@@ -26,7 +26,7 @@ echo "$(date): Restart requested" >> ~/discord-daemon.log
 if tmux has-session -t discord-daemon 2>/dev/null; then
   echo "Killing daemon..."
   tmux kill-session -t discord-daemon 2>/dev/null
-  sleep 2
+  sleep 0.5
 else
   echo "No daemon running."
 fi

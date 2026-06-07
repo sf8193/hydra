@@ -120,14 +120,18 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 // ---------------------------------------------------------------------------
 
 let gateway: ChatGateway
-let forceReconnect: (() => Promise<{ ok: boolean; message: string }>) | null = null
 
 if (PLATFORM === 'slack') {
   const heartbeatPath = join(STATE_DIR, 'daemon.alive')
   const { SlackGateway } = await import('./slack-gateway.js')
-  const slackGw = new SlackGateway(SLACK_APP_TOKEN!, { heartbeatPath })
-  forceReconnect = () => slackGw.forceReconnect()
-  slackGw.onReconnectAfterOutage = (gapMs: number) => {
+  gateway = new SlackGateway(SLACK_APP_TOKEN!, { heartbeatPath })
+} else {
+  const { DiscordGateway } = await import('./discord-gateway.js')
+  gateway = new DiscordGateway()
+}
+
+if (gateway.onReconnectAfterOutage !== undefined) {
+  gateway.onReconnectAfterOutage = (gapMs: number) => {
     const hrs = Math.floor(gapMs / 3_600_000)
     const mins = Math.floor((gapMs % 3_600_000) / 60_000)
     const duration = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`
@@ -141,16 +145,12 @@ if (PLATFORM === 'slack') {
     ].join('\n')
     const access = loadAccess()
     for (const userId of access.allowFrom) {
-      void slackGw.sendDM(userId, report).catch(e =>
+      void gateway.sendDM(userId, report).catch(e =>
         process.stderr.write(`daemon: recovery report DM failed: ${e}\n`),
       )
     }
     process.stderr.write(`daemon: sent recovery report (offline ${duration})\n`)
   }
-  gateway = slackGw
-} else {
-  const { DiscordGateway } = await import('./discord-gateway.js')
-  gateway = new DiscordGateway()
 }
 
 // ---------------------------------------------------------------------------
@@ -389,39 +389,39 @@ function chunk(text: string, limit: number, mode: 'length' | 'newline'): string[
 // Cute session names
 // ---------------------------------------------------------------------------
 
-const SESSION_CATALOG: Array<{ name: string; emoji: string; slackName: string }> = [
-  { name: 'spark', emoji: '⚡', slackName: 'zap' },
-  { name: 'pixel', emoji: '🟦', slackName: 'blue_square' },
-  { name: 'nova',  emoji: '💥', slackName: 'boom' },
-  { name: 'drift', emoji: '🌊', slackName: 'ocean' },
-  { name: 'flint', emoji: '🪨', slackName: 'rock' },
-  { name: 'ember', emoji: '🔥', slackName: 'fire' },
-  { name: 'bloom', emoji: '🌸', slackName: 'cherry_blossom' },
-  { name: 'atlas', emoji: '🗺️', slackName: 'world_map' },
-  { name: 'qubit', emoji: '⚛️', slackName: 'atom_symbol' },
-  { name: 'prism', emoji: '🌈', slackName: 'rainbow' },
-  { name: 'orbit', emoji: '🪐', slackName: 'ringed_planet' },
-  { name: 'comet', emoji: '☄️', slackName: 'comet' },
-  { name: 'patch', emoji: '🩹', slackName: 'adhesive_bandage' },
-  { name: 'glyph', emoji: '🔣', slackName: 'symbols' },
-  { name: 'pulse', emoji: '💓', slackName: 'heartbeat' },
-  { name: 'scout', emoji: '🔭', slackName: 'telescope' },
-  { name: 'cedar', emoji: '🪵', slackName: 'wood' },
-  { name: 'dusk',  emoji: '🌇', slackName: 'sunset' },
-  { name: 'fern',  emoji: '🌿', slackName: 'herb' },
-  { name: 'haze',  emoji: '🌫️', slackName: 'fog' },
-  { name: 'jade',  emoji: '🐉', slackName: 'dragon' },
-  { name: 'lark',  emoji: '🪶', slackName: 'feather' },
-  { name: 'moss',  emoji: '🪴', slackName: 'potted_plant' },
-  { name: 'pine',  emoji: '🌲', slackName: 'evergreen_tree' },
-  { name: 'reef',  emoji: '🪸', slackName: 'coral' },
-  { name: 'sage',  emoji: '🦉', slackName: 'owl' },
-  { name: 'tide',  emoji: '🌙', slackName: 'crescent_moon' },
-  { name: 'vale',  emoji: '🏞️', slackName: 'national_park' },
-  { name: 'wren',  emoji: '🐦', slackName: 'bird' },
-  { name: 'zinc',  emoji: '🔧', slackName: 'wrench' },
-  { name: 'bolt',  emoji: '🔩', slackName: 'nut_and_bolt' },
-  { name: 'crisp', emoji: '❄️', slackName: 'snowflake' },
+const SESSION_CATALOG: Array<{ name: string; emoji: string }> = [
+  { name: 'spark', emoji: '⚡' },
+  { name: 'pixel', emoji: '🟦' },
+  { name: 'nova',  emoji: '💥' },
+  { name: 'drift', emoji: '🌊' },
+  { name: 'flint', emoji: '🪨' },
+  { name: 'ember', emoji: '🔥' },
+  { name: 'bloom', emoji: '🌸' },
+  { name: 'atlas', emoji: '🗺️' },
+  { name: 'qubit', emoji: '⚛️' },
+  { name: 'prism', emoji: '🌈' },
+  { name: 'orbit', emoji: '🪐' },
+  { name: 'comet', emoji: '☄️' },
+  { name: 'patch', emoji: '🩹' },
+  { name: 'glyph', emoji: '🔣' },
+  { name: 'pulse', emoji: '💓' },
+  { name: 'scout', emoji: '🔭' },
+  { name: 'cedar', emoji: '🪵' },
+  { name: 'dusk',  emoji: '🌇' },
+  { name: 'fern',  emoji: '🌿' },
+  { name: 'haze',  emoji: '🌫️' },
+  { name: 'jade',  emoji: '🐉' },
+  { name: 'lark',  emoji: '🪶' },
+  { name: 'moss',  emoji: '🪴' },
+  { name: 'pine',  emoji: '🌲' },
+  { name: 'reef',  emoji: '🪸' },
+  { name: 'sage',  emoji: '🦉' },
+  { name: 'tide',  emoji: '🌙' },
+  { name: 'vale',  emoji: '🏞️' },
+  { name: 'wren',  emoji: '🐦' },
+  { name: 'zinc',  emoji: '🔧' },
+  { name: 'bolt',  emoji: '🔩' },
+  { name: 'crisp', emoji: '❄️' },
 ]
 const SESSION_NAMES = SESSION_CATALOG.map(s => s.name)
 
@@ -619,7 +619,7 @@ loadPersistedQueues()
 // ---------------------------------------------------------------------------
 
 const BRIDGE_TOOLS = [
-  { name: 'reply', description: 'Reply on Discord. Pass chat_id from the inbound message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' }, reply_to: { type: 'string', description: 'Message ID to thread under.' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['chat_id', 'text'] } },
+  { name: 'reply', description: 'Reply in chat. Pass chat_id from the inbound message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' }, reply_to: { type: 'string', description: 'Message ID to thread under.' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['chat_id', 'text'] } },
   { name: 'react', description: 'Add an emoji reaction to a message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, emoji: { type: 'string' } }, required: ['chat_id', 'message_id', 'emoji'] } },
   { name: 'edit_message', description: 'Edit a message the bot previously sent.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, text: { type: 'string' } }, required: ['chat_id', 'message_id', 'text'] } },
   { name: 'download_attachment', description: 'Download attachments from a message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' } }, required: ['chat_id', 'message_id'] } },
@@ -661,7 +661,7 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
       const ch = await gateway.fetchChannel(targetChannelId)
       if (ch.isThread) {
         threadId = ch.id
-      } else if (ch.isDM && gateway.platform === 'discord') {
+      } else if (ch.isDM && !gateway.canThreadInDM) {
         targetChannelId = DEFAULT_SESSION_CHANNEL
       }
     } catch {
@@ -720,7 +720,7 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
     prompt = [
       `You are ${tmuxName}, a session created by handoff from ${originFrom}. Topic: ${topic}`,
       ``,
-      `Your Discord thread chat_id is ${threadId}. Your session_id is ${sessionId}.`,
+      `Your chat thread chat_id is ${threadId}. Your session_id is ${sessionId}.`,
       `${contextLine}`,
       `After reading the artifact, append a "### Reception (by ${tmuxName})" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.`,
       `Send a greeting to your thread using reply(chat_id=${threadId}). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.`,
@@ -738,7 +738,7 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
       `Then call set_description(session_id="${sessionId}", description="...") with a ≤10 word summary.`,
     ].join('\n')
   } else {
-    prompt = `You are ${tmuxName}, a spawned session. Topic: ${topic}\n\nYour Discord thread chat_id is ${threadId}. Your session_id is ${sessionId}. Read your memory files for context, then send a greeting to your thread using reply(chat_id=${threadId}). After orienting, call set_description(session_id="${sessionId}", description="...") with a ≤10 word summary of what you're doing. Update it if your focus shifts significantly.`
+    prompt = `You are ${tmuxName}, a spawned session. Topic: ${topic}\n\nYour chat thread chat_id is ${threadId}. Your session_id is ${sessionId}. Read your memory files for context, then send a greeting to your thread using reply(chat_id=${threadId}). After orienting, call set_description(session_id="${sessionId}", description="...") with a ≤10 word summary of what you're doing. Update it if your focus shifts significantly.`
   }
 
   // Build claude command — fork adds --resume --fork-session
@@ -1097,10 +1097,8 @@ async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: 
     const result = await doSpawnSession(topic, msg.channelId, msg.id)
 
     if (msg.isDM) {
-      // Slack DMs support threads natively — the session thread is already visible,
-      // so skip the URL. Discord DMs redirect to a guild channel, so the URL helps.
       const e = sessionEmoji(result.name)
-      const base = (result.url && gateway.platform === 'discord')
+      const base = (result.url && !gateway.canThreadInDM)
         ? `Spawned ${e} \`${result.name}\` — ${result.url}`
         : `Spawned ${e} \`${result.name}\``
       // The session is a plain tmux session — surface the attach command so it can be
@@ -1284,23 +1282,30 @@ async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
   } catch {}
 
   try {
-    writeFileSync(RESTART_PENDING_FILE, JSON.stringify({ chatId: msg.channelId, messageId: msg.id, ts: Date.now() }) + '\n')
+    const restartChatId = msg.isThread && msg.existingThreadId ? msg.existingThreadId : msg.channelId
+    writeFileSync(RESTART_PENDING_FILE, JSON.stringify({ chatId: restartChatId, messageId: msg.id, ts: Date.now() }) + '\n')
   } catch {}
 
+  let restartFailed = false
   try {
-    execSync(`bash "${restartScript}"`, {
+    // nohup + &: script must survive killing its parent tmux session (SIGHUP)
+    execSync(`nohup bash "${restartScript}" > /dev/null 2>&1 &`, {
       stdio: 'pipe',
-      timeout: 30_000,
+      timeout: 10_000,
+      shell: '/bin/bash',
       env: { ...process.env, PATH: `${homedir()}/.asdf/shims:${homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` },
     })
   } catch (err) {
+    restartFailed = true
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: restart failed: ${errMsg}\n`)
   }
-  try { unlinkSync(RESTART_PENDING_FILE) } catch {}
-  try {
-    await gateway.send(msg.channelId, `❌ Restart failed — daemon is still running on old code.`, { replyTo: msg.id })
-  } catch {}
+  if (restartFailed) {
+    try { unlinkSync(RESTART_PENDING_FILE) } catch {}
+    try {
+      await gateway.send(msg.channelId, `❌ Restart failed — daemon is still running on old code.`, { replyTo: msg.id })
+    } catch {}
+  }
 }
 
 async function announceRestartComplete(): Promise<void> {
@@ -1344,11 +1349,11 @@ async function handleHealthIntercept(msg: InboundMessage): Promise<void> {
 
 async function handleReconnectIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔌').catch(() => {})
-  if (!forceReconnect) {
-    try { await gateway.send(msg.channelId, `Reconnect not available on ${PLATFORM} platform.`, { replyTo: msg.id }) } catch {}
+  if (!gateway.forceReconnect) {
+    try { await gateway.send(msg.channelId, `Reconnect not supported on this platform.`, { replyTo: msg.id }) } catch {}
     return
   }
-  const result = await forceReconnect()
+  const result = await gateway.forceReconnect()
   const emoji = result.ok ? '✅' : '❌'
   try { await gateway.send(msg.channelId, `${emoji} ${result.message}`, { replyTo: msg.id }) } catch {}
 }
@@ -1486,6 +1491,12 @@ history.
 User's direction for the successor: "{user_direction}"
 (If empty: the successor should continue the current line of work.)
 
+If you haven't run a session retrospective yet, consider running one before
+starting this protocol. Retros route learnings to permanent artifacts (skills,
+techniques, memory files) where future sessions will actually load them.
+Handoff artifacts are ephemeral — consumed by one successor. Recommended,
+not required — skip if the session has no learnings worth persisting.
+
 Execute the following steps. Do not ask for confirmation.
 
 STEP 1: PERSIST DURABLE LEARNINGS
@@ -1519,6 +1530,10 @@ Write the artifact to: {artifact_path}
 Structure it as a self-contained prompt -- the successor has never seen
 your conversation:
 
+### TL;DR
+Three sentences max: what we're building, where it's at, what the
+successor should do first.
+
 ### Orientation
 What we're working on and why. 2-3 sentences.
 
@@ -1528,6 +1543,10 @@ anything. Not suggestions -- gates. If the workstream has specialized tooling
 (validation scripts, editing conventions, pipeline patterns), list the skill
 or doc path here. The successor reads these before acting on anything else.
 
+### Key decisions
+Decisions that were expensive to reach. Include reasoning and rejected
+alternatives. Format: "Decision: X. Reasoning: Y. Rejected: Z."
+
 ### State of the work
 - Done (with file paths). For each done item whose mechanism isn't
   obvious from the name alone, add one sentence explaining how it works.
@@ -1535,9 +1554,10 @@ or doc path here. The successor reads these before acting on anything else.
 - In progress (with locations and status)
 - Blocked or unresolved (with enough context to unblock)
 
-### Key decisions
-Decisions that were expensive to reach. Include reasoning and rejected
-alternatives. Format: "Decision: X. Reasoning: Y. Rejected: Z."
+### Fragile
+Things that break easily if the successor doesn't know about them.
+Manually maintained state, implicit assumptions, non-obvious coupling
+between files. Not what's done or in progress -- what's brittle.
 
 ### Dead ends
 Approaches tried and abandoned, with why.
@@ -1703,7 +1723,7 @@ async function handleCommandsIntercept(msg: InboundMessage): Promise<void> {
     '• `list sessions` — show all running sessions with lineage',
     '• `kill session: <name>` — terminate a named session',
     '• `health` / `status` — daemon health and diagnostics',
-    '• `reconnect` — re-establish Slack connection without restarting (sessions untouched)',
+    '• `reconnect` — re-establish chat connection without restarting (sessions untouched)',
     '• `restart` — restart the daemon (picks up code changes, sessions reconnect)',
     '',
     '**Thread-scoped (in a session thread only, ❌ elsewhere):**',
@@ -1741,7 +1761,7 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
 
   let threadContext: Record<string, string> = {}
   if (msg.isThread) {
-    const starter = await (gateway as any).getThreadStarterInfo?.(msg.channelId)
+    const starter = await gateway.getThreadStarterInfo(msg.channelId)
     if (starter) {
       threadContext = {
         thread_name: starter.threadName,
@@ -1903,7 +1923,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
     // Session thread routing
     if (msg.isThread) {
-      // Discord: channelId IS the thread ID. Slack: need composite channelId:thread_ts.
+      // Thread ID format varies by platform — try both channelId and existingThreadId.
       const mappedSession = threadToSession.get(msg.channelId)
         ?? (msg.existingThreadId ? threadToSession.get(msg.existingThreadId) : undefined)
       process.stderr.write(`daemon: thread routing: channelId=${msg.channelId} existingThreadId=${msg.existingThreadId} mappedSession=${mappedSession ?? 'none'} threadToSession keys=[${[...threadToSession.keys()].join(',')}]\n`)
@@ -1918,10 +1938,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
 
-          // In Slack DM threads, always route — the thread IS the session.
-          // In Discord guild threads, require explicit addressing (listen mode,
-          // name prefix, or reply-to-bot) to avoid responding to bystanders.
-          const alwaysRoute = gateway.platform === 'slack' && msg.isDM
+          const alwaysRoute = gateway.dmThreadsAreExclusive && msg.isDM
           const shouldRoute =
             alwaysRoute ||
             info.listening ||
@@ -1978,7 +1995,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (msg.hasExistingThread && msg.existingThreadId) {
         chat_id = msg.existingThreadId
       } else {
-        const threadId = await (gateway as any).startThreadOnMessage?.(msg, preview, archiveDuration)
+        const threadId = await gateway.startThreadOnMessage(msg, preview, archiveDuration)
         if (threadId) {
           chat_id = threadId
         }
@@ -2019,7 +2036,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
   let threadContext: Record<string, string> = {}
   if (msg.isThread) {
-    const starter = await (gateway as any).getThreadStarterInfo?.(msg.channelId)
+    const starter = await gateway.getThreadStarterInfo(msg.channelId)
     if (starter) {
       threadContext = {
         thread_name: starter.threadName,
@@ -2237,9 +2254,15 @@ try {
   process.stderr.write(`daemon: bridge sync skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
 }
 
-await gateway.start(TOKEN!)
-process.stderr.write(`daemon: ${PLATFORM} gateway started\n`)
-void announceRestartComplete()
+// Non-blocking: socket server is already listening — bridges reconnect immediately.
+// Slack connects in background; messages queue until gateway is live.
+gateway.start(TOKEN!).then(() => {
+  process.stderr.write(`daemon: ${PLATFORM} gateway started\n`)
+  void announceRestartComplete()
+}).catch(err => {
+  process.stderr.write(`daemon: gateway start failed: ${err}\n`)
+  process.exit(1)
+})
 
 let shuttingDown = false
 

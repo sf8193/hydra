@@ -33,6 +33,9 @@ const RECENT_SENT_CAP = 200
 
 export class DiscordGateway implements ChatGateway {
   readonly platform = 'discord' as const
+  readonly canThreadInDM = false
+  readonly dmThreadsAreExclusive = false
+  readonly healthCheckUrl = 'https://discord.com/api/v10/gateway'
   private client: Client
   private messageHandler: ((msg: InboundMessage) => Promise<void>) | null = null
   private threadDeleteHandler: ((threadId: string) => void) | null = null
@@ -381,8 +384,6 @@ export class DiscordGateway implements ChatGateway {
     } catch {}
     return ''
   }
-
-  // --- Internal helpers ---
 
   /** Start a thread on a message in a guild channel (for threadReply policy). */
   async startThreadOnMessage(msg: InboundMessage, preview: string, archiveDuration: number): Promise<string | null> {

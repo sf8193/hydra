@@ -24,9 +24,11 @@ const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200
 
 const HEALTH_CHECK_MS = 60_000
+const HEALTH_CHECK_FAST_MS = 10_000
 const STALE_THRESHOLD_MS = 3 * 60_000
 const HEARTBEAT_WRITE_THROTTLE_MS = 10_000
 const MAX_RECONNECT_ATTEMPTS = 2
+const NETWORK_CHECK_TIMEOUT_MS = 5_000
 
 /**
  * Slack renders FULL Markdown — tables, `-`/`*` lists, headings, code fences — only via the
@@ -45,6 +47,9 @@ function applyMessageBody(payload: Record<string, unknown>, text: string, hasBut
 
 export class SlackGateway implements ChatGateway {
   readonly platform = 'slack' as const
+  readonly canThreadInDM = true
+  readonly dmThreadsAreExclusive = true
+  readonly healthCheckUrl = 'https://slack.com/api/api.test'
   private app: App | null = null
   private _botId: string | null = null
   private _botUserId: string | null = null
@@ -64,6 +69,25 @@ export class SlackGateway implements ChatGateway {
   private staleThresholdMs: number
   private reconnecting = false
   private reconnectAttempts = 0
+  onReconnectAfterOutage: ((gapMs: number) => void) | null = null
+
+  async forceReconnect(): Promise<{ ok: boolean; message: string }> {
+    if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
+    const networkUp = await this.checkNetwork()
+    if (!networkUp) return { ok: false, message: 'network unreachable' }
+    try {
+      const gapMs = Date.now() - this.lastEventAt
+      await this.start(this.token!)
+      this.reconnectAttempts = 0
+      this.setHealthCheckInterval(HEALTH_CHECK_MS)
+      if (gapMs > 10 * 60_000 && this.onReconnectAfterOutage) {
+        this.onReconnectAfterOutage(gapMs)
+      }
+      return { ok: true, message: 'reconnected' }
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    }
+  }
 
   constructor(appToken: string, opts?: { heartbeatPath?: string; staleThresholdMs?: number }) {
     this.appToken = appToken
@@ -645,33 +669,66 @@ export class SlackGateway implements ChatGateway {
     } catch {}
   }
 
+  private healthCheckMs = HEALTH_CHECK_MS
+
   private startHealthCheck(): void {
+    if (this.healthInterval) clearInterval(this.healthInterval)
     this.healthInterval = setInterval(async () => {
       const elapsed = Date.now() - this.lastEventAt
       if (elapsed > this.staleThresholdMs) {
         process.stderr.write(`slack gateway: connection stale (${Math.round(elapsed / 1000)}s since last event), attempting reconnect\n`)
         await this.reconnect()
-      } else {
-        this.writeHeartbeat()
       }
-    }, HEALTH_CHECK_MS)
+      this.writeHeartbeat()
+    }, this.healthCheckMs)
     this.healthInterval.unref()
   }
 
+  private setHealthCheckInterval(ms: number): void {
+    if (ms === this.healthCheckMs) return
+    this.healthCheckMs = ms
+    this.startHealthCheck()
+  }
+
+  private async checkNetwork(): Promise<boolean> {
+    try {
+      const resp = await fetch('https://slack.com/api/api.test', { signal: AbortSignal.timeout(NETWORK_CHECK_TIMEOUT_MS) })
+      return resp.ok
+    } catch {
+      return false
+    }
+  }
+
+  // Network-aware: if network is down, stay alive and poll fast (10s) instead of
+  // exiting for watchdog restart. Prevents restart storms during extended outages.
   private async reconnect(): Promise<void> {
     if (this.reconnecting) return
     this.reconnecting = true
     try {
+      const networkUp = await this.checkNetwork()
+      if (!networkUp) {
+        this.setHealthCheckInterval(HEALTH_CHECK_FAST_MS)
+        process.stderr.write(`slack gateway: network unreachable, polling every ${HEALTH_CHECK_FAST_MS / 1000}s\n`)
+        this.reconnectAttempts = 0
+        this.writeHeartbeat()
+        return
+      }
       this.reconnectAttempts++
       if (this.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-        process.stderr.write(`slack gateway: ${this.reconnectAttempts} reconnect attempts exhausted, exiting for supervisor restart\n`)
+        process.stderr.write(`slack gateway: ${this.reconnectAttempts} reconnect attempts exhausted (network is up), exiting for supervisor restart\n`)
         process.exit(1)
       }
+      const gapMs = Date.now() - this.lastEventAt
       await this.start(this.token!)
       this.reconnectAttempts = 0
+      this.setHealthCheckInterval(HEALTH_CHECK_MS)
       process.stderr.write(`slack gateway: reconnected successfully\n`)
+      if (gapMs > 10 * 60_000 && this.onReconnectAfterOutage) {
+        this.onReconnectAfterOutage(gapMs)
+      }
     } catch (err) {
       process.stderr.write(`slack gateway: reconnect attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} failed: ${err}\n`)
+      this.writeHeartbeat()
     } finally {
       this.reconnecting = false
     }

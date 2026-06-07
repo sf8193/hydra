@@ -55,6 +55,12 @@ MTIME=$(stat -f %m "$HEARTBEAT" 2>/dev/null || echo 0)
 ELAPSED=$((NOW - MTIME))
 
 if [ "$ELAPSED" -gt "$STALE_SECONDS" ]; then
+  # Don't restart if the network is down — the daemon can't connect anyway,
+  # and restarting just creates a restart storm. Let the in-process self-heal
+  # recover when connectivity returns.
+  if ! curl -sS --max-time 5 https://slack.com/api/api.test &>/dev/null; then
+    exit 0
+  fi
   echo "$(date): Heartbeat stale (${ELAPSED}s > ${STALE_SECONDS}s), restarting daemon" >> "$LOG"
   restart_daemon
 fi

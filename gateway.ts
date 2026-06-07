@@ -82,13 +82,28 @@ export type ButtonClick = {
   clearButtons: (text: string) => Promise<void>
 }
 
+export type ThreadStarterInfo = {
+  threadName: string
+  starterUser: string
+  starterContent: string
+  starterId: string
+}
+
 export interface ChatGateway {
   readonly platform: 'discord' | 'slack'
   readonly botId: string | null
 
+  readonly canThreadInDM: boolean
+  readonly dmThreadsAreExclusive: boolean
+  readonly healthCheckUrl: string
+
   // Lifecycle
   start(token: string): Promise<void>
   stop(): Promise<void>
+
+  // Resilience (optional — gateways implement if their transport needs it)
+  forceReconnect?(): Promise<{ ok: boolean; message: string }>
+  onReconnectAfterOutage?: (gapMs: number) => void
 
   // Event registration
   onMessage(handler: (msg: InboundMessage) => Promise<void>): void
@@ -115,6 +130,8 @@ export interface ChatGateway {
     text?: string
     files?: string[]
   }): Promise<ThreadInfo>
+  startThreadOnMessage(msg: InboundMessage, preview: string, archiveDuration: number): Promise<string | null>
+  getThreadStarterInfo(channelId: string): Promise<ThreadStarterInfo | null>
 
   // Attachments
   downloadAttachments(channelId: string, messageId: string, inboxDir: string): Promise<DownloadedFile[]>
