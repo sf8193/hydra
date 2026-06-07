@@ -23,10 +23,18 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 
 const SOCKET_PATH = process.env.DAEMON_SOCK ?? join(homedir(), '.claude', 'channels', 'discord', 'daemon.sock')
-// NB: must NOT be plain SESSION_ID — Claude Code overwrites that env var with its own
-// session id when it launches MCP subprocesses, so the daemon-assigned id would be lost.
 const SESSION_ID = process.env.HYDRA_SESSION_ID ?? 'main'
 const RECONNECT_INTERVAL = 5000
+
+const CLAUDE_SESSION_ID_ENV_NAMES = ['CLAUDE_CODE_SESSION_ID', 'SESSION_ID']
+
+function resolveClaudeSessionId(): string | undefined {
+  for (const name of CLAUDE_SESSION_ID_ENV_NAMES) {
+    const val = process.env[name]
+    if (val && val !== SESSION_ID) return val
+  }
+  return undefined
+}
 
 // ── Pending tool call tracker ──────────────────────────────────────────
 
@@ -41,6 +49,10 @@ const pendingCalls = new Map<string, PendingCall>()
 
 const notificationQueue: Array<{ content: string; meta: Record<string, string> }> = []
 let socketReady = false
+
+// ── Dynamic tool list (updated on daemon registration) ────────────────
+
+let dynamicTools: Array<Record<string, unknown>> | null = null
 
 // ── Socket connection ──────────────────────────────────────────────────
 
@@ -63,6 +75,20 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
     case 'registered': {
       process.stderr.write(`bridge: registered as session ${msg.sessionId}\n`)
       socketReady = true
+
+      // Update tool list if daemon sent one (dynamic tool refresh)
+      const tools = msg.tools as Array<Record<string, unknown>> | undefined
+      if (tools && tools.length > 0) {
+        const hadTools = dynamicTools !== null
+        dynamicTools = tools
+        process.stderr.write(`bridge: received ${tools.length} tool definitions from daemon\n`)
+        if (hadTools) {
+          mcp.notification({ method: 'notifications/tools/list_changed' }).catch(err => {
+            process.stderr.write(`bridge: failed to send tools/list_changed: ${err}\n`)
+          })
+        }
+      }
+
       // Flush queued notifications
       while (notificationQueue.length > 0) {
         const queued = notificationQueue.shift()!
@@ -131,7 +157,8 @@ function connectSocket(): void {
   sock.on('connect', () => {
     process.stderr.write(`bridge: connected to daemon\n`)
     lineBuf = ''
-    sendToSocket({ type: 'register', sessionId: SESSION_ID })
+    const claudeId = resolveClaudeSessionId()
+    sendToSocket({ type: 'register', sessionId: SESSION_ID, claudeSessionId: claudeId })
   })
 
   sock.on('data', (data: Buffer) => {
@@ -230,8 +257,9 @@ mcp.setNotificationHandler(
 
 // ── Tool definitions ───────────────────────────────────────────────────
 
-mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
+mcp.setRequestHandler(ListToolsRequestSchema, async () => {
+  if (dynamicTools) return { tools: dynamicTools }
+  return { tools: [
     {
       name: 'reply',
       description:
@@ -364,8 +392,20 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
-  ],
-}))
+    {
+      name: 'set_description',
+      description: 'Set a brief description for your session (shown in "list sessions"). Call after orienting, and update if your focus shifts.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          session_id: { type: 'string', description: 'Your session ID (from HYDRA_SESSION_ID env var).' },
+          description: { type: 'string', description: 'Brief description of what this session is doing (≤120 chars).' },
+        },
+        required: ['session_id', 'description'],
+      },
+    },
+  ] }
+})
 
 // ── Tool call handler (relay to daemon) ────────────────────────────────
 

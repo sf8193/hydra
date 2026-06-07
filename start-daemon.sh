@@ -10,6 +10,8 @@
 #   CHAT_PLATFORM — discord (default) or slack
 #   DISCORD_STATE_DIR — state dir (socket, access.json, sessions)
 #   CLAUDE_CONFIG_DIR — config dir for spawned Claude sessions
+export PATH="$HOME/.asdf/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 SESSION="discord-daemon"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATE_DIR="${DISCORD_STATE_DIR:-$HOME/.claude/channels/discord}"
@@ -31,7 +33,8 @@ rm -f "$STATE_DIR/daemon.sock"
 # Forward env EXPLICITLY into the tmux command. tmux does NOT reliably inherit arbitrary
 # vars into new sessions — its server global env is frozen at first launch — so relying on
 # inheritance silently dropped CLAUDE_CONFIG_DIR and broke spawned-session bridges.
-ENVS="DISCORD_STATE_DIR='$STATE_DIR' SPAWN_CWD='$SPAWN_CWD'"
+# PATH must also be forwarded so bun/claude are reachable when launched via launchd.
+ENVS="PATH='$PATH' DISCORD_STATE_DIR='$STATE_DIR' SPAWN_CWD='$SPAWN_CWD'"
 [ -n "$CHAT_PLATFORM" ] && ENVS="$ENVS CHAT_PLATFORM='$CHAT_PLATFORM'"
 [ -n "$CLAUDE_CONFIG_DIR" ] && ENVS="$ENVS CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
 tmux new-session -d -s "$SESSION" \
