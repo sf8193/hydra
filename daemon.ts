@@ -999,6 +999,13 @@ async function killSession(info: SessionInfo, reason: string): Promise<void> {
       process.stderr.write(`daemon: failed to post session end message: ${err}\n`)
     }
 
+    const threadParts = info.threadId.split(':')
+    if (threadParts.length >= 2) {
+      const baseChatId = threadParts[0]
+      const anchorTs = threadParts.slice(1).join(':')
+      void gateway.react(baseChatId, anchorTs, '☠️').catch(() => {})
+    }
+
     const tmuxName = info.tmuxName
     try {
       execSync(`tmux kill-session -t "${tmuxName}"`, { stdio: 'pipe' })
@@ -1165,8 +1172,7 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
     return
   }
 
-  async function formatSession(s: SessionInfo, prefix: string): Promise<string> {
-    const url = await gateway.getThreadUrl(s.threadId).catch(() => '')
+  function formatSession(s: SessionInfo, prefix: string, url: string, latestInfo?: string): string {
     const desc = s.description ?? fallbackDescription(s.topic)
     const duration = formatDuration(Date.now() - s.createdAt)
     const msgs = s.messageCount ?? 0
@@ -1175,7 +1181,8 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
     const emoji = sessionEmoji(s.tmuxName)
     const title = url ? `[**${desc}**](${url})` : `**${desc}**`
     const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} ${s.originFrom}` : ''
-    return `${prefix}${emoji} \`${s.tmuxName}\`${disconnected}${provenance} — ${title}\n    ◦ ${ctx} (${msgs} msgs · ${duration})`
+    const latest = latestInfo ? ` · ${latestInfo}` : ''
+    return `${prefix}${emoji} \`${s.tmuxName}\`${disconnected}${provenance} — ${title}\n    ◦ ${ctx} (${msgs} msgs · ${duration})${latest}`
   }
 
   const all = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
@@ -1189,25 +1196,64 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
     }
   }
 
-  const blocks: string[] = []
+  // Collect ordered session list with URLs (fast — no message fetching)
+  type SessionEntry = { session: SessionInfo; prefix: string; url: string }
+  const entries: SessionEntry[][] = []
   const shown = new Set<string>()
   for (const root of roots) {
-    const block: string[] = [await formatSession(root, '')]
+    const url = await gateway.getThreadUrl(root.threadId).catch(() => '')
+    const block: SessionEntry[] = [{ session: root, prefix: '', url }]
     shown.add(root.sessionId)
     const forks = forksByParent.get(root.tmuxName) ?? []
     for (const fork of forks) {
-      block.push(await formatSession(fork, '╰ '))
+      const forkUrl = await gateway.getThreadUrl(fork.threadId).catch(() => '')
+      block.push({ session: fork, prefix: '╰ ', url: forkUrl })
       shown.add(fork.sessionId)
     }
-    blocks.push(block.join('\n'))
+    entries.push(block)
   }
   for (const s of all) {
     if (!shown.has(s.sessionId)) {
-      blocks.push(await formatSession(s, '╰ '))
+      const url = await gateway.getThreadUrl(s.threadId).catch(() => '')
+      entries.push([{ session: s, prefix: '╰ ', url }])
     }
   }
 
-  try { await gateway.send(msg.channelId, blocks.join('\n\n'), { replyTo: msg.id }) } catch {}
+  // Phase 1: post immediately without latest-message info
+  const fastBlocks = entries.map(block =>
+    block.map(e => formatSession(e.session, e.prefix, e.url)).join('\n')
+  )
+  let sentMsg: { id: string } | undefined
+  try {
+    sentMsg = await gateway.send(msg.channelId, fastBlocks.join('\n\n'), { replyTo: msg.id, unfurl: false })
+  } catch { return }
+
+  // Phase 2: fetch latest message per thread in parallel, then edit
+  const allEntries = entries.flat()
+  const latestInfos = await Promise.all(allEntries.map(async (e): Promise<string | undefined> => {
+    try {
+      const msgs = await gateway.fetchMessages(e.session.threadId, 1)
+      if (msgs.length === 0) return undefined
+      const m = msgs[0]
+      const who = m.authorId === gateway.botId ? 'me' : 'you'
+      const msgUrl = await gateway.getMessageUrl(e.session.threadId, m.id).catch(() => '')
+      return msgUrl ? `[latest](${msgUrl}) by ${who}` : `latest by ${who}`
+    } catch { return undefined }
+  }))
+
+  // Build enriched version
+  let idx = 0
+  const richBlocks = entries.map(block =>
+    block.map(e => {
+      const info = latestInfos[idx++]
+      return formatSession(e.session, e.prefix, e.url, info)
+    }).join('\n')
+  )
+
+  const richText = richBlocks.join('\n\n')
+  if (richText !== fastBlocks.join('\n\n') && sentMsg) {
+    try { await gateway.edit(msg.channelId, sentMsg.id, richText) } catch {}
+  }
 }
 
 const daemonStartedAt = Date.now()
@@ -2119,7 +2165,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       bridges.set(sessionId, conn)
-      sendToBridge(conn, { type: 'registered', sessionId, tools: BRIDGE_TOOLS })
+      sendToBridge(conn, { type: 'registered', sessionId, tools: BRIDGE_TOOLS, platform: PLATFORM })
       flushQueue(sessionId)
       process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
       break
