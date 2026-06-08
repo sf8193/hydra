@@ -885,13 +885,10 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           text: args.text as string | undefined,
           files: (args.files as string[] | undefined),
         })
-        const hasText = args.text as string | undefined
         return {
           content: [{
             type: 'text',
-            text: hasText
-              ? `thread created (thread_id: ${thread.id})`
-              : `thread created (thread_id: ${thread.id})`,
+            text: `thread created (thread_id: ${thread.id})`,
           }],
         }
       }
@@ -999,11 +996,9 @@ async function killSession(info: SessionInfo, reason: string): Promise<void> {
       process.stderr.write(`daemon: failed to post session end message: ${err}\n`)
     }
 
-    const threadParts = info.threadId.split(':')
-    if (threadParts.length >= 2) {
-      const baseChatId = threadParts[0]
-      const anchorTs = threadParts.slice(1).join(':')
-      void gateway.react(baseChatId, anchorTs, '☠️').catch(() => {})
+    const anchor = gateway.getThreadAnchor(info.threadId)
+    if (anchor) {
+      void gateway.react(anchor.channelId, anchor.messageId, '☠️').catch(() => {})
     }
 
     const tmuxName = info.tmuxName
@@ -1172,17 +1167,22 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
     return
   }
 
-  function formatSession(s: SessionInfo, prefix: string, url: string, latestInfo?: string): string {
+  function formatSession(s: SessionInfo, prefix: string, url: string, latestLine?: string): string {
     const desc = s.description ?? fallbackDescription(s.topic)
     const duration = formatDuration(Date.now() - s.createdAt)
-    const msgs = s.messageCount ?? 0
+    const msgCount = s.messageCount ?? 0
     const ctx = getContextPercent(s.tmuxName)
     const disconnected = bridges.has(s.sessionId) ? '' : ' ⚠️'
     const emoji = sessionEmoji(s.tmuxName)
     const title = url ? `[**${desc}**](${url})` : `**${desc}**`
     const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} ${s.originFrom}` : ''
-    const latest = latestInfo ? ` · ${latestInfo}` : ''
-    return `${prefix}${emoji} \`${s.tmuxName}\`${disconnected}${provenance} — ${title}\n    ◦ ${ctx} (${msgs} msgs · ${duration})${latest}`
+    const lines = [
+      `${prefix}${emoji} \`${s.tmuxName}\`${disconnected}${provenance}`,
+      `  - ${title}`,
+      `  - ${ctx} (${msgCount} msgs · ${duration})`,
+    ]
+    if (latestLine) lines.push(`  - ${latestLine}`)
+    return lines.join('\n')
   }
 
   const all = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
@@ -1235,9 +1235,9 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
       const msgs = await gateway.fetchMessages(e.session.threadId, 1)
       if (msgs.length === 0) return undefined
       const m = msgs[0]
-      const who = m.authorId === gateway.botId ? 'me' : 'you'
-      const msgUrl = await gateway.getMessageUrl(e.session.threadId, m.id).catch(() => '')
-      return msgUrl ? `[latest](${msgUrl}) by ${who}` : `latest by ${who}`
+      const who = m.authorId === gateway.botId ? `<@${gateway.botId}>` : 'you'
+      const msgUrl = gateway.getMessageUrl(e.session.threadId, m.id)
+      return msgUrl ? `[📩 latest](${msgUrl}) — by ${who}` : `📩 latest — by ${who}`
     } catch { return undefined }
   }))
 
@@ -1464,7 +1464,8 @@ async function handleForkIntercept(msg: InboundMessage, description?: string): P
   const parentMessages = info.messageCount ?? 0
   const parentContext = getContextPercent(parentName)
   const forkTopic = description || `continuing: ${info.topic}`
-  const baseChatId = msg.channelId.split(':')[0]
+  const threadAnchor = gateway.getThreadAnchor(msg.channelId)
+  const baseChatId = threadAnchor?.channelId ?? msg.channelId
 
   try {
     const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
@@ -1712,7 +1713,8 @@ async function handleGoIntercept(msg: InboundMessage): Promise<void> {
 
   void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
 
-  const baseChatId = msg.channelId.split(':')[0]
+  const handoffAnchor = gateway.getThreadAnchor(msg.channelId)
+  const baseChatId = handoffAnchor?.channelId ?? msg.channelId
   const topic = info.description ?? fallbackDescription(info.topic)
 
   try {

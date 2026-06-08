@@ -288,6 +288,8 @@ export class SlackGateway implements ChatGateway {
     replyTo?: string
     files?: string[]
     buttons?: ButtonDef[]
+    unfurl?: boolean
+    mrkdwn?: boolean
   }): Promise<SentMessage> {
     if (!this.app) throw new Error('not connected')
 
@@ -306,8 +308,12 @@ export class SlackGateway implements ChatGateway {
       payload.thread_ts = opts.replyTo
     }
 
-    // Render full Markdown via markdown_text; buttons force the Block Kit (mrkdwn) path.
-    applyMessageBody(payload, text, !!opts?.buttons?.length)
+    // Render full Markdown via markdown_text; buttons and mrkdwn opt-in force the classic text path.
+    if (opts?.mrkdwn) {
+      payload.text = text
+    } else {
+      applyMessageBody(payload, text, !!opts?.buttons?.length)
+    }
 
     // Buttons via Block Kit
     if (opts?.buttons?.length) {
@@ -343,6 +349,11 @@ export class SlackGateway implements ChatGateway {
       }
     }
 
+    if (opts?.unfurl === false) {
+      payload.unfurl_links = false
+      payload.unfurl_media = false
+    }
+
     const result = await this.app.client.chat.postMessage(payload as any)
     const sentId = result.ts!
     this.noteSent(sentId)
@@ -352,11 +363,9 @@ export class SlackGateway implements ChatGateway {
   async edit(channelId: string, messageId: string, text: string): Promise<string> {
     if (!this.app) throw new Error('not connected')
     const { channel } = this.parseChannelId(channelId)
-    const result = await this.app.client.chat.update({
-      channel,
-      ts: messageId,
-      text,
-    })
+    const payload: Record<string, unknown> = { channel, ts: messageId }
+    applyMessageBody(payload, text, false)
+    const result = await this.app.client.chat.update(payload as any)
     return result.ts!
   }
 
@@ -591,13 +600,22 @@ export class SlackGateway implements ChatGateway {
     return this.recentSentIds.has(id)
   }
 
-  async getThreadUrl(threadId: string): Promise<string> {
-    // threadId for Slack is "channelId:ts"
+  getThreadAnchor(threadId: string): { channelId: string; messageId: string } | null {
     const parts = threadId.split(':')
-    if (parts.length >= 2) {
-      return this.buildMessageUrl(parts[0], parts.slice(1).join(':'))
-    }
-    return ''
+    if (parts.length < 2) return null
+    return { channelId: parts[0], messageId: parts.slice(1).join(':') }
+  }
+
+  getMessageUrl(threadId: string, messageTs: string): string {
+    const anchor = this.getThreadAnchor(threadId)
+    if (!anchor) return ''
+    return this.buildMessageUrl(anchor.channelId, messageTs, anchor.messageId)
+  }
+
+  async getThreadUrl(threadId: string): Promise<string> {
+    const anchor = this.getThreadAnchor(threadId)
+    if (!anchor) return ''
+    return this.buildMessageUrl(anchor.channelId, anchor.messageId)
   }
 
   /** Start a thread on a message (for threadReply policy). In Slack this just means replying in-thread. */
@@ -692,7 +710,7 @@ export class SlackGateway implements ChatGateway {
 
   private async checkNetwork(): Promise<boolean> {
     try {
-      const resp = await fetch('https://slack.com/api/api.test', { signal: AbortSignal.timeout(NETWORK_CHECK_TIMEOUT_MS) })
+      const resp = await fetch(this.healthCheckUrl, { signal: AbortSignal.timeout(NETWORK_CHECK_TIMEOUT_MS) })
       return resp.ok
     } catch {
       return false
@@ -768,10 +786,11 @@ export class SlackGateway implements ChatGateway {
     }
   }
 
-  private buildMessageUrl(channelId: string, ts: string): string {
+  private buildMessageUrl(channelId: string, ts: string, threadTs?: string): string {
     const tsClean = ts.replace('.', '')
     const domain = this._teamDomain ?? 'app'
-    return `https://${domain}.slack.com/archives/${channelId}/p${tsClean}?thread_ts=${ts}&cid=${channelId}`
+    const threadParam = threadTs ? `?thread_ts=${threadTs}&cid=${channelId}` : ''
+    return `https://${domain}.slack.com/archives/${channelId}/p${tsClean}${threadParam}`
   }
 
   private emojiToSlackName(emoji: string): string {
@@ -800,6 +819,7 @@ export class SlackGateway implements ChatGateway {
       '🍽️': 'knife_fork_plate',
       '🤝': 'handshake',
       '🔄': 'arrows_counterclockwise',
+      '🔌': 'electric_plug',
     }
     if (map[emoji]) return map[emoji]
     // If it's already a text name (no colons), return as-is

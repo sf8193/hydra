@@ -52,7 +52,6 @@ let socketReady = false
 // ── Dynamic tool list (updated on daemon registration) ────────────────
 
 let dynamicTools: Array<Record<string, unknown>> | null = null
-let platformName = 'chat'
 
 // ── Socket connection ──────────────────────────────────────────────────
 
@@ -75,8 +74,6 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
     case 'registered': {
       process.stderr.write(`bridge: registered as session ${msg.sessionId}\n`)
       socketReady = true
-
-      if (msg.platform) platformName = msg.platform as string
 
       // Update tool list if daemon sent one (dynamic tool refresh)
       const tools = msg.tools as Array<Record<string, unknown>> | undefined
