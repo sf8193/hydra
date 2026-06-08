@@ -1167,70 +1167,72 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
     return
   }
 
-  function formatSession(s: SessionInfo, prefix: string, url: string, latestLine?: string): string {
+  function timeBucket(lastActiveMs: number, now: number): string {
+    const diffH = (now - lastActiveMs) / 3_600_000
+    if (diffH < 1) return 'Past hour'
+    if (diffH < 3) return 'Past 3 hours'
+    const last = new Date(lastActiveMs)
+    const today = new Date(now)
+    const lastDay = new Date(last.getFullYear(), last.getMonth(), last.getDate())
+    const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    const daysDiff = Math.round((todayDay.getTime() - lastDay.getTime()) / 86_400_000)
+    if (daysDiff === 0) return `${Math.round(diffH)} hours ago`
+    if (daysDiff === 1) return 'Yesterday'
+    return `${daysDiff} days ago`
+  }
+
+  type SessionEntry = { session: SessionInfo; url: string; latestLine?: string }
+
+  function formatSession(e: SessionEntry): string {
+    const s = e.session
     const desc = s.description ?? fallbackDescription(s.topic)
     const duration = formatDuration(Date.now() - s.createdAt)
     const msgCount = s.messageCount ?? 0
     const ctx = getContextPercent(s.tmuxName)
     const disconnected = bridges.has(s.sessionId) ? '' : ' ⚠️'
     const emoji = sessionEmoji(s.tmuxName)
-    const title = url ? `[**${desc}**](${url})` : `**${desc}**`
-    const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} ${s.originFrom}` : ''
+    const title = e.url ? `[**${desc}**](${e.url})` : `**${desc}**`
+    const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} (${s.originFrom})` : ''
     const lines = [
-      `${prefix}${emoji} \`${s.tmuxName}\`${disconnected}${provenance}`,
-      `  - ${title}`,
-      `  - ${ctx} (${msgCount} msgs · ${duration})`,
+      `${emoji} \`${s.tmuxName}\`${disconnected}${provenance}`,
+      `- ${title}`,
+      `- ${ctx} (${msgCount} msgs · ${duration})`,
     ]
-    if (latestLine) lines.push(`  - ${latestLine}`)
+    if (e.latestLine) lines.push(`- ${e.latestLine}`)
     return lines.join('\n')
   }
 
+  const now = Date.now()
   const all = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
-  const roots = all.filter(s => s.originType !== 'fork')
-  const forksByParent = new Map<string, SessionInfo[]>()
-  for (const s of all) {
-    if (s.originType === 'fork' && s.originFrom) {
-      const list = forksByParent.get(s.originFrom) ?? []
-      list.push(s)
-      forksByParent.set(s.originFrom, list)
+
+  const entries: SessionEntry[] = await Promise.all(all.map(async s => ({
+    session: s,
+    url: await gateway.getThreadUrl(s.threadId).catch(() => ''),
+  })))
+
+  // Phase 1: post immediately without latest-message info, grouped by time
+  function buildOutput(list: SessionEntry[]): string {
+    const buckets = new Map<string, SessionEntry[]>()
+    for (const e of list) {
+      const bucket = timeBucket(e.session.lastActive, now)
+      const arr = buckets.get(bucket) ?? []
+      arr.push(e)
+      buckets.set(bucket, arr)
     }
+    const sections: string[] = []
+    for (const [label, items] of buckets) {
+      sections.push(`### ${label}\n\n${items.map(formatSession).join('\n\n')}`)
+    }
+    return sections.join('\n')
   }
 
-  // Collect ordered session list with URLs (fast — no message fetching)
-  type SessionEntry = { session: SessionInfo; prefix: string; url: string }
-  const entries: SessionEntry[][] = []
-  const shown = new Set<string>()
-  for (const root of roots) {
-    const url = await gateway.getThreadUrl(root.threadId).catch(() => '')
-    const block: SessionEntry[] = [{ session: root, prefix: '', url }]
-    shown.add(root.sessionId)
-    const forks = forksByParent.get(root.tmuxName) ?? []
-    for (const fork of forks) {
-      const forkUrl = await gateway.getThreadUrl(fork.threadId).catch(() => '')
-      block.push({ session: fork, prefix: '╰ ', url: forkUrl })
-      shown.add(fork.sessionId)
-    }
-    entries.push(block)
-  }
-  for (const s of all) {
-    if (!shown.has(s.sessionId)) {
-      const url = await gateway.getThreadUrl(s.threadId).catch(() => '')
-      entries.push([{ session: s, prefix: '╰ ', url }])
-    }
-  }
-
-  // Phase 1: post immediately without latest-message info
-  const fastBlocks = entries.map(block =>
-    block.map(e => formatSession(e.session, e.prefix, e.url)).join('\n')
-  )
   let sentMsg: { id: string } | undefined
   try {
-    sentMsg = await gateway.send(msg.channelId, fastBlocks.join('\n\n'), { replyTo: msg.id, unfurl: false })
+    sentMsg = await gateway.send(msg.channelId, buildOutput(entries), { replyTo: msg.id, unfurl: false })
   } catch { return }
 
   // Phase 2: fetch latest message per thread in parallel, then edit
-  const allEntries = entries.flat()
-  const latestInfos = await Promise.all(allEntries.map(async (e): Promise<string | undefined> => {
+  const latestInfos = await Promise.all(entries.map(async (e): Promise<string | undefined> => {
     try {
       const msgs = await gateway.fetchMessages(e.session.threadId, 1)
       if (msgs.length === 0) return undefined
@@ -1241,17 +1243,9 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
     } catch { return undefined }
   }))
 
-  // Build enriched version
-  let idx = 0
-  const richBlocks = entries.map(block =>
-    block.map(e => {
-      const info = latestInfos[idx++]
-      return formatSession(e.session, e.prefix, e.url, info)
-    }).join('\n')
-  )
-
-  const richText = richBlocks.join('\n\n')
-  if (richText !== fastBlocks.join('\n\n') && sentMsg) {
+  const enriched = entries.map((e, i) => ({ ...e, latestLine: latestInfos[i] }))
+  const richText = buildOutput(enriched)
+  if (sentMsg) {
     try { await gateway.edit(msg.channelId, sentMsg.id, richText) } catch {}
   }
 }

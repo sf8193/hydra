@@ -116,6 +116,7 @@ export interface ChatGateway {
     replyTo?: string
     files?: string[]
     buttons?: ButtonDef[]
+    unfurl?: boolean
   }): Promise<SentMessage>
   edit(channelId: string, messageId: string, text: string): Promise<string>
   react(channelId: string, messageId: string, emoji: string): Promise<void>
@@ -146,6 +147,10 @@ export interface ChatGateway {
   noteSent(id: string): void
   wasSentByUs(id: string): boolean
 
+  // Thread structure
+  getThreadAnchor(threadId: string): { channelId: string; messageId: string } | null
+
   // URL building
   getThreadUrl(threadId: string): Promise<string>
+  getMessageUrl(threadId: string, messageTs: string): string
 }

@@ -385,6 +385,14 @@ export class DiscordGateway implements ChatGateway {
     return ''
   }
 
+  getThreadAnchor(_threadId: string): { channelId: string; messageId: string } | null {
+    return null
+  }
+
+  getMessageUrl(_threadId: string, _messageTs: string): string {
+    return ''
+  }
+
   /** Start a thread on a message in a guild channel (for threadReply policy). */
   async startThreadOnMessage(msg: InboundMessage, preview: string, archiveDuration: number): Promise<string | null> {
     const ch = await this.fetchTextChannel(msg.channelId)
