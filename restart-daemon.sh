@@ -6,26 +6,27 @@
 # brief routing gap while the daemon restarts.
 #
 # Usage:
-#   ./restart-daemon.sh                    # uses existing env from start-daemon.sh defaults
-#   SPAWN_CWD=~/Documents/angellist ./restart-daemon.sh   # explicit
+#   ./restart-daemon.sh                              # uses env defaults
+#   SPAWN_CWD=~/my-project ./restart-daemon.sh       # explicit
 export PATH="$HOME/.asdf/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STATE_DIR="${DISCORD_STATE_DIR:-$HOME/.claude/channels/slack}"
-SOCK="$STATE_DIR/daemon.sock"
-
-# Inherit the env the daemon was originally started with, or use defaults
-: "${SPAWN_CWD:=$HOME/Documents/angellist}"
-: "${CHAT_PLATFORM:=slack}"
-: "${DISCORD_STATE_DIR:=$HOME/.claude/channels/slack}"
+: "${TMUX_SESSION:=discord-daemon}"
+: "${DISCORD_STATE_DIR:=$HOME/.claude/channels/discord}"
+: "${SPAWN_CWD:=$HOME}"
+: "${CHAT_PLATFORM:=discord}"
 : "${CLAUDE_CONFIG_DIR:=$HOME/.claude}"
 
-echo "$(date): Restart requested" >> ~/discord-daemon.log
+STATE_DIR="$DISCORD_STATE_DIR"
+SOCK="$STATE_DIR/daemon.sock"
+LOG="${HYDRA_LOG:-$HOME/discord-daemon.log}"
+
+echo "$(date): Restart requested" >> "$LOG"
 
 # 1. Kill existing daemon
-if tmux has-session -t discord-daemon 2>/dev/null; then
+if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
   echo "Killing daemon..."
-  tmux kill-session -t discord-daemon 2>/dev/null
+  tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
   sleep 0.5
 else
   echo "No daemon running."
@@ -47,7 +48,7 @@ echo -n "Waiting for socket"
 for i in $(seq 1 30); do
   if [ -S "$SOCK" ]; then
     echo " ready (${i}×0.5s)"
-    echo "$(date): Daemon restarted successfully" >> ~/discord-daemon.log
+    echo "$(date): Daemon restarted successfully" >> "$LOG"
     exit 0
   fi
   echo -n "."
@@ -55,5 +56,5 @@ for i in $(seq 1 30); do
 done
 
 echo " TIMEOUT — socket did not appear after 15s"
-echo "$(date): Restart FAILED — socket timeout" >> ~/discord-daemon.log
+echo "$(date): Restart FAILED — socket timeout" >> "$LOG"
 exit 1

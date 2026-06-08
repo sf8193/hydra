@@ -12,9 +12,10 @@
 #   CLAUDE_CONFIG_DIR — config dir for spawned Claude sessions
 export PATH="$HOME/.asdf/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-SESSION="discord-daemon"
+SESSION="${TMUX_SESSION:-discord-daemon}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATE_DIR="${DISCORD_STATE_DIR:-$HOME/.claude/channels/discord}"
+LOG="${HYDRA_LOG:-$HOME/discord-daemon.log}"
 
 if [ -z "$SPAWN_CWD" ]; then
   echo "ERROR: SPAWN_CWD is required. Set it to the working directory for spawned sessions."
@@ -38,7 +39,7 @@ ENVS="PATH='$PATH' DISCORD_STATE_DIR='$STATE_DIR' SPAWN_CWD='$SPAWN_CWD'"
 [ -n "$CHAT_PLATFORM" ] && ENVS="$ENVS CHAT_PLATFORM='$CHAT_PLATFORM'"
 [ -n "$CLAUDE_CONFIG_DIR" ] && ENVS="$ENVS CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
 tmux new-session -d -s "$SESSION" \
-  "cd '$SCRIPT_DIR' && $ENVS bun run daemon.ts 2>&1 | tee -a ~/discord-daemon.log"
+  "cd '$SCRIPT_DIR' && $ENVS bun run daemon.ts 2>&1 | tee -a $LOG"
 
-echo "$(date): Daemon started in tmux session '$SESSION' (SPAWN_CWD=$SPAWN_CWD)" >> ~/discord-daemon.log
+echo "$(date): Daemon started in tmux session '$SESSION' (SPAWN_CWD=$SPAWN_CWD)" >> $LOG
 echo "Daemon started. Attach with: tmux attach -t $SESSION"

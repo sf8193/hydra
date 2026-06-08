@@ -494,14 +494,6 @@ function loadPersistedSessions(): void {
         dead++
         continue
       }
-      // Migrate old forkedFrom/handedOffFrom fields
-      const legacy = info as any
-      if (!info.originType) {
-        if (legacy.forkedFrom) { info.originType = 'fork'; info.originFrom = legacy.forkedFrom }
-        else if (legacy.handedOffFrom) { info.originType = 'handoff'; info.originFrom = legacy.handedOffFrom }
-        else { info.originType = 'spawn' }
-        delete legacy.forkedFrom; delete legacy.handedOffFrom
-      }
       sessions.set(info.sessionId, info)
       threadToSession.set(info.threadId, info.sessionId)
       restored++
@@ -643,6 +635,7 @@ type SpawnOpts = {
   artifact?: string
 }
 
+/** Unified session creation — spawn, fork, and handoff all flow through here via SpawnOpts. */
 async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   let threadId: string | undefined
 
@@ -662,6 +655,7 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
       if (ch.isThread) {
         threadId = ch.id
       } else if (ch.isDM && !gateway.canThreadInDM) {
+        // DMs can't host threads on this platform — redirect to a guild channel
         targetChannelId = DEFAULT_SESSION_CHANNEL
       }
     } catch {
@@ -1100,6 +1094,8 @@ async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: 
 
     if (msg.isDM) {
       const e = sessionEmoji(result.name)
+      // Platforms that support DM threads show the session inline — skip the URL.
+      // Others redirect to a guild channel, so the URL helps the user find the thread.
       const base = (result.url && !gateway.canThreadInDM)
         ? `Spawned ${e} \`${result.name}\` — ${result.url}`
         : `Spawned ${e} \`${result.name}\``
@@ -1253,6 +1249,7 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
 const daemonStartedAt = Date.now()
 
 // Thread-scoped intercept: resolves the calling thread's session, or ❌
+/** Map an inbound thread message to its owning session, or null if not a session thread. */
 function resolveThreadSession(msg: InboundMessage): SessionInfo | null {
   if (!msg.isThread) return null
   const mappedSession = threadToSession.get(msg.channelId)
@@ -1402,6 +1399,7 @@ async function handleReconnectIntercept(msg: InboundMessage): Promise<void> {
 // Claude session ID discovery (fallback when bridge registration missed it)
 // ---------------------------------------------------------------------------
 
+/** Fallback: scan the tmux pane's process tree for a UUID-shaped SESSION env var. */
 function discoverClaudeSessionId(tmuxName: string): string | null {
   try {
     const panePid = execSync(`tmux list-panes -t '${tmuxName}' -F '#{pane_pid}' 2>/dev/null`, { encoding: 'utf8' }).trim()
@@ -1789,6 +1787,7 @@ async function handleCommandsIntercept(msg: InboundMessage): Promise<void> {
 // Deliver a message to a session
 // ---------------------------------------------------------------------------
 
+/** Route an inbound message to a session's bridge (or queue it if disconnected). */
 async function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access): Promise<void> {
   void gateway.typing(msg.channelId).catch(() => {})
   if (access.ackReaction) {
@@ -1980,6 +1979,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
 
+          // DM threads on exclusive platforms (e.g. Slack) always route — the thread IS the session.
+          // Non-exclusive platforms (e.g. Discord guilds) require explicit addressing to avoid
+          // responding to bystanders (listen mode, name prefix, or reply-to-bot).
           const alwaysRoute = gateway.dmThreadsAreExclusive && msg.isDM
           const shouldRoute =
             alwaysRoute ||
@@ -2286,7 +2288,7 @@ socketServer.listen(SOCK_PATH, () => {
 
 // Keep the plugin-cache bridge (the server.ts Claude actually loads) in sync with the
 // repo's bridge.ts, so spawned sessions never run stale code after a daemon restart.
-// Mirrors the copy launch-bitbot.sh does for the main bot. Best-effort, never fatal.
+// Mirrors the copy the bot launcher does for the main session. Best-effort, never fatal.
 try {
   const bridgeSrc = join(import.meta.dir, 'bridge.ts')
   const discordCache = join(CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord')
@@ -2297,7 +2299,7 @@ try {
 }
 
 // Non-blocking: socket server is already listening — bridges reconnect immediately.
-// Slack connects in background; messages queue until gateway is live.
+// Chat platform connects in background; messages queue until gateway is live.
 gateway.start(TOKEN!).then(() => {
   process.stderr.write(`daemon: ${PLATFORM} gateway started\n`)
   void announceRestartComplete()

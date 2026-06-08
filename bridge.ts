@@ -4,7 +4,7 @@
  *
  * Thin MCP server that relays tool calls and notifications between a Claude
  * session and a standalone daemon over a unix socket. Each Claude session
- * (including the main bot session) spawns its own bridge instance.
+ * (including the main "byte" session) spawns its own bridge instance.
  *
  * Protocol: newline-delimited JSON over unix socket (path via DAEMON_SOCK env)
  */
@@ -22,6 +22,8 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 
 const SOCKET_PATH = process.env.DAEMON_SOCK ?? join(homedir(), '.claude', 'channels', 'discord', 'daemon.sock')
+// NB: must NOT be plain SESSION_ID — Claude Code overwrites that env var with its own
+// session id when it launches MCP subprocesses, so the daemon-assigned id would be lost.
 const SESSION_ID = process.env.HYDRA_SESSION_ID ?? 'main'
 const RECONNECT_INTERVAL = 5000
 
