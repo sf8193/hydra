@@ -8,7 +8,7 @@
  * Platform selection: set CHAT_PLATFORM=discord (default) or CHAT_PLATFORM=slack
  *
  * Protocol: newline-delimited JSON over unix socket at
- *   ~/.claude/channels/discord/daemon.sock
+ *   ~/.claude/channels/<platform>/daemon.sock
  *
  * Bridge -> Daemon:
  *   {type: "register", sessionId: "main" | "<uuid>"}
@@ -47,7 +47,9 @@ import type { ChatGateway, InboundMessage, ButtonDef } from './gateway.js'
 // Config & env
 // ---------------------------------------------------------------------------
 
-const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
+const STATE_DIR = process.env.HYDRA_STATE_DIR
+  ?? process.env.DISCORD_STATE_DIR
+  ?? join(homedir(), '.claude', 'channels', process.env.CHAT_PLATFORM ?? 'discord')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const APPROVED_DIR = join(STATE_DIR, 'approved')
 const ENV_FILE = join(STATE_DIR, '.env')
@@ -1617,10 +1619,10 @@ STEP 3: PRESENT FOR REVIEW
 ---------------------------
 Reply in the thread with a TLDR: one sentence on what was persisted,
 one sentence summarizing the artifact, and the file path. Then say:
-"Type \`go\` to launch the successor, or give feedback to iterate."
+"Type \`/go\` to launch the successor, or give feedback to iterate."
 
-If the user sends feedback instead of \`go\`, revise the artifact file
-and post an updated TLDR. Repeat until \`go\`.
+If the user sends feedback instead of \`/go\`, revise the artifact file
+and post an updated TLDR. Repeat until \`/go\`.
 `
 
 const HANDOFF_DIR = join(STATE_DIR, 'handoffs')
@@ -1772,7 +1774,7 @@ async function handleCommandsIntercept(msg: InboundMessage): Promise<void> {
     '• `forks` — list all forks from this thread',
     '• `handoff` — distill context into an artifact for review',
     '• `handoff: <direction>` — directed handoff with a specific focus',
-    '• `go` — launch the successor (predecessor stays alive until you `kill` it)',
+    '• `/go` — launch the successor (predecessor stays alive until you `kill` it)',
     '• `usage` — session stats: context %, messages, runtime, fork count',
     '• `kill` — kill this session',
     '• `listen` / `pause` — toggle whether the session responds to all messages',
@@ -1955,7 +1957,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const goMatch = msg.content.match(/^(?:go|\/go)\s*$/i)
+      const goMatch = msg.content.match(/^(?:\/go|go!)\s*$/i)
       if (goMatch) {
         void handleGoIntercept(msg)
         return

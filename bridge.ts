@@ -21,7 +21,10 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 
-const SOCKET_PATH = process.env.DAEMON_SOCK ?? join(homedir(), '.claude', 'channels', 'discord', 'daemon.sock')
+const STATE_DIR = process.env.HYDRA_STATE_DIR
+  ?? process.env.DISCORD_STATE_DIR
+  ?? join(homedir(), '.claude', 'channels', process.env.CHAT_PLATFORM ?? 'discord')
+const SOCKET_PATH = process.env.DAEMON_SOCK ?? join(STATE_DIR, 'daemon.sock')
 // NB: must NOT be plain SESSION_ID — Claude Code overwrites that env var with its own
 // session id when it launches MCP subprocesses, so the daemon-assigned id would be lost.
 const SESSION_ID = process.env.HYDRA_SESSION_ID ?? 'main'

@@ -12,7 +12,7 @@ CWD="${BYTE_CWD:-$HOME}"
 if [ ! -S "$SOCK" ]; then
   echo "ERROR: Slack daemon socket not found at $SOCK"
   echo "Start the Slack daemon first:"
-  echo "  DISCORD_STATE_DIR=\$HOME/.claude/channels/slack CHAT_PLATFORM=slack $SCRIPT_DIR/start-daemon.sh"
+  echo "  HYDRA_STATE_DIR=\$HOME/.claude/channels/slack CHAT_PLATFORM=slack $SCRIPT_DIR/start-daemon.sh"
   exit 1
 fi
 

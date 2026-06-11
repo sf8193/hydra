@@ -3,11 +3,11 @@
 # Encodes the non-obvious failure modes (channels gate, bridge-in-config-dir) as checks.
 #
 # Usage:
-#   CHAT_PLATFORM=slack DISCORD_STATE_DIR=~/.claude/channels/slack \
+#   CHAT_PLATFORM=slack HYDRA_STATE_DIR=~/.claude/channels/slack \
 #     CLAUDE_CONFIG_DIR=~/.claude ./preflight.sh
 
 PLATFORM="${CHAT_PLATFORM:-discord}"
-STATE_DIR="${DISCORD_STATE_DIR:-$HOME/.claude/channels/$PLATFORM}"
+STATE_DIR="${HYDRA_STATE_DIR:-${DISCORD_STATE_DIR:-$HOME/.claude/channels/$PLATFORM}}"
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 fail=0; warn=0
 ok()  { printf "  \033[32m✓\033[0m %s\n" "$1"; }

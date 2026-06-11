@@ -12,14 +12,14 @@ export PATH="$HOME/.asdf/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 : "${TMUX_SESSION:=discord-daemon}"
-: "${DISCORD_STATE_DIR:=$HOME/.claude/channels/discord}"
+: "${HYDRA_STATE_DIR:=${DISCORD_STATE_DIR:-$HOME/.claude/channels/${CHAT_PLATFORM:-discord}}}"
 : "${SPAWN_CWD:=$HOME}"
 : "${CHAT_PLATFORM:=discord}"
 : "${CLAUDE_CONFIG_DIR:=$HOME/.claude}"
 
-STATE_DIR="$DISCORD_STATE_DIR"
+STATE_DIR="$HYDRA_STATE_DIR"
 SOCK="$STATE_DIR/daemon.sock"
-LOG="${HYDRA_LOG:-$HOME/discord-daemon.log}"
+LOG="${HYDRA_LOG:-$HOME/hydra-daemon.log}"
 
 echo "$(date): Restart requested" >> "$LOG"
 
@@ -38,7 +38,7 @@ rm -f "$SOCK"
 # 3. Relaunch
 echo "Starting daemon..."
 CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
-  DISCORD_STATE_DIR="$DISCORD_STATE_DIR" \
+  HYDRA_STATE_DIR="$HYDRA_STATE_DIR" \
   CHAT_PLATFORM="$CHAT_PLATFORM" \
   SPAWN_CWD="$SPAWN_CWD" \
   "$SCRIPT_DIR/start-daemon.sh"

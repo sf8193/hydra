@@ -50,7 +50,7 @@ fi
 restart_daemon() {
   cd "$HYDRA_DIR"
   CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" \
-    DISCORD_STATE_DIR="$HYDRA_STATE_DIR" \
+    HYDRA_STATE_DIR="$HYDRA_STATE_DIR" \
     CHAT_PLATFORM="$CHAT_PLATFORM" \
     SPAWN_CWD="$SPAWN_CWD" ./start-daemon.sh
 }

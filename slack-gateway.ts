@@ -69,7 +69,7 @@ export class SlackGateway implements ChatGateway {
   private staleThresholdMs: number
   private reconnecting = false
   private reconnectAttempts = 0
-  onReconnectAfterOutage: ((gapMs: number) => void) | null = null
+  onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
 
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
