@@ -1132,6 +1132,8 @@ async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: 
         meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
     }
+
+    void refreshListDisplay()
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn intercept failed: ${errMsg}\n`)
@@ -1154,6 +1156,7 @@ async function handleKillIntercept(msg: InboundMessage, name: string): Promise<v
   }
   await killSession(target, 'session ended')
   try { await gateway.send(msg.channelId, `Killed session **${target.tmuxName}**`, { replyTo: msg.id }) } catch {}
+  void refreshListDisplay()
 }
 
 function formatDuration(ms: number): string {
@@ -1175,46 +1178,90 @@ function getContextPercent(tmuxName: string): string {
   } catch { return '?' }
 }
 
+// ---------------------------------------------------------------------------
+// Session list rendering (shared by handleListIntercept and refreshListDisplay)
+// ---------------------------------------------------------------------------
+
+type SessionEntry = { session: SessionInfo; url: string; latestLine?: string }
+
+function listTimeBucket(lastActiveMs: number, now: number): string {
+  const diffH = (now - lastActiveMs) / 3_600_000
+  if (diffH < 1) return 'Past hour'
+  if (diffH < 3) return 'Past 3 hours'
+  const last = new Date(lastActiveMs)
+  const today = new Date(now)
+  const lastDay = new Date(last.getFullYear(), last.getMonth(), last.getDate())
+  const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const daysDiff = Math.round((todayDay.getTime() - lastDay.getTime()) / 86_400_000)
+  if (daysDiff === 0) return `${Math.round(diffH)} hours ago`
+  if (daysDiff === 1) return 'Yesterday'
+  return `${daysDiff} days ago`
+}
+
+function formatSessionEntry(e: SessionEntry): string {
+  const s = e.session
+  const desc = s.description ?? fallbackDescription(s.topic)
+  const duration = formatDuration(Date.now() - s.createdAt)
+  const msgCount = s.messageCount ?? 0
+  const ctx = getContextPercent(s.tmuxName)
+  const disconnected = bridges.has(s.sessionId) ? '' : ' ⚠️'
+  const emoji = sessionEmoji(s.tmuxName)
+  const title = e.url ? `[**${desc}**](${e.url})` : `**${desc}**`
+  const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} (${s.originFrom})` : ''
+  const lines = [
+    `${emoji} \`${s.tmuxName}\`${disconnected}${provenance}`,
+    `- ${title}`,
+    `- ${ctx} (${msgCount} msgs · ${duration})`,
+  ]
+  if (e.latestLine) lines.push(`- ${e.latestLine}`)
+  return lines.join('\n')
+}
+
+function buildListOutput(list: SessionEntry[], now: number): string {
+  const buckets = new Map<string, SessionEntry[]>()
+  for (const e of list) {
+    const bucket = listTimeBucket(e.session.lastActive, now)
+    const arr = buckets.get(bucket) ?? []
+    arr.push(e)
+    buckets.set(bucket, arr)
+  }
+  const sections: string[] = []
+  for (const [label, items] of buckets) {
+    sections.push(`### ${label}\n\n${items.map(formatSessionEntry).join('\n\n')}`)
+  }
+  return sections.join('\n')
+}
+
+// Auto-refresh: track the most recent `list sessions` response so lifecycle
+// events can silently edit it. edit_message doesn't trigger push notifications.
+let lastListMsg: { channelId: string; messageId: string } | null = null
+
+async function refreshListDisplay(): Promise<void> {
+  if (!lastListMsg) return
+  try {
+    if (sessions.size === 0) {
+      await gateway.edit(lastListMsg.channelId, lastListMsg.messageId, 'No active sessions.')
+      return
+    }
+    const now = Date.now()
+    const all = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
+    const entries: SessionEntry[] = await Promise.all(all.map(async s => ({
+      session: s,
+      url: await gateway.getThreadUrl(s.threadId).catch(() => ''),
+    })))
+    const output = buildListOutput(entries, now)
+    await gateway.edit(lastListMsg.channelId, lastListMsg.messageId, output)
+  } catch {
+    // Edit failed (message deleted, channel archived, etc.) — clear the stale reference
+    lastListMsg = null
+  }
+}
+
 async function handleListIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '📊').catch(() => {})
   if (sessions.size === 0) {
     try { await gateway.send(msg.channelId, 'No active sessions.', { replyTo: msg.id }) } catch {}
     return
-  }
-
-  function timeBucket(lastActiveMs: number, now: number): string {
-    const diffH = (now - lastActiveMs) / 3_600_000
-    if (diffH < 1) return 'Past hour'
-    if (diffH < 3) return 'Past 3 hours'
-    const last = new Date(lastActiveMs)
-    const today = new Date(now)
-    const lastDay = new Date(last.getFullYear(), last.getMonth(), last.getDate())
-    const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    const daysDiff = Math.round((todayDay.getTime() - lastDay.getTime()) / 86_400_000)
-    if (daysDiff === 0) return `${Math.round(diffH)} hours ago`
-    if (daysDiff === 1) return 'Yesterday'
-    return `${daysDiff} days ago`
-  }
-
-  type SessionEntry = { session: SessionInfo; url: string; latestLine?: string }
-
-  function formatSession(e: SessionEntry): string {
-    const s = e.session
-    const desc = s.description ?? fallbackDescription(s.topic)
-    const duration = formatDuration(Date.now() - s.createdAt)
-    const msgCount = s.messageCount ?? 0
-    const ctx = getContextPercent(s.tmuxName)
-    const disconnected = bridges.has(s.sessionId) ? '' : ' ⚠️'
-    const emoji = sessionEmoji(s.tmuxName)
-    const title = e.url ? `[**${desc}**](${e.url})` : `**${desc}**`
-    const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} (${s.originFrom})` : ''
-    const lines = [
-      `${emoji} \`${s.tmuxName}\`${disconnected}${provenance}`,
-      `- ${title}`,
-      `- ${ctx} (${msgCount} msgs · ${duration})`,
-    ]
-    if (e.latestLine) lines.push(`- ${e.latestLine}`)
-    return lines.join('\n')
   }
 
   const now = Date.now()
@@ -1226,25 +1273,15 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
   })))
 
   // Phase 1: post immediately without latest-message info, grouped by time
-  function buildOutput(list: SessionEntry[]): string {
-    const buckets = new Map<string, SessionEntry[]>()
-    for (const e of list) {
-      const bucket = timeBucket(e.session.lastActive, now)
-      const arr = buckets.get(bucket) ?? []
-      arr.push(e)
-      buckets.set(bucket, arr)
-    }
-    const sections: string[] = []
-    for (const [label, items] of buckets) {
-      sections.push(`### ${label}\n\n${items.map(formatSession).join('\n\n')}`)
-    }
-    return sections.join('\n')
-  }
-
   let sentMsg: { id: string } | undefined
   try {
-    sentMsg = await gateway.send(msg.channelId, buildOutput(entries), { replyTo: msg.id, unfurl: false })
+    sentMsg = await gateway.send(msg.channelId, buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
   } catch { return }
+
+  // Track for auto-refresh on lifecycle events
+  if (sentMsg) {
+    lastListMsg = { channelId: msg.channelId, messageId: sentMsg.id }
+  }
 
   // Phase 2: fetch latest message per thread in parallel, then edit
   const latestInfos = await Promise.all(entries.map(async (e): Promise<string | undefined> => {
@@ -1259,7 +1296,7 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
   }))
 
   const enriched = entries.map((e, i) => ({ ...e, latestLine: latestInfos[i] }))
-  const richText = buildOutput(enriched)
+  const richText = buildListOutput(enriched, now)
   if (sentMsg) {
     try { await gateway.edit(msg.channelId, sentMsg.id, richText) } catch {}
   }
@@ -1285,6 +1322,7 @@ async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
   }
   void gateway.react(msg.channelId, msg.id, '☠️').catch(() => {})
   await killSession(info, 'session ended')
+  void refreshListDisplay()
 }
 
 async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
@@ -1498,6 +1536,8 @@ async function handleForkIntercept(msg: InboundMessage, description?: string): P
         meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
     }
+
+    void refreshListDisplay()
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: fork intercept failed: ${errMsg}\n`)
@@ -1765,10 +1805,100 @@ async function handleGoIntercept(msg: InboundMessage): Promise<void> {
     try {
       await gateway.send(info.threadId, `${ce} \`${result.name}\` is live. Type \`kill\` here to end \`${info.tmuxName}\`.`)
     } catch {}
+
+    void refreshListDisplay()
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: handoff go failed: ${errMsg}\n`)
     try { await gateway.send(msg.channelId, `Handoff failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Resurrect — crash recovery for dead session threads
+// ---------------------------------------------------------------------------
+
+async function handleResurrectIntercept(msg: InboundMessage): Promise<void> {
+  // Resurrect works in threads where a session previously lived but has died.
+  // It spawns a fresh session and instructs it to read the thread history to
+  // reconstruct context — unlike fork, which carries the transcript via --resume.
+
+  // Check if there's a live session for this thread
+  const liveSession = resolveThreadSession(msg)
+  if (liveSession) {
+    try {
+      execSync(`tmux has-session -t '${liveSession.tmuxName}' 2>/dev/null`, { stdio: 'pipe' })
+      // Session is genuinely alive
+      void gateway.send(msg.channelId, 'Session is still alive — use `kill` first if you want to restart.', { replyTo: msg.id }).catch(() => {})
+      return
+    } catch {
+      // tmux session is gone — clean up stale tracking and proceed with resurrect
+      bridges.delete(liveSession.sessionId)
+      threadToSession.delete(liveSession.threadId)
+      sessions.delete(liveSession.sessionId)
+      persistSessions()
+    }
+  }
+
+  // In a thread: check if this thread EVER had a session (even if cleaned up)
+  // We can detect this by checking if the thread has a session-like anchor pattern
+  if (!msg.isThread) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void gateway.send(msg.channelId, 'Resurrect must be used in a thread where a session previously lived.', { replyTo: msg.id }).catch(() => {})
+    return
+  }
+
+  void gateway.react(msg.channelId, msg.id, '♻️').catch(() => {})
+
+  const threadAnchor = gateway.getThreadAnchor(msg.channelId)
+  const baseChatId = threadAnchor?.channelId ?? msg.channelId
+
+  try {
+    const topic = 'resurrected session — reading thread history'
+    const result = await doSpawnSession(topic, baseChatId, undefined)
+
+    // Post cross-link in the old thread so the user can find the new one
+    const ce = sessionEmoji(result.name)
+    await gateway.send(msg.channelId, [
+      `♻️ Resurrected → ${ce} \`${result.name}\` — ${result.url}`,
+      `View in any terminal: \`tmux attach -t ${result.name}\``,
+    ].join('\n'), { replyTo: msg.id })
+
+    // Send the resurrection prompt to the new session — instruct it to read
+    // the OLD thread to reconstruct context (the key difference from fork)
+    const oldThreadId = msg.channelId
+    sendOrQueue(result.sessionId, {
+      type: 'notification',
+      content: [
+        `[system] You were resurrected from a dead session in thread ${oldThreadId}.`,
+        `Use fetch_messages(chat_id="${oldThreadId}", limit=50) to read the previous thread's history.`,
+        `Reconstruct what was being worked on. Continue from where the previous session left off.`,
+        `Post a summary of what you found and what you're picking up.`,
+      ].join('\n'),
+      meta: {
+        chat_id: result.threadId,
+        message_id: msg.id,
+        user: 'system',
+        user_id: 'system',
+        ts: new Date().toISOString(),
+      },
+    })
+
+    // Notify main session
+    const mainBridge = getBridgeForSession('main')
+    if (mainBridge) {
+      sendToBridge(mainBridge, {
+        type: 'notification',
+        content: `[system] ♻️ Resurrected session → ${ce} \`${result.name}\`${result.url ? ` — ${result.url}` : ''}`,
+        meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
+      })
+    }
+
+    void refreshListDisplay()
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: resurrect intercept failed: ${errMsg}\n`)
+    try { await gateway.send(msg.channelId, `Resurrect failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
   }
 }
 
@@ -1792,6 +1922,7 @@ async function handleCommandsIntercept(msg: InboundMessage): Promise<void> {
     '• `handoff` — distill context into an artifact for review',
     '• `handoff: <direction>` — directed handoff with a specific focus',
     '• `/go` — launch the successor (predecessor stays alive until you `kill` it)',
+    '• `resurrect` — respawn a dead session by reading thread history',
     '• `usage` — session stats: context %, messages, runtime, fork count',
     '• `kill` — kill this session',
     '• `listen` / `pause` — toggle whether the session responds to all messages',
@@ -1981,6 +2112,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const goMatch = msg.content.match(/^(?:\/go|go!)\s*$/i)
       if (goMatch) {
         void handleGoIntercept(msg)
+        return
+      }
+
+      const resurrectMatch = msg.content.match(/^(?:resurrect|\/resurrect)\s*$/i)
+      if (resurrectMatch) {
+        void handleResurrectIntercept(msg)
         return
       }
     }
