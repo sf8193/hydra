@@ -251,7 +251,7 @@ const mcp = new Server(
     instructions: [
       'The sender reads chat, not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
       '',
-      'Messages arrive as <channel source="..." chat_id="..." message_id="..." user="..." ts="...">. If the tag has attachment_count, the attachments attribute lists name/type/size — call download_attachment(chat_id, message_id) to fetch them. Reply with the reply tool — pass chat_id back. Use reply_to (set to a message_id) only when replying to an earlier message; the latest message doesn\'t need a quote-reply, omit reply_to for normal responses.',
+      'Messages arrive as <channel source="..." chat_id="..." message_id="..." user="..." ts="...">. If the tag has attachment_count, the attachments are pre-downloaded — the downloaded_files attribute contains local file paths (semicolon-separated) ready to read directly. For older messages without downloaded_files, call download_attachment(chat_id, message_id) as fallback. Reply with the reply tool — pass chat_id back. Use reply_to (set to a message_id) only when replying to an earlier message; the latest message doesn\'t need a quote-reply, omit reply_to for normal responses.',
       '',
       'reply accepts file paths (files: ["/abs/path.png"]) for attachments. Use react to add emoji reactions, and edit_message for interim progress updates. Edits don\'t trigger push notifications — when a long task completes, send a new reply so the user\'s device pings.',
       '',

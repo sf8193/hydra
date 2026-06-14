@@ -1813,10 +1813,22 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
     void gateway.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
   }
 
-  const atts: string[] = msg.attachments.map(att => {
-    const kb = (att.size / 1024).toFixed(0)
-    return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
-  })
+  // Auto-download attachments so sessions receive local file paths
+  let downloadedFiles: { path: string; name: string; contentType: string; sizeKB: string }[] = []
+  if (msg.attachments.length > 0) {
+    try {
+      downloadedFiles = await gateway.downloadAttachments(msg.channelId, msg.id, INBOX_DIR)
+    } catch (err) {
+      process.stderr.write(`daemon: auto-download failed for ${msg.id}: ${err}\n`)
+    }
+  }
+
+  const atts: string[] = downloadedFiles.length > 0
+    ? downloadedFiles.map(f => `${f.name} (${f.contentType}, ${f.sizeKB}KB) -> ${f.path}`)
+    : msg.attachments.map(att => {
+        const kb = (att.size / 1024).toFixed(0)
+        return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
+      })
   const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
 
   let threadContext: Record<string, string> = {}
@@ -1846,6 +1858,7 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
     user_id: msg.authorId,
     ts: msg.createdAt.toISOString(),
     ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
+    ...(downloadedFiles.length > 0 ? { downloaded_files: downloadedFiles.map(f => f.path).join('; ') } : {}),
     ...threadContext,
   }
 
@@ -2094,11 +2107,23 @@ gateway.onMessage(async (msg: InboundMessage) => {
     void gateway.react(msg.channelId, msg.id, result.access.ackReaction).catch(() => {})
   }
 
+  // Auto-download attachments so sessions receive local file paths
+  let downloadedFiles: { path: string; name: string; contentType: string; sizeKB: string }[] = []
+  if (msg.attachments.length > 0) {
+    try {
+      downloadedFiles = await gateway.downloadAttachments(msg.channelId, msg.id, INBOX_DIR)
+    } catch (err) {
+      process.stderr.write(`daemon: auto-download failed for ${msg.id}: ${err}\n`)
+    }
+  }
+
   // Build notification
-  const atts: string[] = msg.attachments.map(att => {
-    const kb = (att.size / 1024).toFixed(0)
-    return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
-  })
+  const atts: string[] = downloadedFiles.length > 0
+    ? downloadedFiles.map(f => `${f.name} (${f.contentType}, ${f.sizeKB}KB) -> ${f.path}`)
+    : msg.attachments.map(att => {
+        const kb = (att.size / 1024).toFixed(0)
+        return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
+      })
   const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
 
   let threadContext: Record<string, string> = {}
@@ -2121,6 +2146,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     user_id: msg.authorId,
     ts: msg.createdAt.toISOString(),
     ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
+    ...(downloadedFiles.length > 0 ? { downloaded_files: downloadedFiles.map(f => f.path).join('; ') } : {}),
     ...threadContext,
   }
 

@@ -529,9 +529,8 @@ export class SlackGateway implements ChatGateway {
       const buf = Buffer.from(await res.arrayBuffer())
 
       const name = file.name ?? `${file.id}`
-      const rawExt = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : 'bin'
-      const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'bin'
-      const path = `${inboxDir}/${Date.now()}-${file.id}.${ext}`
+      const sanitizedName = name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const path = `${inboxDir}/${Date.now()}-${sanitizedName}`
       mkdirSync(inboxDir, { recursive: true })
       writeFileSync(path, buf)
 
