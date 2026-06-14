@@ -42,7 +42,7 @@ import { join, sep } from 'path'
 import { createServer, type Socket } from 'net'
 import { execSync, execFileSync } from 'child_process'
 
-import type { ChatGateway, InboundMessage, ButtonDef } from './gateway.js'
+import type { ChatGateway, InboundMessage, DownloadedFile, ButtonDef } from './gateway.js'
 
 // ---------------------------------------------------------------------------
 // Config & env
@@ -1803,18 +1803,16 @@ async function handleCommandsIntercept(msg: InboundMessage): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Deliver a message to a session
+// Notification payload builder
 // ---------------------------------------------------------------------------
 
-/** Route an inbound message to a session's bridge (or queue it if disconnected). */
-async function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access): Promise<void> {
-  void gateway.typing(msg.channelId).catch(() => {})
-  if (access.ackReaction) {
-    void gateway.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
-  }
-
+/** Auto-download attachments and build the notification payload for an inbound message. */
+async function buildNotificationPayload(
+  msg: InboundMessage,
+  chatId: string,
+): Promise<{ content: string; meta: Record<string, string> }> {
   // Auto-download attachments so sessions receive local file paths
-  let downloadedFiles: { path: string; name: string; contentType: string; sizeKB: string }[] = []
+  let downloadedFiles: DownloadedFile[] = []
   if (msg.attachments.length > 0) {
     try {
       downloadedFiles = await gateway.downloadAttachments(msg.channelId, msg.id, INBOX_DIR)
@@ -1844,13 +1842,6 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
     }
   }
 
-  // Use the session's threadId as chat_id so replies go to the right thread
-  const sessionInfo = sessions.get(targetSessionId)
-  if (sessionInfo) {
-    sessionInfo.messageCount = (sessionInfo.messageCount ?? 0) + 1
-  }
-  const chatId = sessionInfo?.threadId ?? msg.channelId
-
   const meta: Record<string, string> = {
     chat_id: chatId,
     message_id: msg.id,
@@ -1862,6 +1853,28 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
     ...threadContext,
   }
 
+  return { content, meta }
+}
+
+// ---------------------------------------------------------------------------
+// Deliver a message to a session
+// ---------------------------------------------------------------------------
+
+/** Route an inbound message to a session's bridge (or queue it if disconnected). */
+async function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access): Promise<void> {
+  void gateway.typing(msg.channelId).catch(() => {})
+  if (access.ackReaction) {
+    void gateway.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
+  }
+
+  // Use the session's threadId as chat_id so replies go to the right thread
+  const sessionInfo = sessions.get(targetSessionId)
+  if (sessionInfo) {
+    sessionInfo.messageCount = (sessionInfo.messageCount ?? 0) + 1
+  }
+  const chatId = sessionInfo?.threadId ?? msg.channelId
+
+  const { content, meta } = await buildNotificationPayload(msg, chatId)
   sendOrQueue(targetSessionId, { type: 'notification', content, meta })
 }
 
@@ -2107,48 +2120,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     void gateway.react(msg.channelId, msg.id, result.access.ackReaction).catch(() => {})
   }
 
-  // Auto-download attachments so sessions receive local file paths
-  let downloadedFiles: { path: string; name: string; contentType: string; sizeKB: string }[] = []
-  if (msg.attachments.length > 0) {
-    try {
-      downloadedFiles = await gateway.downloadAttachments(msg.channelId, msg.id, INBOX_DIR)
-    } catch (err) {
-      process.stderr.write(`daemon: auto-download failed for ${msg.id}: ${err}\n`)
-    }
-  }
-
-  // Build notification
-  const atts: string[] = downloadedFiles.length > 0
-    ? downloadedFiles.map(f => `${f.name} (${f.contentType}, ${f.sizeKB}KB) -> ${f.path}`)
-    : msg.attachments.map(att => {
-        const kb = (att.size / 1024).toFixed(0)
-        return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
-      })
-  const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
-
-  let threadContext: Record<string, string> = {}
-  if (msg.isThread) {
-    const starter = await gateway.getThreadStarterInfo(msg.channelId)
-    if (starter) {
-      threadContext = {
-        thread_name: starter.threadName,
-        thread_starter_user: starter.starterUser,
-        thread_starter_content: starter.starterContent,
-        thread_starter_id: starter.starterId,
-      }
-    }
-  }
-
-  const meta: Record<string, string> = {
-    chat_id,
-    message_id: msg.id,
-    user: msg.authorUsername,
-    user_id: msg.authorId,
-    ts: msg.createdAt.toISOString(),
-    ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
-    ...(downloadedFiles.length > 0 ? { downloaded_files: downloadedFiles.map(f => f.path).join('; ') } : {}),
-    ...threadContext,
-  }
+  const { content, meta } = await buildNotificationPayload(msg, chat_id)
 
   // Route to session
   let targetSessionId = 'main'
