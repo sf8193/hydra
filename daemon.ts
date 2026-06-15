@@ -464,6 +464,7 @@ type SessionInfo = {
   claudeSessionId?: string
   originType?: 'spawn' | 'fork' | 'handoff'
   originFrom?: string
+  threadUrl?: string
 }
 
 function fallbackDescription(topic: string): string {
@@ -637,6 +638,7 @@ type SpawnOpts = {
   forkFrom?: { claudeSessionId: string; parentName: string }
   handedOffFrom?: string
   artifact?: string
+  existingThreadId?: string
 }
 
 /** Unified session creation — spawn, fork, and handoff all flow through here via SpawnOpts. */
@@ -649,60 +651,68 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
   const threadName = `${tmuxName}: ${topic}`.slice(0, 100)
   const isFork = !!opts?.forkFrom
   const isHandoff = !!opts?.handedOffFrom
+  const isResurrect = !!opts?.existingThreadId
   const originType: 'spawn' | 'fork' | 'handoff' = isFork ? 'fork' : isHandoff ? 'handoff' : 'spawn'
   const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom
 
-  // Determine where to create the thread
-  let targetChannelId = chatId
-  if (targetChannelId) {
-    try {
-      const ch = await gateway.fetchChannel(targetChannelId)
-      if (ch.isThread) {
-        threadId = ch.id
-      } else if (ch.isDM && !gateway.canThreadInDM) {
-        // DMs can't host threads on this platform — redirect to a guild channel
-        targetChannelId = DEFAULT_SESSION_CHANNEL
-      }
-    } catch {
-      targetChannelId = DEFAULT_SESSION_CHANNEL
-    }
-  } else {
-    targetChannelId = DEFAULT_SESSION_CHANNEL
+  // Resurrect: reattach to existing thread — skip all thread creation
+  if (isResurrect) {
+    threadId = opts!.existingThreadId!
   }
 
-  // Create thread if we don't have one yet
   if (!threadId) {
-    if (messageId && targetChannelId === chatId) {
+    // Determine where to create the thread
+    let targetChannelId = chatId
+    if (targetChannelId) {
       try {
+        const ch = await gateway.fetchChannel(targetChannelId)
+        if (ch.isThread) {
+          threadId = ch.id
+        } else if (ch.isDM && !gateway.canThreadInDM) {
+          // DMs can't host threads on this platform — redirect to a guild channel
+          targetChannelId = DEFAULT_SESSION_CHANNEL
+        }
+      } catch {
+        targetChannelId = DEFAULT_SESSION_CHANNEL
+      }
+    } else {
+      targetChannelId = DEFAULT_SESSION_CHANNEL
+    }
+
+    // Create thread if we don't have one yet
+    if (!threadId) {
+      if (messageId && targetChannelId === chatId) {
+        try {
+          const thread = await gateway.createThread(targetChannelId!, threadName, {
+            messageId,
+            archiveDuration: 1440,
+          })
+          threadId = thread.id
+          anchorMessageId = messageId
+        } catch (err) {
+          process.stderr.write(`daemon: createThread on message failed: ${err}\n`)
+        }
+      }
+
+      if (!threadId) {
+        const e = sessionEmoji(tmuxName)
+        let anchorText: string
+        if (originFrom) {
+          const pe = sessionEmoji(originFrom)
+          const verb = isHandoff ? 'handed off from' : 'forked from'
+          anchorText = `${e} \`${tmuxName}\` — ${verb} ${pe} \`${originFrom}\``
+          if (isFork) anchorText += `\n${topic}`
+        } else {
+          anchorText = `Starting session **${tmuxName}**: ${topic}`
+        }
+        const anchor = await gateway.send(targetChannelId!, anchorText)
+        anchorMessageId = anchor.id
         const thread = await gateway.createThread(targetChannelId!, threadName, {
-          messageId,
+          messageId: anchor.id,
           archiveDuration: 1440,
         })
         threadId = thread.id
-        anchorMessageId = messageId
-      } catch (err) {
-        process.stderr.write(`daemon: createThread on message failed: ${err}\n`)
       }
-    }
-
-    if (!threadId) {
-      const e = sessionEmoji(tmuxName)
-      let anchorText: string
-      if (originFrom) {
-        const pe = sessionEmoji(originFrom)
-        const verb = isHandoff ? 'handed off from' : 'forked from'
-        anchorText = `${e} \`${tmuxName}\` — ${verb} ${pe} \`${originFrom}\``
-        if (isFork) anchorText += `\n${topic}`
-      } else {
-        anchorText = `Starting session **${tmuxName}**: ${topic}`
-      }
-      const anchor = await gateway.send(targetChannelId!, anchorText)
-      anchorMessageId = anchor.id
-      const thread = await gateway.createThread(targetChannelId!, threadName, {
-        messageId: anchor.id,
-        archiveDuration: 1440,
-      })
-      threadId = thread.id
     }
   }
 
@@ -736,6 +746,16 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
       `Your new thread chat_id is ${threadId}. Your session_id is ${sessionId}.`,
       `Greet your new thread using reply(chat_id=${threadId}).`,
       `Mention you were forked from **${originFrom}** and describe your focus.`,
+      `Then call set_description(session_id="${sessionId}", description="...") with a ≤10 word summary.`,
+    ].join('\n')
+  } else if (isResurrect) {
+    prompt = [
+      `You are ${tmuxName}, a resurrected session resuming work in an existing thread.`,
+      ``,
+      `Your chat thread chat_id is ${threadId}. Your session_id is ${sessionId}.`,
+      `Use fetch_messages(channel="${threadId}", limit=50) to read the thread history.`,
+      `Reconstruct context and continue from where the previous session left off.`,
+      `Post a summary of what you found and what you're picking up using reply(chat_id=${threadId}).`,
       `Then call set_description(session_id="${sessionId}", description="...") with a ≤10 word summary.`,
     ].join('\n')
   } else {
@@ -782,15 +802,15 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
     process.stderr.write(`daemon: spawn ${tmuxName}: WARNING — tmux session died immediately after creation\n`)
   }
 
+  const url = await gateway.getThreadUrl(threadId!)
+
   const now = Date.now()
   sessions.set(sessionId, {
     sessionId, topic, threadId: threadId!, anchorMessageId, createdAt: now, lastActive: now,
-    tmuxName, listening: false, originType, originFrom,
+    tmuxName, listening: false, originType, originFrom, threadUrl: url || undefined,
   })
   threadToSession.set(threadId!, sessionId)
   persistSessions()
-
-  const url = await gateway.getThreadUrl(threadId!)
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }
 }
@@ -930,19 +950,18 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
 
       case 'list_sessions': {
         const sorted = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
-        const list = await Promise.all(sorted.map(async s => {
-          const url = await gateway.getThreadUrl(s.threadId).catch(() => '')
+        const list = sorted.map(s => {
           const desc = s.description ?? fallbackDescription(s.topic)
           return {
             name: s.tmuxName,
             description: desc,
-            url,
+            url: s.threadUrl ?? '',
             context: getContextPercent(s.tmuxName),
             messages: s.messageCount ?? 0,
             running_for: formatDuration(Date.now() - s.createdAt),
             status: bridges.has(s.sessionId) ? 'connected' : 'disconnected',
           }
-        }))
+        })
         return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] }
       }
 
@@ -1133,7 +1152,7 @@ async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: 
       })
     }
 
-    void refreshListDisplay()
+    debouncedRefreshListDisplay()
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn intercept failed: ${errMsg}\n`)
@@ -1156,7 +1175,7 @@ async function handleKillIntercept(msg: InboundMessage, name: string): Promise<v
   }
   await killSession(target, 'session ended')
   try { await gateway.send(msg.channelId, `Killed session **${target.tmuxName}**`, { replyTo: msg.id }) } catch {}
-  void refreshListDisplay()
+  debouncedRefreshListDisplay()
 }
 
 function formatDuration(ms: number): string {
@@ -1182,7 +1201,7 @@ function getContextPercent(tmuxName: string): string {
 // Session list rendering (shared by handleListIntercept and refreshListDisplay)
 // ---------------------------------------------------------------------------
 
-type SessionEntry = { session: SessionInfo; url: string; latestLine?: string }
+type SessionEntry = { session: SessionInfo; latestLine?: string }
 
 function listTimeBucket(lastActiveMs: number, now: number): string {
   const diffH = (now - lastActiveMs) / 3_600_000
@@ -1206,7 +1225,8 @@ function formatSessionEntry(e: SessionEntry): string {
   const ctx = getContextPercent(s.tmuxName)
   const disconnected = bridges.has(s.sessionId) ? '' : ' ⚠️'
   const emoji = sessionEmoji(s.tmuxName)
-  const title = e.url ? `[**${desc}**](${e.url})` : `**${desc}**`
+  const url = s.threadUrl
+  const title = url ? `[**${desc}**](${url})` : `**${desc}**`
   const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} (${s.originFrom})` : ''
   const lines = [
     `${emoji} \`${s.tmuxName}\`${disconnected}${provenance}`,
@@ -1232,29 +1252,72 @@ function buildListOutput(list: SessionEntry[], now: number): string {
   return sections.join('\n')
 }
 
-// Auto-refresh: track the most recent `list sessions` response so lifecycle
-// events can silently edit it. edit_message doesn't trigger push notifications.
-let lastListMsg: { channelId: string; messageId: string } | null = null
+// Auto-refresh: FILO queue of up to 5 list-session messages that get silently
+// edited on lifecycle events. edit_message doesn't trigger push notifications.
+const LIST_MSGS_FILE = join(STATE_DIR, 'list-messages.json')
+const MAX_LIST_MSGS = 5
+let lastListMsgs: Array<{ channelId: string; messageId: string }> = []
+
+function persistListMsgs(): void {
+  try {
+    writeFileSync(LIST_MSGS_FILE, JSON.stringify(lastListMsgs) + '\n', { mode: 0o600 })
+  } catch (err) {
+    process.stderr.write(`daemon: failed to persist list-messages: ${err}\n`)
+  }
+}
+
+function loadPersistedListMsgs(): void {
+  try {
+    const raw = readFileSync(LIST_MSGS_FILE, 'utf8')
+    lastListMsgs = JSON.parse(raw) as Array<{ channelId: string; messageId: string }>
+    if (lastListMsgs.length > 0) {
+      process.stderr.write(`daemon: restored ${lastListMsgs.length} list message(s)\n`)
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(`daemon: failed to load list-messages: ${err}\n`)
+    }
+  }
+}
+
+loadPersistedListMsgs()
+
+// Debounced refresh: coalesces rapid lifecycle events into a single edit pass
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+function debouncedRefreshListDisplay(): void {
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null
+    void refreshListDisplay()
+  }, 500)
+}
 
 async function refreshListDisplay(): Promise<void> {
-  if (!lastListMsg) return
-  try {
-    if (sessions.size === 0) {
-      await gateway.edit(lastListMsg.channelId, lastListMsg.messageId, 'No active sessions.')
-      return
-    }
-    const now = Date.now()
-    const all = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
-    const entries: SessionEntry[] = await Promise.all(all.map(async s => ({
-      session: s,
-      url: await gateway.getThreadUrl(s.threadId).catch(() => ''),
-    })))
-    const output = buildListOutput(entries, now)
-    await gateway.edit(lastListMsg.channelId, lastListMsg.messageId, output)
-  } catch {
-    // Edit failed (message deleted, channel archived, etc.) — clear the stale reference
-    lastListMsg = null
+  if (lastListMsgs.length === 0) return
+  const now = Date.now()
+  const all = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
+
+  let output: string
+  if (sessions.size === 0) {
+    output = 'No active sessions.'
+  } else {
+    const entries: SessionEntry[] = all.map(s => ({ session: s }))
+    output = buildListOutput(entries, now)
   }
+
+  let changed = false
+  for (let i = lastListMsgs.length - 1; i >= 0; i--) {
+    const lm = lastListMsgs[i]
+    try {
+      await gateway.edit(lm.channelId, lm.messageId, output)
+    } catch {
+      // Edit failed (message deleted, channel archived, etc.) — remove stale entry
+      lastListMsgs.splice(i, 1)
+      changed = true
+    }
+  }
+  if (changed) persistListMsgs()
 }
 
 async function handleListIntercept(msg: InboundMessage): Promise<void> {
@@ -1267,10 +1330,7 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
   const now = Date.now()
   const all = [...sessions.values()].sort((a, b) => b.lastActive - a.lastActive)
 
-  const entries: SessionEntry[] = await Promise.all(all.map(async s => ({
-    session: s,
-    url: await gateway.getThreadUrl(s.threadId).catch(() => ''),
-  })))
+  const entries: SessionEntry[] = all.map(s => ({ session: s }))
 
   // Phase 1: post immediately without latest-message info, grouped by time
   let sentMsg: { id: string } | undefined
@@ -1278,9 +1338,11 @@ async function handleListIntercept(msg: InboundMessage): Promise<void> {
     sentMsg = await gateway.send(msg.channelId, buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
   } catch { return }
 
-  // Track for auto-refresh on lifecycle events
+  // Track for auto-refresh on lifecycle events (FILO — most recent first)
   if (sentMsg) {
-    lastListMsg = { channelId: msg.channelId, messageId: sentMsg.id }
+    lastListMsgs.unshift({ channelId: msg.channelId, messageId: sentMsg.id })
+    if (lastListMsgs.length > MAX_LIST_MSGS) lastListMsgs.pop()
+    persistListMsgs()
   }
 
   // Phase 2: fetch latest message per thread in parallel, then edit
@@ -1322,7 +1384,7 @@ async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
   }
   void gateway.react(msg.channelId, msg.id, '☠️').catch(() => {})
   await killSession(info, 'session ended')
-  void refreshListDisplay()
+  debouncedRefreshListDisplay()
 }
 
 async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
@@ -1537,7 +1599,7 @@ async function handleForkIntercept(msg: InboundMessage, description?: string): P
       })
     }
 
-    void refreshListDisplay()
+    debouncedRefreshListDisplay()
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: fork intercept failed: ${errMsg}\n`)
@@ -1559,8 +1621,8 @@ async function handleForksIntercept(msg: InboundMessage): Promise<void> {
     return
   }
 
-  const lines = await Promise.all(forks.sort((a, b) => a.createdAt - b.createdAt).map(async s => {
-    const url = await gateway.getThreadUrl(s.threadId).catch(() => '')
+  const lines = forks.sort((a, b) => a.createdAt - b.createdAt).map(s => {
+    const url = s.threadUrl ?? ''
     const desc = s.description ?? fallbackDescription(s.topic)
     const ctx = getContextPercent(s.tmuxName)
     const msgs = s.messageCount ?? 0
@@ -1568,7 +1630,7 @@ async function handleForksIntercept(msg: InboundMessage): Promise<void> {
     const e = sessionEmoji(s.tmuxName)
     const title = url ? `[**${desc}**](${url})` : `**${desc}**`
     return `╰ ${e} \`${s.tmuxName}\` — ${title}\n    ◦ ${ctx} (${msgs} msgs · ${duration})`
-  }))
+  })
 
   const pe = sessionEmoji(info.tmuxName)
   try { await gateway.send(msg.channelId, `Forks from ${pe} \`${info.tmuxName}\`\n\n${lines.join('\n')}`, { replyTo: msg.id }) } catch {}
@@ -1806,7 +1868,7 @@ async function handleGoIntercept(msg: InboundMessage): Promise<void> {
       await gateway.send(info.threadId, `${ce} \`${result.name}\` is live. Type \`kill\` here to end \`${info.tmuxName}\`.`)
     } catch {}
 
-    void refreshListDisplay()
+    debouncedRefreshListDisplay()
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: handoff go failed: ${errMsg}\n`)
@@ -1848,53 +1910,32 @@ async function handleResurrectIntercept(msg: InboundMessage): Promise<void> {
     return
   }
 
-  void gateway.react(msg.channelId, msg.id, '♻️').catch(() => {})
+  void gateway.react(msg.channelId, msg.id, '🫀').catch(() => {})
 
-  const threadAnchor = gateway.getThreadAnchor(msg.channelId)
-  const baseChatId = threadAnchor?.channelId ?? msg.channelId
+  // Resurrect reattaches INTO the existing thread — no new thread, no cross-link
+  const existingThreadId = msg.existingThreadId ?? msg.channelId
 
   try {
     const topic = 'resurrected session — reading thread history'
-    const result = await doSpawnSession(topic, baseChatId, undefined)
+    const result = await doSpawnSession(topic, undefined, undefined, { existingThreadId })
 
-    // Post cross-link in the old thread so the user can find the new one
     const ce = sessionEmoji(result.name)
-    await gateway.send(msg.channelId, [
-      `♻️ Resurrected → ${ce} \`${result.name}\` — ${result.url}`,
+    await gateway.send(existingThreadId, [
+      `🫀 ${ce} \`${result.name}\` resurrected in this thread`,
       `View in any terminal: \`tmux attach -t ${result.name}\``,
     ].join('\n'), { replyTo: msg.id })
-
-    // Send the resurrection prompt to the new session — instruct it to read
-    // the OLD thread to reconstruct context (the key difference from fork)
-    const oldThreadId = msg.channelId
-    sendOrQueue(result.sessionId, {
-      type: 'notification',
-      content: [
-        `[system] You were resurrected from a dead session in thread ${oldThreadId}.`,
-        `Use fetch_messages(chat_id="${oldThreadId}", limit=50) to read the previous thread's history.`,
-        `Reconstruct what was being worked on. Continue from where the previous session left off.`,
-        `Post a summary of what you found and what you're picking up.`,
-      ].join('\n'),
-      meta: {
-        chat_id: result.threadId,
-        message_id: msg.id,
-        user: 'system',
-        user_id: 'system',
-        ts: new Date().toISOString(),
-      },
-    })
 
     // Notify main session
     const mainBridge = getBridgeForSession('main')
     if (mainBridge) {
       sendToBridge(mainBridge, {
         type: 'notification',
-        content: `[system] ♻️ Resurrected session → ${ce} \`${result.name}\`${result.url ? ` — ${result.url}` : ''}`,
+        content: `[system] 🫀 Resurrected session → ${ce} \`${result.name}\`${result.url ? ` — ${result.url}` : ''}`,
         meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
     }
 
-    void refreshListDisplay()
+    debouncedRefreshListDisplay()
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: resurrect intercept failed: ${errMsg}\n`)
