@@ -462,7 +462,7 @@ type SessionInfo = {
   description?: string
   messageCount?: number
   claudeSessionId?: string
-  originType?: 'spawn' | 'fork' | 'handoff'
+  originType?: 'spawn' | 'fork' | 'handoff' | 'resurrect'
   originFrom?: string
   threadUrl?: string
 }
@@ -639,6 +639,7 @@ type SpawnOpts = {
   handedOffFrom?: string
   artifact?: string
   existingThreadId?: string
+  resurrectFrom?: string
 }
 
 /** Unified session creation — spawn, fork, and handoff all flow through here via SpawnOpts. */
@@ -652,10 +653,12 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
   const isFork = !!opts?.forkFrom
   const isHandoff = !!opts?.handedOffFrom
   const isResurrect = !!opts?.existingThreadId
-  const originType: 'spawn' | 'fork' | 'handoff' = isFork ? 'fork' : isHandoff ? 'handoff' : 'spawn'
-  const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom
+  const originType: SessionInfo['originType'] = isFork ? 'fork' : isHandoff ? 'handoff' : isResurrect ? 'resurrect' : 'spawn'
+  const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom ?? opts?.resurrectFrom
 
-  // Resurrect: reattach to existing thread — skip all thread creation
+  // Resurrect: reattach to existing thread — skip all thread creation.
+  // anchorMessageId is intentionally left undefined: resurrected sessions don't own
+  // an anchor message, so the onMessageDelete anchor guard is correctly a no-op.
   if (isResurrect) {
     threadId = opts!.existingThreadId!
   }
@@ -753,6 +756,7 @@ async function doSpawnSession(topic: string, chatId?: string, messageId?: string
       `You are ${tmuxName}, a resurrected session resuming work in an existing thread.`,
       ``,
       `Your chat thread chat_id is ${threadId}. Your session_id is ${sessionId}.`,
+      `Read your memory files for context.`,
       `Use fetch_messages(channel="${threadId}", limit=50) to read the thread history.`,
       `Reconstruct context and continue from where the previous session left off.`,
       `Post a summary of what you found and what you're picking up using reply(chat_id=${threadId}).`,
@@ -1227,7 +1231,8 @@ function formatSessionEntry(e: SessionEntry): string {
   const emoji = sessionEmoji(s.tmuxName)
   const url = s.threadUrl
   const title = url ? `[**${desc}**](${url})` : `**${desc}**`
-  const provenance = s.originFrom ? ` ← ${s.originType === 'handoff' ? '🤝' : '🍴'} (${s.originFrom})` : ''
+  const provenanceEmoji = s.originType === 'handoff' ? '🤝' : s.originType === 'resurrect' ? '🫀' : '🍴'
+  const provenance = s.originFrom ? ` ← ${provenanceEmoji} (${s.originFrom})` : ''
   const lines = [
     `${emoji} \`${s.tmuxName}\`${disconnected}${provenance}`,
     `- ${title}`,
@@ -1880,10 +1885,18 @@ async function handleGoIntercept(msg: InboundMessage): Promise<void> {
 // Resurrect — crash recovery for dead session threads
 // ---------------------------------------------------------------------------
 
+const resurrectsInProgress = new Set<string>()
+
 async function handleResurrectIntercept(msg: InboundMessage): Promise<void> {
   // Resurrect works in threads where a session previously lived but has died.
   // It spawns a fresh session and instructs it to read the thread history to
   // reconstruct context — unlike fork, which carries the transcript via --resume.
+
+  const threadId = msg.existingThreadId ?? msg.channelId
+  if (resurrectsInProgress.has(threadId)) {
+    void gateway.send(msg.channelId, 'Resurrection already in progress for this thread.', { replyTo: msg.id }).catch(() => {})
+    return
+  }
 
   // Check if there's a live session for this thread
   const liveSession = resolveThreadSession(msg)
@@ -1894,11 +1907,10 @@ async function handleResurrectIntercept(msg: InboundMessage): Promise<void> {
       void gateway.send(msg.channelId, 'Session is still alive — use `kill` first if you want to restart.', { replyTo: msg.id }).catch(() => {})
       return
     } catch {
-      // tmux session is gone — clean up stale tracking and proceed with resurrect
-      bridges.delete(liveSession.sessionId)
-      threadToSession.delete(liveSession.threadId)
-      sessions.delete(liveSession.sessionId)
-      persistSessions()
+      // tmux session is gone — clean up stale tracking and proceed with resurrect.
+      // killSession handles bridge/thread/session cleanup and respects killsInProgress.
+      // The tmux kill-session inside will fail silently since the session is already dead.
+      await killSession(liveSession, 'stale — resurrecting')
     }
   }
 
@@ -1914,10 +1926,12 @@ async function handleResurrectIntercept(msg: InboundMessage): Promise<void> {
 
   // Resurrect reattaches INTO the existing thread — no new thread, no cross-link
   const existingThreadId = msg.existingThreadId ?? msg.channelId
+  const previousName = liveSession?.tmuxName
 
+  resurrectsInProgress.add(threadId)
   try {
     const topic = 'resurrected session — reading thread history'
-    const result = await doSpawnSession(topic, undefined, undefined, { existingThreadId })
+    const result = await doSpawnSession(topic, undefined, undefined, { existingThreadId, resurrectFrom: previousName })
 
     const ce = sessionEmoji(result.name)
     await gateway.send(existingThreadId, [
@@ -1940,6 +1954,8 @@ async function handleResurrectIntercept(msg: InboundMessage): Promise<void> {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: resurrect intercept failed: ${errMsg}\n`)
     try { await gateway.send(msg.channelId, `Resurrect failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+  } finally {
+    resurrectsInProgress.delete(threadId)
   }
 }
 
