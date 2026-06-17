@@ -1,7 +1,7 @@
 import { realpathSync } from 'fs'
 import { join, sep } from 'path'
 import { execSync } from 'child_process'
-import { STATE_DIR } from './config.js'
+import { gateway, STATE_DIR } from './config.js'
 
 export function fallbackDescription(topic: string): string {
   const firstLine = topic.split('\n')[0].replace(/^\/\S+\s*/, '').trim()
@@ -56,4 +56,14 @@ export function assertSendable(f: string): void {
   if (real.startsWith(stateReal + sep) && !real.startsWith(inbox + sep)) {
     throw new Error(`refusing to send channel state: ${f}`)
   }
+}
+
+export async function reportError(
+  channelId: string, messageId: string,
+  command: string, reason: string, suggestion?: string,
+): Promise<void> {
+  void gateway.react(channelId, messageId, '❌').catch(() => {})
+  const lines = [`:x: \`${command}\` failed: ${reason}`]
+  if (suggestion) lines.push(suggestion)
+  try { await gateway.send(channelId, lines.join('\n'), { replyTo: messageId }) } catch {}
 }
