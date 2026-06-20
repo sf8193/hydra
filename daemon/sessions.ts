@@ -178,6 +178,13 @@ export class SessionRegistry {
           dead++
           continue
         }
+        // Orphaned join members (review critics/judges) can't be re-associated
+        // with their review state after restart — kill them immediately
+        if (info.isJoinMember) {
+          try { execSync(`tmux kill-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+          dead++
+          continue
+        }
         this.sessions.set(info.sessionId, info)
         this.threadToSession.set(info.threadId, info.sessionId)
         restored++

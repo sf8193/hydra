@@ -17,7 +17,7 @@ export type ReviewState = {
   rounds: number
   currentRound: number
   currentTurn: 'critic' | 'owner'
-  phase: 'debate' | 'judging' | 'complete' | 'cancelled'
+  phase: 'debate' | 'complete' | 'cancelled'
   consecutiveFailures: number
   timeout?: ReturnType<typeof setTimeout>
   _disconnectTimer?: ReturnType<typeof setTimeout>
@@ -28,11 +28,12 @@ export type ReviewState = {
 // ---------------------------------------------------------------------------
 
 const reviews = new Map<string, ReviewState>()
-const sessionToReview = new Map<string, string>()  // critic/judge → reviewId
+const sessionToReview = new Map<string, string>()  // critic → reviewId
 const ownerToReview = new Map<string, string>()     // owner → reviewId
 const threadToReview = new Map<string, string>()    // thread → reviewId
 
-const TURN_TIMEOUT_MS = 10 * 60 * 1000  // 10 minutes per turn
+const CRITIC_TIMEOUT_MS = 10 * 60 * 1000  // 10 minutes for critic
+const OWNER_TIMEOUT_MS = 30 * 60 * 1000  // 30 minutes for owner (human involvement)
 
 // ---------------------------------------------------------------------------
 // Lookups
@@ -83,7 +84,7 @@ export async function startReview(
     const topicLine = topic ? `\nFocus: **${topic}**` : ''
     await gateway.send(ownerThreadId, [
       `**Adversarial Review** — ${rounds} round${rounds > 1 ? 's' : ''}`,
-      `A critic will challenge the design. Owner defends. An independent judge delivers the verdict.${topicLine}`,
+      `A critic will challenge the design. You defend.${topicLine}`,
     ].join('\n'))
 
     // Notify owner to prepare
@@ -143,11 +144,6 @@ export function onReviewReply(sessionId: string, text: string, chatId: string): 
     const state = reviews.get(memberReviewId)
     if (!state || chatId !== state.ownerThreadId) return
 
-    if (state.phase === 'judging') {
-      onJudgePosted(state, sessionId)
-      return
-    }
-
     if (state.phase === 'debate' && state.currentTurn === 'critic' && state.criticSessionId === sessionId) {
       onCriticPosted(state, text)
       return
@@ -165,7 +161,7 @@ export function onReviewReply(sessionId: string, text: string, chatId: string): 
   }
 }
 
-/** Called when a critic or judge bridge disconnects. Grace period before cancel. */
+/** Called when a critic bridge disconnects. Grace period before cancel. */
 export function onParticipantDisconnect(sessionId: string): void {
   const reviewId = sessionToReview.get(sessionId)
   if (!reviewId) return
@@ -231,11 +227,11 @@ function onOwnerPosted(state: ReviewState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
 
   if (state.currentRound >= state.rounds) {
-    // Final round complete — kill critic, spawn judge
+    // Final round complete — kill critic, finish
     void finishDebate(state).catch(err => {
       process.stderr.write(`daemon: finishDebate failed: ${err}\n`)
       void cancelReview(state.reviewId).catch(() => {})
-      void gateway.send(state.ownerThreadId, `Review failed during judge transition: ${err}`).catch(() => {})
+      void gateway.send(state.ownerThreadId, `Review failed during cleanup: ${err}`).catch(() => {})
     })
     return
   }
@@ -254,24 +250,6 @@ function onOwnerPosted(state: ReviewState, text: string): void {
   resetTimeout(state)
 }
 
-function onJudgePosted(state: ReviewState, judgeSessionId: string): void {
-  if (state.timeout) clearTimeout(state.timeout)
-
-  // Kill judge after brief delay
-  setTimeout(async () => {
-    try {
-      const info = registry.get(judgeSessionId)
-      if (info && !killsInProgress.has(judgeSessionId)) {
-        await killSession(info, 'verdict delivered')
-      }
-    } catch (err) {
-      process.stderr.write(`daemon: judge cleanup failed: ${err}\n`)
-    }
-    sessionToReview.delete(judgeSessionId)
-    completeReview(state)
-  }, 3000)
-}
-
 // ---------------------------------------------------------------------------
 // Phase transitions
 // ---------------------------------------------------------------------------
@@ -287,25 +265,7 @@ async function finishDebate(state: ReviewState): Promise<void> {
     state.criticSessionId = undefined
   }
 
-  state.phase = 'judging'
-  await gateway.send(state.ownerThreadId, `Debate complete — spawning independent judge...`)
-
-  // Spawn judge
-  try {
-    const result = await doSpawnSession('Adversarial review JUDGE', undefined, undefined, {
-      joinThread: state.ownerThreadId,
-      promptBuilder: (sessionId, tmuxName) =>
-        buildJudgePrompt(sessionId, tmuxName, state.ownerThreadId),
-    })
-
-    sessionToReview.set(result.sessionId, state.reviewId)
-    resetTimeout(state)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`daemon: judge spawn failed: ${msg}\n`)
-    await gateway.send(state.ownerThreadId, `Failed to spawn judge: ${msg}`)
-    completeReview(state)
-  }
+  completeReview(state)
 }
 
 function completeReview(state: ReviewState): void {
@@ -319,7 +279,7 @@ function completeReview(state: ReviewState): void {
   // Nudge owner
   transport.sendOrQueue(state.ownerSessionId, {
     type: 'notification',
-    content: `[system] Adversarial review complete. The judge's verdict is in your thread. Read it and decide on next steps.`,
+    content: `[system] Adversarial review complete. Read the critique and your defense above, then decide on next steps.`,
     meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -357,12 +317,13 @@ async function spawnCritic(state: ReviewState): Promise<void> {
 function resetTimeout(state: ReviewState): void {
   if (state.timeout) clearTimeout(state.timeout)
 
-  const whose = state.phase === 'judging' ? 'judge' : state.currentTurn
+  const whose = state.currentTurn
+  const timeoutMs = whose === 'owner' ? OWNER_TIMEOUT_MS : CRITIC_TIMEOUT_MS
   state.timeout = setTimeout(async () => {
     process.stderr.write(`daemon: review turn timed out (${whose})\n`)
     await gateway.send(state.ownerThreadId, `Review timed out waiting for ${whose}. Cancelling.`)
     await cancelReview(state.reviewId)
-  }, TURN_TIMEOUT_MS)
+  }, timeoutMs)
 }
 
 // ---------------------------------------------------------------------------
@@ -398,32 +359,3 @@ function buildCriticPrompt(
   ].join('\n')
 }
 
-function buildJudgePrompt(
-  sessionId: string,
-  tmuxName: string,
-  threadId: string,
-): string {
-  return [
-    `You are ${tmuxName}, the independent JUDGE in an adversarial review.`,
-    ``,
-    `Your session_id is ${sessionId}.`,
-    ``,
-    `**Instructions:**`,
-    `1. Call fetch_messages(channel="${threadId}", limit=100) to read the full debate`,
-    `2. Read any code files or analysis referenced in the arguments`,
-    `3. Post ONE verdict using reply(chat_id="${threadId}")`,
-    ``,
-    `**Reading the thread:** All bot messages appear as "me:" in fetch_messages. Identify roles by content:`,
-    `- Messages with "## Adversarial Critique" headers are from the **critic**`,
-    `- Messages with "## Owner Defense" headers are from the **owner/advocate**`,
-    `- Messages like "Spawning critic..." or "Debate complete" are **daemon announcements** (ignore)`,
-    `- Messages from named users (not "me:") are from the **human user**`,
-    ``,
-    `**Your verdict must include:**`,
-    `- Which critiques are valid and which were successfully rebutted`,
-    `- Concrete action items (what should change, what's fine as-is)`,
-    `- An overall assessment: ship as-is, ship with fixes, or redesign`,
-    ``,
-    `Be impartial. You have no prior context — evaluate purely on the arguments and evidence presented.`,
-  ].join('\n')
-}
