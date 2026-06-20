@@ -7,7 +7,7 @@ import { executeTool, computeToolsForSession, MAIN_ONLY_TOOLS, SPAWN_MODEL } fro
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
-import { isReviewMember, onMemberPosted, onMemberDisconnect } from './adversarial.js'
+import { isReviewParticipant, onReviewReply, onParticipantDisconnect } from './adversarial.js'
 import type { ButtonDef } from '../gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -90,9 +90,9 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           ...(result.isError ? { isError: true } : {}),
         })
 
-        // Adversarial review: detect when a member posts its reply
-        if (name === 'reply' && !result.isError && conn.sessionId && isReviewMember(conn.sessionId)) {
-          onMemberPosted(conn.sessionId)
+        // Adversarial review: detect reply from any review participant
+        if (name === 'reply' && !result.isError && conn.sessionId && isReviewParticipant(conn.sessionId)) {
+          onReviewReply(conn.sessionId, args.text as string)
         }
       }).catch(err => {
         transport.sendToBridge(conn, {
@@ -167,9 +167,9 @@ export const socketServer = createServer((socket: Socket) => {
       if (transport.get(conn.sessionId) === conn) {
         transport.delete(conn.sessionId)
       }
-      // Adversarial review: handle member disconnect as fallback
-      if (isReviewMember(conn.sessionId)) {
-        onMemberDisconnect(conn.sessionId)
+      // Adversarial review: handle participant disconnect
+      if (isReviewParticipant(conn.sessionId)) {
+        onParticipantDisconnect(conn.sessionId)
       }
     }
   })

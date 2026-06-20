@@ -2,27 +2,21 @@ import { randomUUID } from 'crypto'
 import { gateway } from './config.js'
 import { registry } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
+import { transport } from './bridge-transport.js'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type TurnRole = 'critic' | 'advocate'
-
-type Turn = {
-  role: TurnRole
-  round: number
-}
-
 export type ReviewState = {
   reviewId: string
   ownerThreadId: string
   ownerSessionId: string
+  criticSessionId?: string
   rounds: number
-  turns: Turn[]
-  currentTurnIndex: number
-  currentMemberSessionId?: string
-  status: 'active' | 'complete' | 'cancelled'
+  currentRound: number
+  currentTurn: 'critic' | 'owner'
+  phase: 'debate' | 'judging' | 'complete' | 'cancelled'
   consecutiveFailures: number
   timeout?: ReturnType<typeof setTimeout>
 }
@@ -32,8 +26,11 @@ export type ReviewState = {
 // ---------------------------------------------------------------------------
 
 const reviews = new Map<string, ReviewState>()
-const memberToReview = new Map<string, string>()
-const threadToReview = new Map<string, string>()
+const sessionToReview = new Map<string, string>()  // critic/judge → reviewId
+const ownerToReview = new Map<string, string>()     // owner → reviewId
+const threadToReview = new Map<string, string>()    // thread → reviewId
+
+const TURN_TIMEOUT_MS = 10 * 60 * 1000  // 10 minutes per turn
 
 // ---------------------------------------------------------------------------
 // Lookups
@@ -44,8 +41,8 @@ export function getReviewByThread(threadId: string): ReviewState | undefined {
   return reviewId ? reviews.get(reviewId) : undefined
 }
 
-export function isReviewMember(sessionId: string): boolean {
-  return memberToReview.has(sessionId)
+export function isReviewParticipant(sessionId: string): boolean {
+  return sessionToReview.has(sessionId) || ownerToReview.has(sessionId)
 }
 
 // ---------------------------------------------------------------------------
@@ -57,15 +54,8 @@ export async function startReview(
   ownerSessionId: string,
   rounds: number,
 ): Promise<ReviewState> {
-  // Synchronous guard against double-invocation (TOCTOU)
   if (threadToReview.has(ownerThreadId)) {
     throw new Error('A review is already in progress in this thread')
-  }
-
-  const turns: Turn[] = []
-  for (let r = 1; r <= rounds; r++) {
-    turns.push({ role: 'critic', round: r })
-    turns.push({ role: 'advocate', round: r })
   }
 
   const reviewId = randomUUID()
@@ -74,21 +64,30 @@ export async function startReview(
     ownerThreadId,
     ownerSessionId,
     rounds,
-    turns,
-    currentTurnIndex: -1,
-    status: 'active',
+    currentRound: 1,
+    currentTurn: 'critic',
+    phase: 'debate',
     consecutiveFailures: 0,
   }
 
   reviews.set(reviewId, state)
   threadToReview.set(ownerThreadId, reviewId)
+  ownerToReview.set(ownerSessionId, reviewId)
 
   await gateway.send(ownerThreadId, [
-    `**Adversarial Review** — ${rounds} round${rounds > 1 ? 's' : ''} starting`,
-    `Critic and advocate will debate, then owner renders verdict.`,
+    `**Adversarial Review** — ${rounds} round${rounds > 1 ? 's' : ''}`,
+    `A critic will challenge the design. Owner defends. An independent judge delivers the verdict.`,
   ].join('\n'))
 
-  await advanceTurn(state)
+  // Notify owner to prepare
+  transport.sendOrQueue(ownerSessionId, {
+    type: 'notification',
+    content: `[system] Adversarial review started (${rounds} rounds). A critic will challenge your design. When their critique arrives as a notification, defend your work by replying to your thread. Be specific — cite code and reasoning.`,
+    meta: { chat_id: ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+
+  // Spawn critic
+  await spawnCritic(state)
   return state
 }
 
@@ -100,186 +99,273 @@ export async function cancelReview(reviewId: string): Promise<void> {
   const state = reviews.get(reviewId)
   if (!state) return
 
-  state.status = 'cancelled'
+  state.phase = 'cancelled'
   if (state.timeout) clearTimeout(state.timeout)
 
-  if (state.currentMemberSessionId) {
-    const info = registry.get(state.currentMemberSessionId)
-    if (info && !killsInProgress.has(state.currentMemberSessionId)) {
+  // Kill critic if alive
+  if (state.criticSessionId) {
+    const info = registry.get(state.criticSessionId)
+    if (info && !killsInProgress.has(state.criticSessionId)) {
       await killSession(info, 'review cancelled')
     }
-    memberToReview.delete(state.currentMemberSessionId)
+    sessionToReview.delete(state.criticSessionId)
   }
 
+  ownerToReview.delete(state.ownerSessionId)
   threadToReview.delete(state.ownerThreadId)
   reviews.delete(reviewId)
   await gateway.send(state.ownerThreadId, `Review cancelled.`)
 }
 
 // ---------------------------------------------------------------------------
-// Member lifecycle hooks
+// Core reply handler — called from bridge-server for ALL reply tool calls
 // ---------------------------------------------------------------------------
 
-/** Called from bridge-server when a review member calls reply() successfully. */
-export function onMemberPosted(sessionId: string): void {
-  const reviewId = memberToReview.get(sessionId)
-  if (!reviewId) return
-  const state = reviews.get(reviewId)
-  if (!state || state.status !== 'active') return
-  if (state.currentMemberSessionId !== sessionId) return
+export function onReviewReply(sessionId: string, text: string): void {
+  // Check if this is a critic/judge posting
+  const memberReviewId = sessionToReview.get(sessionId)
+  if (memberReviewId) {
+    const state = reviews.get(memberReviewId)
+    if (!state) return
 
-  // Guard against re-entrance (member calling reply() multiple times)
-  state.currentMemberSessionId = undefined
-  if (state.timeout) clearTimeout(state.timeout)
-
-  // Brief delay for the message to land, then kill + advance
-  setTimeout(async () => {
-    try {
-      const info = registry.get(sessionId)
-      if (info && !killsInProgress.has(sessionId)) {
-        await killSession(info, 'review turn complete')
-      }
-      memberToReview.delete(sessionId)
-      await advanceTurn(state)
-    } catch (err) {
-      process.stderr.write(`daemon: review post-reply cleanup failed: ${err}\n`)
-      memberToReview.delete(sessionId)
-      await advanceTurn(state).catch(() => {})
+    if (state.phase === 'judging') {
+      // Judge posted verdict — review complete
+      onJudgePosted(state, sessionId)
+      return
     }
-  }, 3000)
-}
 
-/** Fallback: called when a member bridge disconnects unexpectedly. */
-export function onMemberDisconnect(sessionId: string): void {
-  const reviewId = memberToReview.get(sessionId)
-  if (!reviewId) return
-  const state = reviews.get(reviewId)
-  if (!state || state.status !== 'active') return
-  if (state.currentMemberSessionId !== sessionId) return
-
-  if (state.timeout) clearTimeout(state.timeout)
-  memberToReview.delete(sessionId)
-  state.currentMemberSessionId = undefined
-
-  process.stderr.write(`daemon: review member ${sessionId} disconnected, advancing\n`)
-  void advanceTurn(state)
-}
-
-// ---------------------------------------------------------------------------
-// Turn advancement
-// ---------------------------------------------------------------------------
-
-async function advanceTurn(state: ReviewState): Promise<void> {
-  state.currentTurnIndex++
-
-  if (state.currentTurnIndex >= state.turns.length) {
-    state.status = 'complete'
-    if (state.timeout) clearTimeout(state.timeout)
-    threadToReview.delete(state.ownerThreadId)
-    reviews.delete(state.reviewId)
-
-    await gateway.send(state.ownerThreadId, [
-      `**Review complete** — ${state.rounds} round${state.rounds > 1 ? 's' : ''} finished.`,
-      `Owner: read the debate above and post your verdict.`,
-    ].join('\n'))
-
-    // Nudge the owner session
-    const { transport } = await import('./bridge-transport.js')
-    transport.sendOrQueue(state.ownerSessionId, {
-      type: 'notification',
-      content: `[system] Adversarial review complete in your thread. Use fetch_messages to read the full debate, then post your verdict and recommended changes.`,
-      meta: {
-        chat_id: state.ownerThreadId,
-        message_id: '',
-        user: 'system',
-        user_id: 'system',
-        ts: new Date().toISOString(),
-      },
-    })
+    if (state.phase === 'debate' && state.currentTurn === 'critic' && state.criticSessionId === sessionId) {
+      onCriticPosted(state, text)
+      return
+    }
     return
   }
 
-  const turn = state.turns[state.currentTurnIndex]
-  await spawnMember(state, turn)
+  // Check if this is the owner posting during a review
+  const ownerReviewId = ownerToReview.get(sessionId)
+  if (ownerReviewId) {
+    const state = reviews.get(ownerReviewId)
+    if (!state || state.phase !== 'debate' || state.currentTurn !== 'owner') return
+    onOwnerPosted(state, text)
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Member spawning
-// ---------------------------------------------------------------------------
+/** Called when a critic or judge bridge disconnects. */
+export function onParticipantDisconnect(sessionId: string): void {
+  const reviewId = sessionToReview.get(sessionId)
+  if (!reviewId) return
+  const state = reviews.get(reviewId)
+  if (!state) return
 
-async function spawnMember(state: ReviewState, turn: Turn): Promise<void> {
-  const { role, round } = turn
-  const emoji = role === 'critic' ? '🔴' : '🟢'
-  const label = `${emoji} **${role}** (round ${round}/${state.rounds})`
-
-  await gateway.send(state.ownerThreadId, `${label} — spawning...`)
-
-  const topic = `Adversarial ${role.toUpperCase()} round ${round}/${state.rounds}`
-
-  try {
-    const result = await doSpawnSession(topic, undefined, undefined, {
-      joinThread: state.ownerThreadId,
-      promptBuilder: (sessionId, tmuxName) =>
-        buildMemberPrompt(sessionId, tmuxName, role, round, state.rounds, state.ownerThreadId),
-    })
-
-    state.currentMemberSessionId = result.sessionId
-    state.consecutiveFailures = 0
-    memberToReview.set(result.sessionId, state.reviewId)
-
-    // Safety timeout: 5 minutes per turn
-    state.timeout = setTimeout(async () => {
-      process.stderr.write(`daemon: review member ${result.sessionId} timed out\n`)
-      const info = registry.get(result.sessionId)
-      if (info && !killsInProgress.has(result.sessionId)) {
-        await killSession(info, 'review turn timed out')
-      }
-      memberToReview.delete(result.sessionId)
-      state.currentMemberSessionId = undefined
-      await advanceTurn(state)
-    }, 5 * 60 * 1000)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`daemon: review member spawn failed: ${msg}\n`)
-    state.consecutiveFailures++
-    if (state.consecutiveFailures >= 2) {
-      await gateway.send(state.ownerThreadId, `Failed to spawn ${role}: ${msg}. Too many consecutive failures — cancelling review.`)
-      await cancelReview(state.reviewId)
-    } else {
-      await gateway.send(state.ownerThreadId, `Failed to spawn ${role}: ${msg}. Skipping to next turn.`)
-      await advanceTurn(state)
-    }
+  if (state.phase === 'debate' && state.criticSessionId === sessionId) {
+    process.stderr.write(`daemon: review critic disconnected unexpectedly\n`)
+    if (state.timeout) clearTimeout(state.timeout)
+    void cancelReview(state.reviewId)
   }
 }
 
 // ---------------------------------------------------------------------------
-// Prompt builder
+// Turn handlers
 // ---------------------------------------------------------------------------
 
-function buildMemberPrompt(
+function onCriticPosted(state: ReviewState, text: string): void {
+  if (state.timeout) clearTimeout(state.timeout)
+
+  // Push critique to owner
+  const roundLabel = `Round ${state.currentRound}/${state.rounds}`
+  transport.sendOrQueue(state.ownerSessionId, {
+    type: 'notification',
+    content: `[Adversarial Review — Critic ${roundLabel}]\n\n${text}\n\n---\nDefend your design. Reply to your thread with your response.`,
+    meta: { chat_id: state.ownerThreadId, message_id: '', user: 'review-critic', user_id: 'system', ts: new Date().toISOString() },
+  })
+
+  state.currentTurn = 'owner'
+  resetTimeout(state)
+}
+
+function onOwnerPosted(state: ReviewState, text: string): void {
+  if (state.timeout) clearTimeout(state.timeout)
+
+  if (state.currentRound >= state.rounds) {
+    // Final round complete — kill critic, spawn judge
+    void finishDebate(state)
+    return
+  }
+
+  // Push defense to critic and advance round
+  state.currentRound++
+  const roundLabel = `Round ${state.currentRound}/${state.rounds}`
+
+  transport.sendOrQueue(state.criticSessionId!, {
+    type: 'notification',
+    content: `[Adversarial Review — Owner Defense]\n\n${text}\n\n---\nPost your counter-argument for ${roundLabel}.`,
+    meta: { chat_id: state.ownerThreadId, message_id: '', user: 'review-owner', user_id: 'system', ts: new Date().toISOString() },
+  })
+
+  state.currentTurn = 'critic'
+  resetTimeout(state)
+}
+
+function onJudgePosted(state: ReviewState, judgeSessionId: string): void {
+  if (state.timeout) clearTimeout(state.timeout)
+
+  // Kill judge after brief delay
+  setTimeout(async () => {
+    try {
+      const info = registry.get(judgeSessionId)
+      if (info && !killsInProgress.has(judgeSessionId)) {
+        await killSession(info, 'verdict delivered')
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: judge cleanup failed: ${err}\n`)
+    }
+    sessionToReview.delete(judgeSessionId)
+    completeReview(state)
+  }, 3000)
+}
+
+// ---------------------------------------------------------------------------
+// Phase transitions
+// ---------------------------------------------------------------------------
+
+async function finishDebate(state: ReviewState): Promise<void> {
+  // Kill critic
+  if (state.criticSessionId) {
+    const info = registry.get(state.criticSessionId)
+    if (info && !killsInProgress.has(state.criticSessionId)) {
+      await killSession(info, 'debate complete')
+    }
+    sessionToReview.delete(state.criticSessionId)
+    state.criticSessionId = undefined
+  }
+
+  state.phase = 'judging'
+  await gateway.send(state.ownerThreadId, `Debate complete — spawning independent judge...`)
+
+  // Spawn judge
+  try {
+    const result = await doSpawnSession('Adversarial review JUDGE', undefined, undefined, {
+      joinThread: state.ownerThreadId,
+      promptBuilder: (sessionId, tmuxName) =>
+        buildJudgePrompt(sessionId, tmuxName, state.ownerThreadId),
+    })
+
+    sessionToReview.set(result.sessionId, state.reviewId)
+    resetTimeout(state)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: judge spawn failed: ${msg}\n`)
+    await gateway.send(state.ownerThreadId, `Failed to spawn judge: ${msg}`)
+    completeReview(state)
+  }
+}
+
+function completeReview(state: ReviewState): void {
+  state.phase = 'complete'
+  ownerToReview.delete(state.ownerSessionId)
+  threadToReview.delete(state.ownerThreadId)
+  reviews.delete(state.reviewId)
+
+  void gateway.send(state.ownerThreadId, `**Review complete.**`)
+
+  // Nudge owner
+  transport.sendOrQueue(state.ownerSessionId, {
+    type: 'notification',
+    content: `[system] Adversarial review complete. The judge's verdict is in your thread. Read it and decide on next steps.`,
+    meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Spawning
+// ---------------------------------------------------------------------------
+
+async function spawnCritic(state: ReviewState): Promise<void> {
+  await gateway.send(state.ownerThreadId, `Spawning critic...`)
+
+  try {
+    const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
+      joinThread: state.ownerThreadId,
+      promptBuilder: (sessionId, tmuxName) =>
+        buildCriticPrompt(sessionId, tmuxName, state.rounds, state.ownerThreadId),
+    })
+
+    state.criticSessionId = result.sessionId
+    state.consecutiveFailures = 0
+    sessionToReview.set(result.sessionId, state.reviewId)
+    resetTimeout(state)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: critic spawn failed: ${msg}\n`)
+    await gateway.send(state.ownerThreadId, `Failed to spawn critic: ${msg}. Review cancelled.`)
+    void cancelReview(state.reviewId)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Timeout
+// ---------------------------------------------------------------------------
+
+function resetTimeout(state: ReviewState): void {
+  if (state.timeout) clearTimeout(state.timeout)
+
+  const whose = state.phase === 'judging' ? 'judge' : state.currentTurn
+  state.timeout = setTimeout(async () => {
+    process.stderr.write(`daemon: review turn timed out (${whose})\n`)
+    await gateway.send(state.ownerThreadId, `Review timed out waiting for ${whose}. Cancelling.`)
+    await cancelReview(state.reviewId)
+  }, TURN_TIMEOUT_MS)
+}
+
+// ---------------------------------------------------------------------------
+// Prompts
+// ---------------------------------------------------------------------------
+
+function buildCriticPrompt(
   sessionId: string,
   tmuxName: string,
-  role: TurnRole,
-  round: number,
-  totalRounds: number,
+  rounds: number,
   threadId: string,
 ): string {
-  const mandate = role === 'critic'
-    ? `Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design. Be specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
-    : `Defend the design against critique. Address each criticism directly. Concede valid points, rebut weak ones, and propose mitigations where needed. Be specific — cite code, data, or reasoning.`
-
   return [
-    `You are ${tmuxName}, an adversarial review ${role.toUpperCase()} (round ${round}/${totalRounds}).`,
+    `You are ${tmuxName}, the CRITIC in a ${rounds}-round adversarial review.`,
     ``,
     `Your session_id is ${sessionId}.`,
     ``,
     `**Instructions:**`,
-    `1. Call fetch_messages(channel="${threadId}", limit=100) to read the full conversation — the design discussion and any prior review rounds`,
-    `2. Read any code files, wiki articles, or analysis referenced in the discussion to ground your argument`,
-    `3. Post exactly ONE message with your ${role === 'critic' ? 'critique' : 'defense'} using reply(chat_id="${threadId}")`,
+    `1. Call fetch_messages(channel="${threadId}", limit=100) to read the design conversation`,
+    `2. Read any code files, wiki articles, or analysis referenced in the discussion`,
+    `3. Post your opening critique using reply(chat_id="${threadId}")`,
+    `4. **WAIT** — the designer will respond. Their defense will arrive as a notification.`,
+    `5. When you receive their defense, post your counter-argument. Repeat for ${rounds} rounds.`,
     ``,
-    `**Your mandate:** ${mandate}`,
+    `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.`,
+    `Be specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`,
     ``,
-    `Format with clear headers for each point. Be substantive and focused.`,
+    `Format with clear headers. Be substantive and focused. One message per round.`,
+  ].join('\n')
+}
+
+function buildJudgePrompt(
+  sessionId: string,
+  tmuxName: string,
+  threadId: string,
+): string {
+  return [
+    `You are ${tmuxName}, the independent JUDGE in an adversarial review.`,
+    ``,
+    `Your session_id is ${sessionId}.`,
+    ``,
+    `**Instructions:**`,
+    `1. Call fetch_messages(channel="${threadId}", limit=100) to read the full debate`,
+    `2. Read any code files or analysis referenced in the arguments`,
+    `3. Post ONE verdict using reply(chat_id="${threadId}")`,
+    ``,
+    `**Your verdict must include:**`,
+    `- Which critiques are valid and which were successfully rebutted`,
+    `- Concrete action items (what should change, what's fine as-is)`,
+    `- An overall assessment: ship as-is, ship with fixes, or redesign`,
+    ``,
+    `Be impartial. You have no prior context — evaluate purely on the arguments and evidence presented.`,
   ].join('\n')
 }
