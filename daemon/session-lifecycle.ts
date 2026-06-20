@@ -27,15 +27,18 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
   killsInProgress.add(info.sessionId)
 
   try {
-    try {
-      await gateway.send(info.threadId, `_${reason}_`)
-    } catch (err) {
-      process.stderr.write(`daemon: failed to post session end message: ${err}\n`)
-    }
+    // Join members don't own the thread — skip death message and anchor reactions
+    if (!info.isJoinMember) {
+      try {
+        await gateway.send(info.threadId, `_${reason}_`)
+      } catch (err) {
+        process.stderr.write(`daemon: failed to post session end message: ${err}\n`)
+      }
 
-    const anchor = gateway.getThreadAnchor(info.threadId)
-    if (anchor) {
-      void gateway.react(anchor.channelId, anchor.messageId, '☠️').catch(() => {})
+      const anchor = gateway.getThreadAnchor(info.threadId)
+      if (anchor) {
+        void gateway.react(anchor.channelId, anchor.messageId, '☠️').catch(() => {})
+      }
     }
 
     const tmuxName = info.tmuxName
@@ -60,7 +63,10 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       } catch {}
     }
 
-    registry.deleteThread(info.threadId)
+    // Don't delete thread mapping for join members — owner keeps it
+    if (!info.isJoinMember) {
+      registry.deleteThread(info.threadId)
+    }
     registry.delete(info.sessionId)
     registry.persist()
 
@@ -345,6 +351,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     threadUrl: url || undefined,
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
+    ...(isJoin ? { isJoinMember: true } : {}),
   })
   // Don't register in threadToSession for join members — owner keeps that mapping
   if (!isJoin) {

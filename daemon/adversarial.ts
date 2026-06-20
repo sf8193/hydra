@@ -23,6 +23,7 @@ export type ReviewState = {
   currentTurnIndex: number
   currentMemberSessionId?: string
   status: 'active' | 'complete' | 'cancelled'
+  consecutiveFailures: number
   timeout?: ReturnType<typeof setTimeout>
 }
 
@@ -56,6 +57,11 @@ export async function startReview(
   ownerSessionId: string,
   rounds: number,
 ): Promise<ReviewState> {
+  // Synchronous guard against double-invocation (TOCTOU)
+  if (threadToReview.has(ownerThreadId)) {
+    throw new Error('A review is already in progress in this thread')
+  }
+
   const turns: Turn[] = []
   for (let r = 1; r <= rounds; r++) {
     turns.push({ role: 'critic', round: r })
@@ -71,6 +77,7 @@ export async function startReview(
     turns,
     currentTurnIndex: -1,
     status: 'active',
+    consecutiveFailures: 0,
   }
 
   reviews.set(reviewId, state)
@@ -121,17 +128,24 @@ export function onMemberPosted(sessionId: string): void {
   if (!state || state.status !== 'active') return
   if (state.currentMemberSessionId !== sessionId) return
 
+  // Guard against re-entrance (member calling reply() multiple times)
+  state.currentMemberSessionId = undefined
   if (state.timeout) clearTimeout(state.timeout)
 
   // Brief delay for the message to land, then kill + advance
   setTimeout(async () => {
-    const info = registry.get(sessionId)
-    if (info && !killsInProgress.has(sessionId)) {
-      await killSession(info, 'review turn complete')
+    try {
+      const info = registry.get(sessionId)
+      if (info && !killsInProgress.has(sessionId)) {
+        await killSession(info, 'review turn complete')
+      }
+      memberToReview.delete(sessionId)
+      await advanceTurn(state)
+    } catch (err) {
+      process.stderr.write(`daemon: review post-reply cleanup failed: ${err}\n`)
+      memberToReview.delete(sessionId)
+      await advanceTurn(state).catch(() => {})
     }
-    memberToReview.delete(sessionId)
-    state.currentMemberSessionId = undefined
-    await advanceTurn(state)
   }, 3000)
 }
 
@@ -210,6 +224,7 @@ async function spawnMember(state: ReviewState, turn: Turn): Promise<void> {
     })
 
     state.currentMemberSessionId = result.sessionId
+    state.consecutiveFailures = 0
     memberToReview.set(result.sessionId, state.reviewId)
 
     // Safety timeout: 5 minutes per turn
@@ -226,8 +241,14 @@ async function spawnMember(state: ReviewState, turn: Turn): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: review member spawn failed: ${msg}\n`)
-    await gateway.send(state.ownerThreadId, `Failed to spawn ${role}: ${msg}. Advancing.`)
-    await advanceTurn(state)
+    state.consecutiveFailures++
+    if (state.consecutiveFailures >= 2) {
+      await gateway.send(state.ownerThreadId, `Failed to spawn ${role}: ${msg}. Too many consecutive failures — cancelling review.`)
+      await cancelReview(state.reviewId)
+    } else {
+      await gateway.send(state.ownerThreadId, `Failed to spawn ${role}: ${msg}. Skipping to next turn.`)
+      await advanceTurn(state)
+    }
   }
 }
 
@@ -256,7 +277,6 @@ function buildMemberPrompt(
     `1. Call fetch_messages(channel="${threadId}", limit=100) to read the full conversation — the design discussion and any prior review rounds`,
     `2. Read any code files, wiki articles, or analysis referenced in the discussion to ground your argument`,
     `3. Post exactly ONE message with your ${role === 'critic' ? 'critique' : 'defense'} using reply(chat_id="${threadId}")`,
-    `4. After posting, call set_description(session_id="${sessionId}", description="${role} r${round}/${totalRounds} — posted")`,
     ``,
     `**Your mandate:** ${mandate}`,
     ``,

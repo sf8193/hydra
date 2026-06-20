@@ -35,6 +35,7 @@ export type SessionInfo = {
   threadUrl?: string
   worktreeRepo?: string
   worktreePath?: string
+  isJoinMember?: boolean
 }
 
 export type SpawnResult = { name: string; sessionId: string; threadId: string; url: string }
