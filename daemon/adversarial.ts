@@ -74,26 +74,35 @@ export async function startReview(
     consecutiveFailures: 0,
   }
 
+  // Set maps synchronously before any await to prevent TOCTOU
   reviews.set(reviewId, state)
   threadToReview.set(ownerThreadId, reviewId)
   ownerToReview.set(ownerSessionId, reviewId)
 
-  const topicLine = topic ? `\nFocus: **${topic}**` : ''
-  await gateway.send(ownerThreadId, [
-    `**Adversarial Review** — ${rounds} round${rounds > 1 ? 's' : ''}`,
-    `A critic will challenge the design. Owner defends. An independent judge delivers the verdict.${topicLine}`,
-  ].join('\n'))
+  try {
+    const topicLine = topic ? `\nFocus: **${topic}**` : ''
+    await gateway.send(ownerThreadId, [
+      `**Adversarial Review** — ${rounds} round${rounds > 1 ? 's' : ''}`,
+      `A critic will challenge the design. Owner defends. An independent judge delivers the verdict.${topicLine}`,
+    ].join('\n'))
 
-  // Notify owner to prepare
-  transport.sendOrQueue(ownerSessionId, {
-    type: 'notification',
-    content: `[system] Adversarial review started (${rounds} rounds). A critic will challenge your design. When their critique arrives as a notification, defend your work by replying to your thread. Be specific — cite code and reasoning.`,
-    meta: { chat_id: ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
+    // Notify owner to prepare
+    transport.sendOrQueue(ownerSessionId, {
+      type: 'notification',
+      content: `[system] Adversarial review started (${rounds} rounds). A critic will challenge your design. When their critique arrives as a notification, defend your work by replying to your thread. Be specific — cite code and reasoning.`,
+      meta: { chat_id: ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
 
-  // Spawn critic
-  await spawnCritic(state)
-  return state
+    // Spawn critic
+    await spawnCritic(state)
+    return state
+  } catch (err) {
+    // Clean up maps if startup fails
+    reviews.delete(reviewId)
+    threadToReview.delete(ownerThreadId)
+    ownerToReview.delete(ownerSessionId)
+    throw err
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,15 +136,14 @@ export async function cancelReview(reviewId: string): Promise<void> {
 // Core reply handler — called from bridge-server for ALL reply tool calls
 // ---------------------------------------------------------------------------
 
-export function onReviewReply(sessionId: string, text: string): void {
+export function onReviewReply(sessionId: string, text: string, chatId: string): void {
   // Check if this is a critic/judge posting
   const memberReviewId = sessionToReview.get(sessionId)
   if (memberReviewId) {
     const state = reviews.get(memberReviewId)
-    if (!state) return
+    if (!state || chatId !== state.ownerThreadId) return
 
     if (state.phase === 'judging') {
-      // Judge posted verdict — review complete
       onJudgePosted(state, sessionId)
       return
     }
@@ -147,11 +155,12 @@ export function onReviewReply(sessionId: string, text: string): void {
     return
   }
 
-  // Check if this is the owner posting during a review
+  // Check if this is the owner posting during a review — must be to the review thread
   const ownerReviewId = ownerToReview.get(sessionId)
   if (ownerReviewId) {
     const state = reviews.get(ownerReviewId)
     if (!state || state.phase !== 'debate' || state.currentTurn !== 'owner') return
+    if (chatId !== state.ownerThreadId) return
     onOwnerPosted(state, text)
   }
 }
@@ -165,11 +174,16 @@ export function onParticipantDisconnect(sessionId: string): void {
 
   if (state.phase === 'debate' && state.criticSessionId === sessionId) {
     process.stderr.write(`daemon: review critic disconnected — 30s grace period\n`)
+    // Pause turn timeout during grace period to prevent double-cancel
+    if (state.timeout) {
+      clearTimeout(state.timeout)
+      state.timeout = undefined
+    }
     // Grace period: bridge reconnections fire disconnect before re-register
     state._disconnectTimer = setTimeout(async () => {
-      // Check if the critic reconnected during the grace period
       if (transport.has(sessionId)) {
         process.stderr.write(`daemon: review critic reconnected, grace period cleared\n`)
+        resetTimeout(state)
         return
       }
       process.stderr.write(`daemon: review critic did not reconnect, cancelling review\n`)
@@ -186,6 +200,8 @@ export function onParticipantReconnect(sessionId: string): void {
   if (!state || !state._disconnectTimer) return
   clearTimeout(state._disconnectTimer)
   state._disconnectTimer = undefined
+  // Restore turn timeout that was paused during disconnect
+  resetTimeout(state)
   process.stderr.write(`daemon: review participant ${sessionId} reconnected, grace period cleared\n`)
 }
 

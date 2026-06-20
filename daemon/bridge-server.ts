@@ -93,7 +93,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 
         // Adversarial review: detect reply from any review participant
         if (name === 'reply' && !result.isError && conn.sessionId && isReviewParticipant(conn.sessionId)) {
-          onReviewReply(conn.sessionId, args.text as string)
+          onReviewReply(conn.sessionId, args.text as string, args.chat_id as string)
         }
       }).catch(err => {
         transport.sendToBridge(conn, {
