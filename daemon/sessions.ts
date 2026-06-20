@@ -43,6 +43,8 @@ export type SpawnOpts = {
   forkFrom?: { claudeSessionId: string; parentName: string }
   handedOffFrom?: string
   artifact?: string
+  joinThread?: string                                          // join existing thread as member (skip thread creation)
+  promptBuilder?: (sessionId: string, tmuxName: string) => string  // override default prompt
 }
 
 // ---------------------------------------------------------------------------

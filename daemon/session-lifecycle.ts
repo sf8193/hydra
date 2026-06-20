@@ -103,82 +103,87 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const originType: 'spawn' | 'fork' | 'handoff' = isFork ? 'fork' : isHandoff ? 'handoff' : 'spawn'
   const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom
 
-  // Determine where to create the thread
-  let targetChannelId = chatId
-  if (targetChannelId) {
-    try {
-      const ch = await gateway.fetchChannel(targetChannelId)
-      if (ch.isThread) {
-        threadId = ch.id
-      } else if (ch.isDM && !gateway.canThreadInDM) {
-        // DMs can't host threads on this platform -- redirect to a guild channel
+  // Join an existing thread as a member (skip thread creation entirely)
+  const isJoin = !!opts?.joinThread
+  let respawnCount = 0
+  if (isJoin) {
+    threadId = opts!.joinThread!
+  } else {
+    // Determine where to create the thread
+    let targetChannelId = chatId
+    if (targetChannelId) {
+      try {
+        const ch = await gateway.fetchChannel(targetChannelId)
+        if (ch.isThread) {
+          threadId = ch.id
+        } else if (ch.isDM && !gateway.canThreadInDM) {
+          targetChannelId = DEFAULT_SESSION_CHANNEL
+        }
+      } catch {
         targetChannelId = DEFAULT_SESSION_CHANNEL
       }
-    } catch {
+    } else {
       targetChannelId = DEFAULT_SESSION_CHANNEL
     }
-  } else {
-    targetChannelId = DEFAULT_SESSION_CHANNEL
-  }
 
-  // Clean up dead session in this thread before spawning
-  let respawnCount = 0
-  if (threadId) {
-    const staleId = registry.getByThread(threadId)
-    if (staleId) {
-      const stale = registry.get(staleId)
-      if (stale) {
-        try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {
-          respawnCount = (stale.respawnCount ?? 0) + 1
-          const anchor = gateway.getThreadAnchor(threadId)
-          if (anchor) {
-            void gateway.unreact(anchor.channelId, anchor.messageId, '☠️').catch(() => {})
-            const COUNT_EMOJI = ['2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '👨‍👩‍👦‍👦']
-            const idx = Math.min(respawnCount - 1, COUNT_EMOJI.length - 1)
-            void gateway.react(anchor.channelId, anchor.messageId, COUNT_EMOJI[idx]).catch(() => {})
-            if (respawnCount > 1) {
-              void gateway.unreact(anchor.channelId, anchor.messageId, COUNT_EMOJI[Math.min(respawnCount - 2, COUNT_EMOJI.length - 1)]).catch(() => {})
+    // Clean up dead session in this thread before spawning
+    if (threadId) {
+      const staleId = registry.getByThread(threadId)
+      if (staleId) {
+        const stale = registry.get(staleId)
+        if (stale) {
+          try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {
+            respawnCount = (stale.respawnCount ?? 0) + 1
+            const anchor = gateway.getThreadAnchor(threadId)
+            if (anchor) {
+              void gateway.unreact(anchor.channelId, anchor.messageId, '☠️').catch(() => {})
+              const COUNT_EMOJI = ['2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '👨‍👩‍👦‍👦']
+              const idx = Math.min(respawnCount - 1, COUNT_EMOJI.length - 1)
+              void gateway.react(anchor.channelId, anchor.messageId, COUNT_EMOJI[idx]).catch(() => {})
+              if (respawnCount > 1) {
+                void gateway.unreact(anchor.channelId, anchor.messageId, COUNT_EMOJI[Math.min(respawnCount - 2, COUNT_EMOJI.length - 1)]).catch(() => {})
+              }
             }
+            await killSession(stale, 'replaced by new spawn')
           }
-          await killSession(stale, 'replaced by new spawn')
         }
       }
     }
-  }
 
-  // Create thread if we don't have one yet
-  if (!threadId) {
-    if (messageId && targetChannelId === chatId) {
-      try {
+    // Create thread if we don't have one yet
+    if (!threadId) {
+      if (messageId && targetChannelId === chatId) {
+        try {
+          const thread = await gateway.createThread(targetChannelId!, threadName, {
+            messageId,
+            archiveDuration: 1440,
+          })
+          threadId = thread.id
+          anchorMessageId = messageId
+        } catch (err) {
+          process.stderr.write(`daemon: createThread on message failed: ${err}\n`)
+        }
+      }
+
+      if (!threadId) {
+        const e = sessionEmoji(tmuxName)
+        let anchorText: string
+        if (originFrom) {
+          const pe = sessionEmoji(originFrom)
+          const verb = isHandoff ? 'handed off from' : 'forked from'
+          anchorText = `${e} \`${tmuxName}\` — ${verb} ${pe} \`${originFrom}\``
+          if (isFork) anchorText += `\n${topic}`
+        } else {
+          anchorText = `Starting session **${tmuxName}**: ${topic}`
+        }
+        const anchor = await gateway.send(targetChannelId!, anchorText)
+        anchorMessageId = anchor.id
         const thread = await gateway.createThread(targetChannelId!, threadName, {
-          messageId,
+          messageId: anchor.id,
           archiveDuration: 1440,
         })
         threadId = thread.id
-        anchorMessageId = messageId
-      } catch (err) {
-        process.stderr.write(`daemon: createThread on message failed: ${err}\n`)
       }
-    }
-
-    if (!threadId) {
-      const e = sessionEmoji(tmuxName)
-      let anchorText: string
-      if (originFrom) {
-        const pe = sessionEmoji(originFrom)
-        const verb = isHandoff ? 'handed off from' : 'forked from'
-        anchorText = `${e} \`${tmuxName}\` — ${verb} ${pe} \`${originFrom}\``
-        if (isFork) anchorText += `\n${topic}`
-      } else {
-        anchorText = `Starting session **${tmuxName}**: ${topic}`
-      }
-      const anchor = await gateway.send(targetChannelId!, anchorText)
-      anchorMessageId = anchor.id
-      const thread = await gateway.createThread(targetChannelId!, threadName, {
-        messageId: anchor.id,
-        archiveDuration: 1440,
-      })
-      threadId = thread.id
     }
   }
 
@@ -254,7 +259,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   let prompt: string
-  if (isHandoff) {
+  if (opts?.promptBuilder) {
+    prompt = opts.promptBuilder(sessionId, tmuxName)
+  } else if (isHandoff) {
     const contextLine = opts!.artifact
       ? `Read your handoff context from \`${opts!.artifact}\`, then read your memory files.`
       : `Read your memory files and workstream canon for context.`
@@ -339,7 +346,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
   })
-  registry.setThread(threadId!, sessionId)
+  // Don't register in threadToSession for join members — owner keeps that mapping
+  if (!isJoin) {
+    registry.setThread(threadId!, sessionId)
+  }
   registry.persist()
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }

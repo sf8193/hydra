@@ -9,6 +9,7 @@ import type { InboundMessage } from '../gateway.js'
 import { handleSpawnIntercept, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept } from './commands/thread.js'
 import { handleHandoffIntercept, handleGoIntercept } from './commands/handoff.js'
+import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleListIntercept, handleUsageIntercept, handleHealthIntercept } from './commands/status.js'
 import { killSession } from './session-lifecycle.js'
 
@@ -213,6 +214,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const goMatch = msg.content.match(/^(?:\/go|go!)\s*$/i)
       if (goMatch) {
         void handleGoIntercept(msg)
+        return
+      }
+
+      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(\d+)?\s*$/i)
+      if (reviewMatch) {
+        void handleReviewIntercept(msg, parseInt(reviewMatch[1] ?? '3'))
+        return
+      }
+
+      const cancelReviewMatch = msg.content.match(/^(?:\/cancel-review|cancel review)\s*$/i)
+      if (cancelReviewMatch) {
+        void handleCancelReviewIntercept(msg)
         return
       }
     }
