@@ -13,6 +13,7 @@ export type ReviewState = {
   ownerThreadId: string
   ownerSessionId: string
   criticSessionId?: string
+  topic?: string
   rounds: number
   currentRound: number
   currentTurn: 'critic' | 'owner'
@@ -54,6 +55,7 @@ export async function startReview(
   ownerThreadId: string,
   ownerSessionId: string,
   rounds: number,
+  topic?: string,
 ): Promise<ReviewState> {
   if (threadToReview.has(ownerThreadId)) {
     throw new Error('A review is already in progress in this thread')
@@ -64,6 +66,7 @@ export async function startReview(
     reviewId,
     ownerThreadId,
     ownerSessionId,
+    topic,
     rounds,
     currentRound: 1,
     currentTurn: 'critic',
@@ -75,9 +78,10 @@ export async function startReview(
   threadToReview.set(ownerThreadId, reviewId)
   ownerToReview.set(ownerSessionId, reviewId)
 
+  const topicLine = topic ? `\nFocus: **${topic}**` : ''
   await gateway.send(ownerThreadId, [
     `**Adversarial Review** — ${rounds} round${rounds > 1 ? 's' : ''}`,
-    `A critic will challenge the design. Owner defends. An independent judge delivers the verdict.`,
+    `A critic will challenge the design. Owner defends. An independent judge delivers the verdict.${topicLine}`,
   ].join('\n'))
 
   // Notify owner to prepare
@@ -308,7 +312,7 @@ async function spawnCritic(state: ReviewState): Promise<void> {
     const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
       joinThread: state.ownerThreadId,
       promptBuilder: (sessionId, tmuxName) =>
-        buildCriticPrompt(sessionId, tmuxName, state.rounds, state.ownerThreadId),
+        buildCriticPrompt(sessionId, tmuxName, state.rounds, state.ownerThreadId, state.topic),
     })
 
     state.criticSessionId = result.sessionId
@@ -347,7 +351,12 @@ function buildCriticPrompt(
   tmuxName: string,
   rounds: number,
   threadId: string,
+  topic?: string,
 ): string {
+  const mandate = topic
+    ? `**Your focus:** ${topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
+    : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
+
   return [
     `You are ${tmuxName}, the CRITIC in a ${rounds}-round adversarial review.`,
     ``,
@@ -360,8 +369,7 @@ function buildCriticPrompt(
     `4. **WAIT** — the designer will respond. Their defense will arrive as a notification.`,
     `5. When you receive their defense, post your counter-argument. Repeat for ${rounds} rounds.`,
     ``,
-    `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.`,
-    `Be specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`,
+    mandate,
     ``,
     `Format with clear headers. Be substantive and focused. One message per round.`,
   ].join('\n')

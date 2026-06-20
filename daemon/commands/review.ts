@@ -3,7 +3,7 @@ import { registry } from '../sessions.js'
 import { startReview, getReviewByThread, cancelReview } from '../adversarial.js'
 import type { InboundMessage } from '../../gateway.js'
 
-export async function handleReviewIntercept(msg: InboundMessage, rounds: number): Promise<void> {
+export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '⚔️').catch(() => {})
 
   // Must be in a session thread
@@ -34,7 +34,7 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number)
   const clampedRounds = Math.max(1, Math.min(rounds, 5))
 
   try {
-    await startReview(threadId, sessionId, clampedRounds)
+    await startReview(threadId, sessionId, clampedRounds, topic)
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Review failed to start: ${errMsg}`, { replyTo: msg.id })

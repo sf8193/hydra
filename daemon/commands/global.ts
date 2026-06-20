@@ -157,7 +157,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• `handoff` — distill context into an artifact for review',
     '• `handoff: <direction>` — directed handoff with a specific focus',
     '• `/go` — launch the successor (predecessor stays alive until you `kill` it)',
-    '• `/review [N]` — start N-round adversarial review (default 3): critic + advocate debate, owner judges',
+    '• `/review [N] [topic]` — adversarial review (default 3 rounds): critic challenges, owner defends, judge decides. Optional topic focuses the critique.',
     '• `cancel review` — cancel an in-progress adversarial review',
     '• `usage` — session stats: context %, messages, runtime, fork count',
     '• `kill` — kill this session',

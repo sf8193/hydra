@@ -217,9 +217,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(\d+)?\s*$/i)
+      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(\d+)?(?:\s+([\s\S]+))?$/i)
       if (reviewMatch) {
-        void handleReviewIntercept(msg, parseInt(reviewMatch[1] ?? '3'))
+        void handleReviewIntercept(msg, parseInt(reviewMatch[1] ?? '3'), reviewMatch[2]?.trim())
         return
       }
 
