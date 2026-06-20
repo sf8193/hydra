@@ -173,6 +173,9 @@ export function onParticipantDisconnect(sessionId: string): void {
   if (!state) return
 
   if (state.phase === 'debate' && state.criticSessionId === sessionId) {
+    // If a new bridge already registered, this is a stale disconnect — ignore
+    if (transport.has(sessionId)) return
+
     process.stderr.write(`daemon: review critic disconnected — 30s grace period\n`)
     // Pause turn timeout during grace period to prevent double-cancel
     if (state.timeout) {
@@ -229,7 +232,11 @@ function onOwnerPosted(state: ReviewState, text: string): void {
 
   if (state.currentRound >= state.rounds) {
     // Final round complete — kill critic, spawn judge
-    void finishDebate(state)
+    void finishDebate(state).catch(err => {
+      process.stderr.write(`daemon: finishDebate failed: ${err}\n`)
+      void cancelReview(state.reviewId).catch(() => {})
+      void gateway.send(state.ownerThreadId, `Review failed during judge transition: ${err}`).catch(() => {})
+    })
     return
   }
 
@@ -405,6 +412,12 @@ function buildJudgePrompt(
     `1. Call fetch_messages(channel="${threadId}", limit=100) to read the full debate`,
     `2. Read any code files or analysis referenced in the arguments`,
     `3. Post ONE verdict using reply(chat_id="${threadId}")`,
+    ``,
+    `**Reading the thread:** All bot messages appear as "me:" in fetch_messages. Identify roles by content:`,
+    `- Messages with "## Adversarial Critique" headers are from the **critic**`,
+    `- Messages with "## Owner Defense" headers are from the **owner/advocate**`,
+    `- Messages like "Spawning critic..." or "Debate complete" are **daemon announcements** (ignore)`,
+    `- Messages from named users (not "me:") are from the **human user**`,
     ``,
     `**Your verdict must include:**`,
     `- Which critiques are valid and which were successfully rebutted`,
