@@ -7,7 +7,7 @@ import { executeTool, computeToolsForSession, MAIN_ONLY_TOOLS, SPAWN_MODEL } fro
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
-import { isReviewParticipant, onReviewReply, onParticipantDisconnect } from './adversarial.js'
+import { isReviewParticipant, onReviewReply, onParticipantDisconnect, onParticipantReconnect } from './adversarial.js'
 import type { ButtonDef } from '../gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         },
       })
       transport.flushQueue(sessionId)
+      if (isReviewParticipant(sessionId)) onParticipantReconnect(sessionId)
       process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
       break
     }

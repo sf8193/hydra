@@ -19,6 +19,7 @@ export type ReviewState = {
   phase: 'debate' | 'judging' | 'complete' | 'cancelled'
   consecutiveFailures: number
   timeout?: ReturnType<typeof setTimeout>
+  _disconnectTimer?: ReturnType<typeof setTimeout>
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,7 @@ export async function cancelReview(reviewId: string): Promise<void> {
 
   state.phase = 'cancelled'
   if (state.timeout) clearTimeout(state.timeout)
+  if (state._disconnectTimer) clearTimeout(state._disconnectTimer)
 
   // Kill critic if alive
   if (state.criticSessionId) {
@@ -150,7 +152,7 @@ export function onReviewReply(sessionId: string, text: string): void {
   }
 }
 
-/** Called when a critic or judge bridge disconnects. */
+/** Called when a critic or judge bridge disconnects. Grace period before cancel. */
 export function onParticipantDisconnect(sessionId: string): void {
   const reviewId = sessionToReview.get(sessionId)
   if (!reviewId) return
@@ -158,10 +160,29 @@ export function onParticipantDisconnect(sessionId: string): void {
   if (!state) return
 
   if (state.phase === 'debate' && state.criticSessionId === sessionId) {
-    process.stderr.write(`daemon: review critic disconnected unexpectedly\n`)
-    if (state.timeout) clearTimeout(state.timeout)
-    void cancelReview(state.reviewId)
+    process.stderr.write(`daemon: review critic disconnected — 30s grace period\n`)
+    // Grace period: bridge reconnections fire disconnect before re-register
+    state._disconnectTimer = setTimeout(async () => {
+      // Check if the critic reconnected during the grace period
+      if (transport.has(sessionId)) {
+        process.stderr.write(`daemon: review critic reconnected, grace period cleared\n`)
+        return
+      }
+      process.stderr.write(`daemon: review critic did not reconnect, cancelling review\n`)
+      await cancelReview(state.reviewId)
+    }, 30_000)
   }
+}
+
+/** Called when a bridge registers — clears disconnect grace period if applicable. */
+export function onParticipantReconnect(sessionId: string): void {
+  const reviewId = sessionToReview.get(sessionId)
+  if (!reviewId) return
+  const state = reviews.get(reviewId)
+  if (!state || !state._disconnectTimer) return
+  clearTimeout(state._disconnectTimer)
+  state._disconnectTimer = undefined
+  process.stderr.write(`daemon: review participant ${sessionId} reconnected, grace period cleared\n`)
 }
 
 // ---------------------------------------------------------------------------
