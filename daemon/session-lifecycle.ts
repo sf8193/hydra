@@ -72,9 +72,13 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 
     setTimeout(() => {
       try {
-        execSync(`tmux has-session -t "${tmuxName}"`, { stdio: 'pipe' })
-        execSync(`tmux kill-session -t "${tmuxName}"`, { stdio: 'pipe' })
-        process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
+        // Only kill if the tmux session isn't owned by a new session (name recycling)
+        const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName)
+        if (!currentOwner) {
+          execSync(`tmux has-session -t "${tmuxName}"`, { stdio: 'pipe' })
+          execSync(`tmux kill-session -t "${tmuxName}"`, { stdio: 'pipe' })
+          process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
+        }
       } catch {}
       killsInProgress.delete(info.sessionId)
     }, 3000)
