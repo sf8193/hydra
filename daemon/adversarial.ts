@@ -133,9 +133,10 @@ export async function cancelReview(reviewId: string): Promise<void> {
   ownerToReview.delete(state.ownerSessionId)
   threadToReview.delete(state.ownerThreadId)
   reviews.delete(reviewId)
-  await gateway.send(state.ownerThreadId, `Review cancelled.`)
+  const cancelMsg = await gateway.send(state.ownerThreadId, `Review cancelled.`)
+  state.messageIds.push(cancelMsg.id)
 
-  // Clean up review messages
+  // Clean up review messages (including the cancel announcement)
   void deleteReviewMessages(state)
 }
 
@@ -286,6 +287,12 @@ async function finishDebate(state: ReviewState): Promise<void> {
 function completeReview(state: ReviewState): void {
   state.phase = 'cleanup'
 
+  // Cleanup timeout: auto-finalize if owner doesn't post summary within 5 minutes
+  state.timeout = setTimeout(() => {
+    process.stderr.write(`daemon: review cleanup timed out, auto-finalizing\n`)
+    finalizeReview(state)
+  }, 5 * 60 * 1000)
+
   // Nudge owner to post a summary — messages stay visible until summary is posted
   transport.sendOrQueue(state.ownerSessionId, {
     type: 'notification',
@@ -314,12 +321,15 @@ async function deleteReviewMessages(state: ReviewState): Promise<void> {
 }
 
 function finalizeReview(state: ReviewState): void {
+  if (state.timeout) clearTimeout(state.timeout)
   state.phase = 'complete'
-  ownerToReview.delete(state.ownerSessionId)
-  threadToReview.delete(state.ownerThreadId)
-  reviews.delete(state.reviewId)
 
-  void deleteReviewMessages(state)
+  // Delete messages first, then clean up Maps
+  void deleteReviewMessages(state).finally(() => {
+    ownerToReview.delete(state.ownerSessionId)
+    threadToReview.delete(state.ownerThreadId)
+    reviews.delete(state.reviewId)
+  })
 }
 
 // ---------------------------------------------------------------------------
