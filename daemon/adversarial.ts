@@ -136,7 +136,9 @@ export async function cancelReview(reviewId: string): Promise<void> {
   await gateway.send(state.ownerThreadId, `Review cancelled.`)
 
   // Clean up review messages (cancel announcement stays for context)
-  void deleteReviewMessages(state)
+  void deleteReviewMessages(state).catch(err => {
+    process.stderr.write(`daemon: cancel cleanup failed: ${err}\n`)
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +167,8 @@ export function onReviewReply(sessionId: string, text: string, chatId: string, s
     if (!state || chatId !== state.ownerThreadId) return
 
     if (state.phase === 'cleanup') {
-      // Owner posted the summary — verify it contains the marker before finalizing
-      if (text.toLowerCase().includes('**review summary**')) {
+      // Don't push sentMessageIds — summary should survive deletion
+      if (text.toLowerCase().includes('review summary')) {
         finalizeReview(state)
       }
       return
@@ -289,8 +291,9 @@ function completeReview(state: ReviewState): void {
   state.phase = 'cleanup'
 
   // Cleanup timeout: auto-finalize if owner doesn't post summary within 5 minutes
-  state.timeout = setTimeout(() => {
+  state.timeout = setTimeout(async () => {
     process.stderr.write(`daemon: review cleanup timed out, auto-finalizing\n`)
+    await gateway.send(state.ownerThreadId, `**Review Summary** — auto-closed (owner did not post summary)`).catch(() => {})
     finalizeReview(state)
   }, 5 * 60 * 1000)
 
@@ -333,11 +336,13 @@ function finalizeReview(state: ReviewState): void {
   if (state.timeout) clearTimeout(state.timeout)
   state.phase = 'complete'
 
-  // Delete messages first, then clean up Maps
-  void deleteReviewMessages(state).finally(() => {
-    ownerToReview.delete(state.ownerSessionId)
-    threadToReview.delete(state.ownerThreadId)
-    reviews.delete(state.reviewId)
+  // Clear maps immediately — phase guard prevents re-entry
+  ownerToReview.delete(state.ownerSessionId)
+  threadToReview.delete(state.ownerThreadId)
+  reviews.delete(state.reviewId)
+
+  void deleteReviewMessages(state).catch(err => {
+    process.stderr.write(`daemon: review message cleanup failed: ${err}\n`)
   })
 }
 
