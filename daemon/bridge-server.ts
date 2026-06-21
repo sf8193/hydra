@@ -93,7 +93,11 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 
         // Adversarial review: detect reply from any review participant
         if (name === 'reply' && !result.isError && conn.sessionId && isReviewParticipant(conn.sessionId)) {
-          onReviewReply(conn.sessionId, args.text as string, args.chat_id as string)
+          // Extract sent message IDs from result text: "sent (id: X)" or "sent N parts (ids: X, Y)"
+          const resultText = result.content?.[0]?.text ?? ''
+          const idMatch = resultText.match(/ids?: (.+)\)/)
+          const sentIds = idMatch ? idMatch[1].split(', ').map((s: string) => s.trim()) : []
+          onReviewReply(conn.sessionId, args.text as string, args.chat_id as string, sentIds)
         }
       }).catch(err => {
         transport.sendToBridge(conn, {

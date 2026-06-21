@@ -19,6 +19,7 @@ export type ReviewState = {
   currentTurn: 'critic' | 'owner'
   phase: 'debate' | 'complete' | 'cancelled'
   consecutiveFailures: number
+  messageIds: string[]  // track all review messages for cleanup
   timeout?: ReturnType<typeof setTimeout>
   _disconnectTimer?: ReturnType<typeof setTimeout>
 }
@@ -73,6 +74,7 @@ export async function startReview(
     currentTurn: 'critic',
     phase: 'debate',
     consecutiveFailures: 0,
+    messageIds: [],
   }
 
   // Set maps synchronously before any await to prevent TOCTOU
@@ -82,10 +84,11 @@ export async function startReview(
 
   try {
     const topicLine = topic ? `\nFocus: **${topic}**` : ''
-    await gateway.send(ownerThreadId, [
+    const ann = await gateway.send(ownerThreadId, [
       `**Adversarial Review** — ${rounds} round${rounds > 1 ? 's' : ''}`,
       `A critic will challenge the design. You defend.${topicLine}`,
     ].join('\n'))
+    state.messageIds.push(ann.id)
 
     // Notify owner to prepare
     transport.sendOrQueue(ownerSessionId, {
@@ -137,14 +140,15 @@ export async function cancelReview(reviewId: string): Promise<void> {
 // Core reply handler — called from bridge-server for ALL reply tool calls
 // ---------------------------------------------------------------------------
 
-export function onReviewReply(sessionId: string, text: string, chatId: string): void {
-  // Check if this is a critic/judge posting
+export function onReviewReply(sessionId: string, text: string, chatId: string, sentMessageIds: string[]): void {
+  // Check if this is a critic posting
   const memberReviewId = sessionToReview.get(sessionId)
   if (memberReviewId) {
     const state = reviews.get(memberReviewId)
     if (!state || chatId !== state.ownerThreadId) return
 
     if (state.phase === 'debate' && state.currentTurn === 'critic' && state.criticSessionId === sessionId) {
+      state.messageIds.push(...sentMessageIds)
       onCriticPosted(state, text)
       return
     }
@@ -157,6 +161,7 @@ export function onReviewReply(sessionId: string, text: string, chatId: string): 
     const state = reviews.get(ownerReviewId)
     if (!state || state.phase !== 'debate' || state.currentTurn !== 'owner') return
     if (chatId !== state.ownerThreadId) return
+    state.messageIds.push(...sentMessageIds)
     onOwnerPosted(state, text)
   }
 }
@@ -274,12 +279,25 @@ function completeReview(state: ReviewState): void {
   threadToReview.delete(state.ownerThreadId)
   reviews.delete(state.reviewId)
 
-  void gateway.send(state.ownerThreadId, `**Review complete.**`)
+  // Delete all review messages to keep thread clean
+  for (const msgId of state.messageIds) {
+    void gateway.delete(state.ownerThreadId, msgId).catch(() => {})
+  }
 
-  // Nudge owner
+  // Nudge owner to post a summary
   transport.sendOrQueue(state.ownerSessionId, {
     type: 'notification',
-    content: `[system] Adversarial review complete. Read the critique and your defense above, then decide on next steps.`,
+    content: [
+      `[system] Adversarial review complete (${state.rounds} round${state.rounds > 1 ? 's' : ''}).`,
+      `The review messages have been cleaned up. Post a brief summary to your thread using this format:`,
+      ``,
+      `**Review Summary** (N rounds)`,
+      `- ✅ issue — fixed/will fix`,
+      `- ⚠️ issue — acknowledged, deferred`,
+      `- ❌ issue — rebutted`,
+      ``,
+      `Reply to your thread with the summary.`,
+    ].join('\n'),
     meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -289,7 +307,8 @@ function completeReview(state: ReviewState): void {
 // ---------------------------------------------------------------------------
 
 async function spawnCritic(state: ReviewState): Promise<void> {
-  await gateway.send(state.ownerThreadId, `Spawning critic...`)
+  const msg = await gateway.send(state.ownerThreadId, `Spawning critic...`)
+  state.messageIds.push(msg.id)
 
   try {
     const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
