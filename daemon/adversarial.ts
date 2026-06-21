@@ -133,10 +133,9 @@ export async function cancelReview(reviewId: string): Promise<void> {
   ownerToReview.delete(state.ownerSessionId)
   threadToReview.delete(state.ownerThreadId)
   reviews.delete(reviewId)
-  const cancelMsg = await gateway.send(state.ownerThreadId, `Review cancelled.`)
-  state.messageIds.push(cancelMsg.id)
+  await gateway.send(state.ownerThreadId, `Review cancelled.`)
 
-  // Clean up review messages (including the cancel announcement)
+  // Clean up review messages (cancel announcement stays for context)
   void deleteReviewMessages(state)
 }
 
@@ -166,8 +165,10 @@ export function onReviewReply(sessionId: string, text: string, chatId: string, s
     if (!state || chatId !== state.ownerThreadId) return
 
     if (state.phase === 'cleanup') {
-      // Owner posted the summary — delete review messages and finalize
-      finalizeReview(state)
+      // Owner posted the summary — verify it contains the marker before finalizing
+      if (text.toLowerCase().includes('**review summary**')) {
+        finalizeReview(state)
+      }
       return
     }
 
@@ -312,15 +313,23 @@ function completeReview(state: ReviewState): void {
 
 /** Delete review messages after owner posts summary. Serialized with delay to avoid rate limits. */
 async function deleteReviewMessages(state: ReviewState): Promise<void> {
+  let failures = 0
   for (const msgId of state.messageIds) {
     try {
       await gateway.delete(state.ownerThreadId, msgId)
-    } catch {}
+    } catch (err) {
+      failures++
+      process.stderr.write(`daemon: review cleanup: failed to delete message ${msgId}: ${err}\n`)
+    }
     await new Promise(r => setTimeout(r, 1000))
+  }
+  if (failures > 0) {
+    process.stderr.write(`daemon: review cleanup: ${failures}/${state.messageIds.length} message deletes failed\n`)
   }
 }
 
 function finalizeReview(state: ReviewState): void {
+  if (state.phase !== 'cleanup') return  // guard against double-entry (timeout + reply race)
   if (state.timeout) clearTimeout(state.timeout)
   state.phase = 'complete'
 
