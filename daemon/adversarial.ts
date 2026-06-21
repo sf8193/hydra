@@ -17,7 +17,7 @@ export type ReviewState = {
   rounds: number
   currentRound: number
   currentTurn: 'critic' | 'owner'
-  phase: 'debate' | 'complete' | 'cancelled'
+  phase: 'debate' | 'cleanup' | 'complete' | 'cancelled'
   consecutiveFailures: number
   messageIds: string[]  // track all review messages for cleanup
   timeout?: ReturnType<typeof setTimeout>
@@ -134,6 +134,9 @@ export async function cancelReview(reviewId: string): Promise<void> {
   threadToReview.delete(state.ownerThreadId)
   reviews.delete(reviewId)
   await gateway.send(state.ownerThreadId, `Review cancelled.`)
+
+  // Clean up review messages
+  void deleteReviewMessages(state)
 }
 
 // ---------------------------------------------------------------------------
@@ -159,8 +162,15 @@ export function onReviewReply(sessionId: string, text: string, chatId: string, s
   const ownerReviewId = ownerToReview.get(sessionId)
   if (ownerReviewId) {
     const state = reviews.get(ownerReviewId)
-    if (!state || state.phase !== 'debate' || state.currentTurn !== 'owner') return
-    if (chatId !== state.ownerThreadId) return
+    if (!state || chatId !== state.ownerThreadId) return
+
+    if (state.phase === 'cleanup') {
+      // Owner posted the summary — delete review messages and finalize
+      finalizeReview(state)
+      return
+    }
+
+    if (state.phase !== 'debate' || state.currentTurn !== 'owner') return
     state.messageIds.push(...sentMessageIds)
     onOwnerPosted(state, text)
   }
@@ -274,32 +284,42 @@ async function finishDebate(state: ReviewState): Promise<void> {
 }
 
 function completeReview(state: ReviewState): void {
+  state.phase = 'cleanup'
+
+  // Nudge owner to post a summary — messages stay visible until summary is posted
+  transport.sendOrQueue(state.ownerSessionId, {
+    type: 'notification',
+    content: [
+      `[system] Adversarial review complete (${state.rounds} round${state.rounds > 1 ? 's' : ''}).`,
+      `Post a brief summary to your thread. After you post, the review messages will be cleaned up.`,
+      ``,
+      `Use this format:`,
+      `**Review Summary** (${state.rounds} round${state.rounds > 1 ? 's' : ''})`,
+      `- ✅ issue — fixed/will fix`,
+      `- ⚠️ issue — acknowledged, deferred`,
+      `- ❌ issue — rebutted`,
+    ].join('\n'),
+    meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+}
+
+/** Delete review messages after owner posts summary. Serialized with delay to avoid rate limits. */
+async function deleteReviewMessages(state: ReviewState): Promise<void> {
+  for (const msgId of state.messageIds) {
+    try {
+      await gateway.delete(state.ownerThreadId, msgId)
+    } catch {}
+    await new Promise(r => setTimeout(r, 1000))
+  }
+}
+
+function finalizeReview(state: ReviewState): void {
   state.phase = 'complete'
   ownerToReview.delete(state.ownerSessionId)
   threadToReview.delete(state.ownerThreadId)
   reviews.delete(state.reviewId)
 
-  // Delete all review messages to keep thread clean
-  for (const msgId of state.messageIds) {
-    void gateway.delete(state.ownerThreadId, msgId).catch(() => {})
-  }
-
-  // Nudge owner to post a summary
-  transport.sendOrQueue(state.ownerSessionId, {
-    type: 'notification',
-    content: [
-      `[system] Adversarial review complete (${state.rounds} round${state.rounds > 1 ? 's' : ''}).`,
-      `The review messages have been cleaned up. Post a brief summary to your thread using this format:`,
-      ``,
-      `**Review Summary** (N rounds)`,
-      `- ✅ issue — fixed/will fix`,
-      `- ⚠️ issue — acknowledged, deferred`,
-      `- ❌ issue — rebutted`,
-      ``,
-      `Reply to your thread with the summary.`,
-    ].join('\n'),
-    meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
+  void deleteReviewMessages(state)
 }
 
 // ---------------------------------------------------------------------------

@@ -36,7 +36,9 @@ export function computeToolsForSession(sessionId: string): typeof BRIDGE_TOOLS {
 // Tool execution
 // ---------------------------------------------------------------------------
 
-export async function executeTool(name: string, args: Record<string, unknown>): Promise<{ content: Array<{type: string; text: string}>; isError?: boolean }> {
+export type ToolResult = { content: Array<{type: string; text: string}>; isError?: boolean; sentIds?: string[] }
+
+export async function executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   try {
     switch (name) {
       case 'reply': {
@@ -94,7 +96,7 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
           sentIds.length === 1
             ? `sent (id: ${sentIds[0]})`
             : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
-        return { content: [{ type: 'text', text: result }] }
+        return { content: [{ type: 'text', text: result }], sentIds }
       }
 
       case 'fetch_messages': {
