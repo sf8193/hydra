@@ -21,7 +21,8 @@ import { announceRestartComplete } from './daemon/commands/global.js'
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import './daemon/router.js'
-import { getContextPercent } from './daemon/util.js'
+import { getContextPercent, formatDuration } from './daemon/util.js'
+import { syncUpdate } from './daemon/list-sync.js'
 
 // Boot ThreadRegistry — must happen after sessions are loaded
 threadRegistry.boot(registry)
@@ -146,12 +147,22 @@ setInterval(() => {
 
     // Context alert
     const pct = getContextPercent(info.tmuxName)
-    if (pct === '?') continue
-    const num = parseInt(pct)
-    if (num >= CONTEXT_ALERT_THRESHOLD && !contextAlerted.has(info.sessionId)) {
-      contextAlerted.add(info.sessionId)
-      process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
-      void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`handoff\` to a fresh session before it fills up.`).catch(() => {})
+    if (pct !== '?') {
+      const num = parseInt(pct)
+      if (num >= CONTEXT_ALERT_THRESHOLD && !contextAlerted.has(info.sessionId)) {
+        contextAlerted.add(info.sessionId)
+        process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
+        void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`handoff\` to a fresh session before it fills up.`).catch(() => {})
+      }
+    }
+
+    const healthThread = threadRegistry.get(info.threadId)
+    if (healthThread?.listRecordId) {
+      void syncUpdate(healthThread, {
+        contextPct: pct !== '?' ? parseInt(pct) : undefined,
+        messageCount: info.messageCount ?? 0,
+        duration: formatDuration(Date.now() - info.createdAt),
+      })
     }
   }
 }, SESSION_CHECK_INTERVAL_MS)

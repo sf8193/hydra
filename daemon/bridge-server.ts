@@ -7,6 +7,7 @@ import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool, computeToolsForSession, MAIN_ONLY_TOOLS, SPAWN_MODEL } from './bridge-dispatch.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, detachSession } from './session-lifecycle.js'
+import { syncCrash } from './list-sync.js'
 import { loadAccess } from './access.js'
 import { isReviewParticipant, onReviewReply, onParticipantDisconnect, onParticipantReconnect } from './adversarial.js'
 import { isBuildParticipant, onBuildReply, onBuildParticipantDisconnect, onBuildParticipantReconnect } from './build.js'
@@ -204,6 +205,7 @@ export const socketServer = createServer((socket: Socket) => {
         }
         void gateway.send(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to reconnect or \`respawn\` for a fresh start.`).catch(() => {})
         void setAnchorState(info.threadId, 'crashed').catch(() => {})
+        if (thread) void syncCrash(thread)
       }, 3000)
     }
   })

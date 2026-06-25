@@ -77,6 +77,7 @@ export type ThreadInfo = {
   lastActive: number
   totalMessages: number
   sessionHistory: ThreadSessionEntry[]
+  listRecordId?: string
 }
 
 export type SpawnOpts = {

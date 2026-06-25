@@ -11,6 +11,7 @@ import type { SessionInfo, SessionCapabilities, SpawnOpts, SpawnResult } from '.
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession, SPAWN_MODEL } from './bridge-dispatch.js'
 import { setAnchorState } from './anchor-state.js'
+import { syncSpawn, syncKill } from './list-sync.js'
 
 // ---------------------------------------------------------------------------
 // Session death events
@@ -104,6 +105,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       const thread = threadRegistry.get(info.threadId)
       if (thread) {
         thread.anchorState = 'killed'
+        void syncKill(thread)
       }
       threadRegistry.persist()
     }
@@ -454,6 +456,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     claudeSessionId: undefined,
   })
   threadRegistry.persist()
+
+  void syncSpawn(thread, tmuxName, originType, originFrom)
 
   void setAnchorState(threadId!, respawnCount > 0 ? 'zombie' : 'live', respawnCount).catch(() => {})
 
