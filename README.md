@@ -39,6 +39,17 @@ Multi-platform chat bridge for Claude Code. Connect Claude to Discord, Slack, or
 - **Platform selection via env var.** Set `CHAT_PLATFORM=discord` or `CHAT_PLATFORM=slack`. Default: `discord`.
 - **Simultaneous platforms.** Run two daemons on different `DISCORD_STATE_DIR` paths for Discord + Slack at the same time.
 
+### Runtime isolation
+
+The daemon never runs from this repo directly. `start-daemon.sh` rsyncs the repo into a dedicated runtime copy at `~/.claude/channels/<platform>/daemon-runtime/` and launches the daemon from there. This prevents development activity (branch switches, half-finished edits, rebases) from crashing a live daemon.
+
+| Path | Role |
+| --- | --- |
+| `~/Documents/angellist/hydra/` | Source of truth. Git repo, compile-checked before deploy. |
+| `~/.claude/channels/discord/daemon-runtime/` | Runtime copy. Created by rsync, not version-controlled. Daemon process runs here. |
+
+The flow: edit the repo → `restart` (or `./start-daemon.sh`) → rsync syncs source → daemon starts from the fresh copy. Never edit daemon-runtime directly — changes there are overwritten on next restart.
+
 ## Prerequisites
 
 - [Bun](https://bun.sh) — `curl -fsSL https://bun.sh/install | bash`
@@ -93,13 +104,15 @@ Discord bot token can also live in `~/.claude/channels/discord/.env` (loaded as 
     "channel-id": {
       "requireMention": true,
       "allowFrom": [],
-      "threadReply": true
+      "threadReply": true,
+      "defaultListen": true          // per-channel override
     }
   },
   "ackReaction": "👀",
   "replyToMode": "first",         // first | all | off
   "textChunkLimit": 2000,
-  "chunkMode": "newline"           // newline | length
+  "chunkMode": "newline",          // newline | length
+  "defaultListen": false           // sessions start in listen mode
 }
 ```
 

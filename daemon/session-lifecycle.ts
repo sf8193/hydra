@@ -6,6 +6,7 @@ import { homedir } from 'os'
 import { EventEmitter } from 'events'
 
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH } from './config.js'
+import { loadAccess } from './access.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionCapabilities, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -422,7 +423,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   registry.set(sessionId, {
     sessionId, threadId: threadId!, createdAt: now, lastActive: now,
-    tmuxName, listening: false, originType, originFrom, capabilities,
+    tmuxName, listening: (() => {
+      const access = loadAccess()
+      const group = chatId ? access.groups[chatId] : undefined
+      return group?.defaultListen ?? access.defaultListen ?? false
+    })(), originType, originFrom, capabilities,
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
   })

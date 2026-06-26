@@ -83,6 +83,12 @@ Configure outbound behavior with `/discord:access set <key> <value>`.
 /discord:access set ackReaction ""
 ```
 
+**`defaultListen`** makes spawned sessions start in listen mode, picking up all messages in their thread without requiring a quote-reply. Users can still type `pause` in any thread to switch back to reply-only mode. Default: `false`. Can also be set per-channel in `groups` — the channel setting overrides the global default.
+
+```
+/discord:access set defaultListen true
+```
+
 **`replyToMode`** controls threading on chunked replies. When a long response is split, `first` (default) threads only the first chunk under the inbound message; `all` threads every chunk; `off` sends all chunks standalone.
 
 **`textChunkLimit`** sets the split threshold. Discord rejects messages over 2000 characters, which is the hard ceiling.
@@ -101,7 +107,7 @@ Configure outbound behavior with `/discord:access set <key> <value>`.
 | `/discord:access policy allowlist` | Set `dmPolicy`. Values: `pairing`, `allowlist`, `disabled`. |
 | `/discord:access group add 846209781206941736` | Enable a guild channel. Flags: `--no-mention`, `--allow id1,id2`. |
 | `/discord:access group rm 846209781206941736` | Disable a guild channel. |
-| `/discord:access set ackReaction 🔨` | Set a config key: `ackReaction`, `replyToMode`, `textChunkLimit`, `chunkMode`, `mentionPatterns`. |
+| `/discord:access set ackReaction 🔨` | Set a config key: `ackReaction`, `replyToMode`, `textChunkLimit`, `chunkMode`, `mentionPatterns`, `defaultListen`. |
 
 ## Config file
 
@@ -121,7 +127,9 @@ Configure outbound behavior with `/discord:access set <key> <value>`.
       // true: respond only to @mentions and replies.
       "requireMention": true,
       // Restrict triggers to these senders. Empty = any member (subject to requireMention).
-      "allowFrom": []
+      "allowFrom": [],
+      // Override global defaultListen for sessions spawned from this channel.
+      "defaultListen": true
     }
   },
 
@@ -138,6 +146,9 @@ Configure outbound behavior with `/discord:access set <key> <value>`.
   "textChunkLimit": 2000,
 
   // length = cut at limit. newline = prefer paragraph boundaries.
-  "chunkMode": "newline"
+  "chunkMode": "newline",
+
+  // Spawned sessions start in listen mode (pick up all thread messages).
+  "defaultListen": false
 }
 ```

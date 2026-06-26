@@ -21,6 +21,7 @@ export type GroupPolicy = {
   allowFrom: string[]
   threadReply?: boolean
   threadArchiveMinutes?: 60 | 1440 | 4320 | 10080
+  defaultListen?: boolean
 }
 
 export type Access = {
@@ -33,6 +34,7 @@ export type Access = {
   replyToMode?: 'off' | 'first' | 'all'
   textChunkLimit?: number
   chunkMode?: 'length' | 'newline'
+  defaultListen?: boolean
 }
 
 export type GateResult =
@@ -69,6 +71,7 @@ function readAccessFile(): Access {
       replyToMode: parsed.replyToMode,
       textChunkLimit: parsed.textChunkLimit,
       chunkMode: parsed.chunkMode,
+      defaultListen: parsed.defaultListen,
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
