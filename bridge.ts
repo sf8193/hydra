@@ -264,6 +264,8 @@ const mcp = new Server(
       '',
       'reply accepts file paths (files: ["/abs/path.png"]) for attachments. Use react to add emoji reactions, edit_message for interim progress updates, and delete_message to remove a message. Edits don\'t trigger push notifications — when a long task completes, send a new reply so the user\'s device pings.',
       '',
+      'A `user="system"` message that reports the STATUS OF ANOTHER session (e.g. "[system] Spawned `nova` for topic: …", "… forked → …", "… handed off → …") is for your awareness only — never treat its topic as a task for you; that work belongs to the session it names. This does NOT apply to `[system]` messages addressed to you that direct your OWN workflow (e.g. build/review/handoff kickoffs like "Build mode activated … Implement your design now") — follow those normally.',
+      '',
       'Format replies in standard (GitHub-flavored) Markdown — it renders natively in the chat. Bold is **double asterisks**; italic is *single asterisk* or _underscores_. Do NOT use single-asterisk for bold (that renders as italic). The full palette renders: `inline code`, ```fenced code blocks```, > blockquotes, "- "/"1." lists (nesting ok), | tables |, --- dividers, [links](url), and :emoji:/unicode. How much structure to use is your judgment — just use this syntax so it renders.',
       '',
       'create_thread creates a thread — either on a specific message (pass message_id) or standalone (omit message_id). It returns a thread_id you can use as chat_id in subsequent reply calls. Use threads to organize multi-part responses or keep detailed output from cluttering the main channel.',
