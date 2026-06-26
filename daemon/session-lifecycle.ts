@@ -424,6 +424,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   registry.set(sessionId, {
     sessionId, threadId: threadId!, createdAt: now, lastActive: now,
     tmuxName, listening: (() => {
+      const existingThread = threadRegistry.get(threadId!)
+      if (existingThread?.listenOverride !== undefined) return existingThread.listenOverride
       const access = loadAccess()
       const group = chatId ? access.groups[chatId] : undefined
       return group?.defaultListen ?? access.defaultListen ?? false

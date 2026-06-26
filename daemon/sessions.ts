@@ -94,6 +94,7 @@ export type ThreadInfo = {
   lastActive: number
   totalMessages: number
   sessionHistory: ThreadSessionEntry[]
+  listenOverride?: boolean
 }
 
 // ---------------------------------------------------------------------------
