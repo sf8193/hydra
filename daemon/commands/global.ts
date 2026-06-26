@@ -5,7 +5,6 @@ import { homedir } from 'os'
 import { gateway, STATE_DIR } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { ThreadMetadata } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession, tryResume, tryRespawn, discoverClaudeSessionId } from '../session-lifecycle.js'
 import { tmuxHasSession, isAlive } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -46,15 +45,6 @@ export async function handleSpawnIntercept(msg: InboundMessage, topic: string, a
         : `Spawned ${e} \`${result.name}\``
       const reply = `${base}\nView in any terminal: \`tmux attach -t ${result.name}\``
       await gateway.send(msg.channelId, reply, { replyTo: msg.id })
-    }
-
-    const mainBridge = transport.get('main')
-    if (mainBridge) {
-      transport.sendToBridge(mainBridge, {
-        type: 'notification',
-        content: `[system] Spawned ${sessionEmoji(result.name)} \`${result.name}\` for topic: ${topic}${result.url ? ` — ${result.url}` : ''}`,
-        meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
-      })
     }
 
     debouncedRefreshListDisplay()
