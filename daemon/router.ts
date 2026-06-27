@@ -145,8 +145,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
   const senderId = msg.authorId
   const isAllowed = access.allowFrom.includes(senderId)
 
+  // Strip a leading bot mention so commands typed in guild channels
+  // (where requireMention forces the user to @bot first) match the same
+  // anchored regexes as commands typed in DMs.
+  const cmdContent = msg.content.replace(/^<@!?\d+>\s*/, '')
+
   if (isAllowed) {
-    const spawnMatch = msg.content.match(/^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i)
+    const spawnMatch = cmdContent.match(/^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i)
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
       if (topic) {
@@ -156,7 +161,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     }
 
     // spawn-wt: repo_name topic — shorthand for worktree spawns
-    const spawnWtMatch = msg.content.match(/^(?:spawn-wt:|\/spawn-wt)\s*(\S+)\s+([\s\S]+)/i)
+    const spawnWtMatch = cmdContent.match(/^(?:spawn-wt:|\/spawn-wt)\s*(\S+)\s+([\s\S]+)/i)
     if (spawnWtMatch) {
       const repo = spawnWtMatch[1].trim()
       const topic = spawnWtMatch[2].trim()
@@ -166,157 +171,157 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
-    const killMatch = msg.content.match(/^(?:kill session:|kill:|\/kill)\s*(.+)/i)
+    const killMatch = cmdContent.match(/^(?:kill session:|kill:|\/kill)\s*(.+)/i)
     if (killMatch) {
       void handleKillIntercept(msg, killMatch[1].trim())
       return
     }
 
-    const listMatch = msg.content.match(/^(?:\/sessions|list sessions)\s*$/i)
+    const listMatch = cmdContent.match(/^(?:\/sessions|list sessions)\s*$/i)
     if (listMatch) {
       void handleListIntercept(msg)
       return
     }
 
-    const restartMatch = msg.content.match(/^(?:\/restart|restart daemon|restart)\s*$/i)
+    const restartMatch = cmdContent.match(/^(?:\/restart|restart daemon|restart)\s*$/i)
     if (restartMatch) {
       void handleRestartIntercept(msg)
       return
     }
 
-    const healthMatch = msg.content.match(/^(?:\/health|health|status)\s*$/i)
+    const healthMatch = cmdContent.match(/^(?:\/health|health|status)\s*$/i)
     if (healthMatch) {
       void handleHealthIntercept(msg)
       return
     }
 
-    const reconnectMatch = msg.content.match(/^(?:\/reconnect|reconnect)\s*$/i)
+    const reconnectMatch = cmdContent.match(/^(?:\/reconnect|reconnect)\s*$/i)
     if (reconnectMatch) {
       void handleReconnectIntercept(msg)
       return
     }
 
-    const recoverMatch = msg.content.match(/^(?:recover|\/recover)\s*$/i)
+    const recoverMatch = cmdContent.match(/^(?:recover|\/recover)\s*$/i)
     if (recoverMatch) {
       void handleRecoverIntercept(msg)
       return
     }
 
-    const commandsMatch = msg.content.match(/^(?:\/commands|commands|list commands|show commands|\/help|help)\s*$/i)
+    const commandsMatch = cmdContent.match(/^(?:\/commands|commands|list commands|show commands|\/help|help)\s*$/i)
     if (commandsMatch) {
       void handleCommandsIntercept(msg)
       return
     }
 
-    const threadKillMatch = msg.content.match(/^(?:kill|\/kill)\s*$/i)
+    const threadKillMatch = cmdContent.match(/^(?:kill|\/kill)\s*$/i)
     if (threadKillMatch) {
       void handleThreadKillIntercept(msg)
       return
     }
 
-    const respawnMatch = msg.content.match(/^(?:respawn|\/respawn)\s*$/i)
+    const respawnMatch = cmdContent.match(/^(?:respawn|\/respawn)\s*$/i)
     if (respawnMatch) {
       void handleRespawnIntercept(msg)
       return
     }
 
-    const resumeMatch = msg.content.match(/^(?:resume|\/resume)\s*$/i)
+    const resumeMatch = cmdContent.match(/^(?:resume|\/resume)\s*$/i)
     if (resumeMatch) {
       void handleResumeIntercept(msg)
       return
     }
 
-    const usageMatch = msg.content.match(/^(?:\/usage|usage)\s*$/i)
+    const usageMatch = cmdContent.match(/^(?:\/usage|usage)\s*$/i)
     if (usageMatch) {
       void handleUsageIntercept(msg)
       return
     }
 
     if (msg.isThread) {
-      const forkMatch = msg.content.match(/^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i)
+      const forkMatch = cmdContent.match(/^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i)
       if (forkMatch) {
         void handleForkIntercept(msg, forkMatch[1]?.trim())
         return
       }
 
-      const forksMatch = msg.content.match(/^(?:forks|\/forks)\s*$/i)
+      const forksMatch = cmdContent.match(/^(?:forks|\/forks)\s*$/i)
       if (forksMatch) {
         void handleForksIntercept(msg)
         return
       }
 
-      const handoffMatch = msg.content.match(/^(?:handoff|\/handoff)(?::\s*([\s\S]+))?$/i)
+      const handoffMatch = cmdContent.match(/^(?:handoff|\/handoff)(?::\s*([\s\S]+))?$/i)
       if (handoffMatch) {
         void handleHandoffIntercept(msg, handoffMatch[1]?.trim())
         return
       }
 
-      const goMatch = msg.content.match(/^(?:\/go|go!)\s*$/i)
+      const goMatch = cmdContent.match(/^(?:\/go|go!)\s*$/i)
       if (goMatch) {
         void handleGoIntercept(msg)
         return
       }
 
-      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(\d+)?(?:\s+([\s\S]+))?$/i)
+      const reviewMatch = cmdContent.match(/^(?:\/review|review)\s*(\d+)?(?:\s+([\s\S]+))?$/i)
       if (reviewMatch) {
         void handleReviewIntercept(msg, parseInt(reviewMatch[1] ?? '3'), reviewMatch[2]?.trim())
         return
       }
 
-      const cancelReviewMatch = msg.content.match(/^(?:kill review)\s*$/i)
+      const cancelReviewMatch = cmdContent.match(/^(?:kill review)\s*$/i)
       if (cancelReviewMatch) {
         void handleCancelReviewIntercept(msg)
         return
       }
 
-      const buildWtMatch = msg.content.match(/^(?:\/build-wt|build-wt):\s*(\S+)\s+(\d+)?(?:\s+([\s\S]+))?$/i)
+      const buildWtMatch = cmdContent.match(/^(?:\/build-wt|build-wt):\s*(\S+)\s+(\d+)?(?:\s+([\s\S]+))?$/i)
       if (buildWtMatch) {
         void handleBuildIntercept(msg, parseInt(buildWtMatch[2] ?? '3'), buildWtMatch[3]?.trim(), buildWtMatch[1].trim())
         return
       }
       // Catch malformed build-wt (missing repo)
-      if (msg.content.match(/^(?:\/build-wt|build-wt)[:\s]/i)) {
+      if (cmdContent.match(/^(?:\/build-wt|build-wt)[:\s]/i)) {
         void gateway.send(msg.channelId, `Usage: \`build-wt: <repo> [rounds] [task]\`\nExample: \`build-wt: options_bot 3 implement ticket 1\``, { replyTo: msg.id }).catch(() => {})
         return
       }
 
-      const buildMatch = msg.content.match(/^(?:\/build|build)\s*(\d+)?(?:\s+([\s\S]+))?$/i)
+      const buildMatch = cmdContent.match(/^(?:\/build|build)\s*(\d+)?(?:\s+([\s\S]+))?$/i)
       if (buildMatch) {
         void handleBuildIntercept(msg, parseInt(buildMatch[1] ?? '3'), buildMatch[2]?.trim())
         return
       }
 
-      const cancelBuildMatch = msg.content.match(/^(?:kill build)\s*$/i)
+      const cancelBuildMatch = cmdContent.match(/^(?:kill build)\s*$/i)
       if (cancelBuildMatch) {
         void handleCancelBuildIntercept(msg)
         return
       }
 
-      const designMatch = msg.content.match(/^(?:\/design|design):\s*([\s\S]+)$/i)
+      const designMatch = cmdContent.match(/^(?:\/design|design):\s*([\s\S]+)$/i)
       if (designMatch) {
         void handleDesignIntercept(msg, designMatch[1].trim())
         return
       }
 
-      const cancelDesignMatch = msg.content.match(/^(?:kill design)\s*$/i)
+      const cancelDesignMatch = cmdContent.match(/^(?:kill design)\s*$/i)
       if (cancelDesignMatch) {
         void handleCancelDesignIntercept(msg)
         return
       }
 
-      const watchMatch = msg.content.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
+      const watchMatch = cmdContent.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
       if (watchMatch) {
         void handleWatchIntercept(msg, watchMatch[1]?.trim())
         return
       }
 
-      const unwatchMatch = msg.content.match(/^(?:\/unwatch|unwatch)\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?\s*$/i)
+      const unwatchMatch = cmdContent.match(/^(?:\/unwatch|unwatch)\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?\s*$/i)
       if (unwatchMatch) {
         void handleUnwatchIntercept(msg, unwatchMatch[1].trim())
         return
       }
 
-      const watchesMatch = msg.content.match(/^(?:\/watches|watches)\s*$/i)
+      const watchesMatch = cmdContent.match(/^(?:\/watches|watches)\s*$/i)
       if (watchesMatch) {
         void handleWatchesIntercept(msg)
         return
@@ -339,7 +344,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (mappedSession) {
         const info = registry.get(mappedSession)
         if (info) {
-          const listenMatch = msg.content.match(/^(listen|pause)\s*$/i)
+          const listenMatch = cmdContent.match(/^(listen|pause)\s*$/i)
           if (listenMatch) {
             info.listening = listenMatch[1].toLowerCase() === 'listen'
             registry.persist()
