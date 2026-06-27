@@ -57,6 +57,13 @@ const SOCKET_PATH = resolveSocketPath()
 // session id when it launches MCP subprocesses, so the daemon-assigned id would be lost.
 const SESSION_ID = process.env.HYDRA_SESSION_ID ?? 'main'
 const IS_MAIN = SESSION_ID === 'main'
+// Auto-connect to the daemon socket. Off by default so a Claude Code session that
+// merely has the plugin installed (e.g. for the /discord:access skill) does NOT
+// try to register as `main` and fight byte's bridge for the slot. Byte's launcher
+// and the daemon's session-spawner set this explicitly.
+const BRIDGE_AUTOCONNECT =
+  process.env.HYDRA_BRIDGE_AUTOCONNECT === '1' ||
+  process.env.HYDRA_BRIDGE_AUTOCONNECT?.toLowerCase() === 'true'
 const RECONNECT_INTERVAL = 5000
 const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'list_sessions', 'kill_session'])
 
@@ -541,7 +548,15 @@ process.on('uncaughtException', err => {
 // ── Start ──────────────────────────────────────────────────────────────
 
 await mcp.connect(new StdioServerTransport())
-connectSocket()
+if (BRIDGE_AUTOCONNECT) {
+  connectSocket()
+} else {
+  process.stderr.write(
+    'bridge: HYDRA_BRIDGE_AUTOCONNECT not set — skipping daemon connect. ' +
+    'MCP tools are still registered but no messages will flow until a parent ' +
+    'process sets HYDRA_BRIDGE_AUTOCONNECT=1 (byte launcher / daemon spawn).\n',
+  )
+}
 
 // ── Shutdown ───────────────────────────────────────────────────────────
 

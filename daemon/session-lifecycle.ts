@@ -349,6 +349,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const inner = [
     `cd ${shq(effectiveCwd)}`,
     `export HYDRA_SESSION_ID=${shq(sessionId)}`,
+    `export HYDRA_BRIDGE_AUTOCONNECT=1`,
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
     claudeArgs,
