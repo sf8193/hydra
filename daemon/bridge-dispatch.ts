@@ -51,7 +51,11 @@ export const BRIDGE_TOOLS = [
   { name: 'list_watches', description: 'List all PRs being watched (your session or all).', inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Show all watches, not just yours' } } } },
 ]
 
-export const SPAWN_MODEL = 'claude-opus-4-6[1m]'
+// Override via HYDRA_SPAWN_MODEL in the daemon's .env. The default uses the
+// 1M-context Opus build; switch to a non-[1m] variant if your Claude account
+// doesn't have 1M-context credits enabled (otherwise spawned sessions 402 on
+// first API call and never reply).
+export const SPAWN_MODEL = process.env.HYDRA_SPAWN_MODEL ?? 'claude-opus-4-6[1m]'
 export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'list_sessions', 'kill_session'])
 
 export function computeToolsForSession(sessionId: string): typeof BRIDGE_TOOLS {
