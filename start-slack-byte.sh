@@ -50,7 +50,7 @@ fi
 # regardless of what account ~/.claude-slack happens to be logged into, and is
 # immune to CLAUDE_CONFIG_DIR failing to propagate into the spawned process.
 tmux new-session -d -s "$SESSION" \
-  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR='$CONFIG_DIR' && export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat \$HOME/.angellist-claude-token)\" && caffeinate -i claude --model 'claude-opus-4-6[1m]' --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions \
+  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR='$CONFIG_DIR' && export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat \$HOME/.angellist-claude-token)\" && export HYDRA_BRIDGE_AUTOCONNECT=1 && caffeinate -i claude --model 'claude-opus-4-6[1m]' --channels plugin:discord@claude-plugins-official --no-chrome --dangerously-skip-permissions \
   \"$PROMPT\""
 
 echo "$(date): Slack Byte started (daemon+bridge)" >> ~/slack-byte-restarts.log

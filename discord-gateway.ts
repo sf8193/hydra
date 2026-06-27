@@ -497,6 +497,7 @@ export class DiscordGateway implements ChatGateway {
     return {
       id: msg.id,
       channelId: msg.channelId,
+      guildId: msg.guildId,
       authorId: msg.author.id,
       authorUsername: msg.author.username,
       content: msg.content,

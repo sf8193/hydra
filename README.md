@@ -129,6 +129,7 @@ claude --channels plugin:discord@claude-plugins-official
 - `discord@claude-plugins-official` enabled in the `CLAUDE_CONFIG_DIR`'s `settings.json`
 - bridge.ts copied into the `CLAUDE_CONFIG_DIR`'s plugin cache
 - `DAEMON_SOCK` must be `export`ed so the bridge subprocess inherits it
+- `HYDRA_BRIDGE_AUTOCONNECT=1` must be `export`ed in byte's launch shell. Without it the bridge stays dormant and never registers, so the daemon has no session to route to. The provided `start-byte-v2.sh` / `start-slack-byte.sh` already set it; if you roll your own launcher, include it. Daemon-spawned sub-sessions get it automatically.
 
 ## Tools
 

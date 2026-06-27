@@ -804,6 +804,7 @@ export class SlackGateway implements ChatGateway {
     return {
       id: msg.ts,
       channelId: msg.channel,
+      guildId: msg.team ?? null,
       authorId: msg.user,
       authorUsername: username,
       content: msg.text ?? '',

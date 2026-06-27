@@ -27,6 +27,9 @@ export type Access = {
   dmPolicy: 'pairing' | 'allowlist' | 'disabled'
   allowFrom: string[]
   groups: Record<string, GroupPolicy>
+  // Guild/workspace-level policies applied to any channel in the guild when
+  // no per-channel entry exists in groups. Per-channel groups still win.
+  guilds: Record<string, GroupPolicy>
   pending: Record<string, PendingEntry>
   mentionPatterns?: string[]
   ackReaction?: string
@@ -52,7 +55,7 @@ export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 // ---------------------------------------------------------------------------
 
 function defaultAccess(): Access {
-  return { dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {} }
+  return { dmPolicy: 'pairing', allowFrom: [], groups: {}, guilds: {}, pending: {} }
 }
 
 function readAccessFile(): Access {
@@ -63,6 +66,7 @@ function readAccessFile(): Access {
       dmPolicy: parsed.dmPolicy ?? 'pairing',
       allowFrom: parsed.allowFrom ?? [],
       groups: parsed.groups ?? {},
+      guilds: parsed.guilds ?? {},
       pending: parsed.pending ?? {},
       mentionPatterns: parsed.mentionPatterns,
       ackReaction: parsed.ackReaction,
@@ -157,7 +161,8 @@ export async function gate(msg: InboundMessage): Promise<GateResult> {
   const channelId = msg.isThread
     ? msg.parentChannelId ?? msg.channelId
     : msg.channelId
-  const policy = access.groups[channelId]
+  // Per-channel policy wins; guild-level acts as a fallback for any channel in the guild.
+  const policy = access.groups[channelId] ?? (msg.guildId ? access.guilds[msg.guildId] : undefined)
   if (!policy) return { action: 'drop' }
   const groupAllowFrom = policy.allowFrom ?? []
   const requireMention = policy.requireMention ?? true
