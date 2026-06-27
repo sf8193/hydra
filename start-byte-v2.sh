@@ -38,7 +38,7 @@ echo "$(date): symlinked bridge.ts into plugin cache as server.ts" >> ~/byte-res
 # without it, to prevent unrelated Claude sessions that have the plugin installed
 # from also claiming the `main` session slot.
 tmux new-session -d -s "$SESSION" \
-  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR=$CONFIG_DIR && export HYDRA_BRIDGE_AUTOCONNECT=1 && caffeinate -i claude --model 'claude-opus-4-6[1m]' --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions \
+  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR=$CONFIG_DIR && export HYDRA_BRIDGE_AUTOCONNECT=1 && caffeinate -i claude --model 'claude-opus-4-6[1m]' --channels plugin:discord@claude-plugins-official --no-chrome --dangerously-skip-permissions \
   \"You just restarted with a fresh context. Read your memory files, then send a message to Discord channel ${CHANNEL} letting them know you're back online.\""
 
 echo "$(date): Byte v2 started (daemon+bridge)" >> ~/byte-restarts.log
