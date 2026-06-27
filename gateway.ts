@@ -17,6 +17,8 @@ export type AttachmentInfo = {
 export type InboundMessage = {
   id: string
   channelId: string
+  // Server/workspace the message belongs to. Null for DMs and platforms without the concept.
+  guildId: string | null
   authorId: string
   authorUsername: string
   content: string

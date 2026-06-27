@@ -44,10 +44,18 @@ Pairing captures the ID automatically. To add someone manually, enable **User Se
 
 ## Guild channels
 
-Guild channels are off by default. Opt each one in individually, keyed on the **channel** snowflake (not the guild). Threads inherit their parent channel's opt-in; no separate entry needed. Find channel IDs the same way as user IDs: Developer Mode, right-click the channel, Copy Channel ID.
+Guild channels are off by default. Opt each one in individually, keyed on the **channel** snowflake. Threads inherit their parent channel's opt-in; no separate entry needed. Find channel IDs the same way as user IDs: Developer Mode, right-click the channel, Copy Channel ID.
 
 ```
 /discord:access group add 846209781206941736
+```
+
+To opt in **every** channel of a guild at once, set a `guilds` entry keyed on the **guild** snowflake. Per-channel `groups` entries still override the guild-level default. Right-click the server icon → Copy Server ID for the guild snowflake.
+
+```jsonc
+"guilds": {
+  "961427969165889576": { "requireMention": true, "allowFrom": [], "threadReply": true }
+}
 ```
 
 With the default `requireMention: true`, the bot responds only when @mentioned or replied to. Pass `--no-mention` to process every message in the channel, or `--allow id1,id2` to restrict which members can trigger it.
@@ -123,6 +131,12 @@ Configure outbound behavior with `/discord:access set <key> <value>`.
       // Restrict triggers to these senders. Empty = any member (subject to requireMention).
       "allowFrom": []
     }
+  },
+
+  // Whole-guild fallback. Applies to any channel in the guild that has no
+  // explicit "groups" entry. Per-channel "groups" still wins.
+  "guilds": {
+    "961427969165889576": { "requireMention": true, "allowFrom": [], "threadReply": true }
   },
 
   // Case-insensitive regexes that count as a mention.
