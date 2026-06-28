@@ -28,7 +28,25 @@ LOG="${HYDRA_LOG:-$HOME/hydra-daemon.log}"
 
 echo "$(date): Restart requested" >> "$LOG"
 
-# 1. Kill existing daemon
+# 1. Pre-flight: compile-check BEFORE killing the old daemon
+echo "Pre-flight compile check..."
+source "$SCRIPT_DIR/compile-check.sh"
+COMPILE_OUT=$(_compile_check "$SCRIPT_DIR")
+if [ $? -ne 0 ]; then
+  echo "✗ Compile check FAILED — old daemon left running."
+  printf '%s' "$COMPILE_OUT" | sed 's/^/    /'
+  echo "$(date): Restart ABORTED — compile check failed (old daemon untouched)" >> "$LOG"
+  exit 1
+fi
+
+# 2. Snapshot working tree for rollback
+SNAPSHOT=$(cd "$SCRIPT_DIR" && git stash create 2>/dev/null)
+if [ -n "$SNAPSHOT" ]; then
+  echo "Snapshot: $SNAPSHOT (rollback: git stash apply $SNAPSHOT)"
+  echo "$(date): Snapshot $SNAPSHOT" >> "$LOG"
+fi
+
+# 3. Kill existing daemon
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
   echo "Killing daemon..."
   tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
@@ -37,10 +55,10 @@ else
   echo "No daemon running."
 fi
 
-# 2. Remove stale socket
+# 4. Remove stale socket
 rm -f "$SOCK"
 
-# 3. Relaunch
+# 5. Relaunch
 echo "Starting daemon..."
 CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   HYDRA_STATE_DIR="$HYDRA_STATE_DIR" \
@@ -48,7 +66,7 @@ CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   SPAWN_CWD="$SPAWN_CWD" \
   "$SCRIPT_DIR/start-daemon.sh"
 
-# 4. Wait for socket to appear (up to 15s)
+# 6. Wait for socket to appear (up to 15s)
 echo -n "Waiting for socket"
 for i in $(seq 1 30); do
   if [ -S "$SOCK" ]; then
@@ -62,4 +80,7 @@ done
 
 echo " TIMEOUT — socket did not appear after 15s"
 echo "$(date): Restart FAILED — socket timeout" >> "$LOG"
+if [ -n "$SNAPSHOT" ]; then
+  echo "Rollback available: git stash apply $SNAPSHOT && ./restart-daemon.sh"
+fi
 exit 1

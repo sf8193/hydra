@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@types/bun"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  },
+  "include": ["*.ts", "daemon/**/*.ts"],
+  "exclude": ["node_modules", "daemon/__tests__", "slack-gateway.ts"]
+}
