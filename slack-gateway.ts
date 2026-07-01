@@ -75,15 +75,22 @@ export class SlackGateway implements ChatGateway {
   private staleThresholdMs: number
   private reconnecting = false
   private reconnectAttempts = 0
+  private socketConnected = false
+  private transportHooked = false
+  private socketGeneration = 0
+  private disconnectedSince: number | null = null
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string) => Promise<void>) | null = null
 
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
-    const networkUp = await this.checkNetwork()
-    if (!networkUp) return { ok: false, message: 'network unreachable' }
+    // Hold the same mutex reconnect() uses so the health-tick reconnect can't
+    // interleave with this and run a second concurrent start() on this.app.
+    this.reconnecting = true
     try {
+      const networkUp = await this.checkNetwork()
+      if (!networkUp) return { ok: false, message: 'network unreachable' }
       const gapMs = Date.now() - this.lastEventAt
       await this.start(this.token!)
       this.reconnectAttempts = 0
@@ -94,6 +101,8 @@ export class SlackGateway implements ChatGateway {
       return { ok: true, message: 'reconnected' }
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    } finally {
+      this.reconnecting = false
     }
   }
 
@@ -287,7 +296,18 @@ export class SlackGateway implements ChatGateway {
       })
     })
 
+    // Judge liveness by the socket's own connection lifecycle, not business-event
+    // recency. (ws_message fires only on Slack data frames, never on the ws-level
+    // ping/pong keepalive — so staleness must NOT key off ws_message recency.)
+    // Must be attached before start() so the initial 'connected' is observed.
+    this.attachTransportHeartbeat()
+
     await this.app.start()
+    // socketConnected/disconnectedSince are set by the generation-guarded
+    // 'connected' listener, which has already fired by the time start() resolves
+    // (Bolt resolves start() on the Connected event). Don't set them unguarded
+    // here — a raced/orphaned start() could otherwise stomp a dead socket as
+    // connected and blind both watchdogs.
 
     // Get bot identity
     try {
@@ -836,6 +856,48 @@ export class SlackGateway implements ChatGateway {
 
   // --- Heartbeat & self-heal ---
 
+  // Hook the Socket Mode client so liveness reflects the connection itself. The
+  // client pings every 5s, times out the server at 30s, and auto-reconnects on a
+  // real drop; an idle-but-connected socket gets no business events, so the old
+  // "no event in STALE_THRESHOLD_MS" check reconnected a healthy connection every
+  // few minutes, briefly stacking concurrent WebSockets.
+  private attachTransportHeartbeat(): void {
+    try {
+      const client = (this.app as any)?.receiver?.client
+      if (!client || typeof client.on !== 'function') {
+        this.transportHooked = false
+        process.stderr.write('slack gateway: WARN could not hook Socket Mode client; falling back to event-time staleness\n')
+        return
+      }
+      // Bump the generation and capture it in each listener. Bolt's app.stop()
+      // tears the old socket down asynchronously and never removes our listeners,
+      // so a prior client can emit lifecycle events after we've already replaced
+      // it — those must no-op rather than write the shared flags for a dead socket.
+      const gen = ++this.socketGeneration
+      client.on('connected', () => {
+        if (gen !== this.socketGeneration) return
+        this.socketConnected = true
+        this.disconnectedSince = null
+        this.touchHeartbeat()
+      })
+      client.on('ws_message', () => {
+        if (gen !== this.socketGeneration) return
+        this.touchHeartbeat()
+      })
+      for (const down of ['connecting', 'reconnecting', 'disconnecting', 'disconnected']) {
+        client.on(down, () => {
+          if (gen !== this.socketGeneration) return
+          this.socketConnected = false
+          if (this.disconnectedSince === null) this.disconnectedSince = Date.now()
+        })
+      }
+      this.transportHooked = true
+    } catch (err) {
+      this.transportHooked = false
+      process.stderr.write(`slack gateway: WARN failed to hook Socket Mode client: ${err}\n`)
+    }
+  }
+
   private touchHeartbeat(): void {
     this.lastEventAt = Date.now()
     if (this.heartbeatPath && (this.lastEventAt - this.lastHeartbeatWrite > HEARTBEAT_WRITE_THROTTLE_MS)) {
@@ -856,12 +918,27 @@ export class SlackGateway implements ChatGateway {
   private startHealthCheck(): void {
     if (this.healthInterval) clearInterval(this.healthInterval)
     this.healthInterval = setInterval(async () => {
-      const elapsed = Date.now() - this.lastEventAt
-      if (elapsed > this.staleThresholdMs) {
-        process.stderr.write(`slack gateway: connection stale (${Math.round(elapsed / 1000)}s since last event), attempting reconnect\n`)
+      const now = Date.now()
+      // Health is the socket's own connection state: socket-mode pings every 5s,
+      // times out the server at 30s, and auto-reconnects faster than this watchdog.
+      // Only intervene once it has been *continuously* disconnected past the
+      // threshold — a transient reconnect self-heals and clears disconnectedSince,
+      // so a self-healing blip never trips it. Without the transport hook
+      // (unexpected Bolt internals), fall back to the old event-time staleness.
+      const stale = this.transportHooked
+        ? (!this.socketConnected && this.disconnectedSince !== null && (now - this.disconnectedSince) > this.staleThresholdMs)
+        : ((now - this.lastEventAt) > this.staleThresholdMs)
+      if (stale) {
+        const downFor = this.disconnectedSince !== null ? now - this.disconnectedSince : now - this.lastEventAt
+        process.stderr.write(`slack gateway: socket down ${Math.round(downFor / 1000)}s (connected=${this.socketConnected}), attempting reconnect\n`)
         await this.reconnect()
       }
-      this.writeHeartbeat()
+      // While hooked: withhold the file once the socket has been disconnected past
+      // the threshold, so watchdog.sh restarts a wedged daemon. In fallback mode we
+      // can't read socket state, so keep writing unconditionally and rely on the
+      // in-process reconnect()/exit-after-MAX path — a genuinely dead socket makes
+      // start() throw there, which escalates to exit(1) for a supervisor restart.
+      if (!this.transportHooked || !stale) this.writeHeartbeat()
     }, this.healthCheckMs)
     this.healthInterval.unref()
   }
@@ -893,6 +970,9 @@ export class SlackGateway implements ChatGateway {
         this.setHealthCheckInterval(HEALTH_CHECK_FAST_MS)
         process.stderr.write(`slack gateway: network unreachable, polling every ${HEALTH_CHECK_FAST_MS / 1000}s\n`)
         this.reconnectAttempts = 0
+        // Keep the heartbeat fresh during a network outage so watchdog.sh doesn't
+        // restart-storm a daemon that can't connect anyway — matches watchdog.sh's
+        // own "skip restart when the health URL is unreachable" policy.
         this.writeHeartbeat()
         return
       }
@@ -913,7 +993,10 @@ export class SlackGateway implements ChatGateway {
       const backoffMs = Math.min(RECONNECT_BACKOFF_BASE_MS * Math.pow(2, this.reconnectAttempts - 1), RECONNECT_BACKOFF_CAP_MS)
       this.setHealthCheckInterval(backoffMs)
       process.stderr.write(`slack gateway: reconnect attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} failed, next check in ${Math.round(backoffMs / 1000)}s: ${err}\n`)
-      this.writeHeartbeat()
+      // Deliberately do NOT refresh the heartbeat file here: the network is up but
+      // the Slack reconnect is failing, so let the file age past watchdog.sh's
+      // threshold and let it restart us — in parallel with the in-process
+      // exit-after-MAX_RECONNECT_ATTEMPTS — instead of masking a wedged socket.
     } finally {
       this.reconnecting = false
     }
