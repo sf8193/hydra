@@ -382,12 +382,17 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     claudeArgs = `claude --model ${shq(SPAWN_MODEL)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}`
   }
 
+  // Spawned sessions set CLAUDE_CONFIG_DIR, which disables keychain login — so auth
+  // must come from a pinned OAuth token. Read it from a file at spawn time so it
+  // survives daemon/watchdog restarts (tmux global env does not).
+  const tokenFile = process.env.HYDRA_CLAUDE_TOKEN_FILE
   const inner = [
     `cd ${shq(effectiveCwd)}`,
     `export HYDRA_SESSION_ID=${shq(sessionId)}`,
     `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
+    ...(tokenFile ? [`export CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shq(tokenFile)})"`] : []),
     claudeArgs,
   ].join(' && ')
 

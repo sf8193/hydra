@@ -4,9 +4,10 @@
 SESSION="${BYTE_SESSION_NAME:-slack-byte}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOCK="${DAEMON_SOCK:-$HOME/.claude/channels/slack/daemon.sock}"
-CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude-slack}"
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude-byte}"
 GREET_CHANNEL="${BYTE_CHANNEL:-}"   # optional: DM/channel id to greet on launch; empty = start silent
-CWD="${BYTE_CWD:-$HOME/angellist}"
+CWD="${BYTE_CWD:-$HOME/RubymineProjects}"
+TOKEN_FILE="${HYDRA_CLAUDE_TOKEN_FILE:-$HOME/.hydra-claude-token}"
 
 # Check daemon is running
 if [ ! -S "$SOCK" ]; then
@@ -58,7 +59,7 @@ fi
 # regardless of what account ~/.claude-slack happens to be logged into, and is
 # immune to CLAUDE_CONFIG_DIR failing to propagate into the spawned process.
 tmux new-session -d -s "$SESSION" \
-  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR='$CONFIG_DIR' && export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat \$HOME/.angellist-claude-token)\" && caffeinate -i claude --model 'claude-opus-4-6[1m]' --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions \
+  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR='$CONFIG_DIR' && export CLAUDE_CODE_OAUTH_TOKEN=\"\$(cat '$TOKEN_FILE')\" && caffeinate -i claude --model 'claude-opus-4-8[1m]' --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions \
   \"$PROMPT\""
 
 echo "$(date): Slack Byte started (daemon+bridge)" >> ~/slack-byte-restarts.log
