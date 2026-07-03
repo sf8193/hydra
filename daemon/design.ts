@@ -324,7 +324,7 @@ async function cleanupDesignSessions(state: DesignState, reason: string): Promis
 // Cancel a design
 // ---------------------------------------------------------------------------
 
-export async function cancelDesign(threadId: string): Promise<void> {
+export async function cancelDesign(threadId: string, message?: string): Promise<void> {
   const state = designs.get(threadId)
   if (!state) return
 
@@ -337,7 +337,7 @@ export async function cancelDesign(threadId: string): Promise<void> {
   await cleanupDesignSessions(state, 'design cancelled')
   designs.delete(threadId)
   refreshSessionVisual(threadId)
-  await gateway.send(state.ownerThreadId, `Design session cancelled.`)
+  await gateway.send(state.ownerThreadId, message ?? `Design session cancelled.`)
 }
 
 // ---------------------------------------------------------------------------
@@ -639,12 +639,20 @@ export function onDesignParticipantDisconnect(sessionId: string): void {
 
     // Personas are expendable — adjust expectations immediately (no grace timer)
     if (persona) {
-      process.stderr.write(`daemon: design: ${label} disconnected/died\n`)
-      void gateway.send(threadId, `_${label} disconnected. Continuing with ${state.personas.filter(p => p.sessionId !== sessionId).length} remaining personas._`).catch(() => {})
+      const aliveCount = state.personas.filter(p => p.sessionId !== sessionId && transport.has(p.sessionId)).length
+      process.stderr.write(`daemon: design: ${label} disconnected/died (${aliveCount} alive)\n`)
+      void gateway.send(threadId, `_${label} disconnected. ${aliveCount > 0 ? `Continuing with ${aliveCount} remaining persona${aliveCount !== 1 ? 's' : ''}.` : 'All personas dead.'}_`).catch(() => {})
+
+      if (aliveCount === 0) {
+        if (state.timeout) { clearTimeout(state.timeout); state.timeout = undefined }
+        process.stderr.write(`daemon: design: all personas dead — cancelling\n`)
+        void cancelDesign(threadId, `All personas crashed. Design cancelled.\nUse \`design: ${state.topic}\` to retry.`).catch(e => process.stderr.write(`daemon: design: cancel failed: ${e}\n`))
+        return
+      }
 
       if (state.phase === 'questioning') {
         state.questionsExpected--
-        if (state.questionsExpected > 0 && state.questionsReceived >= state.questionsExpected) {
+        if (state.questionsReceived >= state.questionsExpected) {
           if (state.timeout) clearTimeout(state.timeout)
           const result = designMachine.transition(state.phase, 'all_questions')
           if (result.ok) {
@@ -654,7 +662,7 @@ export function onDesignParticipantDisconnect(sessionId: string): void {
         }
       } else if (state.phase === 'independent' && !persona.proposed) {
         state.proposalsExpected--
-        if (state.proposalsExpected > 0 && state.proposalsReceived >= state.proposalsExpected) {
+        if (state.proposalsReceived >= state.proposalsExpected) {
           if (state.timeout) clearTimeout(state.timeout)
           const result = designMachine.transition(state.phase, 'all_proposed')
           if (result.ok) {
@@ -665,7 +673,7 @@ export function onDesignParticipantDisconnect(sessionId: string): void {
         }
       } else if (state.phase === 'refinement') {
         state.refinementExpected--
-        if (state.refinementExpected > 0 && state.refinementResponses >= state.refinementExpected) {
+        if (state.refinementResponses >= state.refinementExpected) {
           if (state.timeout) clearTimeout(state.timeout)
           void processNextDivergence(state)
         }
