@@ -117,7 +117,7 @@ export function debouncedRefreshListDisplay(): void {
 async function refreshListDisplay(): Promise<void> {
   if (lastListMsgs.length === 0) return
   const now = Date.now()
-  const all = [...registry.values()].filter(s => isAlive(s)).sort((a, b) => b.lastActive - a.lastActive)
+  const all = [...registry.values()].filter(s => isAlive(s) && !s.isJoinMember).sort((a, b) => b.lastActive - a.lastActive)
 
   let output: string
   if (all.length === 0) {
@@ -160,7 +160,7 @@ async function refreshListDisplay(): Promise<void> {
 
 export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '📊').catch(() => {})
-  const liveSessions = [...registry.values()].filter(s => isAlive(s))
+  const liveSessions = [...registry.values()].filter(s => isAlive(s) && !s.isJoinMember)
   if (liveSessions.length === 0) {
     try { await gateway.send(msg.channelId, 'No active sessions.', { replyTo: msg.id }) } catch {}
     return
