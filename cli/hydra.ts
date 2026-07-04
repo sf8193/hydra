@@ -41,6 +41,8 @@ Platform: slack | discord (required for lifecycle commands)
 Spawn options (required):
   --initiator <name>                   Who triggered this spawn
   --idempotency-key <key>              Prevent duplicate spawns
+  --channel <id>                       Target channel for the spawned thread
+  --message <id>                       Create thread on this message (requires --channel)
 
 Global options:
   --daemon <name>                      Target a specific daemon
@@ -108,6 +110,10 @@ async function main(): Promise<void> {
     case 'spawn': {
       let idempotencyKey: string | undefined
       let initiator: string | undefined
+      let channel: string | undefined
+      let message: string | undefined
+      let quiet = false
+      let ephemeral = false
       const promptParts: string[] = []
 
       for (let i = 1; i < filtered.length; i++) {
@@ -115,6 +121,14 @@ async function main(): Promise<void> {
           idempotencyKey = filtered[++i]
         } else if (filtered[i] === '--initiator' && i + 1 < filtered.length) {
           initiator = filtered[++i]
+        } else if (filtered[i] === '--channel' && i + 1 < filtered.length) {
+          channel = filtered[++i]
+        } else if (filtered[i] === '--message' && i + 1 < filtered.length) {
+          message = filtered[++i]
+        } else if (filtered[i] === '--quiet') {
+          quiet = true
+        } else if (filtered[i] === '--ephemeral') {
+          ephemeral = true
         } else {
           promptParts.push(filtered[i])
         }
@@ -133,12 +147,16 @@ async function main(): Promise<void> {
         console.error('error: --initiator is required')
         process.exit(1)
       }
+      if (message && !channel) {
+        console.error('error: --message requires --channel')
+        process.exit(1)
+      }
 
       const response = await sendRequest(socketPath, {
         type: 'cli',
         command: 'spawn',
         id: randomUUID(),
-        params: { prompt, idempotencyKey, initiator },
+        params: { prompt, idempotencyKey, initiator, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }) },
       })
       printResponse(response, json)
       break
@@ -194,6 +212,19 @@ async function main(): Promise<void> {
       }
       const response = await sendRequest(socketPath, {
         type: 'cli', command: 'clear-key', id: randomUUID(), params: { key },
+      })
+      printResponse(response, json)
+      break
+    }
+
+    case 'check-key': {
+      const key = filtered[1]
+      if (!key) {
+        console.error('error: idempotency key required')
+        process.exit(1)
+      }
+      const response = await sendRequest(socketPath, {
+        type: 'cli', command: 'check-key', id: randomUUID(), params: { key },
       })
       printResponse(response, json)
       break

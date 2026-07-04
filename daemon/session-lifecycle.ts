@@ -60,8 +60,8 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
   killsInProgress.add(info.sessionId)
 
   try {
-    // Join members don't own the thread — skip death message and anchor reactions
-    if (!info.isJoinMember) {
+    // Join members and ephemeral sessions don't own the thread — skip death message and anchor reactions
+    if (!info.isJoinMember && !info.ephemeral) {
       try {
         await gateway.send(info.threadId, `_${reason}_`)
       } catch (err) {
@@ -227,8 +227,17 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           threadId = thread.id
           anchorMessageId = messageId
           anchorChannelId = targetChannelId!
-        } catch (err) {
-          process.stderr.write(`daemon: createThread on message failed: ${err}\n`)
+        } catch (err: any) {
+          // If thread already exists on this message, join it.
+          // Discord thread IDs equal the parent message ID when created via startThread on a message.
+          if (err?.code === 'MessageExistingThread') {
+            threadId = messageId
+            anchorMessageId = messageId
+            anchorChannelId = targetChannelId!
+            process.stderr.write(`daemon: joined existing thread ${threadId} on message ${messageId}\n`)
+          } else {
+            process.stderr.write(`daemon: createThread on message failed: ${err}\n`)
+          }
         }
       }
 
@@ -431,7 +440,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
-    ...(opts?.initiator ? { initiator: opts.initiator } : {}),
+    initiator: opts?.initiator,
+    ephemeral: opts?.ephemeral,
   })
   // Don't register in threadToSession for join members — owner keeps that mapping
   if (!isJoin) {

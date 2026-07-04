@@ -6,7 +6,7 @@ import { registry, threadRegistry } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool, computeToolsForSession, MAIN_ONLY_TOOLS, SPAWN_MODEL } from './bridge-dispatch.js'
 import { pendingPermissions } from './permission.js'
-import { discoverClaudeSessionId } from './session-lifecycle.js'
+import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { isReviewParticipant, onReviewReply, onParticipantDisconnect, onParticipantReconnect } from './adversarial.js'
 import { isBuildParticipant, onBuildReply, onBuildParticipantDisconnect, onBuildParticipantReconnect } from './build.js'
@@ -25,6 +25,44 @@ const DEATH_DETECT_DELAY_MS = 3_000
 
 const PR_URL_RE = /https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/g
 
+// ---------------------------------------------------------------------------
+// Ephemeral TTL — safety net for stuck ephemeral sessions
+// ---------------------------------------------------------------------------
+
+const EPHEMERAL_TTL_MS = 30 * 60 * 1000 // 30 minutes
+const ephemeralTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+export function startEphemeralTtl(sessionId: string): void {
+  clearEphemeralTtl(sessionId)
+  ephemeralTimers.set(sessionId, setTimeout(() => {
+    const info = registry.get(sessionId)
+    if (info?.ephemeral) {
+      process.stderr.write(`daemon: ephemeral session ${info.tmuxName} TTL expired (${EPHEMERAL_TTL_MS / 60000}min), killing\n`)
+      void killSession(info, 'ephemeral TTL expired').catch(err => {
+        process.stderr.write(`daemon: ephemeral TTL kill failed: ${err}\n`)
+      })
+    }
+    ephemeralTimers.delete(sessionId)
+  }, EPHEMERAL_TTL_MS))
+}
+
+function clearEphemeralTtl(sessionId: string): void {
+  const timer = ephemeralTimers.get(sessionId)
+  if (timer) {
+    clearTimeout(timer)
+    ephemeralTimers.delete(sessionId)
+  }
+}
+
+/** Boot-time sweep: start TTL for any restored ephemeral sessions */
+export function initEphemeralTimers(): void {
+  for (const info of registry.values()) {
+    if (info.ephemeral) {
+      startEphemeralTtl(info.sessionId)
+    }
+  }
+}
+
 function autoWatchPrUrls(sessionId: string, text: string): void {
   if (!text) return
   const info = registry.get(sessionId)
@@ -41,7 +79,7 @@ function autoWatchPrUrls(sessionId: string, text: string): void {
     watchPr(url, sessionId, info.threadId).then(msg => {
       process.stderr.write(`daemon: auto-watch: ${msg}\n`)
       if (!msg.startsWith('already watching')) {
-        gateway.send(info.threadId, `_Auto-watching ${url}_`).catch(() => {})
+        gateway.send(info.threadId, `_Auto-watching_ ${url}`).catch(() => {})
       }
     }).catch(err => {
       process.stderr.write(`daemon: auto-watch failed for ${url}: ${err instanceof Error ? err.message : err}\n`)
@@ -218,6 +256,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         mainBridge.connect()
       } else {
         process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
+        if (info?.ephemeral) startEphemeralTtl(sessionId)
       }
       break
     }
@@ -248,22 +287,41 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           ...(result.isError ? { isError: true } : {}),
         })
 
-        // Auto-watch: detect PR URLs in session replies
+        // Post-reply hooks (single registry lookup)
         if (name === 'reply' && !result.isError && conn.sessionId) {
-          autoWatchPrUrls(conn.sessionId, args.text as string)
-        }
+          const replyInfo = registry.get(conn.sessionId)
+          const replyText = args.text as string
 
-        // Adversarial review: detect reply from any review participant
-        if (name === 'reply' && !result.isError && conn.sessionId && isReviewParticipant(conn.sessionId)) {
-          onReviewReply(conn.sessionId, args.text as string, args.chat_id as string, result.sentIds ?? [])
-        }
-        // Build: detect reply from any build participant
-        if (name === 'reply' && !result.isError && conn.sessionId && isBuildParticipant(conn.sessionId)) {
-          onBuildReply(conn.sessionId, args.text as string, args.chat_id as string, result.sentIds ?? [])
-        }
-        // Design: detect reply from any design participant
-        if (name === 'reply' && !result.isError && conn.sessionId && isDesignParticipant(conn.sessionId)) {
-          onDesignReply(conn.sessionId, args.text as string, args.chat_id as string, result.sentIds ?? [])
+          // Auto-watch: detect PR URLs (skip ephemeral sessions)
+          if (replyInfo && !replyInfo.ephemeral) {
+            autoWatchPrUrls(conn.sessionId, replyText)
+          }
+
+          // Protocol handlers
+          if (isReviewParticipant(conn.sessionId)) {
+            onReviewReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
+          }
+          if (isBuildParticipant(conn.sessionId)) {
+            onBuildReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
+          }
+          if (isDesignParticipant(conn.sessionId)) {
+            onDesignReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
+          }
+
+          // Ephemeral session: kill on [done] sentinel
+          if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
+            process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)
+            clearEphemeralTtl(conn.sessionId)
+            const sid = conn.sessionId
+            setTimeout(() => {
+              const current = registry.get(sid)
+              if (current) {
+                void killSession(current, 'ephemeral [done]').catch(err => {
+                  process.stderr.write(`daemon: ephemeral kill failed: ${err}\n`)
+                })
+              }
+            }, 2000)
+          }
         }
       }).catch(err => {
         transport.sendToBridge(conn, {
@@ -347,10 +405,13 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     info.deadAt = Date.now()
     registry.persist()
 
-    try {
-      await gateway.send(info.threadId, `💀 **${info.tmuxName}** crashed — use \`resume\` to reconnect or \`respawn\` to start fresh.`)
-    } catch {}
-    refreshSessionVisual(info.threadId, { state: 'crashed' })
+    // Ephemeral sessions die silently — no crash message or skull visual
+    if (!info.ephemeral) {
+      try {
+        await gateway.send(info.threadId, `💀 **${info.tmuxName}** crashed — use \`resume\` to reconnect or \`respawn\` to start fresh.`)
+      } catch {}
+      refreshSessionVisual(info.threadId, { state: 'crashed' })
+    }
   }
 }
 

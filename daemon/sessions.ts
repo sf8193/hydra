@@ -43,6 +43,7 @@ export type SessionInfo = {
   worktreePath?: string
   isJoinMember?: boolean
   deadAt?: number
+  ephemeral?: boolean
 }
 
 export type ThreadMember = {
@@ -96,6 +97,7 @@ export type SpawnOpts = {
   promptBuilder?: (sessionId: string, tmuxName: string) => string
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
+  ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
 }
 
 // ---------------------------------------------------------------------------

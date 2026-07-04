@@ -42,7 +42,7 @@ import { registry, threadRegistry } from './daemon/sessions.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
-import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
+import { socketServer, startBridgeServer, initEphemeralTimers } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 
 threadRegistry.boot(registry)
@@ -66,6 +66,7 @@ if (existsSync(SOCK_PATH)) {
 }
 
 startBridgeServer()
+initEphemeralTimers()
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 registry.onPersist = refreshDashboard
