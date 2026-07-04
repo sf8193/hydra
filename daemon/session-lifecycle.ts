@@ -359,7 +359,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const promptParams = { sessionId, tmuxName, threadId: threadId!, topic }
   let prompt: string
   if (opts?.promptBuilder) {
-    prompt = opts.promptBuilder(sessionId, tmuxName)
+    prompt = opts.promptBuilder(sessionId, tmuxName, threadId!)
   } else if (isHandoff) {
     prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact })
   } else if (isFork) {

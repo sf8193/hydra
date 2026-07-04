@@ -10,7 +10,7 @@ import { handleSpawnIntercept, handleKillIntercept, handleRestartIntercept, hand
 import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
-import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
+import { handleDesignIntercept, handleDesignSpawnIntercept, handleCancelDesignIntercept } from './commands/design.js'
 import { getDesignByThread, handleDesignAnswer } from './design.js'
 import { getReviewByThread } from './adversarial.js'
 import { getBuildByThread } from './build.js'
@@ -243,6 +243,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const usageMatch = msg.content.match(/^(?:\/usage|usage)\s*$/i)
     if (usageMatch) {
       void handleUsageIntercept(msg)
+      return
+    }
+
+    // Top-level design: auto-spawn a session, then start the design in its thread
+    const topLevelDesignMatch = msg.content.match(/^(?:\/design|design):\s*([\s\S]+)$/i)
+    if (topLevelDesignMatch && !msg.isThread) {
+      void handleDesignSpawnIntercept(msg, topLevelDesignMatch[1].trim())
       return
     }
 

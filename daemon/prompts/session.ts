@@ -58,6 +58,21 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
   ].join('\n')
 }
 
+export function buildDesignHostPrompt(p: PromptParams): string {
+  return [
+    `You are a spawned worker session hosting a design discussion. Keep the persona and identity defined in your CLAUDE.md — do NOT rename yourself after the session label. Your internal session label (for tmux/ops only) is "${p.tmuxName}". Topic: ${p.topic}`,
+    ``,
+    `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
+    `Read your memory files for context.`,
+    ``,
+    `A multi-persona design session is starting in your thread. Multiple design personas will post proposals, a synthesizer will merge them, and an auditor will review the result. A design brief will be posted when complete.`,
+    ``,
+    `Do NOT greet, explore code, or start working on the topic yet. Wait for the design to finish. Once the design brief is posted (you'll see "[brief→thread]" and "Design session complete"), read the brief and help the user implement it. Until then, stay quiet.`,
+    ``,
+    `After the design completes, ${DESCRIPTION_INSTRUCTION(p.sessionId)}`,
+  ].join('\n')
+}
+
 export function buildResurrectPrompt(p: PromptParams): string {
   return [
     `You are ${p.tmuxName}, a resurrected session resuming work in an existing thread.`,

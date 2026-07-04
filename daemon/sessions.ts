@@ -94,7 +94,7 @@ export type SpawnOpts = {
   resumeFrom?: string                                          // claude session ID for --resume (no --fork-session)
   resurrectFrom?: string                                       // tmuxName of predecessor (for lineage in respawn)
   joinThread?: string                                          // join existing thread as member (skip thread creation)
-  promptBuilder?: (sessionId: string, tmuxName: string) => string
+  promptBuilder?: (sessionId: string, tmuxName: string, threadId: string) => string
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals

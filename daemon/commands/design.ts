@@ -1,6 +1,9 @@
 import { gateway } from '../config.js'
-import { registry } from '../sessions.js'
+import { registry, sessionEmoji } from '../sessions.js'
 import { startDesign, getDesignByThread, cancelDesign } from '../design.js'
+import { doSpawnSession } from '../session-lifecycle.js'
+import { buildDesignHostPrompt } from '../prompts/session.js'
+import { debouncedRefreshListDisplay } from './status.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleDesignIntercept(msg: InboundMessage, topic: string): Promise<void> {
@@ -34,6 +37,36 @@ export async function handleDesignIntercept(msg: InboundMessage, topic: string):
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Design failed to start: ${errMsg}`, { replyTo: msg.id })
+  }
+}
+
+export async function handleDesignSpawnIntercept(msg: InboundMessage, topic: string): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '🎨').catch(() => {})
+
+  try {
+    const result = await doSpawnSession(topic, msg.channelId, msg.id, {
+      promptBuilder: (sessionId, tmuxName, threadId) => buildDesignHostPrompt({
+        sessionId,
+        tmuxName,
+        threadId,
+        topic,
+      }),
+    })
+
+    if (msg.isDM) {
+      const e = sessionEmoji(result.name)
+      const base = (result.url && !gateway.canThreadInDM)
+        ? `Spawned ${e} \`${result.name}\` for design — ${result.url}`
+        : `Spawned ${e} \`${result.name}\` for design`
+      await gateway.send(msg.channelId, `${base}\nView in any terminal: \`tmux attach -t ${result.name}\``, { replyTo: msg.id })
+    }
+
+    debouncedRefreshListDisplay()
+
+    await startDesign(result.threadId, topic)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    await gateway.send(msg.channelId, `Design failed: ${errMsg}`, { replyTo: msg.id })
   }
 }
 

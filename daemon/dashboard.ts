@@ -37,6 +37,7 @@ function getActiveSessions(): SessionRow[] {
 
   const rows: SessionRow[] = []
   for (const s of all) {
+    if (s.isJoinMember) continue
     if (!tmuxHasSession(s.tmuxName)) continue
     const rawDesc = s.description || s.topic || s.tmuxName
     const desc = rawDesc.length > 80 ? rawDesc.slice(0, 77) + '...' : rawDesc

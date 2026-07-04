@@ -25,6 +25,7 @@ const FORKS_RE = /^(?:forks|\/forks)\s*$/i
 const REVIEW_RE = /^(?:\/review|review)\s*(\d+)?(?:\s+([\s\S]+))?$/i
 const BUILD_RE = /^(?:\/build|build)\s*(\d+)?(?:\s+([\s\S]+))?$/i
 const BUILD_WT_RE = /^(?:\/build-wt|build-wt):\s*(\S+)\s+(\d+)?(?:\s+([\s\S]+))?$/i
+const DESIGN_RE = /^(?:\/design|design):\s*([\s\S]+)$/i
 
 // ---------------------------------------------------------------------------
 // Spawn
@@ -248,6 +249,46 @@ describe('build command', () => {
     expect(m![1]).toBe('options_bot')
     expect(m![2]).toBe('3')
     expect(m![3]).toBe('fix the handler')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Design
+// ---------------------------------------------------------------------------
+
+describe('design command', () => {
+  test('design: topic', () => {
+    const m = 'design: auto-spawn sessions from top level'.match(DESIGN_RE)
+    expect(m).not.toBeNull()
+    expect(m![1].trim()).toBe('auto-spawn sessions from top level')
+  })
+
+  test('/design topic', () => {
+    const m = '/design: build a new auth system'.match(DESIGN_RE)
+    expect(m).not.toBeNull()
+    expect(m![1].trim()).toBe('build a new auth system')
+  })
+
+  test('case insensitive', () => {
+    const m = 'Design: Hello'.match(DESIGN_RE)
+    expect(m).not.toBeNull()
+  })
+
+  test('multiline topic captured', () => {
+    const m = 'design: first line\nsecond line'.match(DESIGN_RE)
+    expect(m).not.toBeNull()
+    expect(m![1]).toContain('second line')
+  })
+
+  test('does not match without colon', () => {
+    expect('design something'.match(DESIGN_RE)).toBeNull()
+  })
+
+  test('does not match bare design:', () => {
+    // Empty topic after the colon
+    const m = 'design: '.match(DESIGN_RE)
+    expect(m).not.toBeNull()
+    expect(m![1].trim()).toBe('')
   })
 })
 
