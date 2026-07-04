@@ -162,6 +162,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     topic = topic.slice(worktreeMatch[0].length)
   }
 
+  // Parse proj:<name> / dir:<name> prefix -- spawn directly inside an existing
+  // subdirectory of SPAWN_CWD (no worktree), so per-project tooling (e.g. claude-mem)
+  // shards memory/state by that directory instead of pooling everything under SPAWN_CWD.
+  let projTarget: string | undefined
+  const projMatch = topic.match(/^(?:proj|dir):(\S+)\s+/)
+  if (projMatch) {
+    projTarget = projMatch[1]
+    topic = topic.slice(projMatch[0].length)
+  }
+
   const sessionId = randomUUID()
   const tmuxName = registry.pickSessionName()
   const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
@@ -292,6 +302,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let worktreeRepo: string | undefined
   let worktreePath: string | undefined
   let effectiveCwd = spawnCwd
+  if (projTarget) {
+    // Spawn in an existing subdirectory of SPAWN_CWD (real checkout, no worktree).
+    const projDir = resolve(spawnCwd, projTarget)
+    if (!existsSync(projDir)) {
+      throw new Error(`proj target "${projTarget}" does not exist at ${projDir}`)
+    }
+    effectiveCwd = projDir
+    process.stderr.write(`daemon: spawning in project dir ${projDir}\n`)
+  }
   if (worktreeTarget) {
     const repoName = worktreeTarget
     const repoDir = resolve(spawnCwd, repoName)
