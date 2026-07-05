@@ -381,9 +381,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const model = rawModel ? (resolveModelAlias(rawModel) ?? rawModel) : SPAWN_MODEL
 
   if (!isKnownModel(model)) {
-    const warn = `\u26a0\ufe0f Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`
-    process.stderr.write(`daemon: ${warn}\n`)
-    if (threadId) void gateway.send(threadId, warn).catch(() => {})
+    process.stderr.write(`daemon: unrecognized model ${model} — may be a new release or typo. Spawning anyway.\n`)
+    if (threadId) void gateway.send(threadId, `\u26a0\ufe0f Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`).catch(() => {})
   }
 
   // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
@@ -478,6 +477,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       tmuxName,
       originType,
       originFrom,
+      model,
     })
   }
 

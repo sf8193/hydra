@@ -70,6 +70,7 @@ export type ThreadSessionEntry = {
   endedAt?: number
   messageCount: number
   claudeSessionId?: string
+  model?: string
 }
 
 export type ThreadMetadata = {
@@ -362,6 +363,7 @@ export class ThreadRegistry {
     anchorMessageId?: string, threadUrl?: string, topic: string,
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
+    model?: string,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -390,6 +392,7 @@ export class ThreadRegistry {
       originFrom: opts.originFrom,
       startedAt: now,
       messageCount: 0,
+      model: opts.model,
     })
     this.persist()
   }

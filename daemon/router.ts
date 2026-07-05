@@ -27,7 +27,7 @@ import { listTemplates, getTemplate } from './templates.js'
 // gated on session ownership, not allowFrom, so non-allowlisted users
 // can never trigger them.
 const COMMAND_PREFIXES = [
-  'new session:', 'new session ', 'spawn:', 'spawn ', '/spawn', 'spawn-wt:', '/spawn-wt',
+  'new session:', 'spawn:', '/spawn', 'spawn-wt:', '/spawn-wt',
   ...Object.keys(MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
   'kill session:', 'kill:', '/kill',
   '/sessions', 'list sessions',

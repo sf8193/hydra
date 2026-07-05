@@ -191,8 +191,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   const lastSession = thread.sessionHistory[thread.sessionHistory.length - 1]
   const claudeSessionId = lastSession?.claudeSessionId
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
-  const deadInfo = lastSession ? registry.get(lastSession.sessionId) : undefined
-  const deadModel = deadInfo?.capabilities?.model
+  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.capabilities?.model
 
   void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
 
@@ -260,8 +259,7 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   const lastSession = thread?.sessionHistory[thread.sessionHistory.length - 1]
   const resolvedTopic = topic || thread?.topic || 'respawned session'
   const resurrectFrom = lastSession?.tmuxName
-  const deadInfo = lastSession ? registry.get(lastSession.sessionId) : undefined
-  const deadModel = deadInfo?.capabilities?.model
+  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.capabilities?.model
 
   const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel)
   if (result) {

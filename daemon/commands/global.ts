@@ -127,6 +127,25 @@ export async function handleTemplateSpawn(msg: InboundMessage, templateName: str
   }
   await spawnAndNotify(msg, topic, { name: templateName, template }, model)
 }
+
+export async function handleKillIntercept(msg: InboundMessage, name: string): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '☠️').catch(() => {})
+  let target: ReturnType<typeof registry.get>
+  for (const s of registry.values()) {
+    if (s.tmuxName === name || s.topic.toLowerCase() === name.toLowerCase()) {
+      target = s
+      break
+    }
+  }
+  if (!target) {
+    try { await gateway.send(msg.channelId, `No session found matching "${name}"`, { replyTo: msg.id }) } catch {}
+    return
+  }
+  await killSession(target, 'session ended')
+  try { await gateway.send(msg.channelId, `Killed session **${target.tmuxName}**`, { replyTo: msg.id }) } catch {}
+  debouncedRefreshListDisplay()
+}
+
 export async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
 
