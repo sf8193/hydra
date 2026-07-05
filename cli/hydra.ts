@@ -45,7 +45,7 @@ Spawn options (required):
   --idempotency-key <key>              Prevent duplicate spawns
   --channel <id>                       Target channel for the spawned thread
   --message <id>                       Create thread on this message (requires --channel)
-  --model <id>                         Model for this session (default: $HYDRA_MODEL or claude-opus-4-6[1m])
+  --model <id|alias>                   Model ID or alias (sonnet, haiku, fable, opus-4-7, etc)
 
 Global options:
   --daemon <name>                      Target a specific daemon
@@ -157,7 +157,6 @@ async function main(): Promise<void> {
         console.error('error: --message requires --channel')
         process.exit(1)
       }
-
       const response = await sendRequest(socketPath, {
         type: 'cli',
         command: 'spawn',

@@ -41,18 +41,28 @@ async function spawnAndNotify(
   msg: InboundMessage,
   topic: string,
   template?: { name: string; template: SpawnTemplate },
+  model?: string,
 ): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🚀').catch(() => {})
   const chatId = await resolveSpawnTarget(msg)
   const label = template?.name ?? null
-  const spawnOpts = template ? { promptPrefix: template.template.prompt } : undefined
+  // Model priority: chat/CLI alias (router.ts / hydra.ts) > template.model (here)
+  //   > HYDRA_MODEL env > DEFAULT_MODEL (session-lifecycle.ts via SPAWN_MODEL)
+  const resolvedModel = model ?? template?.template.model
+  const spawnOpts = {
+    ...(template && { promptPrefix: template.template.prompt }),
+    ...(resolvedModel && { model: resolvedModel }),
+  }
 
   try {
-    const result = await doSpawnSession(topic, chatId, msg.id, spawnOpts)
+    const result = await doSpawnSession(topic, chatId, msg.id, Object.keys(spawnOpts).length > 0 ? spawnOpts : undefined)
 
-    if (label) {
-      process.stderr.write(`daemon: template "${label}" spawned ${result.name} for: ${topic}\n`)
-      void gateway.send(result.threadId, `_Using **${label}** template_`).catch(() => {})
+    if (label || resolvedModel) {
+      const parts: string[] = []
+      if (label) parts.push(`**${label}** template`)
+      if (resolvedModel) parts.push(`model \`${resolvedModel}\``)
+      process.stderr.write(`daemon: ${label ? `template "${label}" ` : ''}spawned ${result.name} for: ${topic}${resolvedModel ? ` (model: ${resolvedModel})` : ''}\n`)
+      void gateway.send(result.threadId, `_Using ${parts.join(' · ')}_`).catch(() => {})
     }
 
     if (template?.template.action) {
@@ -89,10 +99,11 @@ async function spawnAndNotify(
 
     const mainBridge = transport.get('main')
     if (mainBridge) {
-      const suffix = label ? ` (${label})` : ''
+      const labelSuffix = label ? ` (${label})` : ''
+      const modelSuffix = resolvedModel ? ` [${resolvedModel}]` : ''
       transport.sendToBridge(mainBridge, {
         type: 'notification',
-        content: `[system] Spawned ${sessionEmoji(result.name)} \`${result.name}\`${suffix} for: ${topic}${result.url ? ` — ${result.url}` : ''}`,
+        content: `[system] Spawned ${sessionEmoji(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${topic}${result.url ? ` — ${result.url}` : ''}`,
         meta: { chat_id: msg.channelId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
     }
@@ -105,36 +116,17 @@ async function spawnAndNotify(
   }
 }
 
-export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access): Promise<void> {
-  await spawnAndNotify(msg, topic)
+export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string): Promise<void> {
+  await spawnAndNotify(msg, topic, undefined, model)
 }
 
-export async function handleTemplateSpawn(msg: InboundMessage, templateName: string, topic: string, template: SpawnTemplate, access: Access): Promise<void> {
+export async function handleTemplateSpawn(msg: InboundMessage, templateName: string, topic: string, template: SpawnTemplate, access: Access, model?: string): Promise<void> {
   if (!topic.trim()) {
     await gateway.send(msg.channelId, `_\`${templateName}:\` needs a topic — e.g. \`${templateName}: describe the task\`_`, { replyTo: msg.id })
     return
   }
-  await spawnAndNotify(msg, topic, { name: templateName, template })
+  await spawnAndNotify(msg, topic, { name: templateName, template }, model)
 }
-
-export async function handleKillIntercept(msg: InboundMessage, name: string): Promise<void> {
-  void gateway.react(msg.channelId, msg.id, '☠️').catch(() => {})
-  let target: ReturnType<typeof registry.get>
-  for (const s of registry.values()) {
-    if (s.tmuxName === name || s.topic.toLowerCase() === name.toLowerCase()) {
-      target = s
-      break
-    }
-  }
-  if (!target) {
-    try { await gateway.send(msg.channelId, `No session found matching "${name}"`, { replyTo: msg.id }) } catch {}
-    return
-  }
-  await killSession(target, 'session ended')
-  try { await gateway.send(msg.channelId, `Killed session **${target.tmuxName}**`, { replyTo: msg.id }) } catch {}
-  debouncedRefreshListDisplay()
-}
-
 export async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
 
@@ -217,7 +209,9 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '',
     '**Sessions:**',
     '• 🚀 `spawn: <topic>` — new session in its own thread',
+    '• 🚀 `spawn <model>: <topic>` — spawn with model (sonnet, haiku, fable, opus-4-7, etc)',
     '• 🚀 `spawn-wt: <repo> <topic>` — new session in a git worktree',
+    '• 🚀 `spawn-wt <model>: <repo> <topic>` — worktree spawn with model',
     '• 🎯 `review: <topic>` / `fix: <topic>` / `design: <topic>` — templated session',
     '• 📋 `templates` — list available spawn templates',
     '• 📊 `list sessions` — show all running sessions',
@@ -274,8 +268,8 @@ let recoveryInProgress = false
 const MAX_CONCURRENT = 2
 const STAGGER_MS = 5_000
 
-function findDeadSessions(): Array<{ thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string }> {
-  const results: Array<{ thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string }> = []
+function findDeadSessions(): Array<{ thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string }> {
+  const results: Array<{ thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string }> = []
 
   // Check all sessions in registry for dead ones
   for (const info of registry.values()) {
@@ -288,14 +282,15 @@ function findDeadSessions(): Array<{ thread: ThreadMetadata; claudeSessionId?: s
       thread,
       claudeSessionId: info.claudeSessionId,
       lastTmuxName: info.tmuxName,
+      model: info.capabilities?.model,
     })
   }
 
   return results
 }
 
-async function recoverOne(dead: { thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string }): Promise<{ name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string }> {
-  const { thread, claudeSessionId, lastTmuxName } = dead
+async function recoverOne(dead: { thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string }): Promise<{ name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string }> {
+  const { thread, claudeSessionId, lastTmuxName, model } = dead
 
   if (claudeSessionId) {
     // Tier 1: full resume
@@ -304,6 +299,7 @@ async function recoverOne(dead: { thread: ThreadMetadata; claudeSessionId?: stri
       threadId: thread.threadId,
       claudeSessionId,
       threadUrl: thread.threadUrl,
+      model,
     })
     if (result) {
       return { name: lastTmuxName, method: 'resumed', newName: result.name, threadUrl: thread.threadUrl }
@@ -315,6 +311,7 @@ async function recoverOne(dead: { thread: ThreadMetadata; claudeSessionId?: stri
       const forkResult = await doSpawnSession(thread.topic, undefined, undefined, {
         existingThreadId: thread.threadId,
         forkFrom: { claudeSessionId, parentName: lastTmuxName },
+        model,
       })
       return { name: lastTmuxName, method: 'forked', newName: forkResult.name, threadUrl: thread.threadUrl }
     } catch {
@@ -323,7 +320,7 @@ async function recoverOne(dead: { thread: ThreadMetadata; claudeSessionId?: stri
   }
 
   // Tier 3: respawn
-  const result = await tryRespawn(thread.threadId, thread.topic, lastTmuxName)
+  const result = await tryRespawn(thread.threadId, thread.topic, lastTmuxName, model)
   if (result) {
     return { name: lastTmuxName, method: 'resurrected', newName: result.name, threadUrl: thread.threadUrl }
   }

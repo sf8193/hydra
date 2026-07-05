@@ -1,9 +1,11 @@
 import { readFileSync, existsSync, statSync } from 'fs'
 import { join } from 'path'
+import { isKnownModel } from '../shared/constants.js'
 
 export type SpawnTemplate = {
   prompt: string
   action?: string
+  model?: string
 }
 
 const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
@@ -54,6 +56,12 @@ function loadTemplateFile(path: string, cache: FileCache | null, label: string):
             process.stderr.write(`daemon: ${label}: "${name}" has unknown action "${entry.action}" — ignoring it\n`)
           }
         }
+        if (typeof entry.model === 'string' && entry.model.trim()) {
+          template.model = entry.model.trim()
+          if (!isKnownModel(template.model)) {
+            process.stderr.write(`daemon: ${label}: WARNING "${name}" has unrecognized model "${template.model}" — may be new release or typo\n`)
+          }
+        }
         const builtin = BUILTIN_TEMPLATES[name.toLowerCase()]
         if (builtin?.action) {
           if (!template.action) {
@@ -89,9 +97,9 @@ export function getTemplate(name: string): SpawnTemplate | null {
   return loadAllTemplates()[name.toLowerCase()] ?? null
 }
 
-export function listTemplates(): Array<{ name: string; prompt: string; action?: string }> {
+export function listTemplates(): Array<{ name: string; prompt: string; action?: string; model?: string }> {
   const all = loadAllTemplates()
   return Object.entries(all)
-    .map(([name, t]) => ({ name, prompt: t.prompt, action: t.action }))
+    .map(([name, t]) => ({ name, prompt: t.prompt, action: t.action, model: t.model }))
     .sort((a, b) => a.name.localeCompare(b.name))
 }

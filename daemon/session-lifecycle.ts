@@ -10,6 +10,7 @@ import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionCapabilities, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession, SPAWN_MODEL } from './bridge-dispatch.js'
+import { isKnownModel, resolveModelAlias } from '../shared/constants.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -374,7 +375,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt = `${opts.promptPrefix}\n\n${prompt}`
   }
 
-  const model = opts?.model ?? SPAWN_MODEL
+  // Central model resolution: alias → full ID → validate. All callers can pass
+  // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-4-6[1m]").
+  const rawModel = opts?.model
+  const model = rawModel ? (resolveModelAlias(rawModel) ?? rawModel) : SPAWN_MODEL
+
+  if (!isKnownModel(model)) {
+    const warn = `\u26a0\ufe0f Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`
+    process.stderr.write(`daemon: ${warn}\n`)
+    if (threadId) void gateway.send(threadId, warn).catch(() => {})
+  }
 
   // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
   let claudeArgs: string
@@ -504,12 +514,14 @@ export async function tryResume(dead: {
   threadId: string
   claudeSessionId?: string
   threadUrl?: string
+  model?: string
 }): Promise<SpawnResult | null> {
   if (!dead.claudeSessionId) return null
   try {
     const result = await doSpawnSession(dead.topic, undefined, undefined, {
       existingThreadId: dead.threadId,
       resumeFrom: dead.claudeSessionId,
+      model: dead.model,
     })
     const ok = await waitForBridge(result.sessionId, HEALTH_TIMEOUT_MS)
     if (!ok) {
@@ -532,11 +544,13 @@ export async function tryRespawn(
   threadId: string,
   topic: string,
   resurrectFrom?: string,
+  model?: string,
 ): Promise<SpawnResult | null> {
   try {
     return await doSpawnSession(topic, undefined, undefined, {
       existingThreadId: threadId,
       resurrectFrom,
+      model,
     })
   } catch {
     return null

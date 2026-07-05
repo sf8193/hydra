@@ -7,6 +7,7 @@ import type { DownloadedFile } from '../gateway.js'
 import type { InboundMessage } from '../gateway.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept, handleRecoverIntercept } from './commands/global.js'
+import { resolveModelAlias, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
@@ -26,7 +27,8 @@ import { listTemplates, getTemplate } from './templates.js'
 // gated on session ownership, not allowFrom, so non-allowlisted users
 // can never trigger them.
 const COMMAND_PREFIXES = [
-  'new session:', 'spawn:', '/spawn', 'spawn-wt:', '/spawn-wt',
+  'new session:', 'new session ', 'spawn:', 'spawn ', '/spawn', 'spawn-wt:', '/spawn-wt',
+  ...Object.keys(MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
   'kill session:', 'kill:', '/kill',
   '/sessions', 'list sessions',
   '/restart', 'restart daemon', 'restart',
@@ -40,6 +42,9 @@ const COMMAND_PREFIXES = [
 const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
 )
+const SPAWN_MODEL_RE = new RegExp(`^(?:new session|spawn)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
+const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
+const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 
 // ---------------------------------------------------------------------------
 // Notification payload builder (auto-downloads attachments)
@@ -212,11 +217,37 @@ gateway.onMessage(async (msg: InboundMessage) => {
   }
 
   if (isAllowed) {
+    // "spawn sonnet: topic" / "new session haiku: topic" — model alias before colon
+    const spawnModelMatch = msg.content.match(SPAWN_MODEL_RE)
+    if (spawnModelMatch) {
+      const topic = spawnModelMatch[2].trim()
+      if (topic) {
+        void handleSpawnIntercept(msg, topic, access, spawnModelMatch[1])
+        return
+      }
+    }
+
     const spawnMatch = msg.content.match(/^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i)
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
+      // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
+      const bareAlias = topic.match(BARE_ALIAS_RE)
+      if (bareAlias) {
+        void gateway.send(msg.channelId, `_\`spawn ${bareAlias[1]}:\` needs a topic — e.g. \`spawn ${bareAlias[1]}: describe the task\`_`, { replyTo: msg.id })
+        return
+      }
       if (topic) {
         void handleSpawnIntercept(msg, topic, access)
+        return
+      }
+    }
+
+    // spawn-wt sonnet: repo_name topic — worktree spawn with model alias
+    const spawnWtModelMatch = msg.content.match(SPAWN_WT_MODEL_RE)
+    if (spawnWtModelMatch) {
+      const [, alias, repo, topic] = spawnWtModelMatch
+      if (repo && topic.trim()) {
+        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, access, alias)
         return
       }
     }
@@ -252,7 +283,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
       } else {
         const lines = templates.map(t => {
           const actionTag = t.action ? ` _(+ ${t.action} protocol)_` : ''
-          return `**${t.name}**${actionTag} — ${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}`
+          const modelTag = t.model ? ` \`[${t.model}]\`` : ''
+          return `**${t.name}**${actionTag}${modelTag} — ${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}`
         })
         void gateway.send(msg.channelId, `**Spawn Templates**\n${lines.join('\n')}`, { replyTo: msg.id })
       }
@@ -337,6 +369,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const candidateTopic = msg.content.slice(colonIdx + 1).trim()
             void handleTemplateSpawn(msg, candidateName, candidateTopic, template, access)
             return
+          }
+          // "review sonnet: topic" — template name + model alias before colon
+          const spaceIdx = candidateName.indexOf(' ')
+          if (spaceIdx > 0) {
+            const tplName = candidateName.slice(0, spaceIdx)
+            const modelAlias = candidateName.slice(spaceIdx + 1)
+            const tpl = getTemplate(tplName)
+            if (tpl && resolveModelAlias(modelAlias)) {
+              const candidateTopic = msg.content.slice(colonIdx + 1).trim()
+              void handleTemplateSpawn(msg, tplName, candidateTopic, tpl, access, modelAlias)
+              return
+            }
           }
         }
       }

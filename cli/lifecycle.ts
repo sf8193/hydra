@@ -9,7 +9,7 @@ import {
   compileCheck, killOrphanBytes, hasOrphanBytes, appendLog, shq,
   waitForSocket, buildDaemonEnvs, pluginVersionDir,
 } from './helpers.js'
-import { DEFAULT_MODEL } from '../shared/constants.js'
+import { DEFAULT_MODEL, isKnownModel } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)
@@ -88,6 +88,9 @@ export async function startByte(cfg: HydraConfig): Promise<void> {
 
   const byteCwd = process.env.BYTE_CWD ?? cfg.spawnCwd
   const byteModel = process.env.HYDRA_MODEL?.trim() || DEFAULT_MODEL
+  if (!isKnownModel(byteModel)) {
+    console.warn(`\u26a0\ufe0f  Unrecognized model "${byteModel}" — may be a new release or typo. Starting anyway.`)
+  }
   const inner = [
     `cd ${shq(byteCwd)}`,
     `export DAEMON_SOCK=${shq(cfg.sockPath)}`,

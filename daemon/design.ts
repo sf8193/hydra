@@ -169,6 +169,7 @@ export async function startDesign(
   const cutoffTs = new Date().toISOString()
 
   // Spawn personas with 2s stagger
+  // Intentionally omits model — personas always use SPAWN_MODEL (strongest available)
   for (const name of PERSONA_NAMES) {
     try {
       const result = await doSpawnSession(`Design persona: ${name}`, undefined, undefined, {

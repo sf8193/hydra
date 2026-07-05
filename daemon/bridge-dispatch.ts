@@ -53,7 +53,9 @@ export const BRIDGE_TOOLS = [
   { name: 'list_watches', description: 'List all PRs being watched (your session or all).', inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Show all watches, not just yours' } } } },
 ]
 
-// Frozen at import time — daemon restart required to pick up changes.
+// Frozen at import time — daemon restart required to pick up .env changes.
+// `hydra restart` restarts daemon but not byte — byte keeps its original model
+// until a full down/up cycle. Per-spawn overrides bypass this via SpawnOpts.model.
 export const SPAWN_MODEL = process.env.HYDRA_MODEL?.trim() || DEFAULT_MODEL
 export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'list_sessions', 'kill_session'])
 

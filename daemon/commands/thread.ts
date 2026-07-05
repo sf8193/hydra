@@ -56,6 +56,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   try {
     const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
       forkFrom: { claudeSessionId: info.claudeSessionId, parentName },
+      model: info.capabilities?.model,
     })
 
     const pe = sessionEmoji(parentName)
@@ -83,6 +84,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       await gateway.send(msg.channelId, `⚠️ Fork failed — spawning fresh session that will read the thread for context.`, { replyTo: msg.id })
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
         resurrectFrom: parentName,
+        model: info.capabilities?.model,
       })
       const e = sessionEmoji(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (reading thread from **${parentName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
@@ -189,6 +191,8 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   const lastSession = thread.sessionHistory[thread.sessionHistory.length - 1]
   const claudeSessionId = lastSession?.claudeSessionId
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
+  const deadInfo = lastSession ? registry.get(lastSession.sessionId) : undefined
+  const deadModel = deadInfo?.capabilities?.model
 
   void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
 
@@ -200,6 +204,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       threadId: thread.threadId,
       claudeSessionId,
       threadUrl: thread.threadUrl,
+      model: deadModel,
     })
     if (result) {
       await announceRecovery(msg, result, thread, 'resumed — full context restored', '⏯️', lastTmuxName)
@@ -212,6 +217,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       const forkResult = await doSpawnSession(thread.topic, undefined, undefined, {
         existingThreadId: thread.threadId,
         forkFrom: { claudeSessionId, parentName: lastTmuxName },
+        model: deadModel,
       })
       await announceRecovery(msg, forkResult, thread, 'resumed (forked from dead session — transcript preserved)', '⏯️', lastTmuxName)
       return
@@ -221,7 +227,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   }
 
   // Tier 3: respawn (fresh session reads thread history)
-  const t3result = await tryRespawn(threadId, thread.topic, lastTmuxName)
+  const t3result = await tryRespawn(threadId, thread.topic, lastTmuxName, deadModel)
   if (t3result) {
     await announceRecovery(msg, t3result, thread, 'respawned (resume unavailable — reading thread history)', '🔁', lastTmuxName)
   } else {
@@ -254,8 +260,10 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   const lastSession = thread?.sessionHistory[thread.sessionHistory.length - 1]
   const resolvedTopic = topic || thread?.topic || 'respawned session'
   const resurrectFrom = lastSession?.tmuxName
+  const deadInfo = lastSession ? registry.get(lastSession.sessionId) : undefined
+  const deadModel = deadInfo?.capabilities?.model
 
-  const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom)
+  const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel)
   if (result) {
     const e = sessionEmoji(result.name)
     const count = thread?.respawnCount ?? 0
