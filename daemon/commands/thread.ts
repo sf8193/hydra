@@ -50,8 +50,8 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   const parentContext = getContextPercent(parentName)
   const thread = threadRegistry.get(info.threadId)
   const forkTopic = description || `continuing: ${thread?.topic ?? info.description ?? 'session'}`
-  const threadAnchor = gateway.getThreadAnchor(msg.channelId)
-  const baseChatId = threadAnchor?.channelId ?? msg.channelId
+  // msg.parentChannelId works on both Discord and Slack; getThreadAnchor is Slack-only
+  const baseChatId = msg.parentChannelId ?? gateway.getThreadAnchor(msg.channelId)?.channelId ?? msg.channelId
 
   try {
     const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
