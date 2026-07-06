@@ -1,6 +1,7 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
-import { startDesign, getDesignByThread, cancelDesign } from '../design.js'
+import { startDesign, getDesignByThread, cancelDesign, retryDesign } from '../design.js'
+import { debouncedRefreshListDisplay } from './status.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleDesignIntercept(msg: InboundMessage, topic: string): Promise<void> {
@@ -48,4 +49,25 @@ export async function handleCancelDesignIntercept(msg: InboundMessage): Promise<
   }
 
   await cancelDesign(threadId)
+}
+
+export async function handleRetryDesignIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
+  const threadId = registry.resolveThreadId(msg)
+  const existing = getDesignByThread(threadId)
+  if (!existing) {
+    await gateway.send(msg.channelId, `No design session to retry.`, { replyTo: msg.id })
+    return
+  }
+  try {
+    const { respawned, alreadyAlive } = await retryDesign(threadId)
+    const parts: string[] = []
+    if (respawned > 0) parts.push(`${respawned} persona${respawned !== 1 ? 's' : ''} respawned`)
+    if (alreadyAlive > 0) parts.push(`${alreadyAlive} already alive`)
+    await gateway.send(msg.channelId, `🔄 Design retry: ${parts.join(', ')}.`, { replyTo: msg.id })
+    debouncedRefreshListDisplay()
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    await gateway.send(msg.channelId, `Retry failed: ${errMsg}`, { replyTo: msg.id })
+  }
 }

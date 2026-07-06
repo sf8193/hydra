@@ -10,7 +10,7 @@ import { handleSpawnIntercept, handleKillIntercept, handleRestartIntercept, hand
 import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
-import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
+import { handleDesignIntercept, handleCancelDesignIntercept, handleRetryDesignIntercept } from './commands/design.js'
 import { getDesignByThread, handleDesignAnswer } from './design.js'
 import { getReviewByThread } from './adversarial.js'
 import { getBuildByThread } from './build.js'
@@ -303,6 +303,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const cancelDesignMatch = msg.content.match(/^(?:kill design)\s*$/i)
       if (cancelDesignMatch) {
         void handleCancelDesignIntercept(msg)
+        return
+      }
+
+      const retryDesignMatch = msg.content.match(/^(?:retry design|\/retry design)\s*$/i)
+      if (retryDesignMatch) {
+        void handleRetryDesignIntercept(msg)
         return
       }
 

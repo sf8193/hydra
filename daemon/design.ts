@@ -346,6 +346,106 @@ export async function cancelDesign(threadId: string, message?: string): Promise<
 }
 
 // ---------------------------------------------------------------------------
+// Retry a design — respawn dead personas and resume from current phase
+// ---------------------------------------------------------------------------
+
+export async function retryDesign(threadId: string): Promise<{ respawned: number; alreadyAlive: number }> {
+  const state = designs.get(threadId)
+  if (!state) throw new Error('No design session in this thread')
+  if (state.phase === 'complete') throw new Error('Design is already complete')
+  if (state.phase === 'cancelled') throw new Error('Design was cancelled. Start a new one with `design: <topic>`')
+
+  const personaPhases: DesignPhase[] = ['questioning', 'answering', 'independent', 'refinement']
+  if (!personaPhases.includes(state.phase)) throw new Error(`Cannot retry personas during ${state.phase} phase`)
+
+  const cutoffTs = new Date().toISOString()
+  let respawned = 0
+  let alreadyAlive = 0
+
+  for (const persona of state.personas) {
+    if (transport.has(persona.sessionId) || state.retryingPersonas.has(persona.name)) {
+      alreadyAlive++
+      continue
+    }
+
+    const name = persona.name as PersonaName
+    const oldSessionId = persona.sessionId
+    state.retryingPersonas.add(name)
+    try {
+      const oldInfo = registry.get(oldSessionId)
+      if (oldInfo && !killsInProgress.has(oldSessionId)) {
+        await killSession(oldInfo, 'replaced by retry').catch(() => {})
+      }
+
+      const result = await doSpawnSession(`Design persona: ${name}`, undefined, undefined, {
+        joinThread: threadId,
+        memberLabel: name,
+        promptBuilder: (sessionId, tmuxName) => designPersonaPrompt({ sessionId, tmuxName, persona: name, topic: state.topic, threadId, cutoffTs }),
+      })
+
+      persona.sessionId = result.sessionId
+      if (state.phase === 'independent') persona.proposed = false
+
+      const ok = await waitForBridge(result.sessionId, HEALTH_TIMEOUT_MS)
+      if (!ok) {
+        const info = registry.get(result.sessionId)
+        if (info) await killSession(info, 'retry health check failed').catch(() => {})
+        continue
+      }
+
+      if (state.phase === 'cancelled' || state.phase === 'complete') break
+
+      respawned++
+
+      if (state.phase === 'independent') {
+        transport.sendOrQueue(result.sessionId, {
+          type: 'notification',
+          content: `[system] You are replacing a crashed persona. Read the thread for context, then post your proposal. Tag with \`[${name}→thread]\`. Be INDEPENDENT.`,
+          meta: { chat_id: threadId, message_id: '', user: 'system', user_id: 'system', ts: cutoffTs },
+        })
+      } else if (state.phase === 'refinement' && state.activeDivergence) {
+        if (state.activeDivergence.personas.some(n => n === name || n === name.replaceAll('_', ' ')) && !state.refinementRespondedIds.has(oldSessionId)) {
+          state.refinementExpected++
+          transport.sendOrQueue(result.sessionId, {
+            type: 'notification',
+            content: [
+              `[system] Refinement requested on divergence: **${state.activeDivergence.description}**`,
+              ``,
+              `Critique the synthesized composite design from your lens (${name}).`,
+              `Post your response with: \`[${name}→thread]\``,
+            ].join('\n'),
+            meta: { chat_id: threadId, message_id: '', user: 'system', user_id: 'system', ts: cutoffTs },
+          })
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: design: retry failed for ${name}: ${err}\n`)
+    } finally {
+      state.retryingPersonas.delete(name)
+    }
+  }
+
+  if (state.phase === 'cancelled' || state.phase === 'complete') return { respawned, alreadyAlive }
+
+  const aliveNow = state.personas.filter(p => transport.has(p.sessionId)).length
+  if (state.phase === 'questioning') {
+    state.questionsExpected = aliveNow
+    if (state.questionsReceived >= state.questionsExpected) {
+      if (state.timeout) { clearTimeout(state.timeout); state.timeout = undefined }
+      const result = designMachine.transition(state.phase, 'all_questions')
+      if (result.ok) {
+        state.phase = result.to
+        void aggregateAndPostQuestions(state)
+      }
+    }
+  } else if (state.phase === 'independent') {
+    state.proposalsExpected = state.personas.filter(p => !p.proposed && transport.has(p.sessionId)).length + state.proposalsReceived
+  }
+
+  return { respawned, alreadyAlive }
+}
+
+// ---------------------------------------------------------------------------
 // Autonomous flow — auto-advance after each phase
 // ---------------------------------------------------------------------------
 
