@@ -1,6 +1,6 @@
 import { gateway } from './config.js'
 import { registry } from './sessions.js'
-import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
+import { doSpawnSession, killSession, killsInProgress, waitForBridge, HEALTH_TIMEOUT_MS } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { getReviewByThread } from './adversarial.js'
 import { getBuildByThread } from './build.js'
@@ -59,6 +59,9 @@ export type DesignState = {
   refinementExpected: number
   refinementResponses: number
   refinementRespondedIds: Set<string>
+  activeDivergence?: { description: string; personas: string[]; impact: string }
+  retriedPersonas: Set<string>
+  retryingPersonas: Set<string>
   timeout?: ReturnType<typeof setTimeout>
   _synthesizerDisconnectTimer?: ReturnType<typeof setTimeout>
   _auditorDisconnectTimer?: ReturnType<typeof setTimeout>
@@ -154,6 +157,8 @@ export async function startDesign(
     refinementExpected: 0,
     refinementResponses: 0,
     refinementRespondedIds: new Set(),
+    retriedPersonas: new Set(),
+    retryingPersonas: new Set(),
   }
 
   designs.set(threadId, state)
@@ -565,12 +570,13 @@ async function runRefinement(
 
 async function processNextDivergence(state: DesignState): Promise<void> {
   if (!state.refinementQueue || state.refinementQueue.length === 0) {
-    // All divergences refined — auto re-synthesize
+    state.activeDivergence = undefined
     void autoAdvanceAfterRefinement(state)
     return
   }
 
   const divergence = state.refinementQueue.shift()!
+  state.activeDivergence = divergence
   state.currentDivergence++
   state.refinementResponses = 0
   state.refinementRespondedIds = new Set()
@@ -616,6 +622,81 @@ async function processNextDivergence(state: DesignState): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-retry a crashed persona once
+// ---------------------------------------------------------------------------
+
+async function retryPersona(
+  state: DesignState,
+  deadPersona: { name: string; sessionId: string; proposed: boolean },
+  threadId: string,
+): Promise<void> {
+  const name = deadPersona.name as PersonaName
+  const cutoffTs = new Date().toISOString()
+  const oldSessionId = deadPersona.sessionId
+
+  if (state.phase === 'cancelled' || state.phase === 'complete') return
+  state.retryingPersonas.add(name)
+
+  try {
+    const oldInfo = registry.get(oldSessionId)
+    if (oldInfo && !killsInProgress.has(oldSessionId)) {
+      await killSession(oldInfo, 'persona crashed, retrying').catch(() => {})
+    }
+
+    const result = await doSpawnSession(`Design persona: ${name}`, undefined, undefined, {
+      joinThread: threadId,
+      memberLabel: name,
+      promptBuilder: (sessionId, tmuxName) => designPersonaPrompt({ sessionId, tmuxName, persona: name, topic: state.topic, threadId, cutoffTs }),
+    })
+
+    deadPersona.sessionId = result.sessionId
+
+    const ok = await waitForBridge(result.sessionId, HEALTH_TIMEOUT_MS)
+    if (!ok) {
+      const info = registry.get(result.sessionId)
+      if (info) await killSession(info, 'persona retry health check failed').catch(() => {})
+      throw new Error('bridge did not connect')
+    }
+
+    if (state.phase === 'cancelled' || state.phase === 'complete') {
+      const info = registry.get(result.sessionId)
+      if (info) await killSession(info, 'design ended during retry').catch(() => {})
+      return
+    }
+
+    process.stderr.write(`daemon: design: ${name} auto-retried as ${result.name}\n`)
+    void gateway.send(threadId, `_${name} respawned as **${result.name}**._`).catch(() => {})
+
+    if (state.phase === 'independent') {
+      transport.sendOrQueue(result.sessionId, {
+        type: 'notification',
+        content: `[system] You are replacing a crashed persona. Read the thread for context, then post your proposal. Tag with \`[${name}→thread]\`. Be INDEPENDENT.`,
+        meta: { chat_id: threadId, message_id: '', user: 'system', user_id: 'system', ts: cutoffTs },
+      })
+    } else if (state.phase === 'refinement' && state.activeDivergence) {
+      if (state.activeDivergence.personas.some(n => n === name || n === name.replaceAll('_', ' ')) && !state.refinementRespondedIds.has(oldSessionId)) {
+        transport.sendOrQueue(result.sessionId, {
+          type: 'notification',
+          content: [
+            `[system] Refinement requested on divergence: **${state.activeDivergence.description}**`,
+            ``,
+            `Critique the synthesized composite design from your lens (${name}).`,
+            `Post your response with: \`[${name}→thread]\``,
+          ].join('\n'),
+          meta: { chat_id: threadId, message_id: '', user: 'system', user_id: 'system', ts: cutoffTs },
+        })
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`daemon: design: ${name} auto-retry failed: ${err}\n`)
+    state.retryingPersonas.delete(name)
+    onDesignParticipantDisconnect(deadPersona.sessionId)
+    return
+  }
+  state.retryingPersonas.delete(name)
+}
+
+// ---------------------------------------------------------------------------
 // Participant disconnect / reconnect — grace timer before cancelling
 // ---------------------------------------------------------------------------
 
@@ -637,11 +718,21 @@ export function onDesignParticipantDisconnect(sessionId: string): void {
       : isAuditor ? 'auditor'
       : 'brief writer'
 
-    // Personas are expendable — adjust expectations immediately (no grace timer)
+    // Personas are expendable — try auto-retry once, then adjust expectations
     if (persona) {
+      if (state.retryingPersonas.has(persona.name)) return
+
       const aliveCount = state.personas.filter(p => p.sessionId !== sessionId && transport.has(p.sessionId)).length
       process.stderr.write(`daemon: design: ${label} disconnected/died (${aliveCount} alive)\n`)
-      void gateway.send(threadId, `_${label} disconnected. ${aliveCount > 0 ? `Continuing with ${aliveCount} remaining persona${aliveCount !== 1 ? 's' : ''}.` : 'All personas dead.'}_`).catch(() => {})
+
+      if (!state.retriedPersonas.has(persona.name)) {
+        state.retriedPersonas.add(persona.name)
+        void gateway.send(threadId, `_${label} crashed — auto-retrying..._`).catch(() => {})
+        void retryPersona(state, persona, threadId)
+        return
+      }
+
+      void gateway.send(threadId, `_${label} disconnected (retry exhausted). ${aliveCount > 0 ? `Continuing with ${aliveCount} remaining persona${aliveCount !== 1 ? 's' : ''}.` : 'All personas dead.'}_`).catch(() => {})
 
       if (aliveCount === 0) {
         if (state.timeout) { clearTimeout(state.timeout); state.timeout = undefined }
