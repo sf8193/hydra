@@ -37,6 +37,7 @@ Session management:
   hydra peek [name]                    Read-only view of live sessions
   hydra health                         Daemon diagnostics
   hydra clear-key <key>                Clear a stuck idempotency key
+  hydra check-key <key>                Check if an idempotency key exists
 
 Platform: slack | discord (required for lifecycle commands)
 

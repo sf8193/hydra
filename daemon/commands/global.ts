@@ -230,7 +230,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• 🚀 `spawn: <topic>` — new session in its own thread',
     '• 🚀 `spawn <model>: <topic>` — spawn with model (sonnet, haiku, fable, etc)',
     '• 🚀 `spawn-wt: <repo> <topic>` — spawn in a git worktree',
-    '• 🎯 `review:` / `fix:` / `design:` — templated session · 📋 `templates`',
+    '• 🎯 `review:` / `fix:` / `design:` — templated session (`review <model>: topic`) · 📋 `templates`',
     '• 📊 `list sessions` — show all running sessions',
     '• ☠️ `kill session: <name>` — terminate a named session',
     '',
