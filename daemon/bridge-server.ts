@@ -425,34 +425,32 @@ export const socketServer = createServer((socket: Socket) => {
     }
   })
 
-  socket.on('end', () => {
-    if (conn.sessionId) {
-      if (conn.sessionId === 'main') {
-        mainBridge.disconnect()
-      } else {
-        process.stderr.write(`daemon: bridge disconnected for session ${conn.sessionId}\n`)
-      }
-      if (transport.get(conn.sessionId) === conn) {
-        transport.delete(conn.sessionId)
-      }
-      if (conn.sessionId !== 'main') {
-        const sid = conn.sessionId
-        setTimeout(() => checkSessionDeath(sid), DEATH_DETECT_DELAY_MS)
-      }
-      dispatchDisconnect(conn.sessionId)
+  function handleSocketClose(): void {
+    if (!conn.sessionId) return
+    const isOwner = transport.get(conn.sessionId) === conn
+    if (conn.sessionId === 'main' && isOwner) {
+      mainBridge.disconnect()
     }
+    if (isOwner) {
+      transport.delete(conn.sessionId)
+    }
+    if (conn.sessionId !== 'main') {
+      const sid = conn.sessionId
+      setTimeout(() => checkSessionDeath(sid), DEATH_DETECT_DELAY_MS)
+    }
+    dispatchDisconnect(conn.sessionId)
+  }
+
+  socket.on('end', () => {
+    if (conn.sessionId && conn.sessionId !== 'main') {
+      process.stderr.write(`daemon: bridge disconnected for session ${conn.sessionId}\n`)
+    }
+    handleSocketClose()
   })
 
   socket.on('error', (err) => {
     process.stderr.write(`daemon: bridge socket error: ${err}\n`)
-    if (conn.sessionId && transport.get(conn.sessionId) === conn) {
-      transport.delete(conn.sessionId)
-      if (conn.sessionId !== 'main') {
-        const sid = conn.sessionId
-        setTimeout(() => checkSessionDeath(sid), DEATH_DETECT_DELAY_MS)
-      }
-      dispatchDisconnect(conn.sessionId)
-    }
+    handleSocketClose()
   })
 })
 
