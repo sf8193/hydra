@@ -2,8 +2,7 @@ import { gateway } from './config.js'
 import { registry } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { getReviewByThread } from './adversarial.js'
-import { getBuildByThread } from './build.js'
+import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
 import { createStateMachine } from './state-machine.js'
 import { designPersonaPrompt, PERSONA_NAMES, type PersonaName } from './prompts/design-personas.js'
 import { designSynthesizerPrompt } from './prompts/design-synthesizer.js'
@@ -131,11 +130,9 @@ export async function startDesign(
   if (designs.has(threadId)) {
     throw new Error('A design session is already in progress in this thread')
   }
-  if (getReviewByThread(threadId)) {
-    throw new Error('A review is in progress in this thread — finish or cancel it first')
-  }
-  if (getBuildByThread(threadId)) {
-    throw new Error('A build is in progress in this thread — finish or cancel it first')
+  const occupied = isThreadOccupied(threadId, 'design')
+  if (occupied) {
+    throw new Error(`A ${occupied} is in progress in this thread — finish or cancel it first`)
   }
 
   const state: DesignState = {
@@ -856,3 +853,11 @@ export function onDesignReply(sessionId: string, text: string, chatId: string, s
 // ---------------------------------------------------------------------------
 
 export { designMachine }
+
+registerProtocol('design', {
+  getByThread: (threadId) => !!getDesignByThread(threadId),
+  isParticipant: isDesignParticipant,
+  onReply: onDesignReply,
+  onDisconnect: onDesignParticipantDisconnect,
+  onReconnect: onDesignParticipantReconnect,
+})

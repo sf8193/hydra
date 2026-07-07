@@ -4,8 +4,7 @@ import { gateway } from './config.js'
 import { registry } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { getReviewByThread } from './adversarial.js'
-import { getDesignByThread } from './design.js'
+import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
 import { buildOwnerPrompt } from './prompts/build-owner.js'
 import { buildCriticPrompt } from './prompts/build-critic.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge } from './anchor-state.js'
@@ -130,11 +129,9 @@ export async function startBuild(
   if (threadToBuild.has(ownerThreadId)) {
     throw new Error('A build is already in progress in this thread')
   }
-  if (getReviewByThread(ownerThreadId)) {
-    throw new Error('A review is in progress in this thread — finish or cancel it first')
-  }
-  if (getDesignByThread(ownerThreadId)) {
-    throw new Error('A design is in progress in this thread — finish or cancel it first')
+  const occupied = isThreadOccupied(ownerThreadId, 'build')
+  if (occupied) {
+    throw new Error(`A ${occupied} is in progress in this thread — finish or cancel it first`)
   }
 
   const buildId = Math.random().toString(36).slice(2, 10)
@@ -567,4 +564,12 @@ function resetTimeout(state: BuildState): void {
     await cancelBuild(state.buildId)
   }, timeoutMs)
 }
+
+registerProtocol('build', {
+  getByThread: (threadId) => !!getBuildByThread(threadId),
+  isParticipant: isBuildParticipant,
+  onReply: onBuildReply,
+  onDisconnect: onBuildParticipantDisconnect,
+  onReconnect: onBuildParticipantReconnect,
+})
 

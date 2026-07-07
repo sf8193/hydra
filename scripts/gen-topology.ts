@@ -25,7 +25,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/bridge-tools.ts':   { layer: 'tools',     desc: 'BRIDGE_TOOLS, MAIN_ONLY_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)' },
   'daemon/bridge-dispatch.ts': { layer: 'tools',    desc: 'executeTool — tool execution dispatch' },
   'daemon/bridge-server.ts':  { layer: 'server',    desc: 'Unix socket server, bridge protocol, death detection, flap guard' },
-  'daemon/protocol-dispatch.ts': { layer: 'server', desc: 'Unified dispatch{Reconnect,Reply,Disconnect} fan-out' },
+  'daemon/protocol-registry.ts': { layer: 'server', desc: 'Protocol registration, isThreadOccupied query, dispatch{Reconnect,Reply,Disconnect}' },
   'daemon/main-guard.ts':     { layer: 'server',    desc: 'Duplicate-main detection logic' },
   'daemon/permission.ts':     { layer: 'server',    desc: 'Permission request routing to DM' },
   'daemon/cli-handler.ts':    { layer: 'server',    desc: 'CLI socket request handler' },

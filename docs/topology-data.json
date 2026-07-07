@@ -123,10 +123,10 @@
       "desc": "Unix socket server, bridge protocol, death detection, flap guard"
     },
     {
-      "id": "daemon_protocol-dispatch",
-      "label": "daemon/protocol-dispatch.ts",
+      "id": "daemon_protocol-registry",
+      "label": "daemon/protocol-registry.ts",
       "layer": "server",
-      "desc": "Unified dispatch{Reconnect,Reply,Disconnect} fan-out"
+      "desc": "Protocol registration, isThreadOccupied query, dispatch{Reconnect,Reply,Disconnect}"
     },
     {
       "id": "daemon_main-guard",
@@ -404,7 +404,7 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_protocol-dispatch"
+      "daemon_protocol-registry"
     ],
     [
       "daemon_bridge-server",
@@ -421,18 +421,6 @@
     [
       "daemon_bridge-server",
       "daemon_main-guard"
-    ],
-    [
-      "daemon_protocol-dispatch",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_protocol-dispatch",
-      "daemon_build"
-    ],
-    [
-      "daemon_protocol-dispatch",
-      "daemon_design"
     ],
     [
       "daemon_permission",
@@ -556,11 +544,7 @@
     ],
     [
       "daemon_router",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_router",
-      "daemon_build"
+      "daemon_protocol-registry"
     ],
     [
       "daemon_router",
@@ -660,11 +644,7 @@
     ],
     [
       "daemon_adversarial",
-      "daemon_build"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_design"
+      "daemon_protocol-registry"
     ],
     [
       "daemon_adversarial",
@@ -692,11 +672,7 @@
     ],
     [
       "daemon_build",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_build",
-      "daemon_design"
+      "daemon_protocol-registry"
     ],
     [
       "daemon_build",
@@ -724,11 +700,7 @@
     ],
     [
       "daemon_design",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_design",
-      "daemon_build"
+      "daemon_protocol-registry"
     ],
     [
       "daemon_design",

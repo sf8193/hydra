@@ -3,8 +3,7 @@ import { gateway } from './config.js'
 import { registry } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { getBuildByThread } from './build.js'
-import { getDesignByThread } from './design.js'
+import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
 import { reviewCriticPrompt } from './prompts/review-critic.js'
 import { reviewModel, resolveModelAlias } from '../shared/constants.js'
 import { createStateMachine } from './state-machine.js'
@@ -118,11 +117,9 @@ export async function startReview(
   if (cleaningUpThreads.has(ownerThreadId)) {
     throw new Error('A previous review is still cleaning up — try again in a few seconds')
   }
-  if (getBuildByThread(ownerThreadId)) {
-    throw new Error('A build is in progress in this thread — finish or cancel it first')
-  }
-  if (getDesignByThread(ownerThreadId)) {
-    throw new Error('A design is in progress in this thread — finish or cancel it first')
+  const occupied = isThreadOccupied(ownerThreadId, 'review')
+  if (occupied) {
+    throw new Error(`A ${occupied} is in progress in this thread — finish or cancel it first`)
   }
 
   const reviewId = randomUUID()
@@ -529,3 +526,11 @@ function resetTimeout(state: ReviewState): void {
     await cancelReview(state.reviewId)
   }, timeoutMs)
 }
+
+registerProtocol('review', {
+  getByThread: (threadId) => !!getReviewByThread(threadId),
+  isParticipant: isReviewParticipant,
+  onReply: onReviewReply,
+  onDisconnect: onParticipantDisconnect,
+  onReconnect: onParticipantReconnect,
+})
