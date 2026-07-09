@@ -781,6 +781,10 @@
       "daemon_util"
     ],
     [
+      "daemon_build",
+      "daemon_transcript-dump"
+    ],
+    [
       "daemon_design",
       "daemon_config"
     ],

@@ -339,12 +339,8 @@ describe('transformProtocolTag', () => {
       .toBe('[critic→owner]')
   })
 
-  test('[summary] sentinel is stripped from display', () => {
-    expect(transformProtocolTag('[summary]\nAll good.')).toBe('All good.')
-  })
-
-  test('[summary] with no body returns original', () => {
-    expect(transformProtocolTag('[summary]')).toBe('[summary]')
+  test('[summary] passes through (stripping handled in bridge-dispatch)', () => {
+    expect(transformProtocolTag('[summary]\nAll good.')).toBe('[summary]\nAll good.')
   })
 
   test('other move sentinels without an arrow are untouched', () => {

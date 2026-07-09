@@ -8,7 +8,7 @@ import { reviewCriticPrompt } from './prompts/review-critic.js'
 import { reviewModel } from '../shared/constants.js'
 import { createStateMachine } from './state-machine.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
-import { safeSend, editOrSendStatus, type StatusLineState } from './util.js'
+import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
 
@@ -350,7 +350,7 @@ export function onParticipantReconnect(sessionId: string): void {
 // Turn handlers
 // ---------------------------------------------------------------------------
 
-function reviewStatusLine(state: ReviewState): void {
+async function reviewStatusLine(state: ReviewState): Promise<void> {
   const half = reviewHalf(state.phase)
   const isCriticTurn = state.phase === 'critic_turn'
   const name = isCriticTurn
@@ -359,7 +359,11 @@ function reviewStatusLine(state: ReviewState): void {
   const action = isCriticTurn
     ? (name ? `${sessionEmoji(name)} ${name} (The Critic) is attacking...` : 'critic is attacking...')
     : (name ? `${sessionEmoji(name)} ${name} (The Owner) is defending...` : 'owner is defending...')
-  editOrSendStatus(state.ownerThreadId, formatStateLine('⚔️', 'review', formatRoundBadge('', half, state.currentRound, state.rounds), action), state)
+  const text = formatStateLine('⚔️', 'review', formatRoundBadge('', half, state.currentRound, state.rounds), action)
+  if (!state.statusHistory) state.statusHistory = []
+  state.statusHistory.push(text)
+  const ids = await safeSend(state.ownerThreadId, text)
+  state.messageIds.push(...ids)
 }
 
 function onCriticPosted(state: ReviewState, text: string): void {

@@ -84,6 +84,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const firstLine = outText.split('\n')[0].trim()
         if (firstLine === '[summary]') {
           outText = outText.slice(outText.indexOf('\n') + 1)
+          // Enforce bold+emoji header on summary — LLMs sometimes omit the formatting
+          outText = outText.replace(/^(\*\*)?(?:⚔️\s*)?Review Summary(\*\*)?/m, '**⚔️ Review Summary**')
+          outText = outText.replace(/^(\*\*)?(?:🔨\s*)?Build Summary(\*\*)?/m, '**🔨 Build Summary**')
         }
         if (callerSessionId && isProtocolPost(callerSessionId, chat_id)) {
           outText = transformProtocolTag(outText)

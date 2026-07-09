@@ -12,7 +12,8 @@ import { getWatchesBySession } from './pr-watch.js'
 import { buildSummaryFormat } from './prompts/build-summary.js'
 import { createStateMachine } from './state-machine.js'
 import { buildModel } from '../shared/constants.js'
-import { safeSend, editOrSendStatus, type StatusLineState } from './util.js'
+import { safeSend, type StatusLineState } from './util.js'
+import { dumpTranscript } from './transcript-dump.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -101,6 +102,22 @@ export const buildMachine = createStateMachine<BuildPhase, BuildEvent>('build', 
 
 function buildHalf(phase: BuildPhase): 'top' | 'bottom' {
   return phase === 'implementing' ? 'top' : 'bottom'
+}
+
+async function buildStatusLine(state: BuildState): Promise<void> {
+  const half = buildHalf(state.phase)
+  const isBuilderTurn = state.phase === 'implementing'
+  const name = isBuilderTurn
+    ? registry.get(state.ownerSessionId)?.tmuxName
+    : (state.criticSessionId ? registry.get(state.criticSessionId)?.tmuxName : undefined)
+  const action = isBuilderTurn
+    ? (name ? `${sessionEmoji(name)} ${name} (The Builder) is building...` : 'builder is building...')
+    : (name ? `${sessionEmoji(name)} ${name} (The Critic) is reviewing...` : 'critic is reviewing...')
+  const text = formatStateLine('🔨', 'build', formatRoundBadge('', half, state.currentRound, state.rounds), action)
+  if (!state.statusHistory) state.statusHistory = []
+  state.statusHistory.push(text)
+  const ids = await safeSend(state.ownerThreadId, text)
+  state.messageIds.push(...ids)
 }
 
 registerProtocolBadge(threadId => {
@@ -215,10 +232,7 @@ export async function startBuild(
       meta: { chat_id: ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
 
-    // Initial state line — builder has the floor
-    const builderName = registry.get(ownerSessionId)?.tmuxName
-    editOrSendStatus(ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', buildHalf(state.phase), state.currentRound, state.rounds),
-      builderName ? `${sessionEmoji(builderName)} ${builderName} (The Builder) is building...` : 'builder is building...'), state)
+    buildStatusLine(state)
 
     // Critic spawns later — after owner posts implementation summary
     resetTimeout(state)
@@ -408,11 +422,7 @@ export function onBuildParticipantReconnect(sessionId: string): void {
 function onOwnerPosted(state: BuildState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
-
-  // Edit persistent status line (or create one if none exists)
-  const criticName = state.criticSessionId ? registry.get(state.criticSessionId)?.tmuxName : undefined
-  editOrSendStatus(state.ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', buildHalf(state.phase), state.currentRound, state.rounds),
-    criticName ? `${sessionEmoji(criticName)} ${criticName} (The Critic) is reviewing...` : 'critic is reviewing...'), state)
+  buildStatusLine(state)
 
   // Phase already set to 'reviewing' by the dispatcher
   if (!state.criticSessionId) {
@@ -436,10 +446,7 @@ function onCriticFeedback(state: BuildState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
 
-  // Edit persistent status line
-  const builderName = registry.get(state.ownerSessionId)?.tmuxName
-  editOrSendStatus(state.ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', buildHalf(state.phase), state.currentRound, state.rounds),
-    builderName ? `${sessionEmoji(builderName)} ${builderName} (The Builder) is building...` : 'builder is building...'), state)
+  buildStatusLine(state)
 
   transport.sendOrQueue(state.ownerSessionId, {
     type: 'notification',
@@ -507,7 +514,7 @@ async function requestBuildSummary(state: BuildState, lastCriticText: string, ap
   })
 }
 
-function completeBuild(state: BuildState, approved: boolean, lastCriticText: string): void {
+async function completeBuild(state: BuildState, approved: boolean, lastCriticText: string): Promise<void> {
   process.stderr.write(`daemon: build: complete (approved=${approved}, rounds=${state.currentRound}/${state.rounds})\n`)
   const status = approved
     ? `Critic approved (**LGTM**) after ${state.currentRound} round${state.currentRound > 1 ? 's' : ''}.`
@@ -527,8 +534,24 @@ function completeBuild(state: BuildState, approved: boolean, lastCriticText: str
   if (state.timeout) clearTimeout(state.timeout)
   state.phase = 'complete'
   const feedbackCycles = Math.max(0, state.currentRound - 1)
-  editOrSendStatus(state.ownerThreadId, formatStateLine('🔨', 'build', '⚒︎',
-    `concluded — ${state.currentRound} round${state.currentRound > 1 ? 's' : ''}${feedbackCycles > 0 ? `, ${feedbackCycles} feedback cycle${feedbackCycles > 1 ? 's' : ''}` : ''}`), state)
+  const concludedIds = await safeSend(state.ownerThreadId, formatStateLine('🔨', 'build', '⚒︎',
+    `concluded — ${state.currentRound} round${state.currentRound > 1 ? 's' : ''}${feedbackCycles > 0 ? `, ${feedbackCycles} feedback cycle${feedbackCycles > 1 ? 's' : ''}` : ''}`))
+  state.messageIds.push(...concludedIds)
+
+  // Dump-without-strike: write transcript + transitions to disk, keep messages in thread
+  const owner = registry.get(state.ownerSessionId)?.tmuxName ?? state.ownerSessionId
+  const critic = state.criticSessionId ? registry.get(state.criticSessionId)?.tmuxName ?? state.criticSessionId : 'unknown'
+  void dumpTranscript(state.ownerThreadId, 'build', state.messageIds, {
+    task: state.task,
+    rounds: `${state.currentRound}/${state.rounds}`,
+    cast: `builder ${owner} · critic ${critic}`,
+    outcome: approved ? 'approved' : 'max-rounds',
+  }, state.statusHistory).then(path => {
+    if (path) void safeSend(state.ownerThreadId, `_📼 transcript saved: \`${path}\`_`)
+  }).catch(err => {
+    process.stderr.write(`daemon: build transcript dump failed: ${err}\n`)
+  })
+
   cleanupBuildMaps(state)
   refreshSessionVisual(state.ownerThreadId)
 }
@@ -580,12 +603,11 @@ async function spawnCritic(state: BuildState, implementationText: string): Promi
     sessionToBuild.set(result.sessionId, state.buildId)
     void gateway.delete(state.ownerThreadId, statusMsg.id).catch(() => {})
     state.messageIds = state.messageIds.filter(id => id !== statusMsg.id)
+    await buildStatusLine(state)
     resetTimeout(state)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`daemon: build critic spawn failed: ${msg}\n`)
-    await safeSend(state.ownerThreadId, `Failed to spawn build critic: ${msg}. Build cancelled.`)
-    void cancelBuild(state.buildId)
+    process.stderr.write(`daemon: build critic spawn failed: ${err instanceof Error ? err.message : String(err)}\n`)
+    throw err
   }
 }
 

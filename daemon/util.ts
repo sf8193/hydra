@@ -52,9 +52,10 @@ export function getContextPercent(tmuxName: string): string {
 }
 
 // Strip protocol routing tags from displayed text. The machine tag
-// ([critic→owner], [summary]) is consumed by dispatchReply for routing;
-// the human sees only the content. Free-form posts and non-routing
-// sentinels ([done]) pass through unchanged.
+// ([critic→owner]) is consumed by dispatchReply for routing; the human
+// sees only the content. [summary] stripping is handled unconditionally
+// in bridge-dispatch.ts (survives cancel/timeout). Free-form posts and
+// non-routing sentinels ([done]) pass through unchanged.
 const ROLE_TAG_RE = /^\[([a-z][\w-]*)→[\w-]+\]\s*/i
 
 const titleCaseRole = (role: string): string =>
@@ -65,10 +66,6 @@ export function transformProtocolTag(
 ): string {
   const nl = text.indexOf('\n')
   const firstLine = (nl === -1 ? text : text.slice(0, nl)).trim()
-
-  if (firstLine === '[summary]') {
-    return nl === -1 ? text : text.slice(nl + 1)
-  }
 
   const m = firstLine.match(ROLE_TAG_RE)
   if (!m) return text
@@ -122,26 +119,8 @@ export function formatSpawnLine(p: {
 }
 
 export type StatusLineState = {
-  statusMessageId?: string
   messageIds: string[]
   statusHistory?: string[]
-}
-
-export function editOrSendStatus(
-  threadId: string,
-  text: string,
-  state: StatusLineState,
-): void {
-  if (!state.statusHistory) state.statusHistory = []
-  state.statusHistory.push(text)
-  if (state.statusMessageId) {
-    void gateway.edit(threadId, state.statusMessageId, text).catch(() => {})
-  } else {
-    void gateway.send(threadId, text).then(msg => {
-      state.statusMessageId = msg.id
-      state.messageIds.push(msg.id)
-    }).catch(() => {})
-  }
 }
 
 export function chunk(text: string, limit: number, mode: 'length' | 'newline' | 'markdown'): string[] {

@@ -3,12 +3,10 @@ import { buildSummaryFormat } from '../prompts/build-summary.js'
 import { buildMachine } from '../build.js'
 
 describe('buildSummaryFormat', () => {
-  test('carries the build sections and closing sections in order', () => {
+  test('sections in order: synthesis → round arc → dispositions → meaning', () => {
     const out = buildSummaryFormat(2, []).join('\n')
     expect(out).toContain('**🔨 Build Summary** (2 rounds)')
-    expect(out).toContain('**What was built**')
-    expect(out).toContain('**PRs / artifacts**')
-    const positions = ['PRs / artifacts', 'Tensions', 'Emergences', 'Synthesis', "What's next"].map(s => out.indexOf(s))
+    const positions = ['Synthesis', 'Round 1', 'Round 2', 'Dispositions', 'Tensions', 'What Emerged', "What's next"].map(s => out.indexOf(s))
     for (let i = 1; i < positions.length; i++) {
       expect(positions[i]).toBeGreaterThan(positions[i - 1])
     }
