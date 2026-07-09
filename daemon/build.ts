@@ -11,8 +11,8 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { getWatchesBySession } from './pr-watch.js'
 import { buildSummaryFormat } from './prompts/build-summary.js'
 import { createStateMachine } from './state-machine.js'
-import { buildModel, resolveModelAlias } from '../shared/constants.js'
-import { safeSend } from './util.js'
+import { buildModel } from '../shared/constants.js'
+import { safeSend, editOrSendStatus, type StatusLineState } from './util.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -38,7 +38,7 @@ export type BuildPhase =
   | 'complete'
   | 'cancelled'
 
-export type BuildState = {
+export type BuildState = StatusLineState & {
   buildId: string
   ownerThreadId: string
   ownerSessionId: string
@@ -47,7 +47,6 @@ export type BuildState = {
   rounds: number
   currentRound: number
   phase: BuildPhase
-  messageIds: string[]
   timeout?: ReturnType<typeof setTimeout>
   _heartbeat?: ReturnType<typeof setInterval>
   _criticDisconnectTimer?: ReturnType<typeof setTimeout>
@@ -100,11 +99,14 @@ export const buildMachine = createStateMachine<BuildPhase, BuildEvent>('build', 
 // Lookups
 // ---------------------------------------------------------------------------
 
+function buildHalf(phase: BuildPhase): 'top' | 'bottom' {
+  return phase === 'implementing' ? 'top' : 'bottom'
+}
+
 registerProtocolBadge(threadId => {
   const state = getBuildByThread(threadId)
   if (!state) return undefined
-  const half = state.phase === 'implementing' ? 'top' : 'bottom'
-  return formatRoundBadge('🔨', half, state.currentRound, state.rounds)
+  return formatRoundBadge('🔨', buildHalf(state.phase), state.currentRound, state.rounds)
 })
 
 export function getActiveBuilds(): BuildState[] {
@@ -195,7 +197,7 @@ export async function startBuild(
   builds.set(buildId, state)
   threadToBuild.set(ownerThreadId, buildId)
   ownerToBuild.set(ownerSessionId, buildId)
-  refreshSessionVisual(ownerThreadId, { badge: formatRoundBadge('🔨', 'top', state.currentRound, state.rounds) })
+  refreshSessionVisual(ownerThreadId, { badge: formatRoundBadge('🔨', buildHalf(state.phase), state.currentRound, state.rounds) })
 
   try {
     const taskLine = task ? `\nTask: **${task}**` : ''
@@ -213,7 +215,11 @@ export async function startBuild(
       meta: { chat_id: ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
 
-    // Spawn critic
+    // Initial state line — builder has the floor
+    const builderName = registry.get(ownerSessionId)?.tmuxName
+    editOrSendStatus(ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', buildHalf(state.phase), state.currentRound, state.rounds),
+      builderName ? `${sessionEmoji(builderName)} ${builderName} (The Builder) is building...` : 'builder is building...'), state)
+
     // Critic spawns later — after owner posts implementation summary
     resetTimeout(state)
     return state
@@ -231,7 +237,9 @@ export async function cancelBuild(buildId: string): Promise<void> {
   const state = builds.get(buildId)
   if (!state) return
 
-  state.phase = 'cancelled'
+  const transition = buildMachine.transition(state.phase, 'cancel')
+  if (!transition.ok) return
+  state.phase = transition.to
   if (state.timeout) clearTimeout(state.timeout)
   if (state._heartbeat) clearInterval(state._heartbeat)
   if (state._criticDisconnectTimer) clearTimeout(state._criticDisconnectTimer)
@@ -400,14 +408,11 @@ export function onBuildParticipantReconnect(sessionId: string): void {
 function onOwnerPosted(state: BuildState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
-  const badge = formatRoundBadge('🔨', 'bottom', state.currentRound, state.rounds)
 
-  // Post visible status
+  // Edit persistent status line (or create one if none exists)
   const criticName = state.criticSessionId ? registry.get(state.criticSessionId)?.tmuxName : undefined
-  void gateway.send(state.ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', 'bottom', state.currentRound, state.rounds),
-    criticName ? `${sessionEmoji(criticName)} ${criticName} (critic) is reviewing` : 'critic is reviewing')).then(msg => {
-    state.messageIds.push(msg.id)
-  }).catch(() => {})
+  editOrSendStatus(state.ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', buildHalf(state.phase), state.currentRound, state.rounds),
+    criticName ? `${sessionEmoji(criticName)} ${criticName} (The Critic) is reviewing...` : 'critic is reviewing...'), state)
 
   // Phase already set to 'reviewing' by the dispatcher
   if (!state.criticSessionId) {
@@ -430,12 +435,11 @@ function onOwnerPosted(state: BuildState, text: string): void {
 function onCriticFeedback(state: BuildState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
-  const badge = formatRoundBadge('🔨', 'top', state.currentRound, state.rounds)
 
-  // Post visible status so the human knows it's the builder's turn
+  // Edit persistent status line
   const builderName = registry.get(state.ownerSessionId)?.tmuxName
-  void gateway.send(state.ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', 'top', state.currentRound, state.rounds),
-    builderName ? `critic found issues — ${sessionEmoji(builderName)} ${builderName} (builder) is fixing` : "critic found issues — builder is fixing")).catch(() => {})
+  editOrSendStatus(state.ownerThreadId, formatStateLine('🔨', 'build', formatRoundBadge('', buildHalf(state.phase), state.currentRound, state.rounds),
+    builderName ? `${sessionEmoji(builderName)} ${builderName} (The Builder) is building...` : 'builder is building...'), state)
 
   transport.sendOrQueue(state.ownerSessionId, {
     type: 'notification',
@@ -451,19 +455,22 @@ function onCriticFeedback(state: BuildState, text: string): void {
 // ---------------------------------------------------------------------------
 
 async function requestBuildSummary(state: BuildState, lastCriticText: string, approved: boolean): Promise<void> {
-  // Kill critic — delete from map BEFORE nulling the field
+  // Kill critic
   if (state.criticSessionId) {
     sessionToBuild.delete(state.criticSessionId)
     try {
-      const info = registry.get(state.criticSessionId)
-      if (info && !killsInProgress.has(state.criticSessionId)) {
-        await killSession(info, 'build complete')
+      const criticInfo = registry.get(state.criticSessionId)
+      if (criticInfo && !killsInProgress.has(state.criticSessionId)) {
+        await killSession(criticInfo, 'build complete')
       }
     } catch (err) {
       process.stderr.write(`daemon: build requestBuildSummary killSession failed: ${err}\n`)
     }
     state.criticSessionId = undefined
   }
+
+  // Closing transition: new message (linear, not edited onto the status line)
+  void safeSend(state.ownerThreadId, formatStateLine('🔨', 'build', '⚒︎', 'has concluded. Processing summary…'))
 
   // The critic heartbeat is moot once the critic is gone — stop the no-op
   // ticks. Pending disconnect timers from the reviewing phase must die too,
@@ -519,6 +526,9 @@ function completeBuild(state: BuildState, approved: boolean, lastCriticText: str
   if (state._heartbeat) clearInterval(state._heartbeat)
   if (state.timeout) clearTimeout(state.timeout)
   state.phase = 'complete'
+  const feedbackCycles = Math.max(0, state.currentRound - 1)
+  editOrSendStatus(state.ownerThreadId, formatStateLine('🔨', 'build', '⚒︎',
+    `concluded — ${state.currentRound} round${state.currentRound > 1 ? 's' : ''}${feedbackCycles > 0 ? `, ${feedbackCycles} feedback cycle${feedbackCycles > 1 ? 's' : ''}` : ''}`), state)
   cleanupBuildMaps(state)
   refreshSessionVisual(state.ownerThreadId)
 }
@@ -568,7 +578,9 @@ async function spawnCritic(state: BuildState, implementationText: string): Promi
 
     state.criticSessionId = result.sessionId
     sessionToBuild.set(result.sessionId, state.buildId)
-    void gateway.edit(state.ownerThreadId, statusMsg.id, formatStateLine('🔨', 'build', formatRoundBadge('', 'bottom', state.currentRound, state.rounds), `${sessionEmoji(result.name)} ${result.name} (critic) is reviewing`)).catch(() => {})
+    void gateway.delete(state.ownerThreadId, statusMsg.id).catch(() => {})
+    state.messageIds = state.messageIds.filter(id => id !== statusMsg.id)
+    resetTimeout(state)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: build critic spawn failed: ${msg}\n`)

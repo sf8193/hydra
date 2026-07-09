@@ -87,6 +87,21 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       }
     }
 
+    // Edit spawn announce to show completion
+    if (info.spawnAnnounceId && info.isJoinMember) {
+      const elapsed = Math.round((Date.now() - info.createdAt) / 60_000)
+      const spawnLine = formatSpawnLine({
+        roleLabel: undefined,
+        emoji: sessionEmoji(info.tmuxName),
+        name: info.tmuxName,
+        model: info.capabilities?.model ?? 'unknown',
+        trigger: info.originType ?? 'spawn',
+        initiator: info.initiator,
+      })
+      const completionNote = `\n_↳ guest agent in thread_\n_↳ ${reason} after ${elapsed}m_`
+      void gateway.edit(info.threadId, info.spawnAnnounceId, spawnLine + completionNote).catch(() => {})
+    }
+
     const tmuxName = info.tmuxName
     try {
       execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
@@ -517,7 +532,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     trigger: opts?.trigger ?? originType,
     initiator: opts?.initiator,
   })
-  void safeSend(threadId!, spawnLine)
+  const guestNote = isJoin ? '\n_↳ guest agent in thread_' : ''
+  void safeSend(threadId!, spawnLine + guestNote).then(ids => {
+    if (ids.length > 0) {
+      const info = registry.get(sessionId)
+      if (info) info.spawnAnnounceId = ids[0]
+    }
+  })
   // Echo to the causing thread — but only when it IS a thread we track
   // (a session or protocol thread). A plain channel already shows the new
   // thread's anchor; echoing there would double-announce.

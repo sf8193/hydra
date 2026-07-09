@@ -46,6 +46,7 @@ export type SessionInfo = {
   contextLinks?: string[]
   ephemeral?: boolean
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
+  spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
 }
 
 export type ThreadMember = {

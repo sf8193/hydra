@@ -5,7 +5,7 @@ import { registry, sessionEmoji } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, getContextPercent, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration, renderCastHeader } from './util.js'
+import { fallbackDescription, formatDuration, getContextPercent, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration, transformProtocolTag } from './util.js'
 import { isProtocolPost } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -80,15 +80,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // transformed (no session names leak to DMs/other channels). The
         // transform happens before chunking, so lengths need no special care.
         let outText = text
+        // [summary] is never displayed — strip it regardless of protocol state
+        const firstLine = outText.split('\n')[0].trim()
+        if (firstLine === '[summary]') {
+          outText = outText.slice(outText.indexOf('\n') + 1)
+        }
         if (callerSessionId && isProtocolPost(callerSessionId, chat_id)) {
-          const info = registry.get(callerSessionId)
-          if (info) {
-            outText = renderCastHeader(text, {
-              name: info.tmuxName,
-              emoji: sessionEmoji(info.tmuxName),
-              guest: !!info.isJoinMember,
-            })
-          }
+          outText = transformProtocolTag(outText)
         }
 
         const chunks = chunk(outText, limit, mode)

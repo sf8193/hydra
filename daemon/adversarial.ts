@@ -5,10 +5,10 @@ import { doSpawnSession, killSession, killsInProgress } from './session-lifecycl
 import { transport } from './bridge-transport.js'
 import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
 import { reviewCriticPrompt } from './prompts/review-critic.js'
-import { reviewModel, resolveModelAlias } from '../shared/constants.js'
+import { reviewModel } from '../shared/constants.js'
 import { createStateMachine } from './state-machine.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
-import { safeSend } from './util.js'
+import { safeSend, editOrSendStatus, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
 
@@ -23,7 +23,7 @@ const OWNER_SENTINEL = '[owner→critic]'
 const CRITIC_SENTINEL = '[critic→owner]'
 const SUMMARY_SENTINEL = '[summary]'
 
-export type ReviewState = {
+export type ReviewState = StatusLineState & {
   reviewId: string
   ownerThreadId: string
   ownerSessionId: string
@@ -32,13 +32,11 @@ export type ReviewState = {
   rounds: number
   currentRound: number
   phase: ReviewPhase
-  messageIds: string[]
   timeout?: ReturnType<typeof setTimeout>
   _criticDisconnectTimer?: ReturnType<typeof setTimeout>
   _ownerDisconnectTimer?: ReturnType<typeof setTimeout>
   _finalizing?: boolean
   _cleanupNudged?: boolean
-  statusMessageId?: string
   model?: string
 }
 
@@ -83,11 +81,14 @@ function cleanupReviewMaps(state: ReviewState): void {
 // Lookups
 // ---------------------------------------------------------------------------
 
+function reviewHalf(phase: ReviewPhase): 'top' | 'bottom' {
+  return phase === 'critic_turn' || phase === 'cleanup' ? 'top' : 'bottom'
+}
+
 registerProtocolBadge(threadId => {
   const state = getReviewByThread(threadId)
   if (!state) return undefined
-  const half = state.phase === 'critic_turn' || state.phase === 'cleanup' ? 'top' : 'bottom'
-  return formatRoundBadge('⚔️', half, state.currentRound, state.rounds)
+  return formatRoundBadge('⚔️', reviewHalf(state.phase), state.currentRound, state.rounds)
 })
 
 export function getActiveReviews(): ReviewState[] {
@@ -141,7 +142,7 @@ export async function startReview(
   reviews.set(reviewId, state)
   threadToReview.set(ownerThreadId, reviewId)
   ownerToReview.set(ownerSessionId, reviewId)
-  refreshSessionVisual(ownerThreadId, { badge: formatRoundBadge('⚔️', 'top', state.currentRound, state.rounds) })
+  refreshSessionVisual(ownerThreadId, { badge: formatRoundBadge('⚔️', reviewHalf(state.phase), state.currentRound, state.rounds) })
 
   try {
     const topicLine = topic ? `\nFocus: **${topic}**` : ''
@@ -163,6 +164,7 @@ export async function startReview(
     })
 
     await spawnCritic(state)
+    reviewStatusLine(state)
     return state
   } catch (err) {
     cleanupReviewMaps(state)
@@ -262,6 +264,13 @@ export function onReviewReply(sessionId: string, text: string, chatId: string, s
 
     const bodyText = text.slice(text.indexOf('\n') + 1).trim()
     const isFinalRound = state.currentRound >= state.rounds
+    if (isFinalRound && bodyText.split('\n')[0].trim().startsWith(SUMMARY_SENTINEL)) {
+      transport.sendOrQueue(state.ownerSessionId, {
+        type: 'notification',
+        content: `[system] Your defense was counted, but \`${SUMMARY_SENTINEL}\` belongs in the cleanup phase — post it separately after the debate ends.`,
+        meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+      })
+    }
     const event: ReviewEvent = isFinalRound ? 'final_round' : 'owner_posted'
     const result = reviewMachine.transition(state.phase, event)
     if (!result.ok) return
@@ -270,7 +279,7 @@ export function onReviewReply(sessionId: string, text: string, chatId: string, s
     state.phase = result.to
 
     if (isFinalRound) {
-      void finishDebate(state, bodyText).catch(err => {
+      void finishDebate(state).catch(err => {
         process.stderr.write(`daemon: finishDebate failed: ${err}\n`)
         void cancelReview(state.reviewId).catch(e => process.stderr.write(`daemon: cancelReview failed: ${e}\n`))
       })
@@ -341,19 +350,24 @@ export function onParticipantReconnect(sessionId: string): void {
 // Turn handlers
 // ---------------------------------------------------------------------------
 
+function reviewStatusLine(state: ReviewState): void {
+  const half = reviewHalf(state.phase)
+  const isCriticTurn = state.phase === 'critic_turn'
+  const name = isCriticTurn
+    ? (state.criticSessionId ? registry.get(state.criticSessionId)?.tmuxName : undefined)
+    : registry.get(state.ownerSessionId)?.tmuxName
+  const action = isCriticTurn
+    ? (name ? `${sessionEmoji(name)} ${name} (The Critic) is attacking...` : 'critic is attacking...')
+    : (name ? `${sessionEmoji(name)} ${name} (The Owner) is defending...` : 'owner is defending...')
+  editOrSendStatus(state.ownerThreadId, formatStateLine('⚔️', 'review', formatRoundBadge('', half, state.currentRound, state.rounds), action), state)
+}
+
 function onCriticPosted(state: ReviewState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
 
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
-  const badge = formatRoundBadge('⚔️', 'top', state.currentRound, state.rounds)
-  const ownerName = registry.get(state.ownerSessionId)?.tmuxName
-  const statusText = formatStateLine('⚔️', 'review', formatRoundBadge('', 'top', state.currentRound, state.rounds),
-    ownerName ? `${sessionEmoji(ownerName)} ${ownerName} (owner) is defending` : 'owner is defending')
-  if (state.statusMessageId) {
-    void gateway.edit(state.ownerThreadId, state.statusMessageId, statusText).catch(() => {})
-  } else {
-    void gateway.send(state.ownerThreadId, statusText).then(msg => { state.statusMessageId = msg.id }).catch(() => {})
-  }
+  const badge = formatRoundBadge('⚔️', reviewHalf(state.phase), state.currentRound, state.rounds)
+  reviewStatusLine(state)
   transport.sendOrQueue(state.ownerSessionId, {
     type: 'notification',
     content: `${badge} [Adversarial Review — Critic ${roundLabel}]\n\n${text}\n\n---\nDefend your design. Reply to your thread with \`${OWNER_SENTINEL}\` as the first line.`,
@@ -368,15 +382,8 @@ function onOwnerPosted(state: ReviewState, text: string): void {
 
   state.currentRound++
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
-  const badge = formatRoundBadge('⚔️', 'bottom', state.currentRound, state.rounds)
-  const criticName = state.criticSessionId ? registry.get(state.criticSessionId)?.tmuxName : undefined
-  const statusText = formatStateLine('⚔️', 'review', formatRoundBadge('', 'bottom', state.currentRound, state.rounds),
-    criticName ? `${sessionEmoji(criticName)} ${criticName} (critic) is reviewing the defense` : 'critic is reviewing the defense')
-  if (state.statusMessageId) {
-    void gateway.edit(state.ownerThreadId, state.statusMessageId, statusText).catch(() => {})
-  } else {
-    void gateway.send(state.ownerThreadId, statusText).then(msg => { state.statusMessageId = msg.id }).catch(() => {})
-  }
+  reviewStatusLine(state)
+  const badge = formatRoundBadge('⚔️', reviewHalf(state.phase), state.currentRound, state.rounds)
 
   transport.sendOrQueue(state.criticSessionId!, {
     type: 'notification',
@@ -391,26 +398,23 @@ function onOwnerPosted(state: ReviewState, text: string): void {
 // Phase transitions
 // ---------------------------------------------------------------------------
 
-async function finishDebate(state: ReviewState, lastOwnerText: string): Promise<void> {
-  // Kill critic — delete from map BEFORE nulling the field
+async function finishDebate(state: ReviewState): Promise<void> {
+  // Kill critic — wrapped so a kill failure doesn't abort the closing sequence
   if (state.criticSessionId) {
     sessionToReview.delete(state.criticSessionId)
-    const info = registry.get(state.criticSessionId)
-    if (info && !killsInProgress.has(state.criticSessionId)) {
-      await killSession(info, 'debate complete')
+    try {
+      const criticInfo = registry.get(state.criticSessionId)
+      if (criticInfo && !killsInProgress.has(state.criticSessionId)) {
+        await killSession(criticInfo, 'debate complete')
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: review finishDebate killSession failed: ${err}\n`)
     }
     state.criticSessionId = undefined
   }
 
-  // If the owner's final defense starts with the summary sentinel, skip cleanup
-  if (lastOwnerText.split('\n')[0].trim().startsWith(SUMMARY_SENTINEL)) {
-    const transition = reviewMachine.transition(state.phase, 'summary_posted')
-    if (transition.ok) {
-      state.phase = transition.to
-      finalizeReview(state)
-      return
-    }
-  }
+  // Closing transition: new message (linear, not edited onto the status line)
+  void safeSend(state.ownerThreadId, formatStateLine('⚔️', 'review', '⚒︎', 'has concluded. Processing summary…'))
 
   completeReview(state)
 }
@@ -457,7 +461,7 @@ async function deleteReviewMessages(state: ReviewState): Promise<void> {
     rounds: `${state.currentRound}/${state.rounds}`,
     cast: `owner ${owner} · critic ${critic}`,
     outcome: state.phase,
-  })
+  }, state.statusHistory)
   if (!dumpPath) {
     process.stderr.write(`daemon: review cleanup: transcript dump failed — leaving ${state.messageIds.length} messages in place (no strike without preserve)\n`)
     return
@@ -528,13 +532,15 @@ async function spawnCritic(state: ReviewState): Promise<void> {
 
     state.criticSessionId = result.sessionId
     sessionToReview.set(result.sessionId, state.reviewId)
-    void gateway.edit(state.ownerThreadId, statusMsg.id, `_Critic (**${result.name}**) spawned._`).catch(() => {})
+    void gateway.delete(state.ownerThreadId, statusMsg.id).catch(() => {})
+    state.messageIds = state.messageIds.filter(id => id !== statusMsg.id)
     resetTimeout(state)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: critic spawn failed: ${msg}\n`)
     await safeSend(state.ownerThreadId, `Failed to spawn critic: ${msg}. Review cancelled.`)
     void cancelReview(state.reviewId)
+    throw err
   }
 }
 
@@ -566,7 +572,7 @@ registerProtocol('review', {
     if (!state || chatId !== state.ownerThreadId) return null
     if (state.phase === 'critic_turn' && sessionId === state.criticSessionId) return CRITIC_SENTINEL
     if (state.phase === 'owner_turn' && sessionId === state.ownerSessionId) return OWNER_SENTINEL
-    if (state.phase === 'cleanup' && sessionId === state.criticSessionId) return SUMMARY_SENTINEL
+    if (state.phase === 'cleanup' && sessionId === state.ownerSessionId) return SUMMARY_SENTINEL
     return null
   },
 })

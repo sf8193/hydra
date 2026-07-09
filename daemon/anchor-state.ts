@@ -48,7 +48,7 @@ const DESIGN_PHASE_INDICATOR: Record<string, string> = {
 // State line: the scaffold's spine. One grammar for every protocol status
 // post — blockquoted (scaffolding is quoted, performance is not), protocol in
 // caps, baseball-notation position, then a plain-fact clause about NOW.
-//   > **⚔️ REVIEW ²▲₃** — 🟦 pixel (owner) is defending
+//   > **⚔️ REVIEW ¹▼₃** — 🟦 pixel (The Owner) is defending...
 export function formatStateLine(emoji: string, protocol: string, position: string, action: string): string {
   return `> **${emoji} ${protocol.toUpperCase()}${position ? ` ${position}` : ''}** — ${action}`
 }

@@ -201,6 +201,24 @@
       "desc": "Generic state machine for protocols"
     },
     {
+      "id": "daemon_transcript-dump",
+      "label": "daemon/transcript-dump.ts",
+      "layer": "domain",
+      "desc": "Preserve-then-strike: raw transcript dump before deletion"
+    },
+    {
+      "id": "daemon_sentinel-nudge",
+      "label": "daemon/sentinel-nudge.ts",
+      "layer": "domain",
+      "desc": "Liveness grammar: nudge roles that post without expected sentinel"
+    },
+    {
+      "id": "daemon_phase-budget",
+      "label": "daemon/phase-budget.ts",
+      "layer": "domain",
+      "desc": "Per-session max lifetime: nudge → grace → reap"
+    },
+    {
       "id": "daemon_adversarial",
       "label": "daemon/adversarial.ts",
       "layer": "protocols",
@@ -292,6 +310,14 @@
     ],
     [
       "daemon",
+      "daemon_phase-budget"
+    ],
+    [
+      "daemon",
+      "daemon_session-lifecycle"
+    ],
+    [
+      "daemon",
       "daemon_dashboard"
     ],
     [
@@ -360,6 +386,10 @@
     ],
     [
       "daemon_bridge-dispatch",
+      "daemon_protocol-registry"
+    ],
+    [
+      "daemon_bridge-dispatch",
       "daemon_pr-watch"
     ],
     [
@@ -405,6 +435,10 @@
     [
       "daemon_bridge-server",
       "daemon_protocol-registry"
+    ],
+    [
+      "daemon_bridge-server",
+      "daemon_sentinel-nudge"
     ],
     [
       "daemon_bridge-server",
@@ -464,6 +498,10 @@
     ],
     [
       "daemon_session-lifecycle",
+      "daemon_util"
+    ],
+    [
+      "daemon_session-lifecycle",
       "daemon_sessions"
     ],
     [
@@ -473,6 +511,10 @@
     [
       "daemon_session-lifecycle",
       "daemon_bridge-tools"
+    ],
+    [
+      "daemon_session-lifecycle",
+      "daemon_phase-budget"
     ],
     [
       "daemon_session-lifecycle",
@@ -627,6 +669,38 @@
       "daemon_util"
     ],
     [
+      "daemon_transcript-dump",
+      "daemon_config"
+    ],
+    [
+      "daemon_transcript-dump",
+      "daemon_util"
+    ],
+    [
+      "daemon_sentinel-nudge",
+      "daemon_bridge-transport"
+    ],
+    [
+      "daemon_sentinel-nudge",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_sentinel-nudge",
+      "daemon_protocol-registry"
+    ],
+    [
+      "daemon_phase-budget",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_phase-budget",
+      "daemon_bridge-transport"
+    ],
+    [
+      "daemon_phase-budget",
+      "daemon_util"
+    ],
+    [
       "daemon_adversarial",
       "daemon_config"
     ],
@@ -648,6 +722,10 @@
     ],
     [
       "daemon_adversarial",
+      "shared_constants"
+    ],
+    [
+      "daemon_adversarial",
       "daemon_state-machine"
     ],
     [
@@ -655,6 +733,14 @@
       "daemon_anchor-state"
     ],
     [
+      "daemon_adversarial",
+      "daemon_util"
+    ],
+    [
+      "daemon_adversarial",
+      "daemon_transcript-dump"
+    ],
+    [
       "daemon_build",
       "daemon_config"
     ],
@@ -680,7 +766,19 @@
     ],
     [
       "daemon_build",
+      "daemon_pr-watch"
+    ],
+    [
+      "daemon_build",
       "daemon_state-machine"
+    ],
+    [
+      "daemon_build",
+      "shared_constants"
+    ],
+    [
+      "daemon_build",
+      "daemon_util"
     ],
     [
       "daemon_design",
@@ -709,6 +807,10 @@
     [
       "daemon_design",
       "daemon_anchor-state"
+    ],
+    [
+      "daemon_design",
+      "daemon_util"
     ],
     [
       "daemon_commands_global",

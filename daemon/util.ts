@@ -51,36 +51,32 @@ export function getContextPercent(tmuxName: string): string {
   } catch { return '?' }
 }
 
-// Cast header: protocol role posts open with a stage direction instead of raw
-// routing grammar. The machine tag ([critic→owner]) stays in the PARSED text —
-// protocols receive the original via dispatchReply — only the displayed first
-// line is transformed:
-//   [ The Critic • 🌊 drift ]
-//   ↳ guest in thread
-// Move sentinels without an arrow ([summary], [done]) and free-form posts are
-// left untouched. Only guests get the annotation — an unmarked post is the
-// thread's own session.
+// Strip protocol routing tags from displayed text. The machine tag
+// ([critic→owner], [summary]) is consumed by dispatchReply for routing;
+// the human sees only the content. Free-form posts and non-routing
+// sentinels ([done]) pass through unchanged.
 const ROLE_TAG_RE = /^\[([a-z][\w-]*)→[\w-]+\]\s*/i
-
-const sanitizeSenderName = (name: string): string => name.replace(/[\]\n]/g, '_')
 
 const titleCaseRole = (role: string): string =>
   role.split('-').map(w => (w ? w[0].toUpperCase() + w.slice(1) : w)).join('-')
 
-export function renderCastHeader(
+export function transformProtocolTag(
   text: string,
-  sender: { name: string; emoji: string; guest: boolean },
 ): string {
   const nl = text.indexOf('\n')
   const firstLine = (nl === -1 ? text : text.slice(0, nl)).trim()
+
+  if (firstLine === '[summary]') {
+    return nl === -1 ? text : text.slice(nl + 1)
+  }
+
   const m = firstLine.match(ROLE_TAG_RE)
   if (!m) return text
   const rest = nl === -1 ? '' : text.slice(nl)
   const remainder = firstLine.replace(ROLE_TAG_RE, '')
-  const header = `[ The ${titleCaseRole(m[1])} • ${sender.emoji} ${sanitizeSenderName(sender.name)} ]`
-  const annotation = sender.guest ? `\n↳ guest in thread` : ''
-  const tail = remainder ? `\n${remainder}` : ''
-  return `${header}${annotation}${tail}${rest}`
+  const stripped = remainder ? `${remainder}${rest}` : rest
+  const result = stripped.replace(/^\n+/, '')
+  return result || text
 }
 
 // Bounded to 24h: a zero duration is meaningless for any timer this feeds,
@@ -123,6 +119,29 @@ export function formatSpawnLine(p: {
   const title = p.roleLabel ? `The ${titleCaseRole(p.roleLabel)} • ` : ''
   const by = p.initiator ? `${p.trigger} from ${p.initiator}` : p.trigger
   return `> ⚡ spawned [ ${title}${p.emoji} ${p.name} ] · model \`${p.model}\` · by ${by}`
+}
+
+export type StatusLineState = {
+  statusMessageId?: string
+  messageIds: string[]
+  statusHistory?: string[]
+}
+
+export function editOrSendStatus(
+  threadId: string,
+  text: string,
+  state: StatusLineState,
+): void {
+  if (!state.statusHistory) state.statusHistory = []
+  state.statusHistory.push(text)
+  if (state.statusMessageId) {
+    void gateway.edit(threadId, state.statusMessageId, text).catch(() => {})
+  } else {
+    void gateway.send(threadId, text).then(msg => {
+      state.statusMessageId = msg.id
+      state.messageIds.push(msg.id)
+    }).catch(() => {})
+  }
 }
 
 export function chunk(text: string, limit: number, mode: 'length' | 'newline' | 'markdown'): string[] {

@@ -29,6 +29,7 @@ export function formatTranscript(
   entries: TranscriptEntry[],
   totalTracked: number,
   meta: Record<string, string> = {},
+  statusHistory?: string[],
 ): string {
   const exchange = entries.filter(e => !isScaffolding(e.content))
   const scaffolding = entries.filter(e => isScaffolding(e.content))
@@ -45,6 +46,9 @@ export function formatTranscript(
     ...(scaffolding.length > 0
       ? ['## Scaffolding (status lines, banners)', '', ...scaffolding.map(e => `- \`[${e.ts}]\` ${e.content.split('\n')[0]}`)]
       : []),
+    ...(statusHistory && statusHistory.length > 0
+      ? ['', '## Transitions', '', ...statusHistory.map((line, i) => `${i + 1}. ${line}`)]
+      : []),
   ].join('\n')
 }
 
@@ -55,6 +59,7 @@ export async function dumpTranscript(
   protocol: string,
   messageIds: string[],
   meta: Record<string, string> = {},
+  statusHistory?: string[],
 ): Promise<string | null> {
   try {
     const wanted = new Set(messageIds)
@@ -71,8 +76,9 @@ export async function dumpTranscript(
       return null
     }
     mkdirSync(TRANSCRIPTS_DIR, { recursive: true })
-    const path = join(TRANSCRIPTS_DIR, `${protocol}-${threadId}-${Date.now()}.md`)
-    atomicWriteFileSync(path, formatTranscript(protocol, threadId, entries, messageIds.length, meta))
+    const shortId = threadId.slice(-4)
+    const path = join(TRANSCRIPTS_DIR, `${protocol}-${Date.now()}-${shortId}.md`)
+    atomicWriteFileSync(path, formatTranscript(protocol, threadId, entries, messageIds.length, meta, statusHistory))
     return path
   } catch (err) {
     process.stderr.write(`daemon: transcript dump failed for ${threadId}: ${err}\n`)

@@ -9,21 +9,17 @@ describe('reviewSummaryFormat', () => {
     expect(out).toContain('- ❌ issue — rebutted')
   })
 
-  test('adds the present-tense orientation section', () => {
-    const out = reviewSummaryFormat(3).join('\n')
-    expect(out).toContain('**Where we are**')
-    expect(out).toContain('present tense')
-    expect(out).toContain('needs the human')
-  })
-
-  test('orientation comes after the checklist', () => {
+  test('includes all five sections in order', () => {
     const out = reviewSummaryFormat(1).join('\n')
-    expect(out.indexOf('rebutted')).toBeLessThan(out.indexOf('Where we are'))
+    const positions = ['rebutted', 'Tensions', 'Emergences', 'Synthesis', "What's next"].map(s => out.indexOf(s))
+    for (let i = 1; i < positions.length; i++) {
+      expect(positions[i]).toBeGreaterThan(positions[i - 1])
+    }
   })
 
   test('round count pluralizes', () => {
-    expect(reviewSummaryFormat(1)[0]).toBe('**Review Summary** (1 round)')
-    expect(reviewSummaryFormat(3)[0]).toBe('**Review Summary** (3 rounds)')
+    expect(reviewSummaryFormat(1)[0]).toBe('**⚔️ Review Summary** (1 round)')
+    expect(reviewSummaryFormat(3)[0]).toBe('**⚔️ Review Summary** (3 rounds)')
   })
 
   test('no configuration surface: format is a pure function of rounds', () => {
