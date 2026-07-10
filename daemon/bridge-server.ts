@@ -12,6 +12,7 @@ import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
+import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
@@ -253,6 +254,9 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           platform: PLATFORM,
         },
       })
+      // Reply guard: re-arm from queued user messages before the flush hands
+      // them over — the queue survives daemon restarts, the guard map doesn't.
+      notePendingFromQueue(sessionId, transport.messageQueues.get(sessionId))
       transport.flushQueue(sessionId)
       dispatchReconnect(sessionId)
       if (info && !info.isJoinMember) refreshSessionVisual(info.threadId)
@@ -294,9 +298,20 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         })
 
         try {
+          // Reply guard: a reaction acknowledges the message — but only where one is
+          // actually posted. Slack `react` succeeds as a no-op, so settling on it
+          // would disarm the guard on an ack the sender never sees.
+          if (name === 'react' && PLATFORM !== 'slack' && !result.isError && conn.sessionId && args.chat_id && args.message_id) {
+            settlePendingOnReact(conn.sessionId, args.chat_id as string, args.message_id as string)
+          }
+
           if (name === 'reply' && !result.isError && conn.sessionId) {
             const replyInfo = registry.get(conn.sessionId)
             const replyText = args.text as string
+
+            // Reply guard: settle synchronously — the reply is already sent, and
+            // the hooks below await (and may throw), which would strand the guard.
+            clearPendingReply(conn.sessionId, args.chat_id as string)
 
             if (replyInfo && !replyInfo.ephemeral) {
               autoWatchPrUrls(conn.sessionId, replyText)

@@ -451,6 +451,7 @@ export class SlackGateway implements ChatGateway {
   async react(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
     // no-op: bot reactions trigger push notifications on Slack
     // NOTE: updateSessionVisual also depends on react/unreact being live — re-enable all three together
+    // (and drop the PLATFORM check on reply-guard's react-settle in bridge-server.ts)
   }
 
   async unreact(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
