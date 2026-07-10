@@ -98,48 +98,28 @@ const MAIN_COOLDOWN_MS = 10_000
 const FLAP_THRESHOLD = 10
 const flapTracker = new Map<string, number[]>()
 
-// Tracks each cycle's disconnect reason + true uptime for the 'main' reconnect
-// log below. Instruments an unresolved reconnect-flapping issue; does not fix it.
 const mainBridge = {
   cycleCount: 0,
+  lastConnectedAt: 0,
   lastLoggedAt: 0,
-  /** Connect time of the currently-registered main cycle (for true uptime). */
-  _connectedAt: 0,
-  /** True lifetime (ms) of the cycle that most recently ended. */
-  _lastUptimeMs: 0,
-  /** What ended the previous cycle: the socket event ('end'/'error: ...') or
-   *  'replaced' when the daemon itself called .end() on it (see register
-   *  handler) before any socket event fired. */
-  _lastDisconnectReason: 'n/a',
-  connect(hadOtherIncumbent: boolean) {
+  connect() {
     this.cycleCount++
-    this._connectedAt = Date.now()
+    this.lastConnectedAt = Date.now()
     if (this.cycleCount === 1) {
       process.stderr.write('daemon: main bridge connected\n')
     } else {
+      const uptime = this.lastConnectedAt - (this._lastDisconnectAt || this.lastConnectedAt)
       const now = Date.now()
       if (now - this.lastLoggedAt > 60_000 || this.cycleCount <= 3) {
-        process.stderr.write(
-          `daemon: main bridge reconnected (cycle ${this.cycleCount}, ` +
-          `last uptime ${Math.round(this._lastUptimeMs / 1000)}s, ` +
-          `last disconnect: ${this._lastDisconnectReason}` +
-          `${hadOtherIncumbent ? ', duplicate incumbent socket was live at registration' : ''})\n`
-        )
+        process.stderr.write(`daemon: main bridge reconnected (cycle ${this.cycleCount}, last uptime ${Math.round(uptime / 1000)}s)\n`)
         this.lastLoggedAt = now
       }
     }
   },
-  /** Called when a cycle ends via an actual socket event ('end'/'error'). */
-  disconnect(reason: string) {
-    this._lastUptimeMs = this._connectedAt ? Date.now() - this._connectedAt : 0
-    this._lastDisconnectReason = reason
+  disconnect() {
+    this._lastDisconnectAt = Date.now()
   },
-  /** The daemon replaced the incumbent's socket itself — fires before the
-   *  evicted socket's own 'end'/'error' reaches handleSocketClose. */
-  notifyReplaced() {
-    this._lastUptimeMs = this._connectedAt ? Date.now() - this._connectedAt : 0
-    this._lastDisconnectReason = 'replaced by newcomer registration'
-  },
+  _lastDisconnectAt: 0,
 }
 
 function trackRegistration(sessionId: string): boolean {
@@ -210,10 +190,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         break
       }
 
-      // Whether a live 'main' incumbent already existed at registration —
-      // carried to mainBridge.connect() to flag a two-process fight vs. a reconnect.
-      let mainHadOtherIncumbent = false
-
       // Duplicate-'main' guard. The circuit breaker above exempts 'main' (never
       // tmux-kill the control session), but 'main' is the id every bridge defaults
       // to without HYDRA_SESSION_ID — so two byte processes can both claim it and
@@ -223,7 +199,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       if (sessionId === 'main') {
         const incumbent = transport.get('main')
         const hasOtherIncumbent = !!incumbent && incumbent.socket !== conn.socket
-        mainHadOtherIncumbent = hasOtherIncumbent
         const now = Date.now()
 
         // Cooldown refusal — do NOT track this registration. Refused
@@ -256,16 +231,11 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       const existing = transport.get(sessionId)
       if (existing && existing.socket !== conn.socket) {
         if (sessionId !== 'main') process.stderr.write(`daemon: replacing bridge for session ${sessionId}\n`)
-        // The main replace is otherwise silent — record it as the disconnect
-        // cause for the next reconnect log line.
-        if (sessionId === 'main') mainBridge.notifyReplaced()
         try { existing.socket.end() } catch {}
       }
 
       transport.set(sessionId, conn)
-      // No flapTracker.delete('main') here: a prior version cleared the counter
-      // that trackRegistration('main') had just fed, so the flap threshold could
-      // never be reached. The 60s window already ages out stale entries.
+      if (sessionId === 'main') flapTracker.delete('main')
       const tools = computeToolsForSession(sessionId)
       transport.sendToBridge(conn, {
         type: 'registered',
@@ -284,7 +254,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       dispatchReconnect(sessionId)
       if (info && !info.isJoinMember) refreshSessionVisual(info.threadId)
       if (sessionId === 'main') {
-        mainBridge.connect(mainHadOtherIncumbent)
+        mainBridge.connect()
       } else {
         process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
         if (info?.ephemeral) startEphemeralTtl(sessionId)
@@ -490,11 +460,11 @@ export const socketServer = createServer((socket: Socket) => {
     }
   })
 
-  function handleSocketClose(reason: string): void {
+  function handleSocketClose(): void {
     if (!conn.sessionId) return
     const isOwner = transport.get(conn.sessionId) === conn
     if (conn.sessionId === 'main' && isOwner) {
-      mainBridge.disconnect(reason)
+      mainBridge.disconnect()
     }
     if (isOwner) {
       transport.delete(conn.sessionId)
@@ -510,12 +480,12 @@ export const socketServer = createServer((socket: Socket) => {
     if (conn.sessionId && conn.sessionId !== 'main') {
       process.stderr.write(`daemon: bridge disconnected for session ${conn.sessionId}\n`)
     }
-    handleSocketClose('end')
+    handleSocketClose()
   })
 
   socket.on('error', (err) => {
     process.stderr.write(`daemon: bridge socket error: ${err}\n`)
-    handleSocketClose(`error: ${err instanceof Error ? err.message : String(err)}`)
+    handleSocketClose()
   })
 })
 
