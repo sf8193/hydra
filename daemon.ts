@@ -73,7 +73,7 @@ import { killSession } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)
 
 import { startVitalsSnapshots } from './daemon/observability.js'
-startVitalsSnapshots()
+startVitalsSnapshots((id) => transport.has(id))
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 registry.onPersist = refreshDashboard

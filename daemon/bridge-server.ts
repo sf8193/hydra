@@ -1,5 +1,5 @@
 import { existsSync, unlinkSync, mkdirSync, chmodSync, readFileSync } from 'fs'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { registry, threadRegistry } from './sessions.js'
@@ -406,14 +406,14 @@ const CRASH_LOG_TAIL_LINES = 30
 const CRASH_NOTICE_TAIL_LINES = 8
 const CRASH_NOTICE_TAIL_MAX_CHARS = 1500
 
-/** Read the last `maxLines` lines of a black-box spawn logfile (see
- *  session-lifecycle.ts's `pipe-pane` capture). Throws if the file is
- *  missing/unreadable — callers decide how to report that. */
+/** Last `maxLines` lines of a black-box spawn logfile (see session-lifecycle.ts's
+ *  `pipe-pane` capture). Uses `tail`, which seeks from the end, so a multi-hundred-MB
+ *  pane log isn't read into memory. Throws if the file is missing/unreadable. */
 function tailSpawnLog(path: string, maxLines: number): string[] {
-  const content = readFileSync(path, 'utf8')
-  const lines = content.split('\n')
+  const out = execFileSync('tail', ['-n', String(maxLines), path], { encoding: 'utf8' })
+  const lines = out.split('\n')
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-  return lines.slice(-maxLines)
+  return lines
 }
 
 async function checkSessionDeath(sessionId: string): Promise<void> {
@@ -437,7 +437,9 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     }
     process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail) + '\n')
     const crashExcerpt = tail.length > 0
-      ? tail.slice(-CRASH_NOTICE_TAIL_LINES).join('\n').slice(-CRASH_NOTICE_TAIL_MAX_CHARS)
+      // Zero-width space after each backtick so pane output can't close the
+      // ``` fence this excerpt is wrapped in below.
+      ? tail.slice(-CRASH_NOTICE_TAIL_LINES).join('\n').slice(-CRASH_NOTICE_TAIL_MAX_CHARS).replace(/`/g, '`​')
       : ''
 
     const thread = threadRegistry.get(info.threadId)

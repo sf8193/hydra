@@ -48,8 +48,6 @@ export type SessionInfo = {
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash
-  lastRssMB?: number       // vitals: last sampled process-subtree RSS (MB) — an OOM shows as a climb here
-  lastVitalsAt?: number    // vitals: epoch ms of the last RSS sample (for "N before death" in the autopsy)
 }
 
 export type ThreadMember = {
