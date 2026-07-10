@@ -1,11 +1,11 @@
 import { randomUUID } from 'crypto'
 import { execSync, execFileSync } from 'child_process'
-import { writeFileSync, readFileSync, existsSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { EventEmitter } from 'events'
 
-import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH } from './config.js'
+import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionCapabilities, SpawnOpts, SpawnResult } from './sessions.js'
@@ -33,6 +33,11 @@ export type SessionDeathEvent = {
 export const sessionDeathEmitter = new EventEmitter()
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+
+// Per-session pane logfile — `tmux pipe-pane` captures each spawn's output so a
+// crash still leaves it on disk.
+
+const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 // ---------------------------------------------------------------------------
 // Listen state resolution: thread override → channel group → global → false
@@ -480,11 +485,28 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   // Verify the tmux session actually exists after creation
+  let tmuxConfirmedAlive = false
   try {
     execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
     process.stderr.write(`daemon: spawn ${tmuxName}: tmux session confirmed alive\n`)
+    tmuxConfirmedAlive = true
   } catch {
     process.stderr.write(`daemon: spawn ${tmuxName}: WARNING -- tmux session died immediately after creation\n`)
+  }
+
+  // Best-effort: any failure is logged, never fatal to the spawn.
+  let spawnLogPath: string | undefined
+  if (tmuxConfirmedAlive) {
+    try {
+      mkdirSync(SPAWN_LOGS_DIR, { recursive: true })
+      const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
+      execFileSync('tmux', ['pipe-pane', '-o', '-t', tmuxName, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
+      spawnLogPath = logPath
+      process.stderr.write(`daemon: spawn ${tmuxName}: pane capture -> ${logPath}\n`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`daemon: spawn ${tmuxName}: pipe-pane capture setup FAILED (non-fatal): ${msg}\n`)
+    }
   }
 
   const now = Date.now()
@@ -504,6 +526,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
+    ...(spawnLogPath ? { spawnLogPath } : {}),
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),

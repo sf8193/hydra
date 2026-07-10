@@ -72,6 +72,9 @@ import { initPhaseBudgets } from './daemon/phase-budget.js'
 import { killSession } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)
 
+import { startVitalsSnapshots } from './daemon/observability.js'
+startVitalsSnapshots()
+
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 registry.onPersist = refreshDashboard
 

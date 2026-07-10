@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
+import { existsSync, unlinkSync, mkdirSync, chmodSync, readFileSync } from 'fs'
 import { execSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
@@ -16,6 +16,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
+import { buildAutopsy, logCorrelation } from './observability.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
@@ -97,28 +98,48 @@ const MAIN_COOLDOWN_MS = 10_000
 const FLAP_THRESHOLD = 10
 const flapTracker = new Map<string, number[]>()
 
+// Tracks each cycle's disconnect reason + true uptime for the 'main' reconnect
+// log below. Instruments an unresolved reconnect-flapping issue; does not fix it.
 const mainBridge = {
   cycleCount: 0,
-  lastConnectedAt: 0,
   lastLoggedAt: 0,
-  connect() {
+  /** Connect time of the currently-registered main cycle (for true uptime). */
+  _connectedAt: 0,
+  /** True lifetime (ms) of the cycle that most recently ended. */
+  _lastUptimeMs: 0,
+  /** What ended the previous cycle: the socket event ('end'/'error: ...') or
+   *  'replaced' when the daemon itself called .end() on it (see register
+   *  handler) before any socket event fired. */
+  _lastDisconnectReason: 'n/a',
+  connect(hadOtherIncumbent: boolean) {
     this.cycleCount++
-    this.lastConnectedAt = Date.now()
+    this._connectedAt = Date.now()
     if (this.cycleCount === 1) {
       process.stderr.write('daemon: main bridge connected\n')
     } else {
-      const uptime = this.lastConnectedAt - (this._lastDisconnectAt || this.lastConnectedAt)
       const now = Date.now()
       if (now - this.lastLoggedAt > 60_000 || this.cycleCount <= 3) {
-        process.stderr.write(`daemon: main bridge reconnected (cycle ${this.cycleCount}, last uptime ${Math.round(uptime / 1000)}s)\n`)
+        process.stderr.write(
+          `daemon: main bridge reconnected (cycle ${this.cycleCount}, ` +
+          `last uptime ${Math.round(this._lastUptimeMs / 1000)}s, ` +
+          `last disconnect: ${this._lastDisconnectReason}` +
+          `${hadOtherIncumbent ? ', duplicate incumbent socket was live at registration' : ''})\n`
+        )
         this.lastLoggedAt = now
       }
     }
   },
-  disconnect() {
-    this._lastDisconnectAt = Date.now()
+  /** Called when a cycle ends via an actual socket event ('end'/'error'). */
+  disconnect(reason: string) {
+    this._lastUptimeMs = this._connectedAt ? Date.now() - this._connectedAt : 0
+    this._lastDisconnectReason = reason
   },
-  _lastDisconnectAt: 0,
+  /** The daemon replaced the incumbent's socket itself — fires before the
+   *  evicted socket's own 'end'/'error' reaches handleSocketClose. */
+  notifyReplaced() {
+    this._lastUptimeMs = this._connectedAt ? Date.now() - this._connectedAt : 0
+    this._lastDisconnectReason = 'replaced by newcomer registration'
+  },
 }
 
 function trackRegistration(sessionId: string): boolean {
@@ -174,6 +195,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
             threadRegistry.persist()
           }
         }
+        if (sessionId !== 'main') logCorrelation(info)
       }
 
       if (sessionId !== 'main' && trackRegistration(sessionId)) {
@@ -188,6 +210,10 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         break
       }
 
+      // Whether a live 'main' incumbent already existed at registration —
+      // carried to mainBridge.connect() to flag a two-process fight vs. a reconnect.
+      let mainHadOtherIncumbent = false
+
       // Duplicate-'main' guard. The circuit breaker above exempts 'main' (never
       // tmux-kill the control session), but 'main' is the id every bridge defaults
       // to without HYDRA_SESSION_ID — so two byte processes can both claim it and
@@ -197,6 +223,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       if (sessionId === 'main') {
         const incumbent = transport.get('main')
         const hasOtherIncumbent = !!incumbent && incumbent.socket !== conn.socket
+        mainHadOtherIncumbent = hasOtherIncumbent
         const now = Date.now()
 
         // Cooldown refusal — do NOT track this registration. Refused
@@ -229,11 +256,16 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       const existing = transport.get(sessionId)
       if (existing && existing.socket !== conn.socket) {
         if (sessionId !== 'main') process.stderr.write(`daemon: replacing bridge for session ${sessionId}\n`)
+        // The main replace is otherwise silent — record it as the disconnect
+        // cause for the next reconnect log line.
+        if (sessionId === 'main') mainBridge.notifyReplaced()
         try { existing.socket.end() } catch {}
       }
 
       transport.set(sessionId, conn)
-      if (sessionId === 'main') flapTracker.delete('main')
+      // No flapTracker.delete('main') here: a prior version cleared the counter
+      // that trackRegistration('main') had just fed, so the flap threshold could
+      // never be reached. The 60s window already ages out stale entries.
       const tools = computeToolsForSession(sessionId)
       transport.sendToBridge(conn, {
         type: 'registered',
@@ -252,7 +284,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       dispatchReconnect(sessionId)
       if (info && !info.isJoinMember) refreshSessionVisual(info.threadId)
       if (sessionId === 'main') {
-        mainBridge.connect()
+        mainBridge.connect(mainHadOtherIncumbent)
       } else {
         process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
         if (info?.ephemeral) startEphemeralTtl(sessionId)
@@ -370,6 +402,20 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 // Session death detection
 // ---------------------------------------------------------------------------
 
+const CRASH_LOG_TAIL_LINES = 30
+const CRASH_NOTICE_TAIL_LINES = 8
+const CRASH_NOTICE_TAIL_MAX_CHARS = 1500
+
+/** Read the last `maxLines` lines of a black-box spawn logfile (see
+ *  session-lifecycle.ts's `pipe-pane` capture). Throws if the file is
+ *  missing/unreadable — callers decide how to report that. */
+function tailSpawnLog(path: string, maxLines: number): string[] {
+  const content = readFileSync(path, 'utf8')
+  const lines = content.split('\n')
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines.slice(-maxLines)
+}
+
 async function checkSessionDeath(sessionId: string): Promise<void> {
   if (transport.has(sessionId)) return
 
@@ -380,7 +426,19 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
   try { execSync(`tmux has-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); tmuxAlive = true } catch {}
 
   if (!tmuxAlive) {
-    process.stderr.write(`daemon: session ${info.tmuxName} crashed (tmux dead, bridge disconnected)\n`)
+    // Read the pane's captured output once, for both the autopsy and the notice.
+    let tail: string[] = []
+    if (info.spawnLogPath) {
+      try {
+        tail = tailSpawnLog(info.spawnLogPath, CRASH_LOG_TAIL_LINES)
+      } catch (err) {
+        process.stderr.write(`daemon: session ${info.tmuxName} black box unreadable (${info.spawnLogPath}): ${err}\n`)
+      }
+    }
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail) + '\n')
+    const crashExcerpt = tail.length > 0
+      ? tail.slice(-CRASH_NOTICE_TAIL_LINES).join('\n').slice(-CRASH_NOTICE_TAIL_MAX_CHARS)
+      : ''
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {
@@ -399,8 +457,11 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {
       try {
-        await gateway.send(info.threadId, `💀 **${info.tmuxName}** crashed — use \`resume\` to reconnect or \`respawn\` to start fresh.`)
-      } catch {}
+        const tailBlock = crashExcerpt ? `\n\`\`\`\n${crashExcerpt}\n\`\`\`` : ''
+        await gateway.send(info.threadId, `💀 **${info.tmuxName}** crashed — use \`resume\` to reconnect or \`respawn\` to start fresh.${tailBlock}`)
+      } catch (err) {
+        process.stderr.write(`daemon: session ${info.tmuxName} crash-notice send failed: ${err}\n`)
+      }
       refreshSessionVisual(info.threadId, { state: 'crashed' })
     }
   }
@@ -427,11 +488,11 @@ export const socketServer = createServer((socket: Socket) => {
     }
   })
 
-  function handleSocketClose(): void {
+  function handleSocketClose(reason: string): void {
     if (!conn.sessionId) return
     const isOwner = transport.get(conn.sessionId) === conn
     if (conn.sessionId === 'main' && isOwner) {
-      mainBridge.disconnect()
+      mainBridge.disconnect(reason)
     }
     if (isOwner) {
       transport.delete(conn.sessionId)
@@ -447,12 +508,12 @@ export const socketServer = createServer((socket: Socket) => {
     if (conn.sessionId && conn.sessionId !== 'main') {
       process.stderr.write(`daemon: bridge disconnected for session ${conn.sessionId}\n`)
     }
-    handleSocketClose()
+    handleSocketClose('end')
   })
 
   socket.on('error', (err) => {
     process.stderr.write(`daemon: bridge socket error: ${err}\n`)
-    handleSocketClose()
+    handleSocketClose(`error: ${err instanceof Error ? err.message : String(err)}`)
   })
 })
 
