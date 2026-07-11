@@ -13,6 +13,7 @@ export type BridgeConn = {
   sessionId: string
   socket: Socket
   buf: string
+  mainCloseRecorded?: boolean // guards double 'error'+'end' from recording twice
 }
 
 // ---------------------------------------------------------------------------

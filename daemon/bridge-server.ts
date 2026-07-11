@@ -18,6 +18,7 @@ import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
 import { safeSend } from './util.js'
+import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
@@ -99,29 +100,10 @@ const MAIN_COOLDOWN_MS = 10_000
 const FLAP_THRESHOLD = 10
 const flapTracker = new Map<string, number[]>()
 
-const mainBridge = {
-  cycleCount: 0,
-  lastConnectedAt: 0,
-  lastLoggedAt: 0,
-  connect() {
-    this.cycleCount++
-    this.lastConnectedAt = Date.now()
-    if (this.cycleCount === 1) {
-      process.stderr.write('daemon: main bridge connected\n')
-    } else {
-      const uptime = this.lastConnectedAt - (this._lastDisconnectAt || this.lastConnectedAt)
-      const now = Date.now()
-      if (now - this.lastLoggedAt > 60_000 || this.cycleCount <= 3) {
-        process.stderr.write(`daemon: main bridge reconnected (cycle ${this.cycleCount}, last uptime ${Math.round(uptime / 1000)}s)\n`)
-        this.lastLoggedAt = now
-      }
-    }
-  },
-  disconnect() {
-    this._lastDisconnectAt = Date.now()
-  },
-  _lastDisconnectAt: 0,
-}
+// Tracks each cycle's disconnect reason + true uptime for the 'main' reconnect
+// log below. Instruments an unresolved reconnect-flapping issue; does not fix it.
+// Logic lives in main-bridge-cycle.ts (pure + tested); this owns the stderr write.
+const mainBridge = createMainBridgeCycle()
 
 function trackRegistration(sessionId: string): boolean {
   const now = Date.now()
@@ -191,6 +173,10 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         break
       }
 
+      // Whether a live 'main' incumbent already existed at registration —
+      // carried to mainBridge.connect() to flag a two-process fight vs. a reconnect.
+      let mainHadOtherIncumbent = false
+
       // Duplicate-'main' guard. The circuit breaker above exempts 'main' (never
       // tmux-kill the control session), but 'main' is the id every bridge defaults
       // to without HYDRA_SESSION_ID — so two byte processes can both claim it and
@@ -200,6 +186,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       if (sessionId === 'main') {
         const incumbent = transport.get('main')
         const hasOtherIncumbent = !!incumbent && incumbent.socket !== conn.socket
+        mainHadOtherIncumbent = hasOtherIncumbent
         const now = Date.now()
 
         // Cooldown refusal — do NOT track this registration. Refused
@@ -232,10 +219,25 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       const existing = transport.get(sessionId)
       if (existing && existing.socket !== conn.socket) {
         if (sessionId !== 'main') process.stderr.write(`daemon: replacing bridge for session ${sessionId}\n`)
+        // The main replace is otherwise silent — record it as the disconnect
+        // cause for the next reconnect log line. SYNC: mainBridge.connect() below
+        // must run in the same synchronous pass as this notifyReplaced (before the
+        // evicted socket's async 'end' arrives) — do not insert an await between
+        // them, or the 'replaced' reason will be lost. See main-bridge-cycle.ts.
+        if (sessionId === 'main') mainBridge.notifyReplaced(Date.now())
         try { existing.socket.end() } catch {}
       }
 
       transport.set(sessionId, conn)
+      // Deliberately kept (diagnostics-only). This self-wipes the flap counter
+      // that trackRegistration('main') just fed, so the flap threshold can never
+      // trip and shouldHoldIncumbentMain stays inert. Removing it is the actual
+      // circuit-breaker fix — but on the live 5s flap, each reconnect reads
+      // hasOtherIncumbent=true (replace path), so an accumulating counter would
+      // cross the threshold in ~50s and refuse main's own reconnects, locking out
+      // the control channel. Held until the close cause is confirmed — the uptime +
+      // disconnect-reason instrumentation here is what makes that confirmation possible.
+      // TODO(fix-main-flap): remove flapTracker.delete('main') once the disconnect cause is confirmed.
       if (sessionId === 'main') flapTracker.delete('main')
       const tools = computeToolsForSession(sessionId)
       transport.sendToBridge(conn, {
@@ -255,7 +257,9 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       dispatchReconnect(sessionId)
       if (info && !info.isJoinMember) refreshSessionVisual(info.threadId)
       if (sessionId === 'main') {
-        mainBridge.connect()
+        const r = mainBridge.connect(mainHadOtherIncumbent, Date.now())
+        if (r.kind === 'first') process.stderr.write('daemon: main bridge connected\n')
+        else if (!r.throttled) process.stderr.write(formatReconnectLine(r) + '\n')
       } else {
         process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
         if (info?.ephemeral) startEphemeralTtl(sessionId)
@@ -448,11 +452,16 @@ export const socketServer = createServer((socket: Socket) => {
     }
   })
 
-  function handleSocketClose(): void {
+  function handleSocketClose(reason: string): void {
     if (!conn.sessionId) return
     const isOwner = transport.get(conn.sessionId) === conn
-    if (conn.sessionId === 'main' && isOwner) {
-      mainBridge.disconnect()
+    // First reason wins. A socket can emit both 'error' and 'end'; the owner's
+    // first close records the cause (and the transport.delete below then makes any
+    // later close a non-owner), so this flag is belt-and-suspenders that keeps the
+    // real cause even if that ordering ever changes.
+    if (mainCloseRecordsReason(conn.sessionId, isOwner) && !conn.mainCloseRecorded) {
+      conn.mainCloseRecorded = true
+      mainBridge.disconnect(reason, Date.now())
     }
     if (isOwner) {
       transport.delete(conn.sessionId)
@@ -468,12 +477,12 @@ export const socketServer = createServer((socket: Socket) => {
     if (conn.sessionId && conn.sessionId !== 'main') {
       process.stderr.write(`daemon: bridge disconnected for session ${conn.sessionId}\n`)
     }
-    handleSocketClose()
+    handleSocketClose('end')
   })
 
   socket.on('error', (err) => {
     process.stderr.write(`daemon: bridge socket error: ${err}\n`)
-    handleSocketClose()
+    handleSocketClose(`error: ${err instanceof Error ? err.message : String(err)}`)
   })
 })
 
