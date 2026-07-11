@@ -88,8 +88,8 @@ function descendantPids(rootPid: string): string[] {
 }
 
 // pid + summed RSS (MB) of the pane's process subtree.
-// execFileSync (no shell) throughout — tmuxName is daemon-controlled but the rest
-// of this PR uses the array form, and it removes the quoting question entirely.
+// execFileSync (array form, no shell) throughout — removes the quoting question
+// even though tmuxName is daemon-controlled.
 // TODO: async — this sync-spawns several subprocesses per session each tick.
 function paneVitals(tmuxName: string): { pid?: number; rssMB?: number } {
   try {
@@ -114,10 +114,9 @@ export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (
   return `${info.tmuxName} pid=${v.pid ?? '?'} rss=${v.rssMB ?? '?'}MB up=${dur(now - info.createdAt)} idle=${dur(now - info.lastActive)}${conn}`
 }
 
-// Truncate an over-cap spawn log in place, keeping the last SPAWN_LOG_KEEP_BYTES.
-// In-place (`writeFileSync` on the same path, same inode) is deliberate: pipe-pane's
-// append fd stays valid, so capture continues past the trim. Best-effort — a few
-// bytes appended during the read→write window may be lost; only fires over the cap.
+// Truncate an over-cap spawn log in place, keeping the last SPAWN_LOG_KEEP_BYTES
+// (the inode-preservation rationale is at the writeFileSync call below). Best-effort
+// — a few bytes appended during the read→write window may be lost; only over the cap.
 export function trimSpawnLog(path: string): void {
   let size: number
   try { size = statSync(path).size } catch { return }

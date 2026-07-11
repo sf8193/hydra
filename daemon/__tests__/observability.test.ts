@@ -51,8 +51,8 @@ describe('trimSpawnLog (front-trim cap)', () => {
 
     trimSpawnLog(p)
 
-    // Refutes "writeFileSync('w') replaces the inode": O_TRUNC truncates in place,
-    // so the path still points at the same inode the append fd holds.
+    // writeFileSync's O_TRUNC truncates in place, so the path keeps the same inode
+    // the append fd holds — capture survives the trim.
     expect(statSync(p).ino).toBe(inoBefore)
 
     writeSync(appendFd, Buffer.from('POST-TRIM-MARKER\n'))
@@ -98,10 +98,9 @@ describe('buildCrashNotice (LINK, not CONVEY)', () => {
   })
 })
 
-// Note: tailSpawnLog is a thin `tail -n` subprocess wrapper — deliberately not
-// unit-tested here. It was verified out-of-band (seeks from the end, no full read
-// into memory) against a 500k-line file, and the repo's full-suite run has a
-// pre-existing cross-file isolation bug that corrupts subprocess-based tests.
+// tailSpawnLog (a thin `tail -n` wrapper) is intentionally not unit-tested — it
+// shells out, and its one behavior (seek-from-end, no full read) was verified
+// out-of-band against a 500k-line file.
 
 const NOW = 1_000_000_000
 function fakeInfo(over: Partial<SessionInfo> = {}): SessionInfo {
