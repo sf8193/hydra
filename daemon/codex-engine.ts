@@ -325,6 +325,14 @@ export class CodexEngine extends EventEmitter {
 
       case 'turn/completed':
         session.currentTurnId = null
+        // Auto-restart: if messages queued while turn was finishing, start a new turn
+        // with the first queued message. Remaining items flush via turn/started handler.
+        if (session.steerQueue.length > 0) {
+          const first = session.steerQueue.shift()!
+          void this.startTurn(session.sessionId, first).catch(err => {
+            process.stderr.write(`codex-engine: auto-turn failed for ${session.sessionId}: ${err}\n`)
+          })
+        }
         this.emit('turnCompleted', session.sessionId)
         break
 

@@ -4,6 +4,7 @@ import type { Socket } from 'net'
 import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
 import { atomicWriteFileSync } from './util.js'
+import type { CodexEngine } from './codex-engine.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,10 +25,19 @@ export class BridgeTransport {
   readonly messageQueues = new Map<string, Array<Record<string, unknown>>>()
   private readonly maxQueueSize = 50
   private readonly queueFile: string
+  private codexEngine: CodexEngine | null = null
 
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
     this.loadPersistedQueues()
+  }
+
+  setCodexEngine(engine: CodexEngine): void {
+    this.codexEngine = engine
+  }
+
+  getCodexEngine(): CodexEngine | null {
+    return this.codexEngine
   }
 
   get(sessionId: string): BridgeConn | undefined {
@@ -35,7 +45,11 @@ export class BridgeTransport {
   }
 
   has(sessionId: string): boolean {
-    return this.bridges.has(sessionId)
+    if (this.bridges.has(sessionId)) return true
+    // Check if it's a connected codex session
+    const info = registry.get(sessionId)
+    if (info?.engine === 'codex' && this.codexEngine?.isConnected(sessionId)) return true
+    return false
   }
 
   set(sessionId: string, conn: BridgeConn): void {
@@ -59,6 +73,17 @@ export class BridgeTransport {
   }
 
   sendOrQueue(sessionId: string, msg: Record<string, unknown>): void {
+    // Route to Codex engine if this is a codex session
+    const info = registry.get(sessionId)
+    if (info?.engine === 'codex' && this.codexEngine) {
+      const content = (msg as any).content as string | undefined
+      if (content) {
+        this.codexEngine.steer(sessionId, content)
+      }
+      return
+    }
+
+    // Claude path — send via bridge socket or queue
     const bridge = this.bridges.get(sessionId)
     if (bridge) {
       this.sendToBridge(bridge, msg)

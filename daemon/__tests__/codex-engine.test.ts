@@ -751,5 +751,55 @@ describe('CodexEngine', () => {
 
       expect(messages).toEqual(['First', 'Second'])
     })
+
+    test('turnCompleted auto-restarts from steerQueue', () => {
+      const session = {
+        sessionId: 'auto-restart',
+        proc: fakeProc,
+        rl: new EventEmitter(),
+        threadId: 'thread-1',
+        currentTurnId: 'turn-1',
+        nextRequestId: 5,
+        pendingRequests: new Map(),
+        messageBuffer: [],
+        steerQueue: ['queued-msg-1', 'queued-msg-2'],
+        connected: true,
+      };
+      (engine as any).sessions.set('auto-restart', session)
+
+      // Simulate turn/completed — should trigger startTurn with first queued message
+      ;(engine as any).handleNotification(session, 'turn/completed', {})
+
+      // currentTurnId cleared
+      expect(session.currentTurnId).toBeNull()
+      // First message was shifted out and sent as turn/start
+      expect(session.steerQueue).toEqual(['queued-msg-2'])
+      // stdin.write called with turn/start containing first message
+      expect(fakeProc.stdin.write).toHaveBeenCalled()
+      const written = JSON.parse((fakeProc.stdin.write.mock.calls[0][0] as string).trim())
+      expect(written.method).toBe('turn/start')
+      expect(written.params.input[0].text).toBe('queued-msg-1')
+    })
+
+    test('turnCompleted with empty steerQueue does not start new turn', () => {
+      const session = {
+        sessionId: 'no-restart',
+        proc: fakeProc,
+        rl: new EventEmitter(),
+        threadId: 'thread-1',
+        currentTurnId: 'turn-1',
+        nextRequestId: 0,
+        pendingRequests: new Map(),
+        messageBuffer: [],
+        steerQueue: [],
+        connected: true,
+      };
+      (engine as any).sessions.set('no-restart', session)
+
+      ;(engine as any).handleNotification(session, 'turn/completed', {})
+
+      expect(session.currentTurnId).toBeNull()
+      expect(fakeProc.stdin.write).not.toHaveBeenCalled()
+    })
   })
 })

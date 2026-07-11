@@ -47,6 +47,7 @@ export type SessionInfo = {
   ephemeral?: boolean
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
+  engine?: 'claude' | 'codex'  // which backend runs this session (default: claude)
 }
 
 export type ThreadMember = {
@@ -107,6 +108,7 @@ export type SpawnOpts = {
   model?: string         // per-spawn model override (falls back to spawnModel() / HYDRA_MODEL)
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
   trigger?: string       // what caused this spawn, for the announce line (e.g. 'spawn:', 'review 2:', 'CLI'); falls back to originType
+  engine?: 'claude' | 'codex'  // which backend to use (default: claude)
 }
 
 // ---------------------------------------------------------------------------

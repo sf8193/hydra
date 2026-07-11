@@ -113,9 +113,17 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
 
     const tmuxName = info.tmuxName
-    try {
-      execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
-    } catch {}
+    if (info.engine === 'codex') {
+      // Codex sessions are managed by the codex engine, not tmux
+      const { codexEngine } = await import('./codex-bootstrap.js')
+      await codexEngine.kill(info.sessionId).catch((err: Error) => {
+        process.stderr.write(`daemon: codex kill failed for ${tmuxName}: ${err.message}\n`)
+      })
+    } else {
+      try {
+        execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
+      } catch {}
+    }
 
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
@@ -168,6 +176,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     } satisfies SessionDeathEvent)
 
     setTimeout(() => {
+      if (info.engine === 'codex') { killsInProgress.delete(info.sessionId); return }
       try {
         // Only kill if the tmux session isn't owned by a new session (name recycling)
         const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName)
@@ -258,7 +267,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (staleId) {
         const stale = registry.get(staleId)
         if (stale) {
-          try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {
+          const alive = stale.engine === 'codex' ? !stale.deadAt : (() => { try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); return true } catch { return false } })()
+          if (!alive) {
             respawnCount = (stale.respawnCount ?? 0) + 1
             await killSession(stale, 'replaced by new spawn')
           }
@@ -314,8 +324,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (staleId) {
       const stale = registry.get(staleId)
       if (stale) {
-        let staleAlive = false
-        try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); staleAlive = true } catch {}
+        const staleAlive = stale.engine === 'codex' ? !stale.deadAt : (() => { try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); return true } catch { return false } })()
         if (!staleAlive) {
           respawnCount = (stale.respawnCount ?? 0) + 1
           if (!anchorMessageId && stale.anchorMessageId) {
@@ -424,15 +433,76 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt = `${opts.promptPrefix}\n\n${prompt}`
   }
 
+  // Engine selection — codex sessions skip the tmux/claude path entirely
+  const engine = opts?.engine ?? 'claude'
+
   // Central model resolution: alias → full ID → validate. All callers can pass
   // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-4-6[1m]").
   const rawModel = opts?.model
   const model = rawModel ? (resolveModelAlias(rawModel) ?? rawModel) : spawnModel()
 
-  if (!isKnownModel(model)) {
+  if (engine === 'claude' && !isKnownModel(model)) {
     process.stderr.write(`daemon: unrecognized model ${model} — may be a new release or typo. Spawning anyway.\n`)
     if (threadId) void gateway.send(threadId, `\u26a0\ufe0f Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`).catch(() => {})
   }
+
+  // --- Codex engine path ---
+  if (engine === 'codex') {
+    const { codexEngine } = await import('./codex-bootstrap.js')
+    const now = Date.now()
+    const capabilities: SessionCapabilities = { role: 'worker', tools: [], model: opts?.model ?? 'default', cwd: effectiveCwd, platform: PLATFORM }
+    const url = await gateway.getThreadUrl(threadId!)
+
+    await codexEngine.spawn(sessionId, { cwd: effectiveCwd, model: opts?.model })
+
+    // Send the initial prompt as the first turn
+    void codexEngine.startTurn(sessionId, prompt).catch(err => {
+      process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
+    })
+
+    registry.set(sessionId, {
+      sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
+      tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
+      threadUrl: url || undefined, engine: 'codex',
+      ...(respawnCount > 0 ? { respawnCount } : {}),
+      ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
+      ...(isJoin ? { isJoinMember: true } : {}),
+      initiator: opts?.initiator,
+      ephemeral: opts?.ephemeral,
+      ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
+    })
+    if (phaseBudgetMs) startPhaseBudget(sessionId)
+    if (!isJoin) {
+      registry.setThread(threadId!, sessionId)
+    } else {
+      registry.addMember(threadId!, sessionId, opts?.memberLabel)
+    }
+    registry.persist()
+
+    if (!isJoin) {
+      threadRegistry.recordSpawn(threadId!, {
+        anchorMessageId, threadUrl: url || undefined, topic, respawnCount,
+        sessionId, tmuxName, originType, originFrom, model: opts?.model ?? 'default', parentChannelId,
+      })
+    }
+
+    refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
+
+    const spawnLine = formatSpawnLine({
+      emoji: sessionEmoji(tmuxName), name: tmuxName, model: opts?.model ?? 'codex',
+      trigger: opts?.trigger ?? originType ?? 'spawn',
+    })
+    const announceIds = await safeSend(threadId!, spawnLine)
+    const info = registry.get(sessionId)
+    if (info && announceIds.length > 0) {
+      info.spawnAnnounceId = announceIds[0]
+      registry.persist()
+    }
+
+    return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
+  }
+
+  // --- Claude engine path (default) ---
 
   // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
   let claudeArgs: string

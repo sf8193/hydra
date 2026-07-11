@@ -26,8 +26,9 @@ export function formatDuration(ms: number): string {
   return remHrs > 0 ? `${days}d ${remHrs}h` : `${days}d`
 }
 
-export function isAlive(info: { tmuxName: string; deadAt?: number }): boolean {
+export function isAlive(info: { tmuxName: string; deadAt?: number; engine?: string }): boolean {
   if (info.deadAt) return false
+  if (info.engine === 'codex') return true  // codex lifecycle managed by engine disconnect → deadAt
   return tmuxHasSession(info.tmuxName)
 }
 
