@@ -8,7 +8,7 @@ import type { ChatGateway, ButtonDef } from '../gateway.js'
 
 export const pendingPermissions = new Map<
   string,
-  { tool_name: string; description: string; input_preview: string }
+  { tool_name: string; description: string; input_preview: string; sessionId: string }
 >()
 
 // ---------------------------------------------------------------------------
@@ -56,10 +56,12 @@ export function setupPermissionHandler(gateway: ChatGateway): void {
       return
     }
 
-    // Forward allow/deny to main session bridge
-    const mainBridge = transport.get('main')
-    if (mainBridge) {
-      transport.sendToBridge(mainBridge, {
+    // Forward allow/deny to the session that requested it
+    const pending = pendingPermissions.get(request_id)
+    const targetSessionId = pending?.sessionId ?? 'main'
+    const targetBridge = transport.get(targetSessionId)
+    if (targetBridge) {
+      transport.sendToBridge(targetBridge, {
         type: 'permission_response',
         request_id,
         behavior,

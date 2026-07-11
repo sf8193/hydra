@@ -11,6 +11,7 @@ import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleR
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
+import { listPostPasses } from './adversarial.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
 import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
 import { getDesignByThread, handleDesignAnswer } from './design.js'
@@ -19,6 +20,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept } from './commands/status.js'
 import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
+import { pendingPermissions } from './permission.js'
 import { isAlive, reportError } from './util.js'
 import { listTemplates, getTemplate } from './templates.js'
 
@@ -418,7 +420,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const postModel = reviewMatch[3] ? resolveModelAlias(reviewMatch[3]) : undefined
         const modelId = preModel ?? postModel
         const rounds = parseInt(reviewMatch[2] ?? '3')
-        const topic = reviewMatch[4]?.trim()
+        let topic = reviewMatch[4]?.trim()
         // Detect wrong order: "review fable 3 topic" (alias without colon)
         if (!modelId && topic) {
           const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
@@ -427,7 +429,15 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
         }
-        void handleReviewIntercept(msg, rounds, topic, modelId)
+        // Parse +pass suffixes — only match known pass names to avoid collisions with
+        // natural language (e.g. "+1 error handling" shouldn't extract "1" as a pass)
+        const knownPasses = listPostPasses()
+        const passRe = new RegExp(`\\+(${knownPasses.join('|')})\\b`, 'g')
+        const postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
+        if (postPasses.length > 0) {
+          topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+        }
+        void handleReviewIntercept(msg, rounds, topic, modelId, postPasses.length > 0 ? postPasses : undefined)
         return
       }
 
@@ -534,6 +544,31 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
 
+          const permReplyMatch = msg.content.match(/^(allow|deny)\s*$/i)
+          if (permReplyMatch) {
+            const behavior = permReplyMatch[1].toLowerCase() === 'allow' ? 'allow' : 'deny'
+            // Find the most recent pending permission for this session
+            let foundId: string | undefined
+            for (const [reqId, perm] of pendingPermissions) {
+              if (perm.sessionId === mappedSession) foundId = reqId
+            }
+            if (foundId) {
+              const targetBridge = transport.get(mappedSession)
+              if (targetBridge) {
+                transport.sendToBridge(targetBridge, {
+                  type: 'permission_response',
+                  request_id: foundId,
+                  behavior,
+                })
+              }
+              pendingPermissions.delete(foundId)
+              void gateway.react(msg.channelId, msg.id, behavior === 'allow' ? '✅' : '❌').catch(() => {})
+            } else {
+              void gateway.send(msg.channelId, '_No pending permission for this session._', { replyTo: msg.id }).catch(() => {})
+            }
+            return
+          }
+
           const pauseMatch = msg.content.match(/^(pause|unpause)\s*$/i)
           if (pauseMatch) {
             if (pauseMatch[1].toLowerCase() === 'pause') {
@@ -637,14 +672,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
   const permMatch = PERMISSION_REPLY_RE.exec(msg.content)
   if (permMatch) {
-    const mainBridge = transport.get('main')
-    if (mainBridge) {
-      transport.sendToBridge(mainBridge, {
+    const requestId = permMatch[2]!.toLowerCase()
+    const pending = pendingPermissions.get(requestId)
+    const targetSessionId = pending?.sessionId ?? 'main'
+    const targetBridge = transport.get(targetSessionId)
+    if (targetBridge) {
+      transport.sendToBridge(targetBridge, {
         type: 'permission_response',
-        request_id: permMatch[2]!.toLowerCase(),
+        request_id: requestId,
         behavior: permMatch[1]!.toLowerCase().startsWith('y') ? 'allow' : 'deny',
       })
     }
+    pendingPermissions.delete(requestId)
     const emoji = permMatch[1]!.toLowerCase().startsWith('y') ? '✅' : '❌'
     void gateway.react(msg.channelId, msg.id, emoji).catch(() => {})
     return

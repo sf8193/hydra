@@ -10,14 +10,19 @@ process.stderr.write = (() => true) as any
 // ---------------------------------------------------------------------------
 
 describe('state machine transitions', () => {
-  test('review: critic_turn -> owner_turn -> cleanup -> complete', () => {
+  test('review: critic_turn -> owner_turn -> post_pass -> cleanup -> complete', () => {
     const r1 = reviewMachine.transition('critic_turn', 'critic_posted')
     expect(r1.ok).toBe(true)
     if (r1.ok) expect(r1.to).toBe('owner_turn')
 
     const r2 = reviewMachine.transition('owner_turn', 'final_round')
     expect(r2.ok).toBe(true)
-    if (r2.ok) expect(r2.to).toBe('cleanup')
+    if (r2.ok) expect(r2.to).toBe('post_pass')
+
+    // No passes — timeout to cleanup
+    const r2b = reviewMachine.transition('post_pass', 'timeout')
+    expect(r2b.ok).toBe(true)
+    if (r2b.ok) expect(r2b.to).toBe('cleanup')
 
     const r3 = reviewMachine.transition('cleanup', 'summary_posted')
     expect(r3.ok).toBe(true)

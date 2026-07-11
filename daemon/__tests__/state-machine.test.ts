@@ -183,12 +183,13 @@ describe('build transition table', () => {
 // Review-specific transition table tests
 // ---------------------------------------------------------------------------
 
-type ReviewPhase = 'critic_turn' | 'owner_turn' | 'cleanup' | 'complete' | 'cancelled'
-type ReviewEvent = 'critic_posted' | 'owner_posted' | 'final_round' | 'summary_posted' | 'timeout' | 'cancel'
+type ReviewPhase = 'critic_turn' | 'owner_turn' | 'post_pass' | 'cleanup' | 'complete' | 'cancelled'
+type ReviewEvent = 'critic_posted' | 'owner_posted' | 'final_round' | 'pass_posted' | 'summary_posted' | 'timeout' | 'cancel'
 
 const reviewTransitions = {
   critic_turn: { critic_posted: 'owner_turn' as ReviewPhase, timeout: 'cancelled' as ReviewPhase, cancel: 'cancelled' as ReviewPhase },
-  owner_turn:  { owner_posted: 'critic_turn' as ReviewPhase, final_round: 'cleanup' as ReviewPhase, timeout: 'cancelled' as ReviewPhase, cancel: 'cancelled' as ReviewPhase },
+  owner_turn:  { owner_posted: 'critic_turn' as ReviewPhase, final_round: 'post_pass' as ReviewPhase, timeout: 'cancelled' as ReviewPhase, cancel: 'cancelled' as ReviewPhase },
+  post_pass:   { pass_posted: 'post_pass' as ReviewPhase, summary_posted: 'complete' as ReviewPhase, timeout: 'cleanup' as ReviewPhase, cancel: 'cancelled' as ReviewPhase },
   cleanup:     { summary_posted: 'complete' as ReviewPhase, timeout: 'complete' as ReviewPhase },
   complete:    {} as Partial<Record<ReviewEvent, ReviewPhase>>,
   cancelled:   {} as Partial<Record<ReviewEvent, ReviewPhase>>,
@@ -224,6 +225,12 @@ describe('review transition table', () => {
     r = sm.transition(phase, 'final_round')
     expect(r.ok).toBe(true)
     if (r.ok) phase = r.to
+    expect(phase).toBe('post_pass')
+
+    // Post-pass timeout falls through to cleanup, then summary completes
+    r = sm.transition(phase, 'timeout')
+    expect(r.ok).toBe(true)
+    if (r.ok) phase = r.to
     expect(phase).toBe('cleanup')
 
     // Summary posted
@@ -239,10 +246,11 @@ describe('review transition table', () => {
     expect(sm.transition('owner_turn', 'final_round').ok).toBe(true)
   })
 
-  test('summary_posted only valid during cleanup', () => {
+  test('summary_posted valid during cleanup and post_pass', () => {
     expect(sm.transition('critic_turn', 'summary_posted').ok).toBe(false)
     expect(sm.transition('owner_turn', 'summary_posted').ok).toBe(false)
     expect(sm.transition('cleanup', 'summary_posted').ok).toBe(true)
+    expect(sm.transition('post_pass', 'summary_posted').ok).toBe(true)
   })
 
   test('cleanup timeout goes to complete (not cancelled)', () => {
@@ -270,13 +278,13 @@ describe('review transition table', () => {
 
   test('complete and cancelled are terminal', () => {
     for (const phase of ['complete', 'cancelled'] as ReviewPhase[]) {
-      for (const event of ['critic_posted', 'owner_posted', 'final_round', 'summary_posted', 'timeout', 'cancel'] as ReviewEvent[]) {
+      for (const event of ['critic_posted', 'owner_posted', 'final_round', 'pass_posted', 'summary_posted', 'timeout', 'cancel'] as ReviewEvent[]) {
         expect(sm.transition(phase, event).ok).toBe(false)
       }
     }
   })
 
-  test('1-round review: critic posts, owner defends (final), cleanup, complete', () => {
+  test('1-round review: critic posts, owner defends (final), post_pass, complete', () => {
     let phase: ReviewPhase = 'critic_turn'
     let r = sm.transition(phase, 'critic_posted')
     if (r.ok) phase = r.to
@@ -284,10 +292,21 @@ describe('review transition table', () => {
     r = sm.transition(phase, 'final_round')
     expect(r.ok).toBe(true)
     if (r.ok) phase = r.to
+    expect(phase).toBe('post_pass')
+    // No passes configured — timeout to cleanup
+    r = sm.transition(phase, 'timeout')
+    if (r.ok) phase = r.to
     expect(phase).toBe('cleanup')
     r = sm.transition(phase, 'summary_posted')
     if (r.ok) phase = r.to
     expect(phase).toBe('complete')
+  })
+
+  test('post_pass: pass_posted stays in post_pass (for multiple passes)', () => {
+    let phase: ReviewPhase = 'post_pass'
+    const r = sm.transition(phase, 'pass_posted')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.to).toBe('post_pass')
   })
 })
 

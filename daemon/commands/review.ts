@@ -1,9 +1,9 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
-import { startReview, getReviewByThread, cancelReview } from '../adversarial.js'
+import { startReview, getReviewByThread, cancelReview, listPostPasses } from '../adversarial.js'
 import type { InboundMessage } from '../../gateway.js'
 
-export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string): Promise<void> {
+export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, postPasses?: string[]): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '⚔️').catch(() => {})
 
   // Must be in a session thread
@@ -33,8 +33,16 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
   // Clamp rounds
   const clampedRounds = Math.max(1, Math.min(rounds, 5))
 
+  // Validate post-passes
+  const validPasses = listPostPasses()
+  const invalidPasses = postPasses?.filter(p => !validPasses.includes(p))
+  if (invalidPasses && invalidPasses.length > 0) {
+    await gateway.send(msg.channelId, `Unknown pass${invalidPasses.length > 1 ? 'es' : ''}: ${invalidPasses.map(p => `\`+${p}\``).join(', ')}. Available: ${validPasses.map(p => `\`+${p}\``).join(', ')}`, { replyTo: msg.id })
+    return
+  }
+
   try {
-    await startReview(threadId, sessionId, clampedRounds, topic, model)
+    await startReview(threadId, sessionId, clampedRounds, topic, model, postPasses)
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Review failed to start: ${errMsg}`, { replyTo: msg.id })

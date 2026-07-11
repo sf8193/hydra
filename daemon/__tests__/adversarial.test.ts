@@ -5,12 +5,13 @@ import { createStateMachine } from '../state-machine.js'
 process.stderr.write = (() => true) as any
 
 // Reproduce the review state machine from adversarial.ts
-type ReviewPhase = 'critic_turn' | 'owner_turn' | 'cleanup' | 'complete' | 'cancelled'
-type ReviewEvent = 'critic_posted' | 'owner_posted' | 'final_round' | 'summary_posted' | 'timeout' | 'cancel'
+type ReviewPhase = 'critic_turn' | 'owner_turn' | 'post_pass' | 'cleanup' | 'complete' | 'cancelled'
+type ReviewEvent = 'critic_posted' | 'owner_posted' | 'final_round' | 'pass_posted' | 'summary_posted' | 'timeout' | 'cancel'
 
 const reviewMachine = createStateMachine<ReviewPhase, ReviewEvent>('review', {
   critic_turn: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' },
-  owner_turn:  { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled' },
+  owner_turn:  { owner_posted: 'critic_turn', final_round: 'post_pass', timeout: 'cancelled', cancel: 'cancelled' },
+  post_pass:   { pass_posted: 'post_pass', summary_posted: 'complete', timeout: 'cleanup', cancel: 'cancelled' },
   cleanup:     { summary_posted: 'complete', timeout: 'complete' },
   complete:    {},
   cancelled:   {},
@@ -36,6 +37,10 @@ describe('review state machine', () => {
     phase = reviewMachine.transition(phase, 'critic_posted').to!
     expect(phase).toBe('owner_turn')
     phase = reviewMachine.transition(phase, 'final_round').to!
+    expect(phase).toBe('post_pass')
+
+    // No passes — timeout to cleanup
+    phase = reviewMachine.transition(phase, 'timeout').to!
     expect(phase).toBe('cleanup')
 
     // Summary

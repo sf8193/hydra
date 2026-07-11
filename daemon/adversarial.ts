@@ -16,12 +16,47 @@ import { reviewSummaryFormat } from './prompts/review-summary.js'
 // Types
 // ---------------------------------------------------------------------------
 
-export type ReviewPhase = 'critic_turn' | 'owner_turn' | 'cleanup' | 'complete' | 'cancelled'
-type ReviewEvent = 'critic_posted' | 'owner_posted' | 'final_round' | 'summary_posted' | 'timeout' | 'cancel'
+export type ReviewPhase = 'critic_turn' | 'owner_turn' | 'post_pass' | 'cleanup' | 'complete' | 'cancelled'
+type ReviewEvent = 'critic_posted' | 'owner_posted' | 'final_round' | 'pass_posted' | 'summary_posted' | 'timeout' | 'cancel'
 
 const OWNER_SENTINEL = '[owner→critic]'
 const CRITIC_SENTINEL = '[critic→owner]'
 const SUMMARY_SENTINEL = '[summary]'
+
+// ---------------------------------------------------------------------------
+// Post-pass instructions — composable lenses applied after correctness rounds
+// ---------------------------------------------------------------------------
+
+const POST_PASS_INSTRUCTIONS: Record<string, string> = {
+  readability: [
+    'Review purely for simplicity and readability. Correctness is settled — don\'t re-litigate it.',
+    '',
+    'The standard: code should be immediately understandable without comments.',
+    'If something needs a comment to explain it, it should be rewritten instead.',
+    '',
+    'Flag:',
+    '- Anything you have to read twice to understand',
+    '- Indirection that obscures what\'s actually happening',
+    '- Abstractions that make simple things look complex',
+    '- Code that could be deleted without changing behavior',
+    '- Inconsistency (same thing done two different ways)',
+    '',
+    'Do NOT suggest adding anything (comments, types, docs, error handling).',
+    'Only suggest making things simpler, clearer, or shorter.',
+  ].join('\n'),
+}
+
+const POST_PASS_ALIASES: Record<string, string> = {
+  r: 'readability',
+}
+
+export function listPostPasses(): string[] {
+  return [...Object.keys(POST_PASS_INSTRUCTIONS), ...Object.keys(POST_PASS_ALIASES)]
+}
+
+export function resolvePassName(name: string): string {
+  return POST_PASS_ALIASES[name] ?? name
+}
 
 export type ReviewState = StatusLineState & {
   reviewId: string
@@ -38,6 +73,8 @@ export type ReviewState = StatusLineState & {
   _finalizing?: boolean
   _cleanupNudged?: boolean
   model?: string
+  postPasses?: string[]
+  _currentPassIdx?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -46,7 +83,8 @@ export type ReviewState = StatusLineState & {
 
 export const reviewMachine = createStateMachine<ReviewPhase, ReviewEvent>('review', {
   critic_turn: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' },
-  owner_turn:  { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled' },
+  owner_turn:  { owner_posted: 'critic_turn', final_round: 'post_pass', timeout: 'cancelled', cancel: 'cancelled' },
+  post_pass:   { pass_posted: 'post_pass', summary_posted: 'complete', timeout: 'cleanup', cancel: 'cancelled' },
   cleanup:     { summary_posted: 'complete', timeout: 'complete' },
   complete:    {},
   cancelled:   {},
@@ -88,6 +126,12 @@ function reviewHalf(phase: ReviewPhase): 'top' | 'bottom' {
 registerProtocolBadge(threadId => {
   const state = getReviewByThread(threadId)
   if (!state) return undefined
+  if (state.phase === 'post_pass' && state.postPasses) {
+    const idx = state._currentPassIdx ?? 0
+    if (idx < state.postPasses.length) {
+      return `⚔️ +${resolvePassName(state.postPasses[idx])} (${idx + 1}/${state.postPasses.length})`
+    }
+  }
   return formatRoundBadge('⚔️', reviewHalf(state.phase), state.currentRound, state.rounds)
 })
 
@@ -114,6 +158,7 @@ export async function startReview(
   rounds: number,
   topic?: string,
   model?: string,
+  postPasses?: string[],
 ): Promise<ReviewState> {
   if (threadToReview.has(ownerThreadId)) {
     throw new Error('A review is already in progress in this thread')
@@ -137,6 +182,7 @@ export async function startReview(
     phase: 'critic_turn',
     messageIds: [],
     model,
+    ...(postPasses && postPasses.length > 0 ? { postPasses } : {}),
   }
 
   reviews.set(reviewId, state)
@@ -224,10 +270,20 @@ export function onReviewReply(sessionId: string, text: string, chatId: string, s
     // Only process messages with the critic sentinel
     if (!firstLine.startsWith(CRITIC_SENTINEL)) return
 
+    const bodyText = text.slice(text.indexOf('\n') + 1).trim()
+
+    // Post-pass phase — critic feedback on readability/security/etc
+    if (state.phase === 'post_pass') {
+      const result = reviewMachine.transition(state.phase, 'pass_posted')
+      if (!result.ok) return
+      state.messageIds.push(...sentMessageIds)
+      state.phase = result.to
+      onPostPassCriticPosted(state, bodyText)
+      return
+    }
+
     const result = reviewMachine.transition(state.phase, 'critic_posted')
     if (!result.ok) return
-
-    const bodyText = text.slice(text.indexOf('\n') + 1).trim()
     state.messageIds.push(...sentMessageIds)
     state.phase = result.to
     onCriticPosted(state, bodyText)
@@ -403,6 +459,13 @@ function onOwnerPosted(state: ReviewState, text: string): void {
 // ---------------------------------------------------------------------------
 
 async function finishDebate(state: ReviewState): Promise<void> {
+  // If post-passes are configured, enter post-pass flow instead of finishing
+  if (state.postPasses && state.postPasses.length > 0) {
+    state._currentPassIdx = 0
+    startNextPass(state)
+    return
+  }
+
   // Kill critic — wrapped so a kill failure doesn't abort the closing sequence
   if (state.criticSessionId) {
     sessionToReview.delete(state.criticSessionId)
@@ -420,7 +483,98 @@ async function finishDebate(state: ReviewState): Promise<void> {
   // Closing transition: new message (linear, not edited onto the status line)
   void safeSend(state.ownerThreadId, formatStateLine('⚔️', 'review', '⚒︎', 'has concluded. Processing summary…'))
 
+  // Transition through state machine: post_pass → timeout → cleanup
+  const transition = reviewMachine.transition(state.phase, 'timeout')
+  if (transition.ok) state.phase = transition.to
   completeReview(state)
+}
+
+// ---------------------------------------------------------------------------
+// Post-pass flow — critic reviews with a different lens after correctness
+// ---------------------------------------------------------------------------
+
+function startNextPass(state: ReviewState): void {
+  const idx = state._currentPassIdx ?? 0
+  const passes = state.postPasses!
+  const passName = resolvePassName(passes[idx])
+  const instruction = POST_PASS_INSTRUCTIONS[passName]
+
+  if (!instruction) {
+    process.stderr.write(`daemon: review: unknown pass "${passName}", skipping\n`)
+    void advanceOrFinishPasses(state)
+    return
+  }
+
+  const passLabel = `+${passName} (${idx + 1}/${passes.length})`
+  const statusText = formatStateLine('⚔️', 'review', passLabel, `critic reviewing ${passName}`)
+  if (!state.statusHistory) state.statusHistory = []
+  state.statusHistory.push(statusText)
+  void safeSend(state.ownerThreadId, statusText).then(ids => state.messageIds.push(...ids)).catch(() => {})
+
+  transport.sendOrQueue(state.criticSessionId!, {
+    type: 'notification',
+    content: [
+      `[system] Correctness debate complete. Now do a **${passName}** pass.`,
+      ``,
+      instruction,
+      ``,
+      `Post your feedback with \`${CRITIC_SENTINEL}\` as the first line.`,
+      `If everything is clean, post \`${CRITIC_SENTINEL}\` followed by \`LGTM\`.`,
+    ].join('\n'),
+    meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+
+  resetTimeout(state)
+}
+
+function onPostPassCriticPosted(state: ReviewState, text: string): void {
+  if (state.timeout) clearTimeout(state.timeout)
+
+  const firstLine = text.split('\n')[0].trim()
+  const isLgtm = firstLine.replace(/[*_.]/g, '').trim().toUpperCase() === 'LGTM'
+
+  if (isLgtm) {
+    void advanceOrFinishPasses(state).catch(err => {
+      process.stderr.write(`daemon: review post-pass advance failed: ${err}\n`)
+      finalizeReview(state)
+    })
+  } else {
+    // Relay feedback to owner — they apply fixes while review advances
+    const idx = state._currentPassIdx ?? 0
+    const passName = resolvePassName(state.postPasses![idx])
+    transport.sendOrQueue(state.ownerSessionId, {
+      type: 'notification',
+      content: `[+${passName} feedback]\n\n${text}\n\n---\nApply these changes.`,
+      meta: { chat_id: state.ownerThreadId, message_id: '', user: 'review-critic', user_id: 'system', ts: new Date().toISOString() },
+    })
+    void advanceOrFinishPasses(state).catch(err => {
+      process.stderr.write(`daemon: review post-pass advance failed: ${err}\n`)
+      finalizeReview(state)
+    })
+  }
+}
+
+async function advanceOrFinishPasses(state: ReviewState): Promise<void> {
+  const idx = (state._currentPassIdx ?? 0) + 1
+  state._currentPassIdx = idx
+
+  if (idx < (state.postPasses?.length ?? 0)) {
+    startNextPass(state)
+  } else {
+    // All passes done — kill critic and finish
+    if (state.criticSessionId) {
+      sessionToReview.delete(state.criticSessionId)
+      const info = registry.get(state.criticSessionId)
+      if (info && !killsInProgress.has(state.criticSessionId)) {
+        await killSession(info, 'review complete')
+      }
+      state.criticSessionId = undefined
+    }
+    // Transition through state machine: post_pass → timeout → cleanup
+    const transition = reviewMachine.transition(state.phase, 'timeout')
+    if (transition.ok) state.phase = transition.to
+    completeReview(state)
+  }
 }
 
 function completeReview(state: ReviewState): void {
@@ -555,12 +709,18 @@ async function spawnCritic(state: ReviewState): Promise<void> {
 function resetTimeout(state: ReviewState): void {
   if (state.timeout) clearTimeout(state.timeout)
 
-  const whose = state.phase === 'critic_turn' ? 'critic' : 'owner'
+  const whose = (state.phase === 'critic_turn' || state.phase === 'post_pass') ? 'critic' : 'owner'
   const timeoutMs = whose === 'critic' ? CRITIC_TIMEOUT_MS : OWNER_TIMEOUT_MS
   state.timeout = setTimeout(async () => {
     process.stderr.write(`daemon: review turn timed out (${whose})\n`)
-    await safeSend(state.ownerThreadId, `Review timed out waiting for ${whose}. Cancelling.`)
-    await cancelReview(state.reviewId)
+    if (state.phase === 'post_pass') {
+      // Graceful: skip remaining passes and finish the review
+      await safeSend(state.ownerThreadId, `Post-pass timed out waiting for critic. Finishing review.`)
+      void advanceOrFinishPasses(state).catch(() => finalizeReview(state))
+    } else {
+      await safeSend(state.ownerThreadId, `Review timed out waiting for ${whose}. Cancelling.`)
+      await cancelReview(state.reviewId)
+    }
   }, timeoutMs)
 }
 
@@ -575,6 +735,7 @@ registerProtocol('review', {
     const state = reviewId ? reviews.get(reviewId) : undefined
     if (!state || chatId !== state.ownerThreadId) return null
     if (state.phase === 'critic_turn' && sessionId === state.criticSessionId) return CRITIC_SENTINEL
+    if (state.phase === 'post_pass' && sessionId === state.criticSessionId) return CRITIC_SENTINEL
     if (state.phase === 'owner_turn' && sessionId === state.ownerSessionId) return OWNER_SENTINEL
     if (state.phase === 'cleanup' && sessionId === state.ownerSessionId) return SUMMARY_SENTINEL
     return null

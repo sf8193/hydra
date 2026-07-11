@@ -331,7 +331,8 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 
     case 'permission_request': {
       const { request_id, tool_name, description, input_preview } = msg
-      pendingPermissions.set(request_id, { tool_name, description, input_preview })
+      const sessionId = conn.sessionId || 'main'
+      pendingPermissions.set(request_id, { tool_name, description, input_preview, sessionId })
       const access = loadAccess()
       const text = `Permission: ${tool_name}`
       const buttons: ButtonDef[] = [
@@ -339,10 +340,18 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         { id: `perm:allow:${request_id}`, label: 'Allow', style: 'success', emoji: '✅' },
         { id: `perm:deny:${request_id}`, label: 'Deny', style: 'danger', emoji: '❌' },
       ]
-      for (const userId of access.allowFrom) {
-        void gateway.sendDM(userId, text, buttons).catch(e => {
-          process.stderr.write(`daemon: permission_request send to ${userId} failed: ${e}\n`)
+      // Post buttons in the session's thread (if it's a spawned session), otherwise DM allowFrom users
+      const permInfo = sessionId !== 'main' ? registry.get(sessionId) : undefined
+      if (permInfo) {
+        void gateway.send(permInfo.threadId, text, { buttons }).catch(e => {
+          process.stderr.write(`daemon: permission_request send to thread ${permInfo.threadId} failed: ${e}\n`)
         })
+      } else {
+        for (const userId of access.allowFrom) {
+          void gateway.sendDM(userId, text, buttons).catch(e => {
+            process.stderr.write(`daemon: permission_request send to ${userId} failed: ${e}\n`)
+          })
+        }
       }
       break
     }
