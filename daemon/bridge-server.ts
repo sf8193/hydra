@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync, mkdirSync, chmodSync, readFileSync } from 'fs'
+import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
 import { execSync, execFileSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'

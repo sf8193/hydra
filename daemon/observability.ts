@@ -2,7 +2,7 @@
 // death report to the daemon log. A crashed spawn otherwise leaves no cause, no
 // stderr, and no link to its transcript.
 
-import { existsSync, readdirSync } from 'fs'
+import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
@@ -12,6 +12,12 @@ import { formatDuration } from './util.js'
 
 const PROJECTS_ROOT = join(homedir(), '.claude', 'projects')
 const VITALS_INTERVAL_MS = 60_000
+
+// Front-trim cap for the black-box spawn logs. A live session's pane output is
+// otherwise unbounded on disk; over the cap we keep only the most recent bytes —
+// the dying tail is the whole point of the recorder — and discard the front.
+const SPAWN_LOG_MAX_BYTES = 5 * 1024 * 1024
+const SPAWN_LOG_KEEP_BYTES = 2 * 1024 * 1024
 
 // Last RSS sample per session, kept here rather than on SessionInfo — SessionInfo
 // is persisted to sessions.json, and this is ephemeral diagnostic state.
@@ -69,11 +75,35 @@ export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (
   return `${info.tmuxName} pid=${v.pid ?? '?'} rss=${v.rssMB ?? '?'}MB up=${dur(now - info.createdAt)} idle=${dur(now - info.lastActive)}${conn}`
 }
 
+// Truncate an over-cap spawn log in place, keeping the last SPAWN_LOG_KEEP_BYTES.
+// In-place (`writeFileSync` on the same path, same inode) is deliberate: pipe-pane's
+// append fd stays valid, so capture continues past the trim. Best-effort — a few
+// bytes appended during the read→write window may be lost; only fires over the cap.
+function trimSpawnLog(path: string): void {
+  let size: number
+  try { size = statSync(path).size } catch { return }
+  if (size <= SPAWN_LOG_MAX_BYTES) return
+  try {
+    const fd = openSync(path, 'r')
+    const buf = Buffer.alloc(SPAWN_LOG_KEEP_BYTES)
+    const read = readSync(fd, buf, 0, SPAWN_LOG_KEEP_BYTES, size - SPAWN_LOG_KEEP_BYTES)
+    closeSync(fd)
+    const kept = buf.subarray(0, read)
+    // Drop the partial first line so the file starts on a clean boundary.
+    const nl = kept.indexOf(0x0a)
+    writeFileSync(path, nl >= 0 ? kept.subarray(nl + 1) : kept)
+    process.stderr.write(`daemon: spawn-log front-trimmed ${path} (${Math.round(size / 1048576)}MB -> kept ${Math.round(SPAWN_LOG_KEEP_BYTES / 1048576)}MB tail)\n`)
+  } catch (err) {
+    process.stderr.write(`daemon: spawn-log trim failed ${path}: ${err}\n`)
+  }
+}
+
 export function startVitalsSnapshots(isConnected: (id: string) => boolean): void {
   setInterval(() => {
     const now = Date.now()
     for (const id of vitalsSamples.keys()) if (!registry.get(id)) vitalsSamples.delete(id)
     const live = [...registry.values()].filter(s => !s.deadAt)
+    for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
     if (live.length === 0) return
     const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected))
     process.stderr.write(`daemon: vitals (${live.length} live):\n${lines.join('\n')}\n`)
