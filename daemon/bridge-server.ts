@@ -17,6 +17,7 @@ import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
+import { safeSend } from './util.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
@@ -410,11 +411,8 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
 
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {
-      try {
-        await gateway.send(info.threadId, buildCrashNotice(info))
-      } catch (err) {
-        process.stderr.write(`daemon: session ${info.tmuxName} crash-notice send failed: ${err}\n`)
-      }
+      // safeSend (never throws, chunks, logs) — the daemon's delivery path.
+      await safeSend(info.threadId, buildCrashNotice(info))
       refreshSessionVisual(info.threadId, { state: 'crashed' })
     }
   }
