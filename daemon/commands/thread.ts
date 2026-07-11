@@ -5,8 +5,13 @@ import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn } from '../session-lifecycle.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError } from '../util.js'
+import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError, capturePane } from '../util.js'
+import { resolveModelAlias, MODEL_ALIASES } from '../../shared/constants.js'
 import type { InboundMessage } from '../../gateway.js'
+
+// model-switch confirm-modal poll: CONFIRM_POLL_MAX × CONFIRM_POLL_MS = ~3s ceiling
+const CONFIRM_POLL_MS = 250
+const CONFIRM_POLL_MAX = 12
 
 export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
   const info = registry.resolveThreadSessionFromMsg(msg)
@@ -280,5 +285,62 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
     debouncedRefreshListDisplay()
   } else {
     await reportError(msg.channelId, msg.id, 'respawn', 'failed to spawn session')
+  }
+}
+
+// "model <alias>" — switch a running session's model mid-conversation. allowFrom-gated
+// (mutates cost/capability) but thread-scoped, so NOT a COMMAND_PREFIXES entry. Drives Claude
+// Code's own /model: Escape, text via -l, Enter — each send awaited so they can't reorder;
+// reacts only if every step succeeds.
+export async function handleModelSwitchIntercept(msg: InboundMessage, alias: string, isAllowed: boolean): Promise<void> {
+  if (!isAllowed) {
+    process.stderr.write(`daemon: model switch from non-allowlisted sender ${msg.authorId} ignored\n`)
+    return
+  }
+  const info = registry.resolveThreadSessionFromMsg(msg)
+  if (!info) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    return
+  }
+  const resolved = resolveModelAlias(alias)
+  if (!resolved) {
+    void reportError(msg.channelId, msg.id, 'model', `unknown model alias "${alias}"`, `Known aliases: ${Object.keys(MODEL_ALIASES).join(', ')}`)
+    return
+  }
+  const spawnOpts = { stdio: ['ignore', 'ignore', 'ignore'] as const }
+  let switched = true
+  try {
+    for (const keys of [['Escape'], ['-l', `/model ${resolved}`], ['Enter']]) {
+      if ((await Bun.spawn(['tmux', 'send-keys', '-t', info.tmuxName, ...keys], spawnOpts).exited) !== 0) {
+        switched = false
+        break
+      }
+    }
+  } catch (err) {
+    switched = false
+    process.stderr.write(`daemon: model switch failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+  }
+  if (switched) {
+    // Claude Code shows "Switch model?" only when the switch invalidates the cache. Poll for
+    // it rather than blind-firing a timed Enter (a slow modal would swallow one); best-effort
+    // — a capture error leaves the submitted switch intact, only a seen-but-unconfirmed modal
+    // (pane parked) downgrades success to failure.
+    try {
+      for (let i = 0; i < CONFIRM_POLL_MAX; i++) {
+        await new Promise(r => setTimeout(r, CONFIRM_POLL_MS))
+        if (/Switch model\?/i.test(capturePane(info.tmuxName))) {
+          if ((await Bun.spawn(['tmux', 'send-keys', '-t', info.tmuxName, 'Enter'], spawnOpts).exited) !== 0) switched = false
+          break
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: model switch confirm-check failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+    }
+  }
+  if (switched) {
+    process.stderr.write(`daemon: model switch -> ${resolved} for ${info.tmuxName}\n`)
+    void gateway.react(msg.channelId, msg.id, '🔁').catch(() => {})
+  } else {
+    void reportError(msg.channelId, msg.id, 'model', `couldn't switch model on ${info.tmuxName}`, 'The pane may be gone or stuck on the confirmation.')
   }
 }

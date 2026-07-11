@@ -243,6 +243,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• ☠️ `kill` — kill this session',
     '• 👂 `listen` / 🔇 `unlisten` — mute/unmute message delivery',
     '• ⏸️ `pause` / ▶️ `unpause` — mark as paused (visual only)',
+    '• 🔁 `model <alias>` — switch this session model (e.g. sonnet, opus)',
     '• 📈 `usage` — context %, messages, runtime',
     '',
     '**Multi-agent** (thread):',

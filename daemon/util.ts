@@ -40,12 +40,16 @@ export function tmuxHasSession(name: string): boolean {
   }
 }
 
+// Snapshot a tmux pane's visible text. Throws if the pane is gone.
+export function capturePane(tmuxName: string): string {
+  const name = tmuxName.replace(/'/g, "'\\''")
+  return execSync(`tmux capture-pane -t '${name}' -p 2>/dev/null`, { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
+}
+
 export function getContextPercent(tmuxName: string): string {
   try {
-    const pane = execSync(`tmux capture-pane -t '${tmuxName}' -p 2>/dev/null`, { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
     // Match from the last few lines only (Claude's status bar) to avoid matching percentages in conversation text
-    const lines = pane.trimEnd().split('\n')
-    const tail = lines.slice(-3).join('\n')
+    const tail = capturePane(tmuxName).trimEnd().split('\n').slice(-3).join('\n')
     const match = tail.match(/(\d+)%/)
     return match ? `${match[1]}%` : '?'
   } catch { return '?' }

@@ -9,7 +9,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept, handleRecoverIntercept } from './commands/global.js'
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
-import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
+import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handleModelSwitchIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { listPostPasses } from './adversarial.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
@@ -47,6 +47,10 @@ const COMMAND_RE = new RegExp(
 const SPAWN_MODEL_RE = new RegExp(`^(?:new session|spawn)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
+// "model sonnet" / "model opus" — switch a running session's model mid-conversation.
+// Matches any single token so a typo'd alias gets a clear error instead of silently
+// falling through; the alias is validated (resolveModelAlias) at the call site.
+const MODEL_SWITCH_RE = /^model\s+(\S+)\s*$/i
 
 // ---------------------------------------------------------------------------
 // Notification payload builder (auto-downloads attachments)
@@ -582,6 +586,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
             registry.persist()
             void gateway.react(msg.channelId, msg.id, info.paused ? '⏸' : '▶️').catch(() => {})
             refreshSessionVisual(resolvedThreadId)
+            return
+          }
+
+          const modelMatch = msg.content.match(MODEL_SWITCH_RE)
+          if (modelMatch) {
+            void handleModelSwitchIntercept(msg, modelMatch[1], isAllowed)
             return
           }
 
