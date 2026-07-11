@@ -117,13 +117,22 @@ export function trimSpawnLog(path: string): void {
   if (size <= SPAWN_LOG_MAX_BYTES) return
   try {
     const fd = openSync(path, 'r')
-    const buf = Buffer.alloc(SPAWN_LOG_KEEP_BYTES)
-    const read = readSync(fd, buf, 0, SPAWN_LOG_KEEP_BYTES, size - SPAWN_LOG_KEEP_BYTES)
-    closeSync(fd)
-    const kept = buf.subarray(0, read)
-    // Drop the partial first line so the file starts on a clean boundary.
-    const nl = kept.indexOf(0x0a)
-    writeFileSync(path, nl >= 0 ? kept.subarray(nl + 1) : kept)
+    let kept: Buffer
+    try {
+      const buf = Buffer.alloc(SPAWN_LOG_KEEP_BYTES)
+      const read = readSync(fd, buf, 0, SPAWN_LOG_KEEP_BYTES, size - SPAWN_LOG_KEEP_BYTES)
+      const sub = buf.subarray(0, read)
+      // Drop the partial first line so the file starts on a clean boundary.
+      const nl = sub.indexOf(0x0a)
+      kept = nl >= 0 ? sub.subarray(nl + 1) : sub
+    } finally {
+      closeSync(fd) // always, even if readSync throws
+    }
+    // writeFileSync's 'w' flag is O_TRUNC — it truncates this inode in place, it
+    // does NOT unlink/recreate. So pipe-pane's O_APPEND fd keeps writing to the
+    // same inode and capture continues past the trim (locked by the inode-identity
+    // test in observability.test.ts).
+    writeFileSync(path, kept)
     process.stderr.write(`daemon: spawn-log front-trimmed ${path} (${Math.round(size / 1048576)}MB -> kept ${Math.round(SPAWN_LOG_KEEP_BYTES / 1048576)}MB tail)\n`)
   } catch (err) {
     process.stderr.write(`daemon: spawn-log trim failed ${path}: ${err}\n`)

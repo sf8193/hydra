@@ -43,12 +43,18 @@ describe('trimSpawnLog (front-trim cap)', () => {
     expect(content.includes(lastLine)).toBe(true) // dying tail survives
   })
 
-  test("pipe-pane's append fd stays valid across the in-place truncate", () => {
+  test("pipe-pane's append fd stays valid across the in-place truncate (inode preserved)", () => {
     const p = tmpFile('append.log')
     writeFileSync(p, ('a'.repeat(100) + '\n').repeat(70000)) // ~7MB
+    const inoBefore = statSync(p).ino
     const appendFd = openSync(p, 'a') // like `cat >> log`, opened BEFORE the trim
 
     trimSpawnLog(p)
+
+    // Refutes "writeFileSync('w') replaces the inode": O_TRUNC truncates in place,
+    // so the path still points at the same inode the append fd holds.
+    expect(statSync(p).ino).toBe(inoBefore)
+
     writeSync(appendFd, Buffer.from('POST-TRIM-MARKER\n'))
     closeSync(appendFd)
 
