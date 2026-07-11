@@ -16,7 +16,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
-import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashExcerpt } from './observability.js'
+import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashExcerpt, getVitalsSample } from './observability.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
@@ -391,7 +391,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
         process.stderr.write(`daemon: session ${info.tmuxName} black box unreadable (${info.spawnLogPath}): ${err}\n`)
       }
     }
-    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail) + '\n')
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId)) + '\n')
     const crashExcerpt = buildCrashExcerpt(tail)
 
     const thread = threadRegistry.get(info.threadId)

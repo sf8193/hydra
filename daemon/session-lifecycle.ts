@@ -498,8 +498,12 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let spawnLogPath: string | undefined
   if (tmuxConfirmedAlive) {
     try {
-      mkdirSync(SPAWN_LOGS_DIR, { recursive: true })
+      // 0o700: the spawn logs are sensitive by construction (raw pane output).
+      // Assert it at the artifact, not only via STATE_DIR's mode.
+      mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
       const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
+      // Shell string is unavoidable here — `pipe-pane` runs its argument through a
+      // shell, so it can't be array-form execFileSync; the path is shq-quoted.
       execFileSync('tmux', ['pipe-pane', '-o', '-t', tmuxName, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
       spawnLogPath = logPath
       process.stderr.write(`daemon: spawn ${tmuxName}: pane capture -> ${logPath}\n`)

@@ -25,9 +25,17 @@ const CRASH_LOG_TAIL_LINES = 30
 const CRASH_NOTICE_TAIL_LINES = 8
 const CRASH_NOTICE_TAIL_MAX_CHARS = 1500
 
+export type VitalsSample = { rssMB: number; at: number }
+
 // Last RSS sample per session, kept here rather than on SessionInfo — SessionInfo
 // is persisted to sessions.json, and this is ephemeral diagnostic state.
-const vitalsSamples = new Map<string, { rssMB: number; at: number }>()
+const vitalsSamples = new Map<string, VitalsSample>()
+
+// The death path (bridge-server.ts) reads a session's last sample to fold into
+// its autopsy — exposed here so buildAutopsy can take it as an argument (pure).
+export function getVitalsSample(sessionId: string): VitalsSample | undefined {
+  return vitalsSamples.get(sessionId)
+}
 
 // Sessions already correlated, so the correlation line is logged once per session
 // (register fires on every reconnect too). Ephemeral, pruned with vitalsSamples.
@@ -142,12 +150,14 @@ export function trimSpawnLog(path: string): void {
 export function startVitalsSnapshots(isConnected: (id: string) => boolean): void {
   setInterval(() => {
     const now = Date.now()
-    // Prune samples for gone-or-dead sessions. buildAutopsy reads the sample
-    // before deadAt is set (checkSessionDeath), so this never races the autopsy.
-    for (const id of vitalsSamples.keys()) {
-      const s = registry.get(id)
-      if (!s || s.deadAt) { vitalsSamples.delete(id); correlatedSessions.delete(id) }
-    }
+    // Prune diagnostic state for gone-or-dead sessions. Each map/set is pruned by
+    // liveness independently: a session that registered (→ correlatedSessions) but
+    // never yielded an RSS sample (→ absent from vitalsSamples) must still be
+    // reclaimed. buildAutopsy reads its sample before deadAt is set
+    // (checkSessionDeath), so this never races the autopsy.
+    const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }
+    for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
+    for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
     const live = [...registry.values()].filter(s => !s.deadAt)
     for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
     if (live.length === 0) return
@@ -156,10 +166,11 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
   }, VITALS_INTERVAL_MS).unref()
 }
 
-export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[]): string {
-  const now = Date.now()
+// Pure: `now` and `sample` are injected (not read from the wall clock / global
+// Map) so the assembled report — including the "N before death" timing and the
+// sampled-vs-never-sampled branch — is deterministic and testable.
+export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined): string {
   const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
-  const sample = vitalsSamples.get(info.sessionId)
   const rss = sample ? `${sample.rssMB}MB (${dur(now - sample.at)} before death)` : 'never sampled'
   const lines = [
     `daemon: ═══ AUTOPSY ${info.tmuxName} ═══`,
@@ -191,10 +202,11 @@ export function tailSpawnLog(path: string, maxLines: number = CRASH_LOG_TAIL_LIN
   return lines
 }
 
-// Channel-safe crash excerpt from a pane tail: the last CRASH_NOTICE_TAIL_LINES,
-// capped to CRASH_NOTICE_TAIL_MAX_CHARS, with each backtick followed by U+200B
-// (zero-width space) so the output can't close the ``` fence it's wrapped in.
-// Empty tail → '' (caller omits the block entirely).
+// Crash excerpt from a pane tail: the last CRASH_NOTICE_TAIL_LINES, capped to
+// CRASH_NOTICE_TAIL_MAX_CHARS, with each backtick followed by U+200B (zero-width
+// space) so the output can't close the ``` fence it's wrapped in.
+// This is fence-safe, NOT secret-safe: the bytes are raw, unredacted pane output.
+// Redaction of the channel excerpt is a tracked follow-up. Empty tail → ''.
 export function buildCrashExcerpt(tail: string[]): string {
   if (tail.length === 0) return ''
   return tail

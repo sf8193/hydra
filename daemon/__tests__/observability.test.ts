@@ -106,40 +106,45 @@ describe('buildCrashExcerpt (channel-safe crash tail)', () => {
 // into memory) against a 500k-line file, and the repo's full-suite run has a
 // pre-existing cross-file isolation bug that corrupts subprocess-based tests.
 
+const NOW = 1_000_000_000
 function fakeInfo(over: Partial<SessionInfo> = {}): SessionInfo {
-  const now = Date.now()
   return {
     sessionId: 'sess-1',
     tmuxName: 'discord-ember',
     threadId: 't1',
     topic: 'build critic',
-    createdAt: now - 40_000, // 40s lifetime
-    lastActive: now - 5_000,
+    createdAt: NOW - 40_000, // 40s lifetime
+    lastActive: NOW - 5_000, // 5s idle at death
     ...over,
   } as unknown as SessionInfo
 }
 
 describe('buildAutopsy', () => {
   test('reports "never sampled" when no vitals were taken (sub-60s death)', () => {
-    const out = buildAutopsy(fakeInfo(), 'crashed', [])
+    const out = buildAutopsy(fakeInfo(), 'crashed', [], NOW, undefined)
     expect(out.includes('last RSS: never sampled')).toBe(true)
     expect(out.includes('last output: none captured')).toBe(true)
   })
 
+  test('renders an injected RSS sample with its "before death" age', () => {
+    const out = buildAutopsy(fakeInfo(), 'crashed', [], NOW, { rssMB: 512, at: NOW - 8_000 })
+    expect(out.includes('last RSS: 512MB (8s before death)')).toBe(true)
+  })
+
   test('renders the pane tail with a count and per-line prefix', () => {
-    const out = buildAutopsy(fakeInfo(), 'crashed', ['boom', 'stack frame'])
+    const out = buildAutopsy(fakeInfo(), 'crashed', ['boom', 'stack frame'], NOW, undefined)
     expect(out.includes('last output (2 lines):')).toBe(true)
     expect(out.includes('  | boom')).toBe(true)
     expect(out.includes('  | stack frame')).toBe(true)
   })
 
-  test('durations render at second resolution (a 40s death is not "0m")', () => {
-    const out = buildAutopsy(fakeInfo(), 'crashed', [])
-    expect(out).toMatch(/lifetime: (39|40)s/)
+  test('durations render at exact second resolution (a 40s death is not "0m")', () => {
+    const out = buildAutopsy(fakeInfo(), 'crashed', [], NOW, undefined)
+    expect(out.includes('lifetime: 40s, idle at death: 5s')).toBe(true)
   })
 
   test('transcript reads "not found" when the claude id resolves to no file', () => {
-    const out = buildAutopsy(fakeInfo({ claudeSessionId: 'no-such-claude-id-xyz' }), 'crashed', [])
+    const out = buildAutopsy(fakeInfo({ claudeSessionId: 'no-such-claude-id-xyz' }), 'crashed', [], NOW, undefined)
     expect(out.includes('transcript: not found')).toBe(true)
   })
 })
