@@ -1,5 +1,5 @@
 import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
-import { execSync, execFileSync } from 'child_process'
+import { execSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { registry, threadRegistry } from './sessions.js'
@@ -16,7 +16,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
-import { buildAutopsy, logCorrelation } from './observability.js'
+import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashExcerpt } from './observability.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
@@ -372,20 +372,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 // Session death detection
 // ---------------------------------------------------------------------------
 
-const CRASH_LOG_TAIL_LINES = 30
-const CRASH_NOTICE_TAIL_LINES = 8
-const CRASH_NOTICE_TAIL_MAX_CHARS = 1500
-
-/** Last `maxLines` lines of a black-box spawn logfile (see session-lifecycle.ts's
- *  `pipe-pane` capture). Uses `tail`, which seeks from the end, so a multi-hundred-MB
- *  pane log isn't read into memory. Throws if the file is missing/unreadable. */
-function tailSpawnLog(path: string, maxLines: number): string[] {
-  const out = execFileSync('tail', ['-n', String(maxLines), path], { encoding: 'utf8' })
-  const lines = out.split('\n')
-  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-  return lines
-}
-
 async function checkSessionDeath(sessionId: string): Promise<void> {
   if (transport.has(sessionId)) return
 
@@ -400,17 +386,13 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     let tail: string[] = []
     if (info.spawnLogPath) {
       try {
-        tail = tailSpawnLog(info.spawnLogPath, CRASH_LOG_TAIL_LINES)
+        tail = tailSpawnLog(info.spawnLogPath)
       } catch (err) {
         process.stderr.write(`daemon: session ${info.tmuxName} black box unreadable (${info.spawnLogPath}): ${err}\n`)
       }
     }
     process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail) + '\n')
-    const crashExcerpt = tail.length > 0
-      // Zero-width space after each backtick so pane output can't close the
-      // ``` fence this excerpt is wrapped in below.
-      ? tail.slice(-CRASH_NOTICE_TAIL_LINES).join('\n').slice(-CRASH_NOTICE_TAIL_MAX_CHARS).replace(/`/g, '`​')
-      : ''
+    const crashExcerpt = buildCrashExcerpt(tail)
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {

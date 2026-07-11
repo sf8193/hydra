@@ -5,7 +5,7 @@
 import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
@@ -19,9 +19,19 @@ const VITALS_INTERVAL_MS = 60_000
 const SPAWN_LOG_MAX_BYTES = 5 * 1024 * 1024
 const SPAWN_LOG_KEEP_BYTES = 2 * 1024 * 1024
 
+// Crash-read shaping: how much pane tail the autopsy reads, and how much of that
+// (further capped by chars) is posted to the channel in the crash notice.
+const CRASH_LOG_TAIL_LINES = 30
+const CRASH_NOTICE_TAIL_LINES = 8
+const CRASH_NOTICE_TAIL_MAX_CHARS = 1500
+
 // Last RSS sample per session, kept here rather than on SessionInfo — SessionInfo
 // is persisted to sessions.json, and this is ephemeral diagnostic state.
 const vitalsSamples = new Map<string, { rssMB: number; at: number }>()
+
+// Sessions already correlated, so the correlation line is logged once per session
+// (register fires on every reconnect too). Ephemeral, pruned with vitalsSamples.
+const correlatedSessions = new Set<string>()
 
 // Seconds under a minute, so a short-lived session doesn't read as "0m".
 function dur(ms: number): string {
@@ -41,6 +51,8 @@ export function transcriptPathFor(claudeSessionId: string): string | undefined {
 }
 
 export function logCorrelation(info: SessionInfo): void {
+  if (correlatedSessions.has(info.sessionId)) return
+  correlatedSessions.add(info.sessionId)
   const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
   process.stderr.write(
     `daemon: correlate ${info.tmuxName}: hydra=${info.sessionId} ` +
@@ -50,18 +62,38 @@ export function logCorrelation(info: SessionInfo): void {
   )
 }
 
-// pid + RSS (MB) of the pane's process subtree (shell + children).
-// TODO: async — this sync-spawns 3+ subprocesses per session each tick.
+// Direct children of a pid (empty if none — pgrep exits non-zero, which throws).
+function childPids(pid: string): string[] {
+  try {
+    return execFileSync('pgrep', ['-P', pid], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+  } catch { return [] }
+}
+
+// The pane's whole process subtree. Claude's tree is shell → node → claude, so a
+// direct-children-only walk undercounts RSS — descend the full tree.
+function descendantPids(rootPid: string): string[] {
+  const all: string[] = []
+  const queue = [rootPid]
+  while (queue.length) {
+    for (const kid of childPids(queue.shift()!)) { all.push(kid); queue.push(kid) }
+  }
+  return all
+}
+
+// pid + summed RSS (MB) of the pane's process subtree.
+// execFileSync (no shell) throughout — tmuxName is daemon-controlled but the rest
+// of this PR uses the array form, and it removes the quoting question entirely.
+// TODO: async — this sync-spawns several subprocesses per session each tick.
 function paneVitals(tmuxName: string): { pid?: number; rssMB?: number } {
   try {
-    const panePid = execSync(`tmux list-panes -t '${tmuxName}' -F '#{pane_pid}' 2>/dev/null`, { encoding: 'utf8' }).trim().split('\n')[0]
+    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim().split('\n')[0]
     if (!panePid) return {}
-    const kids = execSync(`pgrep -P ${panePid} 2>/dev/null`, { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+    const subtree = descendantPids(panePid)
     let rssKb = 0
-    for (const pid of [panePid, ...kids]) {
-      try { rssKb += parseInt(execSync(`ps -o rss= -p ${pid} 2>/dev/null`, { encoding: 'utf8' }).trim() || '0', 10) } catch { /* pid gone */ }
+    for (const pid of [panePid, ...subtree]) {
+      try { rssKb += parseInt(execFileSync('ps', ['-o', 'rss=', '-p', pid], { encoding: 'utf8' }).trim() || '0', 10) } catch { /* pid gone */ }
     }
-    const pid = kids[0] ? parseInt(kids[0], 10) : parseInt(panePid, 10)
+    const pid = subtree[0] ? parseInt(subtree[0], 10) : parseInt(panePid, 10)
     return { pid, rssMB: Math.round(rssKb / 1024) }
   } catch {
     return {}
@@ -79,7 +111,7 @@ export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (
 // In-place (`writeFileSync` on the same path, same inode) is deliberate: pipe-pane's
 // append fd stays valid, so capture continues past the trim. Best-effort — a few
 // bytes appended during the read→write window may be lost; only fires over the cap.
-function trimSpawnLog(path: string): void {
+export function trimSpawnLog(path: string): void {
   let size: number
   try { size = statSync(path).size } catch { return }
   if (size <= SPAWN_LOG_MAX_BYTES) return
@@ -101,7 +133,12 @@ function trimSpawnLog(path: string): void {
 export function startVitalsSnapshots(isConnected: (id: string) => boolean): void {
   setInterval(() => {
     const now = Date.now()
-    for (const id of vitalsSamples.keys()) if (!registry.get(id)) vitalsSamples.delete(id)
+    // Prune samples for gone-or-dead sessions. buildAutopsy reads the sample
+    // before deadAt is set (checkSessionDeath), so this never races the autopsy.
+    for (const id of vitalsSamples.keys()) {
+      const s = registry.get(id)
+      if (!s || s.deadAt) { vitalsSamples.delete(id); correlatedSessions.delete(id) }
+    }
     const live = [...registry.values()].filter(s => !s.deadAt)
     for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
     if (live.length === 0) return
@@ -133,4 +170,27 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   }
   lines.push(`  ═══ end autopsy ═══`)
   return lines.join('\n')
+}
+
+/** Last `maxLines` lines of a black-box spawn logfile (see session-lifecycle.ts's
+ *  `pipe-pane` capture). Uses `tail`, which seeks from the end, so a multi-hundred-MB
+ *  pane log isn't read into memory. Throws if the file is missing/unreadable. */
+export function tailSpawnLog(path: string, maxLines: number = CRASH_LOG_TAIL_LINES): string[] {
+  const out = execFileSync('tail', ['-n', String(maxLines), path], { encoding: 'utf8' })
+  const lines = out.split('\n')
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+// Channel-safe crash excerpt from a pane tail: the last CRASH_NOTICE_TAIL_LINES,
+// capped to CRASH_NOTICE_TAIL_MAX_CHARS, with each backtick followed by U+200B
+// (zero-width space) so the output can't close the ``` fence it's wrapped in.
+// Empty tail → '' (caller omits the block entirely).
+export function buildCrashExcerpt(tail: string[]): string {
+  if (tail.length === 0) return ''
+  return tail
+    .slice(-CRASH_NOTICE_TAIL_LINES)
+    .join('\n')
+    .slice(-CRASH_NOTICE_TAIL_MAX_CHARS)
+    .replace(/`/g, "`\u200B")
 }
