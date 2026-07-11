@@ -19,11 +19,10 @@ const VITALS_INTERVAL_MS = 60_000
 const SPAWN_LOG_MAX_BYTES = 5 * 1024 * 1024
 const SPAWN_LOG_KEEP_BYTES = 2 * 1024 * 1024
 
-// Crash-read shaping: how much pane tail the autopsy reads, and how much of that
-// (further capped by chars) is posted to the channel in the crash notice.
+// How much pane tail the autopsy reads into the daemon log (PRESERVE, hardware-only).
+// The channel crash notice gets a LINK to the log, never the bytes — so there is no
+// channel-excerpt shaping to configure.
 const CRASH_LOG_TAIL_LINES = 30
-const CRASH_NOTICE_TAIL_LINES = 8
-const CRASH_NOTICE_TAIL_MAX_CHARS = 1500
 
 export type VitalsSample = { rssMB: number; at: number }
 
@@ -202,16 +201,13 @@ export function tailSpawnLog(path: string, maxLines: number = CRASH_LOG_TAIL_LIN
   return lines
 }
 
-// Crash excerpt from a pane tail: the last CRASH_NOTICE_TAIL_LINES, capped to
-// CRASH_NOTICE_TAIL_MAX_CHARS, with each backtick followed by U+200B (zero-width
-// space) so the output can't close the ``` fence it's wrapped in.
-// This is fence-safe, NOT secret-safe: the bytes are raw, unredacted pane output.
-// Redaction of the channel excerpt is a tracked follow-up. Empty tail → ''.
-export function buildCrashExcerpt(tail: string[]): string {
-  if (tail.length === 0) return ''
-  return tail
-    .slice(-CRASH_NOTICE_TAIL_LINES)
-    .join('\n')
-    .slice(-CRASH_NOTICE_TAIL_MAX_CHARS)
-    .replace(/`/g, "`\u200B")
+// The channel crash notice: LINK, not CONVEY. It names the on-disk black box
+// (hardware-only) and a safe derived reason, but never posts raw pane bytes —
+// so there is nothing to redact or fence-escape. Content crosses to chat only on
+// request, when the main session reads the log and surfaces a judged summary.
+export function buildCrashNotice(info: SessionInfo): string {
+  const blackBox = info.spawnLogPath
+    ? ` Black box: \`${info.spawnLogPath}\` — ask me to read it.`
+    : ''
+  return `💀 **${info.tmuxName}** crashed — tmux dead, bridge disconnected.${blackBox} Use \`resume\` to reconnect or \`respawn\` to start fresh.`
 }

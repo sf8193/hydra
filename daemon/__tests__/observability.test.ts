@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, buildCrashExcerpt, buildAutopsy } from '../observability.js'
+import { trimSpawnLog, buildCrashNotice, buildAutopsy } from '../observability.js'
 import type { SessionInfo } from '../sessions.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
@@ -76,28 +76,25 @@ describe('trimSpawnLog (front-trim cap)', () => {
   })
 })
 
-describe('buildCrashExcerpt (channel-safe crash tail)', () => {
-  test('empty tail → empty string (caller omits the block)', () => {
-    expect(buildCrashExcerpt([])).toBe('')
+describe('buildCrashNotice (LINK, not CONVEY)', () => {
+  test('links the on-disk black box and offers resume/respawn', () => {
+    const out = buildCrashNotice(fakeInfo({ spawnLogPath: '/home/u/.claude/spawn-logs/ember-42.log' }))
+    expect(out.includes('/home/u/.claude/spawn-logs/ember-42.log')).toBe(true) // the LINK
+    expect(out.includes('ask me to read it')).toBe(true)
+    expect(out.includes('resume')).toBe(true)
+    expect(out.includes('respawn')).toBe(true)
   })
 
-  test('keeps only the last 8 lines', () => {
-    const tail = Array.from({ length: 20 }, (_, i) => `row ${i}`)
-    const out = buildCrashExcerpt(tail).split('\n')
-    expect(out.length).toBe(8)
-    expect(out[0]).toBe('row 12')
-    expect(out[7]).toBe('row 19')
+  test('conveys no raw pane content — the notice takes only metadata, never the tail', () => {
+    const out = buildCrashNotice(fakeInfo({ spawnLogPath: '/tmp/x.log' }))
+    // No code fence: raw pane output is never posted to the channel by the daemon.
+    expect(out.includes('```')).toBe(false)
   })
 
-  test('neutralizes backticks so they cannot close the fence', () => {
-    const out = buildCrashExcerpt(['```danger```'])
-    expect(out.includes('```')).toBe(false) // no run of three bare backticks
-    expect(out.includes('`​')).toBe(true) // each backtick followed by ZWS
-  })
-
-  test('caps to 1500 chars (before ZWS insertion)', () => {
-    const out = buildCrashExcerpt(['y'.repeat(5000)])
-    expect(out.length).toBeLessThanOrEqual(1500)
+  test('omits the black-box clause when no pane log was captured', () => {
+    const out = buildCrashNotice(fakeInfo({ spawnLogPath: undefined }))
+    expect(out.includes('Black box:')).toBe(false)
+    expect(out.includes('respawn')).toBe(true) // still actionable
   })
 })
 

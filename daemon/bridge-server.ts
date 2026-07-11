@@ -16,7 +16,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
-import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashExcerpt, getVitalsSample } from './observability.js'
+import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
@@ -382,7 +382,8 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
   try { execSync(`tmux has-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); tmuxAlive = true } catch {}
 
   if (!tmuxAlive) {
-    // Read the pane's captured output once, for both the autopsy and the notice.
+    // Read the pane tail once, for the autopsy — which goes to the daemon log
+    // (PRESERVE, hardware-only). The channel gets a LINK to the log, never the bytes.
     let tail: string[] = []
     if (info.spawnLogPath) {
       try {
@@ -392,7 +393,6 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
       }
     }
     process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId)) + '\n')
-    const crashExcerpt = buildCrashExcerpt(tail)
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {
@@ -411,8 +411,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {
       try {
-        const tailBlock = crashExcerpt ? `\n\`\`\`\n${crashExcerpt}\n\`\`\`` : ''
-        await gateway.send(info.threadId, `💀 **${info.tmuxName}** crashed — use \`resume\` to reconnect or \`respawn\` to start fresh.${tailBlock}`)
+        await gateway.send(info.threadId, buildCrashNotice(info))
       } catch (err) {
         process.stderr.write(`daemon: session ${info.tmuxName} crash-notice send failed: ${err}\n`)
       }
