@@ -457,6 +457,10 @@
       "daemon_main-guard"
     ],
     [
+      "daemon_bridge-server",
+      "daemon_util"
+    ],
+    [
       "daemon_permission",
       "daemon_bridge-transport"
     ],
