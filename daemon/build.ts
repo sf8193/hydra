@@ -661,12 +661,48 @@ function resetTimeout(state: BuildState): void {
   }, timeoutMs)
 }
 
+export function onBuildDecision(sessionId: string, value: string, because: string): void {
+  const buildId = sessionToBuild.get(sessionId)
+  if (!buildId) return
+  const state = builds.get(buildId)
+  if (!state || state.phase !== 'reviewing' || state.criticSessionId !== sessionId) return
+
+  const isApprove = value === 'approve'
+  if (!isApprove && value !== 'request_changes') {
+    process.stderr.write(`daemon: build decide: unknown value "${value}" (expected approve | request_changes)\n`)
+    return
+  }
+
+  const isFinal = !isApprove && state.currentRound >= state.rounds
+  const event: BuildEvent = isApprove ? 'critic_lgtm' : isFinal ? 'critic_final' : 'critic_feedback'
+  const result = buildMachine.transition(state.phase, event)
+  if (!result.ok) return
+
+  void safeSend(state.ownerThreadId, `${CRITIC_SENTINEL}\n${isApprove ? '**LGTM**\n' : ''}${because}`).then(ids => {
+    state.messageIds.push(...ids)
+  })
+
+  if (isApprove || isFinal) {
+    state.phase = result.to
+    state._closing = { approved: isApprove, lastCriticText: because }
+    void requestBuildSummary(state, because, isApprove).catch(err => {
+      process.stderr.write(`daemon: requestBuildSummary failed: ${err}\n`)
+      void cancelBuild(state.buildId).catch(e => process.stderr.write(`daemon: cancelBuild failed: ${e}\n`))
+    })
+  } else {
+    state.phase = result.to
+    state.currentRound++
+    onCriticFeedback(state, because)
+  }
+}
+
 registerProtocol('build', {
   getByThread: (threadId) => !!getBuildByThread(threadId),
   isParticipant: isBuildParticipant,
   onReply: onBuildReply,
   onDisconnect: onBuildParticipantDisconnect,
   onReconnect: onBuildParticipantReconnect,
+  onDecision: onBuildDecision,
   expectedTag: (sessionId, chatId) => {
     const buildId = sessionToBuild.get(sessionId) ?? ownerToBuild.get(sessionId)
     const state = buildId ? builds.get(buildId) : undefined

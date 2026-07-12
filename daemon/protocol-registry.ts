@@ -16,11 +16,7 @@ type ProtocolHooks = {
   onReply: (sessionId: string, text: string, chatId: string, sentIds: string[]) => void
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
-  // Liveness grammar: the first-line tag currently owed by this session when
-  // posting to chatId, or null when nothing is owed (already satisfied this
-  // phase, wrong thread, or a phase with no expectation). The nudge check
-  // consuming this lives in the daemon (sentinel-nudge.ts) and never moves;
-  // protocols-as-documents (step ③) migrates only this data source to cards.
+  onDecision?: (sessionId: string, value: string, because: string) => void
   expectedTag?: (sessionId: string, chatId: string) => string | null
 }
 
@@ -73,6 +69,16 @@ export function dispatchDisconnect(sessionId: string): void {
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) { hooks.onDisconnect(sessionId); break }
   }
+}
+
+export function dispatchDecision(sessionId: string, value: string, because: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId) && hooks.onDecision) {
+      hooks.onDecision(sessionId, value, because)
+      return true
+    }
+  }
+  return false
 }
 
 export function _resetForTesting(): void { protocols.clear() }
