@@ -201,10 +201,14 @@ export async function loadProtocolWithLenses(
   }
 
   for (const file of files) {
-    const def = await loadLensDef(join(lensesDir, file))
-    lenses.set(def.lens, def)
-    for (const alias of def.aliases) {
-      lenses.set(alias, def)
+    try {
+      const def = await loadLensDef(join(lensesDir, file))
+      lenses.set(def.lens, def)
+      for (const alias of def.aliases) {
+        lenses.set(alias, def)
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: skipping malformed lens ${file}: ${err}\n`)
     }
   }
 

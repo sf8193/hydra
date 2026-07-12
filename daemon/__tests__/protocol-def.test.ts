@@ -169,6 +169,25 @@ describe('loadProtocolWithLenses', () => {
     expect(lenses.has('security')).toBe(true)
     expect(lenses.get('r')).toBe(lenses.get('readability'))
   })
+
+  test('a malformed lens does not poison the good ones', async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import('fs')
+    const tmpDir = join(import.meta.dir, '..', '..', 'protocols', 'lenses-test-tmp')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(join(tmpDir, 'good.md'), [
+      '# Good — lens', '', '## Instructions', '', 'Do good things.', '',
+      '```yaml skeleton', 'lens: good', 'aliases: [g]', '```',
+    ].join('\n'))
+    writeFileSync(join(tmpDir, 'bad.md'), '# Bad\n\nno skeleton here at all')
+    try {
+      const { lenses } = await loadProtocolWithLenses(PROTOCOL_PATH, tmpDir)
+      expect(lenses.has('good')).toBe(true)
+      expect(lenses.has('g')).toBe(true)
+      expect(lenses.get('good')!.instructions).toBe('Do good things.')
+    } finally {
+      rmSync(tmpDir, { recursive: true })
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
