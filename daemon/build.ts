@@ -674,4 +674,6 @@ registerProtocol('build', {
   },
 })
 
-export const __test = { builds, sessionToBuild, ownerToBuild, threadToBuild } as const
+export const __test = process.env.NODE_ENV === 'test'
+  ? { builds, sessionToBuild, ownerToBuild, threadToBuild } as const
+  : undefined
