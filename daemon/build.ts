@@ -309,6 +309,9 @@ export function onBuildReply(sessionId: string, text: string, chatId: string, se
     state.messageIds.push(...sentMessageIds)
     if (isLgtm || isFinal) {
       state.phase = result.to
+      // Set before the async requestBuildSummary — its killSession await
+      // creates a window where the owner can post [summary] and read _closing.
+      state._closing = { approved: isLgtm, lastCriticText: bodyText }
       void requestBuildSummary(state, bodyText, isLgtm).catch(err => {
         process.stderr.write(`daemon: requestBuildSummary failed: ${err}\n`)
         void cancelBuild(state.buildId).catch(e => process.stderr.write(`daemon: cancelBuild failed: ${e}\n`))
@@ -485,7 +488,6 @@ async function requestBuildSummary(state: BuildState, lastCriticText: string, ap
   if (state._heartbeat) clearInterval(state._heartbeat)
   if (state._criticDisconnectTimer) clearTimeout(state._criticDisconnectTimer)
   if (state._ownerDisconnectTimer) clearTimeout(state._ownerDisconnectTimer)
-  state._closing = { approved, lastCriticText }
 
   // Backstop: complete without a summary rather than hold the thread hostage.
   if (state.timeout) clearTimeout(state.timeout)
@@ -672,3 +674,4 @@ registerProtocol('build', {
   },
 })
 
+export const __test = { builds, sessionToBuild, ownerToBuild, threadToBuild } as const
