@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { join } from 'path'
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
@@ -11,6 +12,7 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
+import { loadProtocolWithLenses, type LensDef } from './protocol-def.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,38 +26,37 @@ const CRITIC_SENTINEL = '[critic→owner]'
 const SUMMARY_SENTINEL = '[summary]'
 
 // ---------------------------------------------------------------------------
-// Post-pass instructions — composable lenses applied after correctness rounds
+// Post-pass lenses — loaded from protocols/lenses/ (compose-by-writing)
 // ---------------------------------------------------------------------------
 
-const POST_PASS_INSTRUCTIONS: Record<string, string> = {
-  readability: [
-    'Review purely for simplicity and readability. Correctness is settled — don\'t re-litigate it.',
-    '',
-    'The standard: code should be immediately understandable without comments.',
-    'If something needs a comment to explain it, it should be rewritten instead.',
-    '',
-    'Flag:',
-    '- Anything you have to read twice to understand',
-    '- Indirection that obscures what\'s actually happening',
-    '- Abstractions that make simple things look complex',
-    '- Code that could be deleted without changing behavior',
-    '- Inconsistency (same thing done two different ways)',
-    '',
-    'Do NOT suggest adding anything (comments, types, docs, error handling).',
-    'Only suggest making things simpler, clearer, or shorter.',
-  ].join('\n'),
+const LENSES_DIR = join(import.meta.dir, '..', 'protocols', 'lenses')
+const PROTOCOL_PATH = join(import.meta.dir, '..', 'protocols', 'review.md')
+
+let lensCache: Map<string, LensDef> = new Map()
+
+async function loadLenses(): Promise<Map<string, LensDef>> {
+  if (lensCache.size > 0) return lensCache
+  try {
+    const { lenses } = await loadProtocolWithLenses(PROTOCOL_PATH, LENSES_DIR)
+    lensCache = lenses
+    process.stderr.write(`daemon: loaded ${lenses.size} lens entries from ${LENSES_DIR}\n`)
+    return lenses
+  } catch (err) {
+    process.stderr.write(`daemon: failed to load lenses: ${err}\n`)
+    return lensCache
+  }
 }
 
-const POST_PASS_ALIASES: Record<string, string> = {
-  r: 'readability',
-}
+// Eagerly load lenses so listPostPasses() is ready for the router's +lens parsing
+void loadLenses()
 
 export function listPostPasses(): string[] {
-  return [...Object.keys(POST_PASS_INSTRUCTIONS), ...Object.keys(POST_PASS_ALIASES)]
+  return [...lensCache.keys()]
 }
 
 export function resolvePassName(name: string): string {
-  return POST_PASS_ALIASES[name] ?? name
+  const def = lensCache.get(name)
+  return def ? def.lens : name
 }
 
 export type ReviewState = StatusLineState & {
@@ -171,6 +172,14 @@ export async function startReview(
   const occupied = isThreadOccupied(ownerThreadId, 'review')
   if (occupied) {
     throw new Error(`A ${occupied} is in progress in this thread — finish or cancel it first`)
+  }
+
+  if (postPasses && postPasses.length > 0) {
+    const lenses = await loadLenses()
+    const unknown = postPasses.filter(p => !lenses.has(p))
+    if (unknown.length > 0) {
+      throw new Error(`Unknown lens${unknown.length > 1 ? 'es' : ''}: ${unknown.join(', ')}. Available: ${[...new Set([...lenses.values()].map(l => l.lens))].join(', ')}`)
+    }
   }
 
   const reviewId = randomUUID()
@@ -500,16 +509,16 @@ function startNextPass(state: ReviewState): void {
   const idx = state._currentPassIdx ?? 0
   const passes = state.postPasses!
   const passName = resolvePassName(passes[idx])
-  const instruction = POST_PASS_INSTRUCTIONS[passName]
+  const lensDef = lensCache?.get(passName)
 
-  if (!instruction) {
-    process.stderr.write(`daemon: review: unknown pass "${passName}", skipping\n`)
+  if (!lensDef) {
+    process.stderr.write(`daemon: review: unknown lens "${passName}", skipping\n`)
     void advanceOrFinishPasses(state)
     return
   }
 
-  const passLabel = `+${passName} (${idx + 1}/${passes.length})`
-  const statusText = formatStateLine('⚔️', 'review', passLabel, `critic reviewing ${passName}`)
+  const passLabel = `+${lensDef.lens} (${idx + 1}/${passes.length})`
+  const statusText = formatStateLine('⚔️', 'review', passLabel, `critic reviewing ${lensDef.lens}`)
   if (!state.statusHistory) state.statusHistory = []
   state.statusHistory.push(statusText)
   void safeSend(state.ownerThreadId, statusText).then(ids => state.messageIds.push(...ids)).catch(() => {})
@@ -517,9 +526,9 @@ function startNextPass(state: ReviewState): void {
   transport.sendOrQueue(state.criticSessionId!, {
     type: 'notification',
     content: [
-      `[system] Correctness debate complete. Now do a **${passName}** pass.`,
+      `[system] Correctness debate complete. Now do a **${lensDef.lens}** pass.`,
       ``,
-      instruction,
+      lensDef.instructions,
       ``,
       `Post your feedback with \`${CRITIC_SENTINEL}\` as the first line.`,
       `If everything is clean, post \`${CRITIC_SENTINEL}\` followed by \`LGTM\`.`,
