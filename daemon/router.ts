@@ -45,8 +45,10 @@ const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
 )
 const SPAWN_MODEL_RE = new RegExp(`^(?:new session|spawn)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
+const SPAWN_CODEX_RE = /^(?:new session|spawn)\s+codex(?:\s+(\S+))?:\s*([\s\S]+)/i
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
+const BARE_CODEX_RE = /^codex:?\s*$/i
 
 // ---------------------------------------------------------------------------
 // Notification payload builder (auto-downloads attachments)
@@ -232,6 +234,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
   }
 
   if (isAllowed) {
+    // "spawn codex: topic" / "spawn codex gpt-5.5: topic" — codex engine with optional model
+    const spawnCodexMatch = msg.content.match(SPAWN_CODEX_RE)
+    if (spawnCodexMatch) {
+      const topic = spawnCodexMatch[2].trim()
+      if (topic) {
+        void handleSpawnIntercept(msg, topic, access, spawnCodexMatch[1] || undefined, 'codex')
+        return
+      }
+    }
+
     // "spawn sonnet: topic" / "new session haiku: topic" — model alias before colon
     const spawnModelMatch = msg.content.match(SPAWN_MODEL_RE)
     if (spawnModelMatch) {
@@ -246,9 +258,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
       // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
-      const bareAlias = topic.match(BARE_ALIAS_RE)
+      const bareAlias = topic.match(BARE_ALIAS_RE) || topic.match(BARE_CODEX_RE)
       if (bareAlias) {
-        void gateway.send(msg.channelId, `_\`spawn ${bareAlias[1]}:\` needs a topic — e.g. \`spawn ${bareAlias[1]}: describe the task\`_`, { replyTo: msg.id })
+        const alias = bareAlias[1] || 'codex'
+        void gateway.send(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
         return
       }
       if (topic) {

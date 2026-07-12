@@ -48,6 +48,8 @@ export type SessionInfo = {
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash
+  engine?: 'claude' | 'codex'  // which backend runs this session (default: claude)
+  codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
 }
 
 export type ThreadMember = {
@@ -93,7 +95,7 @@ export type ThreadMetadata = {
 }
 
 export type SpawnOpts = {
-  forkFrom?: { claudeSessionId: string; parentName: string }
+  forkFrom?: { claudeSessionId: string; parentName: string; codexThreadId?: string }
   handedOffFrom?: string
   artifact?: string
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
@@ -108,6 +110,7 @@ export type SpawnOpts = {
   model?: string         // per-spawn model override (falls back to spawnModel() / HYDRA_MODEL)
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
   trigger?: string       // what caused this spawn, for the announce line (e.g. 'spawn:', 'review 2:', 'CLI'); falls back to originType
+  engine?: 'claude' | 'codex'  // which backend to use (default: claude)
 }
 
 // ---------------------------------------------------------------------------

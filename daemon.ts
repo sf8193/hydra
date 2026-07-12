@@ -68,6 +68,14 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
+// Reconnect persisted codex sessions to their app-server sockets
+import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
+reconnectCodexSessions().then(() => {
+  process.stderr.write('daemon: codex reconnection sweep complete\n')
+}).catch(err => {
+  process.stderr.write(`daemon: codex reconnection failed: ${err}\n`)
+})
+
 import { initPhaseBudgets } from './daemon/phase-budget.js'
 import { killSession } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)

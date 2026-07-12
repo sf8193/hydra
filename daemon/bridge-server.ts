@@ -161,7 +161,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         if (sessionId !== 'main') logCorrelation(info)
       }
 
-      if (sessionId !== 'main' && trackRegistration(sessionId)) {
+      if (sessionId !== 'main' && info?.engine !== 'codex' && trackRegistration(sessionId)) {
         process.stderr.write(`daemon: circuit breaker: ${info?.tmuxName ?? sessionId} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
         try { execSync(`tmux kill-session -t '${info?.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {}
         if (info) {

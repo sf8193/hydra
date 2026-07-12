@@ -6,7 +6,7 @@ import { homedir } from 'os'
 import { EventEmitter } from 'events'
 
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine } from './util.js'
+import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionCapabilities, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -18,6 +18,8 @@ import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPr
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
+import { codexEngine } from './codex-bootstrap.js'
+import { codexSocketPath } from './codex-engine.js'
 
 // ---------------------------------------------------------------------------
 // Session death events
@@ -118,6 +120,12 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
 
     const tmuxName = info.tmuxName
+    if (info.engine === 'codex') {
+      try {
+        // codexEngine imported at module scope
+        codexEngine.disconnect(info.sessionId)
+      } catch {}
+    }
     try {
       execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
     } catch {}
@@ -195,6 +203,86 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 // ---------------------------------------------------------------------------
 
 /** Unified session creation -- spawn, fork, and handoff all flow through here via SpawnOpts. */
+// ---------------------------------------------------------------------------
+// Codex spawn helper — tmux setup + engine connect
+// ---------------------------------------------------------------------------
+
+async function spawnCodexSession(p: {
+  tmuxName: string; sessionId: string; effectiveCwd: string;
+  model?: string; forkFromThread?: string;
+}): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string }> {
+  const sockPath = codexSocketPath(p.tmuxName)
+  const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${p.tmuxName}`)
+  const mcpServerPath = join(new URL('.', import.meta.url).pathname, 'codex-mcp-server.ts')
+  const codexModel = p.model ? `-c model=${shq(p.model)}` : ''
+  const fullPerms = `-c 'sandbox_permissions=["disk-full-read-access","disk-full-write-access","network-full-access"]'`
+  const serverCmd = `codex app-server --listen 'unix://' ${codexModel} ${fullPerms}`.trim()
+
+  // Window 0: durable app-server
+  const serverInner = [
+    `cd ${shq(p.effectiveCwd)}`,
+    `export CODEX_HOME=${shq(codexHomeDir)}`,
+    `mkdir -p ${shq(codexHomeDir)}`,
+    `ln -sf ~/.codex/auth.json ${shq(codexHomeDir)}/auth.json`,
+    `codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(codexHomeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(p.sessionId)} -- bun ${shq(mcpServerPath)}`,
+    serverCmd,
+  ].join(' && ')
+
+  process.stderr.write(`daemon: codex spawning ${p.tmuxName}\n`)
+  try {
+    execFileSync('tmux', ['new-session', '-d', '-s', p.tmuxName, serverInner], { stdio: 'pipe' })
+  } catch (err) {
+    throw new Error(`failed to spawn codex tmux: ${err instanceof Error ? err.message : err}`)
+  }
+
+  // Capture server pane for crash diagnostics
+  let spawnLogPath: string | undefined
+  try {
+    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+    const logPath = join(SPAWN_LOGS_DIR, `${p.tmuxName}-${p.sessionId}.log`)
+    execFileSync('tmux', ['pipe-pane', '-o', '-t', `${p.tmuxName}:0`, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
+    spawnLogPath = logPath
+  } catch {}
+
+  // Window 1: attachable TUI
+  const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && sleep 3 && codex --remote "unix://${sockPath}"`
+  try {
+    execFileSync('tmux', ['new-window', '-t', p.tmuxName, tuiInner], { stdio: 'pipe' })
+  } catch {
+    process.stderr.write(`daemon: codex TUI window failed for ${p.tmuxName} (non-fatal)\n`)
+  }
+
+  // Connect to the app-server socket with retry
+  const start = Date.now()
+  let codexThreadId: string | null = null
+  let lastErr = ''
+  while (Date.now() - start < 15_000) {
+    try {
+      if (p.forkFromThread) {
+        const r = await codexEngine.connectAndFork(p.sessionId, sockPath, p.forkFromThread)
+        codexThreadId = r.threadId
+      } else {
+        const r = await codexEngine.connect(p.sessionId, sockPath)
+        codexThreadId = r.threadId
+      }
+      break
+    } catch (err: any) {
+      lastErr = err?.message || String(err)
+      try { codexEngine.disconnect(p.sessionId) } catch {}
+      if (!tmuxHasSession(p.tmuxName)) throw new Error(`codex tmux ${p.tmuxName} died during startup`)
+      await new Promise(r => setTimeout(r, 500))
+    }
+  }
+  if (!codexThreadId) throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
+  process.stderr.write(`daemon: codex connected for ${p.tmuxName}, thread=${codexThreadId}\n`)
+
+  return { sockPath, spawnLogPath, codexThreadId }
+}
+
+// ---------------------------------------------------------------------------
+// Main spawn orchestrator
+// ---------------------------------------------------------------------------
+
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
   let threadId: string | undefined
   let anchorMessageId: string | undefined
@@ -434,9 +522,60 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const rawModel = opts?.model
   const model = rawModel ? (resolveModelAlias(rawModel) ?? rawModel) : spawnModel()
 
-  if (!isKnownModel(model)) {
+  const engine = opts?.engine ?? 'claude'
+
+  if (engine === 'claude' && !isKnownModel(model)) {
     process.stderr.write(`daemon: unrecognized model ${model} — may be a new release or typo. Spawning anyway.\n`)
     if (threadId) void gateway.send(threadId, `\u26a0\ufe0f Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`).catch(() => {})
+  }
+
+  // --- Codex engine: spawn in tmux, connect via unix socket ---
+  if (engine === 'codex') {
+    const { sockPath, spawnLogPath, codexThreadId } = await spawnCodexSession({
+      tmuxName, sessionId, effectiveCwd, model: opts?.model, forkFromThread: opts?.forkFrom?.codexThreadId,
+    })
+    void codexEngine.startTurn(sessionId, prompt).catch(err => {
+      process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
+    })
+
+    // SYNC: keep in sync with Claude registration block (~line 655+)
+    const now = Date.now()
+    const capabilities: SessionCapabilities = { role: 'worker', tools: [], model: opts?.model ?? 'codex-default', cwd: effectiveCwd, platform: PLATFORM }
+    const url = await gateway.getThreadUrl(threadId!)
+    registry.set(sessionId, {
+      sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
+      tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
+      threadUrl: url || undefined, engine: 'codex', codexThreadId: codexThreadId!,
+      ...(spawnLogPath ? { spawnLogPath } : {}),
+      ...(respawnCount > 0 ? { respawnCount } : {}),
+      ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
+      ...(isJoin ? { isJoinMember: true } : {}),
+      initiator: opts?.initiator,
+      ephemeral: opts?.ephemeral,
+      ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
+    })
+    if (phaseBudgetMs) startPhaseBudget(sessionId)
+    if (!isJoin) registry.setThread(threadId!, sessionId)
+    else registry.addMember(threadId!, sessionId, opts?.memberLabel)
+    registry.persist()
+
+    if (!isJoin) {
+      threadRegistry.recordSpawn(threadId!, {
+        anchorMessageId, threadUrl: url || undefined, topic, respawnCount,
+        sessionId, tmuxName, originType, originFrom, model: opts?.model ?? 'codex-default', parentChannelId,
+      })
+    }
+    refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
+
+    const spawnLine = formatSpawnLine({
+      emoji: sessionEmoji(tmuxName), name: tmuxName, model: opts?.model ?? 'codex',
+      trigger: opts?.trigger ?? originType ?? 'spawn',
+    })
+    const announceIds = await safeSend(threadId!, spawnLine)
+    const info = registry.get(sessionId)
+    if (info && announceIds.length > 0) { info.spawnAnnounceId = announceIds[0]; registry.persist() }
+
+    return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
   }
 
   // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork

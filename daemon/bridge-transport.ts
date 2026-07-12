@@ -4,6 +4,7 @@ import type { Socket } from 'net'
 import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
 import { atomicWriteFileSync } from './util.js'
+import type { CodexEngine } from './codex-engine.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,10 +26,15 @@ export class BridgeTransport {
   readonly messageQueues = new Map<string, Array<Record<string, unknown>>>()
   private readonly maxQueueSize = 50
   private readonly queueFile: string
+  private codexEngine: CodexEngine | null = null
 
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
     this.loadPersistedQueues()
+  }
+
+  setCodexEngine(engine: CodexEngine): void {
+    this.codexEngine = engine
   }
 
   get(sessionId: string): BridgeConn | undefined {
@@ -36,7 +42,9 @@ export class BridgeTransport {
   }
 
   has(sessionId: string): boolean {
-    return this.bridges.has(sessionId)
+    if (this.bridges.has(sessionId)) return true
+    if (this.codexEngine?.isConnected(sessionId)) return true
+    return false
   }
 
   set(sessionId: string, conn: BridgeConn): void {
@@ -60,6 +68,25 @@ export class BridgeTransport {
   }
 
   sendOrQueue(sessionId: string, msg: Record<string, unknown>): void {
+    // Route to Codex engine if this session is connected via codex
+    if (this.codexEngine?.isConnected(sessionId)) {
+      const content = msg.content
+      if (typeof content === 'string' && content) {
+        // Enrich with attachment paths so codex can view images/files
+        const meta = msg.meta as Record<string, string> | undefined
+        const downloadedFiles = meta?.downloaded_files
+        let steerText = content
+        if (downloadedFiles) {
+          steerText += `\n\n[attachments: ${downloadedFiles}]`
+        }
+        this.codexEngine.steer(sessionId, steerText)
+      } else if (content !== undefined) {
+        process.stderr.write(`daemon: codex ${sessionId}: non-string content (${typeof content}) dropped: ${JSON.stringify(msg).slice(0, 200)}\n`)
+      }
+      return
+    }
+
+    // Claude path (or disconnected codex session) — send via bridge socket or queue
     const bridge = this.bridges.get(sessionId)
     if (bridge) {
       this.sendToBridge(bridge, msg)

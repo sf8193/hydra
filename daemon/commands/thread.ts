@@ -54,8 +54,9 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   try {
     const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
-      forkFrom: { claudeSessionId: info.claudeSessionId, parentName },
+      forkFrom: { claudeSessionId: info.claudeSessionId, parentName, codexThreadId: info.codexThreadId },
       model: info.capabilities?.model,
+      engine: info.engine,
     })
 
     const pe = sessionEmoji(parentName)

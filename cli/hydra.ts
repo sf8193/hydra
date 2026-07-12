@@ -35,6 +35,7 @@ Session management:
   hydra status <name>                  Session details
   hydra kill <name>                    Kill a session
   hydra peek [name]                    Read-only view of live sessions
+  hydra attach <name>                  Attach codex TUI to a running codex session
   hydra health                         Daemon diagnostics
   hydra clear-key <key>                Clear a stuck idempotency key
   hydra check-key <key>                Check if an idempotency key exists
@@ -238,6 +239,35 @@ async function main(): Promise<void> {
 
     case 'peek': {
       await peek(filtered.slice(1), daemonName)
+      break
+    }
+
+    case 'attach': {
+      const name = filtered[1]
+      if (!name) {
+        console.error('error: session name required. Usage: hydra attach <name>')
+        process.exit(1)
+      }
+      const { codexSocketPath } = await import('../daemon/codex-engine.js')
+      const sockPath = codexSocketPath(name)
+      const { existsSync } = await import('fs')
+      if (!existsSync(sockPath)) {
+        console.error(`error: no codex socket found for "${name}" at ${sockPath}`)
+        console.error('Is this a codex session? Is the app-server running?')
+        process.exit(1)
+      }
+      const { join: pathJoin } = await import('path')
+      const { execFileSync } = await import('child_process')
+      const codexHome = pathJoin(process.env.HOME!, '.codex', `hydra-${name}`)
+      console.log(`Attaching to codex session "${name}"...`)
+      try {
+        execFileSync('codex', ['--remote', `unix://${sockPath}`], {
+          stdio: 'inherit',
+          env: { ...process.env, CODEX_HOME: codexHome },
+        })
+      } catch {
+        // codex --remote exits on disconnect, that's normal
+      }
       break
     }
 

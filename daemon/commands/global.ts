@@ -42,6 +42,7 @@ async function spawnAndNotify(
   topic: string,
   template?: { name: string; template: SpawnTemplate },
   model?: string,
+  engine?: 'claude' | 'codex',
 ): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🚀').catch(() => {})
   const chatId = await resolveSpawnTarget(msg)
@@ -52,6 +53,7 @@ async function spawnAndNotify(
   const spawnOpts = {
     ...(template && { promptPrefix: template.template.prompt }),
     ...(resolvedModel && { model: resolvedModel }),
+    ...(engine && { engine }),
     trigger: template ? `${template.name}:` : 'spawn:',
     initiator: msg.authorUsername,
   }
@@ -118,8 +120,15 @@ async function spawnAndNotify(
   }
 }
 
-export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string): Promise<void> {
-  await spawnAndNotify(msg, topic, undefined, model)
+export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
+  // Also parse --codex flag from topic (fallback for non-prefix usage)
+  let resolvedEngine = engine
+  let cleanTopic = topic
+  if (!resolvedEngine && /\s*--codex\b/.test(topic)) {
+    resolvedEngine = 'codex'
+    cleanTopic = topic.replace(/\s*--codex\b/, '').trim()
+  }
+  await spawnAndNotify(msg, cleanTopic, undefined, model, resolvedEngine)
 }
 
 export async function handleTemplateSpawn(msg: InboundMessage, templateName: string, topic: string, template: SpawnTemplate, access: Access, model?: string): Promise<void> {
