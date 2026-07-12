@@ -12,7 +12,7 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
-import { loadProtocolWithLenses, type LensDef } from './protocol-def.js'
+import { loadLensesFromDir, type LensDef } from './protocol-def.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,14 +30,13 @@ export const SUMMARY_SENTINEL = '[summary]'
 // ---------------------------------------------------------------------------
 
 const LENSES_DIR = join(import.meta.dir, '..', 'protocols', 'lenses')
-const PROTOCOL_PATH = join(import.meta.dir, '..', 'protocols', 'review.md')
 
 let lensCache: Map<string, LensDef> = new Map()
 
 async function loadLenses(): Promise<Map<string, LensDef>> {
   if (lensCache.size > 0) return lensCache
   try {
-    const { lenses } = await loadProtocolWithLenses(PROTOCOL_PATH, LENSES_DIR)
+    const lenses = await loadLensesFromDir(LENSES_DIR)
     lensCache = lenses
     process.stderr.write(`daemon: loaded ${lenses.size} lens entries from ${LENSES_DIR}\n`)
     return lenses

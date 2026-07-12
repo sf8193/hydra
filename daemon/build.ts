@@ -69,8 +69,8 @@ const sessionToBuild = new Map<string, string>()  // critic -> buildId
 const ownerToBuild = new Map<string, string>()     // owner -> buildId
 const threadToBuild = new Map<string, string>()    // thread -> buildId
 
-const CRITIC_TIMEOUT_MS = 20 * 60 * 1000
-const OWNER_TIMEOUT_MS = 30 * 60 * 1000
+export const CRITIC_TIMEOUT_MS = 20 * 60 * 1000
+export const OWNER_TIMEOUT_MS = 30 * 60 * 1000
 
 // ---------------------------------------------------------------------------
 // Map cleanup — single function for all exit paths
@@ -285,9 +285,9 @@ export async function cancelBuild(buildId: string): Promise<void> {
 // Core reply handler — called from bridge-server for ALL reply tool calls
 // ---------------------------------------------------------------------------
 
-const BUILDER_SENTINEL = '[builder→critic]'
-const CRITIC_SENTINEL = '[critic→builder]'
-const SUMMARY_SENTINEL = '[summary]'
+export const BUILDER_SENTINEL = '[builder→critic]'
+export const CRITIC_SENTINEL = '[critic→builder]'
+export const SUMMARY_SENTINEL = '[summary]'
 
 export function onBuildReply(sessionId: string, text: string, chatId: string, sentMessageIds: string[]): void {
   const firstLine = text.split('\n')[0].trim()

@@ -10,7 +10,11 @@ import {
   CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL,
   CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS,
 } from '../adversarial.js'
-import { buildMachine } from '../build.js'
+import {
+  buildMachine,
+  BUILDER_SENTINEL, CRITIC_SENTINEL as BUILD_CRITIC_SENTINEL, SUMMARY_SENTINEL as BUILD_SUMMARY_SENTINEL,
+  CRITIC_TIMEOUT_MS as BUILD_CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS as BUILD_OWNER_TIMEOUT_MS,
+} from '../build.js'
 
 const PROTOCOLS_DIR = join(import.meta.dir, '..', '..', 'protocols')
 const PROTOCOL_PATH = join(PROTOCOLS_DIR, 'review.md')
@@ -276,12 +280,6 @@ aliases: []
 // Build protocol — parity with build.ts
 // ---------------------------------------------------------------------------
 
-const BUILD_BUILDER_SENTINEL = '[builder→critic]'
-const BUILD_CRITIC_SENTINEL = '[critic→builder]'
-const BUILD_SUMMARY_SENTINEL = '[summary]'
-
-const BUILD_CRITIC_TIMEOUT_MS = 20 * 60 * 1000
-const BUILD_OWNER_TIMEOUT_MS = 30 * 60 * 1000
 const BUILD_CLOSING_TIMEOUT_MS = 5 * 60 * 1000
 
 let buildDef: ProtocolDef
@@ -293,7 +291,7 @@ test('the build protocol loads', async () => {
 
 describe('parity with build.ts', () => {
   test('sentinel grammar matches the live constants', () => {
-    expect(buildDef.sentinels.implementing).toBe(BUILD_BUILDER_SENTINEL)
+    expect(buildDef.sentinels.implementing).toBe(BUILDER_SENTINEL)
     expect(buildDef.sentinels.reviewing).toBe(BUILD_CRITIC_SENTINEL)
     expect(buildDef.sentinels.closing).toBe(BUILD_SUMMARY_SENTINEL)
   })

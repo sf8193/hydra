@@ -23,7 +23,7 @@ Sharpen a design by putting it under sustained, structured attack. One critic, o
 4. **cleanup** — the debate is over; the owner writes one summary in the shape below. Posting it completes the review; a 5-minute silence auto-closes it.
 5. **complete** / **cancelled** — terminal. Completion emits a structured event (see skeleton) and preserves the transcript before striking the round messages.
 
-A turn that goes silent past its window cancels the review (except post_pass, which skips remaining passes and finishes gracefully). A participant whose bridge drops gets a grace period to reconnect before the review is abandoned.
+A turn that goes silent past its window cancels the review (except post_pass, which advances to the next pass on timeout, finishing when all passes complete). A participant whose bridge drops gets a grace period to reconnect before the review is abandoned.
 
 ## Lenses
 

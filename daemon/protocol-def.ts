@@ -183,6 +183,38 @@ export function parseLensDef(source: string, origin = '<lens>'): LensDef {
 }
 
 // ---------------------------------------------------------------------------
+// Load lenses from a directory (independent of any protocol document)
+// ---------------------------------------------------------------------------
+
+export async function loadLensesFromDir(lensesDir: string): Promise<Map<string, LensDef>> {
+  const lenses = new Map<string, LensDef>()
+  let files: string[]
+  try {
+    files = readdirSync(lensesDir).filter(f => f.endsWith('.md'))
+  } catch {
+    return lenses
+  }
+
+  for (const file of files) {
+    try {
+      const def = await loadLensDef(join(lensesDir, file))
+      for (const key of [def.lens, ...def.aliases]) {
+        const existing = lenses.get(key)
+        if (existing && existing.lens !== def.lens) {
+          process.stderr.write(`daemon: lens alias collision: "${key}" claimed by both "${existing.lens}" and "${def.lens}" (${file}) — keeping "${existing.lens}"\n`)
+          continue
+        }
+        lenses.set(key, def)
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: skipping malformed lens ${file}: ${err}\n`)
+    }
+  }
+
+  return lenses
+}
+
+// ---------------------------------------------------------------------------
 // Load protocol + discover lenses
 // ---------------------------------------------------------------------------
 
@@ -191,26 +223,7 @@ export async function loadProtocolWithLenses(
   lensesDir: string,
 ): Promise<{ protocol: ProtocolDef; lenses: Map<string, LensDef> }> {
   const protocol = await loadProtocolDef(protocolPath)
-
-  const lenses = new Map<string, LensDef>()
-  let files: string[]
-  try {
-    files = readdirSync(lensesDir).filter(f => f.endsWith('.md'))
-  } catch {
-    return { protocol, lenses }
-  }
-
-  for (const file of files) {
-    try {
-      const def = await loadLensDef(join(lensesDir, file))
-      lenses.set(def.lens, def)
-      for (const alias of def.aliases) {
-        lenses.set(alias, def)
-      }
-    } catch (err) {
-      process.stderr.write(`daemon: skipping malformed lens ${file}: ${err}\n`)
-    }
-  }
+  const lenses = await loadLensesFromDir(lensesDir)
 
   return { protocol, lenses }
 }
