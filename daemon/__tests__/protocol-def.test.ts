@@ -6,9 +6,13 @@ import {
   type ProtocolDef, type LensDef,
 } from '../protocol-def.js'
 import { reviewMachine } from '../adversarial.js'
+import { buildMachine } from '../build.js'
 
-const PROTOCOL_PATH = join(import.meta.dir, '..', '..', 'protocols', 'review.md')
-const LENSES_DIR = join(import.meta.dir, '..', '..', 'protocols', 'lenses')
+const PROTOCOLS_DIR = join(import.meta.dir, '..', '..', 'protocols')
+const PROTOCOL_PATH = join(PROTOCOLS_DIR, 'review.md')
+const BUILD_PATH = join(PROTOCOLS_DIR, 'build.md')
+const SPIKE_PATH = join(PROTOCOLS_DIR, 'spike.md')
+const LENSES_DIR = join(PROTOCOLS_DIR, 'lenses')
 
 // The sentinel constants are module-private in adversarial.ts — test against literals.
 const CRITIC_SENTINEL = '[critic→owner]'
@@ -252,5 +256,142 @@ aliases: []
 \`\`\`
 `
     expect(() => parseLensDef(bad)).toThrow('missing ## Instructions section')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Build protocol — parity with build.ts
+// ---------------------------------------------------------------------------
+
+const BUILD_BUILDER_SENTINEL = '[builder→critic]'
+const BUILD_CRITIC_SENTINEL = '[critic→builder]'
+const BUILD_SUMMARY_SENTINEL = '[summary]'
+
+const BUILD_CRITIC_TIMEOUT_MS = 20 * 60 * 1000
+const BUILD_OWNER_TIMEOUT_MS = 30 * 60 * 1000
+const BUILD_CLOSING_TIMEOUT_MS = 5 * 60 * 1000
+
+let buildDef: ProtocolDef
+
+test('the build protocol loads', async () => {
+  buildDef = await loadProtocolDef(BUILD_PATH)
+  expect(buildDef.protocol).toBe('build')
+})
+
+describe('parity with build.ts', () => {
+  test('sentinel grammar matches the live constants', () => {
+    expect(buildDef.sentinels.implementing).toBe(BUILD_BUILDER_SENTINEL)
+    expect(buildDef.sentinels.reviewing).toBe(BUILD_CRITIC_SENTINEL)
+    expect(buildDef.sentinels.closing).toBe(BUILD_SUMMARY_SENTINEL)
+  })
+
+  test('transition table matches buildMachine exactly', () => {
+    const table = toTransitionTable(buildDef)
+    for (const [phase, events] of Object.entries(table)) {
+      for (const [event, target] of Object.entries(events)) {
+        const result = buildMachine.transition(phase as any, event as any)
+        expect(result.ok).toBe(true)
+        if (result.ok) expect(result.to).toBe(target as any)
+      }
+      expect(new Set(buildMachine.validEvents(phase as any))).toEqual(new Set(Object.keys(events)))
+    }
+  })
+
+  test('turn windows match the live timeout constants', () => {
+    expect(windowMs(buildDef, 'reviewing')).toBe(BUILD_CRITIC_TIMEOUT_MS)
+    expect(windowMs(buildDef, 'implementing')).toBe(BUILD_OWNER_TIMEOUT_MS)
+    expect(windowMs(buildDef, 'closing')).toBe(BUILD_CLOSING_TIMEOUT_MS)
+  })
+
+  test('disconnect grace matches the live constants', () => {
+    expect(graceMs(buildDef, 'critic')).toBe(30_000)
+    expect(graceMs(buildDef, 'builder')).toBe(120_000)
+  })
+
+  test('buildHalf is derivable from the definition', () => {
+    expect(buildDef.phases.implementing.half).toBe('top')
+    expect(buildDef.phases.reviewing.half).toBe('bottom')
+    expect(buildDef.phases.closing.half).toBe('top')
+  })
+
+  test('terminal phases match the machine', () => {
+    expect(isTerminal(buildDef, 'complete')).toBe(true)
+    expect(isTerminal(buildDef, 'cancelled')).toBe(true)
+    expect(isTerminal(buildDef, 'implementing')).toBe(false)
+    expect(isTerminal(buildDef, 'reviewing')).toBe(false)
+    expect(isTerminal(buildDef, 'closing')).toBe(false)
+  })
+
+  test('reviewing has three outcome events (lgtm, final, feedback)', () => {
+    const table = toTransitionTable(buildDef)
+    expect(table.reviewing.critic_lgtm).toBe('closing')
+    expect(table.reviewing.critic_final).toBe('closing')
+    expect(table.reviewing.critic_feedback).toBe('implementing')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spike protocol — structural validity (novel protocol, no TS parity)
+// ---------------------------------------------------------------------------
+
+let spikeDef: ProtocolDef
+
+test('the spike protocol loads', async () => {
+  spikeDef = await loadProtocolDef(SPIKE_PATH)
+  expect(spikeDef.protocol).toBe('spike')
+})
+
+describe('spike protocol structure', () => {
+  test('has two non-adversarial roles', () => {
+    expect(Object.keys(spikeDef.roles)).toEqual(['explorer', 'guide'])
+    expect(spikeDef.roles.explorer.label).toBe('The Explorer')
+    expect(spikeDef.roles.guide.label).toBe('The Guide')
+  })
+
+  test('exploring phase loops on checkpoint', () => {
+    const table = toTransitionTable(spikeDef)
+    expect(table.exploring.checkpoint).toBe('exploring')
+  })
+
+  test('exploring transitions to reporting on wrap_up or timeout', () => {
+    const table = toTransitionTable(spikeDef)
+    expect(table.exploring.wrap_up).toBe('reporting')
+    expect(table.exploring.timeout).toBe('reporting')
+  })
+
+  test('reporting completes on report_posted', () => {
+    const table = toTransitionTable(spikeDef)
+    expect(table.reporting.report_posted).toBe('complete')
+  })
+
+  test('sentinels match the expected checkpoint/report pattern', () => {
+    expect(spikeDef.sentinels.exploring).toBe('[checkpoint]')
+    expect(spikeDef.sentinels.reporting).toBe('[report]')
+  })
+
+  test('exploring has a long window (60m)', () => {
+    expect(windowMs(spikeDef, 'exploring')).toBe(60 * 60 * 1000)
+  })
+
+  test('only explorer has disconnect grace', () => {
+    expect(graceMs(spikeDef, 'explorer')).toBe(120_000)
+    expect(graceMs(spikeDef, 'guide')).toBeUndefined()
+  })
+
+  test('all transitions target valid phases (referential integrity)', () => {
+    const table = toTransitionTable(spikeDef)
+    const phases = new Set(Object.keys(spikeDef.phases))
+    for (const [, events] of Object.entries(table)) {
+      for (const [, target] of Object.entries(events)) {
+        expect(phases.has(target)).toBe(true)
+      }
+    }
+  })
+
+  test('completion event declares the right fields', () => {
+    expect(spikeDef.completionEvent.protocol).toBe('spike')
+    expect(spikeDef.completionEvent.fields).toContain('thread')
+    expect(spikeDef.completionEvent.fields).toContain('topic')
+    expect(spikeDef.completionEvent.fields).toContain('transcript')
   })
 })
