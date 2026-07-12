@@ -80,6 +80,7 @@ phases:
 sentinels:
   critic_turn: "[critic→owner]"
   owner_turn:  "[owner→critic]"
+  post_pass:   "[critic→owner]"
   cleanup:     "[summary]"
 
 windows:

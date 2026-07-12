@@ -448,10 +448,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
         // Parse +pass suffixes — only match known pass names to avoid collisions with
         // natural language (e.g. "+1 error handling" shouldn't extract "1" as a pass)
         const knownPasses = listPostPasses()
-        const passRe = new RegExp(`\\+(${knownPasses.join('|')})\\b`, 'g')
-        const postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
-        if (postPasses.length > 0) {
-          topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+        let postPasses: string[] = []
+        if (knownPasses.length > 0) {
+          const passRe = new RegExp(`\\+(${knownPasses.join('|')})\\b`, 'g')
+          postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
+          if (postPasses.length > 0) {
+            topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+          }
         }
         void handleReviewIntercept(msg, rounds, topic, modelId, postPasses.length > 0 ? postPasses : undefined, isCodex ? 'codex' : undefined)
         return

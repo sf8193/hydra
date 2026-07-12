@@ -5,7 +5,11 @@ import {
   loadLensDef, parseLensDef, loadProtocolWithLenses,
   type ProtocolDef, type LensDef,
 } from '../protocol-def.js'
-import { reviewMachine } from '../adversarial.js'
+import {
+  reviewMachine,
+  CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL,
+  CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS,
+} from '../adversarial.js'
 import { buildMachine } from '../build.js'
 
 const PROTOCOLS_DIR = join(import.meta.dir, '..', '..', 'protocols')
@@ -14,18 +18,8 @@ const BUILD_PATH = join(PROTOCOLS_DIR, 'build.md')
 const SPIKE_PATH = join(PROTOCOLS_DIR, 'spike.md')
 const LENSES_DIR = join(PROTOCOLS_DIR, 'lenses')
 
-// The sentinel constants are module-private in adversarial.ts — test against literals.
-const CRITIC_SENTINEL = '[critic→owner]'
-const OWNER_SENTINEL = '[owner→critic]'
-const SUMMARY_SENTINEL = '[summary]'
-
-const CRITIC_TIMEOUT_MS = 10 * 60 * 1000
-const OWNER_TIMEOUT_MS = 30 * 60 * 1000
 const CLEANUP_TIMEOUT_MS = 5 * 60 * 1000
-const POST_PASS_TIMEOUT_MS = 10 * 60 * 1000
-
-const CRITIC_DISCONNECT_GRACE_MS = 30_000
-const OWNER_DISCONNECT_GRACE_MS = 120_000
+const POST_PASS_TIMEOUT_MS = CRITIC_TIMEOUT_MS
 
 let def: ProtocolDef
 
@@ -41,8 +35,8 @@ describe('parity with adversarial.ts', () => {
     expect(def.sentinels.cleanup).toBe(SUMMARY_SENTINEL)
   })
 
-  test('post_pass has no sentinel (instructions come from the lens)', () => {
-    expect(def.sentinels.post_pass).toBeUndefined()
+  test('post_pass sentinel matches critic_turn (critic owes the same tag)', () => {
+    expect(def.sentinels.post_pass).toBe(CRITIC_SENTINEL)
   })
 
   test('transition table matches reviewMachine exactly', () => {
@@ -64,7 +58,7 @@ describe('parity with adversarial.ts', () => {
     expect(expectedTag(def, 'owner_turn', 'critic')).toBeNull()
     expect(expectedTag(def, 'cleanup', 'owner')).toBe(SUMMARY_SENTINEL)
     expect(expectedTag(def, 'cleanup', 'critic')).toBeNull()
-    expect(expectedTag(def, 'post_pass', 'critic')).toBeNull()
+    expect(expectedTag(def, 'post_pass', 'critic')).toBe(CRITIC_SENTINEL)
     expect(expectedTag(def, 'complete', 'owner')).toBeNull()
   })
 
@@ -76,8 +70,8 @@ describe('parity with adversarial.ts', () => {
   })
 
   test('disconnect grace matches the live constants', () => {
-    expect(graceMs(def, 'critic')).toBe(CRITIC_DISCONNECT_GRACE_MS)
-    expect(graceMs(def, 'owner')).toBe(OWNER_DISCONNECT_GRACE_MS)
+    expect(graceMs(def, 'critic')).toBe(30_000)
+    expect(graceMs(def, 'owner')).toBe(120_000)
   })
 
   test('reviewHalf is derivable from the definition', () => {

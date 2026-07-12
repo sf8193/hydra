@@ -173,8 +173,8 @@ export function parseLensDef(source: string, origin = '<lens>'): LensDef {
     ? raw.aliases.map(String)
     : []
 
-  // Extract instructions from the ## Instructions section
-  const instructionsMatch = source.match(/## Instructions\n\n([\s\S]*?)(?:\n## |\n```yaml skeleton|$)/)
+  // Extract instructions: everything between ## Instructions and the skeleton (heading or fence)
+  const instructionsMatch = source.match(/## Instructions\n\n([\s\S]*?)(?:\n## Skeleton\n|\n```yaml skeleton|$)/)
   if (!instructionsMatch) fail('missing ## Instructions section')
   const instructions = instructionsMatch[1].trim()
   if (!instructions) fail('## Instructions section is empty')

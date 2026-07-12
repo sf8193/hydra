@@ -21,9 +21,9 @@ import { loadProtocolWithLenses, type LensDef } from './protocol-def.js'
 export type ReviewPhase = 'critic_turn' | 'owner_turn' | 'post_pass' | 'cleanup' | 'complete' | 'cancelled'
 type ReviewEvent = 'critic_posted' | 'owner_posted' | 'final_round' | 'pass_posted' | 'summary_posted' | 'timeout' | 'cancel'
 
-const OWNER_SENTINEL = '[owner→critic]'
-const CRITIC_SENTINEL = '[critic→owner]'
-const SUMMARY_SENTINEL = '[summary]'
+export const OWNER_SENTINEL = '[owner→critic]'
+export const CRITIC_SENTINEL = '[critic→owner]'
+export const SUMMARY_SENTINEL = '[summary]'
 
 // ---------------------------------------------------------------------------
 // Post-pass lenses — loaded from protocols/lenses/ (compose-by-writing)
@@ -103,8 +103,8 @@ const threadToReview = new Map<string, string>()
 
 const cleaningUpThreads = new Set<string>()
 
-const CRITIC_TIMEOUT_MS = 10 * 60 * 1000
-const OWNER_TIMEOUT_MS = 30 * 60 * 1000
+export const CRITIC_TIMEOUT_MS = 10 * 60 * 1000
+export const OWNER_TIMEOUT_MS = 30 * 60 * 1000
 
 // ---------------------------------------------------------------------------
 // Map cleanup — single function for all exit paths
@@ -509,7 +509,7 @@ function startNextPass(state: ReviewState): void {
   const idx = state._currentPassIdx ?? 0
   const passes = state.postPasses!
   const passName = resolvePassName(passes[idx])
-  const lensDef = lensCache?.get(passName)
+  const lensDef = lensCache.get(passName)
 
   if (!lensDef) {
     process.stderr.write(`daemon: review: unknown lens "${passName}", skipping\n`)
