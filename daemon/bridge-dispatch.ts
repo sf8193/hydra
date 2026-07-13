@@ -6,7 +6,7 @@ import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, getContextPercent, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration, transformProtocolTag } from './util.js'
-import { isProtocolPost } from './protocol-registry.js'
+import { isProtocolPost, dispatchDecision } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
@@ -373,6 +373,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const header = `Session: ${name} | ${ctx} | ${msgs} msgs | ${duration}`
 
         return { content: [{ type: 'text', text: `${header}\n${'─'.repeat(60)}\n${output || '(empty)'}` }] }
+      }
+
+      case 'decide': {
+        const value = (args.value as string)?.trim()
+        const because = (args.because as string)?.trim()
+        if (!value) throw new Error('decide requires a value')
+        if (!because) throw new Error('decide requires a because')
+        if (!callerSessionId) throw new Error('decide requires a session context')
+
+        const result = dispatchDecision(callerSessionId, value, because)
+        if (!result.ok) throw new Error(result.reason)
+
+        return { content: [{ type: 'text', text: `decided: ${value}` }] }
       }
 
       default:

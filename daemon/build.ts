@@ -69,8 +69,8 @@ const sessionToBuild = new Map<string, string>()  // critic -> buildId
 const ownerToBuild = new Map<string, string>()     // owner -> buildId
 const threadToBuild = new Map<string, string>()    // thread -> buildId
 
-const CRITIC_TIMEOUT_MS = 20 * 60 * 1000
-const OWNER_TIMEOUT_MS = 30 * 60 * 1000
+export const CRITIC_TIMEOUT_MS = 20 * 60 * 1000
+export const OWNER_TIMEOUT_MS = 30 * 60 * 1000
 
 // ---------------------------------------------------------------------------
 // Map cleanup — single function for all exit paths
@@ -285,9 +285,9 @@ export async function cancelBuild(buildId: string): Promise<void> {
 // Core reply handler — called from bridge-server for ALL reply tool calls
 // ---------------------------------------------------------------------------
 
-const BUILDER_SENTINEL = '[builder→critic]'
-const CRITIC_SENTINEL = '[critic→builder]'
-const SUMMARY_SENTINEL = '[summary]'
+export const BUILDER_SENTINEL = '[builder→critic]'
+export const CRITIC_SENTINEL = '[critic→builder]'
+export const SUMMARY_SENTINEL = '[summary]'
 
 export function onBuildReply(sessionId: string, text: string, chatId: string, sentMessageIds: string[]): void {
   const firstLine = text.split('\n')[0].trim()
@@ -661,12 +661,49 @@ function resetTimeout(state: BuildState): void {
   }, timeoutMs)
 }
 
+export function onBuildDecision(sessionId: string, value: string, because: string): boolean {
+  const buildId = sessionToBuild.get(sessionId)
+  if (!buildId) return false
+  const state = builds.get(buildId)
+  if (!state || state.phase !== 'reviewing' || state.criticSessionId !== sessionId) return false
+
+  const isApprove = value === 'approve'
+  if (!isApprove && value !== 'request_changes') {
+    process.stderr.write(`daemon: build decide: unknown value "${value}" (expected approve | request_changes)\n`)
+    return false
+  }
+
+  const isFinal = !isApprove && state.currentRound >= state.rounds
+  const event: BuildEvent = isApprove ? 'critic_lgtm' : isFinal ? 'critic_final' : 'critic_feedback'
+  const result = buildMachine.transition(state.phase, event)
+  if (!result.ok) return false
+
+  void safeSend(state.ownerThreadId, `${CRITIC_SENTINEL}\n${isApprove ? '**LGTM**\n' : ''}${because}`).then(ids => {
+    state.messageIds.push(...ids)
+  })
+
+  if (isApprove || isFinal) {
+    state._closing = { approved: isApprove, lastCriticText: because }
+    state.phase = result.to
+    void requestBuildSummary(state, because, isApprove).catch(err => {
+      process.stderr.write(`daemon: requestBuildSummary failed: ${err}\n`)
+      void cancelBuild(state.buildId).catch(e => process.stderr.write(`daemon: cancelBuild failed: ${e}\n`))
+    })
+  } else {
+    state.phase = result.to
+    state.currentRound++
+    onCriticFeedback(state, because)
+  }
+  return true
+}
+
 registerProtocol('build', {
   getByThread: (threadId) => !!getBuildByThread(threadId),
   isParticipant: isBuildParticipant,
   onReply: onBuildReply,
   onDisconnect: onBuildParticipantDisconnect,
   onReconnect: onBuildParticipantReconnect,
+  onDecision: onBuildDecision,
   expectedTag: (sessionId, chatId) => {
     const buildId = sessionToBuild.get(sessionId) ?? ownerToBuild.get(sessionId)
     const state = buildId ? builds.get(buildId) : undefined

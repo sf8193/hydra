@@ -8,7 +8,7 @@
 // Protocol-specific routing behaviors (e.g., design answer interception)
 // remain as direct imports in their consumers.
 
-export type ProtocolName = 'review' | 'build' | 'design'
+export type ProtocolName = 'review' | 'build' | 'design' | 'review_v2' | 'build_v2' | 'spike_v2'
 
 type ProtocolHooks = {
   getByThread: (threadId: string) => boolean
@@ -16,11 +16,7 @@ type ProtocolHooks = {
   onReply: (sessionId: string, text: string, chatId: string, sentIds: string[]) => void
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
-  // Liveness grammar: the first-line tag currently owed by this session when
-  // posting to chatId, or null when nothing is owed (already satisfied this
-  // phase, wrong thread, or a phase with no expectation). The nudge check
-  // consuming this lives in the daemon (sentinel-nudge.ts) and never moves;
-  // protocols-as-documents (step ③) migrates only this data source to cards.
+  onDecision?: (sessionId: string, value: string, because: string) => boolean
   expectedTag?: (sessionId: string, chatId: string) => string | null
 }
 
@@ -73,6 +69,18 @@ export function dispatchDisconnect(sessionId: string): void {
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) { hooks.onDisconnect(sessionId); break }
   }
+}
+
+export function dispatchDecision(sessionId: string, value: string, because: string): { ok: true } | { ok: false; reason: string } {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId)) {
+      if (!hooks.onDecision) return { ok: false, reason: 'this protocol does not support decide()' }
+      const accepted = hooks.onDecision(sessionId, value, because)
+      if (!accepted) return { ok: false, reason: `decision "${value}" was not accepted (wrong phase, role, or invalid value)` }
+      return { ok: true }
+    }
+  }
+  return { ok: false, reason: 'no active protocol for this session' }
 }
 
 export function _resetForTesting(): void { protocols.clear() }
