@@ -360,7 +360,8 @@ function sendLensInstruction(run: ProtocolRun): void {
   if (!actorSid) return
 
   const passLabel = `+${lens.lens} (${idx + 1}/${lenses.length})`
-  const statusText = formatStateLine(run.protocol.emoji, run.protocol.name, passLabel, `critic reviewing ${lens.lens}`)
+  const roleLabel = run.protocol.roles[actor] ?? actor
+  const statusText = formatStateLine(run.protocol.emoji, run.protocol.name, passLabel, `${roleLabel} reviewing ${lens.lens}`)
   if (!run.statusHistory) run.statusHistory = []
   run.statusHistory.push(statusText)
   void safeSend(run.threadId, statusText).then(ids => run.messageIds.push(...ids))
