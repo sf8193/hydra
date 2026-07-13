@@ -238,7 +238,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // the control channel. Held until the close cause is confirmed — the uptime +
       // disconnect-reason instrumentation here is what makes that confirmation possible.
       // TODO(fix-main-flap): remove flapTracker.delete('main') once the disconnect cause is confirmed.
-      if (sessionId === 'main') flapTracker.delete('main')
+      if (sessionId === 'main' && !mainHadOtherIncumbent) flapTracker.delete('main')
       const tools = computeToolsForSession(sessionId)
       transport.sendToBridge(conn, {
         type: 'registered',
