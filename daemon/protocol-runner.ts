@@ -471,3 +471,37 @@ export function getRunByThread(threadId: string): ProtocolRun | undefined {
 export function isRunParticipant(sessionId: string): boolean {
   return sessionToRun.has(sessionId)
 }
+
+// ---------------------------------------------------------------------------
+// Protocol registry integration — register v2 protocols
+// ---------------------------------------------------------------------------
+
+function runnerHooks(name: ProtocolName) {
+  registerProtocol(name, {
+    getByThread: (threadId) => {
+      const run = getRunByThread(threadId)
+      return !!run && run.protocol.name === name.replace('_v2', '')
+    },
+    isParticipant: isRunParticipant,
+    onReply: onRunReply,
+    onDisconnect: onRunDisconnect,
+    onReconnect: onRunReconnect,
+    onDecision: (sessionId, value, because) => {
+      onRunDecision(sessionId, value, because)
+      return true
+    },
+    expectedTag: (sessionId, chatId) => {
+      const runId = sessionToRun.get(sessionId)
+      const run = runId ? runs.get(runId) : undefined
+      if (!run || chatId !== run.threadId) return null
+      const role = run.sessionToRole.get(sessionId)
+      if (!role) return null
+      const phase = run.protocol.phases[run.phase]
+      if (phase?.actor !== role) return null
+      return run.protocol.sentinel(run.phase) ?? null
+    },
+  })
+}
+
+runnerHooks('review_v2')
+runnerHooks('build_v2')

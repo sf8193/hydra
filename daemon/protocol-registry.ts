@@ -8,7 +8,7 @@
 // Protocol-specific routing behaviors (e.g., design answer interception)
 // remain as direct imports in their consumers.
 
-export type ProtocolName = 'review' | 'build' | 'design'
+export type ProtocolName = 'review' | 'build' | 'design' | 'review_v2' | 'build_v2'
 
 type ProtocolHooks = {
   getByThread: (threadId: string) => boolean

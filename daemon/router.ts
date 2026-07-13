@@ -11,6 +11,8 @@ import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleR
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
+import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
+import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
 import { listPostPasses } from './adversarial.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
 import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
@@ -460,9 +462,20 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const cancelReviewMatch = msg.content.match(/^(?:kill review)\s*$/i)
+      const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (reviewV2Match) {
+        const preModel = reviewV2Match[1] ? resolveModelAlias(reviewV2Match[1]) : undefined
+        const postModel = reviewV2Match[3] ? resolveModelAlias(reviewV2Match[3]) : undefined
+        const v2Rounds = parseInt(reviewV2Match[2] ?? '3')
+        const v2Topic = reviewV2Match[4]?.trim()
+        void handleReviewV2Intercept(msg, v2Rounds, v2Topic, preModel ?? postModel)
+        return
+      }
+
+      const cancelReviewMatch = msg.content.match(/^(?:kill review|kill review_v2)\s*$/i)
       if (cancelReviewMatch) {
         void handleCancelReviewIntercept(msg)
+        void handleCancelReviewV2Intercept(msg)
         return
       }
 
@@ -500,9 +513,20 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const cancelBuildMatch = msg.content.match(/^(?:kill build)\s*$/i)
+      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (buildV2Match) {
+        const preModel = buildV2Match[1] ? resolveModelAlias(buildV2Match[1]) : undefined
+        const postModel = buildV2Match[3] ? resolveModelAlias(buildV2Match[3]) : undefined
+        const v2Rounds = parseInt(buildV2Match[2] ?? '3')
+        const v2Task = buildV2Match[4]?.trim()
+        void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
+        return
+      }
+
+      const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
       if (cancelBuildMatch) {
         void handleCancelBuildIntercept(msg)
+        void handleCancelBuildV2Intercept(msg)
         return
       }
 
