@@ -9,9 +9,13 @@ type RoleDef = Record<string, string>
 
 type PhaseTransitions = Record<string, string>
 
-export type PhaseBehavior = 'advanceRound' | 'lensIteration' | 'closing'
+export type PhaseBehaviorName = 'advanceRound' | 'lensIteration' | 'closing'
+export type PhaseBehavior = PhaseBehaviorName | PhaseBehaviorFn
+export type PhaseBehaviorFn = (run: unknown, prevPhase: string, content: string) => boolean
 
 type PhaseDef = {
+  // Singular: one actor per phase. Fan-out (parallel actors) requires actor: string | string[]
+  // with concurrent token tracking — the flat FSM becomes a Petri net. Known ceiling.
   actor: string
   half?: 'top' | 'bottom'
   on: PhaseTransitions

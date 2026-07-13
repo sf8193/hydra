@@ -235,6 +235,39 @@ describe('protocol runner — terminal phases', () => {
   })
 })
 
+describe('protocol runner — inline behaviors', () => {
+  test('inline function behavior fires on phase entry', () => {
+    let fired = false
+    const protoWithInline = protocol('inline-test', {
+      emoji: '🧪', display: 'Inline Test',
+      roles: { a: 'A', b: 'B' }, owner: 'b',
+      phases: {
+        phase1: { actor: 'a', on: { go: 'phase2' }, replyEvent: 'go' },
+        phase2: { actor: 'b', on: { finish: 'done' }, onEnter: [() => { fired = true; return false }] },
+        done:   { actor: 'b', on: {} },
+      },
+      sentinels: { phase1: '[go]' },
+      windows: { phase1: '10m' },
+    })
+
+    const run = {
+      id: 'inline-run', protocol: protoWithInline, threadId: 'inline-thread',
+      ownerSessionId: 'b-sid', phase: 'phase1', currentRound: 1, rounds: 1,
+      params: {}, participants: new Map([['a', 'a-sid'], ['b', 'b-sid']]),
+      sessionToRole: new Map([['a-sid', 'a'], ['b-sid', 'b']]),
+      timeout: undefined, disconnectTimers: new Map(), decisions: [], messageIds: [], ext: {},
+    } as any
+    runs.set(run.id, run)
+    threadToRun.set(run.threadId, run.id)
+    sessionToRun.set('a-sid', run.id)
+    sessionToRun.set('b-sid', run.id)
+
+    onRunReply('a-sid', '[go]\nDone.', 'inline-thread', ['msg-1'])
+
+    expect(fired).toBe(true)
+  })
+})
+
 describe('protocol runner — seed rendering', () => {
   test('seed renders with context', () => {
     const seed = testProto.seed('critic', { name: 'drift', sessionId: 'abc', threadId: 'thread-1', rounds: 3 })

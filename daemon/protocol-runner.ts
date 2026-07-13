@@ -357,8 +357,8 @@ function afterTransition(run: ProtocolRun, prevPhase: string, content: string): 
 
   const phase = run.protocol.phases[run.phase]
   for (const behavior of phase?.onEnter ?? []) {
-    const handler = BEHAVIORS[behavior]
-    if (handler && handler(run, prevPhase, content)) return
+    const handler = typeof behavior === 'function' ? behavior : BEHAVIORS[behavior]
+    if (handler && handler(run as any, prevPhase, content)) return
   }
 
   notifyNextActor(run, content)
