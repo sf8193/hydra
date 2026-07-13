@@ -429,39 +429,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (reviewMatch) {
-        const preAlias = reviewMatch[1]?.toLowerCase()
-        const postAlias = reviewMatch[3]?.toLowerCase()
-        const isCodex = preAlias === 'codex' || postAlias === 'codex'
-        const preModel = (preAlias && preAlias !== 'codex') ? resolveModelAlias(preAlias) : undefined
-        const postModel = (postAlias && postAlias !== 'codex') ? resolveModelAlias(postAlias) : undefined
-        const modelId = preModel ?? postModel
-        const rounds = parseInt(reviewMatch[2] ?? '3')
-        let topic = reviewMatch[4]?.trim()
-        // Detect wrong order: "review fable 3 topic" (alias without colon)
-        if (!modelId && topic) {
-          const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
-          if (badOrder && resolveModelAlias(badOrder[1])) {
-            void gateway.send(msg.channelId, `_Model syntax: \`/review ${badOrder[2]} ${badOrder[1]}: topic\` or \`/review ${badOrder[1]}: ${badOrder[2]} topic\`_`, { replyTo: msg.id }).catch(() => {})
-            return
-          }
-        }
-        // Parse +pass suffixes — only match known pass names to avoid collisions with
-        // natural language (e.g. "+1 error handling" shouldn't extract "1" as a pass)
-        const knownPasses = listPostPasses()
-        let postPasses: string[] = []
-        if (knownPasses.length > 0) {
-          const passRe = new RegExp(`\\+(${knownPasses.join('|')})\\b`, 'g')
-          postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
-          if (postPasses.length > 0) {
-            topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
-          }
-        }
-        void handleReviewIntercept(msg, rounds, topic, modelId, postPasses.length > 0 ? postPasses : undefined, isCodex ? 'codex' : undefined)
-        return
-      }
-
+      // v2 commands checked BEFORE v1 — the v1 regex matches "review_v2" / "build_v2" otherwise
       const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewV2Match) {
         const preModel = reviewV2Match[1] ? resolveModelAlias(reviewV2Match[1]) : undefined
@@ -479,6 +447,36 @@ gateway.onMessage(async (msg: InboundMessage) => {
           }
         }
         void handleReviewV2Intercept(msg, v2Rounds, v2Topic, preModel ?? postModel, v2Passes.length > 0 ? v2Passes : undefined)
+        return
+      }
+
+      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (reviewMatch) {
+        const preAlias = reviewMatch[1]?.toLowerCase()
+        const postAlias = reviewMatch[3]?.toLowerCase()
+        const isCodex = preAlias === 'codex' || postAlias === 'codex'
+        const preModel = (preAlias && preAlias !== 'codex') ? resolveModelAlias(preAlias) : undefined
+        const postModel = (postAlias && postAlias !== 'codex') ? resolveModelAlias(postAlias) : undefined
+        const modelId = preModel ?? postModel
+        const rounds = parseInt(reviewMatch[2] ?? '3')
+        let topic = reviewMatch[4]?.trim()
+        if (!modelId && topic) {
+          const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
+          if (badOrder && resolveModelAlias(badOrder[1])) {
+            void gateway.send(msg.channelId, `_Model syntax: \`/review ${badOrder[2]} ${badOrder[1]}: topic\` or \`/review ${badOrder[1]}: ${badOrder[2]} topic\`_`, { replyTo: msg.id }).catch(() => {})
+            return
+          }
+        }
+        const knownPasses = listPostPasses()
+        let postPasses: string[] = []
+        if (knownPasses.length > 0) {
+          const passRe = new RegExp(`\\+(${knownPasses.join('|')})\\b`, 'g')
+          postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
+          if (postPasses.length > 0) {
+            topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+          }
+        }
+        void handleReviewIntercept(msg, rounds, topic, modelId, postPasses.length > 0 ? postPasses : undefined, isCodex ? 'codex' : undefined)
         return
       }
 
@@ -502,6 +500,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
+      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (buildV2Match) {
+        const preModel = buildV2Match[1] ? resolveModelAlias(buildV2Match[1]) : undefined
+        const postModel = buildV2Match[3] ? resolveModelAlias(buildV2Match[3]) : undefined
+        const v2Rounds = parseInt(buildV2Match[2] ?? '3')
+        const v2Task = buildV2Match[4]?.trim()
+        void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
+        return
+      }
+
       const buildMatch = msg.content.match(/^(?:\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (buildMatch) {
         const buildPreAlias = buildMatch[1]?.toLowerCase()
@@ -520,16 +528,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
           }
         }
         void handleBuildIntercept(msg, buildRounds, buildTask, undefined, buildModelId, buildIsCodex ? 'codex' : undefined)
-        return
-      }
-
-      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (buildV2Match) {
-        const preModel = buildV2Match[1] ? resolveModelAlias(buildV2Match[1]) : undefined
-        const postModel = buildV2Match[3] ? resolveModelAlias(buildV2Match[3]) : undefined
-        const v2Rounds = parseInt(buildV2Match[2] ?? '3')
-        const v2Task = buildV2Match[4]?.trim()
-        void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
         return
       }
 
