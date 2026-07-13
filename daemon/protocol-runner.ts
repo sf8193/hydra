@@ -7,6 +7,7 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import type { Protocol } from './protocol-dsl.js'
+import type { LensDef } from './protocol-def.js'
 
 // ---------------------------------------------------------------------------
 // Run state
@@ -26,6 +27,9 @@ export type ProtocolRun = StatusLineState & {
   timeout?: ReturnType<typeof setTimeout>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
+  lenses?: LensDef[]
+  _currentLensIdx?: number
+  strike?: boolean
   onComplete?: (run: ProtocolRun) => void | Promise<void>
   _closing?: { approved: boolean; lastCriticText: string }
 }
@@ -42,7 +46,7 @@ export async function startProtocolRun(
   proto: Protocol,
   threadId: string,
   ownerSessionId: string,
-  params: { rounds?: number; topic?: string; model?: string; [key: string]: unknown } = {},
+  params: { rounds?: number; topic?: string; model?: string; lenses?: LensDef[]; strike?: boolean; [key: string]: unknown } = {},
 ): Promise<ProtocolRun> {
   if (threadToRun.has(threadId)) throw new Error(`A ${proto.display} is already running in this thread`)
 
@@ -64,6 +68,8 @@ export async function startProtocolRun(
     disconnectTimers: new Map(),
     decisions: [],
     messageIds: [],
+    lenses: params.lenses,
+    strike: params.strike,
   }
 
   runs.set(id, run)
@@ -136,20 +142,7 @@ export function onRunReply(sessionId: string, text: string, chatId: string, sent
   const prevPhase = run.phase
   run.phase = result.to
 
-  if (isTerminal(run)) {
-    completeRun(run)
-    return
-  }
-
-  // If we looped back (e.g., critic_turn → owner_turn → critic_turn), advance round
-  if (run.phase === run.protocol.initialPhase && prevPhase !== run.phase) {
-    run.currentRound++
-  }
-
-  // Notify the next actor
-  notifyNextActor(run, bodyText)
-  postStatusLine(run)
-  resetTimeout(run)
+  afterTransition(run, prevPhase, bodyText)
 }
 
 // ---------------------------------------------------------------------------
@@ -192,16 +185,10 @@ export function onRunDecision(sessionId: string, value: string, because: string)
   if (!result.ok) return
 
   if (run.timeout) clearTimeout(run.timeout)
+  const prevPhase = run.phase
   run.phase = result.to
 
-  if (isTerminal(run)) {
-    completeRun(run)
-    return
-  }
-
-  notifyNextActor(run, because)
-  postStatusLine(run)
-  resetTimeout(run)
+  afterTransition(run, prevPhase, because)
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +290,118 @@ function cleanupRun(run: ProtocolRun): void {
   for (const sid of run.sessionToRole.keys()) sessionToRun.delete(sid)
   threadToRun.delete(run.threadId)
   runs.delete(run.id)
+}
+
+function afterTransition(run: ProtocolRun, prevPhase: string, content: string): void {
+  if (isTerminal(run)) {
+    completeRun(run)
+    return
+  }
+
+  // Round advancement: if we looped back to the initial phase
+  if (run.phase === run.protocol.initialPhase && prevPhase !== run.phase) {
+    run.currentRound++
+  }
+
+  // Lens flow: entering post_pass starts the first lens
+  if (run.phase === 'post_pass' && prevPhase !== 'post_pass' && run.lenses && run.lenses.length > 0) {
+    run._currentLensIdx = 0
+    sendLensInstruction(run)
+    postStatusLine(run)
+    resetTimeout(run)
+    return
+  }
+
+  // Lens flow: looping within post_pass advances to the next lens
+  if (run.phase === 'post_pass' && prevPhase === 'post_pass' && run.lenses) {
+    const idx = (run._currentLensIdx ?? 0) + 1
+    if (idx < run.lenses.length) {
+      run._currentLensIdx = idx
+      sendLensInstruction(run)
+      postStatusLine(run)
+      resetTimeout(run)
+      return
+    }
+    // All lenses done — transition to cleanup via timeout event
+    const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
+    if (tr.ok) {
+      run.phase = tr.to
+      if (isTerminal(run)) { completeRun(run); return }
+    }
+  }
+
+  // Closing flow: kill non-owner participants, notify owner
+  if (run.phase === 'closing' && prevPhase !== 'closing') {
+    void enterClosing(run, content)
+    return
+  }
+
+  notifyNextActor(run, content)
+  postStatusLine(run)
+  resetTimeout(run)
+}
+
+function sendLensInstruction(run: ProtocolRun): void {
+  if (!run.lenses || run._currentLensIdx === undefined) return
+  const lens = run.lenses[run._currentLensIdx]
+  const criticSid = run.participants.get('critic')
+  if (!criticSid) return
+
+  const passLabel = `+${lens.lens} (${run._currentLensIdx + 1}/${run.lenses.length})`
+  const statusText = formatStateLine(run.protocol.emoji, run.protocol.name, passLabel, `critic reviewing ${lens.lens}`)
+  if (!run.statusHistory) run.statusHistory = []
+  run.statusHistory.push(statusText)
+  void safeSend(run.threadId, statusText).then(ids => run.messageIds.push(...ids))
+
+  transport.sendOrQueue(criticSid, {
+    type: 'notification',
+    content: [
+      `[system] Correctness debate complete. Now do a **${lens.lens}** pass.`,
+      ``,
+      lens.instructions,
+      ``,
+      `Post your feedback. Use decide('clean', why) if everything is fine, or decide('findings', what_to_fix) if not.`,
+    ].join('\n'),
+    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+}
+
+async function enterClosing(run: ProtocolRun, lastContent: string): Promise<void> {
+  // Kill non-owner participants
+  for (const [role, sid] of run.participants) {
+    if (sid === run.ownerSessionId) continue
+    sessionToRun.delete(sid)
+    const info = registry.get(sid)
+    if (info && !killsInProgress.has(sid)) {
+      try { await killSession(info, 'protocol closing') } catch {}
+    }
+  }
+
+  void safeSend(run.threadId, formatStateLine(run.protocol.emoji, run.protocol.name, '⚒︎', 'has concluded. Processing summary…'))
+
+  clearTimers(run)
+
+  // Backstop timeout for the closing phase
+  const closingMs = run.protocol.windowMs('closing') ?? 5 * 60 * 1000
+  run.timeout = setTimeout(() => {
+    if (run.phase !== 'closing') return
+    const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
+    if (tr.ok) run.phase = tr.to
+    completeRun(run)
+  }, closingMs)
+
+  // Notify owner to post summary
+  const sentinel = run.protocol.sentinel('closing') ?? '[summary]'
+  transport.sendOrQueue(run.ownerSessionId, {
+    type: 'notification',
+    content: [
+      `[system] ${run.protocol.display} complete (${run.currentRound} round${run.currentRound > 1 ? 's' : ''}).`,
+      `Post a closing summary to your thread.`,
+      ``,
+      `**Message routing:** Your first line MUST be \`${sentinel}\`. Messages without this tag won't complete the protocol.`,
+    ].join('\n'),
+    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
 }
 
 function resolveEvent(run: ProtocolRun, _role: string, _bodyText: string, events: string[]): string | null {
@@ -432,12 +531,28 @@ function completeRun(run: ProtocolRun): void {
   void safeSend(run.threadId, formatStateLine(run.protocol.emoji, run.protocol.name, '⚒︎',
     `concluded — ${run.currentRound} round${run.currentRound > 1 ? 's' : ''}`))
 
-  const owner = registry.get(run.ownerSessionId)?.tmuxName ?? run.ownerSessionId
   void dumpTranscript(run.threadId, run.protocol.name, run.messageIds, {
     rounds: `${run.currentRound}/${run.rounds}`,
     outcome: run.phase,
     ...(run.params.topic ? { topic: String(run.params.topic) } : {}),
-  }, run.statusHistory).catch(err => {
+  }, run.statusHistory).then(async (dumpPath) => {
+    if (!dumpPath) {
+      process.stderr.write(`daemon: ${run.protocol.name}: transcript dump failed — leaving messages in place\n`)
+      return
+    }
+    if (run.strike && run.messageIds.length > 0) {
+      let failures = 0
+      for (let i = 0; i < run.messageIds.length; i++) {
+        try { await gateway.delete(run.threadId, run.messageIds[i]) } catch { failures++ }
+        if (i < run.messageIds.length - 1) await new Promise(r => setTimeout(r, 1000))
+      }
+      const struck = run.messageIds.length - failures
+      const failNote = failures > 0 ? ` · ⚠️ ${failures} delete${failures > 1 ? 's' : ''} failed` : ''
+      void safeSend(run.threadId, `_📼 transcript saved: \`${dumpPath}\` · ${struck}/${run.messageIds.length} messages struck${failNote}_`)
+    } else if (dumpPath) {
+      void safeSend(run.threadId, `_📼 transcript saved: \`${dumpPath}\`_`)
+    }
+  }).catch(err => {
     process.stderr.write(`daemon: ${run.protocol.name} transcript dump failed: ${err}\n`)
   })
 

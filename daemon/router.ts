@@ -467,8 +467,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const preModel = reviewV2Match[1] ? resolveModelAlias(reviewV2Match[1]) : undefined
         const postModel = reviewV2Match[3] ? resolveModelAlias(reviewV2Match[3]) : undefined
         const v2Rounds = parseInt(reviewV2Match[2] ?? '3')
-        const v2Topic = reviewV2Match[4]?.trim()
-        void handleReviewV2Intercept(msg, v2Rounds, v2Topic, preModel ?? postModel)
+        let v2Topic = reviewV2Match[4]?.trim()
+        // Parse +lens suffixes
+        const v2KnownPasses = listPostPasses()
+        let v2Passes: string[] = []
+        if (v2KnownPasses.length > 0 && v2Topic) {
+          const v2PassRe = new RegExp(`\\+(${v2KnownPasses.join('|')})\\b`, 'g')
+          v2Passes = [...v2Topic.matchAll(v2PassRe)].map(m => m[1])
+          if (v2Passes.length > 0) {
+            v2Topic = v2Topic.replace(v2PassRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+          }
+        }
+        void handleReviewV2Intercept(msg, v2Rounds, v2Topic, preModel ?? postModel, v2Passes.length > 0 ? v2Passes : undefined)
         return
       }
 
