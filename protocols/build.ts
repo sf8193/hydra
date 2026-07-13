@@ -14,9 +14,9 @@ export default protocol('build', {
   },
 
   phases: {
-    implementing: { actor: 'builder', half: 'top',    on: { owner_impl: 'reviewing', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'owner_impl' },
+    implementing: { actor: 'builder', half: 'top',    on: { owner_impl: 'reviewing', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'owner_impl', onEnter: ['advanceRound'] },
     reviewing:    { actor: 'critic',  half: 'bottom', on: { critic_lgtm: 'closing', critic_final: 'closing', critic_feedback: 'implementing', timeout: 'cancelled', cancel: 'cancelled' } },
-    closing:      { actor: 'builder', half: 'top',    on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, replyEvent: 'summary_posted' },
+    closing:      { actor: 'builder', half: 'top',    on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, replyEvent: 'summary_posted', onEnter: ['closing'] },
     complete:     { actor: 'builder', half: 'top',    on: {} },
     cancelled:    { actor: 'builder', half: 'top',    on: {} },
   },

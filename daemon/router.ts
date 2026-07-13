@@ -13,6 +13,7 @@ import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, h
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
+import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
 import { listPostPasses } from './adversarial.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
 import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
@@ -535,6 +536,20 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (cancelBuildMatch) {
         void handleCancelBuildIntercept(msg)
         void handleCancelBuildV2Intercept(msg)
+        return
+      }
+
+      const spikeV2Match = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (spikeV2Match) {
+        const spikeModel = spikeV2Match[1] ? resolveModelAlias(spikeV2Match[1]) : undefined
+        const spikeTopic = spikeV2Match[2]?.trim()
+        void handleSpikeV2Intercept(msg, spikeTopic, spikeModel)
+        return
+      }
+
+      const cancelSpikeMatch = msg.content.match(/^(?:kill spike|kill spike_v2)\s*$/i)
+      if (cancelSpikeMatch) {
+        void handleCancelSpikeV2Intercept(msg)
         return
       }
 

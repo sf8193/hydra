@@ -287,61 +287,78 @@ function cleanupRun(run: ProtocolRun): void {
   runs.delete(run.id)
 }
 
+// ---------------------------------------------------------------------------
+// Phase behavior registry — declared on phases, executed by the runner
+// ---------------------------------------------------------------------------
+
+type BehaviorHandler = (run: ProtocolRun, prevPhase: string, content: string) => boolean
+
+const BEHAVIORS: Record<string, BehaviorHandler> = {
+  advanceRound: (run, prevPhase) => {
+    if (prevPhase !== run.phase) run.currentRound++
+    return false
+  },
+
+  lensIteration: (run, prevPhase, content) => {
+    const lenses = run.ext.lenses as LensDef[] | undefined
+
+    // Entering the lens phase for the first time
+    if (prevPhase !== run.phase) {
+      if (lenses && lenses.length > 0) {
+        run.ext.currentLensIdx = 0
+        sendLensInstruction(run)
+        postStatusLine(run)
+        resetTimeout(run)
+        return true
+      }
+      // No lenses — skip via timeout
+      const skip = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
+      if (skip.ok) {
+        run.phase = skip.to
+        afterTransition(run, prevPhase, content)
+        return true
+      }
+    }
+
+    // Looping within the lens phase — advance to next lens
+    if (prevPhase === run.phase && lenses) {
+      const idx = ((run.ext.currentLensIdx as number) ?? 0) + 1
+      if (idx < lenses.length) {
+        run.ext.currentLensIdx = idx
+        sendLensInstruction(run)
+        postStatusLine(run)
+        resetTimeout(run)
+        return true
+      }
+      // All lenses done
+      const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
+      if (tr.ok) {
+        run.phase = tr.to
+        afterTransition(run, prevPhase, content)
+        return true
+      }
+    }
+
+    return false
+  },
+
+  closing: (run, prevPhase, content) => {
+    if (prevPhase === run.phase) return false
+    void enterClosing(run, content)
+    return true
+  },
+}
+
 function afterTransition(run: ProtocolRun, prevPhase: string, content: string): void {
   if (isTerminal(run)) {
     completeRun(run)
     return
   }
 
-  // Round advancement: if we looped back to the initial phase
-  if (run.phase === run.protocol.initialPhase && prevPhase !== run.phase) {
-    run.currentRound++
-  }
-
-  // Lens flow: entering the declared lens phase
-  const lensPhase = run.protocol.lensPhase
-  const lenses = run.ext.lenses as LensDef[] | undefined
-  if (lensPhase && run.phase === lensPhase && prevPhase !== lensPhase) {
-    if (lenses && lenses.length > 0) {
-      run.ext.currentLensIdx = 0
-      sendLensInstruction(run)
-      postStatusLine(run)
-      resetTimeout(run)
-      return
-    }
-    // No lenses — skip lens phase immediately via timeout
-    const skip = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-    if (skip.ok) {
-      run.phase = skip.to
-      afterTransition(run, lensPhase, content)
-      return
-    }
-  }
-
-  // Lens flow: looping within the lens phase advances to the next lens
-  if (lensPhase && run.phase === lensPhase && prevPhase === lensPhase && lenses) {
-    const idx = ((run.ext.currentLensIdx as number) ?? 0) + 1
-    if (idx < lenses.length) {
-      run.ext.currentLensIdx = idx
-      sendLensInstruction(run)
-      postStatusLine(run)
-      resetTimeout(run)
-      return
-    }
-    // All lenses done — transition via timeout
-    const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-    if (tr.ok) {
-      run.phase = tr.to
-      afterTransition(run, lensPhase, content)
-      return
-    }
-  }
-
-  // Closing flow: use the protocol's declared closing phase
-  const closingPhase = run.protocol.closingPhase
-  if (closingPhase && run.phase === closingPhase && prevPhase !== closingPhase) {
-    void enterClosing(run, content)
-    return
+  const phase = run.protocol.phases[run.phase]
+  for (const behavior of phase?.onEnter ?? []) {
+    const handler = BEHAVIORS[behavior]
+    if (handler && handler(run, prevPhase, content)) return
   }
 
   notifyNextActor(run, content)
@@ -617,3 +634,4 @@ function runnerHooks(name: ProtocolName) {
 
 runnerHooks('review_v2')
 runnerHooks('build_v2')
+runnerHooks('spike_v2')

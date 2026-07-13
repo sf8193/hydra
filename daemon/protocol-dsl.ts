@@ -9,21 +9,28 @@ type RoleDef = Record<string, string>
 
 type PhaseTransitions = Record<string, string>
 
+export type PhaseBehavior = 'advanceRound' | 'lensIteration' | 'closing'
+
 type PhaseDef = {
   actor: string
   half?: 'top' | 'bottom'
   on: PhaseTransitions
   replyEvent?: string
   finalRoundEvent?: string
+  onEnter?: PhaseBehavior[]
 }
 
 type WindowDef = Record<string, string>
 type GraceDef = Record<string, string>
 
-type SeedContext = {
+export type SeedContext = {
   name: string
   sessionId: string
   threadId: string
+  rounds: number
+  topic?: string
+  task?: string
+  model?: string
   [key: string]: unknown
 }
 

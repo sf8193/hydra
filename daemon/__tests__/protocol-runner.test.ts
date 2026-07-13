@@ -33,9 +33,9 @@ const testProto = protocol('test-review', {
   display: 'Test Review',
   roles: { critic: 'The Critic', owner: 'The Owner' },
   phases: {
-    critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted' },
+    critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted', onEnter: ['advanceRound'] },
     owner_turn:  { actor: 'owner', half: 'bottom', on: { posted: 'critic_turn', final: 'closing', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted', finalRoundEvent: 'final' },
-    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' }, replyEvent: 'summary' },
+    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' }, replyEvent: 'summary', onEnter: ['closing'] },
     complete:    { actor: 'owner', half: 'top', on: {} },
     cancelled:   { actor: 'owner', half: 'top', on: {} },
   },
@@ -237,12 +237,74 @@ describe('protocol runner — terminal phases', () => {
 
 describe('protocol runner — seed rendering', () => {
   test('seed renders with context', () => {
-    const seed = testProto.seed('critic', { name: 'drift', sessionId: 'abc', threadId: 'thread-1' })
+    const seed = testProto.seed('critic', { name: 'drift', sessionId: 'abc', threadId: 'thread-1', rounds: 3 })
     expect(seed).toBe('You are drift, the test critic.')
   })
 
   test('unknown role returns undefined', () => {
-    const seed = testProto.seed('judge', { name: 'x', sessionId: 'y', threadId: 'z' })
+    const seed = testProto.seed('judge', { name: 'x', sessionId: 'y', threadId: 'z', rounds: 1 })
     expect(seed).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spike protocol — structural tests (novel topology)
+// ---------------------------------------------------------------------------
+
+describe('spike protocol structure', () => {
+  let spike: Awaited<ReturnType<typeof import('../../protocols/spike.js')>>['default']
+
+  test('spike protocol loads', async () => {
+    spike = (await import('../../protocols/spike.js')).default
+    expect(spike.name).toBe('spike')
+    expect(spike.emoji).toBe('🔬')
+  })
+
+  test('has two non-adversarial roles', () => {
+    expect(Object.keys(spike.roles)).toEqual(['explorer', 'guide'])
+    expect(spike.ownerRole).toBe('guide')
+  })
+
+  test('exploring loops on checkpoint', () => {
+    const r = spike.machine.transition('exploring' as any, 'checkpoint' as any)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.to).toBe('exploring')
+  })
+
+  test('wrap_up transitions to reporting', () => {
+    const r = spike.machine.transition('exploring' as any, 'wrap_up' as any)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.to).toBe('reporting')
+  })
+
+  test('report_posted completes', () => {
+    const r = spike.machine.transition('reporting' as any, 'report_posted' as any)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.to).toBe('complete')
+  })
+
+  test('exploring has a long window (60m)', () => {
+    expect(spike.windowMs('exploring')).toBe(60 * 60 * 1000)
+  })
+
+  test('sentinel matches checkpoint/report pattern', () => {
+    expect(spike.sentinel('exploring')).toBe('[checkpoint]')
+    expect(spike.sentinel('reporting')).toBe('[report]')
+  })
+
+  test('seed renders with topic', () => {
+    const seed = spike.seed('explorer', { name: 'cedar', sessionId: 'abc', threadId: 't-1', rounds: 1, topic: 'Why does qubit keep crashing?' })
+    expect(seed).toContain('cedar')
+    expect(seed).toContain('Why does qubit keep crashing?')
+    expect(seed).toContain('[checkpoint]')
+    expect(seed).toContain('[report]')
+  })
+
+  test('exploring phase has advanceRound behavior', () => {
+    expect(spike.phases.exploring.onEnter).toContain('advanceRound')
+  })
+
+  test('reporting phase has closing behavior', () => {
+    expect(spike.phases.reporting.onEnter).toContain('closing')
   })
 })
