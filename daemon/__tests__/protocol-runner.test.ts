@@ -70,6 +70,7 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
     disconnectTimers: new Map(),
     decisions: [],
     messageIds: [],
+    ext: {},
     ...overrides,
   } as any
   runs.set(run.id, run)

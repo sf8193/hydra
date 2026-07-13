@@ -6,6 +6,7 @@ export default protocol('review', {
 
   owner: 'owner',
   closingPhase: 'cleanup',
+  lensPhase: 'post_pass',
 
   roles: {
     critic: 'The Critic',

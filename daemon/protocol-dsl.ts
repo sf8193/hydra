@@ -41,6 +41,7 @@ export type ProtocolSpec<
   owner?: keyof Roles & string
   initialPhase?: keyof Phases & string
   closingPhase?: keyof Phases & string
+  lensPhase?: keyof Phases & string
   decisions?: Record<string, {
     phase: string
     actor: string
@@ -63,6 +64,7 @@ export type Protocol<
   phases: Record<string, PhaseDef>
   initialPhase: Phase
   closingPhase?: string
+  lensPhase?: string
   machine: ReturnType<typeof createStateMachine<Phase, Event>>
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
@@ -144,6 +146,7 @@ export function protocol<
     phases: spec.phases as Record<string, PhaseDef>,
     initialPhase,
     closingPhase: spec.closingPhase as string | undefined,
+    lensPhase: spec.lensPhase as string | undefined,
     ownerRole,
     machine: createStateMachine(name, table as TransitionTable<string, string>),
     windowMs: (phase: string) => windows.get(phase),

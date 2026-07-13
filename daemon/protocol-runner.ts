@@ -27,11 +27,7 @@ export type ProtocolRun = StatusLineState & {
   timeout?: ReturnType<typeof setTimeout>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
-  lenses?: LensDef[]
-  _currentLensIdx?: number
-  strike?: boolean
-  onComplete?: (run: ProtocolRun) => void | Promise<void>
-  _closing?: { approved: boolean; lastCriticText: string }
+  ext: Record<string, unknown>
 }
 
 const runs = new Map<string, ProtocolRun>()
@@ -68,8 +64,11 @@ export async function startProtocolRun(
     disconnectTimers: new Map(),
     decisions: [],
     messageIds: [],
-    lenses: params.lenses,
-    strike: params.strike,
+    ext: {
+      lenses: params.lenses,
+      currentLensIdx: undefined as number | undefined,
+      strike: params.strike ?? false,
+    },
   }
 
   runs.set(id, run)
@@ -303,29 +302,31 @@ function afterTransition(run: ProtocolRun, prevPhase: string, content: string): 
     run.currentRound++
   }
 
-  // Lens flow: entering post_pass
-  if (run.phase === 'post_pass' && prevPhase !== 'post_pass') {
-    if (run.lenses && run.lenses.length > 0) {
-      run._currentLensIdx = 0
+  // Lens flow: entering the declared lens phase
+  const lensPhase = run.protocol.lensPhase
+  const lenses = run.ext.lenses as LensDef[] | undefined
+  if (lensPhase && run.phase === lensPhase && prevPhase !== lensPhase) {
+    if (lenses && lenses.length > 0) {
+      run.ext.currentLensIdx = 0
       sendLensInstruction(run)
       postStatusLine(run)
       resetTimeout(run)
       return
     }
-    // No lenses — skip post_pass immediately via timeout
+    // No lenses — skip lens phase immediately via timeout
     const skip = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
     if (skip.ok) {
       run.phase = skip.to
-      afterTransition(run, 'post_pass', content)
+      afterTransition(run, lensPhase, content)
       return
     }
   }
 
-  // Lens flow: looping within post_pass advances to the next lens
-  if (run.phase === 'post_pass' && prevPhase === 'post_pass' && run.lenses) {
-    const idx = (run._currentLensIdx ?? 0) + 1
-    if (idx < run.lenses.length) {
-      run._currentLensIdx = idx
+  // Lens flow: looping within the lens phase advances to the next lens
+  if (lensPhase && run.phase === lensPhase && prevPhase === lensPhase && lenses) {
+    const idx = ((run.ext.currentLensIdx as number) ?? 0) + 1
+    if (idx < lenses.length) {
+      run.ext.currentLensIdx = idx
       sendLensInstruction(run)
       postStatusLine(run)
       resetTimeout(run)
@@ -335,7 +336,7 @@ function afterTransition(run: ProtocolRun, prevPhase: string, content: string): 
     const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
     if (tr.ok) {
       run.phase = tr.to
-      afterTransition(run, 'post_pass', content)
+      afterTransition(run, lensPhase, content)
       return
     }
   }
@@ -353,12 +354,14 @@ function afterTransition(run: ProtocolRun, prevPhase: string, content: string): 
 }
 
 function sendLensInstruction(run: ProtocolRun): void {
-  if (!run.lenses || run._currentLensIdx === undefined) return
-  const lens = run.lenses[run._currentLensIdx]
+  const lenses = run.ext.lenses as LensDef[] | undefined
+  const idx = run.ext.currentLensIdx as number | undefined
+  if (!lenses || idx === undefined) return
+  const lens = lenses[idx]
   const criticSid = run.participants.get('critic')
   if (!criticSid) return
 
-  const passLabel = `+${lens.lens} (${run._currentLensIdx + 1}/${run.lenses.length})`
+  const passLabel = `+${lens.lens} (${idx + 1}/${lenses.length})`
   const statusText = formatStateLine(run.protocol.emoji, run.protocol.name, passLabel, `critic reviewing ${lens.lens}`)
   if (!run.statusHistory) run.statusHistory = []
   run.statusHistory.push(statusText)
@@ -551,7 +554,7 @@ function completeRun(run: ProtocolRun): void {
       process.stderr.write(`daemon: ${run.protocol.name}: transcript dump failed — leaving messages in place\n`)
       return
     }
-    if (run.strike && run.messageIds.length > 0) {
+    if (run.ext.strike && run.messageIds.length > 0) {
       let failures = 0
       for (let i = 0; i < run.messageIds.length; i++) {
         try { await gateway.delete(run.threadId, run.messageIds[i]) } catch { failures++ }
@@ -567,8 +570,9 @@ function completeRun(run: ProtocolRun): void {
     process.stderr.write(`daemon: ${run.protocol.name} transcript dump failed: ${err}\n`)
   })
 
-  if (run.onComplete) {
-    void Promise.resolve(run.onComplete(run)).catch(err => {
+  const onComplete = run.ext.onComplete as ((r: ProtocolRun) => void | Promise<void>) | undefined
+  if (onComplete) {
+    void Promise.resolve(onComplete(run)).catch(err => {
       process.stderr.write(`daemon: ${run.protocol.name} onComplete failed: ${err}\n`)
     })
   }
