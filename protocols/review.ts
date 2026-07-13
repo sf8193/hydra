@@ -18,6 +18,13 @@ export default protocol('review', {
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },
 
+  sentinels: {
+    critic_turn: '[critic→owner]',
+    owner_turn: '[owner→critic]',
+    post_pass: '[critic→owner]',
+    cleanup: '[summary]',
+  },
+
   windows: {
     critic_turn: '10m',
     owner_turn: '30m',

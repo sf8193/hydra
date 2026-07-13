@@ -110,6 +110,10 @@ export function onRunReply(sessionId: string, text: string, chatId: string, sent
   // Check if this role is the phase's actor
   if (phaseDef.actor !== role) return
 
+  // Sentinel check: if the phase declares a sentinel, the message must start with it
+  const sentinel = run.protocol.sentinel(run.phase)
+  if (sentinel && !firstLine.startsWith(sentinel)) return
+
   const bodyText = text.slice(text.indexOf('\n') + 1).trim()
 
   // Find the first matching event for this phase
@@ -300,8 +304,21 @@ function cleanupRun(run: ProtocolRun): void {
   runs.delete(run.id)
 }
 
-function resolveEvent(run: ProtocolRun, role: string, bodyText: string, events: string[]): string | null {
+function resolveEvent(run: ProtocolRun, _role: string, _bodyText: string, events: string[]): string | null {
   const nonControl = events.filter(e => e !== 'timeout' && e !== 'cancel')
+
+  // If a decision is declared for this phase, the reply path only fires
+  // the default "posted" event. Content-dependent routing (approve vs
+  // request_changes) belongs to decide() — the reply path shouldn't guess.
+  const hasDecision = Object.values(run.protocol.decisions).some(d => d.phase === run.phase)
+
+  if (hasDecision) {
+    // Only fire events that are clearly "posted" type (not value-dependent)
+    // If the only non-control events are decision-mapped, return null —
+    // the agent must use decide() for this phase.
+    const posted = nonControl.find(e => e.includes('posted') || e.includes('posted'))
+    return posted ?? null
+  }
 
   // Check for round-boundary events (any event containing "final")
   if (run.currentRound >= run.rounds) {

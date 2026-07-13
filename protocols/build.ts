@@ -17,6 +17,12 @@ export default protocol('build', {
     cancelled:    { actor: 'builder', half: 'top',    on: {} },
   },
 
+  sentinels: {
+    implementing: '[builder→critic]',
+    reviewing: '[critic→builder]',
+    closing: '[summary]',
+  },
+
   windows: {
     implementing: '30m',
     reviewing: '20m',

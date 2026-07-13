@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
 import { reviewMachine, CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS } from '../adversarial.js'
-import { buildMachine, BUILDER_SENTINEL, CRITIC_SENTINEL as BUILD_CRITIC_SENTINEL, CRITIC_TIMEOUT_MS as BUILD_CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS as BUILD_OWNER_TIMEOUT_MS } from '../build.js'
+import { buildMachine, BUILDER_SENTINEL, CRITIC_SENTINEL as BUILD_CRITIC_SENTINEL, SUMMARY_SENTINEL as BUILD_SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS as BUILD_CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS as BUILD_OWNER_TIMEOUT_MS } from '../build.js'
 
 process.stderr.write = (() => true) as any
 
@@ -80,6 +80,14 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(focused).not.toContain('argue AGAINST')
   })
 
+  test('sentinels match the live constants', () => {
+    expect(review.sentinel('critic_turn')).toBe(CRITIC_SENTINEL)
+    expect(review.sentinel('owner_turn')).toBe(OWNER_SENTINEL)
+    expect(review.sentinel('post_pass')).toBe(CRITIC_SENTINEL)
+    expect(review.sentinel('cleanup')).toBe(SUMMARY_SENTINEL)
+    expect(review.sentinel('complete')).toBeUndefined()
+  })
+
   test('pass_verdict decision is declared', () => {
     expect(review.decisions.pass_verdict).toBeDefined()
     expect(review.decisions.pass_verdict.phase).toBe('post_pass')
@@ -118,6 +126,13 @@ describe('build protocol (TypeScript DSL)', () => {
   test('disconnect grace matches the live constants', () => {
     expect(build.graceMs('critic')).toBe(30_000)
     expect(build.graceMs('builder')).toBe(120_000)
+  })
+
+  test('sentinels match the live constants', () => {
+    expect(build.sentinel('implementing')).toBe(BUILDER_SENTINEL)
+    expect(build.sentinel('reviewing')).toBe(BUILD_CRITIC_SENTINEL)
+    expect(build.sentinel('closing')).toBe(BUILD_SUMMARY_SENTINEL)
+    expect(build.sentinel('complete')).toBeUndefined()
   })
 
   test('critic_verdict decision is declared', () => {

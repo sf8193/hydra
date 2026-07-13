@@ -37,6 +37,7 @@ export type ProtocolSpec<
   phases: Phases
   windows: WindowDef
   grace?: GraceDef
+  sentinels?: Record<string, string>
   decisions?: Record<string, {
     phase: string
     actor: string
@@ -134,7 +135,7 @@ export function protocol<
     machine: createStateMachine(name, table as TransitionTable<string, string>),
     windowMs: (phase: string) => windows.get(phase),
     graceMs: (role: string) => grace.get(role),
-    sentinel: (_phase: string) => undefined,
+    sentinel: (phase: string) => spec.sentinels?.[phase],
     decisions,
     seed: (role: string, ctx: SeedContext) => spec.seed?.[role as keyof R]?.(ctx),
     completion: spec.completion ?? ['thread', 'outcome', 'transcript'],
