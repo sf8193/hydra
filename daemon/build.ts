@@ -661,16 +661,16 @@ function resetTimeout(state: BuildState): void {
   }, timeoutMs)
 }
 
-export function onBuildDecision(sessionId: string, value: string, because: string): void {
+export function onBuildDecision(sessionId: string, value: string, because: string): boolean {
   const buildId = sessionToBuild.get(sessionId)
-  if (!buildId) return
+  if (!buildId) return false
   const state = builds.get(buildId)
-  if (!state || state.phase !== 'reviewing' || state.criticSessionId !== sessionId) return
+  if (!state || state.phase !== 'reviewing' || state.criticSessionId !== sessionId) return false
 
   const isApprove = value === 'approve'
   if (!isApprove && value !== 'request_changes') {
     process.stderr.write(`daemon: build decide: unknown value "${value}" (expected approve | request_changes)\n`)
-    return
+    return false
   }
 
   const isFinal = !isApprove && state.currentRound >= state.rounds
@@ -694,6 +694,7 @@ export function onBuildDecision(sessionId: string, value: string, because: strin
     state.currentRound++
     onCriticFeedback(state, because)
   }
+  return true
 }
 
 registerProtocol('build', {

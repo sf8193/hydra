@@ -38,10 +38,14 @@ export type ProtocolSpec<
   windows: WindowDef
   grace?: GraceDef
   sentinels?: Record<string, string>
+  owner?: keyof Roles & string
+  initialPhase?: keyof Phases & string
   decisions?: Record<string, {
     phase: string
     actor: string
     options: readonly string[]
+    events?: Record<string, string>
+    finalEvent?: string
   }>
   seed?: Partial<Record<keyof Roles, SeedFn>>
   completion?: readonly string[]
@@ -61,7 +65,8 @@ export type Protocol<
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
   sentinel: (phase: string) => string | undefined
-  decisions: Record<string, { phase: string; actor: string; options: readonly string[] }>
+  ownerRole: string
+  decisions: Record<string, { phase: string; actor: string; options: readonly string[]; events?: Record<string, string>; finalEvent?: string }>
   seed: (role: string, ctx: SeedContext) => string | undefined
   completion: readonly string[]
 }
@@ -123,7 +128,11 @@ export function protocol<
     if (!roleNames.includes(dec.actor)) throw new Error(`protocol "${name}": decision "${decName}" references unknown role "${dec.actor}"`)
   }
 
-  const initialPhase = phaseNames[0]
+  const ownerRole = spec.owner ?? roleNames[roleNames.length - 1]
+  if (!roleNames.includes(ownerRole)) throw new Error(`protocol "${name}": owner role "${ownerRole}" is not a declared role`)
+
+  const initialPhase = (spec.initialPhase as string) ?? phaseNames[0]
+  if (!phaseNames.includes(initialPhase)) throw new Error(`protocol "${name}": initialPhase "${initialPhase}" is not a declared phase`)
 
   return Object.freeze({
     name,
@@ -132,6 +141,7 @@ export function protocol<
     roles: spec.roles,
     phases: spec.phases as Record<string, PhaseDef>,
     initialPhase,
+    ownerRole,
     machine: createStateMachine(name, table as TransitionTable<string, string>),
     windowMs: (phase: string) => windows.get(phase),
     graceMs: (role: string) => grace.get(role),

@@ -1,9 +1,11 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
 import { reviewMachine, CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS } from '../adversarial.js'
 import { buildMachine, BUILDER_SENTINEL, CRITIC_SENTINEL as BUILD_CRITIC_SENTINEL, SUMMARY_SENTINEL as BUILD_SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS as BUILD_CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS as BUILD_OWNER_TIMEOUT_MS } from '../build.js'
 
-process.stderr.write = (() => true) as any
+let origStderrWrite: typeof process.stderr.write
+beforeEach(() => { origStderrWrite = process.stderr.write; process.stderr.write = (() => true) as any })
+afterEach(() => { process.stderr.write = origStderrWrite })
 
 // ---------------------------------------------------------------------------
 // Load the protocol definitions

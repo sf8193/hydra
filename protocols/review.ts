@@ -4,6 +4,8 @@ export default protocol('review', {
   emoji: '⚔️',
   display: 'Adversarial Review',
 
+  owner: 'owner',
+
   roles: {
     critic: 'The Critic',
     owner: 'The Owner',
@@ -42,6 +44,7 @@ export default protocol('review', {
       phase: 'post_pass',
       actor: 'critic',
       options: ['clean', 'findings'] as const,
+      events: { clean: 'pass_posted', findings: 'pass_posted' },
     },
   },
 

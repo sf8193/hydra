@@ -4,6 +4,8 @@ export default protocol('build', {
   emoji: '🔨',
   display: 'Build',
 
+  owner: 'builder',
+
   roles: {
     builder: 'The Builder',
     critic: 'The Critic',
@@ -39,6 +41,8 @@ export default protocol('build', {
       phase: 'reviewing',
       actor: 'critic',
       options: ['approve', 'request_changes'] as const,
+      events: { approve: 'critic_lgtm', request_changes: 'critic_feedback' },
+      finalEvent: 'critic_final',
     },
   },
 

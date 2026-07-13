@@ -16,7 +16,7 @@ type ProtocolHooks = {
   onReply: (sessionId: string, text: string, chatId: string, sentIds: string[]) => void
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
-  onDecision?: (sessionId: string, value: string, because: string) => void
+  onDecision?: (sessionId: string, value: string, because: string) => boolean
   expectedTag?: (sessionId: string, chatId: string) => string | null
 }
 
@@ -75,7 +75,8 @@ export function dispatchDecision(sessionId: string, value: string, because: stri
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) {
       if (!hooks.onDecision) return { ok: false, reason: 'this protocol does not support decide()' }
-      hooks.onDecision(sessionId, value, because)
+      const accepted = hooks.onDecision(sessionId, value, because)
+      if (!accepted) return { ok: false, reason: `decision "${value}" was not accepted (wrong phase, role, or invalid value)` }
       return { ok: true }
     }
   }

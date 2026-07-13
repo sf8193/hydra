@@ -44,6 +44,8 @@ export async function startProtocolRun(
   ownerSessionId: string,
   params: { rounds?: number; topic?: string; model?: string; [key: string]: unknown } = {},
 ): Promise<ProtocolRun> {
+  if (threadToRun.has(threadId)) throw new Error(`A ${proto.display} is already running in this thread`)
+
   const id = Math.random().toString(36).slice(2, 10)
   const rounds = (params.rounds as number) ?? 3
 
@@ -278,9 +280,8 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 // Internals
 // ---------------------------------------------------------------------------
 
-function findOwnerRole(proto: Protocol): string | undefined {
-  const roles = Object.keys(proto.roles)
-  return roles.find(r => r === 'owner' || r === 'builder' || r === 'guide') ?? roles[roles.length - 1]
+function findOwnerRole(proto: Protocol): string {
+  return proto.ownerRole
 }
 
 function halfForPhase(run: ProtocolRun): 'top' | 'bottom' {
@@ -316,7 +317,7 @@ function resolveEvent(run: ProtocolRun, _role: string, _bodyText: string, events
     // Only fire events that are clearly "posted" type (not value-dependent)
     // If the only non-control events are decision-mapped, return null —
     // the agent must use decide() for this phase.
-    const posted = nonControl.find(e => e.includes('posted') || e.includes('posted'))
+    const posted = nonControl.find(e => e.includes('posted'))
     return posted ?? null
   }
 
@@ -331,25 +332,19 @@ function resolveEvent(run: ProtocolRun, _role: string, _bodyText: string, events
 }
 
 function resolveDecisionEvent(run: ProtocolRun, value: string): string | null {
-  const phase = run.protocol.phases[run.phase]
-  if (!phase) return null
+  const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
+  if (!decision) return null
 
-  // Map decision values to events. Convention: the event name contains the value
-  // or there's a direct match in the transition table.
-  const events = Object.keys(phase.on)
-
-  // Direct match: event name equals or contains the value
-  const direct = events.find(e => e === value || e.includes(value))
-  if (direct) return direct
-
-  // For approve/request_changes in build: map to critic_lgtm/critic_feedback
-  if (value === 'approve') return events.find(e => e.includes('lgtm') || e.includes('approve')) ?? null
-  if (value === 'request_changes') {
-    if (run.currentRound >= run.rounds) return events.find(e => e.includes('final')) ?? null
-    return events.find(e => e.includes('feedback') || e.includes('changes')) ?? null
+  // Use the declared event mapping
+  if (decision.events?.[value]) {
+    // Check for final round override
+    if (decision.finalEvent && run.currentRound >= run.rounds) return decision.finalEvent
+    return decision.events[value]
   }
 
-  return null
+  // Fallback: direct match in the transition table
+  const phase = run.protocol.phases[run.phase]
+  return phase ? Object.keys(phase.on).find(e => e === value) ?? null : null
 }
 
 async function spawnRole(run: ProtocolRun, role: string, params: Record<string, unknown>): Promise<void> {
@@ -362,8 +357,6 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   }
 
   const model = (params.model as string) ?? undefined
-  const seed = run.protocol.seed(role, { ...ctx, name: role, sessionId: 'pending' })
-
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,
