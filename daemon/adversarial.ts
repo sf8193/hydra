@@ -12,7 +12,7 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
-import { loadLensesFromDir, type LensDef } from './protocol-def.js'
+import { loadLensesFromDir, type LensDef } from './lens-loader.js'
 
 // ---------------------------------------------------------------------------
 // Types

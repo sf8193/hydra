@@ -7,7 +7,7 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import type { Protocol } from './protocol-dsl.js'
-import type { LensDef } from './protocol-def.js'
+import type { LensDef } from './lens-loader.js'
 
 // ---------------------------------------------------------------------------
 // Run state

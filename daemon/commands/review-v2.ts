@@ -3,7 +3,7 @@ import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
-import { loadLensesFromDir, type LensDef } from '../protocol-def.js'
+import { loadLensesFromDir, type LensDef } from '../lens-loader.js'
 import type { InboundMessage } from '../../gateway.js'
 
 const LENSES_DIR = join(import.meta.dir, '..', '..', 'protocols', 'lenses')
