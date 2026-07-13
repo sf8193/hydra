@@ -37,7 +37,8 @@ async function loadLenses(): Promise<Map<string, LensDef>> {
   if (lensCache.size > 0) return lensCache
   try {
     const lenses = await loadLensesFromDir(LENSES_DIR)
-    lensCache = lenses
+    lensCache.clear()
+    for (const [k, v] of lenses) lensCache.set(k, v)
     process.stderr.write(`daemon: loaded ${lenses.size} lens entries from ${LENSES_DIR}\n`)
     return lenses
   } catch (err) {

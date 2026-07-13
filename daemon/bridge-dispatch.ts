@@ -382,8 +382,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!because) throw new Error('decide requires a because')
         if (!callerSessionId) throw new Error('decide requires a session context')
 
-        const handled = dispatchDecision(callerSessionId, value, because)
-        if (!handled) throw new Error('no active protocol for this session, or the protocol does not support decide()')
+        const result = dispatchDecision(callerSessionId, value, because)
+        if (!result.ok) throw new Error(result.reason)
 
         return { content: [{ type: 'text', text: `decided: ${value}` }] }
       }

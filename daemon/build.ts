@@ -683,8 +683,8 @@ export function onBuildDecision(sessionId: string, value: string, because: strin
   })
 
   if (isApprove || isFinal) {
-    state.phase = result.to
     state._closing = { approved: isApprove, lastCriticText: because }
+    state.phase = result.to
     void requestBuildSummary(state, because, isApprove).catch(err => {
       process.stderr.write(`daemon: requestBuildSummary failed: ${err}\n`)
       void cancelBuild(state.buildId).catch(e => process.stderr.write(`daemon: cancelBuild failed: ${e}\n`))

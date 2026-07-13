@@ -71,14 +71,15 @@ export function dispatchDisconnect(sessionId: string): void {
   }
 }
 
-export function dispatchDecision(sessionId: string, value: string, because: string): boolean {
+export function dispatchDecision(sessionId: string, value: string, because: string): { ok: true } | { ok: false; reason: string } {
   for (const hooks of protocols.values()) {
-    if (hooks.isParticipant(sessionId) && hooks.onDecision) {
+    if (hooks.isParticipant(sessionId)) {
+      if (!hooks.onDecision) return { ok: false, reason: 'this protocol does not support decide()' }
       hooks.onDecision(sessionId, value, because)
-      return true
+      return { ok: true }
     }
   }
-  return false
+  return { ok: false, reason: 'no active protocol for this session' }
 }
 
 export function _resetForTesting(): void { protocols.clear() }
