@@ -1,4 +1,5 @@
 import { protocol } from '../daemon/protocol-dsl.js'
+import { mechanicsBlock } from '../daemon/prompts/mechanics.js'
 
 export default protocol('review', {
   emoji: '⚔️',
@@ -51,26 +52,19 @@ export default protocol('review', {
   },
 
   seed: {
-    critic: (ctx) => `You are ${ctx.name}, the critic in this thread's ${ctx.rounds}-round adversarial review.
-Your session_id is ${ctx.sessionId}.
-
-**Orient:** fetch_messages(channel="${ctx.threadId}", limit=100) is your window into this thread.
-Read every code file, wiki article, config, or document it references before forming a view.
-
-**Speak:** post to the thread with reply(chat_id="${ctx.threadId}").
-- Your FIRST LINE must be exactly \`[critic→owner]\` — the daemon routes on the first line only.
-- Untagged messages are conversational and won't advance the review.
-- One protocol message per round.
-
-**Wait:** after posting, WAIT. Phase advances arrive as [system] notifications.
-
-${ctx.topic
-  ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
-  : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`}
-
-Post your opening critique after orienting. The owner will tag their defenses with \`[owner→critic]\` — when a defense arrives, post your counter-argument. Repeat for ${ctx.rounds} rounds.
-
-Format with clear headers. Be substantive and focused.`,
+    critic: (ctx) => mechanicsBlock({
+      tmuxName: ctx.name as string,
+      role: 'critic',
+      protocol: `${ctx.rounds}-round adversarial review`,
+      sessionId: ctx.sessionId,
+      threadId: ctx.threadId,
+      tag: '[critic→owner]',
+      cadence: 'per-round',
+      waits: true,
+    }) + '\n\n' + (ctx.topic
+      ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
+      : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
+    ) + `\n\nPost your opening critique after orienting. The owner will tag their defenses with \`[owner→critic]\` — when a defense arrives, post your counter-argument. Repeat for ${ctx.rounds} rounds.\n\nFormat with clear headers. Be substantive and focused.`,
   },
 
   completion: ['thread', 'rounds', 'roundsRun', 'outcome', 'topic', 'cast', 'transcript', 'struck'],

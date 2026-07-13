@@ -1,4 +1,5 @@
 import { protocol } from '../daemon/protocol-dsl.js'
+import { mechanicsBlock } from '../daemon/prompts/mechanics.js'
 
 export default protocol('build', {
   emoji: '🔨',
@@ -48,23 +49,16 @@ export default protocol('build', {
   },
 
   seed: {
-    critic: (ctx) => `You are ${ctx.name}, the critic in this thread's ${ctx.rounds}-round build review.
-Your session_id is ${ctx.sessionId}.
-
-**Orient:** fetch_messages(channel="${ctx.threadId}", limit=100) is your window into this thread.
-Read every code file referenced in the implementation summary before reviewing.
-
-**Speak:** post to the thread with reply(chat_id="${ctx.threadId}").
-- Your FIRST LINE must be exactly \`[critic→builder]\` — the daemon routes on the first line only.
-- To approve: call decide('approve', 'why it ships').
-- To request changes: call decide('request_changes', 'what to fix').
-- Untagged messages are conversational and won't advance the build.
-
-**Wait:** after posting, WAIT. The builder's response arrives as a [system] notification.
-
-**Task:** ${ctx.task ?? 'Review the implementation.'}
-
-Review the implementation. Be specific — cite code lines. Focus on correctness first.`,
+    critic: (ctx) => mechanicsBlock({
+      tmuxName: ctx.name as string,
+      role: 'critic',
+      protocol: `${ctx.rounds}-round build review`,
+      sessionId: ctx.sessionId,
+      threadId: ctx.threadId,
+      tag: '[critic→builder]',
+      cadence: 'per-round',
+      waits: true,
+    }) + `\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.\n\nTo approve: call decide('approve', 'why it ships').\nTo request changes: call decide('request_changes', 'what to fix').`,
   },
 
   completion: ['thread', 'rounds', 'roundsRun', 'outcome', 'task', 'cast', 'transcript', 'approved'],

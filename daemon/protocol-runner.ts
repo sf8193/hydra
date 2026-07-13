@@ -354,8 +354,10 @@ function sendLensInstruction(run: ProtocolRun): void {
   const idx = run.ext.currentLensIdx as number | undefined
   if (!lenses || idx === undefined) return
   const lens = lenses[idx]
-  const criticSid = run.participants.get('critic')
-  if (!criticSid) return
+  const actor = run.protocol.phases[run.phase]?.actor
+  if (!actor) return
+  const actorSid = run.participants.get(actor)
+  if (!actorSid) return
 
   const passLabel = `+${lens.lens} (${idx + 1}/${lenses.length})`
   const statusText = formatStateLine(run.protocol.emoji, run.protocol.name, passLabel, `critic reviewing ${lens.lens}`)
@@ -363,7 +365,7 @@ function sendLensInstruction(run: ProtocolRun): void {
   run.statusHistory.push(statusText)
   void safeSend(run.threadId, statusText).then(ids => run.messageIds.push(...ids))
 
-  transport.sendOrQueue(criticSid, {
+  transport.sendOrQueue(actorSid, {
     type: 'notification',
     content: [
       `[system] Correctness debate complete. Now do a **${lens.lens}** pass.`,
@@ -376,7 +378,8 @@ function sendLensInstruction(run: ProtocolRun): void {
   })
 }
 
-async function enterClosing(run: ProtocolRun, lastContent: string): Promise<void> {
+async function enterClosing(run: ProtocolRun, _lastContent: string): Promise<void> {
+  const phase = run.phase
   // Kill non-owner participants
   for (const [role, sid] of run.participants) {
     if (sid === run.ownerSessionId) continue
@@ -392,16 +395,16 @@ async function enterClosing(run: ProtocolRun, lastContent: string): Promise<void
   clearTimers(run)
 
   // Backstop timeout for the closing phase
-  const closingMs = run.protocol.windowMs('closing') ?? 5 * 60 * 1000
+  const closingMs = run.protocol.windowMs(phase) ?? 5 * 60 * 1000
   run.timeout = setTimeout(() => {
-    if (run.phase !== 'closing') return
+    if (run.phase !== phase) return
     const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
     if (tr.ok) run.phase = tr.to
     completeRun(run)
   }, closingMs)
 
   // Notify owner to post summary
-  const sentinel = run.protocol.sentinel('closing') ?? '[summary]'
+  const sentinel = run.protocol.sentinel(phase) ?? '[summary]'
   transport.sendOrQueue(run.ownerSessionId, {
     type: 'notification',
     content: [
