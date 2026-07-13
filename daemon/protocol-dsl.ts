@@ -13,6 +13,8 @@ type PhaseDef = {
   actor: string
   half?: 'top' | 'bottom'
   on: PhaseTransitions
+  replyEvent?: string
+  finalRoundEvent?: string
 }
 
 type WindowDef = Record<string, string>

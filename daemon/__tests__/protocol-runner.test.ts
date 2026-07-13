@@ -33,9 +33,9 @@ const testProto = protocol('test-review', {
   display: 'Test Review',
   roles: { critic: 'The Critic', owner: 'The Owner' },
   phases: {
-    critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' } },
-    owner_turn:  { actor: 'owner', half: 'bottom', on: { posted: 'critic_turn', final: 'closing', timeout: 'cancelled', cancel: 'cancelled' } },
-    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' } },
+    critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted' },
+    owner_turn:  { actor: 'owner', half: 'bottom', on: { posted: 'critic_turn', final: 'closing', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted', finalRoundEvent: 'final' },
+    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' }, replyEvent: 'summary' },
     complete:    { actor: 'owner', half: 'top', on: {} },
     cancelled:   { actor: 'owner', half: 'top', on: {} },
   },

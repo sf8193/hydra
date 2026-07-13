@@ -123,12 +123,8 @@ export function onRunReply(sessionId: string, text: string, chatId: string, sent
 
   const bodyText = text.slice(text.indexOf('\n') + 1).trim()
 
-  // Find the first matching event for this phase
-  const events = Object.keys(phaseDef.on)
-  if (events.length === 0) return
-
-  // Determine which event to fire based on protocol logic
-  const event = resolveEvent(run, role, bodyText, events)
+  // Determine which event to fire — declarative, not heuristic
+  const event = resolveEvent(run)
   if (!event) return
 
   const result = run.protocol.machine.transition(run.phase as any, event as any)
@@ -418,30 +414,12 @@ async function enterClosing(run: ProtocolRun, lastContent: string): Promise<void
   })
 }
 
-function resolveEvent(run: ProtocolRun, _role: string, _bodyText: string, events: string[]): string | null {
-  const nonControl = events.filter(e => e !== 'timeout' && e !== 'cancel')
+function resolveEvent(run: ProtocolRun): string | null {
+  const phase = run.protocol.phases[run.phase]
+  if (!phase) return null
 
-  // If a decision is declared for this phase, the reply path only fires
-  // the default "posted" event. Content-dependent routing (approve vs
-  // request_changes) belongs to decide() — the reply path shouldn't guess.
-  const hasDecision = Object.values(run.protocol.decisions).some(d => d.phase === run.phase)
-
-  if (hasDecision) {
-    // Only fire events that are clearly "posted" type (not value-dependent)
-    // If the only non-control events are decision-mapped, return null —
-    // the agent must use decide() for this phase.
-    const posted = nonControl.find(e => e.includes('posted'))
-    return posted ?? null
-  }
-
-  // Check for round-boundary events (any event containing "final")
-  if (run.currentRound >= run.rounds) {
-    const finalEvent = nonControl.find(e => e.includes('final'))
-    if (finalEvent) return finalEvent
-  }
-
-  // Default: the first non-timeout, non-cancel, non-final event
-  return nonControl.find(e => !e.includes('final')) ?? nonControl[0] ?? null
+  if (phase.finalRoundEvent && run.currentRound >= run.rounds) return phase.finalRoundEvent
+  return phase.replyEvent ?? null
 }
 
 function resolveDecisionEvent(run: ProtocolRun, value: string): string | null {

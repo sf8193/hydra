@@ -14,10 +14,10 @@ export default protocol('review', {
   },
 
   phases: {
-    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' } },
-    owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'post_pass', timeout: 'cancelled', cancel: 'cancelled' } },
-    post_pass:   { actor: 'critic', half: 'bottom', on: { pass_posted: 'post_pass', summary_posted: 'complete', timeout: 'cleanup', cancel: 'cancelled' } },
-    cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' } },
+    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'critic_posted' },
+    owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'post_pass', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'owner_posted', finalRoundEvent: 'final_round' },
+    post_pass:   { actor: 'critic', half: 'bottom', on: { pass_posted: 'post_pass', summary_posted: 'complete', timeout: 'cleanup', cancel: 'cancelled' }, replyEvent: 'pass_posted' },
+    cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, replyEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },
