@@ -303,13 +303,22 @@ function afterTransition(run: ProtocolRun, prevPhase: string, content: string): 
     run.currentRound++
   }
 
-  // Lens flow: entering post_pass starts the first lens
-  if (run.phase === 'post_pass' && prevPhase !== 'post_pass' && run.lenses && run.lenses.length > 0) {
-    run._currentLensIdx = 0
-    sendLensInstruction(run)
-    postStatusLine(run)
-    resetTimeout(run)
-    return
+  // Lens flow: entering post_pass
+  if (run.phase === 'post_pass' && prevPhase !== 'post_pass') {
+    if (run.lenses && run.lenses.length > 0) {
+      run._currentLensIdx = 0
+      sendLensInstruction(run)
+      postStatusLine(run)
+      resetTimeout(run)
+      return
+    }
+    // No lenses — skip post_pass immediately via timeout
+    const skip = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
+    if (skip.ok) {
+      run.phase = skip.to
+      afterTransition(run, 'post_pass', content)
+      return
+    }
   }
 
   // Lens flow: looping within post_pass advances to the next lens
@@ -322,16 +331,18 @@ function afterTransition(run: ProtocolRun, prevPhase: string, content: string): 
       resetTimeout(run)
       return
     }
-    // All lenses done — transition to cleanup via timeout event
+    // All lenses done — transition via timeout
     const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
     if (tr.ok) {
       run.phase = tr.to
-      if (isTerminal(run)) { completeRun(run); return }
+      afterTransition(run, 'post_pass', content)
+      return
     }
   }
 
-  // Closing flow: kill non-owner participants, notify owner
-  if (run.phase === 'closing' && prevPhase !== 'closing') {
+  // Closing flow: use the protocol's declared closing phase
+  const closingPhase = run.protocol.closingPhase
+  if (closingPhase && run.phase === closingPhase && prevPhase !== closingPhase) {
     void enterClosing(run, content)
     return
   }

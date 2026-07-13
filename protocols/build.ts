@@ -5,6 +5,7 @@ export default protocol('build', {
   display: 'Build',
 
   owner: 'builder',
+  closingPhase: 'closing',
 
   roles: {
     builder: 'The Builder',

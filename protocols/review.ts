@@ -5,6 +5,7 @@ export default protocol('review', {
   display: 'Adversarial Review',
 
   owner: 'owner',
+  closingPhase: 'cleanup',
 
   roles: {
     critic: 'The Critic',
