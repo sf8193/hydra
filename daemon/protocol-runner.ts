@@ -112,7 +112,7 @@ export async function startProtocolRun(
 // Reply handler
 // ---------------------------------------------------------------------------
 
-export function onRunReply(sessionId: string, text: string, chatId: string, sentMessageIds: string[]): void {
+export async function onRunReply(sessionId: string, text: string, chatId: string, sentMessageIds: string[]): Promise<void> {
   const runId = sessionToRun.get(sessionId)
   if (!runId) return
   const run = runs.get(runId)
@@ -132,7 +132,8 @@ export function onRunReply(sessionId: string, text: string, chatId: string, sent
   const sentinel = run.protocol.sentinel(run.phase)
   if (sentinel && !firstLine.startsWith(sentinel)) return
 
-  const bodyText = text.slice(text.indexOf('\n') + 1).trim()
+  const nlIdx = text.indexOf('\n')
+  const bodyText = nlIdx >= 0 ? text.slice(nlIdx + 1).trim() : firstLine.slice(sentinel?.length ?? 0).trim()
 
   // Determine which event to fire — declarative, not heuristic
   const event = resolveEvent(run)
@@ -157,14 +158,14 @@ export function onRunReply(sessionId: string, text: string, chatId: string, sent
     run.currentRound++
   }
 
-  afterTransition(run, prevPhase, bodyText)
+  await afterTransition(run, prevPhase, bodyText)
 }
 
 // ---------------------------------------------------------------------------
 // Decision handler
 // ---------------------------------------------------------------------------
 
-export function onRunDecision(sessionId: string, value: string, because: string): boolean {
+export async function onRunDecision(sessionId: string, value: string, because: string): Promise<boolean> {
   const runId = sessionToRun.get(sessionId)
   if (!runId) return false
   const run = runs.get(runId)
@@ -188,10 +189,9 @@ export function onRunDecision(sessionId: string, value: string, because: string)
   const context = run.protocol.decisionContext?.(run)
   run.decisions.push({ phase: run.phase, role, value, because, context })
 
-  // Post narration to the thread
-  void safeSend(run.threadId, `**${run.protocol.roles[role]}** decided: **${value}**\n${because}`).then(ids => {
-    run.messageIds.push(...ids)
-  })
+  // Post narration — await IDs before transitioning so they're tracked for strike
+  const narrationIds = await safeSend(run.threadId, `**${run.protocol.roles[role]}** decided: **${value}**\n${because}`)
+  run.messageIds.push(...narrationIds)
 
   // Determine the event from the value
   const eventMap = resolveDecisionEvent(run, value)
@@ -208,7 +208,7 @@ export function onRunDecision(sessionId: string, value: string, because: string)
     run.currentRound++
   }
 
-  afterTransition(run, prevPhase, because)
+  await afterTransition(run, prevPhase, because)
   return true
 }
 
@@ -314,7 +314,7 @@ function cleanupRun(run: ProtocolRun): void {
 // Phase behavior registry — declared on phases, executed by the runner
 // ---------------------------------------------------------------------------
 
-type BehaviorHandler = (run: ProtocolRun, prevPhase: string, content: string, ctx: BehaviorContext) => boolean
+type BehaviorHandler = (run: ProtocolRun, prevPhase: string, content: string, ctx: BehaviorContext) => boolean | Promise<boolean>
 
 const BEHAVIORS: Record<string, BehaviorHandler> = {
   killNonOwner: (run, prevPhase) => {
@@ -338,25 +338,16 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
     run.timeout = setTimeout(async () => {
       if (run.phase !== phase) return
       process.stderr.write(`daemon: ${run.protocol.name} run: backstop timeout in "${phase}"\n`)
-      const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-      if (!tr.ok) {
-        await cancelRun(run, 'backstop timed out')
-        return
-      }
-      if (tr.to === run.protocol.cancelPhase) {
-        await cancelRun(run, 'backstop timed out')
-      } else {
-        run.phase = tr.to
-        completeRun(run)
-      }
+      await fireTransition(run, 'timeout', '', 'backstop timed out')
     }, ms)
     return true
   },
 
-  notifyOwnerSummary: (run, prevPhase) => {
+  notifyOwnerSummary: async (run, prevPhase) => {
     if (prevPhase === run.phase) return false
     const sentinel = run.protocol.sentinel(run.phase) ?? '[summary]'
-    void safeSend(run.threadId, formatStateLine(run.protocol.emoji, run.protocol.name, '⚒︎', 'has concluded. Processing summary…'))
+    const concludedIds = await safeSend(run.threadId, formatStateLine(run.protocol.emoji, run.protocol.name, '⚒︎', 'has concluded. Processing summary…'))
+    run.messageIds.push(...concludedIds)
     const formatLines = run.protocol.summaryFormat(run)
     transport.sendOrQueue(run.ownerSessionId, {
       type: 'notification',
@@ -391,14 +382,11 @@ function makeBehaviorCtx(run: ProtocolRun): BehaviorContext {
         meta: { chat_id: r.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
     },
-    transition: (r, event) => {
-      const result = (r as ProtocolRun).protocol.machine.transition(r.phase as any, event as any)
-      return result.ok ? { ok: true, to: result.to } : { ok: false }
-    },
+    fireTransition: (r, event, content, reason) => fireTransition(r as ProtocolRun, event, content, reason),
   }
 }
 
-function afterTransition(run: ProtocolRun, prevPhase: string, content: string): void {
+async function afterTransition(run: ProtocolRun, prevPhase: string, content: string): Promise<void> {
   if (isTerminal(run)) {
     completeRun(run)
     return
@@ -411,12 +399,12 @@ function afterTransition(run: ProtocolRun, prevPhase: string, content: string): 
     const handler = typeof behavior === 'function'
       ? (r: ProtocolRun, p: string, c: string, cx: BehaviorContext) => behavior(r, p, c, cx)
       : BEHAVIORS[behavior]
-    if (handler && handler(run, prevPhase, content, ctx)) handled = true
+    if (handler && await handler(run, prevPhase, content, ctx)) handled = true
   }
 
   if (!handled) {
     notifyNextActor(run, content)
-    postStatusLine(run)
+    await postStatusLine(run)
     resetTimeout(run)
   }
 }
@@ -468,7 +456,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   sessionToRun.set(result.sessionId, run.id)
 }
 
-function postStatusLine(run: ProtocolRun): void {
+async function postStatusLine(run: ProtocolRun): Promise<void> {
   const half = halfForPhase(run)
   const actor = run.protocol.phases[run.phase]?.actor
   const actorSid = actor ? run.participants.get(actor) : undefined
@@ -482,7 +470,8 @@ function postStatusLine(run: ProtocolRun): void {
   const text = formatStateLine(run.protocol.emoji, run.protocol.name, formatRoundBadge('', half, run.currentRound, run.rounds), action)
   if (!run.statusHistory) run.statusHistory = []
   run.statusHistory.push(text)
-  void safeSend(run.threadId, text).then(ids => run.messageIds.push(...ids))
+  const ids = await safeSend(run.threadId, text)
+  run.messageIds.push(...ids)
 }
 
 function notifyNextActor(run: ProtocolRun, prevContent: string): void {
@@ -498,6 +487,27 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   })
 }
 
+async function fireTransition(run: ProtocolRun, event: string, content: string, reason: string): Promise<void> {
+  const result = run.protocol.machine.transition(run.phase as any, event as any)
+  if (!result.ok) {
+    await cancelRun(run, reason)
+    return
+  }
+  if (run.timeout) clearTimeout(run.timeout)
+  const prevPhase = run.phase
+  run.phase = result.to
+  if (isTerminal(run)) {
+    if (result.to === run.protocol.cancelPhase) {
+      run.phase = prevPhase
+      await cancelRun(run, reason)
+    } else {
+      completeRun(run)
+    }
+  } else {
+    await afterTransition(run, prevPhase, content)
+  }
+}
+
 function resetTimeout(run: ProtocolRun): void {
   if (run.timeout) clearTimeout(run.timeout)
 
@@ -508,23 +518,7 @@ function resetTimeout(run: ProtocolRun): void {
   run.timeout = setTimeout(async () => {
     if (run.phase !== phase) return
     process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
-    const result = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-    if (!result.ok) {
-      await cancelRun(run, 'timed out')
-      return
-    }
-    const prevPhase = run.phase
-    run.phase = result.to
-    if (isTerminal(run)) {
-      if (result.to === run.protocol.cancelPhase) {
-        run.phase = prevPhase
-        await cancelRun(run, 'timed out')
-      } else {
-        completeRun(run)
-      }
-    } else {
-      afterTransition(run, prevPhase, '')
-    }
+    await fireTransition(run, 'timeout', '', 'timed out')
   }, ms)
 }
 

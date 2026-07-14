@@ -13,10 +13,10 @@ export type ProtocolName = 'review' | 'build' | 'design' | 'review_v2' | 'build_
 type ProtocolHooks = {
   getByThread: (threadId: string) => boolean
   isParticipant: (sessionId: string) => boolean
-  onReply: (sessionId: string, text: string, chatId: string, sentIds: string[]) => void
+  onReply: (sessionId: string, text: string, chatId: string, sentIds: string[]) => void | Promise<void>
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
-  onDecision?: (sessionId: string, value: string, because: string) => boolean
+  onDecision?: (sessionId: string, value: string, because: string) => boolean | Promise<boolean>
   expectedTag?: (sessionId: string, chatId: string) => string | null
 }
 
@@ -71,11 +71,11 @@ export function dispatchDisconnect(sessionId: string): void {
   }
 }
 
-export function dispatchDecision(sessionId: string, value: string, because: string): { ok: true } | { ok: false; reason: string } {
+export async function dispatchDecision(sessionId: string, value: string, because: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) {
       if (!hooks.onDecision) return { ok: false, reason: 'this protocol does not support decide()' }
-      const accepted = hooks.onDecision(sessionId, value, because)
+      const accepted = await hooks.onDecision(sessionId, value, because)
       if (!accepted) return { ok: false, reason: `decision "${value}" was not accepted (wrong phase, role, or invalid value)` }
       return { ok: true }
     }

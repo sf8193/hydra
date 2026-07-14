@@ -3,7 +3,7 @@ import { mechanicsBlock } from '../daemon/prompts/mechanics.js'
 
 type LensDef = { lens: string; instructions: string }
 
-const lensIteration: PhaseBehaviorFn = (run, prevPhase, content, ctx) => {
+const lensIteration: PhaseBehaviorFn = async (run, prevPhase, content, ctx) => {
   const lenses = run.ext.lenses as LensDef[] | undefined
   const isEntry = prevPhase !== run.phase
   const idx = isEntry ? 0 : ((run.ext.currentLensIdx as number) ?? 0) + 1
@@ -13,8 +13,8 @@ const lensIteration: PhaseBehaviorFn = (run, prevPhase, content, ctx) => {
     run.ext.currentLensName = lenses[idx].lens
     const lens = lenses[idx]
     const passLabel = `+${lens.lens} (${idx + 1}/${lenses.length})`
-    void ctx.safeSend(run.threadId, passLabel)
-      .then(ids => run.messageIds.push(...ids))
+    const ids = await ctx.safeSend(run.threadId, passLabel)
+    run.messageIds.push(...ids)
     ctx.sendToActor(run, [
       `[system] Correctness debate complete. Now do a **${lens.lens}** pass.`,
       ``,
@@ -22,20 +22,14 @@ const lensIteration: PhaseBehaviorFn = (run, prevPhase, content, ctx) => {
       ``,
       `Post your feedback. Use decide('clean', why) if everything is fine, or decide('findings', what_to_fix) if not.`,
     ].join('\n'))
-    ctx.postStatusLine(run)
+    await ctx.postStatusLine(run)
     ctx.resetTimeout(run)
     return true
   }
 
   run.ext.currentLensName = undefined
-  const tr = ctx.transition(run, 'timeout')
-  if (tr.ok && tr.to) {
-    run.phase = tr.to
-    ctx.afterTransition(run, prevPhase, content)
-    return true
-  }
-
-  return false
+  await ctx.fireTransition(run, 'timeout', content, 'no lenses remaining')
+  return true
 }
 
 export default protocol('review', {

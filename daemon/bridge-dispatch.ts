@@ -382,7 +382,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!because) throw new Error('decide requires a because')
         if (!callerSessionId) throw new Error('decide requires a session context')
 
-        const result = dispatchDecision(callerSessionId, value, because)
+        const result = await dispatchDecision(callerSessionId, value, because)
         if (!result.ok) throw new Error(result.reason)
 
         return { content: [{ type: 'text', text: `decided: ${value}` }] }

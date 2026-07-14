@@ -17,13 +17,13 @@ export type RunState = {
 }
 
 export type BehaviorContext = {
-  postStatusLine: (run: RunState) => void
+  postStatusLine: (run: RunState) => Promise<void>
   resetTimeout: (run: RunState) => void
-  afterTransition: (run: RunState, prevPhase: string, content: string) => void
+  afterTransition: (run: RunState, prevPhase: string, content: string) => Promise<void>
+  fireTransition: (run: RunState, event: string, content: string, reason: string) => Promise<void>
   safeSend: (threadId: string, text: string) => Promise<string[]>
   sendToActor: (run: RunState, content: string) => void
-  transition: (run: RunState, event: string) => { ok: boolean; to?: string }
 }
 
 /** Return true to suppress the default notify/reset after this phase entry. All behaviors in the chain still run regardless — true does not halt the chain. */
-export type PhaseBehaviorFn = (run: RunState, prevPhase: string, content: string, ctx: BehaviorContext) => boolean
+export type PhaseBehaviorFn = (run: RunState, prevPhase: string, content: string, ctx: BehaviorContext) => boolean | Promise<boolean>
