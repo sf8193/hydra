@@ -61,7 +61,33 @@ export default protocol('build', {
     }) + `\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.\n\nTo approve: call decide('approve', 'why it ships').\nTo request changes: call decide('request_changes', 'what to fix').`,
   },
 
-  initState: () => ({
-    strike: false,
-  }),
+  ownerKickoff: (params) => {
+    const task = params.task ?? params.topic ?? 'Begin implementing.'
+    return `[Build — starting]\n\n**Task:** ${task}\n\nYou are the builder. Implement the task, then post to the thread tagged with \`[builder→critic]\`. The critic will review.`
+  },
+
+  summaryFormat: (run) => {
+    const roundArc = Array.from({ length: run.rounds }, (_, i) =>
+      `**Round ${i + 1}️⃣:** Critic ... · Builder ...`)
+    return [
+      `**🔨 Build Summary** (${run.rounds} round${run.rounds > 1 ? 's' : ''})`,
+      ``,
+      `🔬 **Synthesis** — one sentence. The build in one breath.`,
+      ...roundArc,
+      ``,
+      `---`,
+      ``,
+      `📋 **Dispositions**`,
+      `- **What was built** — one bullet per piece, each with how to think about it`,
+      `- **PRs / artifacts** — links, or "none"`,
+      ``,
+      `---`,
+      ``,
+      `⚡ **Tensions** — what the critic pushed, and what changed because of it.`,
+      ``,
+      `🌱 **What Emerged** — what nobody asked for that showed up anyway. "Nothing" if the build was routine.`,
+      ``,
+      `➡️ **What's next** — what happens now and what needs the human.`,
+    ]
+  },
 })

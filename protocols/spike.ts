@@ -43,6 +43,15 @@ export default protocol('spike', {
     explorer: '2m',
   },
 
+  decisions: {
+    explorer_done: {
+      phase: 'exploring',
+      actor: 'explorer',
+      options: ['done'] as const,
+      events: { done: 'wrap_up' },
+    },
+  },
+
   seed: {
     explorer: (ctx) => mechanicsBlock({
       tmuxName: ctx.name,
@@ -56,10 +65,7 @@ export default protocol('spike', {
       ],
       cadence: 'per-phase',
       orient: `Read the question and any referenced code, files, or documents. Investigate depth-first — follow the evidence, don't survey.`,
-    }) + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nPost \`[checkpoint]\` with progress as you go. When you have findings, post \`[report]\` with your final analysis.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
+    }) + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nPost \`[checkpoint]\` with progress as you go. When your investigation is complete, call \`decide('done', 'your summary')\` — then post your final \`[report]\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
   },
 
-  initState: () => ({
-    strike: false,
-  }),
 })

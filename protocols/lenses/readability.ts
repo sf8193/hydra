@@ -1,9 +1,9 @@
-# Readability — lens
+import { defineLens } from '../../daemon/lens-loader.js'
 
-> Applied after correctness rounds. Compose with `+r` or `+readability`.
-
-## Instructions
-
+export default defineLens({
+  lens: 'readability',
+  aliases: ['r'],
+  instructions: `
 Review purely for simplicity and readability. Correctness is settled — don't re-litigate it.
 
 The standard: code should be immediately understandable without comments.
@@ -18,10 +18,5 @@ Flag:
 
 Do NOT suggest adding anything (comments, types, docs, error handling).
 Only suggest making things simpler, clearer, or shorter.
-
-## Skeleton
-
-```yaml skeleton
-lens: readability
-aliases: [r]
-```
+  `.trim(),
+})

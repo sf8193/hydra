@@ -1,9 +1,9 @@
-# Security — lens
+import { defineLens } from '../../daemon/lens-loader.js'
 
-> Applied after correctness rounds. Compose with `+security`.
-
-## Instructions
-
+export default defineLens({
+  lens: 'security',
+  aliases: ['s'],
+  instructions: `
 Review for security vulnerabilities. Correctness and readability are settled — focus purely on attack surface.
 
 Check for:
@@ -17,10 +17,5 @@ Check for:
 - Overly permissive defaults
 
 For each finding: name the vulnerability class, show the specific line, and describe a concrete exploit. No hypotheticals — if you can't construct an attack, it's not a finding.
-
-## Skeleton
-
-```yaml skeleton
-lens: security
-aliases: []
-```
+  `.trim(),
+})

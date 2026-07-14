@@ -7,7 +7,7 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import type { Protocol } from './protocol-dsl.js'
-import type { LensDef } from './lens-loader.js'
+import type { RunState, BehaviorContext } from './protocol-types.js'
 
 // ---------------------------------------------------------------------------
 // Run state
@@ -26,7 +26,8 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   sessionToRole: Map<string, string>
   timeout?: ReturnType<typeof setTimeout>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
-  decisions: Array<{ phase: string; role: string; value: string; because: string }>
+  decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
+  strike: boolean
   ext: Ext
 }
 
@@ -64,6 +65,7 @@ export async function startProtocolRun(
     disconnectTimers: new Map(),
     decisions: [],
     messageIds: [],
+    strike: !!(params.strike ?? false),
     ext: proto.initState(params),
   }
 
@@ -71,7 +73,7 @@ export async function startProtocolRun(
   threadToRun.set(threadId, id)
   sessionToRun.set(ownerSessionId, id)
 
-  const ownerRole = findOwnerRole(proto)
+  const ownerRole = proto.ownerRole
   if (ownerRole) {
     run.participants.set(ownerRole, ownerSessionId)
     run.sessionToRole.set(ownerSessionId, ownerRole)
@@ -90,6 +92,19 @@ export async function startProtocolRun(
 
   postStatusLine(run)
   resetTimeout(run)
+
+  // Notify the initial phase's actor if the protocol declares an owner kickoff
+  if (proto.ownerKickoff) {
+    const initialActor = proto.phases[proto.initialPhase]?.actor
+    if (initialActor && run.participants.get(initialActor) === ownerSessionId) {
+      transport.sendOrQueue(ownerSessionId, {
+        type: 'notification',
+        content: proto.ownerKickoff(params),
+        meta: { chat_id: threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+      })
+    }
+  }
+
   return run
 }
 
@@ -137,10 +152,8 @@ export function onRunReply(sessionId: string, text: string, chatId: string, sent
   const prevPhase = run.phase
   run.phase = result.to
 
-  // Round advancement: when the transition returns to a phase that has
-  // finalRoundEvent (the round boundary), the previous round is complete.
   const prevPhaseDef = run.protocol.phases[prevPhase]
-  if (prevPhaseDef?.finalRoundEvent && run.phase !== prevPhase) {
+  if (prevPhaseDef?.finalRoundEvent && event !== prevPhaseDef.finalRoundEvent) {
     run.currentRound++
   }
 
@@ -172,7 +185,8 @@ export function onRunDecision(sessionId: string, value: string, because: string)
     return false
   }
 
-  run.decisions.push({ phase: run.phase, role, value, because })
+  const context = run.protocol.decisionContext?.(run)
+  run.decisions.push({ phase: run.phase, role, value, because, context })
 
   // Post narration to the thread
   void safeSend(run.threadId, `**${run.protocol.roles[role]}** decided: **${value}**\n${because}`).then(ids => {
@@ -189,6 +203,10 @@ export function onRunDecision(sessionId: string, value: string, because: string)
   if (run.timeout) clearTimeout(run.timeout)
   const prevPhase = run.phase
   run.phase = result.to
+
+  if (result.to === run.protocol.initialPhase && eventMap !== decision.finalEvent) {
+    run.currentRound++
+  }
 
   afterTransition(run, prevPhase, because)
   return true
@@ -270,9 +288,6 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 // Internals
 // ---------------------------------------------------------------------------
 
-function findOwnerRole(proto: Protocol): string {
-  return proto.ownerRole
-}
 
 function halfForPhase(run: ProtocolRun): 'top' | 'bottom' {
   return run.protocol.phases[run.phase]?.half ?? 'top'
@@ -299,50 +314,9 @@ function cleanupRun(run: ProtocolRun): void {
 // Phase behavior registry — declared on phases, executed by the runner
 // ---------------------------------------------------------------------------
 
-type BehaviorHandler = (run: ProtocolRun, prevPhase: string, content: string) => boolean
+type BehaviorHandler = (run: ProtocolRun, prevPhase: string, content: string, ctx: BehaviorContext) => boolean
 
 const BEHAVIORS: Record<string, BehaviorHandler> = {
-  advanceRound: (run, prevPhase) => {
-    if (prevPhase !== run.phase) run.currentRound++
-    return false
-  },
-
-  lensIteration: (run, prevPhase, content) => {
-    const lenses = run.ext.lenses as LensDef[] | undefined
-    const isEntry = prevPhase !== run.phase
-    const isLoop = prevPhase === run.phase
-
-    // Determine the target index
-    const idx = isEntry ? 0 : ((run.ext.currentLensIdx as number) ?? 0) + 1
-
-    // Has items to iterate?
-    if (lenses && idx < lenses.length) {
-      run.ext.currentLensIdx = idx
-      sendLensInstruction(run)
-      postStatusLine(run)
-      resetTimeout(run)
-      return true
-    }
-
-    // No items (entry with empty list) or all items done — skip/finish via timeout
-    if (isEntry || isLoop) {
-      const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-      if (tr.ok) {
-        run.phase = tr.to
-        afterTransition(run, prevPhase, content)
-        return true
-      }
-    }
-
-    return false
-  },
-
-  closing: (run, prevPhase) => {
-    if (prevPhase === run.phase) return false
-    void enterClosing(run)
-    return true
-  },
-
   killNonOwner: (run, prevPhase) => {
     if (prevPhase === run.phase) return false
     for (const [role, sid] of run.participants) {
@@ -363,22 +337,28 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
     const ms = run.protocol.windowMs(phase) ?? 5 * 60 * 1000
     run.timeout = setTimeout(() => {
       if (run.phase !== phase) return
+      process.stderr.write(`daemon: ${run.protocol.name} run: backstop timeout in "${phase}"\n`)
       const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-      if (tr.ok) run.phase = tr.to
-      completeRun(run)
+      if (tr.ok) {
+        run.phase = tr.to
+        completeRun(run)
+      }
     }, ms)
-    return false
+    return true
   },
 
   notifyOwnerSummary: (run, prevPhase) => {
     if (prevPhase === run.phase) return false
     const sentinel = run.protocol.sentinel(run.phase) ?? '[summary]'
     void safeSend(run.threadId, formatStateLine(run.protocol.emoji, run.protocol.name, '⚒︎', 'has concluded. Processing summary…'))
+    const formatLines = run.protocol.summaryFormat(run)
     transport.sendOrQueue(run.ownerSessionId, {
       type: 'notification',
       content: [
         `[system] ${run.protocol.display} complete (${run.currentRound} round${run.currentRound > 1 ? 's' : ''}).`,
-        `Post a closing summary to your thread.`,
+        `Post a closing summary to your thread using this format:`,
+        ``,
+        ...formatLines,
         ``,
         `**Message routing:** Your first line MUST be \`${sentinel}\`. Messages without this tag won't complete the protocol.`,
       ].join('\n'),
@@ -388,95 +368,60 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
   },
 }
 
+function makeBehaviorCtx(run: ProtocolRun): BehaviorContext {
+  return {
+    postStatusLine: (r) => postStatusLine(r as ProtocolRun),
+    resetTimeout: (r) => resetTimeout(r as ProtocolRun),
+    afterTransition: (r, prev, c) => afterTransition(r as ProtocolRun, prev, c),
+    safeSend,
+    sendToActor: (r, content) => {
+      const actor = (r as ProtocolRun).protocol.phases[r.phase]?.actor
+      if (!actor) return
+      const actorSid = r.participants.get(actor)
+      if (!actorSid) return
+      transport.sendOrQueue(actorSid, {
+        type: 'notification',
+        content,
+        meta: { chat_id: r.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+      })
+    },
+    transition: (r, event) => {
+      const result = (r as ProtocolRun).protocol.machine.transition(r.phase as any, event as any)
+      return result.ok ? { ok: true, to: result.to } : { ok: false }
+    },
+  }
+}
+
 function afterTransition(run: ProtocolRun, prevPhase: string, content: string): void {
   if (isTerminal(run)) {
     completeRun(run)
     return
   }
 
+  const ctx = makeBehaviorCtx(run)
   const phase = run.protocol.phases[run.phase]
+  let handled = false
   for (const behavior of phase?.onEnter ?? []) {
-    const handler = typeof behavior === 'function' ? behavior : BEHAVIORS[behavior]
-    if (handler && handler(run as any, prevPhase, content)) return
+    const handler = typeof behavior === 'function'
+      ? (r: ProtocolRun, p: string, c: string, cx: BehaviorContext) => behavior(r, p, c, cx)
+      : BEHAVIORS[behavior]
+    if (handler && handler(run, prevPhase, content, ctx)) handled = true
   }
 
-  notifyNextActor(run, content)
-  postStatusLine(run)
-  resetTimeout(run)
-}
-
-function sendLensInstruction(run: ProtocolRun): void {
-  const lenses = run.ext.lenses as LensDef[] | undefined
-  const idx = run.ext.currentLensIdx as number | undefined
-  if (!lenses || idx === undefined) return
-  const lens = lenses[idx]
-  const actor = run.protocol.phases[run.phase]?.actor
-  if (!actor) return
-  const actorSid = run.participants.get(actor)
-  if (!actorSid) return
-
-  const passLabel = `+${lens.lens} (${idx + 1}/${lenses.length})`
-  const roleLabel = run.protocol.roles[actor] ?? actor
-  const statusText = formatStateLine(run.protocol.emoji, run.protocol.name, passLabel, `${roleLabel} reviewing ${lens.lens}`)
-  if (!run.statusHistory) run.statusHistory = []
-  run.statusHistory.push(statusText)
-  void safeSend(run.threadId, statusText).then(ids => run.messageIds.push(...ids))
-
-  transport.sendOrQueue(actorSid, {
-    type: 'notification',
-    content: [
-      `[system] Correctness debate complete. Now do a **${lens.lens}** pass.`,
-      ``,
-      lens.instructions,
-      ``,
-      `Post your feedback. Use decide('clean', why) if everything is fine, or decide('findings', what_to_fix) if not.`,
-    ].join('\n'),
-    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
-}
-
-async function enterClosing(run: ProtocolRun, _lastContent: string): Promise<void> {
-  const phase = run.phase
-  // Kill non-owner participants
-  for (const [role, sid] of run.participants) {
-    if (sid === run.ownerSessionId) continue
-    sessionToRun.delete(sid)
-    const info = registry.get(sid)
-    if (info && !killsInProgress.has(sid)) {
-      try { await killSession(info, 'protocol closing') } catch {}
-    }
+  if (!handled) {
+    notifyNextActor(run, content)
+    postStatusLine(run)
+    resetTimeout(run)
   }
-
-  void safeSend(run.threadId, formatStateLine(run.protocol.emoji, run.protocol.name, '⚒︎', 'has concluded. Processing summary…'))
-
-  clearTimers(run)
-
-  // Backstop timeout for the closing phase
-  const closingMs = run.protocol.windowMs(phase) ?? 5 * 60 * 1000
-  run.timeout = setTimeout(() => {
-    if (run.phase !== phase) return
-    const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-    if (tr.ok) run.phase = tr.to
-    completeRun(run)
-  }, closingMs)
-
-  // Notify owner to post summary
-  const sentinel = run.protocol.sentinel(phase) ?? '[summary]'
-  transport.sendOrQueue(run.ownerSessionId, {
-    type: 'notification',
-    content: [
-      `[system] ${run.protocol.display} complete (${run.currentRound} round${run.currentRound > 1 ? 's' : ''}).`,
-      `Post a closing summary to your thread.`,
-      ``,
-      `**Message routing:** Your first line MUST be \`${sentinel}\`. Messages without this tag won't complete the protocol.`,
-    ].join('\n'),
-    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
 }
 
 function resolveEvent(run: ProtocolRun): string | null {
   const phase = run.protocol.phases[run.phase]
   if (!phase) return null
+
+  // Suppress reply-based advancement when a decision is declared for this phase
+  const hasDecision = Object.values(run.protocol.decisions).some(d => d.phase === run.phase)
+  if (hasDecision) return null
 
   if (phase.finalRoundEvent && run.currentRound >= run.rounds) return phase.finalRoundEvent
   return phase.replyEvent ?? null
@@ -486,16 +431,11 @@ function resolveDecisionEvent(run: ProtocolRun, value: string): string | null {
   const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
   if (!decision) return null
 
-  // Use the declared event mapping
-  if (decision.events?.[value]) {
-    // Check for final round override
-    if (decision.finalEvent && run.currentRound >= run.rounds) return decision.finalEvent
-    return decision.events[value]
-  }
+  // Use the declared event mapping — no fallback to raw transition names
+  if (!decision.events?.[value]) return null
 
-  // Fallback: direct match in the transition table
-  const phase = run.protocol.phases[run.phase]
-  return phase ? Object.keys(phase.on).find(e => e === value) ?? null : null
+  if (decision.finalEvent && run.currentRound >= run.rounds) return decision.finalEvent
+  return decision.events[value]
 }
 
 async function spawnRole(run: ProtocolRun, role: string, params: Record<string, unknown>): Promise<void> {
@@ -558,16 +498,22 @@ function resetTimeout(run: ProtocolRun): void {
   const ms = run.protocol.windowMs(run.phase)
   if (!ms) return
 
+  const phase = run.phase
   run.timeout = setTimeout(async () => {
+    if (run.phase !== phase) return
     process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
     const result = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
     if (result.ok) {
+      const prevPhase = run.phase
       run.phase = result.to
       if (isTerminal(run)) {
-        completeRun(run)
+        if (result.to === 'cancelled') {
+          await cancelRun(run, 'timed out')
+        } else {
+          completeRun(run)
+        }
       } else {
-        postStatusLine(run)
-        resetTimeout(run)
+        afterTransition(run, prevPhase, '')
       }
     } else {
       await cancelRun(run, 'timed out')
@@ -592,7 +538,7 @@ function completeRun(run: ProtocolRun): void {
       process.stderr.write(`daemon: ${run.protocol.name}: transcript dump failed — leaving messages in place\n`)
       return
     }
-    if (run.ext.strike && run.messageIds.length > 0) {
+    if (run.strike && run.messageIds.length > 0) {
       let failures = 0
       for (let i = 0; i < run.messageIds.length; i++) {
         try { await gateway.delete(run.threadId, run.messageIds[i]) } catch { failures++ }
@@ -607,13 +553,6 @@ function completeRun(run: ProtocolRun): void {
   }).catch(err => {
     process.stderr.write(`daemon: ${run.protocol.name} transcript dump failed: ${err}\n`)
   })
-
-  const onComplete = run.ext.onComplete as ((r: ProtocolRun) => void | Promise<void>) | undefined
-  if (onComplete) {
-    void Promise.resolve(onComplete(run)).catch(err => {
-      process.stderr.write(`daemon: ${run.protocol.name} onComplete failed: ${err}\n`)
-    })
-  }
 
   cleanupRun(run)
   refreshSessionVisual(run.threadId)
@@ -644,11 +583,11 @@ export function isRunParticipant(sessionId: string): boolean {
 // Protocol registry integration — register v2 protocols
 // ---------------------------------------------------------------------------
 
-function runnerHooks(name: ProtocolName) {
+function runnerHooks(name: ProtocolName, protoName: string) {
   registerProtocol(name, {
     getByThread: (threadId) => {
       const run = getRunByThread(threadId)
-      return !!run && run.protocol.name === name.replace('_v2', '')
+      return !!run && run.protocol.name === protoName
     },
     isParticipant: isRunParticipant,
     onReply: onRunReply,
@@ -670,6 +609,6 @@ function runnerHooks(name: ProtocolName) {
   })
 }
 
-runnerHooks('review_v2')
-runnerHooks('build_v2')
-runnerHooks('spike_v2')
+runnerHooks('review_v2', 'review')
+runnerHooks('build_v2', 'build')
+runnerHooks('spike_v2', 'spike')

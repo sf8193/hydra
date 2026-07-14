@@ -208,6 +208,26 @@ describe('protocol DSL validation', () => {
     })).toThrow('unknown phase "nowhere"')
   })
 
+  test('rejects closingPhase on unknown phase', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad',
+      roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: {} } },
+      windows: {},
+      closingPhase: 'nonexistent',
+    })).toThrow('closingPhase "nonexistent" is not a declared phase')
+  })
+
+  test('rejects sentinel on unknown phase', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad',
+      roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: {} } },
+      windows: {},
+      sentinels: { missing_phase: '[tag]' },
+    })).toThrow('sentinel on unknown phase "missing_phase"')
+  })
+
   test('protocol object is frozen', () => {
     const p = protocol('frozen', {
       emoji: '🧊', display: 'Frozen',

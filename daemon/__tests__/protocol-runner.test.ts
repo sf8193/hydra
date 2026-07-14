@@ -35,7 +35,7 @@ const testProto = protocol('test-review', {
   phases: {
     critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted' },
     owner_turn:  { actor: 'owner', half: 'bottom', on: { posted: 'critic_turn', final: 'closing', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted', finalRoundEvent: 'final' },
-    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' }, replyEvent: 'summary', onEnter: ['closing'] },
+    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' }, replyEvent: 'summary', onEnter: ['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'] },
     complete:    { actor: 'owner', half: 'top', on: {} },
     cancelled:   { actor: 'owner', half: 'top', on: {} },
   },
@@ -81,12 +81,12 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
 }
 
 describe('protocol runner — reply routing', () => {
-  test('critic reply in critic_turn transitions to owner_turn', () => {
+  test('critic reply in critic_turn with decision declared does not advance via reply', () => {
     const run = createTestRun()
 
     onRunReply('test-critic', '[critic→owner]\nYour code is bad.', 'test-thread', ['msg-1'])
 
-    expect(run.phase).toBe('owner_turn')
+    expect(run.phase).toBe('critic_turn')
   })
 
   test('owner reply in owner_turn transitions to critic_turn', () => {
@@ -98,12 +98,13 @@ describe('protocol runner — reply routing', () => {
     expect(run.currentRound).toBe(2)
   })
 
-  test('final round triggers final event instead of posted', () => {
+  test('final round triggers final event without incrementing currentRound', () => {
     const run = createTestRun({ phase: 'owner_turn', currentRound: 3, rounds: 3 })
 
     onRunReply('test-owner', '[owner→critic]\nFinal defense.', 'test-thread', ['msg-1'])
 
     expect(run.phase).toBe('closing')
+    expect(run.currentRound).toBe(3)
   })
 
   test('wrong role reply is ignored', () => {
@@ -122,10 +123,10 @@ describe('protocol runner — reply routing', () => {
     expect(run.phase).toBe('critic_turn')
   })
 
-  test('message IDs are tracked', () => {
-    const run = createTestRun()
+  test('message IDs are tracked on reply-advanced phases', () => {
+    const run = createTestRun({ phase: 'owner_turn' })
 
-    onRunReply('test-critic', '[critic→owner]\nCritique.', 'test-thread', ['msg-1', 'msg-2'])
+    onRunReply('test-owner', '[owner→critic]\nDefense.', 'test-thread', ['msg-1', 'msg-2'])
 
     expect(run.messageIds).toContain('msg-1')
     expect(run.messageIds).toContain('msg-2')
@@ -149,15 +150,12 @@ describe('protocol runner — reply routing', () => {
   })
 
   test('phase with declared decision requires decide(), reply alone does not advance', () => {
-    // critic_turn has a decision declared (verdict). A reply should not
-    // advance the protocol — the agent must use decide().
     const run = createTestRun()
 
     onRunReply('test-critic', '[critic→owner]\nHere is my critique.', 'test-thread', ['msg-1'])
 
-    // critic_turn has both a decision AND a replyEvent — the reply path fires
-    // the replyEvent alongside the decision capability. Both coexist.
-    expect(run.phase).toBe('owner_turn')
+    expect(run.phase).toBe('critic_turn')
+    expect(run.messageIds).not.toContain('msg-1')
   })
 })
 

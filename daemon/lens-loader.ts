@@ -9,42 +9,16 @@ export type LensDef = {
   lens: string
   aliases: string[]
   instructions: string
-  source: string
 }
 
-const SKELETON_FENCE = /```yaml skeleton\n([\s\S]*?)\n```/
-
-export async function loadLensDef(path: string): Promise<LensDef> {
-  const source = await Bun.file(path).text()
-  return parseLensDef(source, path)
-}
-
-export function parseLensDef(source: string, origin = '<lens>'): LensDef {
-  const fence = source.match(SKELETON_FENCE)
-  if (!fence) throw new Error(`${origin}: no \`\`\`yaml skeleton block found`)
-
-  let raw: any
-  try {
-    raw = Bun.YAML.parse(fence[1])
-  } catch (err) {
-    throw new Error(`${origin}: skeleton is not valid YAML — ${err instanceof Error ? err.message : err}`)
+export function defineLens(def: { lens: string; aliases?: string[]; instructions: string }): LensDef {
+  if (!def.lens || typeof def.lens !== 'string') throw new Error(`defineLens: lens must be a non-empty string`)
+  if (!def.instructions || typeof def.instructions !== 'string') throw new Error(`defineLens("${def.lens}"): instructions must be a non-empty string`)
+  return {
+    lens: def.lens,
+    aliases: def.aliases ?? [],
+    instructions: def.instructions,
   }
-  if (!raw || typeof raw !== 'object') throw new Error(`${origin}: skeleton must be a mapping`)
-
-  const fail = (msg: string): never => { throw new Error(`${origin}: ${msg}`) }
-
-  const lens = typeof raw.lens === 'string' && raw.lens.length > 0
-    ? raw.lens
-    : fail('lens must be a non-empty string')
-
-  const aliases: string[] = Array.isArray(raw.aliases) ? raw.aliases.map(String) : []
-
-  const instructionsMatch = source.match(/## Instructions\n\n([\s\S]*?)(?:\n## Skeleton\n|\n```yaml skeleton|$)/)
-  if (!instructionsMatch) fail('missing ## Instructions section')
-  const instructions = instructionsMatch[1].trim()
-  if (!instructions) fail('## Instructions section is empty')
-
-  return { lens, aliases, instructions, source }
 }
 
 const singletonCache = new Map<string, LensDef>()
@@ -67,14 +41,19 @@ export async function loadLensesFromDir(lensesDir: string): Promise<Map<string, 
   const lenses = new Map<string, LensDef>()
   let files: string[]
   try {
-    files = readdirSync(lensesDir).filter(f => f.endsWith('.md'))
+    files = readdirSync(lensesDir).filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts'))
   } catch {
     return lenses
   }
 
   for (const file of files) {
     try {
-      const def = await loadLensDef(join(lensesDir, file))
+      const mod = await import(join(lensesDir, file))
+      const def: LensDef = mod.default
+      if (!def?.lens) {
+        process.stderr.write(`daemon: skipping lens ${file}: no default export with lens field\n`)
+        continue
+      }
       for (const key of [def.lens, ...def.aliases]) {
         const existing = lenses.get(key)
         if (existing && existing.lens !== def.lens) {

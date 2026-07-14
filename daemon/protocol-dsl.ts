@@ -1,5 +1,8 @@
 import { parseDuration } from './util.js'
 import { createStateMachine, type TransitionTable } from './state-machine.js'
+import type { PhaseBehaviorFn } from './protocol-types.js'
+
+export type { PhaseBehaviorFn, RunState, BehaviorContext } from './protocol-types.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -9,9 +12,8 @@ type RoleDef = Record<string, string>
 
 type PhaseTransitions = Record<string, string>
 
-export type PhaseBehaviorName = 'advanceRound' | 'lensIteration' | 'closing' | 'killNonOwner' | 'backstopTimer' | 'notifyOwnerSummary'
+export type PhaseBehaviorName = 'killNonOwner' | 'backstopTimer' | 'notifyOwnerSummary'
 export type PhaseBehavior = PhaseBehaviorName | PhaseBehaviorFn
-export type PhaseBehaviorFn = (run: unknown, prevPhase: string, content: string) => boolean
 
 type PhaseDef = {
   // Singular: one actor per phase. Fan-out (parallel actors) requires actor: string | string[]
@@ -54,7 +56,6 @@ export type ProtocolSpec<
   owner?: keyof Roles & string
   initialPhase?: keyof Phases & string
   closingPhase?: keyof Phases & string
-  lensPhase?: keyof Phases & string
   decisions?: Record<string, {
     phase: string
     actor: string
@@ -64,6 +65,9 @@ export type ProtocolSpec<
   }>
   seed?: Partial<Record<keyof Roles, SeedFn>>
   initState?: (params: Record<string, unknown>) => Record<string, unknown>
+  summaryFormat?: (run: import('./protocol-types.js').RunState) => string[]
+  ownerKickoff?: (params: Record<string, unknown>) => string
+  decisionContext?: (run: import('./protocol-types.js').RunState) => string | undefined
 }
 
 export type Protocol<
@@ -77,7 +81,6 @@ export type Protocol<
   phases: Record<string, PhaseDef>
   initialPhase: Phase
   closingPhase?: string
-  lensPhase?: string
   machine: ReturnType<typeof createStateMachine<Phase, Event>>
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
@@ -86,6 +89,9 @@ export type Protocol<
   decisions: Record<string, { phase: string; actor: string; options: readonly string[]; events?: Record<string, string>; finalEvent?: string }>
   seed: (role: string, ctx: SeedContext) => string | undefined
   initState: (params: Record<string, unknown>) => Record<string, unknown>
+  summaryFormat: (run: import('./protocol-types.js').RunState) => string[]
+  ownerKickoff: ((params: Record<string, unknown>) => string) | undefined
+  decisionContext: ((run: import('./protocol-types.js').RunState) => string | undefined) | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +161,16 @@ export function protocol<
   const initialPhase = (spec.initialPhase as string) ?? phaseNames[0]
   if (!phaseNames.includes(initialPhase)) throw new Error(`protocol "${name}": initialPhase "${initialPhase}" is not a declared phase`)
 
+  if (spec.closingPhase && !phaseNames.includes(spec.closingPhase as string)) {
+    throw new Error(`protocol "${name}": closingPhase "${spec.closingPhase}" is not a declared phase`)
+  }
+
+  if (spec.sentinels) {
+    for (const phase of Object.keys(spec.sentinels)) {
+      if (!phaseNames.includes(phase)) throw new Error(`protocol "${name}": sentinel on unknown phase "${phase}"`)
+    }
+  }
+
   return Object.freeze({
     name,
     emoji: spec.emoji,
@@ -163,7 +179,6 @@ export function protocol<
     phases: spec.phases as Record<string, PhaseDef>,
     initialPhase,
     closingPhase: spec.closingPhase as string | undefined,
-    lensPhase: spec.lensPhase as string | undefined,
     ownerRole,
     machine: createStateMachine(name, table as TransitionTable<string, string>),
     windowMs: (phase: string) => windows.get(phase),
@@ -172,5 +187,12 @@ export function protocol<
     decisions,
     seed: (role: string, ctx: SeedContext) => spec.seed?.[role as keyof R]?.(ctx),
     initState: spec.initState ?? (() => ({})),
+    summaryFormat: spec.summaryFormat ?? ((run) => [
+      `**${spec.emoji} ${spec.display} Summary** (${run.rounds} round${run.rounds > 1 ? 's' : ''})`,
+      ``,
+      `Post your closing summary.`,
+    ]),
+    ownerKickoff: spec.ownerKickoff ?? undefined,
+    decisionContext: spec.decisionContext ?? undefined,
   })
 }
