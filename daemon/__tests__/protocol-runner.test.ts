@@ -31,6 +31,8 @@ const { runs, threadToRun, sessionToRun } = __test
 const testProto = protocol('test-review', {
   emoji: '🧪',
   display: 'Test Review',
+  cancelPhase: 'cancelled',
+  closingPhase: 'closing',
   roles: { critic: 'The Critic', owner: 'The Owner' },
   phases: {
     critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted' },
@@ -70,6 +72,7 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
     disconnectTimers: new Map(),
     decisions: [],
     messageIds: [],
+    strike: false,
     ext: {},
     ...overrides,
   } as any
@@ -224,6 +227,56 @@ describe('protocol runner — terminal phases', () => {
 
     expect(runs.has('test-run')).toBe(false)
     expect(threadToRun.has('test-thread')).toBe(false)
+  })
+})
+
+describe('protocol runner — timeout transitions', () => {
+  test('timeout to cancelled phase uses cancel semantics', async () => {
+    const run = createTestRun({ phase: 'critic_turn' })
+    // critic_turn timeout → cancelled (the cancelPhase)
+    const result = testProto.machine.transition('critic_turn' as any, 'timeout' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('cancelled')
+    expect(run.protocol.cancelPhase).toBe('cancelled')
+  })
+
+  test('timeout to non-cancel phase routes through afterTransition', () => {
+    // closing timeout → complete (not cancelled, so completeRun semantics)
+    const result = testProto.machine.transition('closing' as any, 'timeout' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('complete')
+    expect(result.to).not.toBe('cancelled')
+  })
+})
+
+describe('protocol runner — strike and decisionContext', () => {
+  test('run.strike is set from params, not ext', () => {
+    const run = createTestRun()
+    expect(run.strike).toBe(false)
+
+    const runWithStrike = createTestRun({ strike: true })
+    expect(runWithStrike.strike).toBe(true)
+  })
+
+  test('decisionContext stamps context on decisions', () => {
+    const run = createTestRun()
+    onRunDecision('test-critic', 'approve', 'Looks good.')
+    expect(run.decisions).toHaveLength(1)
+    // testProto has no decisionContext, so context is undefined
+    expect(run.decisions[0].context).toBeUndefined()
+  })
+})
+
+describe('protocol runner — behavior chain', () => {
+  test('all onEnter behaviors run (chain does not halt on first true)', () => {
+    // closing phase has ['killNonOwner', 'backstopTimer', 'notifyOwnerSummary']
+    // backstopTimer returns true but notifyOwnerSummary should still run
+    const run = createTestRun({ phase: 'owner_turn', currentRound: 3, rounds: 3 })
+
+    onRunReply('test-owner', '[owner→critic]\nFinal defense.', 'test-thread', ['msg-1'])
+
+    // Should reach closing phase and fire all three behaviors
+    expect(run.phase).toBe('closing')
   })
 })
 

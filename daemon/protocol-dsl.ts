@@ -56,6 +56,7 @@ export type ProtocolSpec<
   owner?: keyof Roles & string
   initialPhase?: keyof Phases & string
   closingPhase?: keyof Phases & string
+  cancelPhase?: keyof Phases & string
   decisions?: Record<string, {
     phase: string
     actor: string
@@ -81,6 +82,7 @@ export type Protocol<
   phases: Record<string, PhaseDef>
   initialPhase: Phase
   closingPhase?: string
+  cancelPhase?: string
   machine: ReturnType<typeof createStateMachine<Phase, Event>>
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
@@ -165,6 +167,10 @@ export function protocol<
     throw new Error(`protocol "${name}": closingPhase "${spec.closingPhase}" is not a declared phase`)
   }
 
+  if (spec.cancelPhase && !phaseNames.includes(spec.cancelPhase as string)) {
+    throw new Error(`protocol "${name}": cancelPhase "${spec.cancelPhase}" is not a declared phase`)
+  }
+
   if (spec.sentinels) {
     for (const phase of Object.keys(spec.sentinels)) {
       if (!phaseNames.includes(phase)) throw new Error(`protocol "${name}": sentinel on unknown phase "${phase}"`)
@@ -179,6 +185,7 @@ export function protocol<
     phases: spec.phases as Record<string, PhaseDef>,
     initialPhase,
     closingPhase: spec.closingPhase as string | undefined,
+    cancelPhase: spec.cancelPhase as string | undefined,
     ownerRole,
     machine: createStateMachine(name, table as TransitionTable<string, string>),
     windowMs: (phase: string) => windows.get(phase),

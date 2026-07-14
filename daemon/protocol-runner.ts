@@ -335,11 +335,17 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
     clearTimers(run)
     const phase = run.phase
     const ms = run.protocol.windowMs(phase) ?? 5 * 60 * 1000
-    run.timeout = setTimeout(() => {
+    run.timeout = setTimeout(async () => {
       if (run.phase !== phase) return
       process.stderr.write(`daemon: ${run.protocol.name} run: backstop timeout in "${phase}"\n`)
       const tr = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-      if (tr.ok) {
+      if (!tr.ok) {
+        await cancelRun(run, 'backstop timed out')
+        return
+      }
+      if (tr.to === run.protocol.cancelPhase) {
+        await cancelRun(run, 'backstop timed out')
+      } else {
         run.phase = tr.to
         completeRun(run)
       }
@@ -503,20 +509,21 @@ function resetTimeout(run: ProtocolRun): void {
     if (run.phase !== phase) return
     process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
     const result = run.protocol.machine.transition(run.phase as any, 'timeout' as any)
-    if (result.ok) {
-      const prevPhase = run.phase
-      run.phase = result.to
-      if (isTerminal(run)) {
-        if (result.to === 'cancelled') {
-          await cancelRun(run, 'timed out')
-        } else {
-          completeRun(run)
-        }
+    if (!result.ok) {
+      await cancelRun(run, 'timed out')
+      return
+    }
+    const prevPhase = run.phase
+    run.phase = result.to
+    if (isTerminal(run)) {
+      if (result.to === run.protocol.cancelPhase) {
+        run.phase = prevPhase
+        await cancelRun(run, 'timed out')
       } else {
-        afterTransition(run, prevPhase, '')
+        completeRun(run)
       }
     } else {
-      await cancelRun(run, 'timed out')
+      afterTransition(run, prevPhase, '')
     }
   }, ms)
 }

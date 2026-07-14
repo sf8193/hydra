@@ -44,6 +44,7 @@ export default protocol('review', {
 
   owner: 'owner',
   closingPhase: 'cleanup',
+  cancelPhase: 'cancelled',
 
   roles: {
     critic: 'The Critic',

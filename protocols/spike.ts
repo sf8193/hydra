@@ -7,6 +7,7 @@ export default protocol('spike', {
 
   owner: 'guide',
   closingPhase: 'reporting',
+  cancelPhase: 'cancelled',
 
   roles: {
     explorer: 'The Explorer',
