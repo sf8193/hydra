@@ -3,6 +3,7 @@ import { createStateMachine, type TransitionTable } from './state-machine.js'
 import type { PhaseBehaviorFn } from './protocol-types.js'
 
 export type { PhaseBehaviorFn, RunState, BehaviorContext } from './protocol-types.js'
+export { defineLens } from './lens-loader.js'
 
 // ---------------------------------------------------------------------------
 // Types

@@ -1,6 +1,8 @@
 import { readdirSync } from 'fs'
 import { join } from 'path'
 
+export const LENSES_DIR = join(import.meta.dir, '..', 'protocols', 'lenses')
+
 // ---------------------------------------------------------------------------
 // Lens definition — a composable review pass loaded from protocols/lenses/
 // ---------------------------------------------------------------------------
@@ -24,9 +26,9 @@ export function defineLens(def: { lens: string; aliases?: string[]; instructions
 const singletonCache = new Map<string, LensDef>()
 let singletonLoaded = false
 
-export async function getLenses(lensesDir: string): Promise<Map<string, LensDef>> {
+export async function getLenses(): Promise<Map<string, LensDef>> {
   if (singletonLoaded) return singletonCache
-  const loaded = await loadLensesFromDir(lensesDir)
+  const loaded = await loadLensesFromDir()
   singletonCache.clear()
   for (const [k, v] of loaded) singletonCache.set(k, v)
   singletonLoaded = true
@@ -37,7 +39,8 @@ export function getLensesSync(): Map<string, LensDef> {
   return singletonCache
 }
 
-export async function loadLensesFromDir(lensesDir: string): Promise<Map<string, LensDef>> {
+async function loadLensesFromDir(): Promise<Map<string, LensDef>> {
+  const lensesDir = LENSES_DIR
   const lenses = new Map<string, LensDef>()
   let files: string[]
   try {

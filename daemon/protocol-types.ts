@@ -25,4 +25,5 @@ export type BehaviorContext = {
   transition: (run: RunState, event: string) => { ok: boolean; to?: string }
 }
 
+/** Return true to suppress the default notify/reset after this phase entry. All behaviors in the chain still run regardless — true does not halt the chain. */
 export type PhaseBehaviorFn = (run: RunState, prevPhase: string, content: string, ctx: BehaviorContext) => boolean

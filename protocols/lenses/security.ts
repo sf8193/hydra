@@ -1,4 +1,4 @@
-import { defineLens } from '../../daemon/lens-loader.js'
+import { defineLens } from '../../daemon/protocol-dsl.js'
 
 export default defineLens({
   lens: 'security',

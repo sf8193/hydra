@@ -1,5 +1,4 @@
 import { randomUUID } from 'crypto'
-import { join } from 'path'
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
@@ -25,14 +24,7 @@ export const OWNER_SENTINEL = '[owner→critic]'
 export const CRITIC_SENTINEL = '[critic→owner]'
 export const SUMMARY_SENTINEL = '[summary]'
 
-// ---------------------------------------------------------------------------
-// Post-pass lenses — loaded from protocols/lenses/ (compose-by-writing)
-// ---------------------------------------------------------------------------
-
-const LENSES_DIR = join(import.meta.dir, '..', 'protocols', 'lenses')
-
-// Eagerly load lenses so listPostPasses() is ready for the router's +lens parsing
-void getLenses(LENSES_DIR)
+void getLenses()
 
 export function listPostPasses(): string[] {
   return [...getLensesSync().keys()]
@@ -159,7 +151,7 @@ export async function startReview(
   }
 
   if (postPasses && postPasses.length > 0) {
-    const lenses = await getLenses(LENSES_DIR)
+    const lenses = await getLenses()
     const unknown = postPasses.filter(p => !lenses.has(p))
     if (unknown.length > 0) {
       throw new Error(`Unknown lens${unknown.length > 1 ? 'es' : ''}: ${unknown.join(', ')}. Available: ${[...new Set([...lenses.values()].map(l => l.lens))].join(', ')}`)

@@ -1,22 +1,15 @@
-import { join } from 'path'
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
-import { getLenses as getSharedLenses, type LensDef } from '../lens-loader.js'
+import { getLenses, type LensDef } from '../lens-loader.js'
 import type { InboundMessage } from '../../gateway.js'
-
-const LENSES_DIR = join(import.meta.dir, '..', '..', 'protocols', 'lenses')
 
 let reviewProto: Awaited<ReturnType<typeof import('../../protocols/review.js')>>['default'] | null = null
 
 async function getReviewProto() {
   if (!reviewProto) reviewProto = (await import('../../protocols/review.js')).default
   return reviewProto
-}
-
-async function getLenses(): Promise<Map<string, LensDef>> {
-  return getSharedLenses(LENSES_DIR)
 }
 
 export async function handleReviewV2Intercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, postPasses?: string[]): Promise<void> {
