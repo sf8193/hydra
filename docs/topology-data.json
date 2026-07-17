@@ -397,10 +397,6 @@
       "daemon_anchor-state"
     ],
     [
-      "daemon_bridge-dispatch",
-      "daemon_dashboard"
-    ],
-    [
       "daemon_bridge-server",
       "daemon_config"
     ],
@@ -582,10 +578,6 @@
     ],
     [
       "daemon_router",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_router",
       "daemon_commands_build"
     ],
     [
@@ -615,10 +607,6 @@
     [
       "daemon_router",
       "daemon_session-lifecycle"
-    ],
-    [
-      "daemon_router",
-      "daemon_permission"
     ],
     [
       "daemon_router",

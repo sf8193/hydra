@@ -6,7 +6,7 @@ import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, getContextPercent, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration, transformProtocolTag } from './util.js'
-import { isProtocolPost, getExpectedTag, dispatchDecision } from './protocol-registry.js'
+import { isProtocolPost } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
@@ -82,24 +82,15 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // transformed (no session names leak to DMs/other channels). The
         // transform happens before chunking, so lengths need no special care.
         let outText = text
-        const isProtoPost = callerSessionId && isProtocolPost(callerSessionId, chat_id)
-        if (isProtoPost) {
-          // Strip the expected sentinel if it's a routing-only tag (no →)
-          const expected = getExpectedTag(callerSessionId!, chat_id)
-          const firstLine = outText.split('\n')[0].trim()
-          if (expected && !expected.includes('→') && firstLine.startsWith(expected)) {
-            const afterTag = firstLine.slice(expected.length).trim()
-            const nlPos = outText.indexOf('\n')
-            if (afterTag) {
-              outText = nlPos >= 0 ? afterTag + outText.slice(nlPos) : afterTag
-            } else {
-              outText = nlPos >= 0 ? outText.slice(nlPos + 1) : ''
-            }
-            if (expected === '[summary]') {
-              outText = outText.replace(/^(\*\*)?(?:⚔️\s*)?Review Summary(\*\*)?/m, '**⚔️ Review Summary**')
-              outText = outText.replace(/^(\*\*)?(?:🔨\s*)?Build Summary(\*\*)?/m, '**🔨 Build Summary**')
-            }
-          }
+        // [summary] is never displayed — strip it regardless of protocol state
+        const firstLine = outText.split('\n')[0].trim()
+        if (firstLine === '[summary]') {
+          outText = outText.slice(outText.indexOf('\n') + 1)
+          // Enforce bold+emoji header on summary — LLMs sometimes omit the formatting
+          outText = outText.replace(/^(\*\*)?(?:⚔️\s*)?Review Summary(\*\*)?/m, '**⚔️ Review Summary**')
+          outText = outText.replace(/^(\*\*)?(?:🔨\s*)?Build Summary(\*\*)?/m, '**🔨 Build Summary**')
+        }
+        if (callerSessionId && isProtocolPost(callerSessionId, chat_id)) {
           outText = transformProtocolTag(outText)
         }
 
@@ -399,19 +390,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const header = `Session: ${name} | ${ctx} | ${msgs} msgs | ${duration}`
 
         return { content: [{ type: 'text', text: `${header}\n${'─'.repeat(60)}\n${output || '(empty)'}` }] }
-      }
-
-      case 'decide': {
-        const value = (args.value as string)?.trim()
-        const because = (args.because as string)?.trim()
-        if (!value) throw new Error('decide requires a value')
-        if (!because) throw new Error('decide requires a because')
-        if (!callerSessionId) throw new Error('decide requires a session context')
-
-        const result = await dispatchDecision(callerSessionId, value, because)
-        if (!result.ok) throw new Error(result.reason)
-
-        return { content: [{ type: 'text', text: `decided: ${value}` }] }
       }
 
       default:

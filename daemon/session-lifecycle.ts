@@ -41,6 +41,102 @@ const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
+function getDescendants(pid: number): number[] {
+  try {
+    const out = execSync(`pgrep -P ${pid} 2>/dev/null || true`, { stdio: 'pipe' }).toString().trim()
+    if (!out) return []
+    const children = out.split('\n').map(s => parseInt(s, 10)).filter(n => n > 0)
+    const all: number[] = []
+    for (const child of children) {
+      all.push(child)
+      all.push(...getDescendants(child))
+    }
+    return all
+  } catch { return [] }
+}
+
+function verifyPid(pid: number, expectedLstart: string): boolean {
+  try {
+    const actual = execSync(`ps -p ${pid} -o lstart= 2>/dev/null`, { stdio: 'pipe' }).toString().trim()
+    return actual === expectedLstart
+  } catch { return false }
+}
+
+function captureLstart(pid: number): string | undefined {
+  try {
+    const s = execSync(`ps -p ${pid} -o lstart= 2>/dev/null`, { stdio: 'pipe' }).toString().trim()
+    return s || undefined
+  } catch { return undefined }
+}
+
+function killTreeFromPid(pid: number): void {
+  const descendants = getDescendants(pid)
+  const allPids = [pid, ...descendants.reverse()]
+  // Snapshot lstart before SIGTERM for revalidation
+  const lstarts = new Map<number, string>()
+  for (const p of allPids) {
+    const ls = captureLstart(p)
+    if (ls) lstarts.set(p, ls)
+  }
+  // Signal root first to stop it spawning new children, then descendants
+  for (const p of allPids) {
+    try { process.kill(p, 'SIGTERM') } catch {}
+  }
+  setTimeout(() => {
+    for (const p of allPids) {
+      const expected = lstarts.get(p)
+      if (!expected) continue
+      if (verifyPid(p, expected)) {
+        try { process.kill(p, 'SIGKILL') } catch {}
+      }
+    }
+  }, 3000)
+}
+
+function findAppServerPidBySocket(tmuxName: string): number | undefined {
+  try {
+    const sockPath = codexSocketPath(tmuxName)
+    const out = execFileSync('lsof', ['-a', '-U', '-c', 'codex', '-F', 'p'], { stdio: 'pipe' }).toString()
+    // lsof -F p outputs lines like "p12345\n" for each matching process
+    const pids = out.split('\n').filter(l => l.startsWith('p')).map(l => parseInt(l.slice(1), 10))
+    // Verify each candidate owns the session socket
+    for (const pid of pids) {
+      try {
+        const fds = execFileSync('lsof', ['-a', '-p', String(pid), '-U', '-F', 'n'], { stdio: 'pipe' }).toString()
+        if (fds.includes(sockPath)) return pid
+      } catch {}
+    }
+    return undefined
+  } catch { return undefined }
+}
+
+export function killCodexProcessTree(info: SessionInfo): void {
+  let killedAny = false
+
+  // Strategy 1: kill all stored pane root trees (app-server pane + TUI pane)
+  if (info.codexPaneRoots) {
+    for (const root of info.codexPaneRoots) {
+      if (verifyPid(root.pid, root.lstart)) {
+        killTreeFromPid(root.pid)
+        killedAny = true
+      }
+    }
+  }
+  if (killedAny) return
+
+  // Strategy 2: panes died (reparented children) — use stored app-server PID
+  if (info.codexAppServerPid && info.codexAppServerLstart && verifyPid(info.codexAppServerPid, info.codexAppServerLstart)) {
+    killTreeFromPid(info.codexAppServerPid)
+    return
+  }
+
+  // Strategy 3: resolve app-server from its unix socket
+  const socketPid = findAppServerPidBySocket(info.tmuxName)
+  if (socketPid) {
+    killTreeFromPid(socketPid)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Listen state resolution: thread override → channel group → global → false
 // ---------------------------------------------------------------------------
@@ -122,9 +218,9 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     const tmuxName = info.tmuxName
     if (info.engine === 'codex') {
       try {
-        // codexEngine imported at module scope
         codexEngine.disconnect(info.sessionId)
       } catch {}
+      killCodexProcessTree(info)
     }
     try {
       execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
@@ -210,7 +306,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 async function spawnCodexSession(p: {
   tmuxName: string; sessionId: string; effectiveCwd: string;
   model?: string; forkFromThread?: string;
-}): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string }> {
+}): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string; codexPaneRoots: Array<{ pid: number; lstart: string }>; codexAppServerPid?: number; codexAppServerLstart?: string }> {
   const sockPath = codexSocketPath(p.tmuxName)
   const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${p.tmuxName}`)
   const mcpServerPath = join(new URL('.', import.meta.url).pathname, 'codex-mcp-server.ts')
@@ -224,7 +320,7 @@ async function spawnCodexSession(p: {
     `export CODEX_HOME=${shq(codexHomeDir)}`,
     `mkdir -p ${shq(codexHomeDir)}`,
     `ln -sf ~/.codex/auth.json ${shq(codexHomeDir)}/auth.json`,
-    `codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(codexHomeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(p.sessionId)} -- bun ${shq(mcpServerPath)}`,
+    `codex mcp remove hydra 2>/dev/null; codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(p.sessionId)} -- bun ${shq(mcpServerPath)}`,
     serverCmd,
   ].join(' && ')
 
@@ -235,6 +331,17 @@ async function spawnCodexSession(p: {
     throw new Error(`failed to spawn codex tmux: ${err instanceof Error ? err.message : err}`)
   }
 
+  // Capture server pane PID + lstart for process tree cleanup on kill/crash
+  const codexPaneRoots: Array<{ pid: number; lstart: string }> = []
+  try {
+    const pidStr = execSync(`tmux display-message -p -t ${shq(p.tmuxName)}:0 '#{pane_pid}'`, { stdio: 'pipe' }).toString().trim()
+    const pid = parseInt(pidStr, 10)
+    if (pid) {
+      const lstart = captureLstart(pid)
+      if (lstart) codexPaneRoots.push({ pid, lstart })
+    }
+  } catch {}
+
   // Capture server pane for crash diagnostics
   let spawnLogPath: string | undefined
   try {
@@ -243,14 +350,6 @@ async function spawnCodexSession(p: {
     execFileSync('tmux', ['pipe-pane', '-o', '-t', `${p.tmuxName}:0`, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
     spawnLogPath = logPath
   } catch {}
-
-  // Window 1: attachable TUI
-  const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && sleep 3 && codex --remote "unix://${sockPath}"`
-  try {
-    execFileSync('tmux', ['new-window', '-t', p.tmuxName, tuiInner], { stdio: 'pipe' })
-  } catch {
-    process.stderr.write(`daemon: codex TUI window failed for ${p.tmuxName} (non-fatal)\n`)
-  }
 
   // Connect to the app-server socket with retry
   const start = Date.now()
@@ -276,7 +375,45 @@ async function spawnCodexSession(p: {
   if (!codexThreadId) throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
   process.stderr.write(`daemon: codex connected for ${p.tmuxName}, thread=${codexThreadId}\n`)
 
-  return { sockPath, spawnLogPath, codexThreadId }
+  // Attachable TUI — must use `resume` with the daemon's thread ID, not bare
+  // `codex --remote` which creates a second thread and duplicate MCP bridge.
+  const tuiInner = [
+    `export CODEX_HOME=${shq(codexHomeDir)}`,
+    `exec codex resume --remote ${shq(`unix://${sockPath}`)} ${shq(codexThreadId)}`,
+  ].join(' && ')
+  try {
+    execFileSync('tmux', ['new-window', '-t', p.tmuxName, '-n', 'codex', tuiInner], { stdio: 'pipe' })
+    // Capture TUI pane PID for cleanup
+    const tuiPidStr = execSync(`tmux display-message -p -t ${shq(p.tmuxName)}:codex '#{pane_pid}'`, { stdio: 'pipe' }).toString().trim()
+    const tuiPid = parseInt(tuiPidStr, 10)
+    if (tuiPid) {
+      const tuiLstart = captureLstart(tuiPid)
+      if (tuiLstart) codexPaneRoots.push({ pid: tuiPid, lstart: tuiLstart })
+    }
+  } catch {
+    process.stderr.write(`daemon: codex TUI window failed for ${p.tmuxName} (non-fatal)\n`)
+  }
+
+  // Discover app-server PID from the pane's descendant tree (fallback identity for orphan cleanup)
+  // Discover app-server PID from the first pane root's descendant tree
+  let codexAppServerPid: number | undefined
+  let codexAppServerLstart: string | undefined
+  const serverRoot = codexPaneRoots[0]
+  if (serverRoot) {
+    const descendants = getDescendants(serverRoot.pid)
+    for (const d of descendants) {
+      try {
+        const cmd = execSync(`ps -p ${d} -o args= 2>/dev/null`, { stdio: 'pipe' }).toString().trim()
+        if (cmd.includes('codex') && cmd.includes('app-server')) {
+          codexAppServerPid = d
+          codexAppServerLstart = captureLstart(d)
+          break
+        }
+      } catch {}
+    }
+  }
+
+  return { sockPath, spawnLogPath, codexThreadId, codexPaneRoots, codexAppServerPid, codexAppServerLstart }
 }
 
 // ---------------------------------------------------------------------------
@@ -544,7 +681,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   // --- Codex engine: spawn in tmux, connect via unix socket ---
   if (engine === 'codex') {
-    const { sockPath, spawnLogPath, codexThreadId } = await spawnCodexSession({
+    const { sockPath, spawnLogPath, codexThreadId, codexPaneRoots, codexAppServerPid, codexAppServerLstart } = await spawnCodexSession({
       tmuxName, sessionId, effectiveCwd, model: opts?.model, forkFromThread: opts?.forkFrom?.codexThreadId,
     })
     void codexEngine.startTurn(sessionId, prompt).catch(err => {
@@ -559,6 +696,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
       tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
       threadUrl: url || undefined, engine: 'codex', codexThreadId: codexThreadId!,
+      ...(codexPaneRoots.length > 0 ? { codexPaneRoots } : {}),
+      ...(codexAppServerPid ? { codexAppServerPid, codexAppServerLstart } : {}),
       ...(spawnLogPath ? { spawnLogPath } : {}),
       ...(respawnCount > 0 ? { respawnCount } : {}),
       ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),

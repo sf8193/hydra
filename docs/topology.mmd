@@ -96,7 +96,6 @@ graph TD
   daemon_bridge-dispatch --> daemon_protocol-registry
   daemon_bridge-dispatch --> daemon_pr-watch
   daemon_bridge-dispatch --> daemon_anchor-state
-  daemon_bridge-dispatch --> daemon_dashboard
   daemon_bridge-server --> daemon_config
   daemon_bridge-server --> daemon_sessions
   daemon_bridge-server --> daemon_bridge-transport
@@ -142,7 +141,6 @@ graph TD
   daemon_router --> shared_constants
   daemon_router --> daemon_commands_thread
   daemon_router --> daemon_commands_review
-  daemon_router --> daemon_adversarial
   daemon_router --> daemon_commands_build
   daemon_router --> daemon_commands_design
   daemon_router --> daemon_design
@@ -151,7 +149,6 @@ graph TD
   daemon_router --> daemon_commands_status
   daemon_router --> daemon_commands_watch
   daemon_router --> daemon_session-lifecycle
-  daemon_router --> daemon_permission
   daemon_router --> daemon_util
   daemon_router --> daemon_templates
   daemon_access --> daemon_config
