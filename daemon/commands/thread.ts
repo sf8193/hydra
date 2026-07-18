@@ -39,15 +39,16 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     return
   }
 
-  // No claudeSessionId → skip fork, go straight to respawn fallback
+  // No claudeSessionId → skip fork, spawn session that reads the parent thread
   if (!info.claudeSessionId) {
     void gateway.react(msg.channelId, msg.id, '🔁').catch(() => {})
     const forkTopic = description || `continuing: ${threadRegistry.get(info.threadId)?.topic ?? info.description ?? 'session'}`
     const baseChatId = msg.parentChannelId ?? msg.channelId
+    const parentThreadId = info.threadId
     try {
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
-        resurrectFrom: info.tmuxName,
         model: info.capabilities?.model,
+        promptPrefix: `Read the parent thread for context using fetch_messages(channel="${parentThreadId}", limit=50). Reconstruct what was discussed there, then continue the work in YOUR thread.`,
       })
       const e = sessionEmoji(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (session not forkable yet — reading thread from **${info.tmuxName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
