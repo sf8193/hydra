@@ -1,4 +1,3 @@
-import { execSync } from 'child_process'
 import { gateway } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
@@ -31,15 +30,32 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     if (discovered) {
       info.claudeSessionId = discovered
       registry.persist()
-    } else {
-      void gateway.send(msg.channelId, 'Fork unavailable — could not resolve Claude session ID.', { replyTo: msg.id }).catch(() => {})
-      return
     }
   }
 
   if (!tmuxHasSession(info.tmuxName)) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
+    return
+  }
+
+  // No claudeSessionId → skip fork, go straight to respawn fallback
+  if (!info.claudeSessionId) {
+    void gateway.react(msg.channelId, msg.id, '🔁').catch(() => {})
+    const forkTopic = description || `continuing: ${threadRegistry.get(info.threadId)?.topic ?? info.description ?? 'session'}`
+    const baseChatId = msg.parentChannelId ?? msg.channelId
+    try {
+      const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
+        resurrectFrom: info.tmuxName,
+        model: info.capabilities?.model,
+      })
+      const e = sessionEmoji(result.name)
+      await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (session not forkable yet — reading thread from **${info.tmuxName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
+      debouncedRefreshListDisplay()
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      try { await gateway.send(msg.channelId, `Fork fallback failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+    }
     return
   }
 
