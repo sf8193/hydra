@@ -820,6 +820,21 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
   try {
     const panePid = execSync(`tmux list-panes -t '${tmuxName}' -F '#{pane_pid}' 2>/dev/null`, { encoding: 'utf8' }).trim()
     if (!panePid) return null
+
+    // Primary: read Claude's session file at ~/.claude/sessions/<pid>.json
+    const sessionFile = join(homedir(), '.claude', 'sessions', `${panePid}.json`)
+    try {
+      const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
+      if (data.sessionId && data.cwd) {
+        // Verify the conversation file exists (Claude creates .jsonl lazily —
+        // freshly spawned sessions may not have one yet)
+        const projectDir = join(homedir(), '.claude', 'projects', data.cwd.replace(/\//g, '-'))
+        const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
+        if (existsSync(conversationFile)) return data.sessionId
+      }
+    } catch {}
+
+    // Fallback: scan child process environments
     const childPids = execSync(`pgrep -P ${panePid} 2>/dev/null`, { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
     for (const childPid of childPids) {
       const envOutput = execSync(`ps -E -p ${childPid} 2>/dev/null`, { encoding: 'utf8' })
