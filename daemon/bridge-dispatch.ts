@@ -10,6 +10,7 @@ import { isProtocolPost, getExpectedTag, dispatchDecision } from './protocol-reg
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts } from './artifacts.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -126,6 +127,22 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const info = registry.get(callerSessionId)
           if (info) {
             info.lastReplyId = sentIds[sentIds.length - 1]
+            // Capture artifact links the session produced in its own thread, so
+            // they surface under its Home item (chat_id === threadId scopes this
+            // to the session's own workspace, not cross-posts to other channels;
+            // verified: spawned/resurrect sessions reply with chat_id === threadId).
+            if (chat_id === info.threadId) {
+              // Sanitize existing entries too (same as the backfill path in daemon.ts),
+              // so any legacy-malformed persisted URL self-heals rather than carrying forward.
+              // Compare against the raw prior list so a sanitize-only cleanup (even when the
+              // reply carries no new artifact URL) still persists and refreshes the dashboard.
+              const before = info.artifacts ?? []
+              const { next } = mergeArtifacts(sanitizeArtifacts(before), extractArtifactLinks(text))
+              if (JSON.stringify(next) !== JSON.stringify(before)) {
+                info.artifacts = next
+                refreshDashboard()
+              }
+            }
             registry.debouncedPersist()
           }
         }

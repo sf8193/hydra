@@ -8,6 +8,7 @@ import { transport } from './bridge-transport.js'
 import { formatDuration, tmuxHasSession } from './util.js'
 import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
+import { assembleContextLines } from './artifacts.js'
 
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
@@ -27,6 +28,7 @@ type SessionRow = {
   url: string
   watches: WatchEntry[]
   contextLinks: string[]
+  artifacts: string[]
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -54,42 +56,15 @@ function getActiveSessions(): SessionRow[] {
       url,
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
+      artifacts: s.artifacts ?? [],
     })
   }
 
   return rows
 }
 
-function checkStatusEmoji(status: string): string {
-  switch (status) {
-    case 'success': return '✓'
-    case 'failure': return '✗'
-    case 'pending': return '⏳'
-    default: return ''
-  }
-}
-
 function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*~`]/g, '')
-}
-
-function renderContextLink(link: string): string {
-  // Slack channel mention: slack:channel:C0ABC123:channel-name
-  const channelMatch = link.match(/^slack:channel:([A-Z0-9]+):(.+)$/)
-  if (channelMatch) {
-    return `• 🔗 <#${channelMatch[1]}|${channelMatch[2]}>`
-  }
-  // URL-based links
-  let label: string
-  if (/slack\.com\/archives/.test(link)) label = 'Slack thread'
-  else if (/linear\.app/.test(link)) label = 'Linear'
-  else if (/incident\.io/.test(link)) label = 'Incident'
-  else if (/datadoghq\.com/.test(link)) label = 'Datadog'
-  else if (/sentry\.io/.test(link)) label = 'Sentry'
-  else if (/notion\.so/.test(link)) label = 'Notion'
-  else if (/pagerduty\.com/.test(link)) label = 'PagerDuty'
-  else { try { label = new URL(link).hostname.replace(/^www\./, '') } catch { label = 'link' } }
-  return `• 🔗 <${link}|${label}>`
 }
 
 function buildSessionText(s: SessionRow): string {
@@ -119,16 +94,11 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
         type: 'section',
         text: { type: 'mrkdwn', text: buildSessionText(s) },
       })
-      const contextLines: string[] = []
-      for (const w of s.watches.slice(0, 5)) {
-        const title = w.title || `#${w.prNumber}`
-        contextLines.push(`• <${w.prUrl}|${title}> ${checkStatusEmoji(w.lastCheckStatus)}`)
-      }
-      const watchUrls = new Set(s.watches.map(w => w.prUrl))
-      for (const link of s.contextLinks.slice(0, 5 - contextLines.length)) {
-        if (watchUrls.has(link)) continue
-        contextLines.push(renderContextLink(link))
-      }
+      const contextLines = assembleContextLines({
+        watches: s.watches,
+        artifacts: s.artifacts,
+        contextLinks: s.contextLinks,
+      })
       if (contextLines.length > 0) {
         blocks.push({
           type: 'context',

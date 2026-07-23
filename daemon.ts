@@ -84,6 +84,7 @@ import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts } from './daemon/artifacts.js'
 registry.onPersist = refreshDashboard
 
 if ('homeTabHandler' in gateway) {
@@ -230,22 +231,61 @@ async function startGateway(attempt = 0): Promise<void> {
 }
 
 void startGateway().then(async () => {
-  if (!gateway.getLastReplyId) return
-  let backfilled = 0
-  for (const s of registry.values()) {
-    if (s.lastReplyId) continue
-    try {
-      const lastId = await gateway.getLastReplyId(s.threadId)
-      if (lastId) { s.lastReplyId = lastId; backfilled++ }
-    } catch (err) {
-      process.stderr.write(`daemon: backfill failed for ${s.tmuxName} (${s.threadId}): ${err instanceof Error ? err.message : err}\n`)
+  if (gateway.getLastReplyId) {
+    let backfilled = 0
+    for (const s of registry.values()) {
+      if (s.lastReplyId) continue
+      try {
+        const lastId = await gateway.getLastReplyId(s.threadId)
+        if (lastId) { s.lastReplyId = lastId; backfilled++ }
+      } catch (err) {
+        process.stderr.write(`daemon: backfill failed for ${s.tmuxName} (${s.threadId}): ${err instanceof Error ? err.message : err}\n`)
+      }
+    }
+    if (backfilled > 0) {
+      registry.persist()
+      process.stderr.write(`daemon: backfilled lastReplyId for ${backfilled} session(s)\n`)
     }
   }
-  if (backfilled > 0) {
-    registry.persist()
-    process.stderr.write(`daemon: backfilled lastReplyId for ${backfilled} session(s)\n`)
-  }
+  await backfillArtifacts()
 })
+
+// Backfill artifacts from each live session's own recent thread posts, so
+// deliverables produced before this feature existed appear without waiting for a
+// new reply. Idempotent (mergeArtifacts dedupes), so it's safe to run every boot.
+async function backfillArtifacts(): Promise<void> {
+  if (!gateway.fetchMessages) return
+  let changedCount = 0
+  let dirty = false
+  for (const s of registry.values()) {
+    if (!tmuxHasSession(s.tmuxName)) continue
+    if (s.artifactsBackfilled) continue  // one-time scan — avoids a fetch-burst on every restart
+    try {
+      const msgs = await gateway.fetchMessages(s.threadId, 100)
+      const found: string[] = []
+      for (const m of msgs) {
+        // Only the session's own posts (bot-authored, in its own thread) — not the human's inbound refs.
+        if (gateway.botId && m.authorId !== gateway.botId) continue
+        found.push(...extractArtifactLinks(m.content))
+      }
+      // Re-canonicalize existing entries too, so this pass also self-heals any
+      // pollution captured before the extractor was tightened.
+      const before = s.artifacts ?? []
+      const { next } = mergeArtifacts(sanitizeArtifacts(before), found)
+      if (JSON.stringify(next) !== JSON.stringify(before)) { s.artifacts = next; changedCount++ }
+      s.artifactsBackfilled = true
+      dirty = true
+    } catch (err) {
+      // Leave the flag unset so a transient fetch failure retries next boot.
+      process.stderr.write(`daemon: artifact backfill failed for ${s.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+    }
+  }
+  if (dirty) registry.persist()
+  if (changedCount > 0) {
+    refreshDashboardNow()
+    process.stderr.write(`daemon: backfilled artifacts for ${changedCount} session(s)\n`)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // PR watcher — polls GitHub for new PR comments/reviews
