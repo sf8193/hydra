@@ -752,9 +752,9 @@ registerRouter(async (msg) => { await routeMessage(msg) })
 registerOnComplete(dispatchQueueNext)
 
 // Commands that can participate in && chains — must be command-shaped, not plain conversation.
-const CHAINABLE_RE = /^(?:\/review|review|\/build|build|\/design|design:|push)\b/i
+const CHAINABLE_RE = /^(?:(?:\/review|review|\/build|build|\/design|push)\b|design:)/i
 // Commands that produce a protocol completion signal — non-terminal segments must be one of these.
-const PROTOCOL_RE = /^(?:\/review|review|\/build|build|\/design|design:)\b/i
+const PROTOCOL_RE = /^(?:(?:\/review|review|\/build|build|\/design)\b|design:)/i
 
 gateway.onMessage(async (msg: InboundMessage) => {
   if (msg.isBot) return
