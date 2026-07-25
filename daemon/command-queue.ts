@@ -55,6 +55,22 @@ export function hasQueue(threadId: string): boolean {
   return (queues.get(threadId)?.commands.length ?? 0) > 0
 }
 
+/** Move all queued commands from one thread to another (used by fork to re-target chains). */
+export function migrateQueue(fromThreadId: string, toThreadId: string): number {
+  const q = queues.get(fromThreadId)
+  if (!q || q.commands.length === 0) return 0
+  const count = q.commands.length
+  queues.delete(fromThreadId)
+  const existing = queues.get(toThreadId)
+  if (existing) {
+    existing.commands.push(...q.commands)
+  } else {
+    queues.set(toThreadId, { commands: q.commands, threadId: toThreadId })
+  }
+  process.stderr.write(`daemon: command-queue: migrated ${count} command(s) from ${fromThreadId} → ${toThreadId}\n`)
+  return count
+}
+
 export function onProtocolComplete(threadId: string): void {
   const q = queues.get(threadId)
   if (!q || q.commands.length === 0) {
