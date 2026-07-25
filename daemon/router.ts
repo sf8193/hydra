@@ -748,17 +748,21 @@ async function routeMessage(msg: InboundMessage): Promise<void> {
 }
 
 // Wire up the command queue
-registerRouter((msg) => void routeMessage(msg))
+registerRouter(async (msg) => { await routeMessage(msg) })
 registerOnComplete(dispatchQueueNext)
+
+// Commands that can participate in && chains — must be command-shaped, not plain conversation.
+const CHAINABLE_RE = /^(?:\/review|review|\/build|build|\/design|design:|push|kill queue|spawn|new session|\/spawn)\b/i
 
 gateway.onMessage(async (msg: InboundMessage) => {
   if (msg.isBot) return
 
-  // Split on && for command chaining — only for the original message, not re-dispatched commands
+  // Only split on && when in a thread and the first segment is command-shaped.
+  // Plain conversation like "make sure foo && bar both run" must not be split.
   const segments = splitChain(msg.content)
-  if (segments.length > 1) {
+  if (segments.length > 1 && msg.isThread && CHAINABLE_RE.test(segments[0])) {
     msg.content = segments[0]
-    const threadId = msg.isThread ? registry.resolveThreadId(msg) : msg.channelId
+    const threadId = registry.resolveThreadId(msg)
     const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: msg }))
     enqueue(threadId, rest)
     const preview = segments.map((s, i) => i === 0 ? `**${s}**` : `\`${s}\``).join(' → ')

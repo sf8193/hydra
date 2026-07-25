@@ -17,9 +17,9 @@ type ThreadQueue = {
 
 const queues = new Map<string, ThreadQueue>()
 
-let routeMessageFn: ((msg: InboundMessage) => void) | null = null
+let routeMessageFn: ((msg: InboundMessage) => Promise<void>) | null = null
 
-export function registerRouter(fn: (msg: InboundMessage) => void): void {
+export function registerRouter(fn: (msg: InboundMessage) => Promise<void>): void {
   routeMessageFn = fn
 }
 
@@ -83,15 +83,13 @@ export function onProtocolComplete(threadId: string): void {
     isThread: true,
   }
 
-  try {
-    routeMessageFn(syntheticMsg)
-  } catch (err) {
+  routeMessageFn(syntheticMsg).catch(err => {
     process.stderr.write(`daemon: command-queue: dispatch failed: ${err}\n`)
     const dropped = clearQueue(threadId)
     if (dropped > 0) {
       void gateway.send(threadId, `_⚠️ Queue aborted — command dispatch failed (${dropped} command${dropped !== 1 ? 's' : ''} dropped)_`).catch(() => {})
     }
-  }
+  })
 }
 
 // Split a raw message on && and return [first, ...rest]

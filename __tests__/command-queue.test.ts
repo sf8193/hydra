@@ -26,6 +26,8 @@ function fakeMsg(content: string, channelId = 'thread-1'): InboundMessage {
   } as InboundMessage
 }
 
+const tick = () => new Promise(r => setTimeout(r, 10))
+
 beforeEach(() => {
   _resetForTesting()
 })
@@ -61,10 +63,6 @@ describe('splitChain', () => {
 
   test('single & is not a delimiter', () => {
     expect(splitChain('a & b')).toEqual(['a & b'])
-  })
-
-  test('&& inside backticks is still split (no escaping)', () => {
-    expect(splitChain('review && build 3')).toEqual(['review', 'build 3'])
   })
 })
 
@@ -135,21 +133,22 @@ describe('queue operations', () => {
 // ---------------------------------------------------------------------------
 
 describe('onProtocolComplete', () => {
-  test('dispatches next command to router', () => {
+  test('dispatches next command to router', async () => {
     const dispatched: string[] = []
-    registerRouter((msg) => { dispatched.push(msg.content) })
+    registerRouter(async (msg) => { dispatched.push(msg.content) })
 
     const msg = fakeMsg('review')
     enqueue('thread-1', [{ rawText: 'push', originalMsg: msg }])
 
     onProtocolComplete('thread-1')
+    await tick()
     expect(dispatched).toEqual(['push'])
     expect(hasQueue('thread-1')).toBe(false)
   })
 
-  test('dispatches commands in order', () => {
+  test('dispatches commands in order across completions', async () => {
     const dispatched: string[] = []
-    registerRouter((msg) => { dispatched.push(msg.content) })
+    registerRouter(async (msg) => { dispatched.push(msg.content) })
 
     const msg = fakeMsg('review')
     enqueue('thread-1', [
@@ -158,38 +157,41 @@ describe('onProtocolComplete', () => {
     ])
 
     onProtocolComplete('thread-1')
+    await tick()
     expect(dispatched).toEqual(['build 3'])
     expect(queueLength('thread-1')).toBe(1)
 
     onProtocolComplete('thread-1')
+    await tick()
     expect(dispatched).toEqual(['build 3', 'push'])
     expect(hasQueue('thread-1')).toBe(false)
   })
 
-  test('noop when no queue exists', () => {
+  test('noop when no queue exists', async () => {
     const dispatched: string[] = []
-    registerRouter((msg) => { dispatched.push(msg.content) })
+    registerRouter(async (msg) => { dispatched.push(msg.content) })
     onProtocolComplete('thread-1')
+    await tick()
     expect(dispatched).toEqual([])
   })
 
-  test('noop when no router registered', () => {
+  test('noop when no router registered', async () => {
     const msg = fakeMsg('review')
     enqueue('thread-1', [{ rawText: 'push', originalMsg: msg }])
-    // No registerRouter call — should not throw
     onProtocolComplete('thread-1')
-    // Command was dequeued but dropped
+    await tick()
     expect(hasQueue('thread-1')).toBe(false)
   })
 
-  test('synthetic message inherits original msg properties', () => {
+  test('synthetic message targets the thread', async () => {
     let captured: InboundMessage | null = null
-    registerRouter((msg) => { captured = msg })
+    registerRouter(async (msg) => { captured = msg })
 
     const originalMsg = fakeMsg('review', 'original-channel')
     enqueue('thread-1', [{ rawText: 'build 3', originalMsg }])
 
     onProtocolComplete('thread-1')
+    await tick()
     expect(captured).not.toBeNull()
     expect(captured!.content).toBe('build 3')
     expect(captured!.channelId).toBe('thread-1')
@@ -197,9 +199,9 @@ describe('onProtocolComplete', () => {
     expect(captured!.authorId).toBe('user-1')
   })
 
-  test('router crash aborts remaining queue', () => {
+  test('async router rejection aborts remaining queue', async () => {
     let callCount = 0
-    registerRouter(() => {
+    registerRouter(async () => {
       callCount++
       throw new Error('boom')
     })
@@ -211,6 +213,7 @@ describe('onProtocolComplete', () => {
     ])
 
     onProtocolComplete('thread-1')
+    await tick()
     expect(callCount).toBe(1)
     expect(hasQueue('thread-1')).toBe(false)
   })

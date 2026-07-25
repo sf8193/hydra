@@ -3,6 +3,7 @@ import { registry } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { registerProtocol, isThreadOccupied, dispatchProtocolComplete } from './protocol-registry.js'
+import { clearQueue } from './command-queue.js'
 import { createStateMachine } from './state-machine.js'
 import { designPersonaPrompt, PERSONA_NAMES, normalizePersonaName, personaQuestionsTag, personaProposalTag, type PersonaName } from './prompts/design-personas.js'
 import { designSynthesizerPrompt, SYNTHESIZER_TAG } from './prompts/design-synthesizer.js'
@@ -194,6 +195,7 @@ export async function startDesign(
     await safeSend(threadId, `No personas could be spawned. Design cancelled.`)
     designs.delete(threadId)
     refreshSessionVisual(threadId)
+    clearQueue(threadId)
     state.phase = 'cancelled'
     return state
   }
@@ -381,6 +383,7 @@ export async function cancelDesign(threadId: string, message?: string): Promise<
   await cleanupDesignSessions(state, 'design cancelled')
   designs.delete(threadId)
   refreshSessionVisual(threadId)
+  clearQueue(threadId)
   await gateway.send(state.ownerThreadId, message ?? `Design session cancelled.`)
 }
 
@@ -463,6 +466,7 @@ async function spawnBriefWriter(state: DesignState): Promise<void> {
       await cleanupDesignSessions(state, 'design complete')
       designs.delete(state.ownerThreadId)
       refreshSessionVisual(state.ownerThreadId)
+      dispatchProtocolComplete(state.ownerThreadId)
     }, SYNTHESIS_TIMEOUT_MS)
   } catch (err) {
     process.stderr.write(`daemon: design: brief writer spawn failed: ${err}\n`)
@@ -473,6 +477,7 @@ async function spawnBriefWriter(state: DesignState): Promise<void> {
     await cleanupDesignSessions(state, 'design complete')
     designs.delete(state.ownerThreadId)
     refreshSessionVisual(state.ownerThreadId)
+    dispatchProtocolComplete(state.ownerThreadId)
   }
 }
 

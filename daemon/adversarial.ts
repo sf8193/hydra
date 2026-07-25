@@ -4,6 +4,7 @@ import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { registerProtocol, isThreadOccupied, dispatchProtocolComplete } from './protocol-registry.js'
+import { clearQueue } from './command-queue.js'
 import { reviewCriticPrompt } from './prompts/review-critic.js'
 import { reviewModel } from '../shared/constants.js'
 import { createStateMachine } from './state-machine.js'
@@ -250,6 +251,7 @@ export async function cancelReview(reviewId: string): Promise<void> {
   }
 
   refreshSessionVisual(state.ownerThreadId)
+  clearQueue(state.ownerThreadId)
   await safeSend(state.ownerThreadId, `Review cancelled.`)
 
   void deleteReviewMessages(state).catch(err => {
@@ -663,16 +665,16 @@ function finalizeReview(state: ReviewState): void {
   cleanupReviewMaps(state)
   refreshSessionVisual(state.ownerThreadId)
 
-  cleaningUpThreads.add(state.ownerThreadId)
+  const threadId = state.ownerThreadId
+  cleaningUpThreads.add(threadId)
   void deleteReviewMessages(state)
     .catch(err => {
       process.stderr.write(`daemon: review message cleanup failed: ${err}\n`)
     })
     .finally(() => {
-      cleaningUpThreads.delete(state.ownerThreadId)
+      cleaningUpThreads.delete(threadId)
+      dispatchProtocolComplete(threadId)
     })
-
-  dispatchProtocolComplete(state.ownerThreadId)
 }
 
 // ---------------------------------------------------------------------------

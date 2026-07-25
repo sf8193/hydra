@@ -5,6 +5,7 @@ import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { registerProtocol, isThreadOccupied, dispatchProtocolComplete } from './protocol-registry.js'
+import { clearQueue } from './command-queue.js'
 import { buildOwnerPrompt } from './prompts/build-owner.js'
 import { buildCriticPrompt } from './prompts/build-critic.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
@@ -276,6 +277,7 @@ export async function cancelBuild(buildId: string): Promise<void> {
   }
 
   refreshSessionVisual(state.ownerThreadId)
+  clearQueue(state.ownerThreadId)
   await safeSend(state.ownerThreadId, `Build cancelled.`)
 
   cleanupWorktree(state)
