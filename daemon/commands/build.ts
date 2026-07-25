@@ -1,6 +1,7 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startBuild, getBuildByThread, cancelBuild } from '../build.js'
+import { clearQueue } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleBuildIntercept(msg: InboundMessage, rounds: number, task?: string, worktree?: string, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
@@ -56,4 +57,8 @@ export async function handleCancelBuildIntercept(msg: InboundMessage): Promise<v
   }
 
   await cancelBuild(existing.buildId)
+  const dropped = clearQueue(threadId)
+  if (dropped > 0) {
+    void gateway.send(msg.channelId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`).catch(() => {})
+  }
 }

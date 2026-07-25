@@ -23,6 +23,8 @@ import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { isAlive, reportError } from './util.js'
 import { listTemplates, getTemplate } from './templates.js'
+import { splitChain, enqueue, clearQueue, hasQueue, queueLength, registerRouter, onProtocolComplete as dispatchQueueNext } from './command-queue.js'
+import { registerOnComplete } from './protocol-registry.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
 // commands (fork, watch, build, respawn, resume) are excluded: those are
@@ -222,9 +224,8 @@ if (gateway.onReaction) {
 // Inbound message routing
 // ---------------------------------------------------------------------------
 
-gateway.onMessage(async (msg: InboundMessage) => {
-  if (msg.isBot) return
-
+// Extracted so the command queue can re-invoke routing for chained commands.
+async function routeMessage(msg: InboundMessage): Promise<void> {
   const access = loadAccess()
   const senderId = msg.authorId
   const isAllowed = access.allowFrom.includes(senderId)
@@ -515,6 +516,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
+      const cancelQueueMatch = msg.content.match(/^(?:kill queue)\s*$/i)
+      if (cancelQueueMatch) {
+        const threadId = registry.resolveThreadId(msg)
+        const dropped = clearQueue(threadId)
+        if (dropped > 0) {
+          void gateway.send(msg.channelId, `_Queue cleared — ${dropped} command${dropped !== 1 ? 's' : ''} dropped_`, { replyTo: msg.id }).catch(() => {})
+        } else {
+          void gateway.send(msg.channelId, `_No queued commands._`, { replyTo: msg.id }).catch(() => {})
+        }
+        return
+      }
+
       const watchMatch = msg.content.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
       if (watchMatch) {
         void handleWatchIntercept(msg, watchMatch[1]?.trim())
@@ -732,4 +745,25 @@ gateway.onMessage(async (msg: InboundMessage) => {
   }
   const { content, meta } = await buildNotificationPayload(msg, effectiveChatId)
   transport.sendOrQueue(targetSessionId, { type: 'notification', content, meta })
+}
+
+// Wire up the command queue
+registerRouter((msg) => void routeMessage(msg))
+registerOnComplete(dispatchQueueNext)
+
+gateway.onMessage(async (msg: InboundMessage) => {
+  if (msg.isBot) return
+
+  // Split on && for command chaining — only for the original message, not re-dispatched commands
+  const segments = splitChain(msg.content)
+  if (segments.length > 1) {
+    msg.content = segments[0]
+    const threadId = msg.isThread ? registry.resolveThreadId(msg) : msg.channelId
+    const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: msg }))
+    enqueue(threadId, rest)
+    const preview = segments.map((s, i) => i === 0 ? `**${s}**` : `\`${s}\``).join(' → ')
+    void gateway.send(msg.channelId, `_⛓ Chained ${segments.length} commands: ${preview}_`, { replyTo: msg.id }).catch(() => {})
+  }
+
+  await routeMessage(msg)
 })

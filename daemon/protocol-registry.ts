@@ -75,4 +75,16 @@ export function dispatchDisconnect(sessionId: string): void {
   }
 }
 
-export function _resetForTesting(): void { protocols.clear() }
+// Protocol completion callback — used by command-queue to dispatch next chained command
+let onCompleteFn: ((threadId: string) => void) | null = null
+
+export function registerOnComplete(fn: (threadId: string) => void): void {
+  onCompleteFn = fn
+}
+
+export function dispatchProtocolComplete(threadId: string): void {
+  process.stderr.write(`daemon: protocol-registry: complete for ${threadId}\n`)
+  onCompleteFn?.(threadId)
+}
+
+export function _resetForTesting(): void { protocols.clear(); onCompleteFn = null }

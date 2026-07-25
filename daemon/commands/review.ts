@@ -1,6 +1,7 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startReview, getReviewByThread, cancelReview, listPostPasses } from '../adversarial.js'
+import { clearQueue } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, postPasses?: string[], engine?: 'claude' | 'codex'): Promise<void> {
@@ -61,4 +62,8 @@ export async function handleCancelReviewIntercept(msg: InboundMessage): Promise<
   }
 
   await cancelReview(existing.reviewId)
+  const dropped = clearQueue(threadId)
+  if (dropped > 0) {
+    void gateway.send(msg.channelId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`).catch(() => {})
+  }
 }

@@ -3,7 +3,7 @@ import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
+import { registerProtocol, isThreadOccupied, dispatchProtocolComplete } from './protocol-registry.js'
 import { reviewCriticPrompt } from './prompts/review-critic.js'
 import { reviewModel } from '../shared/constants.js'
 import { createStateMachine } from './state-machine.js'
@@ -671,6 +671,8 @@ function finalizeReview(state: ReviewState): void {
     .finally(() => {
       cleaningUpThreads.delete(state.ownerThreadId)
     })
+
+  dispatchProtocolComplete(state.ownerThreadId)
 }
 
 // ---------------------------------------------------------------------------

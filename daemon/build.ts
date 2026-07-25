@@ -4,7 +4,7 @@ import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
+import { registerProtocol, isThreadOccupied, dispatchProtocolComplete } from './protocol-registry.js'
 import { buildOwnerPrompt } from './prompts/build-owner.js'
 import { buildCriticPrompt } from './prompts/build-critic.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
@@ -559,6 +559,7 @@ async function completeBuild(state: BuildState, approved: boolean, lastCriticTex
 
   cleanupBuildMaps(state)
   refreshSessionVisual(state.ownerThreadId)
+  dispatchProtocolComplete(state.ownerThreadId)
 }
 
 // ---------------------------------------------------------------------------

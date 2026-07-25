@@ -1,6 +1,7 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startDesign, getDesignByThread, cancelDesign } from '../design.js'
+import { clearQueue } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleDesignIntercept(msg: InboundMessage, topic: string): Promise<void> {
@@ -48,4 +49,8 @@ export async function handleCancelDesignIntercept(msg: InboundMessage): Promise<
   }
 
   await cancelDesign(threadId)
+  const dropped = clearQueue(threadId)
+  if (dropped > 0) {
+    void gateway.send(msg.channelId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`).catch(() => {})
+  }
 }

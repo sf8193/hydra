@@ -2,7 +2,7 @@ import { gateway } from './config.js'
 import { registry } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
+import { registerProtocol, isThreadOccupied, dispatchProtocolComplete } from './protocol-registry.js'
 import { createStateMachine } from './state-machine.js'
 import { designPersonaPrompt, PERSONA_NAMES, normalizePersonaName, personaQuestionsTag, personaProposalTag, type PersonaName } from './prompts/design-personas.js'
 import { designSynthesizerPrompt, SYNTHESIZER_TAG } from './prompts/design-synthesizer.js'
@@ -563,6 +563,7 @@ async function spawnAuditor(state: DesignState): Promise<void> {
     if (state._briefDisconnectTimer) clearTimeout(state._briefDisconnectTimer)
     designs.delete(state.ownerThreadId)
     refreshSessionVisual(state.ownerThreadId)
+    dispatchProtocolComplete(state.ownerThreadId)
   }
 }
 
@@ -892,6 +893,7 @@ export function onDesignReply(sessionId: string, text: string, chatId: string, s
         designs.delete(threadId)
         refreshSessionVisual(threadId)
         void gateway.send(threadId, `_Design session complete._`).catch(() => {})
+        dispatchProtocolComplete(threadId)
       }
       return
     }
