@@ -79,6 +79,7 @@ export function dispatchDisconnect(sessionId: string): void {
 let onCompleteFn: ((threadId: string) => void) | null = null
 
 export function registerOnComplete(fn: (threadId: string) => void): void {
+  if (onCompleteFn) throw new Error('onComplete callback already registered')
   onCompleteFn = fn
 }
 

@@ -1,7 +1,7 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startReview, getReviewByThread, cancelReview, listPostPasses } from '../adversarial.js'
-import { hasQueue, queueLength } from '../command-queue.js'
+import { queueLength } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, postPasses?: string[], engine?: 'claude' | 'codex'): Promise<void> {

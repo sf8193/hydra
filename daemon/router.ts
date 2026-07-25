@@ -776,9 +776,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
           void gateway.send(msg.channelId, `_Can't chain — \`${badMid.slice(0, 40)}\` doesn't produce a completion signal (only review/build/design do). Move it to the end or remove it._`, { replyTo: msg.id }).catch(() => {})
           return
         } else {
+          const snapshot = { ...msg }
           msg.content = segments[0]
           const threadId = registry.resolveThreadId(msg)
-          const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: msg }))
+          const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: snapshot }))
           enqueue(threadId, rest)
           const preview = segments.map((s, i) => i === 0 ? `**${s}**` : `\`${s}\``).join(' → ')
           void gateway.send(msg.channelId, `_⛓ Chained ${segments.length} commands: ${preview}_`, { replyTo: msg.id }).catch(() => {})

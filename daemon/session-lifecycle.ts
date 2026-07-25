@@ -265,7 +265,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     if (removedWatches > 0) {
       process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
     }
-    clearQueue(info.threadId)
+    clearQueue(info.threadId) // Silent — session is dying, no recipient for notifications
 
     if (info.isJoinMember) {
       registry.removeMember(info.threadId, info.sessionId)
