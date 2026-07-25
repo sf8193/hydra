@@ -86,9 +86,7 @@ export function onProtocolComplete(threadId: string): void {
   routeMessageFn(syntheticMsg).catch(err => {
     process.stderr.write(`daemon: command-queue: dispatch failed: ${err}\n`)
     const dropped = clearQueue(threadId)
-    if (dropped > 0) {
-      void safeSend(threadId, `_⚠️ Queue aborted — command dispatch failed (${dropped} command${dropped !== 1 ? 's' : ''} dropped)_`)
-    }
+    void safeSend(threadId, `_⚠️ Queue aborted — \`${next.rawText.trim()}\` failed to dispatch${dropped > 0 ? ` (${dropped} more command${dropped !== 1 ? 's' : ''} dropped)` : ''}_`)
   })
 }
 

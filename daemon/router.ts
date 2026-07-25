@@ -752,7 +752,7 @@ registerRouter(async (msg) => { await routeMessage(msg) })
 registerOnComplete(dispatchQueueNext)
 
 // Commands that can participate in && chains — must be command-shaped, not plain conversation.
-const CHAINABLE_RE = /^(?:\/review|review|\/build|build|\/design|design:|push|kill queue)\b/i
+const CHAINABLE_RE = /^(?:\/review|review|\/build|build|\/design|design:|push)\b/i
 // Commands that produce a protocol completion signal — non-terminal segments must be one of these.
 const PROTOCOL_RE = /^(?:\/review|review|\/build|build|\/design|design:)\b/i
 
@@ -776,7 +776,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
           void gateway.send(msg.channelId, `_Can't chain — \`${badMid.slice(0, 40)}\` doesn't produce a completion signal (only review/build/design do). Move it to the end or remove it._`, { replyTo: msg.id }).catch(() => {})
           return
         } else {
-          const snapshot = { ...msg }
+          const snapshot = structuredClone(msg)
           msg.content = segments[0]
           const threadId = registry.resolveThreadId(msg)
           const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: snapshot }))
