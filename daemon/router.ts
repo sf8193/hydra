@@ -23,7 +23,7 @@ import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { isAlive, reportError, safeSend } from './util.js'
 import { listTemplates, getTemplate } from './templates.js'
-import { splitChain, enqueue, clearQueue, hasQueue, queueLength, registerRouter, onProtocolComplete as dispatchQueueNext } from './command-queue.js'
+import { splitChain, enqueue, clearQueue, registerRouter, onProtocolComplete as dispatchQueueNext } from './command-queue.js'
 import { registerOnComplete } from './protocol-registry.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
