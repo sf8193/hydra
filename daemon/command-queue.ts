@@ -80,6 +80,7 @@ export function onProtocolComplete(threadId: string): void {
     ...next.originalMsg,
     content: next.rawText.trim(),
     channelId: threadId,
+    effectiveThreadId: threadId,
     isThread: true,
   }
 

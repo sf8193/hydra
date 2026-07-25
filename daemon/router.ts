@@ -21,7 +21,7 @@ import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handl
 import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
-import { isAlive, reportError } from './util.js'
+import { isAlive, reportError, safeSend } from './util.js'
 import { listTemplates, getTemplate } from './templates.js'
 import { splitChain, enqueue, clearQueue, hasQueue, queueLength, registerRouter, onProtocolComplete as dispatchQueueNext } from './command-queue.js'
 import { registerOnComplete } from './protocol-registry.js'
@@ -516,14 +516,14 @@ async function routeMessage(msg: InboundMessage): Promise<void> {
         return
       }
 
-      const cancelQueueMatch = msg.content.match(/^(?:kill queue)\s*$/i)
+      const cancelQueueMatch = msg.content.match(/^kill queue\s*$/i)
       if (cancelQueueMatch) {
         const threadId = registry.resolveThreadId(msg)
         const dropped = clearQueue(threadId)
         if (dropped > 0) {
-          void gateway.send(msg.channelId, `_Queue cleared — ${dropped} command${dropped !== 1 ? 's' : ''} dropped_`, { replyTo: msg.id }).catch(() => {})
+          void safeSend(msg.channelId, `_Queue cleared — ${dropped} command${dropped !== 1 ? 's' : ''} dropped_`)
         } else {
-          void gateway.send(msg.channelId, `_No queued commands._`, { replyTo: msg.id }).catch(() => {})
+          void safeSend(msg.channelId, `_No queued commands._`)
         }
         return
       }
@@ -777,8 +777,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
           return
         } else {
           const snapshot = structuredClone(msg)
-          msg.content = segments[0]
           const threadId = registry.resolveThreadId(msg)
+          msg = { ...msg, content: segments[0] }
           const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: snapshot }))
           enqueue(threadId, rest)
           const preview = segments.map((s, i) => i === 0 ? `**${s}**` : `\`${s}\``).join(' → ')
