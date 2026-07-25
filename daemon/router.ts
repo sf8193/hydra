@@ -774,6 +774,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const badMid = nonTerminal.find(s => !PROTOCOL_RE.test(s))
         if (badMid) {
           void gateway.send(msg.channelId, `_Can't chain — \`${badMid.slice(0, 40)}\` doesn't produce a completion signal (only review/build/design do). Move it to the end or remove it._`, { replyTo: msg.id }).catch(() => {})
+          return
         } else {
           msg.content = segments[0]
           const threadId = registry.resolveThreadId(msg)

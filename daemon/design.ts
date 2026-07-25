@@ -195,7 +195,10 @@ export async function startDesign(
     await safeSend(threadId, `No personas could be spawned. Design cancelled.`)
     designs.delete(threadId)
     refreshSessionVisual(threadId)
-    clearQueue(threadId)
+    const dropped = clearQueue(threadId)
+    if (dropped > 0) {
+      await safeSend(threadId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`)
+    }
     state.phase = 'cancelled'
     return state
   }

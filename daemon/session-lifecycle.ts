@@ -17,6 +17,7 @@ import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
+import { clearQueue } from './command-queue.js'
 import { loadAccess } from './access.js'
 import { codexEngine } from './codex-bootstrap.js'
 import { codexSocketPath } from './codex-engine.js'
@@ -264,6 +265,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     if (removedWatches > 0) {
       process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
     }
+    clearQueue(info.threadId)
 
     if (info.isJoinMember) {
       registry.removeMember(info.threadId, info.sessionId)

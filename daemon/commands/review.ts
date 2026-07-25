@@ -1,7 +1,7 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startReview, getReviewByThread, cancelReview, listPostPasses } from '../adversarial.js'
-import { clearQueue } from '../command-queue.js'
+import { hasQueue, queueLength } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, postPasses?: string[], engine?: 'claude' | 'codex'): Promise<void> {
@@ -25,7 +25,9 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
 
   const existing = getReviewByThread(threadId)
   if (existing) {
-    await gateway.send(msg.channelId, `A review is already in progress in this thread.`, { replyTo: msg.id })
+    const qLen = queueLength(threadId)
+    const queueWarning = qLen > 0 ? `\n_⚠️ ${qLen} chained command${qLen !== 1 ? 's' : ''} will fire when the current review completes — \`kill queue\` to drop them._` : ''
+    await gateway.send(msg.channelId, `A review is already in progress in this thread.${queueWarning}`, { replyTo: msg.id })
     return
   }
 

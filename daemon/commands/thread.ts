@@ -5,7 +5,6 @@ import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRes
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError } from '../util.js'
-import { clearQueue } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
@@ -15,7 +14,6 @@ export async function handleThreadKillIntercept(msg: InboundMessage): Promise<vo
     return
   }
   void gateway.react(msg.channelId, msg.id, '☠️').catch(() => {})
-  clearQueue(info.threadId)
   await killSession(info, 'session ended')
   debouncedRefreshListDisplay()
 }
