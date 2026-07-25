@@ -45,6 +45,19 @@ export type WatchEntry = {
   createdAt: number
 }
 
+export type CheckStatusType = WatchEntry['lastCheckStatus']
+
+export function shouldNotifyCiChange(
+  lastStatus: CheckStatusType, lastSha: string,
+  newStatus: CheckStatusType, newSha: string,
+): boolean {
+  const newCommit = newSha !== lastSha
+  const statusFlipped = newStatus !== lastStatus
+    && newStatus !== 'pending' && newStatus !== 'unknown'
+    && !(lastStatus === 'unknown' && newStatus === 'success')
+  return (newCommit && newStatus === 'failure') || statusFlipped
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -246,19 +259,50 @@ async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckR
 
   const headSha = pr.head.sha as string
 
-  // Fetch check runs for this SHA
-  const checks = await ghApi(`repos/${entry.owner}/${entry.repo}/commits/${headSha}/check-runs?per_page=100`)
-  if (!checks?.check_runs) return { headSha, status: 'unknown', failed: [] }
+  const [checks, combinedStatus] = await Promise.all([
+    ghApi(`repos/${entry.owner}/${entry.repo}/commits/${headSha}/check-runs?per_page=100`),
+    ghApi(`repos/${entry.owner}/${entry.repo}/commits/${headSha}/status`),
+  ])
 
-  const runs = checks.check_runs as Array<{ name: string; status: string; conclusion: string | null; html_url: string }>
-  if (runs.length === 0) return { headSha, status: 'unknown', failed: [] }
+  // null = API failure. If either endpoint failed, return null so pollPr
+  // holds lastCheckStatus — computing status from partial data causes
+  // false greens (same pattern as the comment-fetch null-vs-empty guard).
+  if (checks === null || combinedStatus === null) {
+    process.stderr.write(`daemon: pr-watch: partial CI fetch failure (check-runs: ${checks !== null}, statuses: ${combinedStatus !== null}) — holding state\n`)
+    return null
+  }
 
-  const pending = runs.some((r: any) => r.status !== 'completed')
-  const failed = runs
-    .filter((r: any) => r.conclusion === 'failure' || r.conclusion === 'cancelled' || r.conclusion === 'timed_out')
-    .map((r: any) => ({ name: r.name, conclusion: r.conclusion, url: r.html_url }))
+  const failed: Array<{ name: string; conclusion: string; url: string }> = []
+  let hasPending = false
+  let hasAnyCheck = false
 
-  if (pending && failed.length === 0) return { headSha, status: 'pending', failed: [] }
+  if (checks?.check_runs) {
+    const runs = checks.check_runs as Array<{ name: string; status: string; conclusion: string | null; html_url: string }>
+    hasAnyCheck = hasAnyCheck || runs.length > 0
+    hasPending = hasPending || runs.some((r: any) => r.status !== 'completed')
+    for (const r of runs) {
+      if (r.conclusion === 'failure' || r.conclusion === 'cancelled' || r.conclusion === 'timed_out' || r.conclusion === 'startup_failure' || r.conclusion === 'action_required') {
+        failed.push({ name: r.name, conclusion: r.conclusion!, url: r.html_url })
+      }
+    }
+  }
+
+  if (combinedStatus?.statuses) {
+    const statuses = combinedStatus.statuses as Array<{ context: string; state: string; target_url: string }>
+    if (statuses.length >= 100) {
+      process.stderr.write(`daemon: pr-watch: ${entry.prUrl} hit 100 commit statuses — some may be missed\n`)
+    }
+    hasAnyCheck = hasAnyCheck || statuses.length > 0
+    hasPending = hasPending || statuses.some((s: any) => s.state === 'pending')
+    for (const s of statuses) {
+      if (s.state === 'failure' || s.state === 'error') {
+        failed.push({ name: s.context, conclusion: s.state, url: s.target_url ?? '' })
+      }
+    }
+  }
+
+  if (!hasAnyCheck) return { headSha, status: 'unknown', failed: [] }
+  if (hasPending && failed.length === 0) return { headSha, status: 'pending', failed: [] }
   if (failed.length > 0) return { headSha, status: 'failure', failed }
   return { headSha, status: 'success', failed: [] }
 }
@@ -310,9 +354,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   let ciChanged = false
   let prevCheckStatus = entry.lastCheckStatus
   if (checkResult) {
-    const newSha = checkResult.headSha !== entry.lastHeadSha
-    const statusFlipped = checkResult.status !== entry.lastCheckStatus && checkResult.status !== 'pending' && checkResult.status !== 'unknown'
-    ciChanged = (newSha && checkResult.status === 'failure') || statusFlipped
+    ciChanged = shouldNotifyCiChange(entry.lastCheckStatus, entry.lastHeadSha, checkResult.status, checkResult.headSha)
     entry.lastHeadSha = checkResult.headSha
     entry.lastCheckStatus = checkResult.status
   }
