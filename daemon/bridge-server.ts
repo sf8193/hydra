@@ -11,6 +11,7 @@ import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession, killCodexProcessTree } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchReply, dispatchDisconnect } from './protocol-registry.js'
+import { onBridgeReady } from './command-queue.js'
 import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
@@ -255,6 +256,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       })
       transport.flushQueue(sessionId)
       dispatchReconnect(sessionId)
+      onBridgeReady(sessionId)
       if (info && !info.isJoinMember) refreshSessionVisual(info.threadId)
       if (sessionId === 'main') {
         const r = mainBridge.connect(mainHadOtherIncumbent, Date.now())

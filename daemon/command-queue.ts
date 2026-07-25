@@ -17,6 +17,11 @@ type ThreadQueue = {
 
 const queues = new Map<string, ThreadQueue>()
 
+// Pending fork handoffs: sessionId → threadId. When the forked session's bridge
+// registers, we dispatch the next queued command. This prevents racing the review
+// against the fork's boot sequence.
+const pendingForkHandoffs = new Map<string, string>()
+
 let routeMessageFn: ((msg: InboundMessage) => Promise<void>) | null = null
 
 export function registerRouter(fn: (msg: InboundMessage) => Promise<void>): void {
@@ -112,7 +117,30 @@ export function splitChain(text: string): string[] {
   return text.split(/\s*&&\s*/).map(s => s.trim()).filter(s => s.length > 0)
 }
 
+/** Schedule a chain dispatch for when the forked session's bridge connects. */
+export function scheduleForkHandoff(sessionId: string, threadId: string): void {
+  pendingForkHandoffs.set(sessionId, threadId)
+  process.stderr.write(`daemon: command-queue: fork handoff pending for session ${sessionId} → thread ${threadId}\n`)
+  // Safety timeout: if bridge never connects, dispatch anyway after 30s
+  setTimeout(() => {
+    if (pendingForkHandoffs.delete(sessionId)) {
+      process.stderr.write(`daemon: command-queue: fork handoff timeout for session ${sessionId}, dispatching anyway\n`)
+      onProtocolComplete(threadId)
+    }
+  }, 30_000)
+}
+
+/** Called from bridge-server when a session's bridge registers. Fires pending fork handoffs. */
+export function onBridgeReady(sessionId: string): void {
+  const threadId = pendingForkHandoffs.get(sessionId)
+  if (!threadId) return
+  pendingForkHandoffs.delete(sessionId)
+  process.stderr.write(`daemon: command-queue: fork handoff firing for session ${sessionId} (bridge ready)\n`)
+  onProtocolComplete(threadId)
+}
+
 export function _resetForTesting(): void {
   queues.clear()
+  pendingForkHandoffs.clear()
   routeMessageFn = null
 }

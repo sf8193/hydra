@@ -5,8 +5,7 @@ import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRes
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError } from '../util.js'
-import { migrateQueue, hasQueue } from '../command-queue.js'
-import { dispatchProtocolComplete } from '../protocol-registry.js'
+import { migrateQueue, hasQueue, scheduleForkHandoff } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
@@ -57,7 +56,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       const e = sessionEmoji(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (session not forkable yet — reading thread from **${info.tmuxName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
       debouncedRefreshListDisplay()
-      forkChainHandoff(info.threadId, result.threadId)
+      forkChainHandoff(info.threadId, result.sessionId, result.threadId)
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       try { await gateway.send(msg.channelId, `Fork fallback failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
@@ -99,7 +98,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     }
 
     debouncedRefreshListDisplay()
-    forkChainHandoff(info.threadId, result.threadId)
+    forkChainHandoff(info.threadId, result.sessionId, result.threadId)
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: fork failed, falling back to spawn: ${errMsg}\n`)
@@ -112,7 +111,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       const e = sessionEmoji(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (reading thread from **${parentName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
       debouncedRefreshListDisplay()
-      forkChainHandoff(info.threadId, result.threadId)
+      forkChainHandoff(info.threadId, result.sessionId, result.threadId)
     } catch (spawnErr) {
       const spawnErrMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr)
       try { await gateway.send(msg.channelId, `Fork and fallback spawn both failed: ${spawnErrMsg}`, { replyTo: msg.id }) } catch {}
@@ -120,12 +119,12 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   }
 }
 
-/** If a && chain is queued on the parent thread, migrate it to the forked thread and dispatch. */
-function forkChainHandoff(parentThreadId: string, forkThreadId: string): void {
+/** If a && chain is queued on the parent thread, migrate it to the forked thread and wait for bridge. */
+function forkChainHandoff(parentThreadId: string, forkSessionId: string, forkThreadId: string): void {
   if (!hasQueue(parentThreadId)) return
   const migrated = migrateQueue(parentThreadId, forkThreadId)
   if (migrated > 0) {
-    dispatchProtocolComplete(forkThreadId)
+    scheduleForkHandoff(forkSessionId, forkThreadId)
   }
 }
 
