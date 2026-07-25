@@ -7,7 +7,6 @@ import type { InboundMessage } from '../../gateway.js'
 export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, postPasses?: string[], engine?: 'claude' | 'codex'): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '⚔️').catch(() => {})
 
-  // Must be in a session thread
   const resolvedThreadId = registry.resolveThreadId(msg)
   const sessionId = registry.getByThread(resolvedThreadId)
 
@@ -24,17 +23,14 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
 
   const threadId = info.threadId
 
-  // Check if a review is already running
   const existing = getReviewByThread(threadId)
   if (existing) {
     await gateway.send(msg.channelId, `A review is already in progress in this thread.`, { replyTo: msg.id })
     return
   }
 
-  // Clamp rounds
   const clampedRounds = Math.max(1, Math.min(rounds, 5))
 
-  // Validate post-passes
   const validPasses = listPostPasses()
   const invalidPasses = postPasses?.filter(p => !validPasses.includes(p))
   if (invalidPasses && invalidPasses.length > 0) {
@@ -62,8 +58,4 @@ export async function handleCancelReviewIntercept(msg: InboundMessage): Promise<
   }
 
   await cancelReview(existing.reviewId)
-  const dropped = clearQueue(threadId)
-  if (dropped > 0) {
-    void gateway.send(msg.channelId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`).catch(() => {})
-  }
 }

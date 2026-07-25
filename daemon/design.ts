@@ -383,8 +383,11 @@ export async function cancelDesign(threadId: string, message?: string): Promise<
   await cleanupDesignSessions(state, 'design cancelled')
   designs.delete(threadId)
   refreshSessionVisual(threadId)
-  clearQueue(threadId)
+  const dropped = clearQueue(threadId)
   await gateway.send(state.ownerThreadId, message ?? `Design session cancelled.`)
+  if (dropped > 0) {
+    await gateway.send(state.ownerThreadId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`)
+  }
 }
 
 // ---------------------------------------------------------------------------

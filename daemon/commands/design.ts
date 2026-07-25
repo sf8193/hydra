@@ -1,13 +1,11 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startDesign, getDesignByThread, cancelDesign } from '../design.js'
-import { clearQueue } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleDesignIntercept(msg: InboundMessage, topic: string): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🎨').catch(() => {})
 
-  // Same pattern as build/review — resolve thread via session registry
   const resolvedThreadId = registry.resolveThreadId(msg)
   const sessionId = registry.getByThread(resolvedThreadId)
 
@@ -49,8 +47,4 @@ export async function handleCancelDesignIntercept(msg: InboundMessage): Promise<
   }
 
   await cancelDesign(threadId)
-  const dropped = clearQueue(threadId)
-  if (dropped > 0) {
-    void gateway.send(msg.channelId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`).catch(() => {})
-  }
 }

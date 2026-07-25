@@ -752,21 +752,41 @@ registerRouter(async (msg) => { await routeMessage(msg) })
 registerOnComplete(dispatchQueueNext)
 
 // Commands that can participate in && chains — must be command-shaped, not plain conversation.
-const CHAINABLE_RE = /^(?:\/review|review|\/build|build|\/design|design:|push|kill queue|spawn|new session|\/spawn)\b/i
+const CHAINABLE_RE = /^(?:\/review|review|\/build|build|\/design|design:|push|kill queue)\b/i
+// Commands that produce a protocol completion signal — non-terminal segments must be one of these.
+const PROTOCOL_RE = /^(?:\/review|review|\/build|build|\/design|design:)\b/i
 
 gateway.onMessage(async (msg: InboundMessage) => {
   if (msg.isBot) return
 
-  // Only split on && when in a thread and the first segment is command-shaped.
-  // Plain conversation like "make sure foo && bar both run" must not be split.
-  const segments = splitChain(msg.content)
-  if (segments.length > 1 && msg.isThread && CHAINABLE_RE.test(segments[0])) {
-    msg.content = segments[0]
-    const threadId = registry.resolveThreadId(msg)
-    const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: msg }))
-    enqueue(threadId, rest)
-    const preview = segments.map((s, i) => i === 0 ? `**${s}**` : `\`${s}\``).join(' → ')
-    void gateway.send(msg.channelId, `_⛓ Chained ${segments.length} commands: ${preview}_`, { replyTo: msg.id }).catch(() => {})
+  // Split on && only when: in a thread, sender is allowlisted, and EVERY
+  // segment is command-shaped. If any segment isn't a command, don't split —
+  // the && is part of the payload (e.g. "build 3: make sure bun test && bun build pass").
+  const access = loadAccess()
+  if (msg.isThread && access.allowFrom.includes(msg.authorId)) {
+    const segments = splitChain(msg.content)
+    if (segments.length > 1) {
+      const allCommands = segments.every(s => CHAINABLE_RE.test(s))
+      if (allCommands) {
+        // Non-terminal segments must produce a completion signal (review/build/design).
+        // Commands like `push` can only be last since they don't trigger the next step.
+        const nonTerminal = segments.slice(0, -1)
+        const badMid = nonTerminal.find(s => !PROTOCOL_RE.test(s))
+        if (badMid) {
+          void gateway.send(msg.channelId, `_Can't chain — \`${badMid.slice(0, 40)}\` doesn't produce a completion signal (only review/build/design do). Move it to the end or remove it._`, { replyTo: msg.id }).catch(() => {})
+        } else {
+          msg.content = segments[0]
+          const threadId = registry.resolveThreadId(msg)
+          const rest = segments.slice(1).map(rawText => ({ rawText, originalMsg: msg }))
+          enqueue(threadId, rest)
+          const preview = segments.map((s, i) => i === 0 ? `**${s}**` : `\`${s}\``).join(' → ')
+          void gateway.send(msg.channelId, `_⛓ Chained ${segments.length} commands: ${preview}_`, { replyTo: msg.id }).catch(() => {})
+        }
+      } else if (CHAINABLE_RE.test(segments[0])) {
+        const bad = segments.find(s => !CHAINABLE_RE.test(s))
+        void gateway.send(msg.channelId, `_Not chained — \`${bad?.slice(0, 40)}\` isn't a recognized command. The \`&&\` was treated as literal text._`, { replyTo: msg.id }).catch(() => {})
+      }
+    }
   }
 
   await routeMessage(msg)

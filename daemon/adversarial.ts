@@ -251,8 +251,11 @@ export async function cancelReview(reviewId: string): Promise<void> {
   }
 
   refreshSessionVisual(state.ownerThreadId)
-  clearQueue(state.ownerThreadId)
+  const dropped = clearQueue(state.ownerThreadId)
   await safeSend(state.ownerThreadId, `Review cancelled.`)
+  if (dropped > 0) {
+    await safeSend(state.ownerThreadId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`)
+  }
 
   void deleteReviewMessages(state).catch(err => {
     process.stderr.write(`daemon: cancel cleanup failed: ${err}\n`)

@@ -277,8 +277,11 @@ export async function cancelBuild(buildId: string): Promise<void> {
   }
 
   refreshSessionVisual(state.ownerThreadId)
-  clearQueue(state.ownerThreadId)
+  const dropped = clearQueue(state.ownerThreadId)
   await safeSend(state.ownerThreadId, `Build cancelled.`)
+  if (dropped > 0) {
+    await safeSend(state.ownerThreadId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`)
+  }
 
   cleanupWorktree(state)
 }

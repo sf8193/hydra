@@ -1,16 +1,13 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startBuild, getBuildByThread, cancelBuild } from '../build.js'
-import { clearQueue } from '../command-queue.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleBuildIntercept(msg: InboundMessage, rounds: number, task?: string, worktree?: string, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔨').catch(() => {})
 
-  // Validate rounds
   if (isNaN(rounds)) rounds = 3
 
-  // Must be in a session thread
   const resolvedThreadId = registry.resolveThreadId(msg)
   const sessionId = registry.getByThread(resolvedThreadId)
 
@@ -27,14 +24,12 @@ export async function handleBuildIntercept(msg: InboundMessage, rounds: number, 
 
   const threadId = info.threadId
 
-  // Check if a build is already running
   const existing = getBuildByThread(threadId)
   if (existing) {
     await gateway.send(msg.channelId, `A build is already in progress in this thread.`, { replyTo: msg.id })
     return
   }
 
-  // Clamp rounds
   const clampedRounds = Math.max(1, Math.min(rounds, 5))
 
   try {
@@ -57,8 +52,4 @@ export async function handleCancelBuildIntercept(msg: InboundMessage): Promise<v
   }
 
   await cancelBuild(existing.buildId)
-  const dropped = clearQueue(threadId)
-  if (dropped > 0) {
-    void gateway.send(msg.channelId, `_⚠️ Queue cleared — ${dropped} chained command${dropped !== 1 ? 's' : ''} dropped_`).catch(() => {})
-  }
 }
