@@ -18,7 +18,7 @@ export async function handleThreadKillIntercept(msg: InboundMessage): Promise<vo
   debouncedRefreshListDisplay()
 }
 
-export async function handleForkIntercept(msg: InboundMessage, description?: string): Promise<void> {
+export async function handleForkIntercept(msg: InboundMessage, description?: string, model?: string): Promise<void> {
   const info = registry.resolveThreadSessionFromMsg(msg)
   if (!info) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
@@ -39,6 +39,8 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     return
   }
 
+  const forkModel = model ?? info.capabilities?.model
+
   // No claudeSessionId → skip fork, spawn session that reads the parent thread
   if (!info.claudeSessionId) {
     void gateway.react(msg.channelId, msg.id, '🔁').catch(() => {})
@@ -47,7 +49,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     const parentThreadId = info.threadId
     try {
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
-        model: info.capabilities?.model,
+        model: forkModel,
         promptPrefix: `Read the parent thread for context using fetch_messages(channel="${parentThreadId}", limit=50). Reconstruct what was discussed there, then continue the work in YOUR thread.`,
       })
       const e = sessionEmoji(result.name)
@@ -72,7 +74,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   try {
     const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
       forkFrom: { claudeSessionId: info.claudeSessionId, parentName, codexThreadId: info.codexThreadId },
-      model: info.capabilities?.model,
+      model: forkModel,
       engine: info.engine,
     })
 
@@ -101,7 +103,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       await gateway.send(msg.channelId, `⚠️ Fork failed — spawning fresh session that will read the thread for context.`, { replyTo: msg.id })
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
         resurrectFrom: parentName,
-        model: info.capabilities?.model,
+        model: forkModel,
       })
       const e = sessionEmoji(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (reading thread from **${parentName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })

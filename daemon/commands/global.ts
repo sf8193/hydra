@@ -247,7 +247,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '',
     '**Thread** (inside a session thread):',
     '• ⚡ `! <message>` — interrupt current work, then deliver',
-    '• 🍴 `fork` / `fork: <focus>` — fork into a new thread',
+    '• 🍴 `fork` / `fork: <focus>` / `fork <model>: <focus>` — fork with optional model override',
     '• 🍽️ `forks` — list forks from this thread',
     '• ☠️ `kill` — kill this session',
     '• 👂 `listen` / 🔇 `unlisten` — mute/unmute message delivery',

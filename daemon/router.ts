@@ -49,6 +49,7 @@ const COMMAND_RE = new RegExp(
 const SPAWN_MODEL_RE = new RegExp(`^(?:new session|spawn)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const SPAWN_CODEX_RE = /^(?:new session|spawn)\s+codex(?:\s+(\S+))?:\s*([\s\S]+)/i
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
+const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
@@ -416,6 +417,13 @@ async function routeMessage(msg: InboundMessage): Promise<void> {
     }
 
     if (msg.isThread) {
+      // "fork sonnet: topic" / "fork opus-5: topic" — fork with model override
+      const forkModelMatch = msg.content.match(FORK_MODEL_RE)
+      if (forkModelMatch) {
+        void handleForkIntercept(msg, forkModelMatch[2].trim(), resolveModelAlias(forkModelMatch[1]))
+        return
+      }
+
       const forkMatch = msg.content.match(/^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i)
       if (forkMatch) {
         void handleForkIntercept(msg, forkMatch[1]?.trim())

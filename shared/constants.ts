@@ -2,6 +2,7 @@ export const DEFAULT_MODEL = 'claude-opus-4-6[1m]'
 export const TRANSCRIBE_TMUX = 'hydra-transcribe'
 
 export const KNOWN_MODELS = new Set([
+  'claude-opus-5',
   'claude-sonnet-5',
   'claude-fable-5',
   'claude-opus-4-8',
@@ -19,6 +20,7 @@ export const MODEL_ALIASES: Record<string, string> = {
   'haiku': 'claude-haiku-4-5-20251001',
   'opus': 'claude-opus-4-6[1m]',
   'fable': 'claude-fable-5[1m]',
+  'opus-5': 'claude-opus-5[1m]',
   'sonnet-5': 'claude-sonnet-5[1m]',
   'opus-4-7': 'claude-opus-4-7[1m]',
   'opus-4-8': 'claude-opus-4-8[1m]',
