@@ -594,12 +594,12 @@ async function spawnCritic(state: BuildState, implementationText: string): Promi
   const ownerInfo = registry.get(state.ownerSessionId)
   const ownerCwd = ownerInfo?.capabilities?.cwd
 
-  const criticModel = state.model ?? buildModel()
+  const criticModel = state.engine === 'codex' ? state.model : (state.model ?? buildModel())
   try {
     const result = await doSpawnSession(`Build CRITIC (${state.rounds} rounds)`, undefined, undefined, {
       trigger: 'build',
       joinThread: state.ownerThreadId,
-      model: criticModel,
+      ...(criticModel ? { model: criticModel } : {}),
       ...(state.engine ? { engine: state.engine } : {}),
       promptBuilder: (sessionId, tmuxName) =>
         buildCriticPrompt({ sessionId, tmuxName, rounds: state.rounds, threadId: state.ownerThreadId, task: state.task, ownerCwd, implementationText }),

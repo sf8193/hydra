@@ -681,12 +681,12 @@ async function spawnCritic(state: ReviewState): Promise<void> {
   const statusMsg = await gateway.send(state.ownerThreadId, `Spawning critic...`)
   state.messageIds.push(statusMsg.id)
 
-  const criticModel = state.model ?? reviewModel()
+  const criticModel = state.engine === 'codex' ? state.model : (state.model ?? reviewModel())
   try {
     const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
       trigger: 'review',
       joinThread: state.ownerThreadId,
-      model: criticModel,
+      ...(criticModel ? { model: criticModel } : {}),
       ...(state.engine ? { engine: state.engine } : {}),
       promptBuilder: (sessionId, tmuxName) =>
         reviewCriticPrompt({ sessionId, tmuxName, rounds: state.rounds, threadId: state.ownerThreadId, topic: state.topic }),
