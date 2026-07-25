@@ -417,7 +417,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (msg.isThread) {
       const forkMatch = msg.content.match(/^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i)
       if (forkMatch) {
-        void handleForkIntercept(msg, forkMatch[1]?.trim())
+        const forkDesc = forkMatch[1]?.trim()
+        const { model: forkModel, rest: forkRest } = forkDesc ? extractModelPrefix(forkDesc) : { model: undefined, rest: undefined }
+        void handleForkIntercept(msg, forkModel ? forkRest : forkDesc, forkModel)
         return
       }
 
