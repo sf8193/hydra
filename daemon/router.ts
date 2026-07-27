@@ -52,7 +52,7 @@ const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): string | undefined | false {
-  if (!alias || alias === 'codex') return undefined
+  if (!alias) return undefined
   const resolved = resolveModelAlias(alias)
   if (!resolved) {
     const available = Object.keys(MODEL_ALIASES).join(', ')
@@ -451,14 +451,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const preAlias = reviewMatch[1]?.toLowerCase()
         const postAlias = reviewMatch[3]?.toLowerCase()
         const isCodex = preAlias === 'codex' || postAlias === 'codex'
-        const preModel = resolveProtocolModel(preAlias, msg.channelId, msg.id)
+        const preModel = preAlias === 'codex' ? undefined : resolveProtocolModel(preAlias, msg.channelId, msg.id)
         if (preModel === false) return
-        const postModel = resolveProtocolModel(postAlias, msg.channelId, msg.id)
+        const postModel = postAlias === 'codex' ? undefined : resolveProtocolModel(postAlias, msg.channelId, msg.id)
         if (postModel === false) return
         const modelId = preModel ?? postModel
         const rounds = parseInt(reviewMatch[2] ?? '3')
         let topic = reviewMatch[4]?.trim()
-        // Detect wrong order: "review fable 3 topic" (alias without colon)
         if (!modelId && topic) {
           const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
           if (badOrder && resolveModelAlias(badOrder[1])) {
@@ -502,9 +501,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const buildPreAlias = buildMatch[1]?.toLowerCase()
         const buildPostAlias = buildMatch[3]?.toLowerCase()
         const buildIsCodex = buildPreAlias === 'codex' || buildPostAlias === 'codex'
-        const preModel = resolveProtocolModel(buildPreAlias, msg.channelId, msg.id)
+        const preModel = buildPreAlias === 'codex' ? undefined : resolveProtocolModel(buildPreAlias, msg.channelId, msg.id)
         if (preModel === false) return
-        const postModel = resolveProtocolModel(buildPostAlias, msg.channelId, msg.id)
+        const postModel = buildPostAlias === 'codex' ? undefined : resolveProtocolModel(buildPostAlias, msg.channelId, msg.id)
         if (postModel === false) return
         const buildModelId = preModel ?? postModel
         const buildRounds = parseInt(buildMatch[2] ?? '3')
