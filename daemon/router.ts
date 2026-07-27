@@ -51,6 +51,17 @@ const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${MODEL_ALIAS_PATTERN}):\\
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
+function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): string | undefined | false {
+  if (!alias) return undefined
+  const resolved = resolveModelAlias(alias)
+  if (!resolved) {
+    const available = Object.keys(MODEL_ALIASES).join(', ')
+    void gateway.send(channelId, `_Unknown model \`${alias}\`. Available: ${available}_`, { replyTo }).catch(() => {})
+    return false
+  }
+  return resolved
+}
+
 // ---------------------------------------------------------------------------
 // Notification payload builder (auto-downloads attachments)
 // ---------------------------------------------------------------------------
@@ -440,12 +451,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const preAlias = reviewMatch[1]?.toLowerCase()
         const postAlias = reviewMatch[3]?.toLowerCase()
         const isCodex = preAlias === 'codex' || postAlias === 'codex'
-        const preModel = (preAlias && preAlias !== 'codex') ? resolveModelAlias(preAlias) : undefined
-        const postModel = (postAlias && postAlias !== 'codex') ? resolveModelAlias(postAlias) : undefined
+        const preModel = preAlias === 'codex' ? undefined : resolveProtocolModel(preAlias, msg.channelId, msg.id)
+        if (preModel === false) return
+        const postModel = postAlias === 'codex' ? undefined : resolveProtocolModel(postAlias, msg.channelId, msg.id)
+        if (postModel === false) return
         const modelId = preModel ?? postModel
         const rounds = parseInt(reviewMatch[2] ?? '3')
         let topic = reviewMatch[4]?.trim()
-        // Detect wrong order: "review fable 3 topic" (alias without colon)
         if (!modelId && topic) {
           const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
           if (badOrder && resolveModelAlias(badOrder[1])) {
@@ -489,8 +501,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const buildPreAlias = buildMatch[1]?.toLowerCase()
         const buildPostAlias = buildMatch[3]?.toLowerCase()
         const buildIsCodex = buildPreAlias === 'codex' || buildPostAlias === 'codex'
-        const preModel = (buildPreAlias && buildPreAlias !== 'codex') ? resolveModelAlias(buildPreAlias) : undefined
-        const postModel = (buildPostAlias && buildPostAlias !== 'codex') ? resolveModelAlias(buildPostAlias) : undefined
+        const preModel = buildPreAlias === 'codex' ? undefined : resolveProtocolModel(buildPreAlias, msg.channelId, msg.id)
+        if (preModel === false) return
+        const postModel = buildPostAlias === 'codex' ? undefined : resolveProtocolModel(buildPostAlias, msg.channelId, msg.id)
+        if (postModel === false) return
         const buildModelId = preModel ?? postModel
         const buildRounds = parseInt(buildMatch[2] ?? '3')
         const buildTask = buildMatch[4]?.trim()
