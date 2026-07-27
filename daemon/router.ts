@@ -453,8 +453,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
       // v2 commands checked BEFORE v1 — the v1 regex matches "review_v2" / "build_v2" otherwise
       const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewV2Match) {
-        const preModel = reviewV2Match[1] ? resolveModelAlias(reviewV2Match[1]) : undefined
-        const postModel = reviewV2Match[3] ? resolveModelAlias(reviewV2Match[3]) : undefined
+        const preModel = resolveProtocolModel(reviewV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+        if (preModel === false) return
+        const postModel = resolveProtocolModel(reviewV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
+        if (postModel === false) return
         const v2Rounds = parseInt(reviewV2Match[2] ?? '3')
         let v2Topic = reviewV2Match[4]?.trim()
         const v2ModKeys = listModifierKeys()
@@ -529,8 +531,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
       const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (buildV2Match) {
-        const preModel = buildV2Match[1] ? resolveModelAlias(buildV2Match[1]) : undefined
-        const postModel = buildV2Match[3] ? resolveModelAlias(buildV2Match[3]) : undefined
+        const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+        if (preModel === false) return
+        const postModel = resolveProtocolModel(buildV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
+        if (postModel === false) return
         const v2Rounds = parseInt(buildV2Match[2] ?? '3')
         const v2Task = buildV2Match[4]?.trim()
         void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
@@ -575,7 +579,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
       // spike only exists as v2 — the unversioned name routes through the generic runner
       const spikeV2Match = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (spikeV2Match) {
-        const spikeModel = spikeV2Match[1] ? resolveModelAlias(spikeV2Match[1]) : undefined
+        const spikeModel = resolveProtocolModel(spikeV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+        if (spikeModel === false) return
         const spikeTopic = spikeV2Match[2]?.trim()
         void handleSpikeV2Intercept(msg, spikeTopic, spikeModel)
         return
