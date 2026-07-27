@@ -11,7 +11,11 @@ import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleR
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
+import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
+import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
+import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
 import { listPostPasses } from './adversarial.js'
+import { listModifierKeys } from './modifiers.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
 import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
 import { getDesignByThread, handleDesignAnswer } from './design.js'
@@ -446,6 +450,26 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
+      // v2 commands checked BEFORE v1 — the v1 regex matches "review_v2" / "build_v2" otherwise
+      const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (reviewV2Match) {
+        const preModel = reviewV2Match[1] ? resolveModelAlias(reviewV2Match[1]) : undefined
+        const postModel = reviewV2Match[3] ? resolveModelAlias(reviewV2Match[3]) : undefined
+        const v2Rounds = parseInt(reviewV2Match[2] ?? '3')
+        let v2Topic = reviewV2Match[4]?.trim()
+        const v2ModKeys = listModifierKeys()
+        let v2Mods: string[] = []
+        if (v2ModKeys.length > 0 && v2Topic) {
+          const v2ModRe = new RegExp(`\\+(${v2ModKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
+          v2Mods = [...v2Topic.matchAll(v2ModRe)].map(m => m[1])
+          if (v2Mods.length > 0) {
+            v2Topic = v2Topic.replace(v2ModRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+          }
+        }
+        void handleReviewV2Intercept(msg, v2Rounds, v2Topic, preModel ?? postModel, v2Mods.length > 0 ? v2Mods : undefined)
+        return
+      }
+
       const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewMatch) {
         const preAlias = reviewMatch[1]?.toLowerCase()
@@ -465,21 +489,28 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
         }
-        // Parse +pass suffixes — only match known pass names to avoid collisions with
-        // natural language (e.g. "+1 error handling" shouldn't extract "1" as a pass)
         const knownPasses = listPostPasses()
-        const passRe = new RegExp(`\\+(${knownPasses.join('|')})\\b`, 'g')
-        const postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
-        if (postPasses.length > 0) {
-          topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+        let postPasses: string[] = []
+        if (knownPasses.length > 0) {
+          const passRe = new RegExp(`\\+(${knownPasses.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
+          postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
+          if (postPasses.length > 0) {
+            topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+          }
         }
         void handleReviewIntercept(msg, rounds, topic, modelId, postPasses.length > 0 ? postPasses : undefined, isCodex ? 'codex' : undefined)
         return
       }
 
-      const cancelReviewMatch = msg.content.match(/^(?:kill review)\s*$/i)
+      const cancelReviewMatch = msg.content.match(/^(?:kill review|kill review_v2)\s*$/i)
       if (cancelReviewMatch) {
-        void handleCancelReviewIntercept(msg)
+        const threadId = registry.resolveThreadId(msg)
+        const occupied = isThreadOccupied(threadId)
+        if (occupied === 'review_v2') {
+          void handleCancelReviewV2Intercept(msg)
+        } else {
+          void handleCancelReviewIntercept(msg)
+        }
         return
       }
 
@@ -493,6 +524,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
       // Catch malformed build-wt (missing repo)
       if (msg.content.match(/^(?:\/build-wt|build-wt)[:\s]/i)) {
         void gateway.send(msg.channelId, `Usage: \`build-wt: <repo> [rounds] [task]\`\nExample: \`build-wt: options_bot 3 implement ticket 1\``, { replyTo: msg.id }).catch(() => {})
+        return
+      }
+
+      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (buildV2Match) {
+        const preModel = buildV2Match[1] ? resolveModelAlias(buildV2Match[1]) : undefined
+        const postModel = buildV2Match[3] ? resolveModelAlias(buildV2Match[3]) : undefined
+        const v2Rounds = parseInt(buildV2Match[2] ?? '3')
+        const v2Task = buildV2Match[4]?.trim()
+        void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
         return
       }
 
@@ -519,9 +560,38 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const cancelBuildMatch = msg.content.match(/^(?:kill build)\s*$/i)
+      const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
       if (cancelBuildMatch) {
-        void handleCancelBuildIntercept(msg)
+        const threadId = registry.resolveThreadId(msg)
+        const occupied = isThreadOccupied(threadId)
+        if (occupied === 'build_v2') {
+          void handleCancelBuildV2Intercept(msg)
+        } else {
+          void handleCancelBuildIntercept(msg)
+        }
+        return
+      }
+
+      // spike only exists as v2 — the unversioned name routes through the generic runner
+      const spikeV2Match = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (spikeV2Match) {
+        const spikeModel = spikeV2Match[1] ? resolveModelAlias(spikeV2Match[1]) : undefined
+        const spikeTopic = spikeV2Match[2]?.trim()
+        void handleSpikeV2Intercept(msg, spikeTopic, spikeModel)
+        return
+      }
+
+      const cancelSpikeMatch = msg.content.match(/^(?:kill spike|kill spike_v2)\s*$/i)
+      if (cancelSpikeMatch) {
+        const threadId = registry.resolveThreadId(msg)
+        const occupied = isThreadOccupied(threadId)
+        if (occupied === 'spike_v2') {
+          void handleCancelSpikeV2Intercept(msg)
+        } else if (!occupied) {
+          void gateway.send(msg.channelId, `No spike in progress in this thread.`, { replyTo: msg.id }).catch(() => {})
+        } else {
+          void gateway.send(msg.channelId, `A ${occupied} is running, not a spike.`, { replyTo: msg.id }).catch(() => {})
+        }
         return
       }
 

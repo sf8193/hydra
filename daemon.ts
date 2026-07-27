@@ -108,6 +108,8 @@ if ('homeSpawnHandler' in gateway) {
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import './daemon/router.js'
+import { getLenses } from './daemon/lens-loader.js'
+await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles } from './daemon/pr-watch.js'
 import { getContextPercent, tmuxHasSession } from './daemon/util.js'
 import { refreshSessionVisual } from './daemon/anchor-state.js'

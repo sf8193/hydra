@@ -16,6 +16,7 @@ export const BRIDGE_TOOLS = [
   { name: 'watch_pr', description: 'Watch a GitHub PR for new comments/reviews. The daemon polls every 3 min and delivers new feedback to your thread for triage. Omit pr_url to auto-detect from the current branch.', inputSchema: { type: 'object', properties: { pr_url: { type: 'string', description: 'Full GitHub PR URL. Omit to auto-detect from current branch via gh pr view.' }, chat_id: { type: 'string', description: 'Thread to deliver feedback to (defaults to your session thread)' } } } },
   { name: 'unwatch_pr', description: 'Stop watching a GitHub PR.', inputSchema: { type: 'object', properties: { pr_url: { type: 'string' } }, required: ['pr_url'] } },
   { name: 'list_watches', description: 'List all PRs being watched (your session or all).', inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Show all watches, not just yours' } } } },
+  { name: 'decide', description: 'Make a protocol decision. The machine routes on value; your reasoning rides `because` and is narrated to the thread. For build reviews: value is "approve" or "request_changes". For post-pass lenses: value is "clean" or "findings".', inputSchema: { type: 'object', properties: { value: { type: 'string', description: 'The decision value — one of the options the protocol declares for this phase.' }, because: { type: 'string', description: 'Why. Posted to the thread as your review content.' } }, required: ['value', 'because'] } },
 ]
 
 export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
