@@ -1,7 +1,10 @@
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
-import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
+import { doSpawnSession, killSession, killsInProgress, waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
+import { decideResume } from './auto-resume.js'
+import { isAlive } from './util.js'
+import { recordSessionDeath } from './observability.js'
 import { registerProtocol, type ProtocolName } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
 import { safeSend, type StatusLineState } from './util.js'
@@ -257,19 +260,84 @@ export function onRunDisconnect(sessionId: string): void {
   const role = run.sessionToRole.get(sessionId)
   if (!role) return
 
+  if (role !== run.protocol.ownerRole) {
+    const info = registry.get(sessionId)
+    const claudeSessionId = info?.claudeSessionId
+    run.disconnectTimers.set(sessionId, setTimeout(async () => {
+      if (isTerminal(run)) return
+      const currentInfo = registry.get(sessionId)
+      const attempts = (run.ext._resumeAttempts as number | undefined) ?? 0
+      const decision = decideResume(
+        transport.has(sessionId),
+        currentInfo ? !isAlive(currentInfo) : true,
+        !!claudeSessionId,
+        attempts,
+      )
+      if (decision === 'reconnected') { run.disconnectTimers.delete(sessionId); return }
+      if (decision === 'resume') {
+        run.ext._resumeAttempts = attempts + 1
+        void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
+          process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
+          void cancelRun(run, `${role} auto-resume failed`)
+        })
+      } else {
+        startGraceTimer(run, role, sessionId)
+      }
+    }, 3_000))
+    return
+  }
+
+  startGraceTimer(run, role, sessionId)
+}
+
+function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): void {
   const graceMs = run.protocol.graceMs(role)
   if (!graceMs) {
     void cancelRun(run, `${role} disconnected (no grace period)`)
     return
   }
-
-  process.stderr.write(`daemon: ${run.protocol.name} run: ${role} disconnected — ${graceMs / 1000}s grace\n`)
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
-
+  process.stderr.write(`daemon: ${run.protocol.name} run: ${role} — ${graceMs / 1000}s grace\n`)
   run.disconnectTimers.set(sessionId, setTimeout(() => {
-    process.stderr.write(`daemon: ${run.protocol.name} run: ${role} did not reconnect\n`)
     void cancelRun(run, `${role} did not reconnect`)
   }, graceMs))
+}
+
+async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
+  const info = registry.get(deadSessionId)
+  if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`)
+
+  const result = await doSpawnSession(
+    info?.topic ?? `${run.protocol.display} ${run.protocol.roles[role]}`,
+    undefined, undefined, {
+      joinThread: run.threadId,
+      resumeFrom: claudeSessionId,
+      model: run.params.model as string | undefined,
+    },
+  )
+  const ok = await waitForBridge(result.sessionId, 30_000)
+  if (!ok) {
+    const newInfo = registry.get(result.sessionId)
+    if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
+    throw new Error('resumed session did not connect')
+  }
+
+  if (info) info.deadAt = Date.now()
+  sessionToRun.delete(deadSessionId)
+  run.participants.set(role, result.sessionId)
+  run.sessionToRole.delete(deadSessionId)
+  run.sessionToRole.set(result.sessionId, role)
+  sessionToRun.set(result.sessionId, run.id)
+  run.disconnectTimers.delete(deadSessionId)
+
+  transport.sendOrQueue(result.sessionId, {
+    type: 'notification',
+    content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
+    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+
+  resetTimeout(run)
+  process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resumed: ${deadSessionId} → ${result.sessionId}\n`)
 }
 
 export function onRunReconnect(sessionId: string): void {

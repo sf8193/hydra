@@ -180,9 +180,43 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
     `  lifetime: ${dur(now - info.createdAt)}, idle at death: ${dur(now - info.lastActive)}`,
     `  last RSS: ${rss}`,
   ]
+  const startIdx = blackBoxTail.indexOf('=== HYDRA SESSION EXIT ===')
+  const endIdx = blackBoxTail.indexOf('=========================', startIdx)
+  const exitBlock = startIdx >= 0 && endIdx > startIdx ? blackBoxTail.slice(startIdx + 1, endIdx) : []
+  const exitMarkers = new Map(
+    exitBlock.filter(l => l.includes('=')).map(l => {
+      const eq = l.indexOf('=')
+      return [l.slice(0, eq), l.slice(eq + 1)] as [string, string]
+    })
+  )
+  if (exitMarkers.has('exit_code')) {
+    const code = exitMarkers.get('exit_code')!
+    const signal = exitMarkers.get('signal')
+    const wall = exitMarkers.get('wall_clock')
+    const parts = [`exit_code=${code}`]
+    if (signal) parts.push(`signal=${signal}`)
+    if (wall) parts.push(`wall=${wall}`)
+    lines.push(`  exit: ${parts.join(', ')}`)
+  }
+  const stderrPath = info.spawnLogPath?.replace(/\/([^/]+)\.log$/, '/stderr-$1.log')
+  if (stderrPath) {
+    try {
+      const stderr = execFileSync('tail', ['-n', '5', stderrPath], { encoding: 'utf8' }).trim()
+      if (stderr) {
+        lines.push(`  stderr (last 5 lines):`)
+        lines.push(...stderr.split('\n').map(l => `  | ${l}`))
+      }
+    } catch {}
+  }
+  const markerKeys = new Set(['exit_code', 'exit_ts', 'session_id', 'tmux_name', 'signal', 'wall_clock'])
   if (blackBoxTail.length > 0) {
-    lines.push(`  last output (${blackBoxTail.length} lines):`)
-    lines.push(...blackBoxTail.map(l => `  | ${l}`))
+    const displayTail = blackBoxTail.filter(l => !l.startsWith('=== HYDRA') && !l.startsWith('====') && !(l.includes('=') && markerKeys.has(l.slice(0, l.indexOf('=')))))
+    if (displayTail.length > 0) {
+      lines.push(`  last output (${displayTail.length} lines):`)
+      lines.push(...displayTail.map(l => `  | ${l}`))
+    } else {
+      lines.push(`  last output: none captured`)
+    }
   } else {
     lines.push(`  last output: none captured`)
   }
@@ -198,6 +232,15 @@ export function tailSpawnLog(path: string, maxLines: number = CRASH_LOG_TAIL_LIN
   const lines = out.split('\n')
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
   return lines
+}
+
+export function recordSessionDeath(info: SessionInfo, reason: string): void {
+  let tail: string[] = []
+  if (info.spawnLogPath) {
+    try { tail = tailSpawnLog(info.spawnLogPath) } catch {}
+  }
+  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId)) + '\n')
+  info.deadAt = Date.now()
 }
 
 // The channel crash notice: LINK, not CONVEY. It names the on-disk black box

@@ -734,6 +734,10 @@
     ],
     [
       "daemon_adversarial",
+      "daemon_util"
+    ],
+    [
+      "daemon_adversarial",
       "daemon_protocol-registry"
     ],
     [
@@ -747,10 +751,6 @@
     [
       "daemon_adversarial",
       "daemon_anchor-state"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_util"
     ],
     [
       "daemon_adversarial",
@@ -774,6 +774,10 @@
     ],
     [
       "daemon_build",
+      "daemon_util"
+    ],
+    [
+      "daemon_build",
       "daemon_protocol-registry"
     ],
     [
@@ -791,10 +795,6 @@
     [
       "daemon_build",
       "shared_constants"
-    ],
-    [
-      "daemon_build",
-      "daemon_util"
     ],
     [
       "daemon_build",

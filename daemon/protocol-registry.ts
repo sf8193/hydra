@@ -65,10 +65,11 @@ export async function dispatchReply(sessionId: string, text: string, chatId: str
   }
 }
 
-export function dispatchDisconnect(sessionId: string): void {
+export function dispatchDisconnect(sessionId: string): boolean {
   for (const hooks of protocols.values()) {
-    if (hooks.isParticipant(sessionId)) { hooks.onDisconnect(sessionId); break }
+    if (hooks.isParticipant(sessionId)) { hooks.onDisconnect(sessionId); return true }
   }
+  return false
 }
 
 export async function dispatchDecision(sessionId: string, value: string, because: string): Promise<{ ok: true } | { ok: false; reason: string }> {
