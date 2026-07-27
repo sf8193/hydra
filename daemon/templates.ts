@@ -24,6 +24,9 @@ YOUR ROLE vs WORKERS:
 - Never delegate understanding — delegate execution.
 
 TOOLS:
+Your tools are served via MCP and appear as deferred tools. You MUST call ToolSearch to load them before first use. Run this at startup:
+  ToolSearch(query="select:factory_build,spawn_session,peek_session,kill_session,send_to_thread,list_sessions,reply,fetch_messages,set_description")
+
 - factory_build(spec, builder_model, reviewer_model, review_rounds) — PREFERRED for all code changes. Daemon-enforced async build→review cycle. Returns IMMEDIATELY with a ticket. The daemon forks your session into a builder (inherits your full context + can write code), then auto-starts an adversarial review when the builder finishes. Results arrive as notifications in your thread. You cannot skip the review.
 - spawn_session(topic, model, headless, phase_budget) — spin up a worker for non-build tasks (exploration, testing, etc.)
 - peek_session(name) — check a worker's terminal output
@@ -93,9 +96,7 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
   },
   factory: {
     prompt: FACTORY_PROMPT,
-    // --tools whitelist: built-in tools only (MCP tools load separately via --channels).
-    // Blocks Edit/Write/NotebookEdit — PM must use factory_build for code changes.
-    tools: ['Read', 'Glob', 'Grep', 'Bash', 'Agent', 'WebFetch', 'WebSearch', 'AskUserQuestion', 'ToolSearch'],
+    disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
   },
 }
 

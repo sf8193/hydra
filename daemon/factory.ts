@@ -233,7 +233,12 @@ async function spawnBuilder(
     `Spec: ${state.spec.slice(0, 200)}${state.spec.length > 200 ? '...' : ''}`,
   ].join('\n'))
 
-  const result = await doSpawnSession(`factory-builder: ${state.spec.slice(0, 60)}`, undefined, undefined, {
+  // Use the PM's channel so the builder thread is created in the same DM/channel.
+  // anchorChannelId may not be set (Slack DM spawns skip it), so extract from threadId.
+  const pmInfo = registry.get(state.pmSessionId)
+  const chatId = pmInfo?.anchorChannelId || state.pmThreadId.split(':')[0] || undefined
+
+  const result = await doSpawnSession(`factory-builder: ${state.spec.slice(0, 60)}`, chatId, undefined, {
     forkFrom: { claudeSessionId: pmClaudeSessionId, parentName: pmTmuxName },
     model: state.builderModel,
     promptPrefix: builderPrompt,

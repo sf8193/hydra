@@ -146,14 +146,11 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       // Update tool list if daemon sent one (dynamic tool refresh)
       const tools = msg.tools as Array<Record<string, unknown>> | undefined
       if (tools && tools.length > 0) {
-        const hadTools = dynamicTools !== null
         dynamicTools = tools
         process.stderr.write(`bridge: received ${tools.length} tool definitions from daemon\n`)
-        if (hadTools) {
-          mcp.notification({ method: 'notifications/tools/list_changed' }).catch(err => {
-            process.stderr.write(`bridge: failed to send tools/list_changed: ${err}\n`)
-          })
-        }
+        mcp.notification({ method: 'notifications/tools/list_changed' }).catch(err => {
+          process.stderr.write(`bridge: failed to send tools/list_changed: ${err}\n`)
+        })
       }
 
       // Flush queued notifications
@@ -331,6 +328,14 @@ const SESSION_INFO_TOOL = {
 }
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => {
+  // Wait up to 5s for daemon registration to deliver the full tool list.
+  // Without this, the first ListTools call races the socket connect and
+  // returns only the hardcoded fallback (no factory_build, spawn_session, etc.)
+  if (!dynamicTools) {
+    for (let i = 0; i < 50 && !dynamicTools; i++) {
+      await new Promise(r => setTimeout(r, 100))
+    }
+  }
   if (dynamicTools) return { tools: [SESSION_INFO_TOOL, ...dynamicTools] }
   const fallback = [
     {

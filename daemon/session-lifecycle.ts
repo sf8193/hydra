@@ -621,7 +621,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } else {
     const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
     const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions${disallowed}${toolsFlag} ${shq(prompt)}`
+    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
   }
