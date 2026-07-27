@@ -10,6 +10,7 @@
 //   6. PM receives artifact + raw critic verdict as thread notifications
 //   7. PM decides: accept / retry / move on
 
+import { randomBytes } from 'crypto'
 import { doSpawnSession, sessionDeathEmitter, killSession } from './session-lifecycle.js'
 import { startReview } from './adversarial.js'
 import { registry } from './sessions.js'
@@ -80,7 +81,7 @@ export function factoryBuild(
     return { error: 'Cannot fork — PM claude session ID not found.' }
   }
 
-  const ticket = `fb-${++ticketCounter}`
+  const ticket = `fb-${++ticketCounter}-${randomBytes(2).toString('hex')}`
   const state: FactoryBuildState = {
     ticket,
     pmThreadId,

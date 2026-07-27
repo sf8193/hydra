@@ -240,7 +240,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // disconnect-reason instrumentation here is what makes that confirmation possible.
       // TODO(fix-main-flap): remove flapTracker.delete('main') once the disconnect cause is confirmed.
       if (sessionId === 'main' && !mainHadOtherIncumbent) flapTracker.delete('main')
-      const tools = computeToolsForSession(sessionId, info?.allowMainTools)
+      const tools = computeToolsForSession(sessionId, { allowMainTools: info?.allowMainTools })
       transport.sendToBridge(conn, {
         type: 'registered',
         sessionId,

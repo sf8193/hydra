@@ -693,7 +693,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const now = Date.now()
   const capabilities: SessionCapabilities = {
     role: 'worker',
-    tools: computeToolsForSession(sessionId).map(t => t.name),
+    tools: computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools }).map(t => t.name),
     model,
     cwd: effectiveCwd,
     platform: PLATFORM,

@@ -31,7 +31,7 @@ describe('computeToolsForSession', () => {
   })
 
   test('worker with allowMainTools gets spawn/kill tools', () => {
-    const tools = computeToolsForSession('some-worker-id', true)
+    const tools = computeToolsForSession('some-worker-id', { allowMainTools: true })
     const names = tools.map(t => t.name)
     expect(names).toContain('spawn_session')
     expect(names).toContain('kill_session')
