@@ -32,4 +32,6 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: test-token
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
-        run: bun test
+        run: |
+          mkdir -p ~/.claude/channels/discord
+          bun test
