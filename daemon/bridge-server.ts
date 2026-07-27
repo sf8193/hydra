@@ -8,7 +8,7 @@ import { executeTool } from './bridge-dispatch.js'
 import { computeToolsForSession, MAIN_ONLY_TOOLS } from './bridge-tools.js'
 import { spawnModel } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
-import { discoverClaudeSessionId, killSession, killCodexProcessTree } from './session-lifecycle.js'
+import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchReply, dispatchDisconnect } from './protocol-registry.js'
 import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
@@ -285,7 +285,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         if (info) info.lastActive = Date.now()
       }
 
-      void executeTool(name, args, conn.sessionId).then(result => {
+      void executeTool(name, args, conn.sessionId).then(async result => {
         transport.sendToBridge(conn, {
           type: 'tool_result',
           id,
@@ -293,33 +293,34 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           ...(result.isError ? { isError: true } : {}),
         })
 
-        // Post-reply hooks (single registry lookup)
-        if (name === 'reply' && !result.isError && conn.sessionId) {
-          const replyInfo = registry.get(conn.sessionId)
-          const replyText = args.text as string
+        try {
+          if (name === 'reply' && !result.isError && conn.sessionId) {
+            const replyInfo = registry.get(conn.sessionId)
+            const replyText = args.text as string
 
-          // Auto-watch: detect PR URLs (skip ephemeral sessions)
-          if (replyInfo && !replyInfo.ephemeral) {
-            autoWatchPrUrls(conn.sessionId, replyText)
+            if (replyInfo && !replyInfo.ephemeral) {
+              autoWatchPrUrls(conn.sessionId, replyText)
+            }
+
+            await dispatchReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
+            maybeNudgeMissingSentinel(conn.sessionId, replyText, args.chat_id as string)
+
+            if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
+              process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)
+              clearEphemeralTtl(conn.sessionId)
+              const sid = conn.sessionId
+              setTimeout(() => {
+                const current = registry.get(sid)
+                if (current) {
+                  void killSession(current, 'ephemeral [done]').catch(err => {
+                    process.stderr.write(`daemon: ephemeral kill failed: ${err}\n`)
+                  })
+                }
+              }, 2000)
+            }
           }
-
-          dispatchReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
-          maybeNudgeMissingSentinel(conn.sessionId, replyText, args.chat_id as string)
-
-          // Ephemeral session: kill on [done] sentinel
-          if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
-            process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)
-            clearEphemeralTtl(conn.sessionId)
-            const sid = conn.sessionId
-            setTimeout(() => {
-              const current = registry.get(sid)
-              if (current) {
-                void killSession(current, 'ephemeral [done]').catch(err => {
-                  process.stderr.write(`daemon: ephemeral kill failed: ${err}\n`)
-                })
-              }
-            }, 2000)
-          }
+        } catch (err) {
+          process.stderr.write(`daemon: post-reply hook failed: ${err}\n`)
         }
       }).catch(err => {
         transport.sendToBridge(conn, {
@@ -421,10 +422,6 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
 
     info.deadAt = Date.now()
     registry.persist()
-
-    if (info.engine === 'codex') {
-      try { killCodexProcessTree(info) } catch {}
-    }
 
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {
