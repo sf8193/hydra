@@ -29,4 +29,7 @@ jobs:
         run: bun build cli/hydra.ts --target bun --outdir /tmp/hb
 
       - name: Run tests
+        env:
+          DISCORD_BOT_TOKEN: test-token
+          DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: bun test
