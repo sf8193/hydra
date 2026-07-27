@@ -8,6 +8,7 @@ export type SpawnTemplate = {
   model?: string
   disallowedTools?: string[]  // Claude built-in tools to block for this template
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
+  allowMainTools?: boolean    // Grant access to spawn_session/kill_session (default: main only)
 }
 
 const FACTORY_PROMPT = `You are a senior tech lead / PM orchestrating a software feature end-to-end. You own the task from research to shipped PR. You have a team of AI agents you can spawn as workers.
@@ -97,6 +98,7 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
   factory: {
     prompt: FACTORY_PROMPT,
     disallowedTools: ['Edit', 'Write', 'NotebookEdit'],
+    allowMainTools: true,
   },
 }
 

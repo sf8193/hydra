@@ -81,8 +81,8 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
   killsInProgress.add(info.sessionId)
 
   try {
-    // Join members and ephemeral sessions don't own the thread — skip death message and anchor reactions
-    if (!info.isJoinMember && !info.ephemeral) {
+    // Join members, ephemeral, and headless sessions don't own a real thread
+    if (!info.isJoinMember && !info.ephemeral && !info.headless) {
       try {
         await gateway.send(info.threadId, `_${reason}_`)
       } catch (err) {
@@ -711,6 +711,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
     ...(isHeadless ? { headless: true } : {}),
+    ...(opts?.allowMainTools ? { allowMainTools: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)

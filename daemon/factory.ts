@@ -128,6 +128,7 @@ export function onFactoryReviewComplete(threadId: string): boolean {
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
     if (builderInfo) {
+      builderInfo.ephemeral = true // suppress "died" message — completion already announced
       void killSession(builderInfo, 'factory review complete').catch(() => {})
     }
   }
@@ -158,6 +159,7 @@ export function onFactoryReviewCancelled(threadId: string): boolean {
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
     if (builderInfo) {
+      builderInfo.ephemeral = true // suppress "died" message
       void killSession(builderInfo, 'factory review cancelled').catch(() => {})
     }
   }
@@ -173,11 +175,14 @@ export function onFactoryCriticRound(builderThreadId: string, round: number, tot
   const pmThreadId = builderThreadToFactory.get(builderThreadId)
   if (!pmThreadId) return
 
-  const truncated = criticText.length > 2000 ? criticText.slice(0, 2000) + '\n...(truncated)' : criticText
-  void safeSend(pmThreadId, [
-    `🏭 **Critic Round ${round}/${totalRounds}**`,
-    truncated,
-  ].join('\n'))
+  if (round < totalRounds) {
+    void safeSend(pmThreadId, `🏭 **Critic Round ${round}/${totalRounds}** — in progress (full transcript in builder thread)`)
+  } else {
+    void safeSend(pmThreadId, [
+      `🏭 **Critic Final Round ${round}/${totalRounds}**`,
+      criticText,
+    ].join('\n'))
+  }
 }
 
 // Keep for backwards compat — build.ts still imports this
@@ -243,7 +248,7 @@ async function spawnBuilder(
     model: state.builderModel,
     promptPrefix: builderPrompt,
     initiator: pmTmuxName,
-    disallowedTools: ['factory_build'],  // prevent recursion bomb
+    phaseBudgetMs: 30 * 60 * 1000, // 30min deadline — reuse phase-budget machinery
   })
 
   state.builderSessionId = result.sessionId

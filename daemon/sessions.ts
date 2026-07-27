@@ -48,6 +48,7 @@ export type SessionInfo = {
   artifactsBackfilled?: boolean  // one-time history scan done (skips the fetch on later restarts)
   ephemeral?: boolean
   headless?: boolean       // no Discord thread — worker communicates via send_to_thread
+  allowMainTools?: boolean // template granted access to spawn_session/kill_session
   isFactoryBuilder?: boolean    // session is a factory builder — persisted for startup sweep
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
@@ -119,6 +120,7 @@ export type SpawnOpts = {
   headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
+  allowMainTools?: boolean    // grant access to spawn_session/kill_session (from template)
 }
 
 // ---------------------------------------------------------------------------

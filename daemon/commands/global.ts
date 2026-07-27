@@ -56,6 +56,7 @@ async function spawnAndNotify(
     ...(engine && { engine }),
     ...(template?.template.disallowedTools?.length && { disallowedTools: template.template.disallowedTools }),
     ...(template?.template.tools?.length && { tools: template.template.tools }),
+    ...(template?.template.allowMainTools && { allowMainTools: true }),
     trigger: template ? `${template.name}:` : 'spawn:',
     initiator: msg.authorUsername,
   }

@@ -20,9 +20,9 @@ export const BRIDGE_TOOLS = [
   { name: 'decide', description: 'Make a protocol decision. The machine routes on value; your reasoning rides `because` and is narrated to the thread. For build reviews: value is "approve" or "request_changes". For post-pass lenses: value is "clean" or "findings".', inputSchema: { type: 'object', properties: { value: { type: 'string', description: 'The decision value — one of the options the protocol declares for this phase.' }, because: { type: 'string', description: 'Why. Posted to the thread as your review content.' } }, required: ['value', 'because'] } },
 ]
 
-export const MAIN_ONLY_TOOLS = new Set<string>([])
+export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
 
-export function computeToolsForSession(sessionId: string): typeof BRIDGE_TOOLS {
-  if (sessionId === 'main') return BRIDGE_TOOLS
+export function computeToolsForSession(sessionId: string, allowMainTools?: boolean): typeof BRIDGE_TOOLS {
+  if (sessionId === 'main' || allowMainTools) return BRIDGE_TOOLS
   return BRIDGE_TOOLS.filter(t => !MAIN_ONLY_TOOLS.has(t.name))
 }
