@@ -47,6 +47,9 @@ export type SessionInfo = {
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
   artifactsBackfilled?: boolean  // one-time history scan done (skips the fetch on later restarts)
   ephemeral?: boolean
+  headless?: boolean       // no Discord thread — worker communicates via send_to_thread
+  isFactoryBuilder?: boolean    // session is a factory builder — persisted for startup sweep
+  factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash
@@ -113,6 +116,9 @@ export type SpawnOpts = {
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
   trigger?: string       // what caused this spawn, for the announce line (e.g. 'spawn:', 'review 2:', 'CLI'); falls back to originType
   engine?: 'claude' | 'codex'  // which backend to use (default: claude)
+  headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
+  disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
+  tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +198,13 @@ export class SessionRegistry {
 
   getByThread(threadId: string): string | undefined {
     return this.threadToSession.get(threadId)
+  }
+
+  findByName(tmuxName: string): SessionInfo | undefined {
+    for (const s of this.sessions.values()) {
+      if (s.tmuxName === tmuxName) return s
+    }
+    return undefined
   }
 
   setThread(threadId: string, sessionId: string): void {

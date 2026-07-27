@@ -15,6 +15,7 @@ import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
 import { getLenses, getLensesSync, type LensDef } from './lens-loader.js'
+import { onFactoryReviewComplete, onFactoryReviewCancelled, onFactoryCriticRound } from './factory.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -240,6 +241,7 @@ export async function cancelReview(reviewId: string): Promise<void> {
   }
 
   refreshSessionVisual(state.ownerThreadId)
+  onFactoryReviewCancelled(state.ownerThreadId)
   await safeSend(state.ownerThreadId, `Review cancelled.`)
 
   void deleteReviewMessages(state).catch(err => {
@@ -454,6 +456,9 @@ async function reviewStatusLine(state: ReviewState): Promise<void> {
 
 function onCriticPosted(state: ReviewState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
+
+  // F2: relay critic round to factory PM if this is a factory review
+  onFactoryCriticRound(state.ownerThreadId, state.currentRound, state.rounds, text)
 
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
   const badge = formatRoundBadge('⚔️', reviewHalf(state.phase), state.currentRound, state.rounds)
@@ -689,6 +694,9 @@ function finalizeReview(state: ReviewState): void {
 
   cleanupReviewMaps(state)
   refreshSessionVisual(state.ownerThreadId)
+
+  // If this review is part of a factory_build, signal completion
+  onFactoryReviewComplete(state.ownerThreadId)
 
   cleaningUpThreads.add(state.ownerThreadId)
   void deleteReviewMessages(state)

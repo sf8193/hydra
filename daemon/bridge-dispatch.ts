@@ -11,6 +11,7 @@ import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry,
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts } from './artifacts.js'
+import { factoryBuild } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -227,10 +228,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
         if (budgetRaw && !phaseBudgetMs) throw new Error(`invalid phase_budget "${budgetRaw}" — use e.g. "90s", "20m", "1h"`)
+        const headless = args.headless as boolean | undefined
         const spawnerName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? 'main' : 'main'
         const result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
           ...(model ? { model } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
+          ...(headless ? { headless: true } : {}),
           trigger: 'spawn_session',
           initiator: spawnerName,
         })
@@ -286,8 +289,46 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         const info = registry.get(targetId)!
+
+        // Non-main sessions can only kill sessions they spawned
+        if (callerSessionId && callerSessionId !== 'main') {
+          const callerName = registry.get(callerSessionId)?.tmuxName
+          if (info.initiator !== callerName && info.originFrom !== callerName) {
+            throw new Error(`cannot kill ${info.tmuxName} — you can only kill sessions you spawned`)
+          }
+        }
+
         await killSession(info, 'session ended')
         return { content: [{ type: 'text', text: `killed session ${targetId}` }] }
+      }
+
+      case 'factory_build': {
+        const spec = args.spec as string
+        const builderModel = (args.builder_model as string | undefined)?.trim() || undefined
+        const reviewerModel = (args.reviewer_model as string | undefined)?.trim() || undefined
+        const reviewRounds = (args.review_rounds as number | undefined) ?? 3
+
+        if (!callerSessionId) throw new Error('factory_build requires a session context')
+        const callerInfo = registry.get(callerSessionId)
+        if (!callerInfo) throw new Error('session not found')
+        if (callerInfo.isFactoryBuilder) throw new Error('factory builders cannot call factory_build (recursion guard)')
+
+        const result = factoryBuild(
+          callerInfo.threadId,
+          callerSessionId,
+          spec,
+          builderModel,
+          reviewerModel,
+          reviewRounds,
+        )
+
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: `Factory build failed: ${result.error}` }], isError: true }
+        }
+
+        return {
+          content: [{ type: 'text', text: `Factory build started. Ticket: ${result.ticket}. Builder is forking from your session — results will be delivered as notifications in your thread. Continue working or wait for updates.` }],
+        }
       }
 
       case 'watch_pr': {
