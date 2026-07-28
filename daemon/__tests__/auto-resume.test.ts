@@ -18,11 +18,12 @@ describe('decideResume', () => {
   test('resume: tmux dead + has claude session + under max attempts', () => {
     expect(decideResume(false, true, true, 0)).toBe('resume')
     expect(decideResume(false, true, true, 1)).toBe('resume')
+    expect(decideResume(false, true, true, 4)).toBe('resume')
   })
 
   test('grace: tmux dead but attempts exhausted', () => {
-    expect(decideResume(false, true, true, 2)).toBe('grace')
     expect(decideResume(false, true, true, 5)).toBe('grace')
+    expect(decideResume(false, true, true, 6)).toBe('grace')
   })
 
   test('grace: tmux dead but no claude session ID', () => {
