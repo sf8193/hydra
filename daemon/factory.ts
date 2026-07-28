@@ -336,9 +336,23 @@ function cleanupState(pmThreadId: string): void {
   pending.delete(pmThreadId)
 }
 
-// Listen for session deaths — detect builder crashes
+// Listen for session deaths — detect builder crashes and PM deaths
 sessionDeathEmitter.on('death', ({ sessionId }: { sessionId: string }) => {
   onBuilderDeath(sessionId)
+
+  // PM death: clean up pending state and kill orphaned builder
+  for (const [pmThreadId, state] of pending) {
+    if (state.pmSessionId !== sessionId) continue
+    process.stderr.write(`daemon: factory: PM ${sessionId} died with active build ${state.ticket}, cleaning up\n`)
+    if (state.builderSessionId) {
+      const builderInfo = registry.get(state.builderSessionId)
+      if (builderInfo) {
+        void killSession(builderInfo, 'PM died').catch(() => {})
+      }
+    }
+    cleanupState(pmThreadId)
+    break
+  }
 })
 
 /**
@@ -347,8 +361,8 @@ sessionDeathEmitter.on('death', ({ sessionId }: { sessionId: string }) => {
  */
 export async function sweepOrphanedBuilders(): Promise<void> {
   let swept = 0
-  for (const info of registry.values()) {
-    if (!info.isFactoryBuilder) continue
+  const builders = [...registry.values()].filter(i => i.isFactoryBuilder)
+  for (const info of builders) {
     process.stderr.write(`daemon: factory: sweeping orphaned builder ${info.tmuxName} (${info.sessionId})\n`)
     const pmThreadId = info.factoryPmThreadId
     try {
