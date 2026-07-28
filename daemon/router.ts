@@ -27,6 +27,7 @@ import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handl
 import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
+import { notePendingReply } from './reply-guard.js'
 import { isAlive, reportError } from './util.js'
 import { listTemplates, getTemplate } from './templates.js'
 
@@ -223,6 +224,7 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
 
   const { content, meta } = await buildNotificationPayload(msg, chatId)
   transport.sendOrQueue(targetSessionId, { type: 'notification', content, meta })
+  notePendingReply(targetSessionId, meta)
 }
 
 // ---------------------------------------------------------------------------
@@ -868,4 +870,5 @@ gateway.onMessage(async (msg: InboundMessage) => {
   }
   const { content, meta } = await buildNotificationPayload(msg, effectiveChatId)
   transport.sendOrQueue(targetSessionId, { type: 'notification', content, meta })
+  notePendingReply(targetSessionId, meta)
 })

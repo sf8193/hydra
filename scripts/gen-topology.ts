@@ -40,6 +40,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/state-machine.ts':  { layer: 'domain',    desc: 'Generic state machine for protocols' },
   'daemon/transcript-dump.ts': { layer: 'domain',   desc: 'Preserve-then-strike: raw transcript dump before deletion' },
   'daemon/sentinel-nudge.ts': { layer: 'domain',    desc: 'Liveness grammar: nudge roles that post without expected sentinel' },
+  'daemon/reply-guard.ts':    { layer: 'domain',    desc: 'Reply guard: nudge sessions that go silent on user-authored messages' },
   'daemon/phase-budget.ts':   { layer: 'domain',    desc: 'Per-session max lifetime: nudge → grace → reap' },
   'daemon/adversarial.ts':    { layer: 'protocols', desc: 'Adversarial review — owner/critic rounds' },
   'daemon/build.ts':          { layer: 'protocols', desc: 'Build — implement/review iteration' },
