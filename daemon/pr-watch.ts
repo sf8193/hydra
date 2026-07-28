@@ -639,34 +639,6 @@ export async function backfillTitles(): Promise<number> {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-async function sweepMergedArtifacts(): Promise<void> {
-  let swept = 0
-  for (const info of registry.values()) {
-    if (!info.artifacts?.length) continue
-    const prUrls = info.artifacts.filter(u => /github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(u))
-    if (!prUrls.length) continue
-    const toRemove = new Set<string>()
-    for (const url of prUrls) {
-      const parsed = parsePrUrl(url)
-      if (!parsed) continue
-      try {
-        const data = await ghApi(`repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.prNumber}`)
-        if (data?.merged || data?.state === 'closed') toRemove.add(url)
-      } catch {}
-    }
-    if (toRemove.size) {
-      info.artifacts = info.artifacts.filter(u => !toRemove.has(u))
-      swept += toRemove.size
-    }
-  }
-  if (swept > 0) {
-    registry.persist()
-    const { refreshDashboard } = await import('./dashboard.js')
-    refreshDashboard()
-    process.stderr.write(`daemon: pr-watch: swept ${swept} merged/closed PR artifact(s) from sessions\n`)
-  }
-}
-
 export function startPrWatcher(): void {
   loadPersisted()
   loadGhToken()
@@ -675,10 +647,6 @@ export function startPrWatcher(): void {
       process.stderr.write(`daemon: pr-watch: poll cycle failed: ${err}\n`)
     })
   }, POLL_INTERVAL_MS)
-  // One-time sweep: clean up merged/closed PR artifacts from existing sessions
-  void sweepMergedArtifacts().catch(err => {
-    process.stderr.write(`daemon: pr-watch: artifact sweep failed: ${err}\n`)
-  })
   process.stderr.write(`daemon: pr-watch: started (interval: ${POLL_INTERVAL_MS / 1000}s)\n`)
 }
 
