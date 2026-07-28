@@ -63,6 +63,6 @@ export function mechanicsBlock(opts: MechanicsOpts): string {
     ...sentinelLines,
     `- Untagged messages are conversational: humans see them; the protocol does not advance. Use them for questions and status, never for your deliverable.`,
     `- ${cadenceLine}`,
-    ...(waits ? [``, `**Wait:** after posting, WAIT. Phase advances and replies arrive as [system] notifications — do not poll the thread for them.`] : []),
+    ...(waits ? [``, `**Between rounds:** after posting, stay idle and wait for the next [system] notification — it will deliver the other party's response. Do not poll the thread or exit; the protocol needs you alive for subsequent rounds.`] : []),
   ].join('\n')
 }

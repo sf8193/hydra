@@ -467,11 +467,11 @@ export const socketServer = createServer((socket: Socket) => {
     if (isOwner) {
       transport.delete(conn.sessionId)
     }
-    if (conn.sessionId !== 'main') {
+    const protocolClaimed = dispatchDisconnect(conn.sessionId)
+    if (conn.sessionId !== 'main' && !protocolClaimed) {
       const sid = conn.sessionId
       setTimeout(() => checkSessionDeath(sid), DEATH_DETECT_DELAY_MS)
     }
-    dispatchDisconnect(conn.sessionId)
   }
 
   socket.on('end', () => {

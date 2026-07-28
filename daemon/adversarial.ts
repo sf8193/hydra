@@ -1,8 +1,11 @@
 import { randomUUID } from 'crypto'
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
-import { doSpawnSession, killSession, killsInProgress } from './session-lifecycle.js'
+import { doSpawnSession, killSession, killsInProgress, waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
+import { decideResume } from './auto-resume.js'
+import { isAlive } from './util.js'
+import { recordSessionDeath } from './observability.js'
 import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
 import { reviewCriticPrompt } from './prompts/review-critic.js'
 import { reviewModel } from '../shared/constants.js'
@@ -51,6 +54,7 @@ export type ReviewState = StatusLineState & {
   postPasses?: string[]
   _currentPassIdx?: number
   engine?: 'claude' | 'codex'
+  _resumeAttempts?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -343,15 +347,52 @@ export function onParticipantDisconnect(sessionId: string): void {
   if (transport.has(sessionId)) return
 
   if (state.criticSessionId === sessionId) {
-    process.stderr.write(`daemon: review critic disconnected — 30s grace period\n`)
-    if (state.timeout) {
-      clearTimeout(state.timeout)
-      state.timeout = undefined
-    }
+    const info = registry.get(sessionId)
+    const claudeSessionId = info?.claudeSessionId
     state._criticDisconnectTimer = setTimeout(async () => {
-      process.stderr.write(`daemon: review critic did not reconnect, cancelling review\n`)
-      void cancelReview(state.reviewId).catch(e => process.stderr.write(`daemon: cancelReview failed: ${e}\n`))
-    }, 30_000)
+      if (state.phase === 'cancelled' || state.phase === 'complete') return
+      const currentInfo = registry.get(sessionId)
+      const decision = decideResume(
+        transport.has(sessionId),
+        currentInfo ? !isAlive(currentInfo) : true,
+        !!claudeSessionId,
+        state._resumeAttempts ?? 0,
+      )
+      if (decision === 'reconnected') return
+      if (decision === 'resume' && claudeSessionId) {
+        state._resumeAttempts = (state._resumeAttempts ?? 0) + 1
+        if (currentInfo) recordSessionDeath(currentInfo, 'critic exited (auto-resuming)')
+        try {
+          const result = await doSpawnSession(currentInfo?.topic ?? `Review critic (${state.rounds} rounds)`, undefined, undefined, {
+            joinThread: state.ownerThreadId, resumeFrom: claudeSessionId, model: state.model,
+          })
+          const ok = await waitForBridge(result.sessionId, 30_000)
+          if (!ok) {
+            const ni = registry.get(result.sessionId)
+            if (ni) await killSession(ni, 'auto-resume health check failed').catch(() => {})
+            throw new Error('resumed session did not connect')
+          }
+          if (currentInfo) currentInfo.deadAt = Date.now()
+          sessionToReview.delete(sessionId)
+          state.criticSessionId = result.sessionId
+          sessionToReview.set(result.sessionId, state.reviewId)
+          transport.sendOrQueue(result.sessionId, {
+            type: 'notification',
+            content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
+            meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+          })
+          resetTimeout(state)
+          process.stderr.write(`daemon: review critic auto-resumed: ${sessionId} → ${result.sessionId}\n`)
+        } catch (err) {
+          process.stderr.write(`daemon: review critic auto-resume failed: ${err}\n`)
+          void cancelReview(state.reviewId).catch(e => process.stderr.write(`daemon: cancelReview failed: ${e}\n`))
+        }
+      } else {
+        state._criticDisconnectTimer = setTimeout(() => {
+          void cancelReview(state.reviewId).catch(e => process.stderr.write(`daemon: cancelReview failed: ${e}\n`))
+        }, 30_000)
+      }
+    }, 3_000)
   } else if (state.ownerSessionId === sessionId) {
     process.stderr.write(`daemon: review owner disconnected — 2min grace period\n`)
     if (state.timeout) {

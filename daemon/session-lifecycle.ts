@@ -615,6 +615,19 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}`
   }
 
+  const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
+  const exitMarker = [
+    `_HYDRA_EXIT_CODE=$? _HYDRA_EXIT_TS=$(date +%s)`,
+    `echo ""`,
+    `echo "=== HYDRA SESSION EXIT ==="`,
+    `echo "exit_code=$_HYDRA_EXIT_CODE"`,
+    `echo "wall_clock=\${SECONDS}s"`,
+    `echo "exit_ts=$_HYDRA_EXIT_TS"`,
+    `echo "session_id=${sessionId}"`,
+    `echo "tmux_name=${tmuxName}"`,
+    `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
+    `echo "========================="`,
+  ].join('; ')
   const inner = [
     `cd ${shq(effectiveCwd)}`,
     `export HYDRA_SESSION_ID=${shq(sessionId)}`,
@@ -622,12 +635,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
     `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-    claudeArgs,
+    `${claudeArgs} 2>>${shq(stderrLog)}; ${exitMarker}`,
   ].join(' && ')
 
   process.stderr.write(`daemon: spawn ${tmuxName}: running tmux new-session\n`)
   process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
 
+  mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
   try {
     execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, inner], { stdio: 'pipe' })
   } catch (err) {
@@ -688,7 +702,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)
-  // Don't register in threadToSession for join members — owner keeps that mapping
+  // Thread ownership: setThread claims the thread for message routing.
+  // Only the thread OWNER should call setThread — join members (protocol
+  // critics, guest agents) use addMember and never touch the mapping.
+  // Callers resuming a non-owner session MUST pass joinThread to preserve
+  // the real owner's routing. See auto-resume in adversarial.ts/build.ts.
   if (!isJoin) {
     registry.setThread(threadId!, sessionId)
   } else {
