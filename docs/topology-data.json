@@ -726,6 +726,10 @@
     ],
     [
       "daemon_commands_global",
+      "daemon_protocol-registry"
+    ],
+    [
+      "daemon_commands_global",
       "daemon_templates"
     ],
     [
