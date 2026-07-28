@@ -175,6 +175,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'react': {
+        if (gateway.platform === 'slack') return { content: [{ type: 'text', text: 'no-op on Slack (reactions disabled)' }] }
         await retrySend(() => gateway.react(args.chat_id as string, args.message_id as string, args.emoji as string))
         return { content: [{ type: 'text', text: 'reacted' }] }
       }
