@@ -39,6 +39,7 @@ export type SentMessage = {
 
 export type ChannelInfo = {
   id: string
+  name?: string
   isDM: boolean
   isThread: boolean
   parentId: string | null

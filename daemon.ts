@@ -93,7 +93,7 @@ import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
-import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './daemon/artifacts.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle, cacheSlackChannel } from './daemon/artifacts.js'
 registry.onPersist = refreshDashboard
 
 if ('homeTabHandler' in gateway) {
@@ -327,6 +327,28 @@ void (async () => {
     process.stderr.write(`daemon: backfilled ${filled} artifact PR title(s)\n`)
   }
 })().catch(err => process.stderr.write(`daemon: artifact title backfill failed: ${err}\n`))
+
+// Backfill Slack channel names for context links (non-blocking)
+void (async () => {
+  const channelIds = new Set<string>()
+  for (const s of registry.values()) {
+    for (const url of s.contextLinks ?? []) {
+      const m = url.match(/slack\.com\/archives\/([A-Z0-9]+)/)
+      if (m) channelIds.add(m[1])
+    }
+  }
+  let filled = 0
+  for (const id of channelIds) {
+    try {
+      const ch = await gateway.fetchChannel(id)
+      if (ch.name) { cacheSlackChannel(id, ch.name); filled++ }
+    } catch {}
+  }
+  if (filled > 0) {
+    refreshDashboardNow()
+    process.stderr.write(`daemon: backfilled ${filled} Slack channel name(s)\n`)
+  }
+})().catch(err => process.stderr.write(`daemon: Slack channel backfill failed: ${err}\n`))
 
 // ---------------------------------------------------------------------------
 // Session health — crash detection + context alerts (every 5 min)

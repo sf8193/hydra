@@ -1,4 +1,5 @@
 import { gateway, PERMISSION_REPLY_RE, INBOX_DIR } from './config.js'
+import { cacheSlackChannel } from './artifacts.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, gate } from './access.js'
@@ -178,6 +179,13 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
       for (const url of links) existing.add(url)
       sessionInfo.contextLinks = [...existing].slice(-MAX_CONTEXT_LINKS)
       registry.debouncedPersist()
+      for (const url of links) {
+        const m = url.match(/slack\.com\/archives\/([A-Z0-9]+)/)
+        if (!m) continue
+        gateway.fetchChannel(m[1]).then(ch => {
+          if (ch.name) cacheSlackChannel(m[1], ch.name)
+        }).catch(() => {})
+      }
     }
   }
   const chatId = sessionInfo?.threadId ?? msg.channelId

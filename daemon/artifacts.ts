@@ -12,10 +12,12 @@
 export const MAX_ARTIFACTS = 10
 
 // In-memory PR title cache — populated at artifact capture time, used for rendering.
-// Keyed by canonical PR URL.
 const prTitleCache = new Map<string, string>()
 export function cachePrTitle(url: string, title: string): void { prTitleCache.set(url, title) }
-export function getCachedPrTitle(url: string): string | undefined { return prTitleCache.get(url) }
+
+// In-memory Slack channel name cache — keyed by channel ID (e.g. "C01NJ09D6UW").
+const slackChannelNames = new Map<string, string>()
+export function cacheSlackChannel(id: string, name: string): void { slackChannelNames.set(id, name) }
 
 // Strict per-type matchers. Each captures the pieces needed to build a *canonical*
 // URL — so trailing markdown (`*`, `**`), quotes/brackets (["url"]), HTML entities
@@ -97,10 +99,12 @@ export function renderContextLink(link: string): string {
   if (channelMatch) {
     return `• 🔗 <#${channelMatch[1]}|${channelMatch[2]}>`
   }
-  // Slack thread/message — render as channel link so Slack resolves the name
+  // Slack thread/message — show channel ID for now; Slack can't nest <#C..> inside <url|label>
   const archiveMatch = link.match(/slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/)
   if (archiveMatch) {
-    return `• 🔗 <${link}|thread in <#${archiveMatch[1]}>>`
+    const channelName = slackChannelNames.get(archiveMatch[1])
+    const label = channelName ? `thread in #${channelName}` : 'Slack thread'
+    return `• 🔗 <${link}|${label}>`
   }
   let label: string
   if (/slack\.com\/archives/.test(link)) label = 'Slack thread'

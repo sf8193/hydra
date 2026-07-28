@@ -470,6 +470,7 @@ export class SlackGateway implements ChatGateway {
     const isDM = ch.is_im ?? false
     return {
       id,
+      name: (ch as any).name ?? undefined,
       isDM,
       isThread: !!parsed.threadTs,
       parentId: parsed.threadTs ? parsed.channel : null,
