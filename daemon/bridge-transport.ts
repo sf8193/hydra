@@ -26,6 +26,7 @@ export class BridgeTransport {
   readonly messageQueues = new Map<string, Array<Record<string, unknown>>>()
   private readonly maxQueueSize = 50
   private readonly queueFile: string
+  private readonly queueFullLogged = new Set<string>()
   private codexEngine: CodexEngine | null = null
 
   constructor() {
@@ -53,6 +54,7 @@ export class BridgeTransport {
 
   delete(sessionId: string): void {
     this.bridges.delete(sessionId)
+    this.queueFullLogged.delete(sessionId)
   }
 
   clear(): void {
@@ -99,6 +101,11 @@ export class BridgeTransport {
       if (queue.length < this.maxQueueSize) {
         queue.push(msg)
         this.persistQueues()
+      } else {
+        if (!this.queueFullLogged.has(sessionId)) {
+          this.queueFullLogged.add(sessionId)
+          process.stderr.write(`daemon: message queue full for ${sessionId} (${this.maxQueueSize}), dropping type=${msg.type ?? 'unknown'}\n`)
+        }
       }
     }
   }
@@ -113,6 +120,7 @@ export class BridgeTransport {
       this.sendToBridge(bridge, msg)
     }
     this.messageQueues.delete(sessionId)
+    this.queueFullLogged.delete(sessionId)
     this.persistQueues()
   }
 
