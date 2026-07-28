@@ -54,6 +54,9 @@ async function spawnAndNotify(
     ...(template && { promptPrefix: template.template.prompt }),
     ...(resolvedModel && { model: resolvedModel }),
     ...(engine && { engine }),
+    ...(template?.template.disallowedTools?.length && { disallowedTools: template.template.disallowedTools }),
+    ...(template?.template.tools?.length && { tools: template.template.tools }),
+    ...(template?.template.allowMainTools && { allowMainTools: true }),
     trigger: template ? `${template.name}:` : 'spawn:',
     initiator: msg.authorUsername,
   }
@@ -241,6 +244,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• 🚀 `spawn: <topic>` — new session in its own thread',
     '• 🚀 `spawn <model>: <topic>` — spawn with model (sonnet, haiku, fable, etc)',
     '• 🚀 `spawn-wt: <repo> <topic>` — spawn in a git worktree',
+    '• 🏭 `factory: <task>` — PM orchestrator: research → design → build → review → ship',
     '• 🎯 `review:` / `fix:` / `design:` — templated session (`<template> <model>: topic`) · 📋 `templates`',
     '• 📊 `list sessions` — show all running sessions',
     '• ☠️ `kill session: <name>` — terminate a named session',

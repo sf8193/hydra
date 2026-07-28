@@ -11,6 +11,7 @@ import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchReply, dispatchDisconnect } from './protocol-registry.js'
+import { onBuilderDone } from './factory.js'
 import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
@@ -239,7 +240,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // disconnect-reason instrumentation here is what makes that confirmation possible.
       // TODO(fix-main-flap): remove flapTracker.delete('main') once the disconnect cause is confirmed.
       if (sessionId === 'main' && !mainHadOtherIncumbent) flapTracker.delete('main')
-      const tools = computeToolsForSession(sessionId)
+      const tools = computeToolsForSession(sessionId, { allowMainTools: info?.allowMainTools })
       transport.sendToBridge(conn, {
         type: 'registered',
         sessionId,
@@ -305,7 +306,16 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
             await dispatchReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
             maybeNudgeMissingSentinel(conn.sessionId, replyText, args.chat_id as string)
 
-            if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
+            // Factory builder: [done] prefix triggers review (may have trailing artifact)
+            const FACTORY_DONE_RE = /^\[done\]/m
+            // Ephemeral: [done] must be the entire line (no trailing content)
+            const EPHEMERAL_DONE_RE = /^\[done\]$/m
+
+            if (FACTORY_DONE_RE.test(replyText)) {
+              onBuilderDone(conn.sessionId, replyText)
+            }
+
+            if (replyInfo?.ephemeral && EPHEMERAL_DONE_RE.test(replyText)) {
               process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)
               clearEphemeralTtl(conn.sessionId)
               const sid = conn.sessionId

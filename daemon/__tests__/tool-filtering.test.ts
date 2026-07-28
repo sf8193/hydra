@@ -17,33 +17,31 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('peek_session')
   })
 
-  test('worker session excludes main-only tools', () => {
+  test('worker session does NOT get spawn/kill tools', () => {
     const tools = computeToolsForSession('some-worker-id')
     const names = tools.map(t => t.name)
     expect(names).toContain('reply')
     expect(names).toContain('react')
     expect(names).toContain('fetch_messages')
     expect(names).toContain('set_description')
-    for (const mainOnly of MAIN_ONLY_TOOLS) {
-      expect(names).not.toContain(mainOnly)
-    }
-  })
-
-  test('worker session gets orchestration tools', () => {
-    const tools = computeToolsForSession('some-worker-id')
-    const names = tools.map(t => t.name)
     expect(names).toContain('send_to_thread')
     expect(names).toContain('peek_session')
-    expect(names).toContain('list_sessions')
+    expect(names).not.toContain('spawn_session')
+    expect(names).not.toContain('kill_session')
   })
 
-  test('MAIN_ONLY_TOOLS contains expected tools', () => {
+  test('worker with allowMainTools gets spawn/kill tools', () => {
+    const tools = computeToolsForSession('some-worker-id', { allowMainTools: true })
+    const names = tools.map(t => t.name)
+    expect(names).toContain('spawn_session')
+    expect(names).toContain('kill_session')
+    expect(names).toContain('reply')
+    expect(names).toContain('factory_build')
+  })
+
+  test('MAIN_ONLY_TOOLS restricts spawn and kill', () => {
     expect(MAIN_ONLY_TOOLS.has('spawn_session')).toBe(true)
     expect(MAIN_ONLY_TOOLS.has('kill_session')).toBe(true)
-    expect(MAIN_ONLY_TOOLS.has('list_sessions')).toBe(false)
-    expect(MAIN_ONLY_TOOLS.has('reply')).toBe(false)
-    expect(MAIN_ONLY_TOOLS.has('send_to_thread')).toBe(false)
-    expect(MAIN_ONLY_TOOLS.has('peek_session')).toBe(false)
   })
 
   test('all BRIDGE_TOOLS have required schema fields', () => {

@@ -81,8 +81,8 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
   killsInProgress.add(info.sessionId)
 
   try {
-    // Join members and ephemeral sessions don't own the thread — skip death message and anchor reactions
-    if (!info.isJoinMember && !info.ephemeral) {
+    // Join members, ephemeral, and headless sessions don't own a real thread
+    if (!info.isJoinMember && !info.ephemeral && !info.headless) {
       try {
         await gateway.send(info.threadId, `_${reason}_`)
       } catch (err) {
@@ -93,7 +93,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
 
     // Notify parent session when a child dies (createdAt guard prevents name-recycling mismatch)
-    if (info.originFrom && !info.isJoinMember) {
+    if (info.originFrom && !info.isJoinMember && !info.suppressDeathMessage) {
       const parent = [...registry.values()].find(s => s.tmuxName === info.originFrom && s.createdAt < info.createdAt)
       if (parent) {
         const msgs = info.messageCount ?? 0
@@ -318,6 +318,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     threadId = opts.existingThreadId
   }
 
+  // Headless sessions: no Discord thread, just tmux + send_to_thread.
+  // Use sessionId as a synthetic threadId for registry tracking.
+  // TODO: headless sessions can send via send_to_thread but cannot receive — safeSend with a UUID silently fails
+  const isHeadless = !!opts?.headless
+  if (isHeadless) {
+    threadId = sessionId // synthetic — not a real Discord thread
+  }
+
   // Join an existing thread as a member (skip thread creation entirely)
   const isJoin = !!opts?.joinThread
   let respawnCount = 0
@@ -328,7 +336,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Determine where to create the thread
   let targetChannelId = chatId
   let parentChannelId: string | undefined
-  if (!threadId) {
+  if (!threadId && !isHeadless) {
     if (targetChannelId) {
       try {
         const ch = await gateway.fetchChannel(targetChannelId)
@@ -612,7 +620,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       `--dangerously-skip-permissions`,
     ].join(' ')
   } else {
-    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}`
+    const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
+    const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
+    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
+    if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
+    if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
   }
 
   const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
@@ -682,12 +694,12 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const now = Date.now()
   const capabilities: SessionCapabilities = {
     role: 'worker',
-    tools: computeToolsForSession(sessionId).map(t => t.name),
+    tools: computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools }).map(t => t.name),
     model,
     cwd: effectiveCwd,
     platform: PLATFORM,
   }
-  const url = await gateway.getThreadUrl(threadId!)
+  const url = isHeadless ? '' : await gateway.getThreadUrl(threadId!)
 
   registry.set(sessionId, {
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
@@ -699,6 +711,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(spawnLogPath ? { spawnLogPath } : {}),
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
+    ...(isHeadless ? { headless: true } : {}),
+    ...(opts?.allowMainTools ? { allowMainTools: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)
@@ -707,15 +721,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // critics, guest agents) use addMember and never touch the mapping.
   // Callers resuming a non-owner session MUST pass joinThread to preserve
   // the real owner's routing. See auto-resume in adversarial.ts/build.ts.
-  if (!isJoin) {
+  // Headless sessions use a synthetic UUID as threadId — don't register it.
+  if (!isJoin && !isHeadless) {
     registry.setThread(threadId!, sessionId)
-  } else {
+  } else if (isJoin) {
     registry.addMember(threadId!, sessionId, opts?.memberLabel)
   }
   registry.persist()
 
   // Co-update thread metadata (observational — not load-bearing for message routing)
-  if (!isJoin) {
+  if (!isJoin && !isHeadless) {
     threadRegistry.recordSpawn(threadId!, {
       anchorMessageId,
       threadUrl: url || undefined,
@@ -730,10 +745,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     })
   }
 
-  refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
-
-  // Deterministic spawn visibility: every tmux announces itself, from the one
-  // function all spawn paths share. Echoed to the causing thread when distinct.
   const spawnLine = formatSpawnLine({
     roleLabel: opts?.memberLabel,
     emoji: sessionEmoji(tmuxName),
@@ -742,18 +753,29 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     trigger: opts?.trigger ?? originType,
     initiator: opts?.initiator,
   })
-  const guestNote = isJoin ? '\n_↳ guest agent in thread_' : ''
-  void safeSend(threadId!, spawnLine + guestNote).then(ids => {
-    if (ids.length > 0) {
-      const info = registry.get(sessionId)
-      if (info) info.spawnAnnounceId = ids[0]
+
+  if (isHeadless) {
+    // Announce headless worker in the parent session's thread
+    const parentInfo = opts?.initiator ? registry.findByName(opts.initiator) : undefined
+    if (parentInfo) {
+      void safeSend(parentInfo.threadId, `${spawnLine}\n_↳ headless worker_`)
     }
-  })
-  // Echo to the causing thread — but only when it IS a thread we track
-  // (a session or protocol thread). A plain channel already shows the new
-  // thread's anchor; echoing there would double-announce.
-  if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
-    void safeSend(chatId, spawnLine)
+  } else {
+    refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
+
+    const guestNote = isJoin ? '\n_↳ guest agent in thread_' : ''
+    void safeSend(threadId!, spawnLine + guestNote).then(ids => {
+      if (ids.length > 0) {
+        const info = registry.get(sessionId)
+        if (info) info.spawnAnnounceId = ids[0]
+      }
+    })
+    // Echo to the causing thread — but only when it IS a thread we track
+    // (a session or protocol thread). A plain channel already shows the new
+    // thread's anchor; echoing there would double-announce.
+    if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
+      void safeSend(chatId, spawnLine)
+    }
   }
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }
