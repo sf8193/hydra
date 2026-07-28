@@ -214,4 +214,65 @@ describe('protocol DSL validation', () => {
     })
     expect(Object.isFrozen(p)).toBe(true)
   })
+
+  test('cleanupPhase gets default onEnter when not specified', () => {
+    const p = protocol('defaults', {
+      emoji: '🧪', display: 'Defaults',
+      roles: { a: 'A', b: 'B' },
+      phases: {
+        working: { actor: 'a', on: { done: 'cleanup', cancel: 'cancelled' } },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted' },
+        complete: { actor: 'a', on: {} },
+        cancelled: { actor: 'a', on: {} },
+      },
+      windows: { cleanup: '5m' },
+      cleanupPhase: 'cleanup',
+      cancelPhase: 'cancelled',
+    })
+    expect(p.phases.cleanup.onEnter).toEqual(['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'])
+  })
+
+  test('cleanupPhase with explicit onEnter keeps it (no default injection)', () => {
+    const p = protocol('explicit', {
+      emoji: '🧪', display: 'Explicit',
+      roles: { a: 'A' },
+      phases: {
+        working: { actor: 'a', on: { done: 'cleanup' } },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted', onEnter: ['backstopTimer'] },
+        complete: { actor: 'a', on: {} },
+      },
+      windows: { cleanup: '5m' },
+      cleanupPhase: 'cleanup',
+    })
+    expect(p.phases.cleanup.onEnter).toEqual(['backstopTimer'])
+  })
+
+  test('cleanupPhase with empty onEnter suppresses defaults', () => {
+    const p = protocol('optout', {
+      emoji: '🧪', display: 'OptOut',
+      roles: { a: 'A' },
+      phases: {
+        working: { actor: 'a', on: { done: 'cleanup' } },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted', onEnter: [] },
+        complete: { actor: 'a', on: {} },
+      },
+      windows: { cleanup: '5m' },
+      cleanupPhase: 'cleanup',
+    })
+    expect(p.phases.cleanup.onEnter).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Default cleanup behavior on live protocols
+// ---------------------------------------------------------------------------
+
+describe('live protocol cleanup defaults', () => {
+  test('review cleanup phase has default behaviors', () => {
+    expect(review.phases.cleanup.onEnter).toEqual(['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'])
+  })
+
+  test('build closing phase has default behaviors', () => {
+    expect(build.phases.closing.onEnter).toEqual(['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'])
+  })
 })

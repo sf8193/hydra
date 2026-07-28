@@ -115,6 +115,9 @@ if ('homeSpawnHandler' in gateway) {
   }
 }
 
+import { bootProtocols } from './daemon/protocol-runner.js'
+await bootProtocols()
+
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { getLenses } from './daemon/lens-loader.js'

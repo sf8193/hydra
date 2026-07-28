@@ -1,6 +1,6 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
-import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
+import { startProtocolRun, getRunByThread, cancelRun, registerProtocolSpec } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import { resolveModifiers } from '../modifiers.js'
 import type { Protocol } from '../protocol-dsl.js'
@@ -19,6 +19,7 @@ export async function getProtocol(name: string): Promise<Protocol> {
   if (mod.default.name !== name) throw new Error(`protocol file "${name}" declares name "${mod.default.name}"`)
   proto = mod.default as Protocol
   protocols.set(name, proto)
+  registerProtocolSpec(proto)
   return proto
 }
 
