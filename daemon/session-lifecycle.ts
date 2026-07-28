@@ -585,7 +585,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
   }
 
-  // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
+  // Build claude command — all paths start without a prompt argument so CC stays
+  // in interactive channel mode. The seed is delivered via the bridge after connect.
   let claudeArgs: string
   if (isFork) {
     claudeArgs = [
@@ -595,7 +596,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       `--model ${shq(model)}`,
       `--channels ${shq(channelFlag)}`,
       `--dangerously-skip-permissions`,
-      shq(prompt),
     ].join(' ')
   } else if (isResume) {
     claudeArgs = [
@@ -608,7 +608,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } else {
     const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
     const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
+    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions${disallowed}${toolsFlag}`
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
   }
@@ -761,6 +761,21 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     // thread's anchor; echoing there would double-announce.
     if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
       void safeSend(chatId, spawnLine)
+    }
+  }
+
+  // Deliver the seed prompt via the bridge so CC stays in interactive channel mode.
+  // A CLI prompt argument causes CC to treat the session as single-turn.
+  if (!isResume) {
+    const bridgeOk = await waitForBridge(sessionId, 30_000)
+    if (bridgeOk) {
+      transport.sendOrQueue(sessionId, {
+        type: 'notification',
+        content: prompt,
+        meta: { chat_id: threadId!, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+      })
+    } else {
+      process.stderr.write(`daemon: spawn ${tmuxName}: bridge did not connect in 30s — seed prompt not delivered\n`)
     }
   }
 
