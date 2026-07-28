@@ -448,26 +448,13 @@ export class SlackGateway implements ChatGateway {
     await this.app.client.chat.delete({ channel, ts: messageId })
   }
 
-  async react(channelId: string, messageId: string, emoji: string): Promise<void> {
-    if (!this.app) throw new Error('not connected')
-    const { channel } = this.parseChannelId(channelId)
-    const name = this.emojiToSlackName(emoji)
-    await this.app.client.reactions.add({
-      channel,
-      timestamp: messageId,
-      name,
-    })
+  async react(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
+    // no-op: bot reactions trigger push notifications on Slack
+    // NOTE: updateSessionVisual also depends on react/unreact being live — re-enable all three together
   }
 
-  async unreact(channelId: string, messageId: string, emoji: string): Promise<void> {
-    if (!this.app) throw new Error('not connected')
-    const { channel } = this.parseChannelId(channelId)
-    const name = this.emojiToSlackName(emoji)
-    await this.app.client.reactions.remove({
-      channel,
-      timestamp: messageId,
-      name,
-    })
+  async unreact(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
+    // no-op: bot reactions trigger push notifications on Slack
   }
 
   async typing(channelId: string): Promise<void> {
@@ -756,6 +743,8 @@ export class SlackGateway implements ChatGateway {
     anchorChannelId?: string
     anchorMessageId?: string
   }): Promise<void> {
+    return; // no-op: visual state communicated via reactions, disabled on Slack
+
     const anchor = this.getThreadAnchor(threadId)
     if (!anchor) return
 
