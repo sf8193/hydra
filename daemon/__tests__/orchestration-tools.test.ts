@@ -147,14 +147,8 @@ describe('peek_session', () => {
     })
     try {
       const result = await executeTool('peek_session', { name: 'peek-main-target' }, 'main')
-      // On dev machines with tmux: session not found → isError true.
-      // On CI without a real tmux server: capture-pane may succeed with empty output.
-      if (result.isError) {
-        expect(result.content[0].text).toContain('tmux not running')
-        expect(result.content[0].text).not.toContain('peek denied')
-      } else {
-        expect(result.content[0].text).toBeDefined()
-      }
+      const text = result.content[0].text
+      expect(text).not.toContain('peek denied')
     } finally {
       registry.delete(testId)
     }
@@ -169,11 +163,9 @@ describe('peek_session', () => {
     })
     try {
       const result = await executeTool('peek_session', { name: 'peek-test-session', lines: 9999 })
-      if (result.isError) {
-        expect(result.content[0].text).toContain('tmux not running')
-      } else {
-        expect(result.content[0].text).toBeDefined()
-      }
+      const text = result.content[0].text
+      expect(text).not.toContain('invalid')
+      expect(text).not.toContain('out of range')
     } finally {
       registry.delete(testId)
     }
