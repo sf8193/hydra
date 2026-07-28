@@ -167,7 +167,7 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
 // Pure: `now` and `sample` are injected (not read from the wall clock / global
 // Map) so the assembled report — including the "N before death" timing and the
 // sampled-vs-never-sampled branch — is deterministic and testable.
-export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, exitFileLines?: string[]): string {
+export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined): string {
   const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
   const rss = sample ? `${sample.rssMB}MB (${dur(now - sample.at)} before death)` : 'never sampled'
   const lines = [
@@ -182,9 +182,7 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   ]
   const startIdx = blackBoxTail.indexOf('=== HYDRA SESSION EXIT ===')
   const endIdx = blackBoxTail.indexOf('=========================', startIdx)
-  const exitBlock = startIdx >= 0 && endIdx > startIdx
-    ? blackBoxTail.slice(startIdx + 1, endIdx)
-    : (exitFileLines ?? [])
+  const exitBlock = startIdx >= 0 && endIdx > startIdx ? blackBoxTail.slice(startIdx + 1, endIdx) : []
   const exitMarkers = new Map(
     exitBlock.filter(l => l.includes('=')).map(l => {
       const eq = l.indexOf('=')

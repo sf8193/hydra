@@ -7,7 +7,9 @@ import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { fallbackDescription, formatDuration, getContextPercent, atomicWriteFileSync, isAlive, safeSend } from '../util.js'
 import { getWatchesBySession } from '../pr-watch.js'
-import { getActiveRuns } from '../protocol-runner.js'
+import { getActiveReviews } from '../adversarial.js'
+import { getActiveBuilds } from '../build.js'
+import { getActiveDesigns } from '../design.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export const daemonStartedAt = Date.now()
@@ -278,29 +280,49 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
 }
 
 // ---------------------------------------------------------------------------
-// Protocols — show active protocol runs
+// Protocols — show active review/build/design sessions
 // ---------------------------------------------------------------------------
 
 export async function handleProtocolsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})
 
-  const activeRuns = getActiveRuns()
-  if (activeRuns.length === 0) {
+  const reviews = getActiveReviews()
+  const builds = getActiveBuilds()
+  const designs = getActiveDesigns()
+
+  if (reviews.length === 0 && builds.length === 0 && designs.length === 0) {
     try { await gateway.send(msg.channelId, `No active protocols.`, { replyTo: msg.id }) } catch {}
     return
   }
 
   const lines: string[] = ['**Active Protocols**']
-  for (const run of activeRuns) {
-    const owner = registry.get(run.ownerSessionId)
-    const elapsed = owner ? formatDuration(Date.now() - owner.createdAt) : '?'
-    const topicLine = run.params.topic ? ` — ${String(run.params.topic).slice(0, 60)}` : ''
-    lines.push(`• ${run.protocol.emoji} **${run.protocol.display}** (${run.currentRound}/${run.rounds}) ${run.phase}${topicLine}`)
 
-    const roles = [...run.participants.entries()]
-      .map(([role, sid]) => `${run.protocol.roles[role]}: ${registry.get(sid)?.tmuxName ?? '?'}`)
-      .join(' · ')
-    lines.push(`  ${roles} · ${elapsed}`)
+  for (const r of reviews) {
+    const owner = registry.get(r.ownerSessionId)
+    const critic = r.criticSessionId ? registry.get(r.criticSessionId) : undefined
+    const startTime = owner?.createdAt ?? critic?.createdAt
+    const elapsed = startTime ? formatDuration(Date.now() - startTime) : '?'
+    const topicLine = r.topic ? ` — ${r.topic}` : ''
+    lines.push(`• ⚔️ **Review** (${r.currentRound}/${r.rounds}) ${r.phase}${topicLine}`)
+    lines.push(`  Owner: ${owner?.tmuxName ?? '?'} · Critic: ${critic?.tmuxName ?? 'pending'} · ${elapsed}`)
+  }
+
+  for (const b of builds) {
+    const owner = registry.get(b.ownerSessionId)
+    const critic = b.criticSessionId ? registry.get(b.criticSessionId) : undefined
+    const startTime = owner?.createdAt ?? critic?.createdAt
+    const elapsed = startTime ? formatDuration(Date.now() - startTime) : '?'
+    lines.push(`• 🔨 **Build** (${b.currentRound}/${b.rounds}) ${b.phase}`)
+    lines.push(`  Owner: ${owner?.tmuxName ?? '?'} · Critic: ${critic?.tmuxName ?? 'pending'} · Task: ${b.task.slice(0, 60)} · ${elapsed}`)
+  }
+
+  for (const d of designs) {
+    const alivePersonas = d.personas.filter(p => registry.has(p.sessionId))
+    const ownerSession = registry.getByThread(d.ownerThreadId)
+    const ownerInfo = ownerSession ? registry.get(ownerSession) : undefined
+    const elapsed = ownerInfo ? formatDuration(Date.now() - ownerInfo.createdAt) : '?'
+    lines.push(`• 🎨 **Design** ${d.phase} — ${d.topic.slice(0, 60)}`)
+    lines.push(`  Personas: ${alivePersonas.length}/${d.personas.length} alive · ${elapsed}`)
   }
 
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
