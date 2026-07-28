@@ -2,7 +2,7 @@
 // death report to the daemon log. A crashed spawn otherwise leaves no cause, no
 // stderr, and no link to its transcript.
 
-import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execFileSync } from 'child_process'
@@ -167,7 +167,7 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
 // Pure: `now` and `sample` are injected (not read from the wall clock / global
 // Map) so the assembled report — including the "N before death" timing and the
 // sampled-vs-never-sampled branch — is deterministic and testable.
-export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined): string {
+export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, exitFileLines?: string[]): string {
   const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
   const rss = sample ? `${sample.rssMB}MB (${dur(now - sample.at)} before death)` : 'never sampled'
   const lines = [
@@ -182,13 +182,9 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   ]
   const startIdx = blackBoxTail.indexOf('=== HYDRA SESSION EXIT ===')
   const endIdx = blackBoxTail.indexOf('=========================', startIdx)
-  let exitBlock = startIdx >= 0 && endIdx > startIdx ? blackBoxTail.slice(startIdx + 1, endIdx) : []
-  if (exitBlock.length === 0 && info.spawnLogPath) {
-    const exitPath = info.spawnLogPath.replace(/\/([^/]+)\.log$/, '/exit-$1.log')
-    try {
-      exitBlock = readFileSync(exitPath, 'utf8').trim().split('\n')
-    } catch {}
-  }
+  const exitBlock = startIdx >= 0 && endIdx > startIdx
+    ? blackBoxTail.slice(startIdx + 1, endIdx)
+    : (exitFileLines ?? [])
   const exitMarkers = new Map(
     exitBlock.filter(l => l.includes('=')).map(l => {
       const eq = l.indexOf('=')
