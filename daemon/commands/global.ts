@@ -10,6 +10,7 @@ import { doSpawnSession, killSession, tryResume, tryRespawn, discoverClaudeSessi
 import { tmuxHasSession, isAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { startProtocolRun, getActiveRuns, cancelRun } from '../protocol-runner.js'
+import { isThreadOccupied } from '../protocol-registry.js'
 import { getProtocol } from './protocol.js'
 import type { SpawnTemplate } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
@@ -74,6 +75,11 @@ async function spawnAndNotify(
     if (template?.template.action) {
       const action = template.template.action
       try {
+        const occupied = isThreadOccupied(result.threadId)
+        if (occupied) {
+          void gateway.send(result.threadId, `_A ${occupied} is already in progress — skipping template action._`).catch(() => {})
+          return
+        }
         const proto = await getProtocol(action)
         await startProtocolRun(proto, result.threadId, result.sessionId, {
           rounds: 3,

@@ -723,7 +723,7 @@ export function getRunByThread(threadId: string): ProtocolRun | undefined {
 }
 
 export function getActiveRuns(): ProtocolRun[] {
-  return [...runs.values()]
+  return [...runs.values()].filter(r => !isTerminal(r))
 }
 
 // ---------------------------------------------------------------------------

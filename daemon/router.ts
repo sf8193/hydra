@@ -499,7 +499,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (reviewMatch) {
         const preAlias = reviewMatch[1]?.toLowerCase()
         const postAlias = reviewMatch[3]?.toLowerCase()
-        if (preAlias === 'codex' || postAlias === 'codex' || /^codex\b/i.test(reviewMatch[4] ?? '')) {
+        if (preAlias === 'codex' || postAlias === 'codex') {
           void gateway.send(msg.channelId, `_Codex engine is not supported for reviews. Use a model alias instead: \`review opus-5: topic\`_`, { replyTo: msg.id }).catch(() => {})
           return
         }
@@ -532,7 +532,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (buildMatch) {
         const preAlias = buildMatch[1]?.toLowerCase()
         const postAlias = buildMatch[3]?.toLowerCase()
-        if (preAlias === 'codex' || postAlias === 'codex' || /^codex\b/i.test(buildMatch[4] ?? '')) {
+        if (preAlias === 'codex' || postAlias === 'codex') {
           void gateway.send(msg.channelId, `_Codex engine is not supported for builds. Use a model alias instead: \`build opus-5: task\`_`, { replyTo: msg.id }).catch(() => {})
           return
         }
@@ -555,7 +555,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const spikeMatch = msg.content.match(/^(?:\/spike|spike)(?=[\s:]|$)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (spikeMatch) {
         const spikeAlias = spikeMatch[1]?.toLowerCase()
-        if (spikeAlias === 'codex' || /^codex\b/i.test(spikeMatch[2] ?? '')) {
+        if (spikeAlias === 'codex') {
           void gateway.send(msg.channelId, `_Codex engine is not supported for spikes. Use a model alias instead: \`spike opus-5: topic\`_`, { replyTo: msg.id }).catch(() => {})
           return
         }
