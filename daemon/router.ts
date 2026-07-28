@@ -482,11 +482,30 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
+      // Reject deprecated _v2 suffixed commands with a clear message
+      if (/^(?:\/?)(?:review_v2|build_v2|spike_v2|kill\s+(?:review_v2|build_v2|spike_v2))\b/i.test(msg.content)) {
+        const clean = msg.content.replace(/_v2/gi, '').trim()
+        void gateway.send(msg.channelId, `_The \`_v2\` suffix is removed. Use \`${clean}\` instead._`, { replyTo: msg.id }).catch(() => {})
+        return
+      }
+
+      // Reject removed commands explicitly
+      if (/^(?:\/?)build-wt[:\s]/i.test(msg.content)) {
+        void gateway.send(msg.channelId, `_\`build-wt\` has been removed. Use \`build\` in a session thread instead._`, { replyTo: msg.id }).catch(() => {})
+        return
+      }
+
       const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewMatch) {
-        const preModel = resolveProtocolModel(reviewMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+        const preAlias = reviewMatch[1]?.toLowerCase()
+        const postAlias = reviewMatch[3]?.toLowerCase()
+        if (preAlias === 'codex' || postAlias === 'codex') {
+          void gateway.send(msg.channelId, `_Codex engine is not supported for v2 reviews. Use a model alias instead: \`review opus-5: topic\`_`, { replyTo: msg.id }).catch(() => {})
+          return
+        }
+        const preModel = resolveProtocolModel(preAlias, msg.channelId, msg.id)
         if (preModel === false) return
-        const postModel = resolveProtocolModel(reviewMatch[3]?.toLowerCase(), msg.channelId, msg.id)
+        const postModel = resolveProtocolModel(postAlias, msg.channelId, msg.id)
         if (postModel === false) return
         const rounds = parseInt(reviewMatch[2] ?? '3')
         let topic = reviewMatch[4]?.trim()
@@ -505,15 +524,21 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
       const cancelReviewMatch = msg.content.match(/^(?:kill review)\s*$/i)
       if (cancelReviewMatch) {
-        void handleCancelProtocolIntercept(msg)
+        void handleCancelProtocolIntercept(msg, 'review')
         return
       }
 
       const buildMatch = msg.content.match(/^(?:\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (buildMatch) {
-        const preModel = resolveProtocolModel(buildMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+        const preAlias = buildMatch[1]?.toLowerCase()
+        const postAlias = buildMatch[3]?.toLowerCase()
+        if (preAlias === 'codex' || postAlias === 'codex') {
+          void gateway.send(msg.channelId, `_Codex engine is not supported for v2 builds. Use a model alias instead: \`build opus-5: task\`_`, { replyTo: msg.id }).catch(() => {})
+          return
+        }
+        const preModel = resolveProtocolModel(preAlias, msg.channelId, msg.id)
         if (preModel === false) return
-        const postModel = resolveProtocolModel(buildMatch[3]?.toLowerCase(), msg.channelId, msg.id)
+        const postModel = resolveProtocolModel(postAlias, msg.channelId, msg.id)
         if (postModel === false) return
         const buildRounds = parseInt(buildMatch[2] ?? '3')
         const buildTask = buildMatch[4]?.trim()
@@ -523,7 +548,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
       const cancelBuildMatch = msg.content.match(/^(?:kill build)\s*$/i)
       if (cancelBuildMatch) {
-        void handleCancelProtocolIntercept(msg)
+        void handleCancelProtocolIntercept(msg, 'build')
         return
       }
 
@@ -538,7 +563,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
       const cancelSpikeMatch = msg.content.match(/^(?:kill spike)\s*$/i)
       if (cancelSpikeMatch) {
-        void handleCancelProtocolIntercept(msg)
+        void handleCancelProtocolIntercept(msg, 'spike')
         return
       }
 

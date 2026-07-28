@@ -81,8 +81,11 @@ async function spawnAndNotify(
             task: topic,
             strike: true,
           })
+          process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
+        } else {
+          process.stderr.write(`daemon: template action "${action}" — protocol not found\n`)
+          void gateway.send(result.threadId, `_Action **${action}** failed: protocol not found_`).catch(() => {})
         }
-        process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         process.stderr.write(`daemon: template action "${action}" failed: ${errMsg}\n`)
