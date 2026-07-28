@@ -7,6 +7,7 @@ import { decideResume } from './auto-resume.js'
 import { isAlive } from './util.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol, isThreadOccupied } from './protocol-registry.js'
+import { emit } from './event-bus.js'
 import { reviewCriticPrompt } from './prompts/review-critic.js'
 import { reviewModel } from '../shared/constants.js'
 import { createStateMachine } from './state-machine.js'
@@ -15,7 +16,6 @@ import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
 import { getLenses, getLensesSync, type LensDef } from './lens-loader.js'
-import { onFactoryReviewComplete, onFactoryReviewCancelled, onFactoryCriticRound } from './factory.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,7 +241,7 @@ export async function cancelReview(reviewId: string): Promise<void> {
   }
 
   refreshSessionVisual(state.ownerThreadId)
-  onFactoryReviewCancelled(state.ownerThreadId)
+  emit('review:cancelled', { threadId: state.ownerThreadId })
   await safeSend(state.ownerThreadId, `Review cancelled.`)
 
   void deleteReviewMessages(state).catch(err => {
@@ -458,7 +458,7 @@ function onCriticPosted(state: ReviewState, text: string): void {
   if (state.timeout) clearTimeout(state.timeout)
 
   // F2: relay critic round to factory PM if this is a factory review
-  onFactoryCriticRound(state.ownerThreadId, state.currentRound, state.rounds, text)
+  emit('review:round', { threadId: state.ownerThreadId, round: state.currentRound, totalRounds: state.rounds, text })
 
   const roundLabel = `Round ${state.currentRound}/${state.rounds}`
   const badge = formatRoundBadge('⚔️', reviewHalf(state.phase), state.currentRound, state.rounds)
@@ -696,7 +696,7 @@ function finalizeReview(state: ReviewState): void {
   refreshSessionVisual(state.ownerThreadId)
 
   // If this review is part of a factory_build, signal completion
-  onFactoryReviewComplete(state.ownerThreadId)
+  emit('review:complete', { threadId: state.ownerThreadId })
 
   cleaningUpThreads.add(state.ownerThreadId)
   void deleteReviewMessages(state)

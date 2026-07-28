@@ -1,22 +1,23 @@
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { doSpawnSession, killSession, sessionDeathEmitter } from './session-lifecycle.js'
+import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, getContextPercent } from './util.js'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
+import { on } from './event-bus.js'
 
 // ---------------------------------------------------------------------------
 // Idempotency completion on session death
 // ---------------------------------------------------------------------------
 
-sessionDeathEmitter.on('death', (event: { sessionId: string }) => {
-  const idemEntry = getBySessionId(event.sessionId)
+on('session:death', ({ sessionId }) => {
+  const idemEntry = getBySessionId(sessionId)
   if (idemEntry) {
     updateIdempotency(idemEntry.key, { status: 'completed' })
-    process.stderr.write(`daemon: cli idempotency key "${idemEntry.key}" → completed (session ${event.sessionId} died)\n`)
+    process.stderr.write(`daemon: cli idempotency key "${idemEntry.key}" → completed (session ${sessionId} died)\n`)
   }
-})
+}, 'cli:idempotency-completion')
 
 // ---------------------------------------------------------------------------
 // CLI request/response types

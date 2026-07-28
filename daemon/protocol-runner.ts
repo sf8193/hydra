@@ -5,7 +5,7 @@ import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
 import { isAlive } from './util.js'
 import { recordSessionDeath } from './observability.js'
-import { registerProtocol, type ProtocolName } from './protocol-registry.js'
+import { registerProtocol } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
@@ -726,7 +726,7 @@ export function getRunByThread(threadId: string): ProtocolRun | undefined {
 // Protocol registry integration — register v2 protocols
 // ---------------------------------------------------------------------------
 
-function runnerHooks(name: ProtocolName, protoName: string) {
+function runnerHooks(name: string, protoName: string) {
   registerProtocol(name, {
     getByThread: (threadId) => {
       const run = getRunByThread(threadId)

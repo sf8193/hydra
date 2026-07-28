@@ -10,8 +10,7 @@ import { spawnModel } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
-import { dispatchReconnect, dispatchReply, dispatchDisconnect } from './protocol-registry.js'
-import { onBuilderDone } from './factory.js'
+import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
@@ -303,19 +302,10 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
               autoWatchPrUrls(conn.sessionId, replyText)
             }
 
-            await dispatchReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
+            await dispatchSessionReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
             maybeNudgeMissingSentinel(conn.sessionId, replyText, args.chat_id as string)
 
-            // Factory builder: [done] prefix triggers review (may have trailing artifact)
-            const FACTORY_DONE_RE = /^\[done\]/m
-            // Ephemeral: [done] must be the entire line (no trailing content)
-            const EPHEMERAL_DONE_RE = /^\[done\]$/m
-
-            if (FACTORY_DONE_RE.test(replyText)) {
-              onBuilderDone(conn.sessionId, replyText)
-            }
-
-            if (replyInfo?.ephemeral && EPHEMERAL_DONE_RE.test(replyText)) {
+            if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
               process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)
               clearEphemeralTtl(conn.sessionId)
               const sid = conn.sessionId

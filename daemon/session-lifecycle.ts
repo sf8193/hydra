@@ -3,8 +3,6 @@ import { execSync, execFileSync } from 'child_process'
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
-import { EventEmitter } from 'events'
-
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
@@ -20,19 +18,7 @@ import { unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
 import { codexEngine } from './codex-bootstrap.js'
 import { codexSocketPath } from './codex-engine.js'
-
-// ---------------------------------------------------------------------------
-// Session death events
-// ---------------------------------------------------------------------------
-
-export type SessionDeathEvent = {
-  sessionId: string
-  threadId: string
-  wasOwner: boolean
-  tmuxName: string
-}
-
-export const sessionDeathEmitter = new EventEmitter()
+import { emit } from './event-bus.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -173,12 +159,12 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       registry.removeMember(info.threadId, info.sessionId)
     }
 
-    sessionDeathEmitter.emit('death', {
+    emit('session:death', {
       sessionId: info.sessionId,
       threadId: info.threadId,
       wasOwner: !info.isJoinMember,
       tmuxName: info.tmuxName,
-    } satisfies SessionDeathEvent)
+    })
 
     setTimeout(() => {
       try {
