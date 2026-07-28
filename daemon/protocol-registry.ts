@@ -16,6 +16,8 @@ type ProtocolHooks = {
   expectedTag?: (sessionId: string, chatId: string) => string | null
 }
 
+// Protocol names are plain strings — intentionally not a union type so new
+// protocols can register without editing this file.
 const protocols = new Map<string, ProtocolHooks>()
 
 export function registerProtocol(name: string, hooks: ProtocolHooks): void {

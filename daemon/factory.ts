@@ -326,6 +326,7 @@ function cleanupState(pmThreadId: string): void {
 const FACTORY_DONE_RE = /^\[done\]/m
 
 function factoryDoneDetection({ sessionId, text }: { sessionId: string; text: string }): void {
+  if (!builderSessionToFactory.has(sessionId)) return
   if (FACTORY_DONE_RE.test(text)) onBuilderDone(sessionId, text)
 }
 
@@ -335,17 +336,19 @@ function factorySessionDeath({ sessionId }: { sessionId: string }): void {
   // PM death: clean up pending state and kill orphaned builder.
   // Snapshot to avoid Map mutation during iteration (killSession can
   // trigger synchronous death events that call cleanupState).
+  // Snapshot to avoid Map mutation during iteration (killSession can
+  // trigger synchronous death events that call cleanupState).
   const pmEntry = [...pending.entries()].find(([_, s]) => s.pmSessionId === sessionId)
   if (pmEntry) {
     const [pmThreadId, state] = pmEntry
     process.stderr.write(`daemon: factory: PM ${sessionId} died with active build ${state.ticket}, cleaning up\n`)
-    cleanupState(pmThreadId)
     if (state.builderSessionId) {
       const builderInfo = registry.get(state.builderSessionId)
       if (builderInfo) {
         void killSession(builderInfo, 'PM died').catch(() => {})
       }
     }
+    cleanupState(pmThreadId)
   }
 }
 
