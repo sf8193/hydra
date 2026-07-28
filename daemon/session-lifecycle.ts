@@ -626,17 +626,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
+  const exitFile = join(SPAWN_LOGS_DIR, `exit-${tmuxName}-${sessionId}.log`)
   const exitMarker = [
     `_HYDRA_EXIT_CODE=$? _HYDRA_EXIT_TS=$(date +%s)`,
-    `echo ""`,
-    `echo "=== HYDRA SESSION EXIT ==="`,
-    `echo "exit_code=$_HYDRA_EXIT_CODE"`,
+    `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
     `echo "wall_clock=\${SECONDS}s"`,
     `echo "exit_ts=$_HYDRA_EXIT_TS"`,
     `echo "session_id=${sessionId}"`,
     `echo "tmux_name=${tmuxName}"`,
     `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
-    `echo "========================="`,
+    `} > ${shq(exitFile)}`,
   ].join('; ')
   const inner = [
     `cd ${shq(effectiveCwd)}`,
@@ -708,7 +707,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
-    ...(spawnLogPath ? { spawnLogPath } : {}),
+    ...(spawnLogPath ? { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog } : {}),
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
     ...(isHeadless ? { headless: true } : {}),

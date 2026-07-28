@@ -167,7 +167,7 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
 // Pure: `now` and `sample` are injected (not read from the wall clock / global
 // Map) so the assembled report — including the "N before death" timing and the
 // sampled-vs-never-sampled branch — is deterministic and testable.
-export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined): string {
+export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, exitFileLines?: string[], stderrTail?: string[]): string {
   const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
   const rss = sample ? `${sample.rssMB}MB (${dur(now - sample.at)} before death)` : 'never sampled'
   const lines = [
@@ -182,7 +182,9 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   ]
   const startIdx = blackBoxTail.indexOf('=== HYDRA SESSION EXIT ===')
   const endIdx = blackBoxTail.indexOf('=========================', startIdx)
-  const exitBlock = startIdx >= 0 && endIdx > startIdx ? blackBoxTail.slice(startIdx + 1, endIdx) : []
+  const exitBlock = startIdx >= 0 && endIdx > startIdx
+    ? blackBoxTail.slice(startIdx + 1, endIdx)
+    : (exitFileLines ?? [])
   const exitMarkers = new Map(
     exitBlock.filter(l => l.includes('=')).map(l => {
       const eq = l.indexOf('=')
@@ -198,15 +200,9 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
     if (wall) parts.push(`wall=${wall}`)
     lines.push(`  exit: ${parts.join(', ')}`)
   }
-  const stderrPath = info.spawnLogPath?.replace(/\/([^/]+)\.log$/, '/stderr-$1.log')
-  if (stderrPath) {
-    try {
-      const stderr = execFileSync('tail', ['-n', '5', stderrPath], { encoding: 'utf8' }).trim()
-      if (stderr) {
-        lines.push(`  stderr (last 5 lines):`)
-        lines.push(...stderr.split('\n').map(l => `  | ${l}`))
-      }
-    } catch {}
+  if (stderrTail && stderrTail.length > 0) {
+    lines.push(`  stderr (last ${stderrTail.length} lines):`)
+    lines.push(...stderrTail.map(l => `  | ${l}`))
   }
   const markerKeys = new Set(['exit_code', 'exit_ts', 'session_id', 'tmux_name', 'signal', 'wall_clock'])
   if (blackBoxTail.length > 0) {

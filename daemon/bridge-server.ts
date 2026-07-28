@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
 import { execSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
@@ -427,7 +427,26 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
         process.stderr.write(`daemon: session ${info.tmuxName} black box unreadable (${info.spawnLogPath}): ${err}\n`)
       }
     }
-    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId)) + '\n')
+    let exitFileLines: string[] | undefined
+    let stderrTail: string[] | undefined
+    const exitPath = info.exitFilePath ?? info.spawnLogPath?.replace(/\/([^/]+)\.log$/, '/exit-$1.log')
+    if (exitPath) {
+      try {
+        exitFileLines = readFileSync(exitPath, 'utf8').trim().split('\n').filter(Boolean)
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write(`daemon: exit file unreadable (${exitPath}): ${err}\n`)
+      }
+    }
+    const stderrPath = info.stderrLogPath ?? info.spawnLogPath?.replace(/\/([^/]+)\.log$/, '/stderr-$1.log')
+    if (stderrPath) {
+      try {
+        const raw = readFileSync(stderrPath, 'utf8').trim()
+        if (raw) stderrTail = raw.split('\n').slice(-5)
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write(`daemon: stderr tail unreadable (${stderrPath}): ${err}\n`)
+      }
+    }
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), exitFileLines, stderrTail) + '\n')
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {
