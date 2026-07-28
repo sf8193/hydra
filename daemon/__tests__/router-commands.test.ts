@@ -24,7 +24,6 @@ const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
 const FORKS_RE = /^(?:forks|\/forks)\s*$/i
 const REVIEW_RE = /^(?:\/review|review)\s*(\d+)?(?:\s+([\s\S]+))?$/i
 const BUILD_RE = /^(?:\/build|build)\s*(\d+)?(?:\s+([\s\S]+))?$/i
-const BUILD_WT_RE = /^(?:\/build-wt|build-wt):\s*(\S+)\s+(\d+)?(?:\s+([\s\S]+))?$/i
 
 // ---------------------------------------------------------------------------
 // Spawn
@@ -242,13 +241,6 @@ describe('build command', () => {
     expect(m![2]).toBe('add tests')
   })
 
-  test('build-wt with repo', () => {
-    const m = 'build-wt: options_bot 3 fix the handler'.match(BUILD_WT_RE)
-    expect(m).not.toBeNull()
-    expect(m![1]).toBe('options_bot')
-    expect(m![2]).toBe('3')
-    expect(m![3]).toBe('fix the handler')
-  })
 })
 
 // ---------------------------------------------------------------------------
