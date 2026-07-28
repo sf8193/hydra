@@ -10,7 +10,8 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import type { Protocol } from './protocol-dsl.js'
-import type { RunState, BehaviorContext } from './protocol-types.js'
+import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
+import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,7 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   phase: string
   currentRound: number
   rounds: number
+  startedAt: number
   params: Record<string, unknown>
   participants: Map<string, string>
   sessionToRole: Map<string, string>
@@ -41,6 +43,25 @@ const threadToRun = new Map<string, string>()
 const sessionToRun = new Map<string, string>()
 const transitioningRuns = new Set<string>()
 const cancellingRuns = new Set<string>()
+
+// ---------------------------------------------------------------------------
+// Completion event bus
+// ---------------------------------------------------------------------------
+
+class ProtocolEventBus extends EventEmitter {
+  constructor() { super(); this.setMaxListeners(20) }
+  emitComplete(event: CompletionEvent): void {
+    for (const fn of this.listeners('complete')) {
+      try { (fn as (e: CompletionEvent) => void)(event) }
+      catch (err) { process.stderr.write(`daemon: completion event listener error: ${err}\n`) }
+    }
+  }
+  /** Listeners must be synchronous — async rejections are unhandled. */
+  onComplete(fn: (event: CompletionEvent) => void): void { this.on('complete', fn) }
+  offComplete(fn: (event: CompletionEvent) => void): void { this.off('complete', fn) }
+}
+
+export const protocolEvents = new ProtocolEventBus()
 
 // ---------------------------------------------------------------------------
 // Start a protocol run
@@ -65,6 +86,7 @@ export async function startProtocolRun(
     phase: proto.initialPhase,
     currentRound: 1,
     rounds,
+    startedAt: Date.now(),
     params,
     participants: new Map(),
     sessionToRole: new Map(),
@@ -386,6 +408,17 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
     const cancelIds = await safeSend(run.threadId, `${run.protocol.display} cancelled: ${reason}`)
     run.messageIds.push(...cancelIds)
   } finally {
+    const completionEvent: CompletionEvent = {
+      protocol: run.protocol.name,
+      threadId: run.threadId,
+      topic: run.params.topic as string | undefined,
+      rounds: { completed: Math.max(0, run.currentRound - 1), requested: run.rounds },
+      outcome: 'cancelled',
+      reason,
+      decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
+      durationMs: Date.now() - run.startedAt,
+    }
+    protocolEvents.emitComplete(completionEvent)
     cancellingRuns.delete(run.id)
     cleanupRun(run)
     refreshSessionVisual(run.threadId)
@@ -667,12 +700,14 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
   clearTimers(run)
 
+  let transcriptPath: string | undefined
   try {
     const dumpPath = await dumpTranscript(run.threadId, run.protocol.name, run.messageIds, {
       rounds: `${run.currentRound}/${run.rounds}`,
       outcome: run.phase,
       ...(run.params.topic ? { topic: String(run.params.topic) } : {}),
     }, run.statusHistory)
+    transcriptPath = dumpPath ?? undefined
 
     if (!dumpPath) {
       process.stderr.write(`daemon: ${run.protocol.name}: transcript dump failed — leaving messages in place\n`)
@@ -692,6 +727,19 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     process.stderr.write(`daemon: ${run.protocol.name} transcript dump failed: ${err}\n`)
   }
 
+  const completionEvent: CompletionEvent = {
+    protocol: run.protocol.name,
+    threadId: run.threadId,
+    topic: run.params.topic as string | undefined,
+    rounds: { completed: run.currentRound, requested: run.rounds },
+    outcome: 'complete',
+    decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
+    durationMs: Date.now() - run.startedAt,
+    transcriptPath,
+  }
+
+  protocolEvents.emitComplete(completionEvent)
+
   for (const [, sid] of run.participants) {
     if (sid === run.ownerSessionId) continue
     sessionToRun.delete(sid)
@@ -700,7 +748,6 @@ async function completeRun(run: ProtocolRun): Promise<void> {
       void killSession(info, 'protocol complete').catch(err => process.stderr.write(`daemon: kill on complete failed: ${err}\n`))
     }
   }
-
   cleanupRun(run)
   refreshSessionVisual(run.threadId)
 }
@@ -750,7 +797,6 @@ function runnerHooks(name: string, protoName: string) {
       if (!role) return null
       const phase = run.protocol.phases[run.phase]
       if (phase?.actor !== role) return null
-      // Don't nudge sentinel for decision-only phases — the agent needs decide(), not a tag
       const hasDecisionOnly = Object.values(run.protocol.decisions).some(d => d.phase === run.phase) && !phase?.replyEvent
       if (hasDecisionOnly) return null
       return run.protocol.sentinel(run.phase) ?? null

@@ -185,6 +185,14 @@ export function protocol<
     }
   }
 
+  if (spec.cleanupPhase) {
+    const cleanupKey = spec.cleanupPhase as keyof P
+    const cleanupDef = spec.phases[cleanupKey] as (PhaseDef & { onEnter?: string[] }) | undefined
+    if (cleanupDef && !cleanupDef.onEnter) {
+      ;(spec.phases as Record<string, PhaseDef>)[cleanupKey as string] = { ...cleanupDef, onEnter: ['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'] }
+    }
+  }
+
   return Object.freeze({
     name,
     emoji: spec.emoji,
