@@ -1,7 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
-import { reviewMachine, CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS } from '../adversarial.js'
-import { buildMachine, BUILDER_SENTINEL, CRITIC_SENTINEL as BUILD_CRITIC_SENTINEL, SUMMARY_SENTINEL as BUILD_SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS as BUILD_CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS as BUILD_OWNER_TIMEOUT_MS } from '../build.js'
 
 let origStderrWrite: typeof process.stderr.write
 beforeEach(() => { origStderrWrite = process.stderr.write; process.stderr.write = (() => true) as any })
@@ -15,7 +13,7 @@ const review = (await import('../../protocols/review.js')).default
 const build = (await import('../../protocols/build.js')).default
 
 // ---------------------------------------------------------------------------
-// Review protocol — parity with adversarial.ts
+// Review protocol
 // ---------------------------------------------------------------------------
 
 describe('review protocol (TypeScript DSL)', () => {
@@ -29,33 +27,19 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(Object.keys(review.roles)).toEqual(['critic', 'owner'])
   })
 
-  test('transition table matches reviewMachine (shared transitions)', () => {
-    // v2 removed post_pass — final_round goes to cleanup directly.
-    // Only check transitions where both machines agree on the target.
-    const v2Removed = new Set(['final_round'])
-    for (const [phase, phaseDef] of Object.entries(review.phases)) {
-      for (const [event, target] of Object.entries(phaseDef.on)) {
-        if (v2Removed.has(event)) continue
-        const result = reviewMachine.transition(phase as any, event as any)
-        if (!result.ok) continue
-        expect(result.to).toBe(target)
-      }
-    }
-  })
-
-  test('final_round goes to cleanup (no post_pass)', () => {
+  test('final_round goes to cleanup', () => {
     const result = review.machine.transition('owner_turn' as any, 'final_round' as any)
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.to).toBe('cleanup')
   })
 
-  test('windows match the live timeout constants', () => {
-    expect(review.windowMs('critic_turn')).toBe(CRITIC_TIMEOUT_MS)
-    expect(review.windowMs('owner_turn')).toBe(OWNER_TIMEOUT_MS)
+  test('windows match expected durations', () => {
+    expect(review.windowMs('critic_turn')).toBe(10 * 60 * 1000)
+    expect(review.windowMs('owner_turn')).toBe(30 * 60 * 1000)
     expect(review.windowMs('cleanup')).toBe(5 * 60 * 1000)
   })
 
-  test('disconnect grace matches the live constants', () => {
+  test('disconnect grace durations', () => {
     expect(review.graceMs('critic')).toBe(30_000)
     expect(review.graceMs('owner')).toBe(120_000)
   })
@@ -90,20 +74,20 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(focused).not.toContain('argue AGAINST')
   })
 
-  test('sentinels match the live constants', () => {
-    expect(review.sentinel('critic_turn')).toBe(CRITIC_SENTINEL)
-    expect(review.sentinel('owner_turn')).toBe(OWNER_SENTINEL)
-    expect(review.sentinel('cleanup')).toBe(SUMMARY_SENTINEL)
+  test('sentinels match expected tags', () => {
+    expect(review.sentinel('critic_turn')).toBe('[critic→owner]')
+    expect(review.sentinel('owner_turn')).toBe('[owner→critic]')
+    expect(review.sentinel('cleanup')).toBe('[summary]')
     expect(review.sentinel('complete')).toBeUndefined()
   })
 
-  test('no decisions declared (modifiers replace post-pass decisions)', () => {
+  test('no decisions declared', () => {
     expect(Object.keys(review.decisions)).toHaveLength(0)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Build protocol — parity with build.ts
+// Build protocol
 // ---------------------------------------------------------------------------
 
 describe('build protocol (TypeScript DSL)', () => {
@@ -112,32 +96,21 @@ describe('build protocol (TypeScript DSL)', () => {
     expect(build.emoji).toBe('🔨')
   })
 
-  test('transition table matches buildMachine', () => {
-    for (const [phase, phaseDef] of Object.entries(build.phases)) {
-      for (const [event, target] of Object.entries(phaseDef.on)) {
-        const result = buildMachine.transition(phase as any, event as any)
-        if (Object.keys(phaseDef.on).length === 0) continue
-        expect(result.ok).toBe(true)
-        if (result.ok) expect(result.to).toBe(target)
-      }
-    }
-  })
-
-  test('windows match the live timeout constants', () => {
-    expect(build.windowMs('reviewing')).toBe(BUILD_CRITIC_TIMEOUT_MS)
-    expect(build.windowMs('implementing')).toBe(BUILD_OWNER_TIMEOUT_MS)
+  test('windows match expected durations', () => {
+    expect(build.windowMs('reviewing')).toBe(20 * 60 * 1000)
+    expect(build.windowMs('implementing')).toBe(30 * 60 * 1000)
     expect(build.windowMs('closing')).toBe(5 * 60 * 1000)
   })
 
-  test('disconnect grace matches the live constants', () => {
+  test('disconnect grace durations', () => {
     expect(build.graceMs('critic')).toBe(30_000)
     expect(build.graceMs('builder')).toBe(120_000)
   })
 
-  test('sentinels match the live constants', () => {
-    expect(build.sentinel('implementing')).toBe(BUILDER_SENTINEL)
-    expect(build.sentinel('reviewing')).toBe(BUILD_CRITIC_SENTINEL)
-    expect(build.sentinel('closing')).toBe(BUILD_SUMMARY_SENTINEL)
+  test('sentinels match expected tags', () => {
+    expect(build.sentinel('implementing')).toBe('[builder→critic]')
+    expect(build.sentinel('reviewing')).toBe('[critic→builder]')
+    expect(build.sentinel('closing')).toBe('[summary]')
     expect(build.sentinel('complete')).toBeUndefined()
   })
 

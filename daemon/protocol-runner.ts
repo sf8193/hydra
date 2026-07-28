@@ -722,6 +722,10 @@ export function getRunByThread(threadId: string): ProtocolRun | undefined {
   return id ? runs.get(id) : undefined
 }
 
+export function getActiveRuns(): ProtocolRun[] {
+  return [...runs.values()].filter(r => !isTerminal(r))
+}
+
 // ---------------------------------------------------------------------------
 // Protocol registry integration — register v2 protocols
 // ---------------------------------------------------------------------------
@@ -758,6 +762,6 @@ function runnerHooks(name: string, protoName: string) {
   })
 }
 
-runnerHooks('review_v2', 'review')
-runnerHooks('build_v2', 'build')
-runnerHooks('spike_v2', 'spike')
+runnerHooks('review', 'review')
+runnerHooks('build', 'build')
+runnerHooks('spike', 'spike')

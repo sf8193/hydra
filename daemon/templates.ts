@@ -87,10 +87,6 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
     prompt: 'You are the owner of a review session. An adversarial review protocol will start automatically — a critic will challenge your work across multiple rounds. Defend your design and fix valid issues.',
     action: 'review',
   },
-  design: {
-    prompt: 'You are a design session. A multi-persona design process will start automatically in your thread. Participate as the owner — answer questions from the personas and guide the synthesis toward a concrete implementation plan.',
-    action: 'design',
-  },
   build: {
     prompt: 'You are the owner of a build session. A multi-agent build protocol will start automatically — a builder will implement the task and a critic will review each round. Guide the process and answer questions.',
     action: 'build',
@@ -103,7 +99,7 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
 }
 
 const RESERVED = new Set(['spawn', 'kill', 'fork', 'resume', 'respawn', 'listen', 'pause', 'help', 'commands', 'recover', 'sessions', 'watch', 'unwatch', 'watches', 'health', 'restart', 'reconnect', 'protocols', 'templates', 'usage'])
-const VALID_ACTIONS = new Set(['review', 'build', 'design'])
+const VALID_ACTIONS = new Set(['review', 'build'])
 
 const HYDRA_DIR = join(import.meta.dir, '..')
 
