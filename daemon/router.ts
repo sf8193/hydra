@@ -499,8 +499,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (reviewMatch) {
         const preAlias = reviewMatch[1]?.toLowerCase()
         const postAlias = reviewMatch[3]?.toLowerCase()
-        if (preAlias === 'codex' || postAlias === 'codex') {
-          void gateway.send(msg.channelId, `_Codex engine is not supported for v2 reviews. Use a model alias instead: \`review opus-5: topic\`_`, { replyTo: msg.id }).catch(() => {})
+        if (preAlias === 'codex' || postAlias === 'codex' || /\bcodex\b/i.test(reviewMatch[4] ?? '')) {
+          void gateway.send(msg.channelId, `_Codex engine is not supported for reviews. Use a model alias instead: \`review opus-5: topic\`_`, { replyTo: msg.id }).catch(() => {})
           return
         }
         const preModel = resolveProtocolModel(preAlias, msg.channelId, msg.id)
@@ -532,8 +532,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (buildMatch) {
         const preAlias = buildMatch[1]?.toLowerCase()
         const postAlias = buildMatch[3]?.toLowerCase()
-        if (preAlias === 'codex' || postAlias === 'codex') {
-          void gateway.send(msg.channelId, `_Codex engine is not supported for v2 builds. Use a model alias instead: \`build opus-5: task\`_`, { replyTo: msg.id }).catch(() => {})
+        if (preAlias === 'codex' || postAlias === 'codex' || /\bcodex\b/i.test(buildMatch[4] ?? '')) {
+          void gateway.send(msg.channelId, `_Codex engine is not supported for builds. Use a model alias instead: \`build opus-5: task\`_`, { replyTo: msg.id }).catch(() => {})
           return
         }
         const preModel = resolveProtocolModel(preAlias, msg.channelId, msg.id)
