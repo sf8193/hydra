@@ -107,12 +107,19 @@ function loadPersisted(): void {
 // Parse PR URL → owner/repo/number
 // ---------------------------------------------------------------------------
 
-function parsePrUrl(url: string): { owner: string; repo: string; prNumber: number } | null {
+export function parsePrUrl(url: string): { owner: string; repo: string; prNumber: number } | null {
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
   if (match) {
     return { owner: match[1], repo: match[2], prNumber: parseInt(match[3]) }
   }
   return null
+}
+
+export async function fetchPrTitle(url: string): Promise<string | null> {
+  const parsed = parsePrUrl(url)
+  if (!parsed) return null
+  const data = await ghApi(`repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.prNumber}`)
+  return data?.title ?? null
 }
 
 // ---------------------------------------------------------------------------

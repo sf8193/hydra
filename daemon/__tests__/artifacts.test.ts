@@ -231,7 +231,7 @@ describe('renderContextLink', () => {
 
   test('labels known domains', () => {
     expect(renderContextLink('https://linear.app/x/issue/BANK-1')).toBe('• 🔗 <https://linear.app/x/issue/BANK-1|Linear>')
-    expect(renderContextLink('https://acme.slack.com/archives/C1/p1')).toContain('|Slack thread>')
+    expect(renderContextLink('https://acme.slack.com/archives/C1/p1')).toBe('• 🔗 <https://acme.slack.com/archives/C1/p1|thread in <#C1>>')
     expect(renderContextLink('https://app.datadoghq.com/x')).toContain('|Datadog>')
   })
 })

@@ -93,7 +93,7 @@ import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
-import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts } from './daemon/artifacts.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './daemon/artifacts.js'
 registry.onPersist = refreshDashboard
 
 if ('homeTabHandler' in gateway) {
@@ -119,7 +119,7 @@ if ('homeSpawnHandler' in gateway) {
 import './daemon/router.js'
 import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
-import { startPrWatcher, backfillTitles } from './daemon/pr-watch.js'
+import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { getContextPercent, tmuxHasSession } from './daemon/util.js'
 import { refreshSessionVisual } from './daemon/anchor-state.js'
 
@@ -309,6 +309,24 @@ backfillTitles().then(n => {
     refreshDashboardNow()
   }
 }).catch(err => process.stderr.write(`daemon: PR title backfill failed: ${err}\n`))
+
+// Backfill PR titles for artifact links (non-blocking)
+void (async () => {
+  let filled = 0
+  for (const s of registry.values()) {
+    for (const url of s.artifacts ?? []) {
+      if (!parsePrUrl(url)) continue
+      try {
+        const title = await fetchPrTitle(url)
+        if (title) { cachePrTitle(url, title); filled++ }
+      } catch {}
+    }
+  }
+  if (filled > 0) {
+    refreshDashboardNow()
+    process.stderr.write(`daemon: backfilled ${filled} artifact PR title(s)\n`)
+  }
+})().catch(err => process.stderr.write(`daemon: artifact title backfill failed: ${err}\n`))
 
 // ---------------------------------------------------------------------------
 // Session health — crash detection + context alerts (every 5 min)

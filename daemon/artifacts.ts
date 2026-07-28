@@ -11,6 +11,12 @@
 
 export const MAX_ARTIFACTS = 10
 
+// In-memory PR title cache — populated at artifact capture time, used for rendering.
+// Keyed by canonical PR URL.
+const prTitleCache = new Map<string, string>()
+export function cachePrTitle(url: string, title: string): void { prTitleCache.set(url, title) }
+export function getCachedPrTitle(url: string): string | undefined { return prTitleCache.get(url) }
+
 // Strict per-type matchers. Each captures the pieces needed to build a *canonical*
 // URL — so trailing markdown (`*`, `**`), quotes/brackets (["url"]), HTML entities
 // (…/&lt;id), comment/review anchors (#discussion_r…), query strings, `http` vs
@@ -71,7 +77,11 @@ export function mergeArtifacts(
 /** Render one artifact URL as a Slack mrkdwn context line (leading bullet + 📎). */
 export function renderArtifactLink(link: string): string {
   const pr = link.match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/)
-  if (pr) return `• 📎 <${link}|${pr[1]}#${pr[2]}>`
+  if (pr) {
+    const title = prTitleCache.get(link)
+    const label = title || `${pr[1]}#${pr[2]}`
+    return `• 📎 <${link}|${label}>`
+  }
   const arti = link.match(/arti\.(?:internal\.)?angellist\.com\/s\/([^/\s]+)/)
   if (arti) return `• 📎 <${link}|Arti: ${arti[1]}>`
   if (/claude\.ai\/public\/artifacts/.test(link)) return `• 📎 <${link}|Claude artifact>`
@@ -86,6 +96,11 @@ export function renderContextLink(link: string): string {
   const channelMatch = link.match(/^slack:channel:([A-Z0-9]+):(.+)$/)
   if (channelMatch) {
     return `• 🔗 <#${channelMatch[1]}|${channelMatch[2]}>`
+  }
+  // Slack thread/message — render as channel link so Slack resolves the name
+  const archiveMatch = link.match(/slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/)
+  if (archiveMatch) {
+    return `• 🔗 <${link}|thread in <#${archiveMatch[1]}>>`
   }
   let label: string
   if (/slack\.com\/archives/.test(link)) label = 'Slack thread'

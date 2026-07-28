@@ -10,7 +10,8 @@ import { isProtocolPost, getExpectedTag, dispatchDecision } from './protocol-reg
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
-import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts } from './artifacts.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
+import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
@@ -138,10 +139,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
               // Compare against the raw prior list so a sanitize-only cleanup (even when the
               // reply carries no new artifact URL) still persists and refreshes the dashboard.
               const before = info.artifacts ?? []
-              const { next } = mergeArtifacts(sanitizeArtifacts(before), extractArtifactLinks(text))
+              const newLinks = extractArtifactLinks(text)
+              const { next, changed } = mergeArtifacts(sanitizeArtifacts(before), newLinks)
               if (JSON.stringify(next) !== JSON.stringify(before)) {
                 info.artifacts = next
                 refreshDashboard()
+              }
+              if (changed) {
+                for (const url of newLinks) {
+                  if (!parsePrUrl(url)) continue
+                  fetchPrTitle(url).then(title => {
+                    if (title) { cachePrTitle(url, title); refreshDashboard() }
+                  }).catch(() => {})
+                }
               }
             }
             registry.debouncedPersist()
