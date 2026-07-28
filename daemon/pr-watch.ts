@@ -323,6 +323,12 @@ async function pollPr(entry: WatchEntry): Promise<void> {
       process.stderr.write(`daemon: pr-watch: #${entry.prNumber} ${reason}, auto-unwatching\n`)
       watches.delete(entry.prUrl)
       persist()
+      // Scrub the PR from the session's artifact list so it disappears from the home tab
+      const info = registry.get(entry.sessionId)
+      if (info?.artifacts?.length) {
+        info.artifacts = info.artifacts.filter(u => u !== entry.prUrl)
+        registry.persist()
+      }
       const { refreshDashboard } = await import('./dashboard.js')
       refreshDashboard()
       return
