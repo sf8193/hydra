@@ -585,8 +585,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
   }
 
-  // Build claude command — all paths start without a prompt argument so CC stays
-  // in interactive channel mode. The seed is delivered via the bridge after connect.
+  // Fresh spawns start without a prompt argument so CC stays in interactive
+  // channel mode — the seed is delivered via the bridge after connect.
+  // Forks keep the CLI prompt (--fork-session needs it alongside --resume).
   let claudeArgs: string
   if (isFork) {
     claudeArgs = [
@@ -596,6 +597,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       `--model ${shq(model)}`,
       `--channels ${shq(channelFlag)}`,
       `--dangerously-skip-permissions`,
+      shq(prompt),
     ].join(' ')
   } else if (isResume) {
     claudeArgs = [
@@ -765,18 +767,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   // Deliver the seed prompt via the bridge so CC stays in interactive channel mode.
-  // A CLI prompt argument causes CC to treat the session as single-turn.
-  if (!isResume) {
-    const bridgeOk = await waitForBridge(sessionId, 30_000)
-    if (bridgeOk) {
-      transport.sendOrQueue(sessionId, {
-        type: 'notification',
-        content: prompt,
-        meta: { chat_id: threadId!, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-      })
-    } else {
-      process.stderr.write(`daemon: spawn ${tmuxName}: bridge did not connect in 30s — seed prompt not delivered\n`)
-    }
+  // sendOrQueue handles the timing — it queues if the bridge isn't connected yet
+  // and flushes automatically on connect.
+  if (!isResume && !isFork) {
+    transport.sendOrQueue(sessionId, {
+      type: 'notification',
+      content: prompt,
+      meta: { chat_id: threadId!, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
   }
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }
