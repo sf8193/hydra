@@ -322,6 +322,10 @@
     ],
     [
       "daemon",
+      "daemon_router"
+    ],
+    [
+      "daemon",
       "daemon_pr-watch"
     ],
     [
@@ -331,10 +335,6 @@
     [
       "daemon",
       "daemon_anchor-state"
-    ],
-    [
-      "daemon",
-      "daemon_router"
     ],
     [
       "daemon_sessions",
@@ -551,6 +551,10 @@
     [
       "daemon_router",
       "daemon_config"
+    ],
+    [
+      "daemon_router",
+      "daemon_dashboard"
     ],
     [
       "daemon_router",
