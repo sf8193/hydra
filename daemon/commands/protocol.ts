@@ -6,12 +6,16 @@ import { resolveModifiers } from '../modifiers.js'
 import type { Protocol } from '../protocol-dsl.js'
 import type { InboundMessage } from '../../gateway.js'
 
+const VALID_NAME = /^[a-z][a-z0-9-]*$/
+
 const protocols = new Map<string, Protocol>()
 
-async function getProtocol(name: string): Promise<Protocol> {
+export async function getProtocol(name: string): Promise<Protocol> {
   let proto = protocols.get(name)
   if (proto) return proto
+  if (!VALID_NAME.test(name)) throw new Error(`invalid protocol name "${name}"`)
   const mod = await import(`../../protocols/${name}.js`)
+  if (!mod.default?.name) throw new Error(`protocol "${name}" has no default export`)
   proto = mod.default as Protocol
   protocols.set(name, proto)
   return proto

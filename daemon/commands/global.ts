@@ -10,6 +10,7 @@ import { doSpawnSession, killSession, tryResume, tryRespawn, discoverClaudeSessi
 import { tmuxHasSession, isAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { startProtocolRun, getActiveRuns, cancelRun } from '../protocol-runner.js'
+import { getProtocol } from './protocol.js'
 import type { SpawnTemplate } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 import type { Access } from '../access.js'
@@ -73,19 +74,14 @@ async function spawnAndNotify(
     if (template?.template.action) {
       const action = template.template.action
       try {
-        const protoMod = await import(`../../protocols/${action}.js`).catch(() => null)
-        if (protoMod?.default) {
-          await startProtocolRun(protoMod.default, result.threadId, result.sessionId, {
-            rounds: 3,
-            topic,
-            task: topic,
-            strike: true,
-          })
-          process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
-        } else {
-          process.stderr.write(`daemon: template action "${action}" — protocol not found\n`)
-          void gateway.send(result.threadId, `_Action **${action}** failed: protocol not found_`).catch(() => {})
-        }
+        const proto = await getProtocol(action)
+        await startProtocolRun(proto, result.threadId, result.sessionId, {
+          rounds: 3,
+          topic,
+          task: topic,
+          strike: true,
+        })
+        process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         process.stderr.write(`daemon: template action "${action}" failed: ${errMsg}\n`)

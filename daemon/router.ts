@@ -484,13 +484,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
       // Reject deprecated _v2 suffixed commands with a clear message
       if (/^(?:\/?)(?:review_v2|build_v2|spike_v2|kill\s+(?:review_v2|build_v2|spike_v2))\b/i.test(msg.content)) {
-        const clean = msg.content.replace(/_v2/gi, '').trim()
+        const clean = msg.content.replace(/^(\/?(?:kill\s+)?(?:review|build|spike))_v2/i, '$1').trim()
         void gateway.send(msg.channelId, `_The \`_v2\` suffix is removed. Use \`${clean}\` instead._`, { replyTo: msg.id }).catch(() => {})
         return
       }
 
       // Reject removed commands explicitly
-      if (/^(?:\/?)build-wt[:\s]/i.test(msg.content)) {
+      if (/^(?:\/?)build-wt(?:[:\s]|$)/i.test(msg.content)) {
         void gateway.send(msg.channelId, `_\`build-wt\` has been removed. Use \`build\` in a session thread instead._`, { replyTo: msg.id }).catch(() => {})
         return
       }
@@ -554,7 +554,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
       const spikeMatch = msg.content.match(/^(?:\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (spikeMatch) {
-        const spikeModel = resolveProtocolModel(spikeMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+        const spikeAlias = spikeMatch[1]?.toLowerCase()
+        if (spikeAlias === 'codex') {
+          void gateway.send(msg.channelId, `_Codex engine is not supported for spikes. Use a model alias instead: \`spike opus-5: topic\`_`, { replyTo: msg.id }).catch(() => {})
+          return
+        }
+        const spikeModel = resolveProtocolModel(spikeAlias, msg.channelId, msg.id)
         if (spikeModel === false) return
         const spikeTopic = spikeMatch[2]?.trim()
         void handleProtocolIntercept('spike', msg, { rounds: 1, topic: spikeTopic, model: spikeModel })
