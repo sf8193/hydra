@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
 import { execSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
@@ -407,7 +407,16 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
         process.stderr.write(`daemon: session ${info.tmuxName} black box unreadable (${info.spawnLogPath}): ${err}\n`)
       }
     }
-    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId)) + '\n')
+    let exitFileLines: string[] | undefined
+    if (info.spawnLogPath) {
+      const exitPath = info.spawnLogPath.replace(/\/([^/]+)\.log$/, '/exit-$1.log')
+      try {
+        exitFileLines = readFileSync(exitPath, 'utf8').trim().split('\n')
+      } catch (err) {
+        if (existsSync(exitPath)) process.stderr.write(`daemon: exit file unreadable (${exitPath}): ${err}\n`)
+      }
+    }
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), exitFileLines) + '\n')
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {
