@@ -585,7 +585,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
   }
 
-  // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
+  // Fresh spawns start without a prompt argument so CC stays in interactive
+  // channel mode — the seed is delivered via the bridge after connect.
+  // Forks keep the CLI prompt (--fork-session needs it alongside --resume).
   let claudeArgs: string
   if (isFork) {
     claudeArgs = [
@@ -608,7 +610,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } else {
     const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
     const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
+    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions${disallowed}${toolsFlag}`
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
   }
@@ -762,6 +764,17 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
       void safeSend(chatId, spawnLine)
     }
+  }
+
+  // Deliver the seed prompt via the bridge so CC stays in interactive channel mode.
+  // sendOrQueue handles the timing — it queues if the bridge isn't connected yet
+  // and flushes automatically on connect.
+  if (!isResume && !isFork) {
+    transport.sendOrQueue(sessionId, {
+      type: 'notification',
+      content: prompt,
+      meta: { chat_id: threadId!, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
   }
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }
