@@ -1,5 +1,6 @@
 import { gateway, PERMISSION_REPLY_RE, INBOX_DIR } from './config.js'
-import { cacheSlackChannel } from './artifacts.js'
+import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
+import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, gate } from './access.js'
@@ -138,6 +139,33 @@ async function buildNotificationPayload(
 
 const CONTEXT_LINK_DOMAINS = /slack\.com\/archives|linear\.app|notion\.so|incident\.io|app\.datadoghq\.com|sentry\.io|pagerduty\.com/
 const MAX_CONTEXT_LINKS = 5
+const MAX_THREAD_SUMMARY_LEN = 60
+
+function parseSlackArchiveUrl(url: string): { channel: string; threadTs: string } | null {
+  const m = url.match(/slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/)
+  if (!m) return null
+  const raw = m[2]
+  const threadTs = raw.length > 10 ? raw.slice(0, 10) + '.' + raw.slice(10) : raw
+  return { channel: m[1], threadTs }
+}
+
+function stripMrkdwn(text: string): string {
+  return text.replace(/<[^|>]+\|([^>]+)>/g, '$1').replace(/<[^>]+>/g, '').replace(/[*_~`]/g, '').trim()
+}
+
+export async function fetchSlackThreadSummary(url: string): Promise<string | null> {
+  const parsed = parseSlackArchiveUrl(url)
+  if (!parsed) return null
+  try {
+    const msgs = await gateway.fetchMessages(`${parsed.channel}:${parsed.threadTs}`, 1)
+    if (!msgs.length) return null
+    const clean = stripMrkdwn(msgs[0].content)
+    if (!clean) return null
+    return clean.length > MAX_THREAD_SUMMARY_LEN
+      ? clean.slice(0, MAX_THREAD_SUMMARY_LEN - 1) + '…'
+      : clean
+  } catch { return null }
+}
 
 function extractContextLinks(text: string): string[] {
   const links: string[] = []
@@ -184,6 +212,9 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
         if (!m) continue
         gateway.fetchChannel(m[1]).then(ch => {
           if (ch.name) cacheSlackChannel(m[1], ch.name)
+        }).catch(() => {})
+        fetchSlackThreadSummary(url).then(summary => {
+          if (summary) { cacheSlackThread(url, summary); refreshDashboard() }
         }).catch(() => {})
       }
     }

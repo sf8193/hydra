@@ -19,6 +19,10 @@ export function cachePrTitle(url: string, title: string): void { prTitleCache.se
 const slackChannelNames = new Map<string, string>()
 export function cacheSlackChannel(id: string, name: string): void { slackChannelNames.set(id, name) }
 
+// In-memory Slack thread summary cache — keyed by archive URL.
+const slackThreadSummaries = new Map<string, string>()
+export function cacheSlackThread(url: string, summary: string): void { slackThreadSummaries.set(url, summary) }
+
 // Strict per-type matchers. Each captures the pieces needed to build a *canonical*
 // URL — so trailing markdown (`*`, `**`), quotes/brackets (["url"]), HTML entities
 // (…/&lt;id), comment/review anchors (#discussion_r…), query strings, `http` vs
@@ -99,9 +103,11 @@ export function renderContextLink(link: string): string {
   if (channelMatch) {
     return `• 🔗 <#${channelMatch[1]}|${channelMatch[2]}>`
   }
-  // Slack thread/message — show channel ID for now; Slack can't nest <#C..> inside <url|label>
+  // Slack thread/message — use thread root summary if available, else channel name
   const archiveMatch = link.match(/slack\.com\/archives\/([A-Z0-9]+)\/p(\d+)/)
   if (archiveMatch) {
+    const summary = slackThreadSummaries.get(link)
+    if (summary) return `• 🔗 <${link}|${summary}>`
     const channelName = slackChannelNames.get(archiveMatch[1])
     const label = channelName ? `thread in #${channelName}` : 'Slack thread'
     return `• 🔗 <${link}|${label}>`

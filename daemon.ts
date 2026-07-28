@@ -93,7 +93,7 @@ import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
-import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle, cacheSlackChannel } from './daemon/artifacts.js'
+import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle, cacheSlackChannel, cacheSlackThread } from './daemon/artifacts.js'
 registry.onPersist = refreshDashboard
 
 if ('homeTabHandler' in gateway) {
@@ -116,7 +116,7 @@ if ('homeSpawnHandler' in gateway) {
 }
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
-import './daemon/router.js'
+import { fetchSlackThreadSummary } from './daemon/router.js'
 import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
@@ -328,13 +328,14 @@ void (async () => {
   }
 })().catch(err => process.stderr.write(`daemon: artifact title backfill failed: ${err}\n`))
 
-// Backfill Slack channel names for context links (non-blocking)
+// Backfill Slack channel names + thread summaries for context links (non-blocking)
 void (async () => {
   const channelIds = new Set<string>()
+  const threadUrls: string[] = []
   for (const s of registry.values()) {
     for (const url of s.contextLinks ?? []) {
       const m = url.match(/slack\.com\/archives\/([A-Z0-9]+)/)
-      if (m) channelIds.add(m[1])
+      if (m) { channelIds.add(m[1]); threadUrls.push(url) }
     }
   }
   let filled = 0
@@ -344,11 +345,17 @@ void (async () => {
       if (ch.name) { cacheSlackChannel(id, ch.name); filled++ }
     } catch {}
   }
+  for (const url of threadUrls) {
+    try {
+      const summary = await fetchSlackThreadSummary(url)
+      if (summary) { cacheSlackThread(url, summary); filled++ }
+    } catch {}
+  }
   if (filled > 0) {
     refreshDashboardNow()
-    process.stderr.write(`daemon: backfilled ${filled} Slack channel name(s)\n`)
+    process.stderr.write(`daemon: backfilled ${filled} Slack context link(s)\n`)
   }
-})().catch(err => process.stderr.write(`daemon: Slack channel backfill failed: ${err}\n`))
+})().catch(err => process.stderr.write(`daemon: Slack context backfill failed: ${err}\n`))
 
 // ---------------------------------------------------------------------------
 // Session health — crash detection + context alerts (every 5 min)
