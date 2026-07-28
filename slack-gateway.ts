@@ -903,10 +903,15 @@ export class SlackGateway implements ChatGateway {
         process.exit(1)
       }
       const gapMs = Date.now() - this.lastEventAt
-      await this.start(this.token!)
+      // Timeout the reconnect — Bolt SocketMode can hang indefinitely on start()
+      const startTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('start() timed out after 30s')), 30_000),
+      )
+      await Promise.race([this.start(this.token!), startTimeout])
+      this.lastEventAt = Date.now() // prevent immediate stale re-detection
       this.reconnectAttempts = 0
       this.setHealthCheckInterval(HEALTH_CHECK_MS)
-      process.stderr.write(`slack gateway: reconnected successfully\n`)
+      process.stderr.write(`slack gateway: reconnected successfully (gap was ${Math.round(gapMs / 1000)}s)\n`)
       if (gapMs > 10 * 60_000 && this.onReconnectAfterOutage) {
         this.onReconnectAfterOutage(gapMs)
       }
