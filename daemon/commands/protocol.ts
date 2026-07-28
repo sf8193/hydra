@@ -16,6 +16,7 @@ export async function getProtocol(name: string): Promise<Protocol> {
   if (!VALID_NAME.test(name)) throw new Error(`invalid protocol name "${name}"`)
   const mod = await import(`../../protocols/${name}.js`)
   if (!mod.default?.name) throw new Error(`protocol "${name}" has no default export`)
+  if (mod.default.name !== name) throw new Error(`protocol file "${name}" declares name "${mod.default.name}"`)
   proto = mod.default as Protocol
   protocols.set(name, proto)
   return proto

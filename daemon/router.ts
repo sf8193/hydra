@@ -495,7 +495,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const reviewMatch = msg.content.match(/^(?:\/review|review)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewMatch) {
         const preAlias = reviewMatch[1]?.toLowerCase()
         const postAlias = reviewMatch[3]?.toLowerCase()
@@ -528,7 +528,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const buildMatch = msg.content.match(/^(?:\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const buildMatch = msg.content.match(/^(?:\/build|build)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (buildMatch) {
         const preAlias = buildMatch[1]?.toLowerCase()
         const postAlias = buildMatch[3]?.toLowerCase()
@@ -552,7 +552,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const spikeMatch = msg.content.match(/^(?:\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const spikeMatch = msg.content.match(/^(?:\/spike|spike)(?=[\s:]|$)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (spikeMatch) {
         const spikeAlias = spikeMatch[1]?.toLowerCase()
         if (spikeAlias === 'codex') {
