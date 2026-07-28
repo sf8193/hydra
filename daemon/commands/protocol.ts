@@ -94,5 +94,10 @@ export async function handleCancelProtocolIntercept(msg: InboundMessage, expecte
     return
   }
 
-  await cancelRun(run, 'cancelled by user')
+  try {
+    await cancelRun(run, 'cancelled by user')
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    await gateway.send(msg.channelId, `Cancel failed: ${errMsg}`, { replyTo: msg.id }).catch(() => {})
+  }
 }
