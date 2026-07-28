@@ -3,7 +3,7 @@
 
 export type ResumeDecision = 'resume' | 'grace' | 'reconnected'
 
-const MAX_RESUME_ATTEMPTS = 5
+const MAX_RESUME_ATTEMPTS = 2
 
 export function decideResume(
   transportConnected: boolean,

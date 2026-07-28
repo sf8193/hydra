@@ -585,9 +585,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
   }
 
-  // Fresh spawns start without a prompt argument so CC stays in interactive
-  // channel mode — the seed is delivered via the bridge after connect.
-  // Forks keep the CLI prompt (--fork-session needs it alongside --resume).
+  // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
   let claudeArgs: string
   if (isFork) {
     claudeArgs = [
@@ -610,22 +608,23 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } else {
     const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
     const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions${disallowed}${toolsFlag}`
+    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
   }
 
   const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
-  const exitFile = join(SPAWN_LOGS_DIR, `exit-${tmuxName}-${sessionId}.log`)
   const exitMarker = [
     `_HYDRA_EXIT_CODE=$? _HYDRA_EXIT_TS=$(date +%s)`,
-    `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
+    `echo ""`,
+    `echo "=== HYDRA SESSION EXIT ==="`,
+    `echo "exit_code=$_HYDRA_EXIT_CODE"`,
     `echo "wall_clock=\${SECONDS}s"`,
     `echo "exit_ts=$_HYDRA_EXIT_TS"`,
     `echo "session_id=${sessionId}"`,
     `echo "tmux_name=${tmuxName}"`,
     `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
-    `} > ${shq(exitFile)}`,
+    `echo "========================="`,
   ].join('; ')
   const inner = [
     `cd ${shq(effectiveCwd)}`,
@@ -707,7 +706,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Only the thread OWNER should call setThread — join members (protocol
   // critics, guest agents) use addMember and never touch the mapping.
   // Callers resuming a non-owner session MUST pass joinThread to preserve
-  // the real owner's routing. See auto-resume in protocol-runner.ts.
+  // the real owner's routing. See auto-resume in adversarial.ts/build.ts.
   // Headless sessions use a synthetic UUID as threadId — don't register it.
   if (!isJoin && !isHeadless) {
     registry.setThread(threadId!, sessionId)
@@ -763,17 +762,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
       void safeSend(chatId, spawnLine)
     }
-  }
-
-  // Deliver the seed prompt via the bridge so CC stays in interactive channel mode.
-  // sendOrQueue handles the timing — it queues if the bridge isn't connected yet
-  // and flushes automatically on connect.
-  if (!isResume && !isFork) {
-    transport.sendOrQueue(sessionId, {
-      type: 'notification',
-      content: prompt,
-      meta: { chat_id: threadId!, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-    })
   }
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }

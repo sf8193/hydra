@@ -28,14 +28,3 @@ export type BehaviorContext = {
 
 /** Return true to suppress the default notify/reset after this phase entry. All behaviors in the chain still run regardless — true does not halt the chain. */
 export type PhaseBehaviorFn = (run: RunState, prevPhase: string, content: string, ctx: BehaviorContext) => boolean | Promise<boolean>
-
-export type CompletionEvent = {
-  protocol: string
-  threadId: string
-  rounds: { completed: number; requested: number }
-  outcome: 'complete' | 'cancelled'
-  reason?: string
-  decisions: Array<{ phase: string; role: string; value: string; because: string }>
-  durationMs: number
-  transcriptPath?: string
-}
