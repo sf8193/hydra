@@ -814,7 +814,6 @@ export async function bootProtocols(): Promise<void> {
   const protocolsDir = join(import.meta.dir, '..', 'protocols')
   const files = readdirSync(protocolsDir).filter(f => f.endsWith('.ts') && !f.startsWith('_') && !f.includes('.test.'))
   for (const file of files) {
-    if (file === 'lenses' || file.startsWith('lenses')) continue
     try {
       const mod = await import(join(protocolsDir, file))
       if (mod.default?.name) registerProtocolSpec(mod.default)
