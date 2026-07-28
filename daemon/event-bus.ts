@@ -32,7 +32,9 @@ export function on<K extends keyof EventMap>(event: K, listener: Listener<EventM
 export function emit<K extends keyof EventMap>(event: K, payload: EventMap[K]): void {
   const set = listeners.get(event)
   if (!set) return
-  // Snapshot: a listener may trigger another emit() for the same event
+  // Snapshot: a listener may trigger another emit() for the same event.
+  // Re-entrant emits are depth-first — inner emit runs to completion
+  // before the outer emit resumes delivering to remaining listeners.
   for (const { listener, label } of [...set]) {
     try {
       listener(payload)

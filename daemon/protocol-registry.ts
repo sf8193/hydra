@@ -23,9 +23,6 @@ export function registerProtocol(name: string, hooks: ProtocolHooks): void {
   protocols.set(name, hooks)
 }
 
-export function unregisterProtocol(name: string): void {
-  protocols.delete(name)
-}
 
 export function isThreadOccupied(threadId: string, exclude?: string): string | null {
   for (const [name, hooks] of protocols) {
@@ -59,7 +56,7 @@ export function dispatchReconnect(sessionId: string): void {
   }
 }
 
-export async function dispatchReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
+async function dispatchReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) { await hooks.onReply(sessionId, text, chatId, sentIds); break }
   }

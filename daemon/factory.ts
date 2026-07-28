@@ -349,10 +349,22 @@ function factorySessionDeath({ sessionId }: { sessionId: string }): void {
   }
 }
 
+function factoryReviewComplete({ threadId }: { threadId: string }): void {
+  onFactoryReviewComplete(threadId)
+}
+
+function factoryReviewCancelled({ threadId }: { threadId: string }): void {
+  onFactoryReviewCancelled(threadId)
+}
+
+function factoryReviewRound({ threadId, round, totalRounds, text }: { threadId: string; round: number; totalRounds: number; text: string }): void {
+  onFactoryCriticRound(threadId, round, totalRounds, text)
+}
+
 on('reply', factoryDoneDetection, 'factory:done-detection')
-on('review:complete', ({ threadId }) => onFactoryReviewComplete(threadId), 'factory:review-complete')
-on('review:cancelled', ({ threadId }) => onFactoryReviewCancelled(threadId), 'factory:review-cancelled')
-on('review:round', ({ threadId, round, totalRounds, text }) => onFactoryCriticRound(threadId, round, totalRounds, text), 'factory:review-round')
+on('review:complete', factoryReviewComplete, 'factory:review-complete')
+on('review:cancelled', factoryReviewCancelled, 'factory:review-cancelled')
+on('review:round', factoryReviewRound, 'factory:review-round')
 on('session:death', factorySessionDeath, 'factory:session-death')
 
 /**

@@ -83,7 +83,7 @@ sweepOrphanedBuilders().catch(err => {
 })
 
 import { logSubscriptions } from './daemon/event-bus.js'
-logSubscriptions()
+queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './daemon/phase-budget.js'
 import { killSession } from './daemon/session-lifecycle.js'

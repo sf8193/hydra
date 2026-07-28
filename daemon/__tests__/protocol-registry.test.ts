@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
 import {
   registerProtocol, isThreadOccupied, isProtocolPost, getExpectedTag,
-  dispatchReply, dispatchDisconnect, dispatchReconnect,
+  dispatchSessionReply, dispatchDisconnect, dispatchReconnect,
   _resetForTesting,
 } from '../protocol-registry.js'
+import { _resetForTesting as resetBus } from '../event-bus.js'
 
 function makeHooks(overrides: Partial<Parameters<typeof registerProtocol>[1]> = {}) {
   return {
@@ -16,7 +17,7 @@ function makeHooks(overrides: Partial<Parameters<typeof registerProtocol>[1]> = 
   }
 }
 
-beforeEach(() => _resetForTesting())
+beforeEach(() => { _resetForTesting(); resetBus() })
 
 describe('registerProtocol', () => {
   test('throws on duplicate registration', () => {
@@ -51,7 +52,7 @@ describe('isThreadOccupied', () => {
 })
 
 describe('dispatch', () => {
-  test('dispatchReply calls the matching protocol handler', () => {
+  test('dispatchSessionReply calls the matching protocol handler', async () => {
     const calls: string[] = []
     registerProtocol('review', makeHooks({
       isParticipant: (id) => id === 'session-1',
@@ -61,7 +62,7 @@ describe('dispatch', () => {
       isParticipant: () => false,
       onReply: () => calls.push('build'),
     }))
-    dispatchReply('session-1', 'text', 'chat', ['msg1'])
+    await dispatchSessionReply('session-1', 'text', 'chat', ['msg1'])
     expect(calls).toEqual(['review'])
   })
 
@@ -85,11 +86,11 @@ describe('dispatch', () => {
     expect(calls).toEqual(['review'])
   })
 
-  test('dispatch skips protocols that do not claim the session', () => {
+  test('dispatch skips protocols that do not claim the session', async () => {
     const calls: string[] = []
     registerProtocol('review', makeHooks({ onReply: () => calls.push('review') }))
     registerProtocol('build', makeHooks({ onReply: () => calls.push('build') }))
-    dispatchReply('unclaimed', 'text', 'chat', [])
+    await dispatchSessionReply('unclaimed', 'text', 'chat', [])
     expect(calls).toEqual([])
   })
 })
