@@ -10,13 +10,13 @@
 //   6. PM receives artifact + raw critic verdict as thread notifications
 //   7. PM decides: accept / retry / move on
 
-// TODO: break bidirectional import cycle with adversarial.ts — use callback registration pattern
 import { randomBytes } from 'crypto'
-import { doSpawnSession, sessionDeathEmitter, killSession } from './session-lifecycle.js'
+import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview } from './adversarial.js'
 import { registry } from './sessions.js'
 import { safeSend } from './util.js'
 import { resolveModelAlias, spawnModel, reviewModel } from '../shared/constants.js'
+import { on } from './event-bus.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,10 +106,7 @@ export function factoryBuild(
   return { ticket }
 }
 
-/**
- * Called from adversarial.ts when a review completes in a builder's thread.
- */
-export function onFactoryReviewComplete(threadId: string): boolean {
+function onFactoryReviewComplete(threadId: string): boolean {
   // threadId here is the builder's thread
   const pmThreadId = builderThreadToFactory.get(threadId)
   if (!pmThreadId) return false
@@ -139,10 +136,7 @@ export function onFactoryReviewComplete(threadId: string): boolean {
   return true
 }
 
-/**
- * Called when a review is cancelled in a builder's thread (timeout, disconnect, etc.)
- */
-export function onFactoryReviewCancelled(threadId: string): boolean {
+function onFactoryReviewCancelled(threadId: string): boolean {
   const pmThreadId = builderThreadToFactory.get(threadId)
   if (!pmThreadId) return false
 
@@ -170,10 +164,7 @@ export function onFactoryReviewCancelled(threadId: string): boolean {
   return true
 }
 
-/**
- * Called from adversarial.ts on each critic round — relay to PM's thread.
- */
-export function onFactoryCriticRound(builderThreadId: string, round: number, totalRounds: number, criticText: string): void {
+function onFactoryCriticRound(builderThreadId: string, round: number, totalRounds: number, criticText: string): void {
   const pmThreadId = builderThreadToFactory.get(builderThreadId)
   if (!pmThreadId) return
 
@@ -187,10 +178,6 @@ export function onFactoryCriticRound(builderThreadId: string, round: number, tot
   }
 }
 
-// Keep for backwards compat — build.ts still imports this
-export function onFactoryBuildComplete(_threadId: string): boolean {
-  return false
-}
 
 export function hasFactoryBuild(threadId: string): boolean {
   return pending.has(threadId)
@@ -269,11 +256,7 @@ async function spawnBuilder(
   process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) forked for ticket ${state.ticket}\n`)
 }
 
-/**
- * Called when a builder posts [done] — start the review phase.
- * Detected in bridge-server.ts reply handling.
- */
-export function onBuilderDone(sessionId: string, doneText: string): boolean {
+function onBuilderDone(sessionId: string, doneText: string): boolean {
   const pmThreadId = builderSessionToFactory.get(sessionId)
   if (!pmThreadId) return false
 
@@ -294,7 +277,6 @@ export function onBuilderDone(sessionId: string, doneText: string): boolean {
     artifactTruncated,
   ].join('\n'))
 
-  // Start review in the builder's thread with builder as owner
   startReview(state.builderThreadId!, state.builderSessionId!, state.reviewRounds, state.spec, state.reviewerModel)
     .catch(err => {
       const errMsg = err instanceof Error ? err.message : String(err)
@@ -337,24 +319,41 @@ function cleanupState(pmThreadId: string): void {
   pending.delete(pmThreadId)
 }
 
-// Listen for session deaths — detect builder crashes and PM deaths
-sessionDeathEmitter.on('death', ({ sessionId }: { sessionId: string }) => {
+// ---------------------------------------------------------------------------
+// Event bus subscriptions — named functions for stack trace clarity
+// ---------------------------------------------------------------------------
+
+const FACTORY_DONE_RE = /^\[done\]/m
+
+function factoryDoneDetection({ sessionId, text }: { sessionId: string; text: string }): void {
+  if (FACTORY_DONE_RE.test(text)) onBuilderDone(sessionId, text)
+}
+
+function factorySessionDeath({ sessionId }: { sessionId: string }): void {
   onBuilderDeath(sessionId)
 
-  // PM death: clean up pending state and kill orphaned builder
-  for (const [pmThreadId, state] of pending) {
-    if (state.pmSessionId !== sessionId) continue
+  // PM death: clean up pending state and kill orphaned builder.
+  // Snapshot to avoid Map mutation during iteration (killSession can
+  // trigger synchronous death events that call cleanupState).
+  const pmEntry = [...pending.entries()].find(([_, s]) => s.pmSessionId === sessionId)
+  if (pmEntry) {
+    const [pmThreadId, state] = pmEntry
     process.stderr.write(`daemon: factory: PM ${sessionId} died with active build ${state.ticket}, cleaning up\n`)
+    cleanupState(pmThreadId)
     if (state.builderSessionId) {
       const builderInfo = registry.get(state.builderSessionId)
       if (builderInfo) {
         void killSession(builderInfo, 'PM died').catch(() => {})
       }
     }
-    cleanupState(pmThreadId)
-    break
   }
-})
+}
+
+on('reply', factoryDoneDetection, 'factory:done-detection')
+on('review:complete', ({ threadId }) => onFactoryReviewComplete(threadId), 'factory:review-complete')
+on('review:cancelled', ({ threadId }) => onFactoryReviewCancelled(threadId), 'factory:review-cancelled')
+on('review:round', ({ threadId, round, totalRounds, text }) => onFactoryCriticRound(threadId, round, totalRounds, text), 'factory:review-round')
+on('session:death', factorySessionDeath, 'factory:session-death')
 
 /**
  * Startup sweep: kill orphaned factory builders left by a daemon restart.

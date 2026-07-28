@@ -14,7 +14,6 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { getWatchesBySession } from './pr-watch.js'
 import { buildSummaryFormat } from './prompts/build-summary.js'
 import { createStateMachine } from './state-machine.js'
-import { onFactoryBuildComplete } from './factory.js'
 import { buildModel } from '../shared/constants.js'
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
@@ -601,9 +600,6 @@ async function completeBuild(state: BuildState, approved: boolean, lastCriticTex
 
   cleanupBuildMaps(state)
   refreshSessionVisual(state.ownerThreadId)
-
-  // If this build is part of a factory_build, trigger the mandatory review
-  onFactoryBuildComplete(state.ownerThreadId)
 }
 
 // ---------------------------------------------------------------------------

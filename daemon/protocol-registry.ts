@@ -1,14 +1,10 @@
-// Protocol registry — eliminates cross-imports between protocol modules.
+// Protocol registry — thread occupancy, participant routing, turn management.
 // Each protocol registers its hooks at module scope; the registry provides
 // unified queries (isThreadOccupied) and dispatch (reconnect/reply/disconnect).
 //
-// Design decision: protocols are interchangeable for occupancy and
-// participant-scoped dispatch. The registry encodes this — callers don't
-// need to know which specific protocol is active, only that some protocol is.
-// Protocol-specific routing behaviors (e.g., design answer interception)
-// remain as direct imports in their consumers.
+// For lifecycle events (review complete, session death, etc.) use event-bus.ts.
 
-export type ProtocolName = 'review' | 'build' | 'design' | 'review_v2' | 'build_v2' | 'spike_v2'
+import { emit } from './event-bus.js'
 
 type ProtocolHooks = {
   getByThread: (threadId: string) => boolean
@@ -20,14 +16,18 @@ type ProtocolHooks = {
   expectedTag?: (sessionId: string, chatId: string) => string | null
 }
 
-const protocols = new Map<ProtocolName, ProtocolHooks>()
+const protocols = new Map<string, ProtocolHooks>()
 
-export function registerProtocol(name: ProtocolName, hooks: ProtocolHooks): void {
+export function registerProtocol(name: string, hooks: ProtocolHooks): void {
   if (protocols.has(name)) throw new Error(`Protocol '${name}' is already registered`)
   protocols.set(name, hooks)
 }
 
-export function isThreadOccupied(threadId: string, exclude?: ProtocolName): ProtocolName | null {
+export function unregisterProtocol(name: string): void {
+  protocols.delete(name)
+}
+
+export function isThreadOccupied(threadId: string, exclude?: string): string | null {
   for (const [name, hooks] of protocols) {
     if (name === exclude) continue
     if (hooks.getByThread(threadId)) return name
@@ -63,6 +63,14 @@ export async function dispatchReply(sessionId: string, text: string, chatId: str
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) { await hooks.onReply(sessionId, text, chatId, sentIds); break }
   }
+}
+
+// Encapsulates dispatch ordering: protocol registry processes the reply first
+// (e.g. review protocol advances round state), then the event bus notifies
+// general subscribers (e.g. factory checks for [done]).
+export async function dispatchSessionReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
+  await dispatchReply(sessionId, text, chatId, sentIds)
+  emit('reply', { sessionId, text, chatId, sentIds })
 }
 
 export function dispatchDisconnect(sessionId: string): boolean {

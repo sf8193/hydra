@@ -82,6 +82,9 @@ sweepOrphanedBuilders().catch(err => {
   process.stderr.write(`daemon: factory sweep failed: ${err}\n`)
 })
 
+import { logSubscriptions } from './daemon/event-bus.js'
+logSubscriptions()
+
 import { initPhaseBudgets } from './daemon/phase-budget.js'
 import { killSession } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)
