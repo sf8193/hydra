@@ -22,8 +22,7 @@ export const BRIDGE_TOOLS = [
 
 export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
 
-export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; registry?: { get(id: string): { allowMainTools?: boolean } | undefined } }): typeof BRIDGE_TOOLS {
-  const allowed = opts?.allowMainTools ?? opts?.registry?.get(sessionId)?.allowMainTools
-  if (sessionId === 'main' || allowed) return BRIDGE_TOOLS
+export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean }): typeof BRIDGE_TOOLS {
+  if (sessionId === 'main' || opts?.allowMainTools) return BRIDGE_TOOLS
   return BRIDGE_TOOLS.filter(t => !MAIN_ONLY_TOOLS.has(t.name))
 }

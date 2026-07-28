@@ -10,6 +10,7 @@
 //   6. PM receives artifact + raw critic verdict as thread notifications
 //   7. PM decides: accept / retry / move on
 
+// TODO: break bidirectional import cycle with adversarial.ts — use callback registration pattern
 import { randomBytes } from 'crypto'
 import { doSpawnSession, sessionDeathEmitter, killSession } from './session-lifecycle.js'
 import { startReview } from './adversarial.js'
@@ -129,7 +130,7 @@ export function onFactoryReviewComplete(threadId: string): boolean {
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
     if (builderInfo) {
-      builderInfo.ephemeral = true // suppress "died" message — completion already announced
+      builderInfo.suppressDeathMessage = true
       void killSession(builderInfo, 'factory review complete').catch(() => {})
     }
   }
@@ -160,7 +161,7 @@ export function onFactoryReviewCancelled(threadId: string): boolean {
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
     if (builderInfo) {
-      builderInfo.ephemeral = true // suppress "died" message
+      builderInfo.suppressDeathMessage = true
       void killSession(builderInfo, 'factory review cancelled').catch(() => {})
     }
   }

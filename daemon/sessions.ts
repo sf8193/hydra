@@ -50,6 +50,7 @@ export type SessionInfo = {
   headless?: boolean       // no Discord thread — worker communicates via send_to_thread
   allowMainTools?: boolean // template granted access to spawn_session/kill_session
   isFactoryBuilder?: boolean    // session is a factory builder — persisted for startup sweep
+  suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion

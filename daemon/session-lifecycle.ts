@@ -93,7 +93,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
 
     // Notify parent session when a child dies (createdAt guard prevents name-recycling mismatch)
-    if (info.originFrom && !info.isJoinMember) {
+    if (info.originFrom && !info.isJoinMember && !info.suppressDeathMessage) {
       const parent = [...registry.values()].find(s => s.tmuxName === info.originFrom && s.createdAt < info.createdAt)
       if (parent) {
         const msgs = info.messageCount ?? 0
@@ -320,6 +320,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   // Headless sessions: no Discord thread, just tmux + send_to_thread.
   // Use sessionId as a synthetic threadId for registry tracking.
+  // TODO: headless sessions can send via send_to_thread but cannot receive — safeSend with a UUID silently fails
   const isHeadless = !!opts?.headless
   if (isHeadless) {
     threadId = sessionId // synthetic — not a real Discord thread
