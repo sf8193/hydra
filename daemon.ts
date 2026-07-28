@@ -223,6 +223,8 @@ async function startGateway(attempt = 0): Promise<void> {
   try {
     await gateway.start(TOKEN!)
     process.stderr.write(`daemon: ${PLATFORM} gateway started\n`)
+    const { resolveDefaultChannel } = await import('./daemon/config.js')
+    await resolveDefaultChannel()
     void announceRestartComplete()
     if (startupGapMs !== null) {
       sendRecoveryReport(startupGapMs)

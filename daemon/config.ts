@@ -34,12 +34,32 @@ for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
   } catch {}
 }
 
-// Read after .env sourcing — .env values must be available
-if (!process.env.DEFAULT_SESSION_CHANNEL) {
-  process.stderr.write(`daemon: DEFAULT_SESSION_CHANNEL not set in .env — spawns will fail.\n` +
-    `  Set it in ${ENV_FILE}\n`)
+// Read after .env sourcing — .env values must be available.
+// If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
+export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
+
+export async function resolveDefaultChannel(): Promise<void> {
+  if (DEFAULT_SESSION_CHANNEL) return
+  try {
+    const { loadAccess } = await import('./access.js')
+    const access = loadAccess()
+    const userId = access.allowFrom[0]
+    if (!userId) return
+    if ('sendDM' in gateway) {
+      const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })
+      if (ch?.channel?.id) {
+        DEFAULT_SESSION_CHANNEL = ch.channel.id
+        process.stderr.write(`daemon: auto-resolved DEFAULT_SESSION_CHANNEL=${DEFAULT_SESSION_CHANNEL} (DM with ${userId})\n`)
+        return
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`daemon: failed to auto-resolve DEFAULT_SESSION_CHANNEL: ${err}\n`)
+  }
+  if (!DEFAULT_SESSION_CHANNEL) {
+    process.stderr.write(`daemon: DEFAULT_SESSION_CHANNEL not set — spawns from home tab will fail.\n`)
+  }
 }
-export const DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
 
 // ---------------------------------------------------------------------------
 // Platform
