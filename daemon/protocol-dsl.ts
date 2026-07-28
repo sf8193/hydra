@@ -186,9 +186,9 @@ export function protocol<
   }
 
   if (spec.cleanupPhase) {
-    const cleanupDef = spec.phases[spec.cleanupPhase as keyof P] as PhaseDef | undefined
+    const cleanupDef = spec.phases[spec.cleanupPhase as keyof P] as (PhaseDef & { onEnter?: string[] }) | undefined
     if (cleanupDef && !cleanupDef.onEnter) {
-      (cleanupDef as any).onEnter = ['killNonOwner', 'backstopTimer', 'notifyOwnerSummary']
+      cleanupDef.onEnter = ['killNonOwner', 'backstopTimer', 'notifyOwnerSummary']
     }
   }
 

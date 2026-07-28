@@ -49,8 +49,12 @@ const cancellingRuns = new Set<string>()
 // ---------------------------------------------------------------------------
 
 class ProtocolEventBus extends EventEmitter {
-  emitComplete(event: CompletionEvent): void { super.emit('complete', event) }
+  constructor() { super(); this.setMaxListeners(0) }
+  emitComplete(event: CompletionEvent): void {
+    try { super.emit('complete', event) } catch (err) { process.stderr.write(`daemon: completion event listener error: ${err}\n`) }
+  }
   onComplete(fn: (event: CompletionEvent) => void): void { this.on('complete', fn) }
+  offComplete(fn: (event: CompletionEvent) => void): void { this.off('complete', fn) }
 }
 
 export const protocolEvents = new ProtocolEventBus()
@@ -812,7 +816,7 @@ export async function bootProtocols(): Promise<void> {
   const { readdirSync } = await import('fs')
   const { join } = await import('path')
   const protocolsDir = join(import.meta.dir, '..', 'protocols')
-  const files = readdirSync(protocolsDir).filter(f => f.endsWith('.ts') && !f.startsWith('_') && !f.includes('.test.'))
+  const files = readdirSync(protocolsDir).filter(f => (f.endsWith('.ts') || f.endsWith('.js')) && !f.startsWith('_') && !f.includes('.test.'))
   for (const file of files) {
     try {
       const mod = await import(join(protocolsDir, file))
