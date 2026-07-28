@@ -12,7 +12,8 @@
 
 import { randomBytes } from 'crypto'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { startReview } from './adversarial.js'
+import { startProtocolRun } from './protocol-runner.js'
+import { getProtocol } from './commands/protocol.js'
 import { registry } from './sessions.js'
 import { safeSend } from './util.js'
 import { resolveModelAlias, spawnModel, reviewModel } from '../shared/constants.js'
@@ -277,8 +278,14 @@ function onBuilderDone(sessionId: string, doneText: string): boolean {
     artifactTruncated,
   ].join('\n'))
 
-  startReview(state.builderThreadId!, state.builderSessionId!, state.reviewRounds, state.spec, state.reviewerModel)
-    .catch(err => {
+  getProtocol('review').then(proto =>
+    startProtocolRun(proto, state.builderThreadId!, state.builderSessionId!, {
+      rounds: state.reviewRounds,
+      topic: state.spec,
+      model: state.reviewerModel,
+      strike: true,
+    })
+  ).catch(err => {
       const errMsg = err instanceof Error ? err.message : String(err)
       process.stderr.write(`daemon: factory: review failed to start: ${errMsg}\n`)
       void safeSend(state.pmThreadId, `🏭 **Factory review failed to start** ❌\nTicket: ${state.ticket}\nError: ${errMsg}`)
