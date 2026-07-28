@@ -2,7 +2,7 @@
 // death report to the daemon log. A crashed spawn otherwise leaves no cause, no
 // stderr, and no link to its transcript.
 
-import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execFileSync } from 'child_process'
@@ -182,7 +182,13 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   ]
   const startIdx = blackBoxTail.indexOf('=== HYDRA SESSION EXIT ===')
   const endIdx = blackBoxTail.indexOf('=========================', startIdx)
-  const exitBlock = startIdx >= 0 && endIdx > startIdx ? blackBoxTail.slice(startIdx + 1, endIdx) : []
+  let exitBlock = startIdx >= 0 && endIdx > startIdx ? blackBoxTail.slice(startIdx + 1, endIdx) : []
+  if (exitBlock.length === 0 && info.spawnLogPath) {
+    const exitPath = info.spawnLogPath.replace(/\/([^/]+)\.log$/, '/exit-$1.log')
+    try {
+      exitBlock = readFileSync(exitPath, 'utf8').trim().split('\n')
+    } catch {}
+  }
   const exitMarkers = new Map(
     exitBlock.filter(l => l.includes('=')).map(l => {
       const eq = l.indexOf('=')
