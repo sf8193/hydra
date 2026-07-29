@@ -182,3 +182,51 @@ export function listTemplates(): Array<{ name: string; prompt: string; action?: 
     .map(([name, t]) => ({ name, prompt: t.prompt, action: t.action, model: t.model }))
     .sort((a, b) => a.name.localeCompare(b.name))
 }
+
+export function parseTemplateTopic(raw: string): { templateName: string; template: SpawnTemplate; topic: string } | null {
+  const colonIdx = raw.indexOf(':')
+  if (colonIdx <= 0) return null
+  const candidate = raw.slice(0, colonIdx).trim().toLowerCase()
+  const t = getTemplate(candidate)
+  if (!t) return null
+  return { templateName: candidate, template: t, topic: raw.slice(colonIdx + 1).trim() }
+}
+
+export function buildTemplateSpawnOpts(templateName: string, template: SpawnTemplate, modelOverride?: string): Record<string, unknown> {
+  const resolvedModel = modelOverride ?? template.model
+  return {
+    promptPrefix: template.prompt,
+    ...(resolvedModel && { model: resolvedModel }),
+    ...(template.disallowedTools?.length && { disallowedTools: template.disallowedTools }),
+    ...(template.tools?.length && { tools: template.tools }),
+    ...(template.allowMainTools && { allowMainTools: true }),
+    trigger: `${templateName}:`,
+  }
+}
+
+export async function runTemplateAction(
+  action: string,
+  threadId: string,
+  sessionId: string,
+  topic: string,
+): Promise<boolean> {
+  switch (action) {
+    case 'design': {
+      const { startDesign } = await import('./design.js')
+      await startDesign(threadId, topic)
+      return true
+    }
+    case 'review': {
+      const { startReview } = await import('./adversarial.js')
+      await startReview(threadId, sessionId, 3, topic)
+      return true
+    }
+    case 'build': {
+      const { startBuild } = await import('./build.js')
+      await startBuild(threadId, sessionId, 3, topic)
+      return true
+    }
+    default:
+      return false
+  }
+}
