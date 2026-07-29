@@ -208,7 +208,7 @@ import { fetchSlackThreadSummary } from './daemon/router.js'
 import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
-import { handleSilenceEvent, handleActivityEvent } from './daemon/reply-guard.js'
+import { handleSilenceEvent, handleActivityEvent, sessionsWithPendingReplies } from './daemon/reply-guard.js'
 import { getContextPercent, tmuxHasSession } from './daemon/util.js'
 import { refreshSessionVisual } from './daemon/anchor-state.js'
 
@@ -502,22 +502,24 @@ setInterval(() => {
 }, SESSION_CHECK_INTERVAL_MS)
 
 // Reply guard: check tmux silence/activity flags on a fast loop (20s).
-// monitor-silence fires after 15s of no output — this polls the flag shortly after.
+// Only checks sessions with pending replies — O(pending) not O(sessions).
 setInterval(() => {
-  for (const info of registry.values()) {
-    if (info.deadAt) continue
+  const pendingNames = sessionsWithPendingReplies()
+  if (pendingNames.size === 0) return
+  for (const tmuxName of pendingNames) {
+    const info = tmuxName === 'main' ? undefined : registry.findByName(tmuxName)
     try {
-      const flag = execSync(`tmux display -t '${info.tmuxName}' -p '#{window_silence_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
+      const flag = execSync(`tmux display -t '${tmuxName}' -p '#{window_silence_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
       if (flag === '1') {
-        if (info.turnState !== 'idle') info.turnState = 'idle'
-        handleSilenceEvent(info.tmuxName)
+        if (info && info.turnState !== 'idle') info.turnState = 'idle'
+        handleSilenceEvent(tmuxName)
       }
     } catch {}
     try {
-      const flag = execSync(`tmux display -t '${info.tmuxName}' -p '#{window_activity_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
+      const flag = execSync(`tmux display -t '${tmuxName}' -p '#{window_activity_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
       if (flag === '1') {
-        if (info.turnState !== 'working') info.turnState = 'working'
-        handleActivityEvent(info.tmuxName)
+        if (info && info.turnState !== 'working') info.turnState = 'working'
+        handleActivityEvent(tmuxName)
       }
     } catch {}
   }

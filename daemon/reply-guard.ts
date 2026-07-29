@@ -209,6 +209,20 @@ export function handleActivityEvent(tmuxName: string): void {
   noteActivityForSession(tmuxName)
 }
 
+/** Return tmux names of sessions with pending replies. */
+export function sessionsWithPendingReplies(): Set<string> {
+  const names = new Set<string>()
+  for (const p of pending.values()) {
+    if (p.sessionId === 'main') {
+      names.add('main')
+    } else {
+      const info = registry.get(p.sessionId)
+      if (info && !info.deadAt) names.add(info.tmuxName)
+    }
+  }
+  return names
+}
+
 // ---------------------------------------------------------------------------
 // Escalation: capture the pane and send it directly to the user's chat.
 // Tries `freeze` for a styled screenshot, falls back to a text code block.
