@@ -598,6 +598,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
   let claudeArgs: string
+  let assignedClaudeSessionId: string | undefined
   if (isFork) {
     claudeArgs = [
       `claude`,
@@ -617,9 +618,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       `--dangerously-skip-permissions`,
     ].join(' ')
   } else {
+    assignedClaudeSessionId = randomUUID()
     const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
     const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
+    claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
   }
@@ -703,6 +705,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
     threadUrl: url || undefined,
+    ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
@@ -740,6 +743,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       originFrom,
       model,
       parentChannelId,
+      claudeSessionId: assignedClaudeSessionId,
     })
   }
 

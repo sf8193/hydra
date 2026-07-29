@@ -391,7 +391,7 @@ export class ThreadRegistry {
     anchorMessageId?: string, threadUrl?: string, topic: string,
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
-    model?: string, parentChannelId?: string,
+    model?: string, parentChannelId?: string, claudeSessionId?: string,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -422,6 +422,7 @@ export class ThreadRegistry {
       startedAt: now,
       messageCount: 0,
       model: opts.model,
+      claudeSessionId: opts.claudeSessionId,
     })
     this.persist()
   }
