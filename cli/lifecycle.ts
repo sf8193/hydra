@@ -378,6 +378,13 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
     }
   }
 
+  try {
+    execFileSync('freeze', ['--version'], { stdio: 'pipe', env: process.env as Record<string, string> })
+    ok('freeze on PATH (pane screenshots)')
+  } catch {
+    wrn('freeze not installed — reply guard escalation will fall back to text. Install: brew install charmbracelet/tap/freeze')
+  }
+
   const check = await compileCheck(cfg.hydraDir)
   if (check.ok) {
     ok('daemon + bridge compile')
