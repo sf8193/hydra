@@ -10,6 +10,7 @@ import { CodexEngine, codexSocketPath } from './codex-engine.js'
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
 import { dispatchDisconnect } from './protocol-registry.js'
+import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
 import { appendFileSync } from 'fs'
 import { tmuxHasSession, safeSend } from './util.js'
 
@@ -27,12 +28,13 @@ transport.setCodexEngine(codexEngine)
 // ---------------------------------------------------------------------------
 
 codexEngine.on('message', (sessionId: string, _text: string) => {
-  // Agent text output — update activity tracking only.
-  // The agent posts to Discord via the `reply` MCP tool (same as Claude).
-  // dispatchReply is triggered by the reply tool call handler in bridge-server.ts.
   const info = registry.get(sessionId)
   if (!info) return
   info.lastActive = Date.now()
+  if (info.turnState !== 'working') {
+    info.turnState = 'working'
+    noteActivityForSession(info.tmuxName)
+  }
 })
 
 codexEngine.on('autoApproved', (sessionId: string, method: string) => {
@@ -40,6 +42,13 @@ codexEngine.on('autoApproved', (sessionId: string, method: string) => {
   if (info?.spawnLogPath) {
     try { appendFileSync(info.spawnLogPath, `[${new Date().toISOString()}] auto-approved: ${method}\n`) } catch {}
   }
+})
+
+codexEngine.on('turnCompleted', (sessionId: string) => {
+  const info = registry.get(sessionId)
+  if (!info) return
+  info.turnState = 'idle'
+  handleSilenceEvent(info.tmuxName)
 })
 
 codexEngine.on('turnStalled', (sessionId: string) => {

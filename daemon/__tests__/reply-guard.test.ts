@@ -4,10 +4,13 @@ import {
   clearPendingReply,
   settlePendingOnReact,
   notePendingFromQueue,
-  sweepPendingReplies,
-  nudgeAfterMs,
+  handleSilenceEvent,
+  handleActivityEvent,
+  noteActivityForSession,
   _resetReplyGuardForTesting,
   _pendingForTesting,
+  _NUDGE_COOLDOWN_MS,
+  _ACTIVITY_BACKSTOP_MS,
 } from '../reply-guard.js'
 import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
@@ -19,7 +22,6 @@ beforeEach(() => { process.stderr.write = (() => true) as any })
 afterEach(() => { process.stderr.write = realStderrWrite })
 
 const T0 = 1_000_000_000
-const AFTER = nudgeAfterMs() + 1_000
 
 const TEST_SESSIONS = ['main', 'sess-1']
 
@@ -85,22 +87,24 @@ describe('notePendingReply', () => {
   test('a newer message in the same chat resets the clock', () => {
     fakeBridge('main')
     notePendingReply('main', meta({ message_id: 'msg-1' }), T0)
+    // Mark activity so the gate is open
+    noteActivityForSession('main', T0 + 1000)
     notePendingReply('main', meta({ message_id: 'msg-2', ts: '2026-07-09T00:01:00.000Z' }), T0 + 120_000)
+    // Mark activity again for the new message
+    noteActivityForSession('main', T0 + 121_000)
     expect(_pendingForTesting().size).toBe(1)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0) // msg-2 not yet due
-    expect(sweepPendingReplies(T0 + 120_000 + AFTER)).toBe(1)
+    // msg-2 is the active pending — a silence event should nudge for it
+    expect(handleSilenceEvent('main', T0 + 120_000 + 60_000)).toBe(1)
   })
 
   test('an older interleaved delivery never overwrites a newer expectation', () => {
-    // Deliveries interleave: msg-1's attachment download finishes after the
-    // quick msg-2 already armed. msg-2 must stay the pending expectation.
     fakeBridge('main')
     notePendingReply('main', meta({ message_id: 'msg-2', ts: '2026-07-09T00:01:00.000Z' }), T0)
     notePendingReply('main', meta({ message_id: 'msg-1', ts: '2026-07-09T00:00:00.000Z' }), T0 + 500)
     expect([..._pendingForTesting().values()][0].messageId).toBe('msg-2')
     // React-ack to the visible newest message settles it
     settlePendingOnReact('main', 'chat-1', 'msg-2')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
   })
 })
 
@@ -108,22 +112,25 @@ describe('clearPendingReply', () => {
   test('a reply to the pending chat settles the expectation', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
     clearPendingReply('main', 'chat-1')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
   })
 
   test('a reply to a different chat does not settle it', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
     clearPendingReply('main', 'other-chat')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
   })
 
   test('a reply from a different session does not settle it', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
     clearPendingReply('sess-1', 'chat-1')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
   })
 })
 
@@ -131,22 +138,25 @@ describe('settlePendingOnReact', () => {
   test('a reaction to the offending message settles the expectation', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
     settlePendingOnReact('main', 'chat-1', 'msg-1')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
   })
 
   test('a reaction to a different message does not settle it', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
     settlePendingOnReact('main', 'chat-1', 'msg-other')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
   })
 
   test('a reaction in a different chat does not settle it', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
     settlePendingOnReact('main', 'chat-2', 'msg-1')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
   })
 })
 
@@ -155,7 +165,8 @@ describe('notePendingFromQueue', () => {
     fakeBridge('main')
     notePendingFromQueue('main', [{ type: 'notification', content: 'hi', meta: meta() }], T0)
     expect(_pendingForTesting().size).toBe(1)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    noteActivityForSession('main', T0 + 1000)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
   })
 
   test('skips system notifications and non-notification payloads', () => {
@@ -175,23 +186,18 @@ describe('notePendingFromQueue', () => {
       { type: 'notification', meta: meta({ message_id: 'msg-2' }) },
     ], T0)
     expect(_pendingForTesting().size).toBe(1)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    noteActivityForSession('main', T0 + 1000)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
     expect(JSON.parse(sent[0]).content).toContain('msg-2')
   })
 })
 
-describe('sweepPendingReplies', () => {
-  test('no nudge before the deadline', () => {
-    fakeBridge('main')
-    notePendingReply('main', meta(), T0)
-    expect(sweepPendingReplies(T0 + 1_000)).toBe(0)
-    expect(_pendingForTesting().size).toBe(1)
-  })
-
-  test('nudges once past the deadline with chat_id, message_id, and reply-tool pointer', () => {
+describe('handleSilenceEvent', () => {
+  test('nudges when a pending reply exists, bridge is connected, and activity was seen', () => {
     const sent = fakeBridge('main')
     notePendingReply('main', meta(), T0)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    noteActivityForSession('main', T0 + 1000)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
     expect(sent.length).toBe(1)
     const payload = JSON.parse(sent[0])
     expect(payload.type).toBe('notification')
@@ -204,56 +210,36 @@ describe('sweepPendingReplies', () => {
     expect(payload.meta.chat_id).toBe('chat-1')
   })
 
-  test('one nudge max per offending message', () => {
+  test('no nudge when bridge is offline', () => {
+    // No bridge connected — silence event fires but cannot deliver nudge
+    notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+    expect(_pendingForTesting().size).toBe(1) // still pending, waiting for reconnect
+  })
+
+  test('no nudge for unknown tmux session names', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
-    expect(sweepPendingReplies(T0 + 2 * AFTER)).toBe(0)
-    expect(_pendingForTesting().size).toBe(0)
+    noteActivityForSession('main', T0 + 1000)
+    expect(handleSilenceEvent('nonexistent-session', T0 + 60_000)).toBe(0)
   })
 
-  test('bridge offline defers the nudge until after reconnect', () => {
-    notePendingReply('main', meta(), T0)
-    // Bridge down at deadline: clock restarts, nothing sent
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0)
-    expect(_pendingForTesting().size).toBe(1)
-    const sent = fakeBridge('main')
-    // Reconnected but the restarted clock is not yet due
-    expect(sweepPendingReplies(T0 + AFTER + 1_000)).toBe(0)
-    // Full window elapsed since the restart — now it fires
-    expect(sweepPendingReplies(T0 + 2 * AFTER)).toBe(1)
-    expect(sent.length).toBe(1)
-  })
-
-  test('offline sweeps before the deadline also restart the clock', () => {
-    // Reconnect-window regression: bridge comes back shortly before the
-    // deadline — the session must still get ~a full window, not seconds.
-    notePendingReply('main', meta(), T0)
-    expect(sweepPendingReplies(T0 + 60_000)).toBe(0) // offline, pre-deadline: clock → T0+60s
-    fakeBridge('main') // reconnect just before the original deadline
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0) // only ~4m since the restart — not due
-    expect(sweepPendingReplies(T0 + 60_000 + AFTER)).toBe(1)
-  })
-
-  test('nudges a live non-main session', () => {
-    liveSession('sess-1')
+  test('nudges a live non-main session by tmuxName', () => {
+    liveSession('sess-1', { tmuxName: 'cedar' })
     const sent = fakeBridge('sess-1')
     notePendingReply('sess-1', meta(), T0)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(1)
     expect(sent.length).toBe(1)
-  })
-
-  test('prunes entries for unknown sessions without nudging', () => {
-    notePendingReply('sess-1', meta(), T0)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0)
-    expect(_pendingForTesting().size).toBe(0)
   })
 
   test('prunes entries for dead sessions without nudging', () => {
-    liveSession('sess-1', { deadAt: T0 + 1 })
+    liveSession('sess-1', { tmuxName: 'cedar', deadAt: T0 + 1 })
     fakeBridge('sess-1')
     notePendingReply('sess-1', meta(), T0)
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(0)
     expect(_pendingForTesting().size).toBe(0)
   })
 
@@ -261,28 +247,106 @@ describe('sweepPendingReplies', () => {
     const sent = fakeBridge('main')
     notePendingReply('main', meta({ chat_id: 'chat-1' }), T0)
     notePendingReply('main', meta({ chat_id: 'chat-2', message_id: 'msg-2' }), T0)
+    noteActivityForSession('main', T0 + 1000)
     clearPendingReply('main', 'chat-1')
-    expect(sweepPendingReplies(T0 + AFTER)).toBe(1)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
     expect(sent.length).toBe(1)
     expect(JSON.parse(sent[0]).content).toContain('msg-2')
   })
+
+  test('a new message after a nudge resets and allows another nudge', () => {
+    const sent = fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
+    // New message arrives — should be nudgeable again
+    notePendingReply('main', meta({ message_id: 'msg-2', ts: '2026-07-09T00:05:00.000Z' }), T0 + 300_000)
+    noteActivityForSession('main', T0 + 301_000)
+    expect(handleSilenceEvent('main', T0 + 360_000)).toBe(1)
+    expect(sent.length).toBe(2)
+    expect(JSON.parse(sent[1]).content).toContain('msg-2')
+  })
 })
 
-describe('nudgeAfterMs', () => {
-  test('defaults to 5 minutes and honors HYDRA_REPLY_GUARD_MS', () => {
-    const prev = process.env.HYDRA_REPLY_GUARD_MS
-    try {
-      delete process.env.HYDRA_REPLY_GUARD_MS
-      expect(nudgeAfterMs()).toBe(5 * 60_000)
-      process.env.HYDRA_REPLY_GUARD_MS = '120000'
-      expect(nudgeAfterMs()).toBe(120_000)
-      process.env.HYDRA_REPLY_GUARD_MS = 'garbage'
-      expect(nudgeAfterMs()).toBe(5 * 60_000)
-      process.env.HYDRA_REPLY_GUARD_MS = '-5'
-      expect(nudgeAfterMs()).toBe(5 * 60_000)
-    } finally {
-      if (prev === undefined) delete process.env.HYDRA_REPLY_GUARD_MS
-      else process.env.HYDRA_REPLY_GUARD_MS = prev
-    }
+describe('activity gate', () => {
+  test('silence without prior activity does not nudge', () => {
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    // No activity event — gate is closed
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+    // Pending entry is still alive (not pruned)
+    expect(_pendingForTesting().size).toBe(1)
+  })
+
+  test('silence AFTER activity does nudge', () => {
+    const sent = fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    // Activity event fires — gate opens
+    noteActivityForSession('main', T0 + 5_000)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
+    expect(sent.length).toBe(1)
+  })
+
+  test('5-minute backstop: silence after 5min without activity still nudges', () => {
+    const sent = fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    // No activity event — but enough time passes to trigger the backstop
+    expect(handleSilenceEvent('main', T0 + _ACTIVITY_BACKSTOP_MS + 1)).toBe(1)
+    expect(sent.length).toBe(1)
+  })
+
+  test('backstop does not fire before 5 minutes', () => {
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    // No activity, and less than 5 minutes elapsed
+    expect(handleSilenceEvent('main', T0 + _ACTIVITY_BACKSTOP_MS - 1)).toBe(0)
+  })
+
+  test('activity before deliveredAt does not open gate', () => {
+    fakeBridge('main')
+    // Activity at T0-1000 is before delivery at T0
+    noteActivityForSession('main', T0 - 1000)
+    notePendingReply('main', meta(), T0)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+  })
+})
+
+describe('cooldown-based re-nudge', () => {
+  test('re-nudge after cooldown period', () => {
+    const sent = fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
+    // First nudge
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
+    expect(sent.length).toBe(1)
+    // Re-nudge after cooldown expires — pending entry is still alive
+    expect(handleSilenceEvent('main', T0 + 60_000 + _NUDGE_COOLDOWN_MS + 1)).toBe(1)
+    expect(sent.length).toBe(2)
+  })
+
+  test('no re-nudge within cooldown period', () => {
+    const sent = fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
+    // First nudge
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
+    expect(sent.length).toBe(1)
+    // Attempt re-nudge within cooldown — should be blocked
+    expect(handleSilenceEvent('main', T0 + 60_000 + _NUDGE_COOLDOWN_MS - 1)).toBe(0)
+    expect(sent.length).toBe(1)
+    // But pending is still alive (not pruned after nudge)
+    expect(_pendingForTesting().size).toBe(1)
+  })
+
+  test('pending entry persists after nudge (only deleted on settle)', () => {
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 1000)
+    handleSilenceEvent('main', T0 + 60_000)
+    // Pending should still exist
+    expect(_pendingForTesting().size).toBe(1)
+    // Settle via reply
+    clearPendingReply('main', 'chat-1')
+    expect(_pendingForTesting().size).toBe(0)
   })
 })
