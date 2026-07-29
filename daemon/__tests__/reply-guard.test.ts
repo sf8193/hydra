@@ -312,16 +312,16 @@ describe('activity gate', () => {
 })
 
 describe('cooldown-based re-nudge', () => {
-  test('re-nudge after cooldown period', () => {
+  test('escalates after cooldown period (no second nudge)', () => {
     const sent = fakeBridge('main')
     notePendingReply('main', meta(), T0)
     noteActivityForSession('main', T0 + 1000)
     // First nudge
     expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
     expect(sent.length).toBe(1)
-    // Re-nudge after cooldown expires — pending entry is still alive
+    // After cooldown: escalation fires (nudgeCount > ESCALATION_AFTER_NUDGES), pending deleted
     expect(handleSilenceEvent('main', T0 + 60_000 + _NUDGE_COOLDOWN_MS + 1)).toBe(1)
-    expect(sent.length).toBe(2)
+    expect(_pendingForTesting().size).toBe(0)
   })
 
   test('no re-nudge within cooldown period', () => {
