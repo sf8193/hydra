@@ -68,6 +68,16 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
+// tmux monitor-silence / monitor-activity — set on 'main' at boot
+import { execFileSync as execFileSyncBoot } from 'child_process'
+try {
+  execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-silence', '15'], { stdio: 'pipe' })
+  execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-activity', 'on'], { stdio: 'pipe' })
+  process.stderr.write('daemon: monitor-silence/activity set on main session\n')
+} catch (err) {
+  process.stderr.write(`daemon: monitor-silence setup on main failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
+}
+
 // Reconnect persisted codex sessions to their app-server sockets
 import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
 reconnectCodexSessions().then(() => {
@@ -198,7 +208,7 @@ import { fetchSlackThreadSummary } from './daemon/router.js'
 import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
-import { startReplyGuard } from './daemon/reply-guard.js'
+import { handleSilenceEvent, handleActivityEvent } from './daemon/reply-guard.js'
 import { getContextPercent, tmuxHasSession } from './daemon/util.js'
 import { refreshSessionVisual } from './daemon/anchor-state.js'
 
@@ -383,8 +393,8 @@ async function backfillArtifacts(): Promise<void> {
 
 startPrWatcher()
 
-// Reply guard — nudges sessions that go silent on user-authored messages
-startReplyGuard()
+// Reply guard is now event-driven via tmux monitor-silence/activity.
+// Silence/activity flags are checked in the session health loop below.
 
 // Backfill PR titles for existing watches (non-blocking)
 backfillTitles().then(n => {
@@ -486,6 +496,22 @@ setInterval(() => {
       process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
       void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`respawn\` to continue in a fresh session.`).catch(() => {})
     }
+
+    // Reply guard: check tmux silence/activity flags
+    try {
+      const flag = execSync(`tmux display -t '${info.tmuxName}' -p '#{window_silence_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
+      if (flag === '1') {
+        if (info.turnState !== 'idle') info.turnState = 'idle'
+        handleSilenceEvent(info.tmuxName)
+      }
+    } catch {}
+    try {
+      const flag = execSync(`tmux display -t '${info.tmuxName}' -p '#{window_activity_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
+      if (flag === '1') {
+        if (info.turnState !== 'working') info.turnState = 'working'
+        handleActivityEvent(info.tmuxName)
+      }
+    } catch {}
   }
 }, SESSION_CHECK_INTERVAL_MS)
 
