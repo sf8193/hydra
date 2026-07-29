@@ -497,7 +497,14 @@ setInterval(() => {
       void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`respawn\` to continue in a fresh session.`).catch(() => {})
     }
 
-    // Reply guard: check tmux silence/activity flags
+  }
+}, SESSION_CHECK_INTERVAL_MS)
+
+// Reply guard: check tmux silence/activity flags on a fast loop (20s).
+// monitor-silence fires after 15s of no output — this polls the flag shortly after.
+setInterval(() => {
+  for (const info of registry.values()) {
+    if (info.deadAt) continue
     try {
       const flag = execSync(`tmux display -t '${info.tmuxName}' -p '#{window_silence_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
       if (flag === '1') {
@@ -513,7 +520,7 @@ setInterval(() => {
       }
     } catch {}
   }
-}, SESSION_CHECK_INTERVAL_MS)
+}, 20_000)
 
 let shuttingDown = false
 
