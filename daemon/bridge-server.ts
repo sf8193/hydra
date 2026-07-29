@@ -12,7 +12,7 @@ import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
-import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
+import { clearPendingReply, settlePendingOnReact, notePendingFromQueue, handleSilenceEvent, handleActivityEvent, noteActivityForSession } from './reply-guard.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
@@ -286,7 +286,15 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 
       if (conn.sessionId !== 'main') {
         const info = registry.get(conn.sessionId)
-        if (info) info.lastActive = Date.now()
+        if (info) {
+          info.lastActive = Date.now()
+          // A tool_call means the session is actively working — reconcile
+          // turnState if it was stuck in 'waiting' (e.g. model received a
+          // message and started processing without a tmux activity event).
+          if (info.turnState === 'waiting') {
+            info.turnState = 'working'
+          }
+        }
       }
 
       void executeTool(name, args, conn.sessionId).then(async result => {
@@ -312,6 +320,13 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
             // Reply guard: settle synchronously — the reply is already sent, and
             // the hooks below await (and may throw), which would strand the guard.
             clearPendingReply(conn.sessionId, args.chat_id as string)
+
+            // Track turnState: session just sent a reply, so if it goes idle
+            // next, it's in 'waiting' state (idle + last action was outbound reply).
+            if (replyInfo) {
+              replyInfo.turnState = 'waiting'
+              registry.debouncedPersist()
+            }
 
             if (replyInfo && !replyInfo.ephemeral) {
               autoWatchPrUrls(conn.sessionId, replyText)
@@ -390,6 +405,40 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           error: `internal error: ${err instanceof Error ? err.message : String(err)}`,
         }) + '\n')
       })
+      break
+    }
+
+    // -----------------------------------------------------------------------
+    // tmux hook signals — fired by global alert-silence / alert-activity hooks
+    // -----------------------------------------------------------------------
+
+    case 'tmux_silence': {
+      const tmuxName = msg.tmuxName as string
+      if (!tmuxName) break
+
+      // Update turnState for the session
+      const silenceInfo = registry.findByName(tmuxName)
+      if (silenceInfo) {
+        silenceInfo.turnState = 'idle'
+        registry.debouncedPersist()
+      }
+
+      handleSilenceEvent(tmuxName)
+      break
+    }
+
+    case 'tmux_activity': {
+      const tmuxName = msg.tmuxName as string
+      if (!tmuxName) break
+
+      // Update turnState for the session
+      const activityInfo = registry.findByName(tmuxName)
+      if (activityInfo) {
+        activityInfo.turnState = 'working'
+        registry.debouncedPersist()
+      }
+
+      handleActivityEvent(tmuxName)
       break
     }
 

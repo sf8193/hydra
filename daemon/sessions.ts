@@ -57,6 +57,7 @@ export type SessionInfo = {
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash
   engine?: 'claude' | 'codex'  // which backend runs this session (default: claude)
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
+  turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
 }
 
 export type ThreadMember = {

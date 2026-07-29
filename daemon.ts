@@ -68,6 +68,35 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
+// ---------------------------------------------------------------------------
+// tmux hooks — event-driven reply guard via monitor-silence / monitor-activity
+// ---------------------------------------------------------------------------
+// Per-session tmux hooks are installed in session-lifecycle.ts at spawn time.
+// At boot, install hooks on the 'main' tmux session and any restored sessions.
+import { execSync as execSyncBoot, execFileSync as execFileSyncBoot } from 'child_process'
+import { installTmuxHooks } from './daemon/session-lifecycle.js'
+
+try {
+  // Set monitor-silence and monitor-activity on the 'main' tmux session
+  execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-silence', '15'], { stdio: 'pipe' })
+  execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-activity', 'on'], { stdio: 'pipe' })
+  installTmuxHooks('main')
+  process.stderr.write('daemon: tmux hooks installed on main session\n')
+} catch (err) {
+  process.stderr.write(`daemon: main tmux hook setup failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
+}
+
+// Re-install hooks on restored sessions (they survive daemon restarts but hooks don't)
+for (const info of registry.values()) {
+  if (info.deadAt) continue
+  try {
+    execFileSyncBoot('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
+    installTmuxHooks(info.tmuxName)
+  } catch {
+    // Session is gone — skip silently
+  }
+}
+
 // Reconnect persisted codex sessions to their app-server sockets
 import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
 reconnectCodexSessions().then(() => {
@@ -104,10 +133,61 @@ if ('homeTabHandler' in gateway) {
 
 if ('homeSpawnHandler' in gateway) {
   const { doSpawnSession } = await import('./daemon/session-lifecycle.js')
+  const { getTemplate } = await import('./daemon/templates.js')
+  const { startDesign } = await import('./daemon/design.js')
+  const { startBuild } = await import('./daemon/build.js')
+  const { startReview } = await import('./daemon/adversarial.js')
   ;(gateway as any).homeSpawnHandler = async (topic: string) => {
     try {
-      const result = await doSpawnSession(topic)
-      process.stderr.write(`daemon: home:spawn created session ${result.name}\n`)
+      // Parse "template: topic" prefix (e.g. "factory: build the thing")
+      let template: ReturnType<typeof getTemplate> = null
+      let templateName: string | undefined
+      const colonIdx = topic.indexOf(':')
+      if (colonIdx > 0) {
+        const candidate = topic.slice(0, colonIdx).trim().toLowerCase()
+        const t = getTemplate(candidate)
+        if (t) {
+          template = t
+          templateName = candidate
+          topic = topic.slice(colonIdx + 1).trim()
+        }
+      }
+
+      const spawnOpts = template ? {
+        promptPrefix: template.prompt,
+        ...(template.model && { model: template.model }),
+        ...(template.disallowedTools?.length && { disallowedTools: template.disallowedTools }),
+        ...(template.tools?.length && { tools: template.tools }),
+        ...(template.allowMainTools && { allowMainTools: true }),
+        trigger: `${templateName}:`,
+      } : undefined
+
+      const result = await doSpawnSession(topic || 'session', undefined, undefined, spawnOpts)
+
+      if (templateName) {
+        void gateway.send(result.threadId, `_Using **${templateName}** template_`).catch(() => {})
+      }
+
+      if (template?.action) {
+        try {
+          switch (template.action) {
+            case 'design':
+              await startDesign(result.threadId, topic)
+              break
+            case 'review':
+              await startReview(result.threadId, result.sessionId, 3, topic)
+              break
+            case 'build':
+              await startBuild(result.threadId, result.sessionId, 3, topic)
+              break
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err)
+          void gateway.send(result.threadId, `_Action **${template.action}** failed: ${errMsg}_`).catch(() => {})
+        }
+      }
+
+      process.stderr.write(`daemon: home:spawn created session ${result.name}${templateName ? ` (template: ${templateName})` : ''}\n`)
       refreshDashboardNow()
     } catch (err) {
       process.stderr.write(`daemon: home:spawn failed: ${err}\n`)
@@ -120,7 +200,6 @@ import { fetchSlackThreadSummary } from './daemon/router.js'
 import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
-import { startReplyGuard } from './daemon/reply-guard.js'
 import { getContextPercent, tmuxHasSession } from './daemon/util.js'
 import { refreshSessionVisual } from './daemon/anchor-state.js'
 
@@ -305,8 +384,9 @@ async function backfillArtifacts(): Promise<void> {
 
 startPrWatcher()
 
-// Reply guard — nudges sessions that go silent on user-authored messages
-startReplyGuard()
+// Reply guard is now event-driven via tmux hooks (monitor-silence/activity).
+// Hooks are set up at daemon boot (above) and per-session in session-lifecycle.ts.
+// No timer/sweep needed — silence events arrive via the daemon socket.
 
 // Backfill PR titles for existing watches (non-blocking)
 backfillTitles().then(n => {
@@ -417,6 +497,22 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   process.stderr.write('daemon: shutting down\n')
+
+  // Remove per-session tmux hooks (sessions may already be dead — wrap in try/catch)
+  for (const info of registry.values()) {
+    if (info.deadAt) continue
+    try {
+      execSyncBoot(`tmux set-hook -u -t ${info.tmuxName} alert-silence`, { stdio: 'pipe' })
+      execSyncBoot(`tmux set-hook -u -t ${info.tmuxName} alert-activity`, { stdio: 'pipe' })
+    } catch {
+      // Session may already be dead — ignore
+    }
+  }
+  // Also clean up 'main' session hooks
+  try {
+    execSyncBoot('tmux set-hook -u -t main alert-silence', { stdio: 'pipe' })
+    execSyncBoot('tmux set-hook -u -t main alert-activity', { stdio: 'pipe' })
+  } catch {}
 
   registry.persist()
   transport.persistQueues()
