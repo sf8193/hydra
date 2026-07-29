@@ -87,7 +87,7 @@ import { logSubscriptions } from './daemon/event-bus.js'
 queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './daemon/phase-budget.js'
-import { killSession } from './daemon/session-lifecycle.js'
+import { killSession, discoverClaudeSessionId } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)
 
 import { startVitalsSnapshots } from './daemon/observability.js'
@@ -447,9 +447,11 @@ void (async () => {
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
+const ORPHAN_GRACE_MS = 90_000
 const CONTEXT_ALERT_THRESHOLD = 70
 const contextAlerted = new Set<string>()
 const crashAlerted = new Set<string>()
+const orphanAlerted = new Set<string>()
 
 setInterval(() => {
   const now = Date.now()
@@ -475,6 +477,33 @@ setInterval(() => {
       void gateway.send(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
       refreshSessionVisual(info.threadId, { state: 'crashed' })
       continue
+    }
+
+    // Orphan detection — tmux alive but bridge never connected past grace window.
+    // Discovery retries every poll (claudeSessionId may become available later).
+    // Alert fires once per orphan episode; clears when bridge reconnects.
+    if (!info.isJoinMember && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
+      if (!info.claudeSessionId && info.engine !== 'codex') {
+        const discovered = discoverClaudeSessionId(info.tmuxName)
+        if (discovered) {
+          info.claudeSessionId = discovered
+          registry.persist()
+          const thread = threadRegistry.get(info.threadId)
+          if (thread) {
+            const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
+            if (histEntry) histEntry.claudeSessionId = discovered
+            threadRegistry.persist()
+          }
+          process.stderr.write(`daemon: orphan ${info.tmuxName}: discovered claudeSessionId=${discovered}\n`)
+        }
+      }
+      if (!orphanAlerted.has(info.sessionId)) {
+        orphanAlerted.add(info.sessionId)
+        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)\n`)
+        void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread. Use \`respawn\` to start fresh.`).catch(() => {})
+      }
+    } else {
+      orphanAlerted.delete(info.sessionId)
     }
 
     // Context alert
