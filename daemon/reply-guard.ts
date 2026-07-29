@@ -9,8 +9,13 @@
 //
 // Known limitation: tmux suppresses monitor-silence alerts when a client is
 // attached to the session's window. Follow-up: fs.watch on pipe-pane logs.
+import { execSync } from 'child_process'
+import { writeFileSync, unlinkSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
+import { gateway } from './config.js'
 
 type PendingReply = {
   sessionId: string
@@ -27,12 +32,12 @@ type PendingReply = {
 const pending = new Map<string, PendingReply>()
 const keyOf = (sessionId: string, chatId: string) => `${sessionId}:${chatId}`
 
-// Track the timestamp of the last nudge per key — allows re-nudge after a
-// cooldown period (2 minutes) instead of one-shot.
-const nudgedKeys = new Map<string, number>()
+// Track nudge state per key: timestamp of last nudge + count.
+const nudgedKeys = new Map<string, { at: number; count: number }>()
 
 const NUDGE_COOLDOWN_MS = 2 * 60_000
 const ACTIVITY_BACKSTOP_MS = 5 * 60_000
+const ESCALATION_AFTER_NUDGES = 2
 
 /** Arm the guard for a user-authored channel message delivered to a session. */
 export function notePendingReply(sessionId: string, meta: Record<string, string>, now: number = Date.now()): void {
@@ -132,15 +137,25 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     if (!activityGateOpen) continue
 
     // Cooldown: skip if nudged within the last 2 minutes.
-    const lastNudgeTs = nudgedKeys.get(key)
-    if (lastNudgeTs !== undefined && (now - lastNudgeTs) < NUDGE_COOLDOWN_MS) continue
+    const nudgeState = nudgedKeys.get(key)
+    if (nudgeState && (now - nudgeState.at) < NUDGE_COOLDOWN_MS) continue
 
-    nudgedKeys.set(key, now)
-    // Keep pending alive for re-nudge — only delete on settle (reply/react).
+    const nudgeCount = (nudgeState?.count ?? 0) + 1
+    nudgedKeys.set(key, { at: now, count: nudgeCount })
     nudged++
     const mins = Math.max(1, Math.round((now - p.deliveredAt) / 60_000))
     const name = registry.get(p.sessionId)?.tmuxName ?? p.sessionId
-    process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, nudging\n`)
+
+    if (nudgeCount > ESCALATION_AFTER_NUDGES) {
+      // Escalation: nudges were ignored. Capture the pane and send it
+      // directly to the user's chat so they at least see the answer.
+      process.stderr.write(`daemon: reply guard: ${name} ignored ${nudgeCount - 1} nudges, escalating with pane capture\n`)
+      void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins)
+      pending.delete(key)
+      continue
+    }
+
+    process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, nudging (${nudgeCount})\n`)
     transport.sendOrQueue(p.sessionId, {
       type: 'notification',
       content: [
@@ -194,6 +209,72 @@ export function handleActivityEvent(tmuxName: string): void {
   noteActivityForSession(tmuxName)
 }
 
+// ---------------------------------------------------------------------------
+// Escalation: capture the pane and send it directly to the user's chat.
+// Tries `freeze` for a styled screenshot, falls back to a text code block.
+// ---------------------------------------------------------------------------
+
+let hasFreezeCache: boolean | null = null
+function hasFreeze(): boolean {
+  if (hasFreezeCache !== null) return hasFreezeCache
+  try {
+    execSync('which freeze', { stdio: 'pipe' })
+    hasFreezeCache = true
+  } catch {
+    hasFreezeCache = false
+  }
+  return hasFreezeCache
+}
+
+function capturePaneText(tmuxName: string, lines = 80): string | null {
+  try {
+    return execSync(
+      `tmux capture-pane -t '${tmuxName.replace(/'/g, "'\\''")}' -p -S -${lines}`,
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
+    ).trimEnd()
+  } catch { return null }
+}
+
+function capturePaneScreenshot(tmuxName: string): string | null {
+  if (!hasFreeze()) return null
+  const outPath = join(tmpdir(), `hydra-pane-${tmuxName}-${Date.now()}.png`)
+  try {
+    execSync(
+      `tmux capture-pane -t '${tmuxName.replace(/'/g, "'\\''")}' -e -p | freeze -o '${outPath}' --language bash`,
+      { stdio: 'pipe', timeout: 10000 },
+    )
+    return outPath
+  } catch {
+    return null
+  }
+}
+
+async function escalateWithCapture(tmuxName: string, chatId: string, user: string, messageId: string, mins: number): Promise<void> {
+  const header = `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It may have answered in-transcript only. Here's what the session looks like:`
+
+  const screenshot = capturePaneScreenshot(tmuxName)
+  if (screenshot) {
+    try {
+      await gateway.send(chatId, header, { files: [screenshot] })
+      try { unlinkSync(screenshot) } catch {}
+      return
+    } catch (err) {
+      process.stderr.write(`daemon: reply guard escalation screenshot send failed: ${err}\n`)
+      try { unlinkSync(screenshot) } catch {}
+    }
+  }
+
+  // Fallback: send as text
+  const text = capturePaneText(tmuxName, 50)
+  if (text) {
+    try {
+      await gateway.send(chatId, `${header}\n\`\`\`\n${text.slice(-1800)}\n\`\`\``)
+    } catch (err) {
+      process.stderr.write(`daemon: reply guard escalation text send failed: ${err}\n`)
+    }
+  }
+}
+
 export function _resetReplyGuardForTesting(): void {
   pending.clear()
   nudgedKeys.clear()
@@ -201,6 +282,7 @@ export function _resetReplyGuardForTesting(): void {
 
 export const _NUDGE_COOLDOWN_MS = NUDGE_COOLDOWN_MS
 export const _ACTIVITY_BACKSTOP_MS = ACTIVITY_BACKSTOP_MS
+export const _ESCALATION_AFTER_NUDGES = ESCALATION_AFTER_NUDGES
 
 export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
   return pending
