@@ -9,10 +9,10 @@ import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession, tryResume, tryRespawn, discoverClaudeSessionId } from '../session-lifecycle.js'
 import { tmuxHasSession, isAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { getActiveBuilds, cancelBuild, startBuild } from '../build.js'
-import { getActiveReviews, cancelReview, startReview } from '../adversarial.js'
-import { startDesign } from '../design.js'
+import { getActiveBuilds, cancelBuild } from '../build.js'
+import { getActiveReviews, cancelReview } from '../adversarial.js'
 import type { SpawnTemplate } from '../templates.js'
+import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 import type { Access } from '../access.js'
 
@@ -47,17 +47,11 @@ async function spawnAndNotify(
   void gateway.react(msg.channelId, msg.id, '🚀').catch(() => {})
   const chatId = await resolveSpawnTarget(msg)
   const label = template?.name ?? null
-  // Model priority: chat/CLI alias (router.ts / hydra.ts) > template.model (here)
-  //   > HYDRA_MODEL env > DEFAULT_MODEL (shared/constants.ts via spawnModel())
   const resolvedModel = model ?? template?.template.model
   const spawnOpts = {
-    ...(template && { promptPrefix: template.template.prompt }),
-    ...(resolvedModel && { model: resolvedModel }),
+    ...(template && buildTemplateSpawnOpts(template.name, template.template, model)),
+    ...(!template && { trigger: 'spawn:' }),
     ...(engine && { engine }),
-    ...(template?.template.disallowedTools?.length && { disallowedTools: template.template.disallowedTools }),
-    ...(template?.template.tools?.length && { tools: template.template.tools }),
-    ...(template?.template.allowMainTools && { allowMainTools: true }),
-    trigger: template ? `${template.name}:` : 'spawn:',
     initiator: msg.authorUsername,
   }
 
@@ -73,24 +67,13 @@ async function spawnAndNotify(
     }
 
     if (template?.template.action) {
-      const action = template.template.action
       try {
-        switch (action) {
-          case 'design':
-            await startDesign(result.threadId, topic)
-            break
-          case 'review':
-            await startReview(result.threadId, result.sessionId, 3, topic)
-            break
-          case 'build':
-            await startBuild(result.threadId, result.sessionId, 3, topic)
-            break
-        }
-        process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
+        await runTemplateAction(template.template.action, result.threadId, result.sessionId, topic)
+        process.stderr.write(`daemon: template action: started ${template.template.action} for ${topic}\n`)
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
-        process.stderr.write(`daemon: template action "${action}" failed: ${errMsg}\n`)
-        void gateway.send(result.threadId, `_Action **${action}** failed: ${errMsg}_`).catch(() => {})
+        process.stderr.write(`daemon: template action "${template.template.action}" failed: ${errMsg}\n`)
+        void gateway.send(result.threadId, `_Action **${template.template.action}** failed: ${errMsg}_`).catch(() => {})
       }
     }
 

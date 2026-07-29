@@ -78,7 +78,7 @@ export class SlackGateway implements ChatGateway {
   private reconnectAttempts = 0
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
-  homeSpawnHandler: ((topic: string) => Promise<void>) | null = null
+  homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
 
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
@@ -173,7 +173,7 @@ export class SlackGateway implements ChatGateway {
       }
       const topic = (action?.value?.trim() ?? '').slice(0, 500)
       if (!topic || !this.homeSpawnHandler) return
-      this.homeSpawnHandler(topic).catch((e: Error) =>
+      this.homeSpawnHandler(topic, userId).catch((e: Error) =>
         process.stderr.write(`slack gateway: home:spawn handler error: ${e}\n`),
       )
     })
