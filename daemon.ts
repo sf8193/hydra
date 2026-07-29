@@ -68,15 +68,15 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
-// tmux monitor-silence / monitor-activity — set on 'main' at boot
+// tmux monitor-silence / monitor-activity — set on main + all live sessions at boot
 import { execFileSync as execFileSyncBoot } from 'child_process'
-try {
-  execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-silence', '15'], { stdio: 'pipe' })
-  execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-activity', 'on'], { stdio: 'pipe' })
-  process.stderr.write('daemon: monitor-silence/activity set on main session\n')
-} catch (err) {
-  process.stderr.write(`daemon: monitor-silence setup on main failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
+for (const tmuxName of ['main', ...([...registry.values()].filter(s => !s.deadAt).map(s => s.tmuxName))]) {
+  try {
+    execFileSyncBoot('tmux', ['set-option', '-t', tmuxName, 'monitor-silence', '15'], { stdio: 'pipe' })
+    execFileSyncBoot('tmux', ['set-option', '-t', tmuxName, 'monitor-activity', 'on'], { stdio: 'pipe' })
+  } catch {}
 }
+process.stderr.write(`daemon: monitor-silence/activity set on main + ${[...registry.values()].filter(s => !s.deadAt).length} live sessions\n`)
 
 // Reconnect persisted codex sessions to their app-server sockets
 import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
