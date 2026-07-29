@@ -12,7 +12,7 @@ import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
-import { clearPendingReply, settlePendingOnReact, notePendingFromQueue, handleSilenceEvent, handleActivityEvent, noteActivityForSession } from './reply-guard.js'
+import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
@@ -405,40 +405,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           error: `internal error: ${err instanceof Error ? err.message : String(err)}`,
         }) + '\n')
       })
-      break
-    }
-
-    // -----------------------------------------------------------------------
-    // tmux hook signals — fired by global alert-silence / alert-activity hooks
-    // -----------------------------------------------------------------------
-
-    case 'tmux_silence': {
-      const tmuxName = msg.tmuxName as string
-      if (!tmuxName) break
-
-      // Update turnState for the session
-      const silenceInfo = registry.findByName(tmuxName)
-      if (silenceInfo) {
-        silenceInfo.turnState = 'idle'
-        registry.debouncedPersist()
-      }
-
-      handleSilenceEvent(tmuxName)
-      break
-    }
-
-    case 'tmux_activity': {
-      const tmuxName = msg.tmuxName as string
-      if (!tmuxName) break
-
-      // Update turnState for the session
-      const activityInfo = registry.findByName(tmuxName)
-      if (activityInfo) {
-        activityInfo.turnState = 'working'
-        registry.debouncedPersist()
-      }
-
-      handleActivityEvent(tmuxName)
       break
     }
 

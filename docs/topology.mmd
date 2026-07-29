@@ -75,12 +75,13 @@ graph TD
   daemon --> daemon_permission
   daemon --> daemon_bridge-server
   daemon --> daemon_commands_global
-  daemon --> daemon_session-lifecycle
   daemon --> daemon_phase-budget
+  daemon --> daemon_session-lifecycle
   daemon --> daemon_dashboard
   daemon --> daemon_router
   daemon --> daemon_pr-watch
   daemon --> daemon_util
+  daemon --> daemon_reply-guard
   daemon --> daemon_anchor-state
   daemon_sessions --> daemon_config
   daemon_sessions --> daemon_util

@@ -316,11 +316,11 @@
     ],
     [
       "daemon",
-      "daemon_session-lifecycle"
+      "daemon_phase-budget"
     ],
     [
       "daemon",
-      "daemon_phase-budget"
+      "daemon_session-lifecycle"
     ],
     [
       "daemon",
@@ -337,6 +337,10 @@
     [
       "daemon",
       "daemon_util"
+    ],
+    [
+      "daemon",
+      "daemon_reply-guard"
     ],
     [
       "daemon",

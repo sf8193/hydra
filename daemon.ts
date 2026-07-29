@@ -69,32 +69,16 @@ startBridgeServer()
 initEphemeralTimers()
 
 // ---------------------------------------------------------------------------
-// tmux hooks — event-driven reply guard via monitor-silence / monitor-activity
+// tmux monitor-silence / monitor-activity — set on 'main' at boot
 // ---------------------------------------------------------------------------
-// Per-session tmux hooks are installed in session-lifecycle.ts at spawn time.
-// At boot, install hooks on the 'main' tmux session and any restored sessions.
-import { execSync as execSyncBoot, execFileSync as execFileSyncBoot } from 'child_process'
-import { installTmuxHooks } from './daemon/session-lifecycle.js'
+import { execFileSync as execFileSyncBoot } from 'child_process'
 
 try {
-  // Set monitor-silence and monitor-activity on the 'main' tmux session
   execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-silence', '15'], { stdio: 'pipe' })
   execFileSyncBoot('tmux', ['set-option', '-t', 'main', 'monitor-activity', 'on'], { stdio: 'pipe' })
-  installTmuxHooks('main')
-  process.stderr.write('daemon: tmux hooks installed on main session\n')
+  process.stderr.write('daemon: monitor-silence/activity set on main session\n')
 } catch (err) {
-  process.stderr.write(`daemon: main tmux hook setup failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
-}
-
-// Re-install hooks on restored sessions (they survive daemon restarts but hooks don't)
-for (const info of registry.values()) {
-  if (info.deadAt) continue
-  try {
-    execFileSyncBoot('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
-    installTmuxHooks(info.tmuxName)
-  } catch {
-    // Session is gone — skip silently
-  }
+  process.stderr.write(`daemon: main tmux monitor setup failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
 }
 
 // Reconnect persisted codex sessions to their app-server sockets
@@ -201,6 +185,7 @@ import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { getContextPercent, tmuxHasSession } from './daemon/util.js'
+import { handleSilenceEvent, handleActivityEvent } from './daemon/reply-guard.js'
 import { refreshSessionVisual } from './daemon/anchor-state.js'
 
 // ---------------------------------------------------------------------------
@@ -384,9 +369,7 @@ async function backfillArtifacts(): Promise<void> {
 
 startPrWatcher()
 
-// Reply guard is now event-driven via tmux hooks (monitor-silence/activity).
-// Hooks are set up at daemon boot (above) and per-session in session-lifecycle.ts.
-// No timer/sweep needed — silence events arrive via the daemon socket.
+// Reply guard: silence/activity flags are polled in the session health loop below.
 
 // Backfill PR titles for existing watches (non-blocking)
 backfillTitles().then(n => {
@@ -488,6 +471,22 @@ setInterval(() => {
       process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
       void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`respawn\` to continue in a fresh session.`).catch(() => {})
     }
+
+    // Reply guard: check tmux silence/activity flags
+    try {
+      const flag = execSync(`tmux display -t '${info.tmuxName}' -p '#{window_silence_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
+      if (flag === '1') {
+        info.turnState = 'idle'
+        handleSilenceEvent(info.tmuxName)
+      }
+    } catch {}
+    try {
+      const flag = execSync(`tmux display -t '${info.tmuxName}' -p '#{window_activity_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
+      if (flag === '1') {
+        info.turnState = 'working'
+        handleActivityEvent(info.tmuxName)
+      }
+    } catch {}
   }
 }, SESSION_CHECK_INTERVAL_MS)
 
@@ -497,22 +496,6 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   process.stderr.write('daemon: shutting down\n')
-
-  // Remove per-session tmux hooks (sessions may already be dead — wrap in try/catch)
-  for (const info of registry.values()) {
-    if (info.deadAt) continue
-    try {
-      execSyncBoot(`tmux set-hook -u -t ${info.tmuxName} alert-silence`, { stdio: 'pipe' })
-      execSyncBoot(`tmux set-hook -u -t ${info.tmuxName} alert-activity`, { stdio: 'pipe' })
-    } catch {
-      // Session may already be dead — ignore
-    }
-  }
-  // Also clean up 'main' session hooks
-  try {
-    execSyncBoot('tmux set-hook -u -t main alert-silence', { stdio: 'pipe' })
-    execSyncBoot('tmux set-hook -u -t main alert-activity', { stdio: 'pipe' })
-  } catch {}
 
   registry.persist()
   transport.persistQueues()

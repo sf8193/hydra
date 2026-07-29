@@ -378,21 +378,6 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
     }
   }
 
-  // Optional tools — soft warnings only
-  try {
-    execFileSync('socat', ['-V'], { stdio: 'pipe', env: process.env as Record<string, string> })
-    ok('socat on PATH (reply guard tmux hooks)')
-  } catch {
-    wrn('socat not installed — reply guard tmux hooks will use bun fallback (slower). Install: brew install socat')
-  }
-
-  try {
-    execFileSync('freeze', ['--version'], { stdio: 'pipe', env: process.env as Record<string, string> })
-    ok('freeze on PATH (pane screenshots)')
-  } catch {
-    wrn('freeze not installed — reply guard escalation will fall back to text. Install: brew install charmbracelet/tap/freeze')
-  }
-
   const check = await compileCheck(cfg.hydraDir)
   if (check.ok) {
     ok('daemon + bridge compile')

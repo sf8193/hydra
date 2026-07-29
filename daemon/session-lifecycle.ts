@@ -22,48 +22,6 @@ import { emit } from './event-bus.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
-// ---------------------------------------------------------------------------
-// Socat availability — checked once at module load, with bun fallback
-// ---------------------------------------------------------------------------
-
-let hasSocat = false
-try {
-  execSync('which socat', { stdio: 'pipe' })
-  hasSocat = true
-} catch {
-  process.stderr.write('daemon: socat not found — tmux hook commands will use bun fallback (slower)\n')
-}
-
-/**
- * Build a shell command that sends a JSON payload to the daemon socket.
- * Prefers socat (lightweight); falls back to a bun one-liner if missing.
- */
-function buildHookCmd(payload: string): string {
-  if (hasSocat) {
-    return `echo '${payload}' | socat - UNIX-CONNECT:${SOCK_PATH}`
-  }
-  // bun fallback — heavier but universally available in this project
-  return `bun -e "require('net').connect('${SOCK_PATH}').end(JSON.stringify(${payload})+'\\n')"`
-}
-
-/**
- * Install per-session tmux hooks for monitor-silence and monitor-activity.
- * These fire JSON messages to the daemon socket so the reply guard can act.
- */
-export function installTmuxHooks(tmuxName: string): void {
-  const silencePayload = `{"type":"tmux_silence","tmuxName":"${tmuxName}"}`
-  const activityPayload = `{"type":"tmux_activity","tmuxName":"${tmuxName}"}`
-  const silenceCmd = buildHookCmd(silencePayload)
-  const activityCmd = buildHookCmd(activityPayload)
-  try {
-    execFileSync('tmux', ['set-hook', '-t', tmuxName, 'alert-silence', `run-shell "${silenceCmd}"`], { stdio: 'pipe' })
-    execFileSync('tmux', ['set-hook', '-t', tmuxName, 'alert-activity', `run-shell "${activityCmd}"`], { stdio: 'pipe' })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`daemon: tmux hook install failed for ${tmuxName} (non-fatal): ${msg}\n`)
-  }
-}
-
 // Per-session pane logfile — `tmux pipe-pane` captures each spawn's output so a
 // crash still leaves it on disk.
 
@@ -706,7 +664,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     try {
       execFileSync('tmux', ['set-option', '-t', tmuxName, 'monitor-silence', '15'], { stdio: 'pipe' })
       execFileSync('tmux', ['set-option', '-t', tmuxName, 'monitor-activity', 'on'], { stdio: 'pipe' })
-      installTmuxHooks(tmuxName)
     } catch (err) {
       const silenceErr = err instanceof Error ? err.message : String(err)
       process.stderr.write(`daemon: spawn ${tmuxName}: monitor-silence setup failed (non-fatal): ${silenceErr}\n`)
