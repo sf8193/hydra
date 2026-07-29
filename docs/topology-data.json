@@ -316,11 +316,11 @@
     ],
     [
       "daemon",
-      "daemon_phase-budget"
+      "daemon_session-lifecycle"
     ],
     [
       "daemon",
-      "daemon_session-lifecycle"
+      "daemon_phase-budget"
     ],
     [
       "daemon",
@@ -333,10 +333,6 @@
     [
       "daemon",
       "daemon_pr-watch"
-    ],
-    [
-      "daemon",
-      "daemon_reply-guard"
     ],
     [
       "daemon",
