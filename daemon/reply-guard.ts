@@ -3,12 +3,8 @@
 // model answered in-transcript, which the sender cannot see. This module
 // converts that silence into a cooldown-based system nudge.
 //
-// v2: event-driven via tmux monitor-silence. The daemon sets monitor-silence
-// on each tmux session at spawn and receives silence/activity signals through
-// tmux hooks → unix socket. No timers, no sweep interval.
-//
-// Known limitation: tmux suppresses monitor-silence alerts when a client is
-// attached to the session's window. Follow-up: fs.watch on pipe-pane logs.
+// The daemon polls tmux's window_activity timestamp every 20s to detect
+// idle sessions. No monitor-silence/activity options needed.
 import { execSync } from 'child_process'
 import { writeFileSync, unlinkSync } from 'fs'
 import { tmpdir } from 'os'

@@ -658,17 +658,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     process.stderr.write(`daemon: spawn ${tmuxName}: WARNING -- tmux session died immediately after creation\n`)
   }
 
-  // Reply guard: enable tmux monitor-silence so the daemon gets notified
-  // when this session goes quiet (event-driven, no polling).
-  if (tmuxConfirmedAlive) {
-    try {
-      execFileSync('tmux', ['set-option', '-t', tmuxName, 'monitor-silence', '15'], { stdio: 'pipe' })
-      execFileSync('tmux', ['set-option', '-t', tmuxName, 'monitor-activity', 'on'], { stdio: 'pipe' })
-    } catch (err) {
-      const silenceErr = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`daemon: spawn ${tmuxName}: monitor-silence setup failed (non-fatal): ${silenceErr}\n`)
-    }
-  }
 
   // Best-effort: any failure is logged, never fatal to the spawn.
   let spawnLogPath: string | undefined

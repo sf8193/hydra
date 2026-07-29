@@ -68,15 +68,6 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
-// tmux monitor-silence / monitor-activity — set on main + all live sessions at boot
-import { execFileSync as execFileSyncBoot } from 'child_process'
-for (const tmuxName of ['main', ...([...registry.values()].filter(s => !s.deadAt).map(s => s.tmuxName))]) {
-  try {
-    execFileSyncBoot('tmux', ['set-option', '-t', tmuxName, 'monitor-silence', '15'], { stdio: 'pipe' })
-    execFileSyncBoot('tmux', ['set-option', '-t', tmuxName, 'monitor-activity', 'on'], { stdio: 'pipe' })
-  } catch {}
-}
-process.stderr.write(`daemon: monitor-silence/activity set on main + ${[...registry.values()].filter(s => !s.deadAt).length} live sessions\n`)
 
 // Reconnect persisted codex sessions to their app-server sockets
 import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
@@ -393,8 +384,7 @@ async function backfillArtifacts(): Promise<void> {
 
 startPrWatcher()
 
-// Reply guard is now event-driven via tmux monitor-silence/activity.
-// Silence/activity flags are checked in the session health loop below.
+// Reply guard: polls window_activity timestamp every 20s (see below).
 
 // Backfill PR titles for existing watches (non-blocking)
 backfillTitles().then(n => {
@@ -501,10 +491,8 @@ setInterval(() => {
   }
 }, SESSION_CHECK_INTERVAL_MS)
 
-// Reply guard: check tmux silence/activity flags on a fast loop (20s).
+// Reply guard: poll window_activity timestamp every 20s.
 // Only checks sessions with pending replies — O(pending) not O(sessions).
-// Uses window_activity timestamp (not the flag) to avoid false positives
-// when a session produces intermittent output (e.g. long builds).
 const MIN_IDLE_BEFORE_NUDGE_S = 45
 setInterval(() => {
   const pendingNames = sessionsWithPendingReplies()
@@ -512,22 +500,17 @@ setInterval(() => {
   const nowSec = Math.floor(Date.now() / 1000)
   for (const tmuxName of pendingNames) {
     const info = tmuxName === 'main' ? undefined : registry.findByName(tmuxName)
-    let silentFlag = false
     let lastActivitySec = 0
     try {
-      const out = execSync(
-        `tmux display -t '${tmuxName}' -p '#{window_silence_flag} #{window_activity}'`,
-        { stdio: 'pipe', timeout: 2000 },
-      ).toString().trim()
-      const parts = out.split(' ')
-      silentFlag = parts[0] === '1'
-      lastActivitySec = parseInt(parts[1]) || 0
+      lastActivitySec = parseInt(
+        execSync(`tmux display -t '${tmuxName}' -p '#{window_activity}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim(),
+      ) || 0
     } catch { continue }
     const secSinceActivity = nowSec - lastActivitySec
     if (secSinceActivity < MIN_IDLE_BEFORE_NUDGE_S) {
       if (info && info.turnState !== 'working') info.turnState = 'working'
       handleActivityEvent(tmuxName)
-    } else if (silentFlag) {
+    } else {
       if (info && info.turnState !== 'idle') info.turnState = 'idle'
       handleSilenceEvent(tmuxName)
     }
