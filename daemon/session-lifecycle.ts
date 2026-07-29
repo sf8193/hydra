@@ -856,7 +856,7 @@ export async function tryRespawn(
 
 export function discoverClaudeSessionId(tmuxName: string): string | null {
   try {
-    const panePid = execSync(`tmux list-panes -t '${tmuxName}' -F '#{pane_pid}' 2>/dev/null`, { encoding: 'utf8' }).trim()
+    const panePid = execSync(`tmux list-panes -t '${tmuxName}' -F '#{pane_pid}' 2>/dev/null`, { encoding: 'utf8', timeout: 2000 }).trim()
     if (!panePid) return null
 
     // Primary: read Claude's session file at ~/.claude/sessions/<pid>.json
@@ -873,9 +873,9 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
     } catch {}
 
     // Fallback: scan child process environments
-    const childPids = execSync(`pgrep -P ${panePid} 2>/dev/null`, { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+    const childPids = execSync(`pgrep -P ${panePid} 2>/dev/null`, { encoding: 'utf8', timeout: 2000 }).trim().split('\n').filter(Boolean)
     for (const childPid of childPids) {
-      const envOutput = execSync(`ps -E -p ${childPid} 2>/dev/null`, { encoding: 'utf8' })
+      const envOutput = execSync(`ps -E -p ${childPid} 2>/dev/null`, { encoding: 'utf8', timeout: 2000 })
       if (!envOutput.includes('HYDRA_SESSION_ID')) continue
       const hydraId = envOutput.match(/HYDRA_SESSION_ID=([^\s]+)/)?.[1]
       const candidates = [...envOutput.matchAll(/([A-Z_]*SESSION[A-Z_]*)=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g)]

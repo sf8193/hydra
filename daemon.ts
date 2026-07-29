@@ -480,9 +480,9 @@ setInterval(() => {
     }
 
     // Orphan detection — tmux alive but bridge never connected past grace window.
-    // Proactively discover claudeSessionId (needed for resume) and alert the thread.
-    if (!orphanAlerted.has(info.sessionId) && !info.isJoinMember && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
-      orphanAlerted.add(info.sessionId)
+    // Discovery retries every poll (claudeSessionId may become available later).
+    // Alert fires once per orphan episode; clears when bridge reconnects.
+    if (!info.isJoinMember && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
       if (!info.claudeSessionId && info.engine !== 'codex') {
         const discovered = discoverClaudeSessionId(info.tmuxName)
         if (discovered) {
@@ -497,8 +497,13 @@ setInterval(() => {
           process.stderr.write(`daemon: orphan ${info.tmuxName}: discovered claudeSessionId=${discovered}\n`)
         }
       }
-      process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)\n`)
-      void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge never connected — replies can't reach this thread. Use \`kill\` then \`resume\`, or \`respawn\`.`).catch(() => {})
+      if (!orphanAlerted.has(info.sessionId)) {
+        orphanAlerted.add(info.sessionId)
+        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)\n`)
+        void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread. Use \`respawn\` to start fresh.`).catch(() => {})
+      }
+    } else {
+      orphanAlerted.delete(info.sessionId)
     }
 
     // Context alert
