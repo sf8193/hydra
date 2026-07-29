@@ -37,7 +37,7 @@ const nudgedKeys = new Map<string, { at: number; count: number }>()
 
 const NUDGE_COOLDOWN_MS = 2 * 60_000
 const ACTIVITY_BACKSTOP_MS = 5 * 60_000
-const ESCALATION_AFTER_NUDGES = 2
+const ESCALATION_AFTER_NUDGES = 1
 
 /** Arm the guard for a user-authored channel message delivered to a session. */
 export function notePendingReply(sessionId: string, meta: Record<string, string>, now: number = Date.now()): void {
