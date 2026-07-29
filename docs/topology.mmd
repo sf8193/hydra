@@ -78,6 +78,7 @@ graph TD
   daemon --> daemon_phase-budget
   daemon --> daemon_session-lifecycle
   daemon --> daemon_dashboard
+  daemon --> daemon_commands_status
   daemon --> daemon_router
   daemon --> daemon_pr-watch
   daemon --> daemon_reply-guard
@@ -220,7 +221,6 @@ graph TD
   daemon_commands_global --> daemon_commands_status
   daemon_commands_global --> daemon_build
   daemon_commands_global --> daemon_adversarial
-  daemon_commands_global --> daemon_design
   daemon_commands_global --> daemon_templates
   daemon_commands_global --> daemon_access
   daemon_commands_status --> daemon_config

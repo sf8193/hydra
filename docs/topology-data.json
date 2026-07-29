@@ -328,6 +328,10 @@
     ],
     [
       "daemon",
+      "daemon_commands_status"
+    ],
+    [
+      "daemon",
       "daemon_router"
     ],
     [
@@ -893,10 +897,6 @@
     [
       "daemon_commands_global",
       "daemon_adversarial"
-    ],
-    [
-      "daemon_commands_global",
-      "daemon_design"
     ],
     [
       "daemon_commands_global",
