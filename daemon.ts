@@ -503,25 +503,34 @@ setInterval(() => {
 
 // Reply guard: check tmux silence/activity flags on a fast loop (20s).
 // Only checks sessions with pending replies — O(pending) not O(sessions).
+// Uses window_activity timestamp (not the flag) to avoid false positives
+// when a session produces intermittent output (e.g. long builds).
+const MIN_IDLE_BEFORE_NUDGE_S = 45
 setInterval(() => {
   const pendingNames = sessionsWithPendingReplies()
   if (pendingNames.size === 0) return
+  const nowSec = Math.floor(Date.now() / 1000)
   for (const tmuxName of pendingNames) {
     const info = tmuxName === 'main' ? undefined : registry.findByName(tmuxName)
+    let silentFlag = false
+    let lastActivitySec = 0
     try {
-      const flag = execSync(`tmux display -t '${tmuxName}' -p '#{window_silence_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
-      if (flag === '1') {
-        if (info && info.turnState !== 'idle') info.turnState = 'idle'
-        handleSilenceEvent(tmuxName)
-      }
-    } catch {}
-    try {
-      const flag = execSync(`tmux display -t '${tmuxName}' -p '#{window_activity_flag}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim()
-      if (flag === '1') {
-        if (info && info.turnState !== 'working') info.turnState = 'working'
-        handleActivityEvent(tmuxName)
-      }
-    } catch {}
+      const out = execSync(
+        `tmux display -t '${tmuxName}' -p '#{window_silence_flag} #{window_activity}'`,
+        { stdio: 'pipe', timeout: 2000 },
+      ).toString().trim()
+      const parts = out.split(' ')
+      silentFlag = parts[0] === '1'
+      lastActivitySec = parseInt(parts[1]) || 0
+    } catch { continue }
+    const secSinceActivity = nowSec - lastActivitySec
+    if (secSinceActivity < MIN_IDLE_BEFORE_NUDGE_S) {
+      if (info && info.turnState !== 'working') info.turnState = 'working'
+      handleActivityEvent(tmuxName)
+    } else if (silentFlag) {
+      if (info && info.turnState !== 'idle') info.turnState = 'idle'
+      handleSilenceEvent(tmuxName)
+    }
   }
 }, 20_000)
 
