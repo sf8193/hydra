@@ -38,7 +38,7 @@ writeFileSync(PID_FILE, `${process.pid}\n`)
 process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
-import { registry, threadRegistry } from './daemon/sessions.js'
+import { registry, threadRegistry, sessionEmoji } from './daemon/sessions.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
@@ -93,6 +93,7 @@ import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
+import { debouncedRefreshListDisplay } from './daemon/commands/status.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle, cacheSlackChannel, cacheSlackThread } from './daemon/artifacts.js'
 registry.onPersist = refreshDashboard
 
@@ -104,13 +105,90 @@ if ('homeTabHandler' in gateway) {
 
 if ('homeSpawnHandler' in gateway) {
   const { doSpawnSession } = await import('./daemon/session-lifecycle.js')
-  ;(gateway as any).homeSpawnHandler = async (topic: string) => {
+  const { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction } = await import('./daemon/templates.js')
+  const { resolveModelAlias } = await import('./shared/constants.js')
+  ;(gateway as any).homeSpawnHandler = async (topic: string, userId: string) => {
     try {
-      const result = await doSpawnSession(topic)
-      process.stderr.write(`daemon: home:spawn created session ${result.name}\n`)
+      let parsed = parseTemplateTopic(topic)
+      let modelOverride: string | undefined
+      let engine: 'claude' | 'codex' | undefined
+
+      // "factory sonnet: topic" — parseTemplateTopic sees "factory sonnet" as candidate, misses it.
+      // Fall back: split prefix on space to find "template model: topic".
+      if (!parsed) {
+        const colonIdx = topic.indexOf(':')
+        if (colonIdx > 0) {
+          const prefix = topic.slice(0, colonIdx).trim().toLowerCase()
+          const spaceIdx = prefix.indexOf(' ')
+          if (spaceIdx > 0) {
+            const { getTemplate } = await import('./daemon/templates.js')
+            const tplName = prefix.slice(0, spaceIdx)
+            const modelAlias = prefix.slice(spaceIdx + 1)
+            const tpl = getTemplate(tplName)
+            const resolved = resolveModelAlias(modelAlias)
+            if (tpl && resolved) {
+              parsed = { templateName: tplName, template: tpl, topic: topic.slice(colonIdx + 1).trim() }
+              modelOverride = resolved
+            }
+          }
+        }
+      }
+
+      let cleanTopic = parsed?.topic || topic
+
+      // --codex flag support
+      if (/\s*--codex\b/.test(cleanTopic)) {
+        engine = 'codex'
+        cleanTopic = cleanTopic.replace(/\s*--codex\b/, '').trim()
+      }
+      if (!cleanTopic.trim()) {
+        const hint = parsed?.templateName ?? 'factory'
+        void gateway.send(userId, `_Need a topic — e.g. \`${hint}: describe the task\`_`).catch(() => {})
+        return
+      }
+
+      const spawnOpts = {
+        ...(parsed && buildTemplateSpawnOpts(parsed.templateName, parsed.template, modelOverride)),
+        ...(engine && { engine }),
+        initiator: userId,
+      }
+
+      const result = await doSpawnSession(cleanTopic, undefined, undefined, spawnOpts)
+
+      if (parsed) {
+        const parts: string[] = [`**${parsed.templateName}** template`]
+        if (modelOverride) parts.push(`model \`${modelOverride}\``)
+        void gateway.send(result.threadId, `_Using ${parts.join(' · ')}_`).catch(() => {})
+        if (parsed.template.action) {
+          try {
+            await runTemplateAction(parsed.template.action, result.threadId, result.sessionId, cleanTopic)
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            void gateway.send(result.threadId, `_Action **${parsed.template.action}** failed: ${errMsg}_`).catch(() => {})
+          }
+        }
+      }
+
+      // Notify main bridge so the main session sees the spawn
+      const mainBridge = transport.get('main')
+      if (mainBridge) {
+        const label = parsed?.templateName
+        const labelSuffix = label ? ` (${label})` : ''
+        const modelSuffix = modelOverride ? ` [${modelOverride}]` : ''
+        transport.sendToBridge(mainBridge, {
+          type: 'notification',
+          content: `[system] Spawned ${sessionEmoji(result.name)} \`${result.name}\`${labelSuffix}${modelSuffix} for: ${cleanTopic}${result.url ? ` — ${result.url}` : ''}`,
+          meta: { chat_id: 'home', message_id: '', user: 'system', user_id: userId, ts: new Date().toISOString() },
+        })
+      }
+
+      process.stderr.write(`daemon: home:spawn created session ${result.name}${parsed ? ` (template: ${parsed.templateName})` : ''}\n`)
       refreshDashboardNow()
+      debouncedRefreshListDisplay()
     } catch (err) {
-      process.stderr.write(`daemon: home:spawn failed: ${err}\n`)
+      const errMsg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`daemon: home:spawn failed: ${errMsg}\n`)
+      void gateway.send(userId, `_Spawn failed: ${errMsg}_`).catch(() => {})
     }
   }
 }
