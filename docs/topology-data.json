@@ -213,12 +213,6 @@
       "desc": "Liveness grammar: nudge roles that post without expected sentinel"
     },
     {
-      "id": "daemon_reply-guard",
-      "label": "daemon/reply-guard.ts",
-      "layer": "domain",
-      "desc": "Reply guard: nudge sessions that go silent on user-authored messages"
-    },
-    {
       "id": "daemon_phase-budget",
       "label": "daemon/phase-budget.ts",
       "layer": "domain",
@@ -328,19 +322,7 @@
     ],
     [
       "daemon",
-      "daemon_commands_status"
-    ],
-    [
-      "daemon",
-      "daemon_router"
-    ],
-    [
-      "daemon",
       "daemon_pr-watch"
-    ],
-    [
-      "daemon",
-      "daemon_reply-guard"
     ],
     [
       "daemon",
@@ -349,6 +331,10 @@
     [
       "daemon",
       "daemon_anchor-state"
+    ],
+    [
+      "daemon",
+      "daemon_router"
     ],
     [
       "daemon_sessions",
@@ -460,10 +446,6 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_reply-guard"
-    ],
-    [
-      "daemon_bridge-server",
       "daemon_anchor-state"
     ],
     [
@@ -572,10 +554,6 @@
     ],
     [
       "daemon_router",
-      "daemon_dashboard"
-    ],
-    [
-      "daemon_router",
       "daemon_sessions"
     ],
     [
@@ -641,10 +619,6 @@
     [
       "daemon_router",
       "daemon_permission"
-    ],
-    [
-      "daemon_router",
-      "daemon_reply-guard"
     ],
     [
       "daemon_router",
@@ -731,18 +705,6 @@
       "daemon_protocol-registry"
     ],
     [
-      "daemon_reply-guard",
-      "daemon_bridge-transport"
-    ],
-    [
-      "daemon_reply-guard",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_reply-guard",
-      "daemon_config"
-    ],
-    [
       "daemon_phase-budget",
       "daemon_sessions"
     ],
@@ -772,10 +734,6 @@
     ],
     [
       "daemon_adversarial",
-      "daemon_util"
-    ],
-    [
-      "daemon_adversarial",
       "daemon_protocol-registry"
     ],
     [
@@ -789,6 +747,10 @@
     [
       "daemon_adversarial",
       "daemon_anchor-state"
+    ],
+    [
+      "daemon_adversarial",
+      "daemon_util"
     ],
     [
       "daemon_adversarial",
@@ -812,10 +774,6 @@
     ],
     [
       "daemon_build",
-      "daemon_util"
-    ],
-    [
-      "daemon_build",
       "daemon_protocol-registry"
     ],
     [
@@ -833,6 +791,10 @@
     [
       "daemon_build",
       "shared_constants"
+    ],
+    [
+      "daemon_build",
+      "daemon_util"
     ],
     [
       "daemon_build",
@@ -901,6 +863,10 @@
     [
       "daemon_commands_global",
       "daemon_adversarial"
+    ],
+    [
+      "daemon_commands_global",
+      "daemon_design"
     ],
     [
       "daemon_commands_global",
