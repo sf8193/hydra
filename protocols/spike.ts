@@ -1,4 +1,4 @@
-import { protocol, mechanicsBlock } from '../daemon/protocol-dsl.js'
+import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
 
 export default protocol('spike', {
   emoji: '🔬',
@@ -49,24 +49,18 @@ export default protocol('spike', {
       phase: 'exploring',
       actor: 'explorer',
       options: ['done'] as const,
+      descriptions: { done: 'your summary' },
       events: { done: 'wrap_up' },
     },
   },
 
+  roleConfig: {
+    explorer: { cadence: 'per-phase', orient: `Read the question and any referenced code, files, or documents. Investigate depth-first — follow the evidence, don't survey.` },
+  },
+
   seed: {
-    explorer: (ctx) => mechanicsBlock({
-      tmuxName: ctx.name,
-      role: 'explorer',
-      protocol: 'spike investigation',
-      sessionId: ctx.sessionId,
-      threadId: ctx.threadId,
-      tag: [
-        { phase: 'exploring', tag: '[checkpoint]' },
-        { phase: 'reporting', tag: '[report]' },
-      ],
-      cadence: 'per-phase',
-      orient: `Read the question and any referenced code, files, or documents. Investigate depth-first — follow the evidence, don't survey.`,
-    }) + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nPost \`[checkpoint]\` with progress as you go. When your investigation is complete, call \`decide('done', 'your summary')\` — then post your final \`[report]\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
+    explorer: (ctx) => protocolSeed(ctx.protocol, 'explorer', ctx)
+      + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nPost your final \`[report]\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
   },
 
   turnNotification: (_run, prevContent) =>

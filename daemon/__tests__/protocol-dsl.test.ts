@@ -293,6 +293,160 @@ describe('protocol DSL validation', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Phase interaction classification
+// ---------------------------------------------------------------------------
+
+describe('phaseInteraction', () => {
+  test('sentinel-only phase returns sentinel mode', () => {
+    expect(review.phaseInteraction('critic_turn')).toEqual({ mode: 'sentinel', tag: '[critic→owner]' })
+    expect(review.phaseInteraction('owner_turn')).toEqual({ mode: 'sentinel', tag: '[owner→critic]' })
+  })
+
+  test('decide-only phase returns decide mode with sentinel tag', () => {
+    expect(build.phaseInteraction('reviewing')).toEqual({ mode: 'decide', tag: '[critic→builder]' })
+  })
+
+  test('both sentinel and decide returns both mode', async () => {
+    const spike = (await import('../../protocols/spike.js')).default
+    expect(spike.phaseInteraction('exploring')).toEqual({ mode: 'both', tag: '[checkpoint]' })
+  })
+
+  test('terminal phase returns undefined', () => {
+    expect(review.phaseInteraction('complete')).toBeUndefined()
+    expect(review.phaseInteraction('cancelled')).toBeUndefined()
+  })
+
+  test('rejects sentinel without replyEvent or decision (inert sentinel)', () => {
+    expect(() => protocol('test-inert', {
+      emoji: '🧪', display: 'Test',
+      roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: { done: 'end' } }, end: { actor: 'a', on: {} } },
+      windows: {},
+      sentinels: { start: '[tag]' },
+    })).toThrow('sentinel "[tag]" but no replyEvent or decision')
+  })
+})
+
+describe('roleConfig', () => {
+  test('returns declared config', () => {
+    expect(review.roleConfig('critic')).toEqual({ cadence: 'per-round', waits: true })
+  })
+
+  test('returns defaults for undeclared role', () => {
+    expect(review.roleConfig('owner')).toEqual({ cadence: 'per-round', waits: false })
+  })
+
+  test('spike explorer has per-phase cadence with orient', async () => {
+    const spike = (await import('../../protocols/spike.js')).default
+    const cfg = spike.roleConfig('explorer')
+    expect(cfg.cadence).toBe('per-phase')
+    expect(cfg.orient).toContain('depth-first')
+  })
+
+  test('rejects roleConfig for unknown role', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad',
+      roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: {} } },
+      windows: {},
+      roleConfig: { nobody: { cadence: 'per-round' } },
+    })).toThrow('roleConfig for unknown role "nobody"')
+  })
+
+  test('rejects per-phase cadence without orient', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad',
+      roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: {} } },
+      windows: {},
+      roleConfig: { a: { cadence: 'per-phase' } },
+    })).toThrow('cadence "per-phase" but no orient')
+  })
+
+  test('rejects description key not in options', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad',
+      roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: {} } },
+      windows: {},
+      decisions: { d: { phase: 'start', actor: 'a', options: ['yes', 'no'], descriptions: { yse: 'typo' } } },
+    })).toThrow('description key "yse" is not a declared option')
+  })
+})
+
+describe('protocolSeed', () => {
+  test('generates decide instructions from protocol declarations', () => {
+    const seed = build.seed('critic', { name: 'drift', sessionId: 'a', threadId: 't', rounds: 3 })!
+    expect(seed).toContain("decide('approve'")
+    expect(seed).toContain("decide('request_changes'")
+    expect(seed).toContain('does NOT advance')
+  })
+
+  test('generates dual-mode instructions for both sentinel+decide', async () => {
+    const spike = (await import('../../protocols/spike.js')).default
+    const seed = spike.seed('explorer', { name: 'drift', sessionId: 'a', threadId: 't', rounds: 1 })!
+    expect(seed).toContain("decide('done'")
+    expect(seed).toContain('[checkpoint]')
+    expect(seed).toContain('for progress')
+    expect(seed).not.toContain('does NOT advance')
+  })
+
+  test('auto-injects protocol into SeedContext', () => {
+    const seed = review.seed('critic', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })!
+    expect(seed).toContain('[critic→owner]')
+  })
+
+  test('auto-fallback generates seed for role with sentinels but no explicit seed', () => {
+    const p = protocol('test-fallback', {
+      emoji: '🧪', display: 'Test',
+      roles: { worker: 'Worker', boss: 'Boss' },
+      phases: {
+        working: { actor: 'worker', on: { done: 'end' }, replyEvent: 'done' },
+        end: { actor: 'boss', on: {} },
+      },
+      windows: {},
+      sentinels: { working: '[done]' },
+      roleConfig: { worker: { cadence: 'per-round' } },
+    })
+    const seed = p.seed('worker', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })!
+    expect(seed).toContain('[done]')
+    expect(seed).toContain('per round')
+  })
+
+  test('auto-fallback generates seed for decide-only role (no sentinels)', () => {
+    const p = protocol('test-decide-only', {
+      emoji: '🧪', display: 'Test',
+      roles: { judge: 'Judge', defendant: 'Defendant' },
+      phases: {
+        judging: { actor: 'judge', on: { guilty: 'end', innocent: 'end' } },
+        end: { actor: 'defendant', on: {} },
+      },
+      windows: {},
+      decisions: { verdict: { phase: 'judging', actor: 'judge', options: ['guilty', 'innocent'] as const, events: { guilty: 'guilty', innocent: 'innocent' } } },
+    })
+    const seed = p.seed('judge', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })!
+    expect(seed).toContain("decide('guilty'")
+    expect(seed).toContain("decide('innocent'")
+    expect(seed).not.toContain('FIRST LINE')
+  })
+
+  test('passive role with only roleConfig returns undefined seed', () => {
+    const p = protocol('test-passive', {
+      emoji: '🧪', display: 'Test',
+      roles: { observer: 'Observer', worker: 'Worker' },
+      phases: {
+        working: { actor: 'worker', on: { done: 'end' }, replyEvent: 'done' },
+        end: { actor: 'worker', on: {} },
+      },
+      windows: {},
+      sentinels: { working: '[done]' },
+      roleConfig: { observer: { cadence: 'per-round' } },
+    })
+    expect(p.seed('observer', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Default cleanup behavior on live protocols
 // ---------------------------------------------------------------------------
 

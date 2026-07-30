@@ -1,4 +1,4 @@
-import { protocol, mechanicsBlock } from '../daemon/protocol-dsl.js'
+import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
 
 export default protocol('build', {
   emoji: '🔨',
@@ -43,22 +43,19 @@ export default protocol('build', {
       phase: 'reviewing',
       actor: 'critic',
       options: ['approve', 'request_changes'] as const,
+      descriptions: { approve: 'why it ships', request_changes: 'what to fix' },
       events: { approve: 'critic_lgtm', request_changes: 'critic_feedback' },
       finalEvent: 'critic_final',
     },
   },
 
+  roleConfig: {
+    critic: { cadence: 'per-round', waits: true },
+  },
+
   seed: {
-    critic: (ctx) => mechanicsBlock({
-      tmuxName: ctx.name as string,
-      role: 'critic',
-      protocol: `${ctx.rounds}-round build review`,
-      sessionId: ctx.sessionId,
-      threadId: ctx.threadId,
-      tag: '[critic→builder]',
-      cadence: 'per-round',
-      waits: true,
-    }) + `\n\n**How to advance:** You MUST use the \`decide\` tool to advance the protocol:\n- To approve: \`decide('approve', 'why it ships')\`\n- To request changes: \`decide('request_changes', 'what to fix')\`\nPosting \`[critic→builder]\` alone does NOT advance — the \`decide\` call is required.\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
+    critic: (ctx) => protocolSeed(ctx.protocol, 'critic', ctx)
+      + `\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
   },
 
   ownerKickoff: (params) => {
