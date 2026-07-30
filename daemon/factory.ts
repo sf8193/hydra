@@ -252,18 +252,15 @@ export function factoryRetry(
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can retry it.' }
-  if (state.phase !== 'awaiting_pm' && state.phase !== 'building') return { error: `Cannot retry — build is in phase "${state.phase}", expected "awaiting_pm" or "building".` }
+  if (state.phase !== 'awaiting_pm') return { error: `Cannot retry — build is in phase "${state.phase}", expected "awaiting_pm".` }
 
   if (!state.builderSessionId || !state.builderThreadId) return { error: 'Builder session not found — use factory_build to start a new build.' }
   const builderInfo = registry.get(state.builderSessionId)
   if (!builderInfo) return { error: 'Builder session no longer exists — use factory_build to start a new build.' }
 
-  const isResend = state.phase === 'building'
   state.phase = 'building'
-  if (!isResend) {
-    state.retryCount++
-    syncPhaseToRegistry(state)
-  }
+  state.retryCount++
+  syncPhaseToRegistry(state)
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
@@ -448,6 +445,10 @@ async function spawnBuilder(
   builderSessionToTicket.set(result.sessionId, state.ticket)
   builderThreadToTicket.set(result.threadId, state.ticket)
 
+  // Stamp registry fields for sweep notifications + phase-aware restart messages.
+  // NOTE: these are informational only — the in-memory `builds` map is NOT reconstructed
+  // from registry on restart. Factory tools (retry/accept/abandon) will not work after
+  // restart; the PM must use peek_session + kill_session directly.
   const builderInfo = registry.get(result.sessionId)
   if (builderInfo) {
     builderInfo.isFactoryBuilder = true
