@@ -8,9 +8,7 @@ import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
-const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout } = __test
-
-const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
+const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS } = __test
 
 type HarnessOpts = {
   rounds?: number

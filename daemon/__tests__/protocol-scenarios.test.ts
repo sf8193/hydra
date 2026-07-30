@@ -397,14 +397,15 @@ describe('review: notifyOwnerSummary fires on cleanup entry', () => {
 // Extension semantics
 // ---------------------------------------------------------------------------
 
-describe('review: extension resets window, does not add minutes', () => {
-  test('timeout fires at original window duration after extension', async () => {
+describe('review: extension is a full window reset (minutes arg is advisory)', () => {
+  test('timeout fires at original window duration, not window + requested minutes', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    // Extend by "5 minutes" — but the actual mechanism is a full window reset
+    // onRunExtend records minutes in the decision context ("+5m") for observability,
+    // but calls resetTimeout(run) which always uses protocol.windowMs(phase).
     h.extend('critic', 'reading codebase', 5)
 
-    // Advance by the original 10m window — timeout fires (not 10m + 5m)
+    // Full 10m window fires — not 10m + 5m
     await h.tick(10 * 60_000)
 
     expect(h.phase).toBe('cancelled')
