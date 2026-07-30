@@ -1,5 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
+import { protocolEvents } from '../protocol-runner.js'
+import type { CompletionEvent } from '../protocol-types.js'
 import { reviewMachine, CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS } from '../adversarial.js'
 import { buildMachine, BUILDER_SENTINEL, CRITIC_SENTINEL as BUILD_CRITIC_SENTINEL, SUMMARY_SENTINEL as BUILD_SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS as BUILD_CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS as BUILD_OWNER_TIMEOUT_MS } from '../build.js'
 
@@ -240,5 +242,128 @@ describe('protocol DSL validation', () => {
       windows: {},
     })
     expect(Object.isFrozen(p)).toBe(true)
+  })
+
+  test('cleanupPhase gets default onEnter when not specified', () => {
+    const p = protocol('defaults', {
+      emoji: '🧪', display: 'Defaults',
+      roles: { a: 'A', b: 'B' },
+      phases: {
+        working: { actor: 'a', on: { done: 'cleanup', cancel: 'cancelled' } },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted' },
+        complete: { actor: 'a', on: {} },
+        cancelled: { actor: 'a', on: {} },
+      },
+      windows: { cleanup: '5m' },
+      cleanupPhase: 'cleanup',
+      cancelPhase: 'cancelled',
+    })
+    expect(p.phases.cleanup.onEnter).toEqual(['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'])
+  })
+
+  test('cleanupPhase with explicit onEnter keeps it (no default injection)', () => {
+    const p = protocol('explicit', {
+      emoji: '🧪', display: 'Explicit',
+      roles: { a: 'A' },
+      phases: {
+        working: { actor: 'a', on: { done: 'cleanup' } },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted', onEnter: ['backstopTimer'] },
+        complete: { actor: 'a', on: {} },
+      },
+      windows: { cleanup: '5m' },
+      cleanupPhase: 'cleanup',
+    })
+    expect(p.phases.cleanup.onEnter).toEqual(['backstopTimer'])
+  })
+
+  test('cleanupPhase with empty onEnter suppresses defaults', () => {
+    const p = protocol('optout', {
+      emoji: '🧪', display: 'OptOut',
+      roles: { a: 'A' },
+      phases: {
+        working: { actor: 'a', on: { done: 'cleanup' } },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted', onEnter: [] },
+        complete: { actor: 'a', on: {} },
+      },
+      windows: { cleanup: '5m' },
+      cleanupPhase: 'cleanup',
+    })
+    expect(p.phases.cleanup.onEnter).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Default cleanup behavior on live protocols
+// ---------------------------------------------------------------------------
+
+describe('live protocol cleanup defaults', () => {
+  test('review cleanup phase has default behaviors', () => {
+    expect(review.phases.cleanup.onEnter).toEqual(['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'])
+  })
+
+  test('build closing phase has default behaviors', () => {
+    expect(build.phases.closing.onEnter).toEqual(['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'])
+  })
+
+  test('spike reporting phase keeps explicit override (no killNonOwner, no notifyOwnerSummary)', async () => {
+    const spike = (await import('../../protocols/spike.js')).default
+    expect(spike.phases.reporting.onEnter).toEqual(['backstopTimer'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ProtocolEventBus — emission behavior
+// ---------------------------------------------------------------------------
+
+describe('ProtocolEventBus', () => {
+  test('emitComplete delivers event to listeners', () => {
+    const received: CompletionEvent[] = []
+    const listener = (e: CompletionEvent) => received.push(e)
+    protocolEvents.onComplete(listener)
+    try {
+      const event: CompletionEvent = {
+        protocol: 'test', threadId: 't1', rounds: { completed: 2, requested: 3 },
+        outcome: 'complete', decisions: [], durationMs: 1000,
+      }
+      protocolEvents.emitComplete(event)
+      expect(received).toHaveLength(1)
+      expect(received[0].protocol).toBe('test')
+      expect(received[0].outcome).toBe('complete')
+    } finally {
+      protocolEvents.offComplete(listener)
+    }
+  })
+
+  test('emitComplete isolates per-listener errors — throwing listener does not skip subsequent listeners', () => {
+    const received: string[] = []
+    const first = () => { received.push('first') }
+    const throwing = () => { throw new Error('boom') }
+    const third = () => { received.push('third') }
+    protocolEvents.onComplete(first)
+    protocolEvents.onComplete(throwing)
+    protocolEvents.onComplete(third)
+    try {
+      const event: CompletionEvent = {
+        protocol: 'test', threadId: 't1', rounds: { completed: 0, requested: 1 },
+        outcome: 'cancelled', reason: 'test', decisions: [], durationMs: 0,
+      }
+      expect(() => protocolEvents.emitComplete(event)).not.toThrow()
+      expect(received).toEqual(['first', 'third'])
+    } finally {
+      protocolEvents.offComplete(first)
+      protocolEvents.offComplete(throwing)
+      protocolEvents.offComplete(third)
+    }
+  })
+
+  test('offComplete removes listener', () => {
+    let count = 0
+    const listener = () => { count++ }
+    protocolEvents.onComplete(listener)
+    protocolEvents.emitComplete({ protocol: 'x', threadId: 'x', rounds: { completed: 0, requested: 0 }, outcome: 'complete', decisions: [], durationMs: 0 })
+    expect(count).toBe(1)
+    protocolEvents.offComplete(listener)
+    protocolEvents.emitComplete({ protocol: 'x', threadId: 'x', rounds: { completed: 0, requested: 0 }, outcome: 'complete', decisions: [], durationMs: 0 })
+    expect(count).toBe(1)
   })
 })

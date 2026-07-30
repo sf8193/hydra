@@ -65,6 +65,7 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
     phase: 'critic_turn',
     currentRound: 1,
     rounds: 3,
+    startedAt: Date.now(),
     params: {},
     participants: new Map([['critic', 'test-critic'], ['owner', 'test-owner']]),
     sessionToRole: new Map([['test-critic', 'critic'], ['test-owner', 'owner']]),
@@ -384,5 +385,61 @@ describe('spike protocol structure', () => {
   test('reporting phase has backstop timer (explorer stays alive to post report)', () => {
     expect(spike.phases.reporting.onEnter).toContain('backstopTimer')
     expect(spike.phases.reporting.onEnter).not.toContain('killNonOwner')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Completion event construction — integration tests
+// ---------------------------------------------------------------------------
+
+import { protocolEvents, cancelRun } from '../protocol-runner.js'
+import type { CompletionEvent } from '../protocol-types.js'
+
+describe('completion event — cancelRun', () => {
+  test('cancel during round 1 reports 0 completed rounds', async () => {
+    const run = createTestRun({ currentRound: 1, rounds: 3, startedAt: Date.now() - 5000, params: { topic: 'test cancel' } })
+    const received: CompletionEvent[] = []
+    const listener = (e: CompletionEvent) => received.push(e)
+    protocolEvents.onComplete(listener)
+    try {
+      await cancelRun(run as any, 'test timeout')
+      expect(received).toHaveLength(1)
+      expect(received[0].outcome).toBe('cancelled')
+      expect(received[0].reason).toBe('test timeout')
+      expect(received[0].rounds.completed).toBe(0)
+      expect(received[0].rounds.requested).toBe(3)
+      expect(received[0].protocol).toBe('test-review')
+      expect(received[0].topic).toBe('test cancel')
+      expect(received[0].durationMs).toBeGreaterThanOrEqual(5000)
+    } finally {
+      protocolEvents.offComplete(listener)
+    }
+  })
+
+  test('cancel during round 3 reports 2 completed rounds', async () => {
+    const run = createTestRun({ currentRound: 3, rounds: 3, startedAt: Date.now() })
+    const received: CompletionEvent[] = []
+    const listener = (e: CompletionEvent) => received.push(e)
+    protocolEvents.onComplete(listener)
+    try {
+      await cancelRun(run as any, 'user cancelled')
+      expect(received).toHaveLength(1)
+      expect(received[0].rounds.completed).toBe(2)
+    } finally {
+      protocolEvents.offComplete(listener)
+    }
+  })
+
+  test('event fires before run is cleaned up from maps', async () => {
+    const run = createTestRun({ startedAt: Date.now() })
+    let runExistedDuringEmit = false
+    const listener = () => { runExistedDuringEmit = runs.has(run.id) }
+    protocolEvents.onComplete(listener)
+    try {
+      await cancelRun(run as any, 'ordering test')
+      expect(runExistedDuringEmit).toBe(true)
+    } finally {
+      protocolEvents.offComplete(listener)
+    }
   })
 })
