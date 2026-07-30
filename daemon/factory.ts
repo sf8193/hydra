@@ -634,7 +634,7 @@ function cleanupState(ticket: string): void {
 // Event bus subscriptions
 // ---------------------------------------------------------------------------
 
-const FACTORY_DONE_RE = /^\[done\]/
+const FACTORY_DONE_RE = /^\[done\]/m
 
 function factoryDoneDetection({ sessionId, text }: { sessionId: string; text: string }): void {
   if (!builderSessionToTicket.has(sessionId)) return
@@ -696,7 +696,7 @@ export async function sweepOrphanedBuilders(): Promise<void> {
     if (info.factoryPhase === 'awaiting_pm') {
       process.stderr.write(`daemon: factory: leaving awaiting_pm builder ${info.tmuxName} alive${ticketInfo}\n`)
       if (pmThreadId) {
-        void safeSend(pmThreadId, `🏭 **Builder survived restart** ℹ️\nBuilder \`${info.tmuxName}\`${ticketInfo} is still alive with completed work. Inspect the tree, peek the builder, or kill it manually when done.`).catch(() => {})
+        void safeSend(pmThreadId, `🏭 **Builder survived restart** ℹ️\nBuilder \`${info.tmuxName}\`${ticketInfo} is still alive with completed work. Factory ticket state was lost — use \`peek_session("${info.tmuxName}")\` to inspect, then \`kill_session\` when done. Work remains on disk.`).catch(() => {})
       }
       continue
     }
