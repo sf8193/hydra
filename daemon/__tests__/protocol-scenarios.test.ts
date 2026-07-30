@@ -322,3 +322,92 @@ describe('build: review timeout cancels', () => {
     expect(h.completionEvents[0].outcome).toBe('cancelled')
   })
 })
+
+describe('build: reply alone in reviewing phase does not advance', () => {
+  test('reviewing phase requires decide(), reply is ignored', async () => {
+    h = createHarness(build, { rounds: 3 })
+
+    await h.reply('builder', '[builder→critic]\nDone.')
+    expect(h.phase).toBe('reviewing')
+
+    // Critic posts a reply instead of calling decide — ignored
+    await h.reply('critic', '[critic→builder]\nLooks ok I guess.')
+    expect(h.phase).toBe('reviewing')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Guard rails and concurrency
+// ---------------------------------------------------------------------------
+
+describe('reentrancy guard (transitioningRuns)', () => {
+  test('concurrent replies — second is dropped', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    // Fire two replies without awaiting the first. The first enters the
+    // transitioningRuns guard before its first yield; the second hits the
+    // guard and returns immediately.
+    const p1 = h.reply('critic', '[critic→owner]\nFirst critique.')
+    const p2 = h.reply('critic', '[critic→owner]\nSecond critique (dropped).')
+    await Promise.all([p1, p2])
+
+    // Only one transition: critic_turn → owner_turn
+    expect(h.phase).toBe('owner_turn')
+    expect(h.round).toBe(1)
+  })
+})
+
+describe('double-cancel guard (cancellingRuns)', () => {
+  test('simultaneous cancel paths produce only one completion event', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    // Trigger cancel from two sources simultaneously
+    const p1 = h.cancel('timeout')
+    const p2 = h.cancel('disconnect')
+    await Promise.all([p1, p2])
+
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Behavior verification
+// ---------------------------------------------------------------------------
+
+describe('review: notifyOwnerSummary fires on cleanup entry', () => {
+  test('owner receives summary format notification when cleanup begins', async () => {
+    h = createHarness(review, { rounds: 1 })
+
+    await h.reply('critic', '[critic→owner]\nCritique.')
+    await h.reply('owner', '[owner→critic]\nDefense.')
+    expect(h.phase).toBe('cleanup')
+
+    // notifyOwnerSummary queues a notification to the owner
+    const notes = h.actorNotifications('owner')
+    expect(notes.some(n => n.includes('Post a closing summary'))).toBe(true)
+    expect(notes.some(n => n.includes('[summary]'))).toBe(true)
+
+    // Thread gets a "concluded" status line
+    expect(h.threadMessages.some(m => m.text.includes('concluded'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Extension semantics
+// ---------------------------------------------------------------------------
+
+describe('review: extension resets window, does not add minutes', () => {
+  test('timeout fires at original window duration after extension', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    // Extend by "5 minutes" — but the actual mechanism is a full window reset
+    h.extend('critic', 'reading codebase', 5)
+
+    // Advance by the original 10m window — timeout fires (not 10m + 5m)
+    await h.tick(10 * 60_000)
+
+    expect(h.phase).toBe('cancelled')
+    expect(h.isTerminated).toBe(true)
+  })
+})

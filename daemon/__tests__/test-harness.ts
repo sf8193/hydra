@@ -226,8 +226,11 @@ export class TestHarness {
   // Internals
   // ---------------------------------------------------------------------------
 
+  // Gateway stubs resolve synchronously, so the real async depth through
+  // afterTransition → safeSend/notifyNextActor → resetTimeout is bounded
+  // at ~4 levels. 20 iterations provides headroom without a formal analysis.
   private async flush(): Promise<void> {
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       await new Promise<void>(resolve => process.nextTick(resolve))
     }
   }
