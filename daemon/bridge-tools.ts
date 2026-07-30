@@ -18,6 +18,7 @@ export const BRIDGE_TOOLS = [
   { name: 'unwatch_pr', description: 'Stop watching a GitHub PR.', inputSchema: { type: 'object', properties: { pr_url: { type: 'string' } }, required: ['pr_url'] } },
   { name: 'list_watches', description: 'List all PRs being watched (your session or all).', inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Show all watches, not just yours' } } } },
   { name: 'decide', description: 'Make a protocol decision. The machine routes on value; your reasoning rides `because` and is narrated to the thread. For build reviews: value is "approve" or "request_changes". For post-pass lenses: value is "clean" or "findings".', inputSchema: { type: 'object', properties: { value: { type: 'string', description: 'The decision value — one of the options the protocol declares for this phase.' }, because: { type: 'string', description: 'Why. Posted to the thread as your review content.' } }, required: ['value', 'because'] } },
+  { name: 'extend_phase', description: 'Request more time in the current protocol phase. Resets the idle timeout. Use when you need more time to complete your work (e.g. reading a large codebase). The daemon posts a status update to the thread.', inputSchema: { type: 'object', properties: { reason: { type: 'string', description: 'Why you need more time — shown in the thread status.' }, minutes: { type: 'number', description: 'Additional minutes requested (default: 5, max: 15).' } }, required: ['reason'] } },
 ]
 
 export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])

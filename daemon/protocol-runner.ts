@@ -3,11 +3,10 @@ import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress, waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-import { isAlive } from './util.js'
+import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
-import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import type { Protocol } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
@@ -31,12 +30,21 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   participants: Map<string, string>
   sessionToRole: Map<string, string>
   timeout?: ReturnType<typeof setTimeout>
+  _warningTimeout?: ReturnType<typeof setTimeout>
+  _totalTimeout?: ReturnType<typeof setTimeout>
+  _extensions: number
+  _phaseStartedAt: number
+  _resumeAttempts?: number
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
   strike: boolean
   statusHistory: string[]
   ext: Ext
 }
+
+const MAX_EXTENSIONS_PER_PHASE = 2
+const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
+const TOTAL_PHASE_CAP_FACTOR = 3
 
 const runs = new Map<string, ProtocolRun>()
 const threadToRun = new Map<string, string>()
@@ -91,6 +99,8 @@ export async function startProtocolRun(
     participants: new Map(),
     sessionToRole: new Map(),
     timeout: undefined,
+    _extensions: 0,
+    _phaseStartedAt: Date.now(),
     disconnectTimers: new Map(),
     decisions: [],
     messageIds: [],
@@ -269,6 +279,36 @@ export async function onRunDecision(sessionId: string, value: string, because: s
 }
 
 // ---------------------------------------------------------------------------
+// Phase extension
+// ---------------------------------------------------------------------------
+
+export function onRunExtend(sessionId: string, reason: string, minutes: number): { ok: boolean; reason?: string } {
+  const lookup = getRunAndRole(sessionId)
+  if (!lookup) return { ok: false, reason: 'no active protocol run' }
+  const { run, role } = lookup
+
+  const phaseDef = run.protocol.phases[run.phase]
+  if (phaseDef?.actor !== role) {
+    return { ok: false, reason: `only the active actor can extend (current: ${phaseDef?.actor}, caller: ${role})` }
+  }
+
+  if (run._extensions >= MAX_EXTENSIONS_PER_PHASE) {
+    return { ok: false, reason: `max extensions reached (${MAX_EXTENSIONS_PER_PHASE} per phase)` }
+  }
+
+  run._extensions++
+  run.decisions.push({ phase: run.phase, role, value: 'extend', because: reason, context: `+${minutes}m` })
+  resetTimeout(run)
+
+  const info = registry.get(sessionId)
+  const name = info?.tmuxName ?? sessionId.slice(0, 8)
+  void safeSend(run.threadId, `_⏳ ${name} requested +${minutes}m: ${reason} (${run._extensions}/${MAX_EXTENSIONS_PER_PHASE})_`)
+  process.stderr.write(`daemon: ${run.protocol.name} run: ${name} extended phase "${run.phase}" +${minutes}m (${run._extensions}/${MAX_EXTENSIONS_PER_PHASE}): ${reason}\n`)
+
+  return { ok: true }
+}
+
+// ---------------------------------------------------------------------------
 // Disconnect / reconnect
 // ---------------------------------------------------------------------------
 
@@ -288,7 +328,7 @@ export function onRunDisconnect(sessionId: string): void {
     run.disconnectTimers.set(sessionId, setTimeout(async () => {
       if (isTerminal(run)) return
       const currentInfo = registry.get(sessionId)
-      const attempts = (run.ext._resumeAttempts as number | undefined) ?? 0
+      const attempts = run._resumeAttempts ?? 0
       const decision = decideResume(
         transport.has(sessionId),
         currentInfo ? !isAlive(currentInfo) : true,
@@ -297,7 +337,7 @@ export function onRunDisconnect(sessionId: string): void {
       )
       if (decision === 'reconnected') { run.disconnectTimers.delete(sessionId); return }
       if (decision === 'resume') {
-        run.ext._resumeAttempts = attempts + 1
+        run._resumeAttempts = attempts + 1
         void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           void cancelRun(run, `${role} auto-resume failed`)
@@ -437,6 +477,10 @@ function halfForPhase(run: ProtocolRun): 'top' | 'bottom' {
 function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   if (run.phase !== from) return false
   run.phase = to
+  run._extensions = 0
+  run._phaseStartedAt = Date.now()
+  if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
+  if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
   return true
 }
 
@@ -447,6 +491,8 @@ function isTerminal(run: ProtocolRun): boolean {
 
 function clearTimers(run: ProtocolRun): void {
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
+  if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
+  if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
   for (const timer of run.disconnectTimers.values()) clearTimeout(timer)
   run.disconnectTimers.clear()
 }
@@ -682,17 +728,70 @@ async function fireTransition(run: ProtocolRun, event: string, content: string, 
 }
 
 function resetTimeout(run: ProtocolRun): void {
-  if (run.timeout) clearTimeout(run.timeout)
+  if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
+  if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
 
   const ms = run.protocol.windowMs(run.phase)
   if (!ms) return
 
   const phase = run.phase
+  const actorRole = run.protocol.phases[phase]?.actor
+  const actorSessionId = actorRole ? run.participants.get(actorRole) : undefined
+
+  if (ms > WARNING_BEFORE_TIMEOUT_MS) {
+    run._warningTimeout = setTimeout(() => {
+      if (run.phase !== phase || !actorSessionId) return
+      const info = registry.get(actorSessionId)
+      if (info?.turnState === 'working') {
+        process.stderr.write(`daemon: ${run.protocol.name} run: warning skipped — ${info.tmuxName} is actively working\n`)
+        return
+      }
+      const ctx = info ? getContextPercent(info.tmuxName) : '?'
+      const sentinel = run.protocol.sentinel(phase)
+      const hasDecision = Object.values(run.protocol.decisions).some(d => d.phase === phase)
+      const sentinelHint = hasDecision
+        ? `Use the \`decide\` tool to advance`
+        : sentinel ? `Post your \`${sentinel}\`` : 'Post your response'
+      const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
+      const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
+      const totalRemaining = Math.max(0, Math.round((run._phaseStartedAt + totalMs - Date.now()) / 60_000))
+      // Escalation: urgency text appears only after a deferral (elapsed > window), not on first warning
+      const urgency = elapsed > ms / 60_000 ? ` Phase has been running ${elapsed}m — ${totalRemaining}m until hard limit.` : ''
+      transport.sendOrQueue(actorSessionId, {
+        type: 'notification',
+        content: `[system] ⏰ Phase timeout in 2 minutes. ${sentinelHint} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
+        meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+      })
+      void safeSend(run.threadId, `_⏰ ${info?.tmuxName ?? 'actor'} warned: 2m remaining (${ctx} context)_`)
+      process.stderr.write(`daemon: ${run.protocol.name} run: warning sent to ${info?.tmuxName ?? actorSessionId} (${ctx} context, ${elapsed}m elapsed)\n`)
+    }, ms - WARNING_BEFORE_TIMEOUT_MS)
+  }
+
   run.timeout = setTimeout(async () => {
     if (run.phase !== phase) return
+    const info = actorSessionId ? registry.get(actorSessionId) : undefined
+    if (info?.turnState === 'working') {
+      process.stderr.write(`daemon: ${run.protocol.name} run: timeout deferred — ${info.tmuxName} is actively working\n`)
+      resetTimeout(run)
+      return
+    }
     process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
     await fireTransition(run, 'timeout', '', 'timed out')
   }, ms)
+
+  // Invariant: on deferral (recursive resetTimeout), _totalTimeout and
+  // _phaseStartedAt survive — they anchor to phase entry, not to the
+  // last reset. _extensions also survives (counts across the phase entry).
+  // Total backstop — unconditional, never resets, no turnState check.
+  // Prevents unbounded deferral from activity-based resets.
+  if (!run._totalTimeout) {
+    const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
+    run._totalTimeout = setTimeout(async () => {
+      if (isTerminal(run)) return
+      process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" hit total backstop (${Math.round(totalMs / 60_000)}m)\n`)
+      await fireTransition(run, 'timeout', '', 'total time exceeded')
+    }, totalMs)
+  }
 }
 
 async function completeRun(run: ProtocolRun): Promise<void> {

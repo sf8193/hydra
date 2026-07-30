@@ -466,6 +466,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         return { content: [{ type: 'text', text: `decided: ${value}` }] }
       }
 
+      case 'extend_phase': {
+        const reason = (args.reason as string)?.trim()
+        if (!reason) throw new Error('extend_phase requires a reason')
+        if (!callerSessionId) throw new Error('extend_phase requires a session context')
+        const minutes = Math.max(1, Math.min(Number(args.minutes) || 5, 15))
+
+        const { onRunExtend } = await import('./protocol-runner.js')
+        const result = onRunExtend(callerSessionId, reason, minutes)
+        if (!result.ok) throw new Error(result.reason)
+
+        return { content: [{ type: 'text', text: `phase extended by ${minutes}m: ${reason}` }] }
+      }
+
       default:
         return {
           content: [{ type: 'text', text: `unknown tool: ${name}` }],
