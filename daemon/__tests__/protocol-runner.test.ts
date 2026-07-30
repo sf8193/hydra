@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
-import { onRunReply, onRunDecision, onRunDisconnect, onRunReconnect, __test } from '../protocol-runner.js'
+import { onRunReply, onRunDecision, onRunDisconnect, onRunReconnect, onRunExtend, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 
 let origStderrWrite: typeof process.stderr.write
@@ -66,6 +66,8 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
     currentRound: 1,
     rounds: 3,
     startedAt: Date.now(),
+    _extensions: 0,
+    _phaseStartedAt: Date.now(),
     params: {},
     participants: new Map([['critic', 'test-critic'], ['owner', 'test-owner']]),
     sessionToRole: new Map([['test-critic', 'critic'], ['test-owner', 'owner']]),
@@ -441,5 +443,54 @@ describe('completion event — cancelRun', () => {
     } finally {
       protocolEvents.offComplete(listener)
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase extension
+// ---------------------------------------------------------------------------
+
+describe('extend_phase', () => {
+  test('extends phase and records decision', () => {
+    const run = createTestRun()
+    const result = onRunExtend('test-critic', 'reading large codebase', 5)
+    expect(result.ok).toBe(true)
+    expect(run.decisions).toHaveLength(1)
+    expect(run.decisions[0].value).toBe('extend')
+    expect(run.decisions[0].because).toBe('reading large codebase')
+    expect(run.decisions[0].context).toBe('+5m')
+  })
+
+  test('rejects after max extensions', () => {
+    const run = createTestRun()
+    onRunExtend('test-critic', 'first', 5)
+    onRunExtend('test-critic', 'second', 5)
+    const result = onRunExtend('test-critic', 'third', 5)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('max extensions')
+    expect(run.decisions).toHaveLength(2)
+  })
+
+  test('extensions reset on phase advance', async () => {
+    const run = createTestRun({ phase: 'owner_turn' })
+    run._extensions = 2
+
+    await onRunReply('test-owner', '[owner→critic]\nDefense.', 'test-thread', ['msg-1'])
+
+    expect(run.phase).toBe('critic_turn')
+    expect(run._extensions).toBe(0)
+  })
+
+  test('rejects for unknown session', () => {
+    createTestRun()
+    const result = onRunExtend('unknown-session', 'reason', 5)
+    expect(result.ok).toBe(false)
+  })
+
+  test('rejects non-actor caller', () => {
+    createTestRun({ phase: 'critic_turn' })
+    const result = onRunExtend('test-owner', 'I want more time', 5)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('only the active actor')
   })
 })

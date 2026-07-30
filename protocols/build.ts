@@ -58,7 +58,7 @@ export default protocol('build', {
       tag: '[critic→builder]',
       cadence: 'per-round',
       waits: true,
-    }) + `\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.\n\nTo approve: call decide('approve', 'why it ships').\nTo request changes: call decide('request_changes', 'what to fix').`,
+    }) + `\n\n**How to advance:** You MUST use the \`decide\` tool to advance the protocol:\n- To approve: \`decide('approve', 'why it ships')\`\n- To request changes: \`decide('request_changes', 'what to fix')\`\nPosting \`[critic→builder]\` alone does NOT advance — the \`decide\` call is required.\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
   },
 
   ownerKickoff: (params) => {
