@@ -227,7 +227,6 @@ export function factoryRetry(
   if (!state.builderSessionId || !state.builderThreadId) return { error: 'Builder session not found — use factory_build to start a new build.' }
   const builderInfo = registry.get(state.builderSessionId)
   if (!builderInfo) return { error: 'Builder session no longer exists — use factory_build to start a new build.' }
-  if (!transport.has(state.builderSessionId)) return { error: 'Builder bridge is disconnected — it may have crashed. Use factory_build to start a new build.' }
 
   state.phase = 'building'
   state.retryCount++
@@ -555,6 +554,7 @@ function onFactoryReviewCancelled(threadId: string): boolean {
 
   // Move to awaiting_pm so PM can retry
   state.phase = 'awaiting_pm'
+  syncPhaseToRegistry(state)
   void safeSend(state.pmThreadId, [
     `🏭 **Factory review cancelled** ⚠️`,
     `Ticket: \`${state.ticket}\``,
