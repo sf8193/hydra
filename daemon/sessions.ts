@@ -52,6 +52,8 @@ export type SessionInfo = {
   isFactoryBuilder?: boolean    // session is a factory builder — persisted for startup sweep
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
+  factoryTicket?: string       // factory ticket ID — for restart recovery info
+  factoryPhase?: string        // last known factory phase — for restart recovery info
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash

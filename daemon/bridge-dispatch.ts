@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild } from './factory.js'
+import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, type Difficulty } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -318,6 +318,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const builderModel = (args.builder_model as string | undefined)?.trim() || undefined
         const reviewerModel = (args.reviewer_model as string | undefined)?.trim() || undefined
         const reviewRounds = (args.review_rounds as number | undefined) ?? 3
+        const difficultyRaw = (args.difficulty as string | undefined)?.trim() || undefined
+        const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'] as const
+        const difficulty: Difficulty = (difficultyRaw && VALID_DIFFICULTIES.includes(difficultyRaw as Difficulty))
+          ? difficultyRaw as Difficulty : 'easy'
 
         if (!callerSessionId) throw new Error('factory_build requires a session context')
         const callerInfo = registry.get(callerSessionId)
@@ -331,15 +335,64 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           builderModel,
           reviewerModel,
           reviewRounds,
+          difficulty,
         )
 
         if ('error' in result) {
           return { content: [{ type: 'text', text: `Factory build failed: ${result.error}` }], isError: true }
         }
 
+        const warningNote = result.warning ? ` Note: ${result.warning}` : ''
         return {
-          content: [{ type: 'text', text: `Factory build started. Ticket: ${result.ticket}. Builder is forking from your session — results will be delivered as notifications in your thread. Continue working or wait for updates.` }],
+          content: [{ type: 'text', text: `Factory build started. Ticket: ${result.ticket}. Builder is forking from your session — results will be delivered as notifications in your thread.${warningNote}` }],
         }
+      }
+
+      case 'factory_retry': {
+        const ticket = args.ticket as string
+        const instructions = args.instructions as string
+        if (!callerSessionId) throw new Error('factory_retry requires a session context')
+
+        const result = factoryRetry(ticket, instructions, callerSessionId)
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: `Factory retry failed: ${result.error}` }], isError: true }
+        }
+        return { content: [{ type: 'text', text: `Retry instructions sent to builder. Ticket: ${ticket}. Waiting for [done].` }] }
+      }
+
+      case 'factory_accept': {
+        const ticket = args.ticket as string
+        if (!callerSessionId) throw new Error('factory_accept requires a session context')
+
+        const result = factoryAccept(ticket, callerSessionId)
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: `Factory accept failed: ${result.error}` }], isError: true }
+        }
+        return { content: [{ type: 'text', text: `Build accepted. Ticket: ${ticket}. Builder killed.` }] }
+      }
+
+      case 'factory_abandon': {
+        const ticket = args.ticket as string
+        if (!callerSessionId) throw new Error('factory_abandon requires a session context')
+
+        const result = factoryAbandon(ticket, callerSessionId)
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: `Factory abandon failed: ${result.error}` }], isError: true }
+        }
+        return { content: [{ type: 'text', text: `Build abandoned. Ticket: ${ticket}. Builder killed.` }] }
+      }
+
+      case 'factory_status': {
+        const ticket = (args.ticket as string | undefined)?.trim() || undefined
+        if (!callerSessionId) throw new Error('factory_status requires a session context')
+        const callerInfo = registry.get(callerSessionId)
+        if (!callerInfo) throw new Error('session not found')
+
+        const result = factoryStatus(callerInfo.threadId, ticket)
+        if (result.builds.length === 0) {
+          return { content: [{ type: 'text', text: 'No active factory builds.' }] }
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result.builds, null, 2) }] }
       }
 
       case 'watch_pr': {
