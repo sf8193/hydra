@@ -48,6 +48,7 @@ graph TD
     daemon_state-machine["state-machine.ts"]
     daemon_transcript-dump["transcript-dump.ts"]
     daemon_sentinel-nudge["sentinel-nudge.ts"]
+    daemon_reply-guard["reply-guard.ts"]
     daemon_phase-budget["phase-budget.ts"]
   end
 
@@ -77,10 +78,12 @@ graph TD
   daemon --> daemon_phase-budget
   daemon --> daemon_session-lifecycle
   daemon --> daemon_dashboard
+  daemon --> daemon_commands_status
+  daemon --> daemon_router
   daemon --> daemon_pr-watch
+  daemon --> daemon_reply-guard
   daemon --> daemon_util
   daemon --> daemon_anchor-state
-  daemon --> daemon_router
   daemon_sessions --> daemon_config
   daemon_sessions --> daemon_util
   daemon_bridge-transport --> daemon_config
@@ -108,6 +111,7 @@ graph TD
   daemon_bridge-server --> daemon_access
   daemon_bridge-server --> daemon_protocol-registry
   daemon_bridge-server --> daemon_sentinel-nudge
+  daemon_bridge-server --> daemon_reply-guard
   daemon_bridge-server --> daemon_anchor-state
   daemon_bridge-server --> daemon_cli-handler
   daemon_bridge-server --> daemon_pr-watch
@@ -135,6 +139,7 @@ graph TD
   daemon_anchor-state --> daemon_config
   daemon_anchor-state --> daemon_sessions
   daemon_router --> daemon_config
+  daemon_router --> daemon_dashboard
   daemon_router --> daemon_sessions
   daemon_router --> daemon_bridge-transport
   daemon_router --> daemon_access
@@ -152,6 +157,7 @@ graph TD
   daemon_router --> daemon_commands_watch
   daemon_router --> daemon_session-lifecycle
   daemon_router --> daemon_permission
+  daemon_router --> daemon_reply-guard
   daemon_router --> daemon_util
   daemon_router --> daemon_templates
   daemon_access --> daemon_config
@@ -173,6 +179,9 @@ graph TD
   daemon_sentinel-nudge --> daemon_bridge-transport
   daemon_sentinel-nudge --> daemon_sessions
   daemon_sentinel-nudge --> daemon_protocol-registry
+  daemon_reply-guard --> daemon_bridge-transport
+  daemon_reply-guard --> daemon_sessions
+  daemon_reply-guard --> daemon_config
   daemon_phase-budget --> daemon_sessions
   daemon_phase-budget --> daemon_bridge-transport
   daemon_phase-budget --> daemon_util
@@ -180,22 +189,22 @@ graph TD
   daemon_adversarial --> daemon_sessions
   daemon_adversarial --> daemon_session-lifecycle
   daemon_adversarial --> daemon_bridge-transport
+  daemon_adversarial --> daemon_util
   daemon_adversarial --> daemon_protocol-registry
   daemon_adversarial --> shared_constants
   daemon_adversarial --> daemon_state-machine
   daemon_adversarial --> daemon_anchor-state
-  daemon_adversarial --> daemon_util
   daemon_adversarial --> daemon_transcript-dump
   daemon_build --> daemon_config
   daemon_build --> daemon_sessions
   daemon_build --> daemon_session-lifecycle
   daemon_build --> daemon_bridge-transport
+  daemon_build --> daemon_util
   daemon_build --> daemon_protocol-registry
   daemon_build --> daemon_anchor-state
   daemon_build --> daemon_pr-watch
   daemon_build --> daemon_state-machine
   daemon_build --> shared_constants
-  daemon_build --> daemon_util
   daemon_build --> daemon_transcript-dump
   daemon_design --> daemon_config
   daemon_design --> daemon_sessions
@@ -213,7 +222,6 @@ graph TD
   daemon_commands_global --> daemon_commands_status
   daemon_commands_global --> daemon_build
   daemon_commands_global --> daemon_adversarial
-  daemon_commands_global --> daemon_design
   daemon_commands_global --> daemon_templates
   daemon_commands_global --> daemon_access
   daemon_commands_status --> daemon_config
