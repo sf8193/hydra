@@ -239,6 +239,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• ☠️ `kill` — kill this session',
     '• 👂 `listen` / 🔇 `unlisten` — mute/unmute message delivery',
     '• ⏸️ `pause` / ▶️ `unpause` — mark as paused (visual only)',
+    '• 📸 `peek` / `peek <name>` — screenshot the tmux pane',
     '• 📈 `usage` — context %, messages, runtime',
     '',
     '**Multi-agent** (thread):',

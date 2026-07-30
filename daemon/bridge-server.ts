@@ -230,16 +230,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       transport.set(sessionId, conn)
-      // Deliberately kept (diagnostics-only). This self-wipes the flap counter
-      // that trackRegistration('main') just fed, so the flap threshold can never
-      // trip and shouldHoldIncumbentMain stays inert. Removing it is the actual
-      // circuit-breaker fix — but on the live 5s flap, each reconnect reads
-      // hasOtherIncumbent=true (replace path), so an accumulating counter would
-      // cross the threshold in ~50s and refuse main's own reconnects, locking out
-      // the control channel. Held until the close cause is confirmed — the uptime +
-      // disconnect-reason instrumentation here is what makes that confirmation possible.
-      // TODO(fix-main-flap): remove flapTracker.delete('main') once the disconnect cause is confirmed.
-      if (sessionId === 'main' && !mainHadOtherIncumbent) flapTracker.delete('main')
       const tools = computeToolsForSession(sessionId, { allowMainTools: info?.allowMainTools })
       transport.sendToBridge(conn, {
         type: 'registered',

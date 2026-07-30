@@ -1,3 +1,7 @@
+import { execSync } from 'child_process'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { unlinkSync } from 'fs'
 import { gateway } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
@@ -300,5 +304,81 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
     debouncedRefreshListDisplay()
   } else {
     await reportError(msg.channelId, msg.id, 'respawn', 'failed to spawn session')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Peek — screenshot the tmux pane and post it to the thread
+// ---------------------------------------------------------------------------
+
+let hasFreezeCache: boolean | null = null
+function hasFreeze(): boolean {
+  if (hasFreezeCache === null) {
+    try { execSync('which freeze', { stdio: 'pipe' }); hasFreezeCache = true } catch { hasFreezeCache = false }
+  }
+  return hasFreezeCache
+}
+
+export async function handlePeekIntercept(msg: InboundMessage, targetName?: string): Promise<void> {
+  let info
+  let name: string
+
+  if (targetName) {
+    info = [...registry.values()].find(s => s.tmuxName === targetName)
+    if (!info) {
+      void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+      void gateway.send(msg.channelId, `No session named **${targetName}**`, { replyTo: msg.id }).catch(() => {})
+      return
+    }
+    name = info.tmuxName
+  } else {
+    info = registry.resolveThreadSessionFromMsg(msg)
+    if (!info) {
+      void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+      return
+    }
+    name = info.tmuxName
+  }
+
+  if (!tmuxHasSession(name)) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void gateway.send(msg.channelId, `**${name}** tmux not running`, { replyTo: msg.id }).catch(() => {})
+    return
+  }
+
+  void gateway.react(msg.channelId, msg.id, '📸').catch(() => {})
+
+  const ctx = getContextPercent(name)
+  const duration = formatDuration(Date.now() - info.createdAt)
+  const msgs = info.messageCount ?? 0
+  const header = `📸 **${name}** · ${ctx} · ${msgs} msgs · ${duration}`
+
+  if (hasFreeze()) {
+    const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
+    try {
+      const safeName = name.replace(/'/g, "'\\''")
+      execSync(
+        `tmux capture-pane -t '${safeName}' -e -p | freeze -o '${outPath}' --language bash`,
+        { stdio: 'pipe', timeout: 10000 },
+      )
+      await gateway.send(msg.channelId, header, { files: [outPath], replyTo: msg.id })
+      try { unlinkSync(outPath) } catch {}
+      return
+    } catch (err) {
+      process.stderr.write(`daemon: peek screenshot failed: ${err}\n`)
+      try { unlinkSync(outPath) } catch {}
+    }
+  }
+
+  // Fallback: text capture
+  try {
+    const safeName = name.replace(/'/g, "'\\''")
+    const text = execSync(
+      `tmux capture-pane -t '${safeName}' -p -S -60`,
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
+    ).trimEnd()
+    await gateway.send(msg.channelId, `${header}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``, { replyTo: msg.id })
+  } catch (err) {
+    await reportError(msg.channelId, msg.id, 'peek', `capture failed: ${err}`)
   }
 }
