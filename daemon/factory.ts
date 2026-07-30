@@ -17,7 +17,7 @@ import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
 import { registry } from './sessions.js'
 import { safeSend } from './util.js'
-import { resolveModelAlias, buildModel, reviewModel } from '../shared/constants.js'
+import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
 
@@ -40,6 +40,7 @@ type FactoryBuildState = {
   phase: FactoryPhase
   retryCount: number
   createdAt: number
+  reviewed: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,7 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
       phase: state.phase,
       outcome,
       retries: state.retryCount,
+      reviewed: state.reviewed,
       builderModel: state.builderModel ?? 'default',
       reviewerModel: state.reviewerModel ?? 'default',
       elapsed: Date.now() - state.createdAt,
@@ -91,11 +93,11 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
 export const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'] as const
 export type Difficulty = (typeof VALID_DIFFICULTIES)[number]
 
-// Late-bound: easy tier reads env vars (HYDRA_BUILD_MODEL / HYDRA_REVIEW_MODEL),
-// medium/hard are fixed escalations. Called per-build, not frozen at import.
+// Hardcoded per tier — consistent, no env-var surprise.
+// Easy = sonnet builds, opus reviews (Sam's request).
 function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
   switch (difficulty) {
-    case 'easy':   return { builder: buildModel(),              reviewer: reviewModel() }
+    case 'easy':   return { builder: 'claude-sonnet-4-6[1m]',  reviewer: 'claude-opus-4-6[1m]' }
     case 'medium': return { builder: 'claude-opus-4-6[1m]',    reviewer: 'claude-opus-4-8[1m]' }
     case 'hard':   return { builder: 'claude-opus-5[1m]',      reviewer: 'claude-fable-5[1m]' }
   }
@@ -108,9 +110,16 @@ function resolveModels(
 ): { builder: string; reviewer: string; warning?: string } {
   const ladder = getDifficultyLadder(difficulty)
 
-  // Explicit overrides take priority
+  // Explicit overrides take priority — validate against known models
   const builder = builderRaw ? (resolveModelAlias(builderRaw) ?? builderRaw) : ladder.builder
   const reviewer = reviewerRaw ? (resolveModelAlias(reviewerRaw) ?? reviewerRaw) : ladder.reviewer
+
+  if (builderRaw && !isKnownModel(builder)) {
+    return { builder: ladder.builder, reviewer: ladder.reviewer, warning: `Unknown builder model "${builderRaw}". Using ladder default.` }
+  }
+  if (reviewerRaw && !isKnownModel(reviewer)) {
+    return { builder, reviewer: ladder.reviewer, warning: `Unknown reviewer model "${reviewerRaw}". Using ladder default.` }
+  }
 
   // Check for collision (compare full IDs — different versions of same family are fine)
   const effectiveBuilder = builder.replace(/\[1m\]$/, '')
@@ -210,6 +219,7 @@ export function factoryBuild(
     phase: 'building',
     retryCount: 0,
     createdAt: Date.now(),
+    reviewed: false,
   }
   builds.set(ticket, state)
 
@@ -284,9 +294,10 @@ export function factoryAccept(
   if (state.phase !== 'awaiting_pm') return { error: `Cannot accept — build is in phase "${state.phase}", expected "awaiting_pm".` }
 
   state.phase = 'complete'
-  logBuild(state, 'accepted')
+  logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
-  void safeSend(state.pmThreadId, `🏭 **Factory build accepted** ✅\nTicket: \`${ticket}\``)
+  const reviewWarning = state.reviewed ? '' : '\n⚠️ **This build was NOT adversarially reviewed** (review failed or was cancelled).'
+  void safeSend(state.pmThreadId, `🏭 **Factory build accepted** ✅\nTicket: \`${ticket}\`${reviewWarning}`)
 
   killBuilder(state)
   cleanupState(ticket)
@@ -349,10 +360,6 @@ export function factoryStatus(
       builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
     })),
   }
-}
-
-export function hasFactoryBuild(threadId: string): boolean {
-  return [...builds.values()].some(s => s.pmThreadId === threadId && s.phase !== 'complete' && s.phase !== 'failed')
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +557,7 @@ function onFactoryReviewComplete(builderThreadId: string): boolean {
 
   // Move to awaiting_pm — builder stays alive for potential retry
   state.phase = 'awaiting_pm'
+  state.reviewed = true
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
@@ -689,12 +697,16 @@ export async function sweepOrphanedBuilders(): Promise<void> {
       phase: 'failed',
       retryCount: 0,
       createdAt: info.createdAt,
+      reviewed: false,
     }
     logBuild(orphanState, 'orphaned')
 
     if (pmThreadId) {
       const ticketInfo = info.factoryTicket ? ` (ticket: \`${info.factoryTicket}\`, was in phase: ${info.factoryPhase ?? 'unknown'})` : ''
-      void safeSend(pmThreadId, `🏭 **Orphaned builder killed** ⚠️\nBuilder \`${info.tmuxName}\` was still running after daemon restart${ticketInfo}. Killed for safety. Retry with factory_build if needed.`).catch(() => {})
+      const advice = info.factoryPhase === 'awaiting_pm'
+        ? 'Work was complete and on disk. Inspect the tree and commit if appropriate.'
+        : 'Retry with factory_build if needed.'
+      void safeSend(pmThreadId, `🏭 **Orphaned builder killed** ⚠️\nBuilder \`${info.tmuxName}\` was still running after daemon restart${ticketInfo}. Killed for safety. ${advice}`).catch(() => {})
     }
     swept++
   }

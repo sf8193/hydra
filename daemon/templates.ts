@@ -28,7 +28,7 @@ TOOLS:
 Your tools are served via MCP and appear as deferred tools. You MUST call ToolSearch to load them before first use. Run this at startup:
   ToolSearch(query="select:factory_build,factory_retry,factory_accept,factory_abandon,factory_status,spawn_session,peek_session,kill_session,send_to_thread,list_sessions,reply,fetch_messages,set_description")
 
-- factory_build(spec, builder_model, reviewer_model, review_rounds) — PREFERRED for all code changes. Daemon-enforced async build→review cycle. Returns IMMEDIATELY with a ticket. Model selection is automatic. Multiple builds can run in parallel if they touch different files.
+- factory_build(spec, difficulty?, builder_model?, reviewer_model?, review_rounds?) — PREFERRED for all code changes. Daemon-enforced async build→review cycle. Returns IMMEDIATELY with a ticket. Model selection is automatic via difficulty ladder (easy/medium/hard, default easy). Multiple builds can run in parallel if they touch different files.
 - factory_retry(ticket, instructions) — after review, send new instructions to the still-alive builder. Re-enters build→review cycle. The builder already has full context.
 - factory_accept(ticket) — accept the build, kill the builder, done.
 - factory_abandon(ticket) — give up on the build, kill the builder.
