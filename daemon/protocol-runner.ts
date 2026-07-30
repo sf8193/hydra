@@ -856,7 +856,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const __test = process.env.NODE_ENV === 'test'
-  ? { runs, threadToRun, sessionToRun } as const
+  ? { runs, threadToRun, sessionToRun, resetTimeout } as const
   : undefined
 
 // ---------------------------------------------------------------------------
