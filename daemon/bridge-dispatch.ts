@@ -366,9 +366,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       case 'factory_accept': {
         if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
         const ticket = args.ticket
+        const allowUnreviewed = args.allow_unreviewed === true
         if (!callerSessionId) throw new Error('factory_accept requires a session context')
 
-        const result = factoryAccept(ticket, callerSessionId)
+        const result = factoryAccept(ticket, callerSessionId, allowUnreviewed)
         if ('error' in result) {
           return { content: [{ type: 'text', text: `Factory accept failed: ${result.error}` }], isError: true }
         }

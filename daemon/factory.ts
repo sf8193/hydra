@@ -110,15 +110,18 @@ function resolveModels(
 ): { builder: string; reviewer: string; warning?: string } {
   const ladder = getDifficultyLadder(difficulty)
 
-  // Explicit overrides take priority — validate against known models
-  const builder = builderRaw ? (resolveModelAlias(builderRaw) ?? builderRaw) : ladder.builder
-  const reviewer = reviewerRaw ? (resolveModelAlias(reviewerRaw) ?? reviewerRaw) : ladder.reviewer
+  // Explicit overrides take priority — validate against known models, fall back to ladder
+  let builder = builderRaw ? (resolveModelAlias(builderRaw) ?? builderRaw) : ladder.builder
+  let reviewer = reviewerRaw ? (resolveModelAlias(reviewerRaw) ?? reviewerRaw) : ladder.reviewer
+  let warning: string | undefined
 
   if (builderRaw && !isKnownModel(builder)) {
-    return { builder: ladder.builder, reviewer: ladder.reviewer, warning: `Unknown builder model "${builderRaw}". Using ladder default.` }
+    warning = `Unknown builder model "${builderRaw}". Using ladder default.`
+    builder = ladder.builder
   }
   if (reviewerRaw && !isKnownModel(reviewer)) {
-    return { builder, reviewer: ladder.reviewer, warning: `Unknown reviewer model "${reviewerRaw}". Using ladder default.` }
+    warning = (warning ? warning + ' ' : '') + `Unknown reviewer model "${reviewerRaw}". Using ladder default.`
+    reviewer = ladder.reviewer
   }
 
   // Check for collision (compare full IDs — different versions of same family are fine)
@@ -126,15 +129,16 @@ function resolveModels(
   const effectiveReviewer = reviewer.replace(/\[1m\]$/, '')
 
   if (effectiveBuilder !== effectiveReviewer) {
-    return { builder, reviewer }
+    return { builder, reviewer, warning }
   }
 
   // Same exact model — fall back to ladder's reviewer, or pick a different one
+  const collisionMsg = `Builder and reviewer both resolved to ${effectiveBuilder}.`
   if (effectiveBuilder !== ladder.reviewer.replace(/\[1m\]$/, '')) {
     return {
       builder,
       reviewer: ladder.reviewer,
-      warning: `Builder and reviewer both resolved to ${effectiveBuilder}. Using ladder reviewer (${ladder.reviewer.replace(/\[1m\]$/, '')}).`,
+      warning: (warning ? warning + ' ' : '') + `${collisionMsg} Using ladder reviewer (${ladder.reviewer.replace(/\[1m\]$/, '')}).`,
     }
   }
 
@@ -154,7 +158,7 @@ function resolveModels(
     return {
       builder,
       reviewer: fallback,
-      warning: `Builder and reviewer both resolved to ${effectiveBuilder}. Auto-selected ${fallback.replace(/\[1m\]$/, '')}.`,
+      warning: (warning ? warning + ' ' : '') + `${collisionMsg} Auto-selected ${fallback.replace(/\[1m\]$/, '')}.`,
     }
   }
 
@@ -164,7 +168,7 @@ function resolveModels(
     return {
       builder,
       reviewer: genericFallback,
-      warning: `Builder and reviewer both resolved to ${effectiveBuilder}. Auto-selected ${genericFallback.replace(/\[1m\]$/, '')} as reviewer.`,
+      warning: (warning ? warning + ' ' : '') + `${collisionMsg} Auto-selected ${genericFallback.replace(/\[1m\]$/, '')} as reviewer.`,
     }
   }
 
@@ -172,7 +176,7 @@ function resolveModels(
   return {
     builder,
     reviewer: 'claude-opus-4-6[1m]',
-    warning: `Builder and reviewer both resolved to ${effectiveBuilder}. Auto-selected claude-opus-4-6 as reviewer.`,
+    warning: (warning ? warning + ' ' : '') + `${collisionMsg} Auto-selected claude-opus-4-6 as reviewer.`,
   }
 }
 
@@ -248,15 +252,18 @@ export function factoryRetry(
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can retry it.' }
-  if (state.phase !== 'awaiting_pm') return { error: `Cannot retry — build is in phase "${state.phase}", expected "awaiting_pm".` }
+  if (state.phase !== 'awaiting_pm' && state.phase !== 'building') return { error: `Cannot retry — build is in phase "${state.phase}", expected "awaiting_pm" or "building".` }
 
   if (!state.builderSessionId || !state.builderThreadId) return { error: 'Builder session not found — use factory_build to start a new build.' }
   const builderInfo = registry.get(state.builderSessionId)
   if (!builderInfo) return { error: 'Builder session no longer exists — use factory_build to start a new build.' }
 
+  const isResend = state.phase === 'building'
   state.phase = 'building'
-  state.retryCount++
-  syncPhaseToRegistry(state)
+  if (!isResend) {
+    state.retryCount++
+    syncPhaseToRegistry(state)
+  }
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
@@ -287,11 +294,13 @@ export function factoryRetry(
 export function factoryAccept(
   ticket: string,
   callerSessionId: string,
+  allowUnreviewed: boolean = false,
 ): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can accept it.' }
   if (state.phase !== 'awaiting_pm') return { error: `Cannot accept — build is in phase "${state.phase}", expected "awaiting_pm".` }
+  if (!state.reviewed && !allowUnreviewed) return { error: 'Build was NOT adversarially reviewed (review failed or was cancelled). Pass allow_unreviewed=true to accept anyway.' }
 
   state.phase = 'complete'
   logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
@@ -680,8 +689,19 @@ export async function sweepOrphanedBuilders(): Promise<void> {
   let swept = 0
   const builders = [...registry.values()].filter(i => i.isFactoryBuilder)
   for (const info of builders) {
-    process.stderr.write(`daemon: factory: sweeping orphaned builder ${info.tmuxName} (${info.sessionId})\n`)
     const pmThreadId = info.factoryPmThreadId
+    const ticketInfo = info.factoryTicket ? ` (ticket: \`${info.factoryTicket}\`, phase: ${info.factoryPhase ?? 'unknown'})` : ''
+
+    // Leave awaiting_pm builders alive — they hold completed work the PM hasn't accepted yet
+    if (info.factoryPhase === 'awaiting_pm') {
+      process.stderr.write(`daemon: factory: leaving awaiting_pm builder ${info.tmuxName} alive${ticketInfo}\n`)
+      if (pmThreadId) {
+        void safeSend(pmThreadId, `🏭 **Builder survived restart** ℹ️\nBuilder \`${info.tmuxName}\`${ticketInfo} is still alive with completed work. Inspect the tree, peek the builder, or kill it manually when done.`).catch(() => {})
+      }
+      continue
+    }
+
+    process.stderr.write(`daemon: factory: sweeping orphaned builder ${info.tmuxName} (${info.sessionId})\n`)
     try {
       await killSession(info, 'orphaned factory builder (daemon restarted)')
     } catch (err) {
@@ -702,11 +722,7 @@ export async function sweepOrphanedBuilders(): Promise<void> {
     logBuild(orphanState, 'orphaned')
 
     if (pmThreadId) {
-      const ticketInfo = info.factoryTicket ? ` (ticket: \`${info.factoryTicket}\`, was in phase: ${info.factoryPhase ?? 'unknown'})` : ''
-      const advice = info.factoryPhase === 'awaiting_pm'
-        ? 'Work was complete and on disk. Inspect the tree and commit if appropriate.'
-        : 'Retry with factory_build if needed.'
-      void safeSend(pmThreadId, `🏭 **Orphaned builder killed** ⚠️\nBuilder \`${info.tmuxName}\` was still running after daemon restart${ticketInfo}. Killed for safety. ${advice}`).catch(() => {})
+      void safeSend(pmThreadId, `🏭 **Orphaned builder killed** ⚠️\nBuilder \`${info.tmuxName}\`${ticketInfo} was still running after daemon restart. Killed for safety. Retry with factory_build if needed.`).catch(() => {})
     }
     swept++
   }
