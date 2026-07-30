@@ -56,10 +56,17 @@ let ticketCounter = 0
 
 // Build history log
 const LOG_DIR = join(process.env.HOME ?? '/tmp', '.hydra', 'factory')
+let logDirReady = false
+
+function ensureLogDir(): void {
+  if (logDirReady) return
+  if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true })
+  logDirReady = true
+}
 
 function logBuild(state: FactoryBuildState, outcome: string): void {
   try {
-    if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true })
+    ensureLogDir()
     const entry = {
       ticket: state.ticket,
       spec: state.spec.slice(0, 500),
@@ -217,7 +224,7 @@ export function factoryRetry(
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can retry it.' }
   if (state.phase !== 'awaiting_pm') return { error: `Cannot retry — build is in phase "${state.phase}", expected "awaiting_pm".` }
 
-  if (!state.builderSessionId) return { error: 'Builder session not found — use factory_build to start a new build.' }
+  if (!state.builderSessionId || !state.builderThreadId) return { error: 'Builder session not found — use factory_build to start a new build.' }
   const builderInfo = registry.get(state.builderSessionId)
   if (!builderInfo) return { error: 'Builder session no longer exists — use factory_build to start a new build.' }
   if (!transport.has(state.builderSessionId)) return { error: 'Builder bridge is disconnected — it may have crashed. Use factory_build to start a new build.' }
@@ -474,6 +481,27 @@ export function onBuilderDeath(sessionId: string): void {
       `🏭 **Builder crashed** ❌`,
       `Ticket: \`${state.ticket}\``,
       `_Builder died without posting [done]. Build did not complete. No review will run._`,
+      `_Retry with factory_build if needed._`,
+    ].join('\n'))
+    cleanupState(ticket)
+  } else if (state.phase === 'reviewing') {
+    // Builder died during review — cancel the review defensively to avoid leaking state.
+    // Normally the review system handles this, but if it misses the death we'd leak.
+    process.stderr.write(`daemon: factory: builder died during review for ticket ${state.ticket}, cancelling review\n`)
+    state.phase = 'failed'
+    logBuild(state, 'builder_died_reviewing')
+    if (state.builderThreadId) {
+      const review = getReviewByThread(state.builderThreadId)
+      if (review) {
+        void cancelReview(review.reviewId).catch(err => {
+          process.stderr.write(`daemon: factory: cancel review on builder death failed: ${err}\n`)
+        })
+      }
+    }
+    void safeSend(state.pmThreadId, [
+      `🏭 **Builder crashed during review** ❌`,
+      `Ticket: \`${state.ticket}\``,
+      `_Builder died while review was in progress. Review cancelled._`,
       `_Retry with factory_build if needed._`,
     ].join('\n'))
     cleanupState(ticket)

@@ -349,8 +349,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'factory_retry': {
-        const ticket = args.ticket as string
-        const instructions = args.instructions as string
+        if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
+        if (!args.instructions || typeof args.instructions !== 'string') throw new Error('instructions is required')
+        const ticket = args.ticket
+        const instructions = args.instructions
         if (!callerSessionId) throw new Error('factory_retry requires a session context')
 
         const result = factoryRetry(ticket, instructions, callerSessionId)
@@ -361,7 +363,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'factory_accept': {
-        const ticket = args.ticket as string
+        if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
+        const ticket = args.ticket
         if (!callerSessionId) throw new Error('factory_accept requires a session context')
 
         const result = factoryAccept(ticket, callerSessionId)
@@ -372,7 +375,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'factory_abandon': {
-        const ticket = args.ticket as string
+        if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
+        const ticket = args.ticket
         if (!callerSessionId) throw new Error('factory_abandon requires a session context')
 
         const result = factoryAbandon(ticket, callerSessionId)
