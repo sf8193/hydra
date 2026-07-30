@@ -248,12 +248,6 @@ export function factoryRetry(
   state.retryCount++
   syncPhaseToRegistry(state)
 
-  // Reset phase budget so the builder gets a fresh 30 min for retry work
-  if (builderInfo.budgetDeadline) {
-    builderInfo.budgetDeadline = Date.now() + 30 * 60 * 1000
-    registry.debouncedPersist()
-  }
-
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
     type: 'notification',
@@ -431,7 +425,6 @@ async function spawnBuilder(
     model: state.builderModel,
     promptPrefix: builderPrompt,
     initiator: pmTmuxName,
-    phaseBudgetMs: 30 * 60 * 1000,
   })
 
   state.builderSessionId = result.sessionId
