@@ -88,7 +88,8 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
 // Model resolution — difficulty ladder with auto-fallback
 // ---------------------------------------------------------------------------
 
-export type Difficulty = 'easy' | 'medium' | 'hard'
+export const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'] as const
+export type Difficulty = (typeof VALID_DIFFICULTIES)[number]
 
 // Late-bound: easy tier reads env vars (HYDRA_BUILD_MODEL / HYDRA_REVIEW_MODEL),
 // medium/hard are fixed escalations. Called per-build, not frozen at import.
@@ -148,7 +149,22 @@ function resolveModels(
     }
   }
 
-  return { builder, reviewer, warning: `Builder and reviewer both resolve to ${effectiveBuilder}.` }
+  // Unknown model with no fallback — use sonnet as a safe generic reviewer
+  const genericFallback = 'claude-sonnet-4-6[1m]'
+  if (effectiveBuilder !== genericFallback.replace(/\[1m\]$/, '')) {
+    return {
+      builder,
+      reviewer: genericFallback,
+      warning: `Builder and reviewer both resolved to ${effectiveBuilder}. Auto-selected ${genericFallback.replace(/\[1m\]$/, '')} as reviewer.`,
+    }
+  }
+
+  // Builder IS sonnet — use opus
+  return {
+    builder,
+    reviewer: 'claude-opus-4-6[1m]',
+    warning: `Builder and reviewer both resolved to ${effectiveBuilder}. Auto-selected claude-opus-4-6 as reviewer.`,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +247,12 @@ export function factoryRetry(
   state.phase = 'building'
   state.retryCount++
   syncPhaseToRegistry(state)
+
+  // Reset phase budget so the builder gets a fresh 30 min for retry work
+  if (builderInfo.budgetDeadline) {
+    builderInfo.budgetDeadline = Date.now() + 30 * 60 * 1000
+    registry.debouncedPersist()
+  }
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {

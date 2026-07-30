@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, type Difficulty } from './factory.js'
+import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, VALID_DIFFICULTIES, type Difficulty } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -319,8 +319,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const reviewerModel = (args.reviewer_model as string | undefined)?.trim() || undefined
         const reviewRounds = (args.review_rounds as number | undefined) ?? 3
         const difficultyRaw = (args.difficulty as string | undefined)?.trim() || undefined
-        const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'] as const
-        const difficulty: Difficulty = (difficultyRaw && VALID_DIFFICULTIES.includes(difficultyRaw as Difficulty))
+        const difficulty: Difficulty = (difficultyRaw && (VALID_DIFFICULTIES as readonly string[]).includes(difficultyRaw))
           ? difficultyRaw as Difficulty : 'easy'
 
         if (!callerSessionId) throw new Error('factory_build requires a session context')
