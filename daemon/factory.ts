@@ -603,10 +603,19 @@ function factoryDoneDetection({ sessionId, text }: { sessionId: string; text: st
 function factorySessionDeath({ sessionId }: { sessionId: string }): void {
   onBuilderDeath(sessionId)
 
-  // PM death: clean up all pending builds and kill orphaned builders
+  // PM death: clean up all pending builds, cancel reviews, kill orphaned builders
   const pmBuilds = [...builds.entries()].filter(([_, s]) => s.pmSessionId === sessionId)
   for (const [ticket, state] of pmBuilds) {
     process.stderr.write(`daemon: factory: PM ${sessionId} died with active build ${state.ticket}, cleaning up\n`)
+    // Cancel any in-flight review so the critic doesn't orphan
+    if (state.phase === 'reviewing' && state.builderThreadId) {
+      const review = getReviewByThread(state.builderThreadId)
+      if (review) {
+        void cancelReview(review.reviewId).catch(err => {
+          process.stderr.write(`daemon: factory: cancel review on PM death failed: ${err}\n`)
+        })
+      }
+    }
     killBuilder(state)
     state.phase = 'failed'
     logBuild(state, 'pm_died')
