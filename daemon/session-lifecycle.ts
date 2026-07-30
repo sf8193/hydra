@@ -352,13 +352,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
     // Clean up dead session in this thread before spawning
     if (threadId) {
-      const staleId = registry.getByThread(threadId)
-      if (staleId) {
-        const stale = registry.get(staleId)
-        if (stale) {
-          try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {
-            respawnCount = (stale.respawnCount ?? 0) + 1
-            await killSession(stale, 'replaced by new spawn')
+      const existingId = registry.getByThread(threadId)
+      if (existingId) {
+        const existing = registry.get(existingId)
+        if (existing) {
+          try { execSync(`tmux has-session -t '${existing.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {
+            respawnCount = (existing.respawnCount ?? 0) + 1
+            await killSession(existing, 'replaced by new spawn')
           }
         }
       }
@@ -408,20 +408,19 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Clean up dead session in this thread before spawning
   // Runs for all paths: existingThreadId, channel lookup, or spawn-in-dead-thread
   if (threadId && !isJoin) {
-    const staleId = registry.getByThread(threadId)
-    if (staleId) {
-      const stale = registry.get(staleId)
-      if (stale) {
-        let staleAlive = false
-        try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); staleAlive = true } catch {}
-        if (!staleAlive) {
-          respawnCount = (stale.respawnCount ?? 0) + 1
-          if (!anchorMessageId && stale.anchorMessageId) {
-            anchorMessageId = stale.anchorMessageId
-            anchorChannelId = stale.anchorChannelId
-          }
-          await killSession(stale, 'replaced by new spawn')
+    const existingId = registry.getByThread(threadId)
+    if (existingId) {
+      const existing = registry.get(existingId)
+      if (existing) {
+        if (tmuxHasSession(existing.tmuxName)) {
+          throw new Error(`thread has a live session (${existing.tmuxName}) — kill it first or spawn in a new thread`)
         }
+        respawnCount = (existing.respawnCount ?? 0) + 1
+        if (!anchorMessageId && existing.anchorMessageId) {
+          anchorMessageId = existing.anchorMessageId
+          anchorChannelId = existing.anchorChannelId
+        }
+        await killSession(existing, 'replaced by new spawn')
       }
     }
     if (!anchorMessageId) {
