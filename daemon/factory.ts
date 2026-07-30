@@ -231,6 +231,7 @@ export function factoryRetry(
 
   state.phase = 'building'
   state.retryCount++
+  syncPhaseToRegistry(state)
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
@@ -242,7 +243,7 @@ export function factoryRetry(
       ``,
       `When done, post \`[done]\` with your structured artifact as before.`,
     ].join('\n'),
-    meta: { chat_id: state.builderThreadId!, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    meta: { chat_id: state.builderThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 
   void safeSend(state.pmThreadId, [
