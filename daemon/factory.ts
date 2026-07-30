@@ -469,10 +469,18 @@ function onBuilderDone(sessionId: string, doneText: string): boolean {
     .catch(err => {
       const errMsg = err instanceof Error ? err.message : String(err)
       process.stderr.write(`daemon: factory: review failed to start: ${errMsg}\n`)
-      void safeSend(state.pmThreadId, `🏭 **Factory review failed to start** ❌\nTicket: \`${state.ticket}\`\nError: ${errMsg}`)
-      state.phase = 'failed'
-      logBuild(state, 'review_start_failed')
-      cleanupState(ticket)
+      // Transition to awaiting_pm so the PM can retry (builder is still alive with the work)
+      state.phase = 'awaiting_pm'
+      syncPhaseToRegistry(state)
+      void safeSend(state.pmThreadId, [
+        `🏭 **Review failed to start** ⚠️`,
+        `Ticket: \`${state.ticket}\``,
+        `Error: ${errMsg}`,
+        `_Builder is still alive with the completed work. You can:_`,
+        `- \`factory_retry("${state.ticket}", "try again")\` — re-enter build→review`,
+        `- \`factory_accept("${state.ticket}")\` — accept without review`,
+        `- \`factory_abandon("${state.ticket}")\` — discard`,
+      ].join('\n'))
     })
 
   return true
@@ -609,7 +617,7 @@ function cleanupState(ticket: string): void {
 // Event bus subscriptions
 // ---------------------------------------------------------------------------
 
-const FACTORY_DONE_RE = /^\[done\]/m
+const FACTORY_DONE_RE = /^\[done\]/
 
 function factoryDoneDetection({ sessionId, text }: { sessionId: string; text: string }): void {
   if (!builderSessionToTicket.has(sessionId)) return

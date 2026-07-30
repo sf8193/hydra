@@ -319,8 +319,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const reviewerModel = (args.reviewer_model as string | undefined)?.trim() || undefined
         const reviewRounds = (args.review_rounds as number | undefined) ?? 3
         const difficultyRaw = (args.difficulty as string | undefined)?.trim() || undefined
-        const difficulty: Difficulty = (difficultyRaw && (VALID_DIFFICULTIES as readonly string[]).includes(difficultyRaw))
-          ? difficultyRaw as Difficulty : 'easy'
+        if (difficultyRaw && !(VALID_DIFFICULTIES as readonly string[]).includes(difficultyRaw)) {
+          throw new Error(`invalid difficulty "${difficultyRaw}" — must be one of: ${VALID_DIFFICULTIES.join(', ')}`)
+        }
+        const difficulty: Difficulty = (difficultyRaw as Difficulty) ?? 'easy'
 
         if (!callerSessionId) throw new Error('factory_build requires a session context')
         const callerInfo = registry.get(callerSessionId)
