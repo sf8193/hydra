@@ -414,14 +414,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (stale) {
         let staleAlive = false
         try { execSync(`tmux has-session -t '${stale.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); staleAlive = true } catch {}
-        if (!staleAlive) {
-          respawnCount = (stale.respawnCount ?? 0) + 1
-          if (!anchorMessageId && stale.anchorMessageId) {
-            anchorMessageId = stale.anchorMessageId
-            anchorChannelId = stale.anchorChannelId
-          }
-          await killSession(stale, 'replaced by new spawn')
+        if (staleAlive) {
+          throw new Error(`thread has a live session (${stale.tmuxName}) — kill it first or spawn in a new thread`)
         }
+        respawnCount = (stale.respawnCount ?? 0) + 1
+        if (!anchorMessageId && stale.anchorMessageId) {
+          anchorMessageId = stale.anchorMessageId
+          anchorChannelId = stale.anchorChannelId
+        }
+        await killSession(stale, 'replaced by new spawn')
       }
     }
     if (!anchorMessageId) {
