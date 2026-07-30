@@ -263,14 +263,11 @@ try {
     const targetDir = join(discordCache, d.name)
     copyFileSync(bridgeSrc, join(targetDir, 'server.ts'))
     writeFileSync(join(targetDir, `daemon-${PLATFORM}.json`), daemonConfig)
-    // DEPRECATED: daemon.json is legacy — kept for old bridges that don't check daemon-{platform}.json.
-    // Remove once all running bridges have CHAT_PLATFORM in their env (one full restart cycle after this PR).
-    writeFileSync(join(targetDir, 'daemon.json'), daemonConfig)
     writeFileSync(join(targetDir, '.mcp.json'), mcpJson)
     mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
     writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), pluginJson)
   }
-  process.stderr.write(`daemon: synced bridge.ts + daemon-${PLATFORM}.json + daemon.json (legacy) + .mcp.json into ${discordCache}/*/\n`)
+  process.stderr.write(`daemon: synced bridge.ts + daemon-${PLATFORM}.json + .mcp.json into ${discordCache}/*/\n`)
 } catch (err) {
   process.stderr.write(`daemon: bridge sync skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
 }

@@ -26,8 +26,7 @@ import { fileURLToPath } from 'url'
 // Resolve daemon socket path. Priority:
 // 1. DAEMON_SOCK env var (explicit override — needed when multiple daemons share a plugin cache)
 // 2. daemon-{platform}.json next to this bridge (platform-keyed — no race when two daemons share a plugin cache)
-// 3. daemon.json next to this bridge (legacy fallback)
-// 4. HYDRA_STATE_DIR / CHAT_PLATFORM env var fallback
+// 3. HYDRA_STATE_DIR / CHAT_PLATFORM env var fallback
 function resolveSocketPath(): string {
   if (process.env.DAEMON_SOCK) {
     process.stderr.write(`bridge: socket path from DAEMON_SOCK env: ${process.env.DAEMON_SOCK}\n`)
@@ -60,17 +59,6 @@ function resolveSocketPath(): string {
   } catch (err) {
     process.stderr.write(`bridge: failed to read daemon-${platform}.json, trying legacy fallback: ${err}\n`)
   }
-
-  try {
-    const configPath = join(bridgeDir, 'daemon.json')
-    if (existsSync(configPath)) {
-      const config = JSON.parse(readFileSync(configPath, 'utf-8'))
-      if (config.socket) {
-        process.stderr.write(`bridge: socket path from daemon.json: ${config.socket}\n`)
-        return config.socket
-      }
-    }
-  } catch {}
 
   const stateDir = process.env.HYDRA_STATE_DIR
     ?? process.env.DISCORD_STATE_DIR

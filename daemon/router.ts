@@ -11,7 +11,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept, handleRecoverIntercept } from './commands/global.js'
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
-import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept } from './commands/thread.js'
+import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
@@ -433,6 +433,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const usageMatch = msg.content.match(/^(?:\/usage|usage)\s*$/i)
     if (usageMatch) {
       void handleUsageIntercept(msg)
+      return
+    }
+
+    const peekMatch = msg.content.match(/^(?:peek|\/peek|screenshot|\/screenshot)(?:\s+(\S+))?\s*$/i)
+    if (peekMatch) {
+      void handlePeekIntercept(msg, peekMatch[1])
       return
     }
 
