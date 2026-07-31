@@ -68,7 +68,7 @@ export class TestHarness {
       participants.set(role, sid)
       sessionToRole.set(sid, role)
 
-      registry.set(sid, {
+      const info: SessionInfo = {
         sessionId: sid,
         topic: `${proto.display} ${proto.roles[role]}`,
         threadId,
@@ -77,7 +77,8 @@ export class TestHarness {
         tmuxName: role,
         listening: false,
         turnState: 'idle',
-      } as SessionInfo)
+      }
+      registry.set(sid, info)
     }
 
     const ownerSessionId = this.sessionIds.get(ownerRole)!
@@ -177,9 +178,8 @@ export class TestHarness {
   // ---------------------------------------------------------------------------
 
   setTurnState(role: string, state: 'working' | 'idle' | 'waiting'): void {
-    const sid = this.sessionId(role)
-    const info = registry.get(sid)
-    if (info) (info as any).turnState = state
+    const info = registry.get(this.sessionId(role))
+    if (info) info.turnState = state
   }
 
   // ---------------------------------------------------------------------------
@@ -226,13 +226,35 @@ export class TestHarness {
   // Internals
   // ---------------------------------------------------------------------------
 
-  // Gateway stubs resolve synchronously, so the real async depth through
-  // afterTransition → safeSend/notifyNextActor → resetTimeout is bounded
-  // at ~4 levels. 20 iterations provides headroom without a formal analysis.
   private async flush(): Promise<void> {
-    for (let i = 0; i < 20; i++) {
+    const MAX_SETTLE_ITERATIONS = 50
+    let prevPhase = this.run.phase
+    let prevEvents = this.completionEvents.length
+    let prevMessages = this.threadMessages.length
+    let stableCount = 0
+
+    for (let i = 0; i < MAX_SETTLE_ITERATIONS; i++) {
       await new Promise<void>(resolve => process.nextTick(resolve))
+
+      const settled =
+        this.run.phase === prevPhase &&
+        this.completionEvents.length === prevEvents &&
+        this.threadMessages.length === prevMessages
+
+      if (settled) {
+        if (++stableCount >= 3) return
+      } else {
+        stableCount = 0
+        prevPhase = this.run.phase
+        prevEvents = this.completionEvents.length
+        prevMessages = this.threadMessages.length
+      }
     }
+
+    throw new Error(
+      `flush() did not converge after ${MAX_SETTLE_ITERATIONS} iterations ` +
+      `(phase=${this.run.phase}, events=${this.completionEvents.length}, msgs=${this.threadMessages.length})`
+    )
   }
 
   dispose(): void {
