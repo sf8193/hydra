@@ -385,6 +385,17 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   sessionToRun.set(result.sessionId, run.id)
   run.disconnectTimers.delete(deadSessionId)
 
+  // Push scoped tools before the resume notification — the resumed session
+  // connected with a bare tool list (advance excluded) because it wasn't
+  // mapped yet. Now that the maps are updated, give it the right hat.
+  const phaseDef = run.protocol.phases[run.phase]
+  if (phaseDef?.actor === role) {
+    const ia = run.protocol.phaseInteraction(run.phase)
+    const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
+    const tools = computeToolsForSession(result.sessionId, hint ? { advanceHint: hint } : undefined)
+    transport.sendOrQueue(result.sessionId, { type: 'tools_update', tools })
+  }
+
   transport.sendOrQueue(result.sessionId, {
     type: 'notification',
     content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
