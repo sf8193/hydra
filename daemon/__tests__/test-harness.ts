@@ -22,6 +22,7 @@ type HarnessOpts = {
 export class TestHarness {
   readonly run: ProtocolRun
   private readonly sessionIds: Map<string, string>
+  private lastTimeoutArmedAt: number
   private readonly origGatewaySend: typeof gateway.send
   private readonly origGatewayDelete: typeof gateway.delete
   private readonly origGatewayReact: typeof gateway.react
@@ -119,6 +120,7 @@ export class TestHarness {
     this.completionListener = (e) => this.completionEvents.push(e)
     protocolEvents.onComplete(this.completionListener)
 
+    this.lastTimeoutArmedAt = Date.now()
     armTimeout(run)
   }
 
@@ -165,7 +167,9 @@ export class TestHarness {
   }
 
   extend(role: string, reason: string, minutes: number): { ok: boolean; reason?: string } {
-    return onRunExtend(this.sessionId(role), reason, minutes)
+    const result = onRunExtend(this.sessionId(role), reason, minutes)
+    if (result.ok) this.lastTimeoutArmedAt = Date.now()
+    return result
   }
 
   async cancel(reason: string): Promise<void> {
@@ -194,7 +198,7 @@ export class TestHarness {
   async tickToWarning(): Promise<void> {
     const windowMs = this.run.protocol.windowMs(this.run.phase)
     if (!windowMs || windowMs <= WARNING_BEFORE_TIMEOUT_MS) return
-    const elapsed = Date.now() - this.run._phaseStartedAt
+    const elapsed = Date.now() - this.lastTimeoutArmedAt
     const remaining = (windowMs - WARNING_BEFORE_TIMEOUT_MS) - elapsed
     if (remaining > 0) await this.tick(remaining)
   }
@@ -202,7 +206,7 @@ export class TestHarness {
   async tickToTimeout(): Promise<void> {
     const windowMs = this.run.protocol.windowMs(this.run.phase)
     if (!windowMs) return
-    const elapsed = Date.now() - this.run._phaseStartedAt
+    const elapsed = Date.now() - this.lastTimeoutArmedAt
     const remaining = windowMs - elapsed
     if (remaining > 0) await this.tick(remaining)
   }

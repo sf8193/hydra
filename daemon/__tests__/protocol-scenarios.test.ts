@@ -400,16 +400,23 @@ describe('review: notifyOwnerSummary fires on cleanup entry', () => {
 // ---------------------------------------------------------------------------
 
 describe('review: extension is a full window reset (minutes arg is advisory)', () => {
-  test('timeout fires at original window duration, not window + requested minutes', async () => {
+  test('extend after partial window grants a fresh full window, not +Nm', async () => {
     h = createHarness(review, { rounds: 3 })
+    const windowMs = h.run.protocol.windowMs('critic_turn')!
 
-    // onRunExtend records minutes in the decision context ("+5m") for observability,
-    // but calls resetTimeout(run) which always uses protocol.windowMs(phase).
+    // Burn half the window, then extend with 5m
+    await h.tick(windowMs / 2)
+    expect(h.phase).toBe('critic_turn')
     h.extend('critic', 'reading codebase', 5)
 
-    // Full window fires — not window + 5m
-    await h.tick(h.run.protocol.windowMs('critic_turn')!)
+    // If minutes arg were literal, timeout would be at half + 5m.
+    // Tick past that point — still alive (proves 5m wasn't used).
+    await h.tick(5 * 60_000 + 1_000)
+    expect(h.phase).toBe('critic_turn')
+    expect(h.isTerminated).toBe(false)
 
+    // Tick the remaining window from the extension point
+    await h.tickToTimeout()
     expect(h.phase).toBe('cancelled')
     expect(h.isTerminated).toBe(true)
   })
