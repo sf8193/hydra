@@ -42,9 +42,10 @@ function getActiveSessions(): SessionRow[] {
     if (!tmuxHasSession(s.tmuxName)) continue
     const rawDesc = s.description || s.topic || s.tmuxName
     const desc = rawDesc.length > 80 ? rawDesc.slice(0, 77) + '...' : rawDesc
-    const url = s.lastReplyId
-      ? gateway.getMessageUrl(s.threadId, s.lastReplyId) || s.threadUrl || ''
-      : s.threadUrl ?? ''
+    // Link to the PARENT thread (not a deep-link to the last reply message) so clicking a
+    // session in Home opens the controlling thread where the user can read + reply.
+    const url = s.threadUrl
+      || (s.lastReplyId ? gateway.getMessageUrl(s.threadId, s.lastReplyId) || '' : '')
     rows.push({
       name: s.tmuxName,
       sessionId: s.sessionId,
