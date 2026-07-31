@@ -9,7 +9,7 @@ import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
-const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP } = __test
+const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP, setLifecycle, resetLifecycle } = __test
 export const TOTAL_PHASE_CAP_FACTOR = _CAP
 export { WARNING_BEFORE_TIMEOUT_MS }
 
@@ -34,6 +34,8 @@ export class TestHarness {
 
   readonly threadMessages: Array<{ text: string; opts?: Record<string, unknown> }> = []
   readonly completionEvents: CompletionEvent[] = []
+  readonly killedSessions: string[] = []
+  private lifecycleOverridden = false
 
   constructor(proto: Protocol, opts: HarnessOpts = {}) {
     this.origStderrWrite = process.stderr.write
@@ -188,6 +190,50 @@ export class TestHarness {
     if (info) info.turnState = state
   }
 
+  setSessionDead(role: string, claudeSessionId?: string): void {
+    const info = registry.get(this.sessionId(role))
+    if (info) {
+      info.deadAt = Date.now()
+      if (claudeSessionId) (info as any).claudeSessionId = claudeSessionId
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle mocking — overrides doSpawnSession/waitForBridge/killSession
+  // ---------------------------------------------------------------------------
+
+  mockResume(opts: { waitMs?: number } = {}): void {
+    const harness = this
+    const waitMs = opts.waitMs ?? 0
+    harness.lifecycleOverridden = true
+
+    setLifecycle({
+      doSpawnSession: async (topic: string, _a: any, _b: any, spawnOpts: any) => {
+        const sid = `test-resumed-${crypto.randomUUID().slice(0, 8)}`
+        const info: SessionInfo = {
+          sessionId: sid,
+          topic,
+          threadId: spawnOpts?.joinThread ?? harness.run.threadId,
+          createdAt: Date.now(),
+          lastActive: Date.now(),
+          tmuxName: `resumed-${sid.slice(14)}`,
+          listening: false,
+          turnState: 'idle',
+        }
+        registry.set(sid, info)
+        return { sessionId: sid }
+      },
+      waitForBridge: async (_sid: string, _timeoutMs: number) => {
+        if (waitMs > 0) await new Promise<void>(r => setTimeout(r, waitMs))
+        return true
+      },
+      killSession: async (info: any, _reason: string) => {
+        harness.killedSessions.push(info.sessionId)
+        registry.delete(info.sessionId)
+      },
+    })
+  }
+
   // ---------------------------------------------------------------------------
   // Time control
   // ---------------------------------------------------------------------------
@@ -281,6 +327,8 @@ export class TestHarness {
     }
     threadToRun.delete(this.run.threadId)
     runs.delete(this.run.id)
+
+    if (this.lifecycleOverridden) resetLifecycle()
 
     ;(gateway as any).send = this.origGatewaySend
     ;(gateway as any).delete = this.origGatewayDelete

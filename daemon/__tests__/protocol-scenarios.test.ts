@@ -619,3 +619,31 @@ describe('build: closing backstop fires completion, not cancel', () => {
     expect(h.completionEvents[0].outcome).toBe('complete')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Resume cancellation guard — exercises isTerminal(run) post-await guards
+// ---------------------------------------------------------------------------
+
+describe('review: cancel during auto-resume kills spawned session', () => {
+  test('cancellation after doSpawnSession kills the new session', async () => {
+    h = createHarness(review, { rounds: 3 })
+    h.mockResume({ waitMs: 5_000 })
+
+    // Mark critic's tmux as dead so decideResume returns 'resume'
+    h.setSessionDead('critic', 'claude-abc')
+
+    h.disconnect('critic')
+
+    // 3s disconnect timer fires → decideResume → resume path starts
+    await h.tick(3_500)
+
+    // Cancel mid-resume (doSpawnSession resolved, waitForBridge pending)
+    await h.cancel('human cancelled')
+
+    // Let waitForBridge timer resolve
+    await h.tick(5_500)
+
+    expect(h.isTerminated).toBe(true)
+    expect(h.killedSessions.length).toBeGreaterThan(0)
+  })
+})

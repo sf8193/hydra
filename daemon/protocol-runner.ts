@@ -1,6 +1,10 @@
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
-import { doSpawnSession, killSession, killsInProgress, waitForBridge } from './session-lifecycle.js'
+import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
+
+let doSpawnSession = _doSpawnSession
+let waitForBridge = _waitForBridge
+let killSession = _killSession
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
@@ -838,7 +842,19 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const __test = process.env.NODE_ENV === 'test'
-  ? { runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR } as const
+  ? {
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR,
+      setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
+        if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
+        if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
+        if (overrides.killSession) killSession = overrides.killSession
+      },
+      resetLifecycle() {
+        doSpawnSession = _doSpawnSession
+        waitForBridge = _waitForBridge
+        killSession = _killSession
+      },
+    } as const
   : undefined
 
 // ---------------------------------------------------------------------------
