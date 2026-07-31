@@ -1,4 +1,4 @@
-import { protocol, mechanicsBlock } from '../daemon/protocol-dsl.js'
+import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
 
 export default protocol('review', {
   emoji: '⚔️',
@@ -38,20 +38,16 @@ export default protocol('review', {
     owner: '2m',
   },
 
+  roleConfig: {
+    critic: { cadence: 'per-round', waits: true },
+  },
+
   seed: {
-    critic: (ctx) => mechanicsBlock({
-      tmuxName: ctx.name as string,
-      role: 'critic',
-      protocol: `${ctx.rounds}-round adversarial review`,
-      sessionId: ctx.sessionId,
-      threadId: ctx.threadId,
-      tag: '[critic→owner]',
-      cadence: 'per-round',
-      waits: true,
-    }) + '\n\n' + (ctx.topic
-      ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
-      : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
-    ) + `\n\nPost your opening critique after orienting. The owner will tag their defenses with \`[owner→critic]\` — when a defense arrives, post your counter-argument. Repeat for ${ctx.rounds} rounds.\n\nFormat with clear headers. Be substantive and focused.`,
+    critic: (ctx) => protocolSeed(ctx.protocol, 'critic', ctx)
+      + '\n\n' + (ctx.topic
+        ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
+        : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
+      ) + `\n\nPost your opening critique after orienting. The owner will tag their defenses with \`[owner→critic]\` — when a defense arrives, post your counter-argument. Repeat for ${ctx.rounds} rounds.\n\nFormat with clear headers. Be substantive and focused.`,
   },
 
   summaryFormat: (run) => {

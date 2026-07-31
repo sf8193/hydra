@@ -188,7 +188,8 @@ export async function onRunReply(sessionId: string, text: string, chatId: string
   if (phaseDef.actor !== role) return
 
   // Sentinel check: if the phase declares a sentinel, the message must start with it
-  const sentinel = run.protocol.sentinel(run.phase)
+  const ia = run.protocol.phaseInteraction(run.phase)
+  const sentinel = ia?.tag
   if (sentinel && !firstLine.startsWith(sentinel)) return
 
   const nlIdx = text.indexOf('\n')
@@ -538,14 +539,18 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
 
   notifyOwnerSummary: async (run, prevPhase) => {
     if (prevPhase === run.phase) return false
-    const sentinel = run.protocol.sentinel(run.phase)
     const concludedIds = await safeSend(run.threadId, formatStateLine(run.protocol.emoji, run.protocol.name, '⚒︎',
       `concluded — ${run.currentRound} round${run.currentRound > 1 ? 's' : ''}`))
     run.messageIds.push(...concludedIds)
     const formatLines = run.protocol.summaryFormat(run)
-    const routingNote = sentinel
-      ? `\n\n**Message routing:** Your first line MUST be \`${sentinel}\`. Messages without this tag won't complete the protocol.`
-      : ''
+    const ia = run.protocol.phaseInteraction(run.phase)
+    const sentinelTag = ia?.tag
+    // Cleanup phases are sentinel-only in all current protocols; a 'both'-mode
+    // cleanup would need the routing note extended to mention decide.
+    const routingNote = !ia ? ''
+      : ia.mode === 'decide'
+        ? `\n\n**Message routing:** Use the \`decide\` tool to advance.`
+        : `\n\n**Message routing:** Your first line MUST be \`${sentinelTag}\`. The daemon routes on the first line only; a tag anywhere else is invisible to it.`
     transport.sendOrQueue(run.ownerSessionId, {
       type: 'notification',
       content: [
@@ -615,17 +620,9 @@ function resolveEvent(run: ProtocolRun): string | null {
   const phase = run.protocol.phases[run.phase]
   if (!phase) return null
 
-  // Suppress reply-based advancement when a decision's events overlap with replyEvent
-  // (prevents double-advance). If events are disjoint, both paths coexist safely
-  // (e.g. spike: checkpoint via reply + decide('done') via decision).
-  if (phase.replyEvent) {
-    const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
-    if (decision?.events) {
-      const decisionEvents = new Set(Object.values(decision.events))
-      if (decision.finalEvent) decisionEvents.add(decision.finalEvent)
-      if (decisionEvents.has(phase.replyEvent)) return null
-    }
-  }
+  // Decide-only phases advance via decide(), not via reply.
+  // Reads from the same classification as seed generation and timeout warnings.
+  if (run.protocol.phaseInteraction(run.phase)?.mode === 'decide') return null
 
   if (phase.finalRoundEvent && run.currentRound >= run.rounds) return phase.finalRoundEvent
   return phase.replyEvent ?? null
@@ -659,7 +656,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
     joinThread: run.threadId,
     model,
     promptBuilder: (sessionId, tmuxName) => {
-      let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId }) ?? `You are ${tmuxName}, the ${role}.`
+      let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
       const seedMods = ((run.params.modifiers as Modifier[] | undefined) ?? [])
         .filter((m): m is SeedModifier => m.type === 'seed' && m.target === role)
       for (const mod of seedMods) {
@@ -747,11 +744,11 @@ function resetTimeout(run: ProtocolRun): void {
         return
       }
       const ctx = info ? getContextPercent(info.tmuxName) : '?'
-      const sentinel = run.protocol.sentinel(phase)
-      const hasDecision = Object.values(run.protocol.decisions).some(d => d.phase === phase)
-      const sentinelHint = hasDecision
+      const ia = run.protocol.phaseInteraction(phase)
+      const sentinelHint = ia?.mode === 'decide'
         ? `Use the \`decide\` tool to advance`
-        : sentinel ? `Post your \`${sentinel}\`` : 'Post your response'
+        : ia?.tag ? `Post your \`${ia.tag}\``
+        : 'Post your response'
       const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
       const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
       const totalRemaining = Math.max(0, Math.round((run._phaseStartedAt + totalMs - Date.now()) / 60_000))
@@ -896,9 +893,9 @@ function runnerHooks(name: string, protoName: string) {
       if (!role) return null
       const phase = run.protocol.phases[run.phase]
       if (phase?.actor !== role) return null
-      const hasDecisionOnly = Object.values(run.protocol.decisions).some(d => d.phase === run.phase) && !phase?.replyEvent
-      if (hasDecisionOnly) return null
-      return run.protocol.sentinel(run.phase) ?? null
+      const ia = run.protocol.phaseInteraction(run.phase)
+      if (ia?.mode === 'decide') return null
+      return ia?.tag ?? null
     },
   })
 }

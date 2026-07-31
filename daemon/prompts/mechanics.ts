@@ -14,10 +14,11 @@ export type MechanicsOpts = {
   protocol: string
   sessionId: string
   threadId: string
-  tag: string | ReadonlyArray<{ phase: string; tag: string }>
+  tag?: string | ReadonlyArray<{ phase: string; tag: string }>
                                        // deliverable sentinel, e.g. '[subtractor→thread]'; roles
                                        // routed on different tags per phase pass the full grammar —
-                                       // a seed must never carry two contradictory first-line rules
+                                       // a seed must never carry two contradictory first-line rules.
+                                       // Omit for decide-only roles with no sentinel routing.
   cadence: 'one-message' | 'per-round' | 'per-phase'
   waits?: boolean                      // roles that wait for [system] notifications between posts
   cutoffTs?: string                    // pool roles reading a shared thread independently
@@ -42,12 +43,13 @@ export function mechanicsBlock(opts: MechanicsOpts): string {
   const orientTail = orient
     ?? 'Read every code file, wiki article, config, or document it references before forming a view.'
 
-  const sentinelLines = typeof tag === 'string'
-    ? [`- A protocol message's FIRST LINE must be exactly \`${tag}\` — the daemon routes on the first line only. A tag anywhere else is invisible to it.`]
-    : [
-        `- The daemon routes on the FIRST LINE only — a tag anywhere else is invisible to it. Your first line must be exactly the tag for the phase you are in:`,
-        ...tag.map(t => `  - ${t.phase}: \`${t.tag}\``),
-      ]
+  const sentinelLines = !tag ? []
+    : typeof tag === 'string'
+      ? [`- A protocol message's FIRST LINE must be exactly \`${tag}\` — the daemon routes on the first line only. A tag anywhere else is invisible to it.`]
+      : [
+          `- The daemon routes on the FIRST LINE only — a tag anywhere else is invisible to it. Your first line must be exactly the tag for the phase you are in:`,
+          ...tag.map(t => `  - ${t.phase}: \`${t.tag}\``),
+        ]
 
   return [
     `You are ${tmuxName}, the ${role} in this thread's ${protocol} run.`,

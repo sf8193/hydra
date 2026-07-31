@@ -1,9 +1,10 @@
 import { parseDuration } from './util.js'
 import { createStateMachine, type TransitionTable } from './state-machine.js'
 import type { PhaseBehaviorFn, RunState } from './protocol-types.js'
+import { mechanicsBlock } from './prompts/mechanics.js'
 
 export type { PhaseBehaviorFn, RunState, BehaviorContext } from './protocol-types.js'
-export { mechanicsBlock } from './prompts/mechanics.js'
+export { mechanicsBlock }
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +31,19 @@ type PhaseDef = {
 type WindowDef = Record<string, string>
 type GraceDef = Record<string, string>
 
+export type RoleConfig = {
+  cadence: 'one-message' | 'per-round' | 'per-phase'
+  waits: boolean
+  orient?: string
+}
+
+const DEFAULT_ROLE_CONFIG: Readonly<RoleConfig> = Object.freeze({ cadence: 'per-round', waits: false })
+
+export type PhaseInteraction = {
+  mode: 'sentinel' | 'decide' | 'both'
+  tag?: string
+}
+
 export type SeedContext = {
   name: string
   sessionId: string
@@ -38,6 +52,7 @@ export type SeedContext = {
   topic?: string
   task?: string
   model?: string
+  protocol: Protocol
   [key: string]: unknown
 }
 
@@ -62,9 +77,11 @@ export type ProtocolSpec<
     phase: string
     actor: string
     options: readonly string[]
+    descriptions?: Partial<Record<string, string>>
     events?: Record<string, string>
     finalEvent?: string
   }>
+  roleConfig?: Partial<Record<keyof Roles & string, Partial<RoleConfig>>>
   seed?: Partial<Record<keyof Roles, SeedFn>>
   initState?: (params: Record<string, unknown>) => Record<string, unknown>
   summaryFormat?: (run: RunState) => string[]
@@ -90,8 +107,10 @@ export type Protocol<
   graceMs: (role: string) => number | undefined
   sentinel: (phase: string) => string | undefined
   ownerRole: string
-  decisions: Record<string, { phase: string; actor: string; options: readonly string[]; events?: Record<string, string>; finalEvent?: string }>
-  seed: (role: string, ctx: SeedContext) => string | undefined
+  decisions: Record<string, { phase: string; actor: string; options: readonly string[]; descriptions?: Partial<Record<string, string>>; events?: Record<string, string>; finalEvent?: string }>
+  phaseInteraction: (phase: string) => PhaseInteraction | undefined
+  roleConfig: (role: string) => RoleConfig
+  seed: (role: string, ctx: Omit<SeedContext, 'protocol'> & { protocol?: Protocol }) => string | undefined
   initState: (params: Record<string, unknown>) => Record<string, unknown>
   summaryFormat: (run: RunState) => string[]
   ownerKickoff: ((params: Record<string, unknown>) => string) | undefined
@@ -160,9 +179,29 @@ export function protocol<
 
   // Validate decisions
   const decisions = spec.decisions ?? {}
+  const phaseDecisionCount = new Map<string, string>()
   for (const [decName, dec] of Object.entries(decisions)) {
     if (!phaseNames.includes(dec.phase)) throw new Error(`protocol "${name}": decision "${decName}" references unknown phase "${dec.phase}"`)
     if (!roleNames.includes(dec.actor)) throw new Error(`protocol "${name}": decision "${decName}" references unknown role "${dec.actor}"`)
+    const existing = phaseDecisionCount.get(dec.phase)
+    if (existing) throw new Error(`protocol "${name}": phase "${dec.phase}" has multiple decisions ("${existing}" and "${decName}")`)
+    phaseDecisionCount.set(dec.phase, decName)
+    if (dec.descriptions) {
+      for (const key of Object.keys(dec.descriptions)) {
+        if (!dec.options.includes(key)) throw new Error(`protocol "${name}": decision "${decName}" description key "${key}" is not a declared option`)
+      }
+    }
+  }
+
+  // Parse roleConfig
+  const roleConfigs = new Map<string, RoleConfig>()
+  for (const [role, cfg] of Object.entries(spec.roleConfig ?? {})) {
+    if (!roleNames.includes(role)) throw new Error(`protocol "${name}": roleConfig for unknown role "${role}"`)
+    const resolved = { ...DEFAULT_ROLE_CONFIG, ...cfg }
+    if (resolved.cadence === 'per-phase' && !resolved.orient) {
+      throw new Error(`protocol "${name}": roleConfig for "${role}" has cadence "per-phase" but no orient`)
+    }
+    roleConfigs.set(role, resolved)
   }
 
   const ownerRole = spec.owner ?? roleNames[roleNames.length - 1]
@@ -193,7 +232,36 @@ export function protocol<
     }
   }
 
-  return Object.freeze({
+  // Pre-compute phase interaction classification — the single derivation
+  // consumed by resolveEvent, onRunReply, expectedTag, protocolSeed, and warnings.
+  const interactions = new Map<string, PhaseInteraction>()
+  for (const phaseName of phaseNames) {
+    const phaseDef = (spec.phases as Record<string, PhaseDef>)[phaseName]
+    if (!phaseDef || Object.keys(phaseDef.on).length === 0) continue
+
+    const sentinel = spec.sentinels?.[phaseName]
+    const decision = Object.values(decisions).find(d => d.phase === phaseName)
+
+    if (decision) {
+      const decisionEvents = new Set(Object.values(decision.events ?? {}))
+      if (decision.finalEvent) decisionEvents.add(decision.finalEvent)
+      const replyCoexists = phaseDef.replyEvent && !decisionEvents.has(phaseDef.replyEvent)
+
+      if (replyCoexists) {
+        interactions.set(phaseName, { mode: 'both', tag: sentinel })
+      } else {
+        interactions.set(phaseName, { mode: 'decide', tag: sentinel })
+      }
+    } else if (sentinel) {
+      if (!phaseDef.replyEvent) {
+        throw new Error(`protocol "${name}": phase "${phaseName}" has sentinel "${sentinel}" but no replyEvent or decision — the sentinel would be inert`)
+      }
+      interactions.set(phaseName, { mode: 'sentinel', tag: sentinel })
+    }
+  }
+
+
+  const built: Protocol = {
     name,
     emoji: spec.emoji,
     display: spec.display,
@@ -208,7 +276,20 @@ export function protocol<
     graceMs: (role: string) => grace.get(role),
     sentinel: (phase: string) => spec.sentinels?.[phase],
     decisions,
-    seed: (role: string, ctx: SeedContext) => spec.seed?.[role as keyof R]?.(ctx),
+    phaseInteraction: (phase: string) => interactions.get(phase),
+    roleConfig: (role: string) => roleConfigs.get(role) ?? DEFAULT_ROLE_CONFIG,
+    seed: (role: string, ctx: Omit<SeedContext, 'protocol'> & { protocol?: Protocol }) => {
+      const fullCtx: SeedContext = { ...ctx, protocol: ctx.protocol ?? built }
+      const fn = spec.seed?.[role as keyof R]
+      if (fn) return fn(fullCtx)
+      // Default: generate from protocol declarations when the role has sentinels or decisions
+      const hasSentinels = Object.entries(built.phases).some(([p, def]) => def.actor === role && built.phaseInteraction(p)?.tag)
+      const hasDecisions = Object.values(decisions).some(d => d.actor === role)
+      if (hasSentinels || hasDecisions) {
+        return protocolSeed(built, role, fullCtx)
+      }
+      return undefined
+    },
     initState: spec.initState ?? (() => ({})),
     summaryFormat: spec.summaryFormat ?? ((run) => [
       `**${spec.emoji} ${spec.display} Summary** (${run.rounds} round${run.rounds > 1 ? 's' : ''})`,
@@ -218,5 +299,69 @@ export function protocol<
     ownerKickoff: spec.ownerKickoff ?? undefined,
     decisionContext: spec.decisionContext ?? undefined,
     turnNotification: spec.turnNotification ?? undefined,
+  }
+  return Object.freeze(built)
+}
+
+// ---------------------------------------------------------------------------
+// Protocol-derived seed generation
+// ---------------------------------------------------------------------------
+
+export function protocolSeed(proto: Protocol, role: string, ctx: SeedContext): string {
+  const cfg = proto.roleConfig(role)
+
+  // Derive sentinel tags from phaseInteraction for phases where this role acts
+  const actorPhases = Object.entries(proto.phases)
+    .filter(([, def]) => def.actor === role)
+    .map(([phase]) => { const ia = proto.phaseInteraction(phase); return { phase, tag: ia?.tag } })
+    .filter((t): t is { phase: string; tag: string } => !!t.tag)
+
+  if (actorPhases.length === 0) {
+    const roleDecisions = Object.values(proto.decisions).filter(d => d.actor === role)
+    if (roleDecisions.length === 0) {
+      throw new Error(`protocolSeed: role "${role}" has no sentinels and no decisions in protocol "${proto.name}"`)
+    }
+  }
+
+  const tag: string | ReadonlyArray<{ phase: string; tag: string }> | undefined =
+    actorPhases.length === 0 ? undefined :
+    actorPhases.length === 1 ? actorPhases[0].tag : actorPhases
+
+  const block = mechanicsBlock({
+    tmuxName: ctx.name,
+    role,
+    protocol: `${ctx.rounds}-round ${proto.display.toLowerCase()}`,
+    sessionId: ctx.sessionId,
+    threadId: ctx.threadId,
+    tag,
+    cadence: cfg.cadence,
+    waits: cfg.waits ? true : undefined,
+    orient: cfg.orient,
   })
+
+  // Derive decide instructions from protocol decisions targeting this role.
+  // A role may have decisions in multiple phases — generate instructions for all.
+  const roleDecisions = Object.values(proto.decisions).filter(d => d.actor === role)
+  if (roleDecisions.length === 0) return block
+
+  const sections: string[] = []
+  for (const dec of roleDecisions) {
+    const ia = proto.phaseInteraction(dec.phase)
+    const optionLines = dec.options.map(o => {
+      const desc = dec.descriptions?.[o]
+      return desc ? `- \`decide('${o}', '${desc}')\`` : `- \`decide('${o}', 'reason')\``
+    }).join('\n')
+
+    if (ia?.mode === 'both' && ia.tag) {
+      sections.push(`Post \`${ia.tag}\` for progress. When ready to advance, use the \`decide\` tool:\n${optionLines}`)
+    } else {
+      const sentinelTag = ia?.tag
+      const sentinelNote = sentinelTag
+        ? `\nPosting \`${sentinelTag}\` alone does NOT advance — the \`decide\` call is required.`
+        : ''
+      sections.push(`You MUST use the \`decide\` tool to advance the protocol:\n${optionLines}${sentinelNote}`)
+    }
+  }
+
+  return block + `\n\n**How to advance:** ${sections.join('\n\n')}`
 }
