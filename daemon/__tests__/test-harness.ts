@@ -4,6 +4,7 @@ import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import type { Protocol } from '../protocol-dsl.js'
+import type { ProtocolRun } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
 
@@ -18,7 +19,7 @@ type HarnessOpts = {
 }
 
 export class TestHarness {
-  readonly run: ReturnType<typeof runs.get> & {}
+  readonly run: ProtocolRun
   private readonly sessionIds: Map<string, string>
   private readonly origGatewaySend: typeof gateway.send
   private readonly origGatewayDelete: typeof gateway.delete
@@ -80,7 +81,7 @@ export class TestHarness {
 
     const ownerSessionId = this.sessionIds.get(ownerRole)!
 
-    const run = {
+    const run: ProtocolRun = {
       id: `run-${crypto.randomUUID().slice(0, 8)}`,
       protocol: proto,
       threadId,
@@ -103,7 +104,7 @@ export class TestHarness {
       statusHistory: [],
       strike: opts.strike ?? false,
       ext: proto.initState({ rounds, topic: opts.topic, ...opts.params }),
-    } as any
+    }
 
     runs.set(run.id, run)
     threadToRun.set(run.threadId, run.id)
@@ -166,7 +167,7 @@ export class TestHarness {
   }
 
   async cancel(reason: string): Promise<void> {
-    await cancelRun(this.run as any, reason)
+    await cancelRun(this.run, reason)
     await this.flush()
   }
 
