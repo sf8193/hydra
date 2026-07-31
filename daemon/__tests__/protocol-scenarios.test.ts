@@ -625,22 +625,40 @@ describe('build: closing backstop fires completion, not cancel', () => {
 // ---------------------------------------------------------------------------
 
 describe('review: cancel during auto-resume kills spawned session', () => {
-  test('cancellation after doSpawnSession kills the new session', async () => {
+  test('cancellation during waitForBridge hits second guard', async () => {
     h = createHarness(review, { rounds: 3 })
     h.mockResume({ waitMs: 5_000 })
 
-    // Mark critic's tmux as dead so decideResume returns 'resume'
     h.setSessionDead('critic', 'claude-abc')
-
     h.disconnect('critic')
 
     // 3s disconnect timer fires → decideResume → resume path starts
     await h.tick(3_500)
 
-    // Cancel mid-resume (doSpawnSession resolved, waitForBridge pending)
+    // Cancel mid-resume (doSpawnSession resolved instantly, waitForBridge pending)
     await h.cancel('human cancelled')
 
     // Let waitForBridge timer resolve
+    await h.tick(5_500)
+
+    expect(h.isTerminated).toBe(true)
+    expect(h.killedSessions.length).toBeGreaterThan(0)
+  })
+
+  test('cancellation during doSpawnSession hits first guard', async () => {
+    h = createHarness(review, { rounds: 3 })
+    h.mockResume({ spawnMs: 5_000, waitMs: 0 })
+
+    h.setSessionDead('critic', 'claude-abc')
+    h.disconnect('critic')
+
+    // 3s disconnect timer fires → decideResume → doSpawnSession starts (5s delay)
+    await h.tick(3_500)
+
+    // Cancel while doSpawnSession is still pending
+    await h.cancel('human cancelled')
+
+    // Let doSpawnSession resolve — first isTerminal guard catches it
     await h.tick(5_500)
 
     expect(h.isTerminated).toBe(true)

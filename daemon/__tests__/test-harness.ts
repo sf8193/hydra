@@ -202,13 +202,15 @@ export class TestHarness {
   // Lifecycle mocking — overrides doSpawnSession/waitForBridge/killSession
   // ---------------------------------------------------------------------------
 
-  mockResume(opts: { waitMs?: number } = {}): void {
+  mockResume(opts: { spawnMs?: number; waitMs?: number } = {}): void {
     const harness = this
+    const spawnMs = opts.spawnMs ?? 0
     const waitMs = opts.waitMs ?? 0
     harness.lifecycleOverridden = true
 
     setLifecycle({
       doSpawnSession: async (topic: string, _a: any, _b: any, spawnOpts: any) => {
+        if (spawnMs > 0) await new Promise<void>(r => setTimeout(r, spawnMs))
         const sid = `test-resumed-${crypto.randomUUID().slice(0, 8)}`
         const info: SessionInfo = {
           sessionId: sid,

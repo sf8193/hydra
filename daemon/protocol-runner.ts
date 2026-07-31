@@ -1,12 +1,12 @@
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
+import { transport } from './bridge-transport.js'
+import { decideResume } from './auto-resume.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
 let killSession = _killSession
-import { transport } from './bridge-transport.js'
-import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
@@ -484,10 +484,14 @@ function isTerminal(run: ProtocolRun): boolean {
   return !phase || Object.keys(phase.on).length === 0
 }
 
-function clearTimers(run: ProtocolRun): void {
+function clearPhaseTimers(run: ProtocolRun): void {
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
+}
+
+function clearTimers(run: ProtocolRun): void {
+  clearPhaseTimers(run)
   for (const timer of run.disconnectTimers.values()) clearTimeout(timer)
   run.disconnectTimers.clear()
 }
@@ -520,9 +524,7 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
 
   backstopTimer: (run, prevPhase) => {
     if (prevPhase === run.phase) return false
-    if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
-    if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
-    if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
+    clearPhaseTimers(run)
     const phase = run.phase
     const ms = run.protocol.windowMs(phase) ?? 5 * 60 * 1000
     run.timeout = setTimeout(async () => {
