@@ -3,10 +3,6 @@ import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-
-let doSpawnSession = _doSpawnSession
-let waitForBridge = _waitForBridge
-let killSession = _killSession
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
@@ -16,6 +12,10 @@ import type { Protocol } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
+
+let doSpawnSession = _doSpawnSession
+let waitForBridge = _waitForBridge
+let killSession = _killSession
 
 // ---------------------------------------------------------------------------
 // Run state
