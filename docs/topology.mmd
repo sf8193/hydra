@@ -47,7 +47,7 @@ graph TD
     daemon_idempotency["idempotency.ts"]
     daemon_state-machine["state-machine.ts"]
     daemon_transcript-dump["transcript-dump.ts"]
-    daemon_sentinel-nudge["sentinel-nudge.ts"]
+    daemon_advance-nudge["advance-nudge.ts"]
     daemon_reply-guard["reply-guard.ts"]
     daemon_phase-budget["phase-budget.ts"]
   end
@@ -110,7 +110,7 @@ graph TD
   daemon_bridge-server --> daemon_session-lifecycle
   daemon_bridge-server --> daemon_access
   daemon_bridge-server --> daemon_protocol-registry
-  daemon_bridge-server --> daemon_sentinel-nudge
+  daemon_bridge-server --> daemon_advance-nudge
   daemon_bridge-server --> daemon_reply-guard
   daemon_bridge-server --> daemon_anchor-state
   daemon_bridge-server --> daemon_cli-handler
@@ -176,9 +176,9 @@ graph TD
   daemon_idempotency --> daemon_util
   daemon_transcript-dump --> daemon_config
   daemon_transcript-dump --> daemon_util
-  daemon_sentinel-nudge --> daemon_bridge-transport
-  daemon_sentinel-nudge --> daemon_sessions
-  daemon_sentinel-nudge --> daemon_protocol-registry
+  daemon_advance-nudge --> daemon_bridge-transport
+  daemon_advance-nudge --> daemon_sessions
+  daemon_advance-nudge --> daemon_protocol-registry
   daemon_reply-guard --> daemon_bridge-transport
   daemon_reply-guard --> daemon_sessions
   daemon_reply-guard --> daemon_config

@@ -79,7 +79,7 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(seed).toContain('abc-123')
     expect(seed).toContain('thread-456')
     expect(seed).toContain('3-round')
-    expect(seed).toContain('[critic→owner]')
+    expect(seed).toContain('advance(')
   })
 
   test('critic seed switches mandate for focused topic', () => {
@@ -90,13 +90,6 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(focused).toContain('Your focus:')
     expect(focused).toContain('security')
     expect(focused).not.toContain('argue AGAINST')
-  })
-
-  test('sentinels match the live constants', () => {
-    expect(review.sentinel('critic_turn')).toBe(CRITIC_SENTINEL)
-    expect(review.sentinel('owner_turn')).toBe(OWNER_SENTINEL)
-    expect(review.sentinel('cleanup')).toBe(SUMMARY_SENTINEL)
-    expect(review.sentinel('complete')).toBeUndefined()
   })
 
   test('no decisions declared (modifiers replace post-pass decisions)', () => {
@@ -136,13 +129,6 @@ describe('build protocol (TypeScript DSL)', () => {
     expect(build.graceMs('builder')).toBe(120_000)
   })
 
-  test('sentinels match the live constants', () => {
-    expect(build.sentinel('implementing')).toBe(BUILDER_SENTINEL)
-    expect(build.sentinel('reviewing')).toBe(BUILD_CRITIC_SENTINEL)
-    expect(build.sentinel('closing')).toBe(BUILD_SUMMARY_SENTINEL)
-    expect(build.sentinel('complete')).toBeUndefined()
-  })
-
   test('critic_verdict decision is declared', () => {
     expect(build.decisions.critic_verdict).toBeDefined()
     expect(build.decisions.critic_verdict.options).toEqual(['approve', 'request_changes'])
@@ -158,7 +144,7 @@ describe('build protocol (TypeScript DSL)', () => {
     })
     expect(seed).toContain('qubit')
     expect(seed).toContain('Fix the race condition')
-    expect(seed).toContain("decide('approve'")
+    expect(seed).toContain('verdict: "approve"')
   })
 })
 
@@ -224,16 +210,6 @@ describe('protocol DSL validation', () => {
     })).toThrow('cleanupPhase "nonexistent" is not a declared phase')
   })
 
-  test('rejects sentinel on unknown phase', () => {
-    expect(() => protocol('bad', {
-      emoji: '🧪', display: 'Bad',
-      roles: { a: 'A' },
-      phases: { start: { actor: 'a', on: {} } },
-      windows: {},
-      sentinels: { missing_phase: '[tag]' },
-    })).toThrow('sentinel on unknown phase "missing_phase"')
-  })
-
   test('protocol object is frozen', () => {
     const p = protocol('frozen', {
       emoji: '🧊', display: 'Frozen',
@@ -250,7 +226,7 @@ describe('protocol DSL validation', () => {
       roles: { a: 'A', b: 'B' },
       phases: {
         working: { actor: 'a', on: { done: 'cleanup', cancel: 'cancelled' } },
-        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted' },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, advanceEvent: 'posted' },
         complete: { actor: 'a', on: {} },
         cancelled: { actor: 'a', on: {} },
       },
@@ -267,7 +243,7 @@ describe('protocol DSL validation', () => {
       roles: { a: 'A' },
       phases: {
         working: { actor: 'a', on: { done: 'cleanup' } },
-        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted', onEnter: ['backstopTimer'] },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, advanceEvent: 'posted', onEnter: ['backstopTimer'] },
         complete: { actor: 'a', on: {} },
       },
       windows: { cleanup: '5m' },
@@ -282,7 +258,7 @@ describe('protocol DSL validation', () => {
       roles: { a: 'A' },
       phases: {
         working: { actor: 'a', on: { done: 'cleanup' } },
-        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, replyEvent: 'posted', onEnter: [] },
+        cleanup: { actor: 'a', on: { posted: 'complete', timeout: 'complete' }, advanceEvent: 'posted', onEnter: [] },
         complete: { actor: 'a', on: {} },
       },
       windows: { cleanup: '5m' },
@@ -297,18 +273,18 @@ describe('protocol DSL validation', () => {
 // ---------------------------------------------------------------------------
 
 describe('phaseInteraction', () => {
-  test('sentinel-only phase returns sentinel mode', () => {
-    expect(review.phaseInteraction('critic_turn')).toEqual({ mode: 'sentinel', tag: '[critic→owner]' })
-    expect(review.phaseInteraction('owner_turn')).toEqual({ mode: 'sentinel', tag: '[owner→critic]' })
+  test('advance-only phase returns advance mode', () => {
+    expect(review.phaseInteraction('critic_turn')).toEqual({ verdict: 'none' })
+    expect(review.phaseInteraction('owner_turn')).toEqual({ verdict: 'none' })
   })
 
-  test('decide-only phase returns decide mode with sentinel tag', () => {
-    expect(build.phaseInteraction('reviewing')).toEqual({ mode: 'decide', tag: '[critic→builder]' })
+  test('decide-only phase returns decide mode', () => {
+    expect(build.phaseInteraction('reviewing')).toEqual({ verdict: 'required' })
   })
 
-  test('both sentinel and decide returns both mode', async () => {
+  test('both advance and decide returns both mode', async () => {
     const spike = (await import('../../protocols/spike.js')).default
-    expect(spike.phaseInteraction('exploring')).toEqual({ mode: 'both', tag: '[checkpoint]' })
+    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional' })
   })
 
   test('terminal phase returns undefined', () => {
@@ -316,14 +292,14 @@ describe('phaseInteraction', () => {
     expect(review.phaseInteraction('cancelled')).toBeUndefined()
   })
 
-  test('rejects sentinel without replyEvent or decision (inert sentinel)', () => {
-    expect(() => protocol('test-inert', {
+  test('phase with no advanceEvent and no decision returns undefined', () => {
+    const p = protocol('test-no-ia', {
       emoji: '🧪', display: 'Test',
       roles: { a: 'A' },
       phases: { start: { actor: 'a', on: { done: 'end' } }, end: { actor: 'a', on: {} } },
       windows: {},
-      sentinels: { start: '[tag]' },
-    })).toThrow('sentinel "[tag]" but no replyEvent or decision')
+    })
+    expect(p.phaseInteraction('start')).toBeUndefined()
   })
 })
 
@@ -375,45 +351,43 @@ describe('roleConfig', () => {
 })
 
 describe('protocolSeed', () => {
-  test('generates decide instructions from protocol declarations', () => {
+  test('generates advance instructions with verdict for decide phases', () => {
     const seed = build.seed('critic', { name: 'drift', sessionId: 'a', threadId: 't', rounds: 3 })!
-    expect(seed).toContain("decide('approve'")
-    expect(seed).toContain("decide('request_changes'")
-    expect(seed).toContain('does NOT advance')
+    expect(seed).toContain('verdict: "approve"')
+    expect(seed).toContain('verdict: "request_changes"')
+    expect(seed).toContain('advance')
   })
 
-  test('generates dual-mode instructions for both sentinel+decide', async () => {
+  test('generates both-mode instructions for advance+decide phases', async () => {
     const spike = (await import('../../protocols/spike.js')).default
     const seed = spike.seed('explorer', { name: 'drift', sessionId: 'a', threadId: 't', rounds: 1 })!
-    expect(seed).toContain("decide('done'")
-    expect(seed).toContain('[checkpoint]')
-    expect(seed).toContain('for progress')
-    expect(seed).not.toContain('does NOT advance')
+    expect(seed).toContain('verdict: "done"')
+    expect(seed).toContain('checkpoints')
+    expect(seed).toContain('advance(')
   })
 
   test('auto-injects protocol into SeedContext', () => {
     const seed = review.seed('critic', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })!
-    expect(seed).toContain('[critic→owner]')
+    expect(seed).toContain('advance(')
   })
 
-  test('auto-fallback generates seed for role with sentinels but no explicit seed', () => {
+  test('auto-fallback generates seed for role with advanceEvent but no explicit seed', () => {
     const p = protocol('test-fallback', {
       emoji: '🧪', display: 'Test',
       roles: { worker: 'Worker', boss: 'Boss' },
       phases: {
-        working: { actor: 'worker', on: { done: 'end' }, replyEvent: 'done' },
+        working: { actor: 'worker', on: { done: 'end' }, advanceEvent: 'done' },
         end: { actor: 'boss', on: {} },
       },
       windows: {},
-      sentinels: { working: '[done]' },
       roleConfig: { worker: { cadence: 'per-round' } },
     })
     const seed = p.seed('worker', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })!
-    expect(seed).toContain('[done]')
+    expect(seed).toContain('advance(')
     expect(seed).toContain('per round')
   })
 
-  test('auto-fallback generates seed for decide-only role (no sentinels)', () => {
+  test('auto-fallback generates seed for decide-only role', () => {
     const p = protocol('test-decide-only', {
       emoji: '🧪', display: 'Test',
       roles: { judge: 'Judge', defendant: 'Defendant' },
@@ -425,9 +399,8 @@ describe('protocolSeed', () => {
       decisions: { verdict: { phase: 'judging', actor: 'judge', options: ['guilty', 'innocent'] as const, events: { guilty: 'guilty', innocent: 'innocent' } } },
     })
     const seed = p.seed('judge', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })!
-    expect(seed).toContain("decide('guilty'")
-    expect(seed).toContain("decide('innocent'")
-    expect(seed).not.toContain('FIRST LINE')
+    expect(seed).toContain('verdict: "guilty"')
+    expect(seed).toContain('verdict: "innocent"')
   })
 
   test('passive role with only roleConfig returns undefined seed', () => {
@@ -435,11 +408,10 @@ describe('protocolSeed', () => {
       emoji: '🧪', display: 'Test',
       roles: { observer: 'Observer', worker: 'Worker' },
       phases: {
-        working: { actor: 'worker', on: { done: 'end' }, replyEvent: 'done' },
+        working: { actor: 'worker', on: { done: 'end' }, advanceEvent: 'done' },
         end: { actor: 'worker', on: {} },
       },
       windows: {},
-      sentinels: { working: '[done]' },
       roleConfig: { observer: { cadence: 'per-round' } },
     })
     expect(p.seed('observer', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })).toBeUndefined()

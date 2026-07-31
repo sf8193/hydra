@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
 import {
-  registerProtocol, isThreadOccupied, isProtocolPost, getExpectedTag,
-  dispatchSessionReply, dispatchDisconnect, dispatchReconnect,
+  registerProtocol, isThreadOccupied, isProtocolPost,
+  dispatchSessionReply, dispatchDisconnect, dispatchReconnect, dispatchAdvance,
   _resetForTesting,
 } from '../protocol-registry.js'
 import { _resetForTesting as resetBus } from '../event-bus.js'
@@ -95,25 +95,31 @@ describe('dispatch', () => {
   })
 })
 
-describe('getExpectedTag', () => {
-  test('null when no protocol claims the session', () => {
+describe('dispatchAdvance', () => {
+  test('error when no protocol claims the session', async () => {
     registerProtocol('review', makeHooks())
-    expect(getExpectedTag('nobody', 'thread-1')).toBeNull()
+    const result = await dispatchAdvance('nobody', 'content')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('no active protocol')
   })
 
-  test('null when the claiming protocol has no expectedTag hook', () => {
+  test('error when the claiming protocol has no onAdvance hook', async () => {
     registerProtocol('review', makeHooks({ isParticipant: () => true }))
-    expect(getExpectedTag('s1', 'thread-1')).toBeNull()
+    const result = await dispatchAdvance('s1', 'content')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('does not support advance')
   })
 
-  test('delegates to the claiming protocol with sessionId and chatId', () => {
-    const seen: string[] = []
-    registerProtocol('design', makeHooks({
+  test('delegates to the claiming protocol', async () => {
+    registerProtocol('review', makeHooks({
       isParticipant: (id) => id === 's1',
-      expectedTag: (id, chat) => { seen.push(`${id}:${chat}`); return '[x→questions]' },
+      onAdvance: async (_sid, content, verdict) => {
+        return { ok: true as const, sentIds: [`msg-${content}-${verdict ?? 'none'}`] }
+      },
     }))
-    expect(getExpectedTag('s1', 'thread-9')).toBe('[x→questions]')
-    expect(seen).toEqual(['s1:thread-9'])
+    const result = await dispatchAdvance('s1', 'my critique', 'approve')
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.sentIds).toEqual(['msg-my critique-approve'])
   })
 })
 

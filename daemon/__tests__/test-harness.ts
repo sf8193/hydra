@@ -1,5 +1,5 @@
 import { jest } from 'bun:test'
-import { onRunReply, onRunDecision, onRunDisconnect, onRunReconnect, onRunExtend, protocolEvents, cancelRun, __test } from '../protocol-runner.js'
+import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, protocolEvents, cancelRun, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
@@ -144,18 +144,19 @@ export class TestHarness {
   // Actor simulation
   // ---------------------------------------------------------------------------
 
+  async advance(role: string, content: string, verdict?: string): Promise<{ ok: boolean; reason?: string }> {
+    const sid = this.sessionId(role)
+    const result = await onRunAdvance(sid, content, verdict)
+    await this.flush()
+    if (!result.ok) return { ok: false, reason: result.reason }
+    return { ok: true }
+  }
+
   async reply(role: string, text: string): Promise<void> {
     const sid = this.sessionId(role)
     const msgIds = [`msg-${++this.msgCounter}`]
     await onRunReply(sid, text, this.run.threadId, msgIds)
     await this.flush()
-  }
-
-  async decide(role: string, value: string, because: string): Promise<boolean> {
-    const sid = this.sessionId(role)
-    const result = await onRunDecision(sid, value, because)
-    await this.flush()
-    return result
   }
 
   disconnect(role: string): void {

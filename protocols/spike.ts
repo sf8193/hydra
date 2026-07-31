@@ -17,21 +17,16 @@ export default protocol('spike', {
     exploring: {
       actor: 'explorer', half: 'top',
       on: { checkpoint: 'exploring', wrap_up: 'reporting', timeout: 'reporting', cancel: 'cancelled' },
-      replyEvent: 'checkpoint',
+      advanceEvent: 'checkpoint',
     },
     reporting: {
       actor: 'explorer', half: 'bottom',
       on: { report_posted: 'complete', timeout: 'complete' },
-      replyEvent: 'report_posted',
+      advanceEvent: 'report_posted',
       onEnter: ['backstopTimer'],
     },
     complete:  { actor: 'explorer', half: 'top', on: {} },
     cancelled: { actor: 'explorer', half: 'top', on: {} },
-  },
-
-  sentinels: {
-    exploring: '[checkpoint]',
-    reporting: '[report]',
   },
 
   windows: {
@@ -60,9 +55,9 @@ export default protocol('spike', {
 
   seed: {
     explorer: (ctx) => protocolSeed(ctx.protocol, 'explorer', ctx)
-      + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nPost your final \`[report]\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
+      + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nUse \`advance({ content: "your report" })\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
   },
 
   turnNotification: (_run, prevContent) =>
-    `[Spike — investigation]\n\n${prevContent}\n\n---\nContinue your investigation. Post \`[checkpoint]\` with progress, or call \`decide('done', summary)\` when complete.`,
+    `[Spike — investigation]\n\n${prevContent}\n\n---\nContinue your investigation. Call \`advance({ content: "progress" })\` for checkpoints, or \`advance({ content: "summary", verdict: "done" })\` when complete.`,
 })

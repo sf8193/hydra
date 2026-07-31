@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
-import { onRunReply, onRunDecision, onRunDisconnect, onRunReconnect, onRunExtend, __test } from '../protocol-runner.js'
+import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 
 let origStderrWrite: typeof process.stderr.write
@@ -35,16 +35,11 @@ const testProto = protocol('test-review', {
   cleanupPhase: 'closing',
   roles: { critic: 'The Critic', owner: 'The Owner' },
   phases: {
-    critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted' },
-    owner_turn:  { actor: 'owner', half: 'bottom', on: { posted: 'critic_turn', final: 'closing', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'posted', finalRoundEvent: 'final' },
-    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' }, replyEvent: 'summary', onEnter: ['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'] },
+    critic_turn: { actor: 'critic', half: 'top', on: { posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'posted' },
+    owner_turn:  { actor: 'owner', half: 'bottom', on: { posted: 'critic_turn', final: 'closing', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'posted', finalAdvanceEvent: 'final' },
+    closing:     { actor: 'owner', half: 'top', on: { summary: 'complete', timeout: 'complete' }, advanceEvent: 'summary', onEnter: ['killNonOwner', 'backstopTimer', 'notifyOwnerSummary'] },
     complete:    { actor: 'owner', half: 'top', on: {} },
     cancelled:   { actor: 'owner', half: 'top', on: {} },
-  },
-  sentinels: {
-    critic_turn: '[critic→owner]',
-    owner_turn: '[owner→critic]',
-    closing: '[summary]',
   },
   windows: { critic_turn: '10m', owner_turn: '30m', closing: '5m' },
   grace: { critic: '30s', owner: '2m' },
@@ -87,20 +82,24 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
   return run
 }
 
-describe('protocol runner — reply routing', () => {
-  test('critic reply in critic_turn with decision declared does not advance via reply', async () => {
+describe('protocol runner — advance routing', () => {
+  test('advance with verdict transitions critic_turn', async () => {
     const run = createTestRun()
 
-    await onRunReply('test-critic', '[critic→owner]\nYour code is bad.', 'test-thread', ['msg-1'])
+    const result = await onRunAdvance('test-critic', 'Your code is bad.', 'approve')
 
-    expect(run.phase).toBe('critic_turn')
+    expect(result.ok).toBe(true)
+    expect(run.phase).toBe('owner_turn')
+    expect(run.decisions).toHaveLength(1)
+    expect(run.decisions[0].value).toBe('approve')
   })
 
-  test('owner reply in owner_turn transitions to critic_turn', async () => {
+  test('advance without verdict on owner_turn transitions to critic_turn', async () => {
     const run = createTestRun({ phase: 'owner_turn' })
 
-    await onRunReply('test-owner', '[owner→critic]\nNo it is not.', 'test-thread', ['msg-1'])
+    const result = await onRunAdvance('test-owner', 'No it is not.')
 
+    expect(result.ok).toBe(true)
     expect(run.phase).toBe('critic_turn')
     expect(run.currentRound).toBe(2)
   })
@@ -108,97 +107,56 @@ describe('protocol runner — reply routing', () => {
   test('final round triggers final event without incrementing currentRound', async () => {
     const run = createTestRun({ phase: 'owner_turn', currentRound: 3, rounds: 3 })
 
-    await onRunReply('test-owner', '[owner→critic]\nFinal defense.', 'test-thread', ['msg-1'])
+    await onRunAdvance('test-owner', 'Final defense.')
 
     expect(run.phase).toBe('closing')
     expect(run.currentRound).toBe(3)
   })
 
-  test('wrong role reply is ignored', async () => {
+  test('advance from wrong role is rejected', async () => {
     const run = createTestRun({ phase: 'critic_turn' })
 
-    await onRunReply('test-owner', 'I should not be posting now.', 'test-thread', ['msg-1'])
+    const result = await onRunAdvance('test-owner', 'I should not be posting now.')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('not your turn')
+    expect(run.phase).toBe('critic_turn')
+  })
+
+  test('reply never advances protocol', async () => {
+    const run = createTestRun()
+
+    await onRunReply('test-critic', 'Just a question.', 'test-thread', ['msg-1'])
 
     expect(run.phase).toBe('critic_turn')
   })
 
-  test('reply to wrong thread is ignored', async () => {
+  test('invalid verdict is rejected', async () => {
     const run = createTestRun()
 
-    await onRunReply('test-critic', 'Wrong thread.', 'other-thread', ['msg-1'])
+    const result = await onRunAdvance('test-critic', 'Not sure.', 'maybe')
 
-    expect(run.phase).toBe('critic_turn')
-  })
-
-  test('message IDs are tracked on reply-advanced phases', async () => {
-    const run = createTestRun({ phase: 'owner_turn' })
-
-    await onRunReply('test-owner', '[owner→critic]\nDefense.', 'test-thread', ['msg-1', 'msg-2'])
-
-    expect(run.messageIds).toContain('msg-1')
-    expect(run.messageIds).toContain('msg-2')
-  })
-
-  test('message without sentinel is ignored', async () => {
-    const run = createTestRun()
-
-    await onRunReply('test-critic', 'Hey, quick question about the codebase.', 'test-thread', ['msg-1'])
-
-    expect(run.phase).toBe('critic_turn')
-    expect(run.messageIds).not.toContain('msg-1')
-  })
-
-  test('message with wrong sentinel is ignored', async () => {
-    const run = createTestRun()
-
-    await onRunReply('test-critic', '[owner→critic]\nWrong tag.', 'test-thread', ['msg-1'])
-
-    expect(run.phase).toBe('critic_turn')
-  })
-
-  test('phase with declared decision requires decide(), reply alone does not advance', async () => {
-    const run = createTestRun()
-
-    await onRunReply('test-critic', '[critic→owner]\nHere is my critique.', 'test-thread', ['msg-1'])
-
-    expect(run.phase).toBe('critic_turn')
-    expect(run.messageIds).not.toContain('msg-1')
-  })
-})
-
-describe('protocol runner — decisions', () => {
-  test('valid decision transitions state', async () => {
-    const run = createTestRun()
-
-    await onRunDecision('test-critic', 'approve', 'Ship it.')
-
-    expect(run.decisions).toHaveLength(1)
-    expect(run.decisions[0].value).toBe('approve')
-    expect(run.decisions[0].because).toBe('Ship it.')
-  })
-
-  test('invalid decision value is rejected', async () => {
-    const run = createTestRun()
-
-    await onRunDecision('test-critic', 'maybe', 'Not sure.')
-
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toContain('invalid verdict')
     expect(run.decisions).toHaveLength(0)
     expect(run.phase).toBe('critic_turn')
   })
 
-  test('decision from wrong role is rejected', async () => {
+  test('advance from wrong role is rejected', async () => {
     const run = createTestRun()
 
-    await onRunDecision('test-owner', 'approve', 'I approve myself.')
+    const result = await onRunAdvance('test-owner', 'I approve myself.', 'approve')
 
+    expect(result.ok).toBe(false)
     expect(run.decisions).toHaveLength(0)
   })
 
-  test('decision in wrong phase is rejected', async () => {
+  test('verdict in wrong phase is rejected', async () => {
     const run = createTestRun({ phase: 'owner_turn' })
 
-    await onRunDecision('test-critic', 'approve', 'Wrong phase.')
+    const result = await onRunAdvance('test-critic', 'Wrong phase.', 'approve')
 
+    expect(result.ok).toBe(false)
     expect(run.decisions).toHaveLength(0)
   })
 })
@@ -227,7 +185,7 @@ describe('protocol runner — terminal phases', () => {
   test('transition to complete cleans up the run', async () => {
     const run = createTestRun({ phase: 'closing' })
 
-    await onRunReply('test-owner', '[summary]\nAll done.', 'test-thread', ['msg-1'])
+    await onRunAdvance('test-owner', 'All done.')
 
     expect(runs.has('test-run')).toBe(false)
     expect(threadToRun.has('test-thread')).toBe(false)
@@ -264,9 +222,8 @@ describe('protocol runner — strike and decisionContext', () => {
 
   test('decisionContext stamps context on decisions', async () => {
     const run = createTestRun()
-    await onRunDecision('test-critic', 'approve', 'Looks good.')
+    await onRunAdvance('test-critic', 'Looks good.', 'approve')
     expect(run.decisions).toHaveLength(1)
-    // testProto has no decisionContext, so context is undefined
     expect(run.decisions[0].context).toBeUndefined()
   })
 })
@@ -275,7 +232,7 @@ describe('protocol runner — behavior chain', () => {
   test('all onEnter behaviors run (chain does not halt on first true)', async () => {
     const run = createTestRun({ phase: 'owner_turn', currentRound: 3, rounds: 3 })
 
-    await onRunReply('test-owner', '[owner→critic]\nFinal defense.', 'test-thread', ['msg-1'])
+    await onRunAdvance('test-owner', 'Final defense.')
 
     expect(run.phase).toBe('closing')
   })
@@ -288,11 +245,10 @@ describe('protocol runner — inline behaviors', () => {
       emoji: '🧪', display: 'Inline Test',
       roles: { a: 'A', b: 'B' }, owner: 'b',
       phases: {
-        phase1: { actor: 'a', on: { go: 'phase2' }, replyEvent: 'go' },
+        phase1: { actor: 'a', on: { go: 'phase2' }, advanceEvent: 'go' },
         phase2: { actor: 'b', on: { finish: 'done' }, onEnter: [() => { fired = true; return false }] },
         done:   { actor: 'b', on: {} },
       },
-      sentinels: { phase1: '[go]' },
       windows: { phase1: '10m' },
     })
 
@@ -309,7 +265,7 @@ describe('protocol runner — inline behaviors', () => {
     sessionToRun.set('a-sid', run.id)
     sessionToRun.set('b-sid', run.id)
 
-    await onRunReply('a-sid', '[go]\nDone.', 'inline-thread', ['msg-1'])
+    await onRunAdvance('a-sid', 'Done.')
 
     expect(fired).toBe(true)
   })
@@ -367,17 +323,16 @@ describe('spike protocol structure', () => {
     expect(spike.windowMs('exploring')).toBe(60 * 60 * 1000)
   })
 
-  test('sentinel matches checkpoint/report pattern', () => {
-    expect(spike.sentinel('exploring')).toBe('[checkpoint]')
-    expect(spike.sentinel('reporting')).toBe('[report]')
+  test('phaseInteraction classifies advance and both modes', () => {
+    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional' })
+    expect(spike.phaseInteraction('reporting')).toEqual({ verdict: 'none' })
   })
 
   test('seed renders with topic', () => {
     const seed = spike.seed('explorer', { name: 'cedar', sessionId: 'abc', threadId: 't-1', rounds: 1, topic: 'Why does qubit keep crashing?' })
     expect(seed).toContain('cedar')
     expect(seed).toContain('Why does qubit keep crashing?')
-    expect(seed).toContain('[checkpoint]')
-    expect(seed).toContain('[report]')
+    expect(seed).toContain('advance(')
   })
 
   test('exploring phase has no onEnter behaviors (rounds advance on reply)', () => {
@@ -475,7 +430,7 @@ describe('extend_phase', () => {
     const run = createTestRun({ phase: 'owner_turn' })
     run._extensions = 2
 
-    await onRunReply('test-owner', '[owner→critic]\nDefense.', 'test-thread', ['msg-1'])
+    await onRunAdvance('test-owner', 'Defense.')
 
     expect(run.phase).toBe('critic_turn')
     expect(run._extensions).toBe(0)
