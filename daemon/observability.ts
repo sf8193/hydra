@@ -2,7 +2,7 @@
 // death report to the daemon log. A crashed spawn otherwise leaves no cause, no
 // stderr, and no link to its transcript.
 
-import { existsSync, readdirSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execFileSync } from 'child_process'
@@ -158,6 +158,7 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
     for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
     const live = [...registry.values()].filter(s => !s.deadAt)
     for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
+    for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
     if (live.length === 0) return
     const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected))
     process.stderr.write(`daemon: vitals (${live.length} live):\n${lines.join('\n')}\n`)
@@ -167,7 +168,14 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
 // Pure: `now` and `sample` are injected (not read from the wall clock / global
 // Map) so the assembled report — including the "N before death" timing and the
 // sampled-vs-never-sampled branch — is deterministic and testable.
-export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, exitFileLines?: string[], stderrTail?: string[]): string {
+export type AutopsyExtras = {
+  exitFileLines?: string[]
+  stderrTail?: string[]
+  debugTail?: string[]
+}
+
+export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, extras?: AutopsyExtras): string {
+  const { exitFileLines, stderrTail, debugTail } = extras ?? {}
   const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
   const rss = sample ? `${sample.rssMB}MB (${dur(now - sample.at)} before death)` : 'never sampled'
   const lines = [
@@ -177,6 +185,7 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
     `  context: ${info.topic}`,
     `  transcript: ${transcript ?? 'not found'}`,
     `  pane-log: ${info.spawnLogPath ?? 'none'}`,
+    `  debug-log: ${info.debugLogPath ?? 'none'}`,
     `  lifetime: ${dur(now - info.createdAt)}, idle at death: ${dur(now - info.lastActive)}`,
     `  last RSS: ${rss}`,
   ]
@@ -203,6 +212,10 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   if (stderrTail && stderrTail.length > 0) {
     lines.push(`  stderr (last ${stderrTail.length} lines):`)
     lines.push(...stderrTail.map(l => `  | ${l}`))
+  }
+  if (debugTail && debugTail.length > 0) {
+    lines.push(`  cc-debug (last ${debugTail.length} lines):`)
+    lines.push(...debugTail.map(l => `  | ${l}`))
   }
   const markerKeys = new Set(['exit_code', 'exit_ts', 'session_id', 'tmux_name', 'signal', 'wall_clock'])
   if (blackBoxTail.length > 0) {
@@ -235,7 +248,19 @@ export function recordSessionDeath(info: SessionInfo, reason: string): void {
   if (info.spawnLogPath) {
     try { tail = tailSpawnLog(info.spawnLogPath) } catch {}
   }
-  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId)) + '\n')
+  let exitFileLines: string[] | undefined
+  if (info.exitFilePath) {
+    try { exitFileLines = readFileSync(info.exitFilePath, 'utf8').split('\n').filter(Boolean) } catch {}
+  }
+  let stderrTail: string[] | undefined
+  if (info.stderrLogPath) {
+    try { const s = tailSpawnLog(info.stderrLogPath, 5); if (s.length > 0) stderrTail = s } catch {}
+  }
+  let debugTail: string[] | undefined
+  if (info.debugLogPath) {
+    try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
+  }
+  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail }) + '\n')
   info.deadAt = Date.now()
 }
 

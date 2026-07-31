@@ -626,9 +626,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
+  const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)
   const exitFile = join(SPAWN_LOGS_DIR, `exit-${tmuxName}-${sessionId}.log`)
-  const exitMarker = [
-    `_HYDRA_EXIT_CODE=$? _HYDRA_EXIT_TS=$(date +%s)`,
+  const writeExitMarker = [
+    `_HYDRA_EXIT_CODE=$?`,
+    `_HYDRA_EXIT_TS=$(date +%s)`,
     `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
     `echo "wall_clock=\${SECONDS}s"`,
     `echo "exit_ts=$_HYDRA_EXIT_TS"`,
@@ -637,14 +639,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
     `} > ${shq(exitFile)}`,
   ].join('; ')
+  claudeArgs += ` --debug-file ${shq(debugLog)}`
   const inner = [
+    `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
     `cd ${shq(effectiveCwd)}`,
     `export HYDRA_SESSION_ID=${shq(sessionId)}`,
     `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
     `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-    `${claudeArgs} 2>>${shq(stderrLog)}; ${exitMarker}`,
+    `${claudeArgs} 2>>${shq(stderrLog)}`,
   ].join(' && ')
 
   process.stderr.write(`daemon: spawn ${tmuxName}: running tmux new-session\n`)
@@ -708,6 +712,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
     ...(spawnLogPath ? { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog } : {}),
+    debugLogPath: debugLog,
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
     ...(isHeadless ? { headless: true } : {}),
