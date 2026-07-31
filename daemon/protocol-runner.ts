@@ -143,6 +143,18 @@ export async function startProtocolRun(
     throw err
   }
 
+  // Push scoped tools to the initial actor — they connected with a bare list
+  const initialActor = proto.phases[proto.initialPhase]?.actor
+  if (initialActor) {
+    const initialSid = run.participants.get(initialActor)
+    if (initialSid) {
+      const ia = proto.phaseInteraction(proto.initialPhase)
+      const hint = ia ? formatAdvanceHint(proto, proto.initialPhase) : undefined
+      const tools = computeToolsForSession(initialSid, hint ? { advanceHint: hint } : undefined)
+      transport.sendOrQueue(initialSid, { type: 'tools_update', tools })
+    }
+  }
+
   await postStatusLine(run)
   resetTimeout(run)
 
