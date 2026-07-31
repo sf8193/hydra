@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { createHarness, TestHarness } from './test-harness.js'
+import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR } from './test-harness.js'
 
 // Real protocol definitions — the harness exercises them as-is
 import review from '../../protocols/review.js'
@@ -79,17 +79,18 @@ describe('review: timeout deferred by activity', () => {
   test('working session gets deferred, idle session gets cancelled', async () => {
     h = createHarness(review, { rounds: 3 })
 
+    const windowMs = h.run.protocol.windowMs('critic_turn')!
+
     h.setTurnState('critic', 'working')
-    // critic_turn window is 10m — advance past it
-    await h.tick(10 * 60_000)
+    await h.tick(windowMs)
 
     // Deferred — still in critic_turn
     expect(h.phase).toBe('critic_turn')
     expect(h.isTerminated).toBe(false)
 
-    // Go idle. Deferral armed a NEW timeout at currentTime + 10m.
+    // Go idle. Deferral armed a NEW timeout at currentTime + windowMs.
     h.setTurnState('critic', 'idle')
-    await h.tick(10 * 60_000)
+    await h.tick(windowMs)
 
     expect(h.phase).toBe('cancelled')
     expect(h.isTerminated).toBe(true)
@@ -162,11 +163,11 @@ describe('review: total backstop', () => {
   test('fires unconditionally at 3x window regardless of activity', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    // critic_turn window is 10m, total backstop at 30m
+    const windowMs = h.run.protocol.windowMs('critic_turn')!
     h.setTurnState('critic', 'working')
 
-    // Advance to 30m — total backstop fires even though actor is working
-    await h.tick(30 * 60 * 1000)
+    // Total backstop at TOTAL_PHASE_CAP_FACTOR × window
+    await h.tick(windowMs * TOTAL_PHASE_CAP_FACTOR)
 
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
@@ -181,9 +182,9 @@ describe('review: disconnect and grace', () => {
 
     h.disconnect('critic')
 
-    // critic grace is 30s — but disconnect starts a 3s death-detect timer first
-    // then grace timer. Total = 3s + 30s. Advance past both.
-    await h.tick(35_000)
+    // 3s death-detect + grace period. Advance past both.
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
 
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
@@ -227,8 +228,9 @@ describe('review: closing backstop completes (not cancels)', () => {
     await h.reply('owner', '[owner→critic]\nThanks.')
     expect(h.phase).toBe('cleanup')
 
-    // Don't post summary — let backstop fire (5m closing window)
-    await h.tick(5 * 60 * 1000)
+    // Don't post summary — let backstop fire
+    const closingMs = h.run.protocol.windowMs('cleanup')!
+    await h.tick(closingMs)
 
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
@@ -315,8 +317,8 @@ describe('build: review timeout cancels', () => {
     await h.reply('builder', '[builder→critic]\nDone.')
     expect(h.phase).toBe('reviewing')
 
-    // Advance past 20m review window
-    await h.tick(20 * 60 * 1000)
+    // Advance past the review window
+    await h.tick(h.run.protocol.windowMs('reviewing')!)
 
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents[0].outcome).toBe('cancelled')
@@ -405,8 +407,8 @@ describe('review: extension is a full window reset (minutes arg is advisory)', (
     // but calls resetTimeout(run) which always uses protocol.windowMs(phase).
     h.extend('critic', 'reading codebase', 5)
 
-    // Full 10m window fires — not 10m + 5m
-    await h.tick(10 * 60_000)
+    // Full window fires — not window + 5m
+    await h.tick(h.run.protocol.windowMs('critic_turn')!)
 
     expect(h.phase).toBe('cancelled')
     expect(h.isTerminated).toBe(true)

@@ -9,7 +9,8 @@ import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
-const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS } = __test
+const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP } = __test
+export const TOTAL_PHASE_CAP_FACTOR = _CAP
 
 type HarnessOpts = {
   rounds?: number
@@ -235,12 +236,10 @@ export class TestHarness {
   }
 
   dispose(): void {
-    if (runs.has(this.run.id)) {
-      if (this.run.timeout) clearTimeout(this.run.timeout)
-      if (this.run._warningTimeout) clearTimeout(this.run._warningTimeout)
-      if (this.run._totalTimeout) clearTimeout(this.run._totalTimeout)
-      for (const t of this.run.disconnectTimers.values()) clearTimeout(t)
-    }
+    clearTimeout(this.run.timeout)
+    clearTimeout(this.run._warningTimeout)
+    clearTimeout(this.run._totalTimeout)
+    for (const t of this.run.disconnectTimers.values()) clearTimeout(t)
 
     jest.clearAllTimers()
     jest.useRealTimers()
