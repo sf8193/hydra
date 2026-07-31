@@ -61,17 +61,10 @@ Identity of who triggered the spawn. Appears in announcements, stored for audit.
 **3. What model?**
 
 ```bash
---model sonnet      # claude-sonnet-4-6[1m]
---model haiku       # claude-haiku-4-5-20251001
---model opus        # claude-opus-4-6[1m]
---model fable       # claude-fable-5[1m]
---model sonnet-5    # claude-sonnet-5[1m]
---model opus-5      # claude-opus-5
---model opus-4-7    # claude-opus-4-7[1m]
---model opus-4-8    # claude-opus-4-8[1m]
+--model <alias>     # e.g. sonnet, haiku, opus, fable
 ```
 
-Omit for the daemon's default (`HYDRA_MODEL` env). Full model IDs also accepted. See `shared/constants.ts` for the canonical alias list.
+Run `hydra spawn --help` for current aliases, or check `shared/constants.ts`. Omit for the daemon's default (`HYDRA_MODEL` env). Full model IDs also accepted.
 
 ### Optional Flags
 
@@ -157,7 +150,7 @@ Global options: `--daemon <name>` (target specific daemon), `--json` (raw JSON o
 3. **Idempotency keys are case-sensitive** — `My-Key` ≠ `my-key`
 4. **24h TTL** — keys auto-expire; for long-running automation, use fresh keys per run
 5. **`hydra kill` sets idempotency to `failed`** — intentionally unblocks retry with same key
-6. **CLI request timeout is 10s** — hardcoded in `sendRequest` (`cli/helpers.ts`). Separate from the daemon's `HYDRA_SOCKET_TIMEOUT` (default 15s) — setting `HYDRA_SOCKET_TIMEOUT` won't change the CLI's 10s limit
+6. **CLI request timeout** — hardcoded in `sendRequest` (`cli/helpers.ts`), separate from the daemon's `HYDRA_SOCKET_TIMEOUT`. If the daemon is overloaded, the CLI may timeout before spawn completes
 
 ## Source
 
