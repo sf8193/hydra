@@ -279,12 +279,12 @@ describe('phaseInteraction', () => {
   })
 
   test('decide-only phase returns decide mode', () => {
-    expect(build.phaseInteraction('reviewing')).toEqual({ verdict: 'required' })
+    expect(build.phaseInteraction('reviewing')).toEqual({ verdict: 'required', options: ['approve', 'request_changes'] })
   })
 
   test('both advance and decide returns both mode', async () => {
     const spike = (await import('../../protocols/spike.js')).default
-    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional' })
+    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional', options: ['done'] })
   })
 
   test('terminal phase returns undefined', () => {

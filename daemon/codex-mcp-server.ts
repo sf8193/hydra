@@ -116,9 +116,11 @@ async function callDaemonTool(id: string, name: string, args: Record<string, unk
 
 const rl = createInterface({ input: process.stdin })
 
-// Import tools from the canonical source — keeps codex and claude tool sets in sync
-import { computeToolsForSession } from './bridge-tools.js'
-const TOOLS = computeToolsForSession('worker').map(t => ({
+// Import tools from the canonical source — keeps codex and claude tool sets in sync.
+// Codex sessions get advance/extend_phase statically (no dynamic tools_update path).
+import { computeToolsForSession, BRIDGE_TOOLS } from './bridge-tools.js'
+const defaultAdvanceDesc = BRIDGE_TOOLS.find(t => t.name === 'advance')!.description
+const TOOLS = computeToolsForSession('worker', { advanceHint: defaultAdvanceDesc }).map(t => ({
   name: t.name, description: t.description, inputSchema: t.inputSchema,
 }))
 

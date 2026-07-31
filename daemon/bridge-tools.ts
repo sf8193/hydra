@@ -26,8 +26,11 @@ export const BRIDGE_TOOLS = [
 ]
 
 export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
+export const PROTOCOL_ACTOR_TOOLS = new Set(['advance', 'extend_phase'])
 
-export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean }): typeof BRIDGE_TOOLS {
+export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; advanceHint?: string }): typeof BRIDGE_TOOLS {
   if (sessionId === 'main' || opts?.allowMainTools) return BRIDGE_TOOLS
-  return BRIDGE_TOOLS.filter(t => !MAIN_ONLY_TOOLS.has(t.name))
+  const filtered = BRIDGE_TOOLS.filter(t => !MAIN_ONLY_TOOLS.has(t.name))
+  if (!opts?.advanceHint) return filtered.filter(t => !PROTOCOL_ACTOR_TOOLS.has(t.name))
+  return filtered.map(t => t.name === 'advance' ? { ...t, description: opts.advanceHint! } : t)
 }

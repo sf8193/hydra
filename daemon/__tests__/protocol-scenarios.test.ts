@@ -1,5 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
+import { computeToolsForSession, PROTOCOL_ACTOR_TOOLS } from '../bridge-tools.js'
+import { protocol } from '../protocol-dsl.js'
 
 // Real protocol definitions — the harness exercises them as-is
 import review from '../../protocols/review.js'
@@ -10,6 +12,7 @@ let h: TestHarness
 
 afterEach(() => {
   h?.dispose()
+  h = undefined as any
 })
 
 // ---------------------------------------------------------------------------
@@ -663,5 +666,189 @@ describe('review: cancel during auto-resume kills spawned session', () => {
 
     expect(h.isTerminated).toBe(true)
     expect(h.killedSessions.length).toBeGreaterThan(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PhaseInteraction enrichment — options carried on the classification
+// ---------------------------------------------------------------------------
+
+describe('PhaseInteraction.options', () => {
+  test('build reviewing carries verdict options from decision', () => {
+    const ia = build.phaseInteraction('reviewing')
+    expect(ia?.verdict).toBe('required')
+    expect(ia?.options).toEqual(['approve', 'request_changes'])
+  })
+
+  test('spike exploring carries verdict options from decision', () => {
+    const ia = spike.phaseInteraction('exploring')
+    expect(ia?.verdict).toBe('optional')
+    expect(ia?.options).toEqual(['done'])
+  })
+
+  test('review critic_turn has no options (verdict: none)', () => {
+    const ia = review.phaseInteraction('critic_turn')
+    expect(ia?.verdict).toBe('none')
+    expect(ia?.options).toBeUndefined()
+  })
+
+  test('build implementing has no options (verdict: none)', () => {
+    const ia = build.phaseInteraction('implementing')
+    expect(ia?.verdict).toBe('none')
+    expect(ia?.options).toBeUndefined()
+  })
+
+  test('review owner_turn has no options (verdict: none)', () => {
+    const ia = review.phaseInteraction('owner_turn')
+    expect(ia?.verdict).toBe('none')
+    expect(ia?.options).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Decision actor build-time validation
+// ---------------------------------------------------------------------------
+
+describe('decision actor build-time validation', () => {
+  test('throws when decision actor differs from phase actor', () => {
+    expect(() => protocol('bad', {
+      emoji: '⚠️',
+      display: 'Bad',
+      roles: { a: 'Role A', b: 'Role B' },
+      phases: {
+        step: { actor: 'a', on: { next: 'done' }, advanceEvent: 'next' },
+        done: { actor: 'a', on: {} },
+      },
+      windows: { step: '5m' },
+      decisions: {
+        bad_decision: { phase: 'step', actor: 'b', options: ['x'] },
+      },
+    })).toThrow(/decision "bad_decision" actor "b" does not match phase "step" actor "a"/)
+  })
+
+  test('matching actor does not throw', () => {
+    expect(() => protocol('good', {
+      emoji: '✅',
+      display: 'Good',
+      roles: { a: 'Role A', b: 'Role B' },
+      phases: {
+        step: { actor: 'a', on: { next: 'done' } },
+        done: { actor: 'a', on: {} },
+      },
+      windows: { step: '5m' },
+      decisions: {
+        good_decision: { phase: 'step', actor: 'a', options: ['x'], events: { x: 'next' } },
+      },
+    })).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Dynamic tool scoping — computeToolsForSession
+// ---------------------------------------------------------------------------
+
+describe('dynamic tool scoping', () => {
+  test('worker without advanceHint excludes advance and extend_phase', () => {
+    const tools = computeToolsForSession('some-worker')
+    const names = tools.map(t => t.name)
+    expect(names).not.toContain('advance')
+    expect(names).not.toContain('extend_phase')
+  })
+
+  test('worker with advanceHint includes advance with custom description', () => {
+    const hint = 'advance({ content: "...", verdict: "approve" }) (or: request_changes)'
+    const tools = computeToolsForSession('worker', { advanceHint: hint })
+    const advance = tools.find(t => t.name === 'advance')
+    expect(advance).toBeDefined()
+    expect(advance!.description).toBe(hint)
+  })
+
+  test('worker with advanceHint includes extend_phase', () => {
+    const tools = computeToolsForSession('worker', { advanceHint: 'advance(...)' })
+    const names = tools.map(t => t.name)
+    expect(names).toContain('extend_phase')
+  })
+
+  test('main session always includes advance and extend_phase', () => {
+    const tools = computeToolsForSession('main')
+    const names = tools.map(t => t.name)
+    expect(names).toContain('advance')
+    expect(names).toContain('extend_phase')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// tools_update emitted on phase transitions
+// ---------------------------------------------------------------------------
+
+describe('tools_update on phase transition', () => {
+  test('new active actor receives tools_update with advance', async () => {
+    h = createHarness(review, { rounds: 3 })
+    await h.advance('critic', 'Critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    const ownerMsgs = h.actorMessages('owner')
+    const toolsUpdate = ownerMsgs.find(m => m.type === 'tools_update')
+    expect(toolsUpdate).toBeDefined()
+    const tools = toolsUpdate!.tools as Array<{ name: string }>
+    expect(tools.some(t => t.name === 'advance')).toBe(true)
+  })
+
+  test('previous actor receives tools_update without advance', async () => {
+    h = createHarness(review, { rounds: 3 })
+    await h.advance('critic', 'Critique.')
+
+    const criticMsgs = h.actorMessages('critic')
+    const toolsUpdate = criticMsgs.find(m => m.type === 'tools_update')
+    expect(toolsUpdate).toBeDefined()
+    const tools = toolsUpdate!.tools as Array<{ name: string }>
+    expect(tools.some(t => t.name === 'advance')).toBe(false)
+  })
+
+  test('advance description contains verdict options for build reviewing', async () => {
+    h = createHarness(build, { rounds: 3 })
+    await h.advance('builder', 'Implementation.')
+    expect(h.phase).toBe('reviewing')
+
+    const criticMsgs = h.actorMessages('critic')
+    const toolsUpdate = criticMsgs.find(m => m.type === 'tools_update')
+    expect(toolsUpdate).toBeDefined()
+    const tools = toolsUpdate!.tools as Array<{ name: string; description: string }>
+    const advance = tools.find(t => t.name === 'advance')!
+    expect(advance.description).toContain('approve')
+    expect(advance.description).toContain('request_changes')
+  })
+
+  test('advance description for verdict:none is simple', async () => {
+    h = createHarness(review, { rounds: 3 })
+    await h.advance('critic', 'Critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    const ownerMsgs = h.actorMessages('owner')
+    const toolsUpdate = ownerMsgs.find(m => m.type === 'tools_update')!
+    const tools = toolsUpdate.tools as Array<{ name: string; description: string }>
+    const advance = tools.find(t => t.name === 'advance')!
+    expect(advance.description).toBe('advance({ content: "..." })')
+  })
+
+  test('same-actor phase transition updates tool description', async () => {
+    h = createHarness(spike, { rounds: 1 })
+    expect(h.phase).toBe('exploring')
+
+    // Checkpoint — self-loop, same actor
+    await h.advance('explorer', 'Found the cache layer.')
+    expect(h.phase).toBe('exploring')
+
+    // Done — transitions to reporting, same actor
+    await h.advance('explorer', 'Investigation complete.', 'done')
+    expect(h.phase).toBe('reporting')
+
+    const msgs = h.actorMessages('explorer')
+    const toolsUpdates = msgs.filter(m => m.type === 'tools_update')
+    const lastUpdate = toolsUpdates[toolsUpdates.length - 1]
+    const tools = lastUpdate.tools as Array<{ name: string; description: string }>
+    const advance = tools.find(t => t.name === 'advance')!
+    // reporting phase is verdict:none
+    expect(advance.description).toBe('advance({ content: "..." })')
   })
 })

@@ -8,6 +8,7 @@ import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
 import { dumpTranscript } from './transcript-dump.js'
+import { computeToolsForSession } from './bridge-tools.js'
 import type { Protocol } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
@@ -205,14 +206,11 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     if (ia.verdict === 'none') {
       return { ok: false, reason: `phase "${run.phase}" does not accept a verdict — call advance without verdict` }
     }
-    const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase && d.actor === role)
-    if (!decision) return { ok: false, reason: `no decision declared for phase "${run.phase}"` }
-    if (!decision.options.includes(verdict)) {
-      return { ok: false, reason: `invalid verdict "${verdict}" (expected: ${decision.options.join(' | ')})` }
+    if (!ia.options?.includes(verdict)) {
+      return { ok: false, reason: `invalid verdict "${verdict}" (expected: ${ia.options?.join(' | ') ?? 'unknown'})` }
     }
   } else if (ia.verdict === 'required') {
-    const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
-    return { ok: false, reason: `phase "${run.phase}" requires a verdict (options: ${decision?.options.join(' | ') ?? 'unknown'})` }
+    return { ok: false, reason: `phase "${run.phase}" requires a verdict (options: ${ia.options?.join(' | ') ?? 'unknown'})` }
   }
 
   // Resolve the event to fire
@@ -598,6 +596,8 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     return
   }
 
+  emitToolsUpdate(run, prevPhase)
+
   if (!handled) {
     notifyNextActor(run, content)
     await postStatusLine(run)
@@ -605,13 +605,35 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
   }
 }
 
-function formatAdvanceHint(proto: Protocol, phase: string): string {
+function emitToolsUpdate(run: ProtocolRun, prevPhase: string): void {
+  const newActor = run.protocol.phases[run.phase]?.actor
+  const prevActor = run.protocol.phases[prevPhase]?.actor
+
+  if (newActor) {
+    const sid = run.participants.get(newActor)
+    if (sid) {
+      const ia = run.protocol.phaseInteraction(run.phase)
+      const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
+      const tools = computeToolsForSession(sid, hint ? { advanceHint: hint } : undefined)
+      transport.sendOrQueue(sid, { type: 'tools_update', tools })
+    }
+  }
+
+  if (prevActor && prevActor !== newActor) {
+    const sid = run.participants.get(prevActor)
+    if (sid) {
+      const tools = computeToolsForSession(sid)
+      transport.sendOrQueue(sid, { type: 'tools_update', tools })
+    }
+  }
+}
+
+export function formatAdvanceHint(proto: Protocol, phase: string): string {
   const ia = proto.phaseInteraction(phase)
   if (!ia || ia.verdict === 'none') return `advance({ content: "..." })`
 
-  const dec = Object.values(proto.decisions).find(d => d.phase === phase)
-  const example = dec?.options[0] ?? '...'
-  const alts = dec && dec.options.length > 1 ? ` (or: ${dec.options.slice(1).join(', ')})` : ''
+  const example = ia.options?.[0] ?? '...'
+  const alts = ia.options && ia.options.length > 1 ? ` (or: ${ia.options.slice(1).join(', ')})` : ''
   const verdictCall = `advance({ content: "...", verdict: "${example}" })${alts}`
 
   if (ia.verdict === 'optional') {
