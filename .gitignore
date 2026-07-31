@@ -2,6 +2,8 @@ node_modules/
 *.log
 .DS_Store
 .env
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 templates.local.json
 node_modules

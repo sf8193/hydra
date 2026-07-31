@@ -9,6 +9,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
+import { MODEL_ALIASES } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // CLI entry point
@@ -42,12 +43,17 @@ Session management:
 
 Platform: slack | discord (required for lifecycle commands)
 
-Spawn options (required):
-  --initiator <name>                   Who triggered this spawn
-  --idempotency-key <key>              Prevent duplicate spawns
+Spawn options:
+  --initiator <name>                   Who triggered this spawn (required)
+  --idempotency-key <key>              Prevent duplicate spawns (required)
+  --model <id|alias>                   Model ID or alias (see below)
   --channel <id>                       Target channel for the spawned thread
   --message <id>                       Create thread on this message (requires --channel)
-  --model <id|alias>                   Model ID or alias (sonnet, haiku, fable, opus-4-7, etc)
+  --quiet                              Suppress spawn announcement in chat
+  --ephemeral                          Auto-kill on [done], skip death visuals
+
+Model aliases:
+${Object.entries(MODEL_ALIASES).map(([k, v]) => `  ${k.padEnd(16)} → ${v}`).join('\n')}
 
 Global options:
   --daemon <name>                      Target a specific daemon
