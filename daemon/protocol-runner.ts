@@ -120,8 +120,7 @@ export async function startProtocolRun(
 
   const ownerRole = proto.ownerRole
   if (ownerRole) {
-    run.participants.set(ownerRole, ownerSessionId)
-    run.sessionToRole.set(ownerSessionId, ownerRole)
+    registerParticipant(run, ownerRole, ownerSessionId)
   }
 
   refreshSessionVisual(threadId, { badge: formatRoundBadge(proto.emoji, halfForPhase(run), run.currentRound, run.rounds) })
@@ -141,18 +140,6 @@ export async function startProtocolRun(
     process.stderr.write(`daemon: ${proto.name} run: spawn failed: ${err}\n`)
     await cancelRun(run, 'spawn failed')
     throw err
-  }
-
-  // Push scoped tools to the initial actor — they connected with a bare list
-  const initialActor = proto.phases[proto.initialPhase]?.actor
-  if (initialActor) {
-    const initialSid = run.participants.get(initialActor)
-    if (initialSid) {
-      const ia = proto.phaseInteraction(proto.initialPhase)
-      const hint = ia ? formatAdvanceHint(proto, proto.initialPhase) : undefined
-      const tools = computeToolsForSession(initialSid, hint ? { advanceHint: hint } : undefined)
-      transport.sendOrQueue(initialSid, { type: 'tools_update', tools })
-    }
   }
 
   await postStatusLine(run)
@@ -185,6 +172,20 @@ function getRunAndRole(sessionId: string): { run: ProtocolRun; role: string } | 
   const role = run.sessionToRole.get(sessionId)
   if (!role) return null
   return { run, role }
+}
+
+function registerParticipant(run: ProtocolRun, role: string, sessionId: string): void {
+  run.participants.set(role, sessionId)
+  run.sessionToRole.set(sessionId, role)
+  sessionToRun.set(sessionId, run.id)
+
+  const phaseDef = run.protocol.phases[run.phase]
+  if (phaseDef?.actor === role) {
+    const ia = run.protocol.phaseInteraction(run.phase)
+    const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
+    const tools = computeToolsForSession(sessionId, hint ? { advanceHint: hint } : undefined)
+    transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -391,22 +392,9 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
 
   if (info) info.deadAt = Date.now()
   sessionToRun.delete(deadSessionId)
-  run.participants.set(role, result.sessionId)
   run.sessionToRole.delete(deadSessionId)
-  run.sessionToRole.set(result.sessionId, role)
-  sessionToRun.set(result.sessionId, run.id)
   run.disconnectTimers.delete(deadSessionId)
-
-  // Push scoped tools before the resume notification — the resumed session
-  // connected with a bare tool list (advance excluded) because it wasn't
-  // mapped yet. Now that the maps are updated, give it the right hat.
-  const phaseDef = run.protocol.phases[run.phase]
-  if (phaseDef?.actor === role) {
-    const ia = run.protocol.phaseInteraction(run.phase)
-    const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
-    const tools = computeToolsForSession(result.sessionId, hint ? { advanceHint: hint } : undefined)
-    transport.sendOrQueue(result.sessionId, { type: 'tools_update', tools })
-  }
+  registerParticipant(run, role, result.sessionId)
 
   transport.sendOrQueue(result.sessionId, {
     type: 'notification',
@@ -708,9 +696,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
     },
   })
 
-  run.participants.set(role, result.sessionId)
-  run.sessionToRole.set(result.sessionId, role)
-  sessionToRun.set(result.sessionId, run.id)
+  registerParticipant(run, role, result.sessionId)
 }
 
 async function postStatusLine(run: ProtocolRun): Promise<void> {
