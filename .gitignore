@@ -4,5 +4,6 @@ node_modules/
 .env
 .claude/*
 !.claude/skills/
+!.claude/skills/**
 templates.local.json
 node_modules
