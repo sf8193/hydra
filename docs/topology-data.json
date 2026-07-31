@@ -351,6 +351,10 @@
       "daemon_anchor-state"
     ],
     [
+      "cli_hydra",
+      "shared_constants"
+    ],
+    [
       "daemon_sessions",
       "daemon_config"
     ],
