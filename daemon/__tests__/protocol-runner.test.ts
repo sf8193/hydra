@@ -324,7 +324,7 @@ describe('spike protocol structure', () => {
   })
 
   test('phaseInteraction classifies advance and both modes', () => {
-    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional', options: ['done'] })
+    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional', options: ['done'], descriptions: { done: 'your summary' } })
     expect(spike.phaseInteraction('reporting')).toEqual({ verdict: 'none' })
   })
 

@@ -606,6 +606,8 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
 }
 
 function emitToolsUpdate(run: ProtocolRun, prevPhase: string): void {
+  if (run.phase === prevPhase) return
+
   const newActor = run.protocol.phases[run.phase]?.actor
   const prevActor = run.protocol.phases[prevPhase]?.actor
 

@@ -244,9 +244,9 @@ export function protocol<
       const advanceCoexists = phaseDef.advanceEvent && !decisionEvents.has(phaseDef.advanceEvent)
 
       if (advanceCoexists) {
-        interactions.set(phaseName, { verdict: 'optional', options: decision.options })
+        interactions.set(phaseName, { verdict: 'optional', options: decision.options, descriptions: decision.descriptions })
       } else {
-        interactions.set(phaseName, { verdict: 'required', options: decision.options })
+        interactions.set(phaseName, { verdict: 'required', options: decision.options, descriptions: decision.descriptions })
       }
     } else if (phaseDef.advanceEvent) {
       interactions.set(phaseName, { verdict: 'none' })
@@ -327,11 +327,9 @@ export function protocolSeed(proto: Protocol, role: string, ctx: SeedContext): s
 
   for (const { phase, ia } of actorPhases) {
     if (ia.verdict === 'optional' && ia.options) {
-      const dec = Object.values(proto.decisions).find(d => d.phase === phase)
-      sections.push(`**${phase}:** Call \`advance({ content: "your progress" })\` for checkpoints. To finish:\n${formatVerdictOptions(ia.options, dec?.descriptions)}`)
+      sections.push(`**${phase}:** Call \`advance({ content: "your progress" })\` for checkpoints. To finish:\n${formatVerdictOptions(ia.options, ia.descriptions)}`)
     } else if (ia.verdict === 'required' && ia.options) {
-      const dec = Object.values(proto.decisions).find(d => d.phase === phase)
-      sections.push(`**${phase}:** You MUST include a verdict:\n${formatVerdictOptions(ia.options, dec?.descriptions)}`)
+      sections.push(`**${phase}:** You MUST include a verdict:\n${formatVerdictOptions(ia.options, ia.descriptions)}`)
     } else if (ia.verdict === 'none') {
       sections.push(`**${phase}:** Call \`advance({ content: "your deliverable" })\` to post and advance.`)
     }
