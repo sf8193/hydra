@@ -10,7 +10,7 @@ import { spawnModel } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
-import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
+import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect, getAdvanceHint } from './protocol-registry.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -230,7 +230,8 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       transport.set(sessionId, conn)
-      const tools = computeToolsForSession(sessionId, { allowMainTools: info?.allowMainTools })
+      const hint = info?.threadId ? getAdvanceHint(sessionId, info.threadId) : null
+      const tools = computeToolsForSession(sessionId, { allowMainTools: info?.allowMainTools, advanceHint: hint ?? undefined })
       transport.sendToBridge(conn, {
         type: 'registered',
         sessionId,
@@ -446,7 +447,11 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write(`daemon: stderr tail unreadable (${stderrPath}): ${err}\n`)
       }
     }
-    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), exitFileLines, stderrTail) + '\n')
+    let debugTail: string[] | undefined
+    if (info.debugLogPath) {
+      try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
+    }
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), exitFileLines, stderrTail, debugTail) + '\n')
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {

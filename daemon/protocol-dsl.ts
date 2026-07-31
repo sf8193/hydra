@@ -41,6 +41,7 @@ const DEFAULT_ROLE_CONFIG: Readonly<RoleConfig> = Object.freeze({ cadence: 'per-
 
 export type PhaseInteraction = {
   verdict: 'none' | 'required' | 'optional'
+  options?: readonly string[]
 }
 
 export type SeedContext = {
@@ -230,17 +231,22 @@ export function protocol<
     const phaseDef = (spec.phases as Record<string, PhaseDef>)[phaseName]
     if (!phaseDef || Object.keys(phaseDef.on).length === 0) continue
 
-    const decision = Object.values(decisions).find(d => d.phase === phaseName)
+    const decisionEntry = Object.entries(decisions).find(([, d]) => d.phase === phaseName)
+    const decision = decisionEntry?.[1]
 
     if (decision) {
+      if (decision.actor !== phaseDef.actor) {
+        throw new Error(`protocol "${name}": decision "${decisionEntry![0]}" actor "${decision.actor}" does not match phase "${phaseName}" actor "${phaseDef.actor}"`)
+      }
+
       const decisionEvents = new Set(Object.values(decision.events ?? {}))
       if (decision.finalEvent) decisionEvents.add(decision.finalEvent)
       const advanceCoexists = phaseDef.advanceEvent && !decisionEvents.has(phaseDef.advanceEvent)
 
       if (advanceCoexists) {
-        interactions.set(phaseName, { verdict: 'optional' })
+        interactions.set(phaseName, { verdict: 'optional', options: decision.options, descriptions: decision.descriptions })
       } else {
-        interactions.set(phaseName, { verdict: 'required' })
+        interactions.set(phaseName, { verdict: 'required', options: decision.options, descriptions: decision.descriptions })
       }
     } else if (phaseDef.advanceEvent) {
       interactions.set(phaseName, { verdict: 'none' })
@@ -313,21 +319,17 @@ export function protocolSeed(proto: Protocol, role: string, ctx: SeedContext): s
     .map(([phase]) => ({ phase, ia: proto.phaseInteraction(phase) }))
     .filter((t): t is { phase: string; ia: PhaseInteraction } => !!t.ia)
 
-  const roleDecisions = Object.values(proto.decisions).filter(d => d.actor === role)
-
-  const formatVerdictOptions = (dec: { options: readonly string[]; descriptions?: Partial<Record<string, string>> }) =>
-    dec.options.map(o => {
-      const desc = dec.descriptions?.[o]
+  const formatVerdictOptions = (options: readonly string[], descriptions?: Partial<Record<string, string>>) =>
+    options.map(o => {
+      const desc = descriptions?.[o]
       return desc ? `  - \`advance({ content: "...", verdict: "${o}" })\` — ${desc}` : `  - \`advance({ content: "...", verdict: "${o}" })\``
     }).join('\n')
 
   for (const { phase, ia } of actorPhases) {
-    const dec = roleDecisions.find(d => d.phase === phase)
-
-    if (ia.verdict === 'optional' && dec) {
-      sections.push(`**${phase}:** Call \`advance({ content: "your progress" })\` for checkpoints. To finish:\n${formatVerdictOptions(dec)}`)
-    } else if (ia.verdict === 'required' && dec) {
-      sections.push(`**${phase}:** You MUST include a verdict:\n${formatVerdictOptions(dec)}`)
+    if (ia.verdict === 'optional' && ia.options) {
+      sections.push(`**${phase}:** Call \`advance({ content: "your progress" })\` for checkpoints. To finish:\n${formatVerdictOptions(ia.options, ia.descriptions)}`)
+    } else if (ia.verdict === 'required' && ia.options) {
+      sections.push(`**${phase}:** You MUST include a verdict:\n${formatVerdictOptions(ia.options, ia.descriptions)}`)
     } else if (ia.verdict === 'none') {
       sections.push(`**${phase}:** Call \`advance({ content: "your deliverable" })\` to post and advance.`)
     }

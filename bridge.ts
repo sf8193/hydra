@@ -196,6 +196,17 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       break
     }
 
+    case 'tools_update': {
+      const tools = msg.tools as Array<Record<string, unknown>> | undefined
+      if (tools) {
+        dynamicTools = tools
+        mcp.notification({ method: 'notifications/tools/list_changed' }).catch(err => {
+          process.stderr.write(`bridge: failed to send tools/list_changed: ${err}\n`)
+        })
+      }
+      break
+    }
+
     default:
       process.stderr.write(`bridge: unknown daemon message type: ${type}\n`)
   }
