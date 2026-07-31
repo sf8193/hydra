@@ -11,7 +11,7 @@ import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
-import { maybeNudgeMissingSentinel } from './sentinel-nudge.js'
+import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
@@ -323,7 +323,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
             }
 
             await dispatchSessionReply(conn.sessionId, replyText, args.chat_id as string, result.sentIds ?? [])
-            maybeNudgeMissingSentinel(conn.sessionId, replyText, args.chat_id as string)
+            maybeNudgeMissingAdvance(conn.sessionId, replyText, args.chat_id as string)
 
             if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
               process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)

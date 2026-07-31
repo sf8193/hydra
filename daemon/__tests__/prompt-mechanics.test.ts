@@ -68,15 +68,15 @@ describe('shared mechanics — uniform across all protocol seeds', () => {
     expect(personaProposalTag('x')).toBe('[x→thread]')
   })
 
-  test('untagged=conversational rule present everywhere the parser applies (drift item 4)', () => {
-    for (const p of allPrompts()) {
-      expect(p.text).toContain('Untagged messages are conversational: humans see them; the protocol does not advance.')
+  test('v1 prompts have sentinel routing (drift item 4a)', () => {
+    for (const p of [...personaPrompts(), ...singletonPrompts()]) {
+      expect(p.text).toContain('Untagged messages are conversational')
     }
   })
 
-  test('reply() instruction present everywhere (drift item 3)', () => {
+  test('reply() instruction present in all prompts (drift item 3)', () => {
     for (const p of allPrompts()) {
-      expect(p.text).toContain(`post to the thread with reply(chat_id="t1")`)
+      expect(p.text).toContain('reply(')
     }
   })
 

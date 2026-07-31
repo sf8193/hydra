@@ -171,109 +171,89 @@ function getRunAndRole(sessionId: string): { run: ProtocolRun; role: string } | 
 }
 
 // ---------------------------------------------------------------------------
-// Reply handler
+// Reply handler — conversational only, never advances the protocol
+// ProtocolHooks.onReply is a required interface — this stub satisfies it.
+// v2 reply is purely conversational; advancement happens via advance().
+
+export async function onRunReply(_sessionId: string, _text: string, _chatId: string, _sentMessageIds: string[]): Promise<void> {}
+
+// ---------------------------------------------------------------------------
+// Advance handler — the single protocol interaction tool
 // ---------------------------------------------------------------------------
 
-export async function onRunReply(sessionId: string, text: string, chatId: string, sentMessageIds: string[]): Promise<void> {
+export async function onRunAdvance(sessionId: string, content: string, verdict?: string): Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }> {
   const lookup = getRunAndRole(sessionId)
-  if (!lookup) return
+  if (!lookup) return { ok: false, reason: 'no active protocol run' }
   const { run, role } = lookup
-  if (chatId !== run.threadId) return
 
-  const firstLine = text.split('\n')[0].trim()
   const phaseDef = run.protocol.phases[run.phase]
-  if (!phaseDef) return
+  if (!phaseDef) return { ok: false, reason: `unknown phase "${run.phase}"` }
 
-  // Check if this role is the phase's actor
-  if (phaseDef.actor !== role) return
+  if (phaseDef.actor !== role) {
+    return { ok: false, reason: `not your turn (current actor: ${phaseDef.actor}, caller: ${role})` }
+  }
 
-  // Sentinel check: if the phase declares a sentinel, the message must start with it
   const ia = run.protocol.phaseInteraction(run.phase)
-  const sentinel = ia?.tag
-  if (sentinel && !firstLine.startsWith(sentinel)) return
+  if (!ia) return { ok: false, reason: `phase "${run.phase}" does not accept advance()` }
 
-  const nlIdx = text.indexOf('\n')
-  const bodyText = nlIdx >= 0 ? text.slice(nlIdx + 1).trim() : firstLine.slice(sentinel?.length ?? 0).trim()
+  // Validate verdict against phase constraint
+  if (verdict) {
+    if (ia.verdict === 'none') {
+      return { ok: false, reason: `phase "${run.phase}" does not accept a verdict — call advance without verdict` }
+    }
+    const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase && d.actor === role)
+    if (!decision) return { ok: false, reason: `no decision declared for phase "${run.phase}"` }
+    if (!decision.options.includes(verdict)) {
+      return { ok: false, reason: `invalid verdict "${verdict}" (expected: ${decision.options.join(' | ')})` }
+    }
+  } else if (ia.verdict === 'required') {
+    const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
+    return { ok: false, reason: `phase "${run.phase}" requires a verdict (options: ${decision?.options.join(' | ') ?? 'unknown'})` }
+  }
 
-  // Determine which event to fire — declarative, not heuristic
-  const event = resolveEvent(run)
-  if (!event) return
+  // Resolve the event to fire
+  const event = resolveAdvanceEvent(run, verdict)
+  if (!event) return { ok: false, reason: 'could not resolve transition event' }
 
-  if (transitioningRuns.has(run.id)) return
+  if (transitioningRuns.has(run.id)) return { ok: false, reason: 'transition in progress' }
   transitioningRuns.add(run.id)
 
   try {
-    const replyPhase = run.phase
-    const result = run.protocol.machine.transition(replyPhase as any, event as any)
-    if (!result.ok) return
+    const advancePhaseFrom = run.phase
+    const result = run.protocol.machine.transition(advancePhaseFrom as any, event as any)
+    if (!result.ok) return { ok: false, reason: `transition failed from "${advancePhaseFrom}" on "${event}"` }
 
-    // Don't track closing-phase posts (summary is work product, not scaffolding)
-    if (replyPhase !== run.protocol.cleanupPhase) {
-      run.messageIds.push(...sentMessageIds)
+    // Advance state before posting — if safeSend fails, the agent retries
+    // without double-posting content that was already delivered.
+    if (run.timeout) clearTimeout(run.timeout)
+    if (!advancePhase(run, result.to, advancePhaseFrom)) {
+      return { ok: false, reason: 'phase advance failed (concurrent transition)' }
     }
 
-    if (run.timeout) clearTimeout(run.timeout)
-    if (!advancePhase(run, result.to, replyPhase)) return
+    if (verdict) {
+      const context = run.protocol.decisionContext?.(run)
+      run.decisions.push({ phase: advancePhaseFrom, role, value: verdict, because: content, context })
+    }
 
-    const prevPhaseDef = run.protocol.phases[replyPhase]
-    if (prevPhaseDef?.finalRoundEvent && event !== prevPhaseDef.finalRoundEvent) {
+    const prevPhaseDef = run.protocol.phases[advancePhaseFrom]
+    if (verdict) {
+      const decision = Object.values(run.protocol.decisions).find(d => d.phase === advancePhaseFrom)
+      if (result.to === run.protocol.initialPhase && event !== decision?.finalEvent) {
+        run.currentRound++
+      }
+    } else if (prevPhaseDef?.finalAdvanceEvent && event !== prevPhaseDef.finalAdvanceEvent) {
       run.currentRound++
     }
 
-    await afterTransition(run, replyPhase, bodyText)
-  } finally {
-    transitioningRuns.delete(run.id)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Decision handler
-// ---------------------------------------------------------------------------
-
-export async function onRunDecision(sessionId: string, value: string, because: string): Promise<boolean> {
-  const lookup = getRunAndRole(sessionId)
-  if (!lookup) return false
-  const { run, role } = lookup
-
-  // Find the decision declared for the current phase
-  const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase && d.actor === role)
-  if (!decision) {
-    process.stderr.write(`daemon: ${run.protocol.name} run: no decision declared for phase "${run.phase}" actor "${role}"\n`)
-    return false
-  }
-
-  if (!decision.options.includes(value)) {
-    process.stderr.write(`daemon: ${run.protocol.name} run: invalid decision value "${value}" (expected: ${decision.options.join(' | ')})\n`)
-    return false
-  }
-
-  if (transitioningRuns.has(run.id)) return false
-  transitioningRuns.add(run.id)
-
-  try {
-    const decisionPhase = run.phase
-    const eventMap = resolveDecisionEvent(run, value)
-    if (!eventMap) return false
-
-    const result = run.protocol.machine.transition(decisionPhase as any, eventMap as any)
-    if (!result.ok) return false
-
-    if (run.timeout) clearTimeout(run.timeout)
-
-    if (!advancePhase(run, result.to, decisionPhase)) return false
-
-    const context = run.protocol.decisionContext?.(run)
-    run.decisions.push({ phase: decisionPhase, role, value, because, context })
-
-    const narrationIds = await safeSend(run.threadId, `**${run.protocol.roles[role]}** decided: **${value}**\n${because}`)
-    run.messageIds.push(...narrationIds)
-
-    if (result.to === run.protocol.initialPhase && eventMap !== decision.finalEvent) {
-      run.currentRound++
+    // Post content to thread — after state advance so a safeSend failure
+    // doesn't leave the agent thinking advance failed when state moved.
+    const sentIds = await safeSend(run.threadId, content)
+    if (advancePhaseFrom !== run.protocol.cleanupPhase) {
+      run.messageIds.push(...sentIds)
     }
 
-    await afterTransition(run, decisionPhase, because)
-    return true
+    await afterTransition(run, advancePhaseFrom, content)
+    return { ok: true, sentIds }
   } finally {
     transitioningRuns.delete(run.id)
   }
@@ -543,22 +523,13 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
       `concluded — ${run.currentRound} round${run.currentRound > 1 ? 's' : ''}`))
     run.messageIds.push(...concludedIds)
     const formatLines = run.protocol.summaryFormat(run)
-    const ia = run.protocol.phaseInteraction(run.phase)
-    const sentinelTag = ia?.tag
-    // Cleanup phases are sentinel-only in all current protocols; a 'both'-mode
-    // cleanup would need the routing note extended to mention decide.
-    const routingNote = !ia ? ''
-      : ia.mode === 'decide'
-        ? `\n\n**Message routing:** Use the \`decide\` tool to advance.`
-        : `\n\n**Message routing:** Your first line MUST be \`${sentinelTag}\`. The daemon routes on the first line only; a tag anywhere else is invisible to it.`
     transport.sendOrQueue(run.ownerSessionId, {
       type: 'notification',
       content: [
         `[system] ${run.protocol.display} complete (${run.currentRound} round${run.currentRound > 1 ? 's' : ''}).`,
-        `Post a closing summary to your thread using this format:`,
+        `Post a closing summary using \`advance({ content: "..." })\`:`,
         ``,
         ...formatLines,
-        routingNote,
       ].join('\n'),
       meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
@@ -616,29 +587,35 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
   }
 }
 
-function resolveEvent(run: ProtocolRun): string | null {
+function formatAdvanceHint(proto: Protocol, phase: string): string {
+  const ia = proto.phaseInteraction(phase)
+  if (!ia || ia.verdict === 'none') return `advance({ content: "..." })`
+
+  const dec = Object.values(proto.decisions).find(d => d.phase === phase)
+  const example = dec?.options[0] ?? '...'
+  const alts = dec && dec.options.length > 1 ? ` (or: ${dec.options.slice(1).join(', ')})` : ''
+  const verdictCall = `advance({ content: "...", verdict: "${example}" })${alts}`
+
+  if (ia.verdict === 'optional') {
+    return `advance({ content: "..." }) for progress, or ${verdictCall} to finish`
+  }
+  return verdictCall
+}
+
+function resolveAdvanceEvent(run: ProtocolRun, verdict?: string): string | null {
   const phase = run.protocol.phases[run.phase]
   if (!phase) return null
 
-  // Decide-only phases advance via decide(), not via reply.
-  // Reads from the same classification as seed generation and timeout warnings.
-  if (run.protocol.phaseInteraction(run.phase)?.mode === 'decide') return null
+  if (verdict) {
+    const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
+    if (!decision) return null
+    if (decision.finalEvent && run.currentRound >= run.rounds) return decision.finalEvent
+    if (!decision.events) return verdict
+    return decision.events[verdict] ?? null
+  }
 
-  if (phase.finalRoundEvent && run.currentRound >= run.rounds) return phase.finalRoundEvent
-  return phase.replyEvent ?? null
-}
-
-function resolveDecisionEvent(run: ProtocolRun, value: string): string | null {
-  const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
-  if (!decision) return null
-
-  if (decision.finalEvent && run.currentRound >= run.rounds) return decision.finalEvent
-
-  // If no events map declared, use the value directly as the event name
-  if (!decision.events) return value
-
-  if (!decision.events[value]) return null
-  return decision.events[value]
+  if (phase.finalAdvanceEvent && run.currentRound >= run.rounds) return phase.finalAdvanceEvent
+  return phase.advanceEvent ?? null
 }
 
 async function spawnRole(run: ProtocolRun, role: string, params: Record<string, unknown>): Promise<void> {
@@ -744,11 +721,7 @@ function resetTimeout(run: ProtocolRun): void {
         return
       }
       const ctx = info ? getContextPercent(info.tmuxName) : '?'
-      const ia = run.protocol.phaseInteraction(phase)
-      const sentinelHint = ia?.mode === 'decide'
-        ? `Use the \`decide\` tool to advance`
-        : ia?.tag ? `Post your \`${ia.tag}\``
-        : 'Post your response'
+      const advanceHint = `Call \`${formatAdvanceHint(run.protocol, phase)}\``
       const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
       const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
       const totalRemaining = Math.max(0, Math.round((run._phaseStartedAt + totalMs - Date.now()) / 60_000))
@@ -756,7 +729,7 @@ function resetTimeout(run: ProtocolRun): void {
       const urgency = elapsed > ms / 60_000 ? ` Phase has been running ${elapsed}m — ${totalRemaining}m until hard limit.` : ''
       transport.sendOrQueue(actorSessionId, {
         type: 'notification',
-        content: `[system] ⏰ Phase timeout in 2 minutes. ${sentinelHint} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
+        content: `[system] ⏰ Phase timeout in 2 minutes. ${advanceHint} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
         meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
       void safeSend(run.threadId, `_⏰ ${info?.tmuxName ?? 'actor'} warned: 2m remaining (${ctx} context)_`)
@@ -882,10 +855,8 @@ function runnerHooks(name: string, protoName: string) {
     onReply: onRunReply,
     onDisconnect: onRunDisconnect,
     onReconnect: onRunReconnect,
-    onDecision: (sessionId, value, because) => {
-      return onRunDecision(sessionId, value, because)
-    },
-    expectedTag: (sessionId, chatId) => {
+    onAdvance: onRunAdvance,
+    advanceHint: (sessionId, chatId) => {
       const runId = sessionToRun.get(sessionId)
       const run = runId ? runs.get(runId) : undefined
       if (!run || chatId !== run.threadId) return null
@@ -893,9 +864,8 @@ function runnerHooks(name: string, protoName: string) {
       if (!role) return null
       const phase = run.protocol.phases[run.phase]
       if (phase?.actor !== role) return null
-      const ia = run.protocol.phaseInteraction(run.phase)
-      if (ia?.mode === 'decide') return null
-      return ia?.tag ?? null
+      if (!run.protocol.phaseInteraction(run.phase)) return null
+      return formatAdvanceHint(run.protocol, run.phase)
     },
   })
 }

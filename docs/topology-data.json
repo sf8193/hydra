@@ -207,10 +207,10 @@
       "desc": "Preserve-then-strike: raw transcript dump before deletion"
     },
     {
-      "id": "daemon_sentinel-nudge",
-      "label": "daemon/sentinel-nudge.ts",
+      "id": "daemon_advance-nudge",
+      "label": "daemon/advance-nudge.ts",
       "layer": "domain",
-      "desc": "Liveness grammar: nudge roles that post without expected sentinel"
+      "desc": "Liveness: nudge protocol participants that post via reply() instead of advance()"
     },
     {
       "id": "daemon_reply-guard",
@@ -456,7 +456,7 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_sentinel-nudge"
+      "daemon_advance-nudge"
     ],
     [
       "daemon_bridge-server",
@@ -719,15 +719,15 @@
       "daemon_util"
     ],
     [
-      "daemon_sentinel-nudge",
+      "daemon_advance-nudge",
       "daemon_bridge-transport"
     ],
     [
-      "daemon_sentinel-nudge",
+      "daemon_advance-nudge",
       "daemon_sessions"
     ],
     [
-      "daemon_sentinel-nudge",
+      "daemon_advance-nudge",
       "daemon_protocol-registry"
     ],
     [

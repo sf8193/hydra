@@ -39,7 +39,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/idempotency.ts':    { layer: 'domain',    desc: 'Message deduplication' },
   'daemon/state-machine.ts':  { layer: 'domain',    desc: 'Generic state machine for protocols' },
   'daemon/transcript-dump.ts': { layer: 'domain',   desc: 'Preserve-then-strike: raw transcript dump before deletion' },
-  'daemon/sentinel-nudge.ts': { layer: 'domain',    desc: 'Liveness grammar: nudge roles that post without expected sentinel' },
+  'daemon/advance-nudge.ts':  { layer: 'domain',    desc: 'Liveness: nudge protocol participants that post via reply() instead of advance()' },
   'daemon/reply-guard.ts':    { layer: 'domain',    desc: 'Reply guard: nudge sessions that go silent on user-authored messages' },
   'daemon/phase-budget.ts':   { layer: 'domain',    desc: 'Per-session max lifetime: nudge → grace → reap' },
   'daemon/adversarial.ts':    { layer: 'protocols', desc: 'Adversarial review — owner/critic rounds' },

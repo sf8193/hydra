@@ -14,17 +14,11 @@ export default protocol('build', {
   },
 
   phases: {
-    implementing: { actor: 'builder', half: 'top',    on: { owner_impl: 'reviewing', timeout: 'cancelled', cancel: 'cancelled' }, replyEvent: 'owner_impl' },
+    implementing: { actor: 'builder', half: 'top',    on: { owner_impl: 'reviewing', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_impl' },
     reviewing:    { actor: 'critic',  half: 'bottom', on: { critic_lgtm: 'closing', critic_final: 'closing', critic_feedback: 'implementing', timeout: 'cancelled', cancel: 'cancelled' } },
-    closing:      { actor: 'builder', half: 'top',    on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, replyEvent: 'summary_posted' },
+    closing:      { actor: 'builder', half: 'top',    on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:     { actor: 'builder', half: 'top',    on: {} },
     cancelled:    { actor: 'builder', half: 'top',    on: {} },
-  },
-
-  sentinels: {
-    implementing: '[builder→critic]',
-    reviewing: '[critic→builder]',
-    closing: '[summary]',
   },
 
   windows: {
@@ -60,7 +54,7 @@ export default protocol('build', {
 
   ownerKickoff: (params) => {
     const task = params.task ?? params.topic ?? 'Begin implementing.'
-    return `[Build — starting]\n\n**Task:** ${task}\n\nYou are the builder. Implement the task, then post to the thread tagged with \`[builder→critic]\`. The critic will review.`
+    return `[Build — starting]\n\n**Task:** ${task}\n\nYou are the builder. Implement the task, then call \`advance({ content: "your implementation summary" })\` when ready for review.`
   },
 
   summaryFormat: (run) => {

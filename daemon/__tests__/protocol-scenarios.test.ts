@@ -4,6 +4,7 @@ import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR } from './test-harne
 // Real protocol definitions — the harness exercises them as-is
 import review from '../../protocols/review.js'
 import build from '../../protocols/build.js'
+import spike from '../../protocols/spike.js'
 
 let h: TestHarness
 
@@ -22,31 +23,31 @@ describe('review: cooperative 3-round completion', () => {
     expect(h.round).toBe(1)
 
     // Round 1
-    await h.reply('critic', '[critic→owner]\nYour code has a potential null dereference on line 42.')
+    await h.advance('critic', 'Your code has a potential null dereference on line 42.')
     expect(h.phase).toBe('owner_turn')
 
-    await h.reply('owner', '[owner→critic]\nAdded a null check. See commit abc123.')
+    await h.advance('owner', 'Added a null check. See commit abc123.')
     expect(h.phase).toBe('critic_turn')
     expect(h.round).toBe(2)
 
     // Round 2
-    await h.reply('critic', '[critic→owner]\nThe null check is good, but the error message is unclear.')
+    await h.advance('critic', 'The null check is good, but the error message is unclear.')
     expect(h.phase).toBe('owner_turn')
 
-    await h.reply('owner', '[owner→critic]\nImproved the error message with context.')
+    await h.advance('owner', 'Improved the error message with context.')
     expect(h.phase).toBe('critic_turn')
     expect(h.round).toBe(3)
 
     // Round 3 (final)
-    await h.reply('critic', '[critic→owner]\nAll issues addressed. Clean code.')
+    await h.advance('critic', 'All issues addressed. Clean code.')
     expect(h.phase).toBe('owner_turn')
 
-    await h.reply('owner', '[owner→critic]\nFinal defense — all findings resolved.')
+    await h.advance('owner', 'Final defense — all findings resolved.')
     expect(h.phase).toBe('cleanup')
     expect(h.round).toBe(3)
 
     // Owner posts summary to complete the run
-    await h.reply('owner', '[summary]\n**Review Summary** — all 3 rounds clean.')
+    await h.advance('owner', '**Review Summary** — all 3 rounds clean.')
     expect(h.isTerminated).toBe(true)
 
     expect(h.completionEvents).toHaveLength(1)
@@ -84,11 +85,9 @@ describe('review: timeout deferred by activity', () => {
     h.setTurnState('critic', 'working')
     await h.tick(windowMs)
 
-    // Deferred — still in critic_turn
     expect(h.phase).toBe('critic_turn')
     expect(h.isTerminated).toBe(false)
 
-    // Go idle. Deferral armed a NEW timeout at currentTime + windowMs.
     h.setTurnState('critic', 'idle')
     await h.tick(windowMs)
 
@@ -105,9 +104,8 @@ describe('review: warning notification at T-2m', () => {
 
     const notes = h.actorNotifications('critic')
     expect(notes.some(n => n.includes('Phase timeout in 2 minutes'))).toBe(true)
-    expect(notes.some(n => n.includes('[critic→owner]'))).toBe(true)
+    expect(notes.some(n => n.includes('advance('))).toBe(true)
 
-    // Thread also gets a warning status line
     expect(h.threadMessages.some(m => m.text.includes('warned'))).toBe(true)
   })
 
@@ -144,16 +142,13 @@ describe('review: extension chain', () => {
   test('extensions reset each round', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    // Extend twice in round 1
     expect(h.extend('critic', 'first', 5).ok).toBe(true)
     expect(h.extend('critic', 'second', 5).ok).toBe(true)
 
-    // Complete round 1 → round 2
-    await h.reply('critic', '[critic→owner]\nRound 1 critique.')
-    await h.reply('owner', '[owner→critic]\nRound 1 defense.')
+    await h.advance('critic', 'Round 1 critique.')
+    await h.advance('owner', 'Round 1 defense.')
     expect(h.round).toBe(2)
 
-    // Can extend twice again
     expect(h.extend('critic', 'third', 5).ok).toBe(true)
     expect(h.extend('critic', 'fourth', 5).ok).toBe(true)
   })
@@ -166,7 +161,6 @@ describe('review: total backstop', () => {
     const windowMs = h.run.protocol.windowMs('critic_turn')!
     h.setTurnState('critic', 'working')
 
-    // Total backstop at TOTAL_PHASE_CAP_FACTOR × window
     await h.tick(windowMs * TOTAL_PHASE_CAP_FACTOR)
 
     expect(h.isTerminated).toBe(true)
@@ -182,7 +176,6 @@ describe('review: disconnect and grace', () => {
 
     h.disconnect('critic')
 
-    // 3s death-detect + grace period. Advance past both.
     const graceMs = h.run.protocol.graceMs('critic')!
     await h.tick(3_000 + graceMs + 1_000)
 
@@ -195,24 +188,24 @@ describe('review: disconnect and grace', () => {
     h = createHarness(review, { rounds: 3 })
 
     h.disconnect('critic')
-    await h.tick(5_000) // within grace
+    await h.tick(5_000)
     h.reconnect('critic')
 
     expect(h.phase).toBe('critic_turn')
     expect(h.isTerminated).toBe(false)
 
-    // Can still operate
-    await h.reply('critic', '[critic→owner]\nBack online with critique.')
+    await h.advance('critic', 'Back online with critique.')
     expect(h.phase).toBe('owner_turn')
   })
 })
 
 describe('review: wrong role rejection', () => {
-  test('owner decision in critic phase is rejected', async () => {
+  test('advance from wrong role is rejected', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    // Review protocol has no decisions, but test that reply from wrong role is ignored
-    await h.reply('owner', '[owner→critic]\nI should not post now.')
+    const result = await h.advance('owner', 'I should not post now.')
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('not your turn')
     expect(h.phase).toBe('critic_turn')
   })
 })
@@ -221,20 +214,30 @@ describe('review: closing backstop completes (not cancels)', () => {
   test('closing timeout transitions to complete', async () => {
     h = createHarness(review, { rounds: 1 })
 
-    // Play through to closing
-    await h.reply('critic', '[critic→owner]\nLooks good.')
+    await h.advance('critic', 'Looks good.')
     expect(h.phase).toBe('owner_turn')
 
-    await h.reply('owner', '[owner→critic]\nThanks.')
+    await h.advance('owner', 'Thanks.')
     expect(h.phase).toBe('cleanup')
 
-    // Don't post summary — let backstop fire
     const closingMs = h.run.protocol.windowMs('cleanup')!
     await h.tick(closingMs)
 
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
     expect(h.completionEvents[0].outcome).toBe('complete')
+  })
+})
+
+describe('review: reply never advances', () => {
+  test('conversational reply does not fire a transition', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.reply('critic', 'Just a status update, not a deliverable.')
+    expect(h.phase).toBe('critic_turn')
+
+    await h.advance('critic', 'This is the actual critique.')
+    expect(h.phase).toBe('owner_turn')
   })
 })
 
@@ -247,18 +250,15 @@ describe('build: approve → closing → complete', () => {
     h = createHarness(build, { rounds: 3, topic: 'add retry logic' })
     expect(h.phase).toBe('implementing')
 
-    // Builder posts implementation
-    await h.reply('builder', '[builder→critic]\nAdded retry with exponential backoff.')
+    await h.advance('builder', 'Added retry with exponential backoff.')
     expect(h.phase).toBe('reviewing')
 
-    // Critic approves
-    const decided = await h.decide('critic', 'approve', 'Clean implementation, ships.')
-    expect(decided).toBe(true)
+    const result = await h.advance('critic', 'Clean implementation, ships.', 'approve')
+    expect(result.ok).toBe(true)
     expect(h.phase).toBe('closing')
     expect(h.decisions.some(d => d.value === 'approve')).toBe(true)
 
-    // Builder posts summary
-    await h.reply('builder', '[summary]\n**Build Summary** — retry logic added.')
+    await h.advance('builder', '**Build Summary** — retry logic added.')
     expect(h.isTerminated).toBe(true)
 
     const event = h.completionEvents[0]
@@ -271,40 +271,52 @@ describe('build: request_changes loop', () => {
   test('critic requests changes, builder fixes, cycle repeats', async () => {
     h = createHarness(build, { rounds: 3 })
 
-    // Round 1: implement → review → request_changes → back to implementing
-    await h.reply('builder', '[builder→critic]\nFirst implementation.')
+    await h.advance('builder', 'First implementation.')
     expect(h.phase).toBe('reviewing')
 
-    await h.decide('critic', 'request_changes', 'Missing error handling.')
+    await h.advance('critic', 'Missing error handling.', 'request_changes')
     expect(h.phase).toBe('implementing')
     expect(h.round).toBe(2)
 
-    // Round 2: implement again → review → request_changes
-    await h.reply('builder', '[builder→critic]\nAdded error handling.')
+    await h.advance('builder', 'Added error handling.')
     expect(h.phase).toBe('reviewing')
 
-    await h.decide('critic', 'request_changes', 'Edge case in retry path.')
+    await h.advance('critic', 'Edge case in retry path.', 'request_changes')
     expect(h.phase).toBe('implementing')
     expect(h.round).toBe(3)
 
-    // Round 3 (final): implement → review → final round forces closing
-    await h.reply('builder', '[builder→critic]\nFixed edge case.')
+    await h.advance('builder', 'Fixed edge case.')
     expect(h.phase).toBe('reviewing')
 
-    await h.decide('critic', 'request_changes', 'Approve reluctantly.')
+    await h.advance('critic', 'Approve reluctantly.', 'request_changes')
     expect(h.phase).toBe('closing')
   })
 })
 
-describe('build: decision from wrong role rejected', () => {
-  test('builder cannot decide during review phase', async () => {
+describe('build: advance without verdict in decide-only phase is rejected', () => {
+  test('reviewing phase requires a verdict', async () => {
     h = createHarness(build, { rounds: 3 })
 
-    await h.reply('builder', '[builder→critic]\nImplementation.')
+    await h.advance('builder', 'Done.')
     expect(h.phase).toBe('reviewing')
 
-    const decided = await h.decide('builder', 'approve', 'I approve myself.')
-    expect(decided).toBe(false)
+    const result = await h.advance('critic', 'Looks ok I guess.')
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('requires a verdict')
+    expect(h.phase).toBe('reviewing')
+  })
+})
+
+describe('build: advance from wrong role rejected', () => {
+  test('builder cannot advance during review phase', async () => {
+    h = createHarness(build, { rounds: 3 })
+
+    await h.advance('builder', 'Implementation.')
+    expect(h.phase).toBe('reviewing')
+
+    const result = await h.advance('builder', 'I approve myself.', 'approve')
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('not your turn')
     expect(h.phase).toBe('reviewing')
   })
 })
@@ -313,11 +325,9 @@ describe('build: review timeout cancels', () => {
   test('critic silence during review cancels the build', async () => {
     h = createHarness(build, { rounds: 3 })
 
-    // Builder implements
-    await h.reply('builder', '[builder→critic]\nDone.')
+    await h.advance('builder', 'Done.')
     expect(h.phase).toBe('reviewing')
 
-    // Advance past the review window
     await h.tick(h.run.protocol.windowMs('reviewing')!)
 
     expect(h.isTerminated).toBe(true)
@@ -325,16 +335,55 @@ describe('build: review timeout cancels', () => {
   })
 })
 
-describe('build: reply alone in reviewing phase does not advance', () => {
-  test('reviewing phase requires decide(), reply is ignored', async () => {
+describe('build: invalid verdict rejected', () => {
+  test('advance with unknown verdict value is rejected', async () => {
     h = createHarness(build, { rounds: 3 })
 
-    await h.reply('builder', '[builder→critic]\nDone.')
+    await h.advance('builder', 'Done.')
     expect(h.phase).toBe('reviewing')
 
-    // Critic posts a reply instead of calling decide — ignored
-    await h.reply('critic', '[critic→builder]\nLooks ok I guess.')
+    const result = await h.advance('critic', 'Not sure.', 'maybe')
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('invalid verdict')
     expect(h.phase).toBe('reviewing')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spike protocol scenarios
+// ---------------------------------------------------------------------------
+
+describe('spike: checkpoint self-loop + done verdict', () => {
+  test('explorer checkpoints then decides done', async () => {
+    h = createHarness(spike, { rounds: 1, topic: 'investigate caching' })
+    expect(h.phase).toBe('exploring')
+
+    // Checkpoint — self-loop via advanceEvent
+    await h.advance('explorer', 'Found the cache layer in src/cache.ts.')
+    expect(h.phase).toBe('exploring')
+
+    // Done — verdict routes to reporting
+    await h.advance('explorer', 'Investigation complete.', 'done')
+    expect(h.phase).toBe('reporting')
+
+    // Post report
+    await h.advance('explorer', '**Report:** caching is handled by src/cache.ts with LRU eviction.')
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('complete')
+  })
+})
+
+describe('spike: advance-only phase does not accept verdict', () => {
+  test('verdict in reporting phase is rejected', async () => {
+    h = createHarness(spike, { rounds: 1 })
+
+    await h.advance('explorer', 'Done.', 'done')
+    expect(h.phase).toBe('reporting')
+
+    const result = await h.advance('explorer', 'Report.', 'done')
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('does not accept a verdict')
+    expect(h.phase).toBe('reporting')
   })
 })
 
@@ -343,17 +392,13 @@ describe('build: reply alone in reviewing phase does not advance', () => {
 // ---------------------------------------------------------------------------
 
 describe('reentrancy guard (transitioningRuns)', () => {
-  test('concurrent replies — second is dropped', async () => {
+  test('concurrent advances — second is dropped', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    // Fire two replies without awaiting the first. The first enters the
-    // transitioningRuns guard before its first yield; the second hits the
-    // guard and returns immediately.
-    const p1 = h.reply('critic', '[critic→owner]\nFirst critique.')
-    const p2 = h.reply('critic', '[critic→owner]\nSecond critique (dropped).')
+    const p1 = h.advance('critic', 'First critique.')
+    const p2 = h.advance('critic', 'Second critique (dropped).')
     await Promise.all([p1, p2])
 
-    // Only one transition: critic_turn → owner_turn
     expect(h.phase).toBe('owner_turn')
     expect(h.round).toBe(1)
   })
@@ -363,7 +408,6 @@ describe('double-cancel guard (cancellingRuns)', () => {
   test('simultaneous cancel paths produce only one completion event', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    // Trigger cancel from two sources simultaneously
     const p1 = h.cancel('timeout')
     const p2 = h.cancel('disconnect')
     await Promise.all([p1, p2])
@@ -381,16 +425,14 @@ describe('review: notifyOwnerSummary fires on cleanup entry', () => {
   test('owner receives summary format notification when cleanup begins', async () => {
     h = createHarness(review, { rounds: 1 })
 
-    await h.reply('critic', '[critic→owner]\nCritique.')
-    await h.reply('owner', '[owner→critic]\nDefense.')
+    await h.advance('critic', 'Critique.')
+    await h.advance('owner', 'Defense.')
     expect(h.phase).toBe('cleanup')
 
-    // notifyOwnerSummary queues a notification to the owner
     const notes = h.actorNotifications('owner')
     expect(notes.some(n => n.includes('Post a closing summary'))).toBe(true)
-    expect(notes.some(n => n.includes('[summary]'))).toBe(true)
+    expect(notes.some(n => n.includes('advance('))).toBe(true)
 
-    // Thread gets a "concluded" status line
     expect(h.threadMessages.some(m => m.text.includes('concluded'))).toBe(true)
   })
 })
@@ -419,5 +461,21 @@ describe('review: extension is a full window reset (minutes arg is advisory)', (
     await h.tickToTimeout()
     expect(h.phase).toBe('cancelled')
     expect(h.isTerminated).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Content is posted to thread by advance()
+// ---------------------------------------------------------------------------
+
+describe('advance posts content to thread', () => {
+  test('advance content appears in threadMessages', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    const msgsBefore = h.threadMessages.length
+    await h.advance('critic', 'Here is my detailed critique of the implementation.')
+
+    const newMsgs = h.threadMessages.slice(msgsBefore)
+    expect(newMsgs.some(m => m.text === 'Here is my detailed critique of the implementation.')).toBe(true)
   })
 })
