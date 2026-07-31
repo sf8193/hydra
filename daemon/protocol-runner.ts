@@ -1,6 +1,6 @@
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
-import { doSpawnSession, killSession, killsInProgress, waitForBridge } from './session-lifecycle.js'
+import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
@@ -12,6 +12,10 @@ import type { Protocol } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
+
+let doSpawnSession = _doSpawnSession
+let waitForBridge = _waitForBridge
+let killSession = _killSession
 
 // ---------------------------------------------------------------------------
 // Run state
@@ -358,11 +362,21 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
       model: run.params.model as string | undefined,
     },
   )
+  if (isTerminal(run)) {
+    const spawnedInfo = registry.get(result.sessionId)
+    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+    return
+  }
   const ok = await waitForBridge(result.sessionId, 30_000)
   if (!ok) {
     const newInfo = registry.get(result.sessionId)
     if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
     throw new Error('resumed session did not connect')
+  }
+  if (isTerminal(run)) {
+    const spawnedInfo = registry.get(result.sessionId)
+    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+    return
   }
 
   if (info) info.deadAt = Date.now()
@@ -470,10 +484,14 @@ function isTerminal(run: ProtocolRun): boolean {
   return !phase || Object.keys(phase.on).length === 0
 }
 
-function clearTimers(run: ProtocolRun): void {
+function clearPhaseTimers(run: ProtocolRun): void {
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
+}
+
+function clearTimers(run: ProtocolRun): void {
+  clearPhaseTimers(run)
   for (const timer of run.disconnectTimers.values()) clearTimeout(timer)
   run.disconnectTimers.clear()
 }
@@ -506,7 +524,7 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
 
   backstopTimer: (run, prevPhase) => {
     if (prevPhase === run.phase) return false
-    clearTimers(run)
+    clearPhaseTimers(run)
     const phase = run.phase
     const ms = run.protocol.windowMs(phase) ?? 5 * 60 * 1000
     run.timeout = setTimeout(async () => {
@@ -826,7 +844,19 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export const __test = process.env.NODE_ENV === 'test'
-  ? { runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR } as const
+  ? {
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR,
+      setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
+        if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
+        if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
+        if (overrides.killSession) killSession = overrides.killSession
+      },
+      resetLifecycle() {
+        doSpawnSession = _doSpawnSession
+        waitForBridge = _waitForBridge
+        killSession = _killSession
+      },
+    } as const
   : undefined
 
 // ---------------------------------------------------------------------------
