@@ -11,6 +11,7 @@ import type { SessionInfo } from '../sessions.js'
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
 const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP } = __test
 export const TOTAL_PHASE_CAP_FACTOR = _CAP
+export { WARNING_BEFORE_TIMEOUT_MS }
 
 type HarnessOpts = {
   rounds?: number

@@ -358,11 +358,21 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
       model: run.params.model as string | undefined,
     },
   )
+  if (isTerminal(run)) {
+    const spawnedInfo = registry.get(result.sessionId)
+    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+    return
+  }
   const ok = await waitForBridge(result.sessionId, 30_000)
   if (!ok) {
     const newInfo = registry.get(result.sessionId)
     if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
     throw new Error('resumed session did not connect')
+  }
+  if (isTerminal(run)) {
+    const spawnedInfo = registry.get(result.sessionId)
+    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+    return
   }
 
   if (info) info.deadAt = Date.now()
@@ -506,7 +516,9 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
 
   backstopTimer: (run, prevPhase) => {
     if (prevPhase === run.phase) return false
-    clearTimers(run)
+    if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
+    if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
+    if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
     const phase = run.phase
     const ms = run.protocol.windowMs(phase) ?? 5 * 60 * 1000
     run.timeout = setTimeout(async () => {

@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR } from './test-harness.js'
+import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
 
 // Real protocol definitions — the harness exercises them as-is
 import review from '../../protocols/review.js'
@@ -477,5 +477,145 @@ describe('advance posts content to thread', () => {
 
     const newMsgs = h.threadMessages.slice(msgsBefore)
     expect(newMsgs.some(m => m.text === 'Here is my detailed critique of the implementation.')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Timer behavior tests — exercises timer *firing*, not just timer existence.
+// Covers the behavioral dead zone identified in adversarial review:
+//   - disconnect timer fires + decideResume integration
+//   - backstopTimer clears phase timers only (not disconnect timers)
+//   - warning + deferral + backstop lifecycle
+// ---------------------------------------------------------------------------
+
+describe('review: disconnect timer fires and triggers grace', () => {
+  test('disconnect timer fires after 3s when bridge is gone', async () => {
+    h = createHarness(review, { rounds: 3 })
+    expect(h.phase).toBe('critic_turn')
+
+    h.disconnect('critic')
+    expect(h.run.disconnectTimers.size).toBe(1)
+
+    // Grace timer hasn't started yet — still in 3s disconnect window
+    await h.tick(2_000)
+    expect(h.isTerminated).toBe(false)
+
+    // 3s disconnect timer fires → decideResume → grace (no claudeSessionId)
+    await h.tick(1_500)
+
+    // Grace timer should now be set (decideResume returns 'grace' since
+    // tmux is alive, transport not connected, no claudeSessionId for resume)
+    const graceMs = h.run.protocol.graceMs('critic')!
+    expect(graceMs).toBeGreaterThan(0)
+
+    // Grace expires → cancel
+    await h.tick(graceMs + 500)
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
+  })
+})
+
+describe('review: reconnect clears disconnect timer', () => {
+  test('reconnect within 3s prevents grace timer', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    h.disconnect('critic')
+    expect(h.run.disconnectTimers.size).toBe(1)
+
+    await h.tick(1_000)
+    h.reconnect('critic')
+    expect(h.run.disconnectTimers.size).toBe(0)
+
+    // Tick past the original 3s + grace — should survive
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.isTerminated).toBe(false)
+    expect(h.phase).toBe('critic_turn')
+  })
+})
+
+describe('spike: backstopTimer preserves disconnect timers', () => {
+  test('phase transition with backstopTimer does not clear disconnect timers', async () => {
+    h = createHarness(spike, { rounds: 1, topic: 'test' })
+    expect(h.phase).toBe('exploring')
+
+    // Simulate a disconnect timer for the explorer (non-owner in spike is explorer)
+    h.disconnect('explorer')
+    expect(h.run.disconnectTimers.size).toBe(1)
+
+    // Transition to reporting — has backstopTimer in onEnter
+    await h.advance('explorer', 'Done investigating.', 'done')
+    expect(h.phase).toBe('reporting')
+
+    // Disconnect timer should survive the backstopTimer behavior
+    expect(h.run.disconnectTimers.size).toBe(1)
+  })
+})
+
+describe('review: backstopTimer clears only phase timers in cleanup', () => {
+  test('cleanup phase clears timeout + warning + total but not disconnect timers', async () => {
+    h = createHarness(review, { rounds: 1 })
+
+    // Complete the exchange to reach cleanup
+    await h.advance('critic', 'Looks good.')
+    await h.advance('owner', 'Thanks.')
+    expect(h.phase).toBe('cleanup')
+
+    // Verify phase timers: backstopTimer sets run.timeout, clears warning/total
+    expect(h.run.timeout).toBeDefined()
+    expect(h.run._warningTimeout).toBeUndefined()
+    expect(h.run._totalTimeout).toBeUndefined()
+  })
+})
+
+describe('review: warning + deferral + backstop lifecycle', () => {
+  test('warning fires, deferral resets, backstop catches runaway', async () => {
+    h = createHarness(review, { rounds: 3 })
+    const windowMs = h.run.protocol.windowMs('critic_turn')!
+
+    // Phase 1: warning fires at T - 2m
+    await h.tickToWarning()
+    const warningNotes = h.actorNotifications('critic')
+    expect(warningNotes.some(n => n.includes('Phase timeout in 2 minutes'))).toBe(true)
+
+    // Phase 2: actor starts working before timeout → deferral
+    h.setTurnState('critic', 'working')
+    await h.tick(WARNING_BEFORE_TIMEOUT_MS) // tick past the original timeout point
+
+    expect(h.phase).toBe('critic_turn')
+    expect(h.isTerminated).toBe(false)
+
+    // Phase 3: actor keeps "working" → deferred timeouts repeat, but
+    // total backstop fires unconditionally at 3x window
+    const totalMs = windowMs * TOTAL_PHASE_CAP_FACTOR
+    const elapsed = windowMs // already elapsed from tickToWarning + tick
+    const remaining = totalMs - elapsed
+    if (remaining > 0) await h.tick(remaining)
+
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
+    expect(h.completionEvents[0].reason).toBe('total time exceeded')
+  })
+})
+
+describe('build: closing backstop fires completion, not cancel', () => {
+  test('closing phase backstop transitions to complete', async () => {
+    h = createHarness(build, { rounds: 1, topic: 'test' })
+
+    await h.advance('builder', 'Implementation done.')
+    expect(h.phase).toBe('reviewing')
+
+    await h.advance('critic', 'Ships.', 'approve')
+    expect(h.phase).toBe('closing')
+
+    // Verify backstopTimer set up the timeout
+    expect(h.run.timeout).toBeDefined()
+
+    // Let backstop fire
+    const closingMs = h.run.protocol.windowMs('closing')!
+    await h.tick(closingMs)
+
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('complete')
   })
 })
