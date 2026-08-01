@@ -1,6 +1,10 @@
 export const DEFAULT_MODEL = 'claude-opus-4-6[1m]'
 export const TRANSCRIBE_TMUX = 'hydra-transcribe'
 
+/** Tools restricted to the main (control-plane) session. Shared across bridge
+ *  and daemon so the two sets cannot diverge. */
+export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
+
 export const KNOWN_MODELS = new Set([
   'claude-opus-5',
   'claude-sonnet-5',

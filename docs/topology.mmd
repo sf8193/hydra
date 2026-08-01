@@ -84,6 +84,7 @@ graph TD
   daemon --> daemon_reply-guard
   daemon --> daemon_util
   daemon --> daemon_anchor-state
+  bridge --> shared_constants
   cli_hydra --> shared_constants
   daemon_sessions --> daemon_config
   daemon_sessions --> daemon_util
@@ -91,6 +92,7 @@ graph TD
   daemon_bridge-transport --> daemon_sessions
   daemon_bridge-transport --> daemon_util
   daemon_util --> daemon_config
+  daemon_bridge-tools --> shared_constants
   daemon_bridge-dispatch --> daemon_config
   daemon_bridge-dispatch --> daemon_sessions
   daemon_bridge-dispatch --> daemon_bridge-transport

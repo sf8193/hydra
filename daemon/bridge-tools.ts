@@ -1,4 +1,7 @@
 // No daemon-internal imports — this module breaks the session-lifecycle ↔ bridge-dispatch cycle.
+// MAIN_ONLY_TOOLS lives in shared/constants.ts — import from there, not here.
+import { MAIN_ONLY_TOOLS } from '../shared/constants.js'
+
 export const BRIDGE_TOOLS = [
   { name: 'reply', description: 'Reply in chat. Pass chat_id from the inbound message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' }, reply_to: { type: 'string', description: 'Message ID to thread under.' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['chat_id', 'text'] } },
   { name: 'react', description: 'Add an emoji reaction to a message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, emoji: { type: 'string' } }, required: ['chat_id', 'message_id', 'emoji'] } },
@@ -25,7 +28,6 @@ export const BRIDGE_TOOLS = [
   { name: 'extend_phase', description: 'Request more time in the current protocol phase. Resets the idle timeout. Use when you need more time to complete your work (e.g. reading a large codebase). The daemon posts a status update to the thread.', inputSchema: { type: 'object', properties: { reason: { type: 'string', description: 'Why you need more time — shown in the thread status.' }, minutes: { type: 'number', description: 'Additional minutes requested (default: 5, max: 15).' } }, required: ['reason'] } },
 ]
 
-export const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
 export const PROTOCOL_ACTOR_TOOLS = new Set(['advance', 'extend_phase'])
 
 export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; advanceHint?: string }): typeof BRIDGE_TOOLS {

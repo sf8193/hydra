@@ -93,6 +93,7 @@ export async function startByte(cfg: HydraConfig): Promise<void> {
     `export DAEMON_SOCK=${shq(cfg.sockPath)}`,
     `export CLAUDE_CONFIG_DIR=${shq(cfg.configDir)}`,
     `export CHAT_PLATFORM=${cfg.platform}`,
+    `export HYDRA_ROLE=main`,
     authExport || null,
     `caffeinate -i claude --model ${shq(cfg.byteModel)} --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions ${shq(prompt)}`,
   ].filter(Boolean).join(' && ')

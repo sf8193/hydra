@@ -1,18 +1,15 @@
 /**
- * Duplicate-'main' guard.
+ * Duplicate-'main' guard (secondary defense).
  *
- * 'main' is the session id every bridge defaults to when HYDRA_SESSION_ID is
- * unset (see bridge.ts), and it is exempt from the flap circuit breaker — we must
- * never tmux-kill the control session. The combination means two byte processes
- * can both register as 'main' and evict each other unboundedly: the daemon ends
- * the incumbent's socket on every new registration, the evicted bridge
- * reconnects, and the ping-pong never stops (nothing kills 'main').
+ * Primary defense: bridge.ts requires HYDRA_ROLE=main to claim the 'main'
+ * session id. Unconfigured bridges get a random ephemeral id instead of
+ * defaulting to 'main'. This eliminates the terminal-session ping-pong.
  *
- * This decides when to break the cycle: once 'main' registrations flap, hold the
- * incumbent and refuse newcomers (for a cooldown) instead of letting each
- * newcomer evict the incumbent. A single legitimate byte restart (one
- * registration, no recent flap) is NOT held — it falls through to normal socket
- * replacement.
+ * This guard remains as a secondary defense for the residual case: two byte
+ * processes both declaring HYDRA_ROLE=main (e.g. a stale byte surviving a
+ * restart). 'main' is exempt from the flap circuit breaker (we must never
+ * tmux-kill the control session), so without this guard two declared bytes
+ * would still evict each other unboundedly.
  *
  * Pure so it can be unit-tested without the socket layer.
  */

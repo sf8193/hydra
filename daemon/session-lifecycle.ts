@@ -650,6 +650,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
     `export CHAT_PLATFORM=${shq(PLATFORM)}`,
+    `unset HYDRA_ROLE`, // prevent spawned session from inheriting byte's HYDRA_ROLE=main
     `${claudeArgs} 2>>${shq(stderrLog)}`,
   ].join(' && ')
 
