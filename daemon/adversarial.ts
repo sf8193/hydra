@@ -368,6 +368,13 @@ export function onParticipantDisconnect(sessionId: string): void {
           const result = await doSpawnSession(currentInfo?.topic ?? `Review critic (${state.rounds} rounds)`, undefined, undefined, {
             joinThread: state.ownerThreadId, resumeFrom: claudeSessionId, model: state.model,
           })
+          // Pre-queue notification so it flushes on bridge connect — prevents
+          // Claude Code from exiting before receiving new input.
+          transport.sendOrQueue(result.sessionId, {
+            type: 'notification',
+            content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
+            meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+          })
           const ok = await waitForBridge(result.sessionId, 30_000)
           if (!ok) {
             const ni = registry.get(result.sessionId)
@@ -378,11 +385,6 @@ export function onParticipantDisconnect(sessionId: string): void {
           sessionToReview.delete(sessionId)
           state.criticSessionId = result.sessionId
           sessionToReview.set(result.sessionId, state.reviewId)
-          transport.sendOrQueue(result.sessionId, {
-            type: 'notification',
-            content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
-            meta: { chat_id: state.ownerThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-          })
           resetTimeout(state)
           process.stderr.write(`daemon: review critic auto-resumed: ${sessionId} → ${result.sessionId}\n`)
         } catch (err) {
