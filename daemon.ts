@@ -477,6 +477,8 @@ setInterval(() => {
     }
 
     // Orphan detection — tmux alive but bridge never connected past grace window.
+    // See also: daemon/resume-health.ts classifyResumeFailure, which checks
+    // the same condition at bridge-timeout time. Both paths must preserve.
     // Discovery retries every poll (claudeSessionId may become available later).
     // Alert fires once per orphan episode; clears when bridge reconnects.
     if (!info.isJoinMember && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
