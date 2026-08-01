@@ -1,4 +1,4 @@
-import { existsSync, statSync, unlinkSync, readFileSync, symlinkSync, writeFileSync, readdirSync, mkdirSync } from 'fs'
+import { existsSync, statSync, lstatSync, unlinkSync, readFileSync, symlinkSync, writeFileSync, readdirSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
@@ -542,6 +542,16 @@ function installCLILink(hydraDir: string): void {
 
   try {
     if (!existsSync(binDir)) mkdirSync(binDir, { recursive: true })
+
+    // Earlier installs made linkPath a symlink to cli/hydra.ts. readFileSync and
+    // writeFileSync both follow symlinks, so upgrading to the wrapper without
+    // unlinking first overwrites the CLI source with a script that execs itself.
+    // lstat, not stat: stat resolves the link and reports the target's type.
+    if (existsSync(linkPath) && lstatSync(linkPath).isSymbolicLink()) {
+      unlinkSync(linkPath)
+      console.log(`removed legacy hydra symlink at ${linkPath}`)
+    }
+
     const existing = existsSync(linkPath) ? readFileSync(linkPath, 'utf-8') : ''
     if (existing !== wrapper) {
       writeFileSync(linkPath, wrapper, { mode: 0o755 })
