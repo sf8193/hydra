@@ -851,4 +851,32 @@ describe('tools_update on phase transition', () => {
     // reporting phase is verdict:none
     expect(advance.description).toBe('advance({ content: "..." })')
   })
+
+  test('reconnect delivers tools_update to current actor', async () => {
+    h = createHarness(review, { rounds: 3 })
+    expect(h.phase).toBe('critic_turn')
+
+    h.reconnect('critic')
+
+    const msgs = h.actorMessages('critic')
+    const toolsUpdate = msgs.find(m => m.type === 'tools_update')
+    expect(toolsUpdate).toBeDefined()
+    const tools = toolsUpdate!.tools as Array<{ name: string }>
+    expect(tools.some(t => t.name === 'advance')).toBe(true)
+  })
+
+  test('reconnect does not deliver advance to non-active actor', async () => {
+    h = createHarness(review, { rounds: 3 })
+    await h.advance('critic', 'Critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    h.reconnect('critic')
+
+    const msgs = h.actorMessages('critic')
+    const toolsUpdates = msgs.filter(m => m.type === 'tools_update')
+    const latest = toolsUpdates[toolsUpdates.length - 1]
+    expect(latest).toBeDefined()
+    const tools = latest.tools as Array<{ name: string }>
+    expect(tools.some(t => t.name === 'advance')).toBe(false)
+  })
 })
