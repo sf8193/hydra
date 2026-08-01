@@ -258,23 +258,74 @@ export function shq(s: string): string {
 // Wait for socket
 // ---------------------------------------------------------------------------
 
-export async function waitForSocket(sockPath: string, timeoutMs: number): Promise<boolean> {
+export async function waitForSocket(sockPath: string, timeoutMs: number, quiet = false): Promise<boolean> {
   const start = Date.now()
-  process.stdout.write('waiting for socket')
+  if (!quiet) process.stdout.write('waiting for socket')
   while (Date.now() - start < timeoutMs) {
     if (existsSync(sockPath)) {
       try {
         if (statSync(sockPath).isSocket()) {
-          process.stdout.write(' ready\n')
+          if (!quiet) process.stdout.write(' ready\n')
           return true
         }
       } catch {}
     }
-    process.stdout.write('.')
+    if (!quiet) process.stdout.write('.')
     await Bun.sleep(500)
   }
-  process.stdout.write(' timeout\n')
+  if (!quiet) process.stdout.write(' timeout\n')
   return false
+}
+
+// ---------------------------------------------------------------------------
+// Health probe — connect to daemon socket and confirm it answers
+// ---------------------------------------------------------------------------
+
+export function probeDaemonHealth(sockPath: string, timeoutMs = 5000): Promise<{ ok: boolean; error?: string }> {
+  return new Promise(resolve => {
+    const socket = connect(sockPath)
+    let buf = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve({ ok: false, error: 'health probe timeout' })
+    }, timeoutMs)
+
+    socket.on('connect', () => {
+      socket.write(JSON.stringify({ type: 'cli', command: 'health', id: 'probe' }) + '\n')
+    })
+
+    function settle(result: { ok: boolean; error?: string }): void {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(result)
+    }
+
+    socket.on('data', (data: Buffer) => {
+      buf += data.toString()
+      const nl = buf.indexOf('\n')
+      if (nl !== -1 && !settled) {
+        try {
+          const resp = JSON.parse(buf.slice(0, nl))
+          settle({ ok: !!resp.ok })
+        } catch {
+          settle({ ok: false, error: 'invalid response' })
+        }
+      }
+    })
+
+    socket.on('error', (err) => {
+      settle({ ok: false, error: err.message })
+    })
+
+    socket.on('end', () => {
+      settle({ ok: false, error: buf ? 'incomplete response' : 'closed without response' })
+    })
+  })
 }
 
 // ---------------------------------------------------------------------------

@@ -1,13 +1,13 @@
-import { existsSync, statSync, lstatSync, unlinkSync, readFileSync, symlinkSync, writeFileSync, readdirSync, mkdirSync } from 'fs'
+import { existsSync, statSync, lstatSync, unlinkSync, readFileSync, symlinkSync, writeFileSync, readdirSync, mkdirSync, rmSync } from 'fs'
 import { join, dirname } from 'path'
-import { homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 
 import type { HydraConfig } from './helpers.js'
 import {
   resolveConfig, tmuxExists, tmuxKill, tmuxSpawn, tmuxSessionAge,
   compileCheck, killOrphanBytes, hasOrphanBytes, appendLog, shq,
-  waitForSocket, buildDaemonEnvs, pluginVersionDir,
+  waitForSocket, buildDaemonEnvs, pluginVersionDir, probeDaemonHealth,
 } from './helpers.js'
 import { isKnownModel } from '../shared/constants.js'
 
@@ -226,13 +226,14 @@ export async function lifecycleDown(platform: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// restart (replaces restart-daemon.sh)
+// restart — fast by default, +v opts into module validation before kill
 // ---------------------------------------------------------------------------
 
-export async function lifecycleRestart(platform: string): Promise<void> {
+export async function lifecycleRestart(platform: string, opts?: { validate?: boolean }): Promise<void> {
   const cfg = resolveConfig(platform)
+  const validate = opts?.validate ?? false
 
-  appendLog(cfg.daemonLog, 'Restart requested')
+  appendLog(cfg.daemonLog, `Restart requested${validate ? ' (+v)' : ''}`)
 
   console.log('pre-flight compile check...')
   const check = await compileCheck(cfg.hydraDir)
@@ -241,6 +242,18 @@ export async function lifecycleRestart(platform: string): Promise<void> {
     console.error(check.errors)
     appendLog(cfg.daemonLog, 'Restart ABORTED — compile check failed (old daemon untouched)')
     process.exit(1)
+  }
+
+  if (validate) {
+    console.log('module validation...')
+    const probeResult = await validateModuleGraph(cfg)
+    if (!probeResult.ok) {
+      console.error('module validation FAILED — old daemon left running.')
+      console.error(`  ${probeResult.error}`)
+      appendLog(cfg.daemonLog, `Restart ABORTED — module validation failed: ${probeResult.error}`)
+      process.exit(1)
+    }
+    console.log('module validation passed')
   }
 
   if (tmuxExists(cfg.daemonTmux)) {
@@ -257,13 +270,62 @@ export async function lifecycleRestart(platform: string): Promise<void> {
   tmuxSpawn(cfg.daemonTmux,
     `cd ${shq(cfg.hydraDir)} && ${buildDaemonEnvs(cfg)} bun run daemon.ts 2>&1 | tee -a ${cfg.daemonLog}`)
 
+  if (!tmuxExists(cfg.daemonTmux)) {
+    appendLog(cfg.daemonLog, 'CRITICAL: tmuxSpawn failed — no daemon process created')
+    console.error('CRITICAL: tmuxSpawn failed — no daemon running')
+    process.exit(1)
+  }
+
   if (await waitForSocket(cfg.sockPath, cfg.socketTimeout)) {
-    appendLog(cfg.daemonLog, 'Daemon restarted successfully')
+    appendLog(cfg.daemonLog, `Daemon restarted successfully${validate ? ' (+v)' : ''}`)
     console.log(`${platform} daemon restarted`)
   } else {
     appendLog(cfg.daemonLog, 'Restart FAILED — socket timeout')
     console.error('TIMEOUT — socket did not appear after 15s')
     process.exit(1)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module graph validation — runs inside a tmux pane (same execution context
+// as the real daemon) to catch broken imports, missing exports, and top-level
+// evaluation errors that compile checks miss.
+// ---------------------------------------------------------------------------
+
+async function validateModuleGraph(cfg: HydraConfig): Promise<{ ok: boolean; error?: string }> {
+  const scratchDir = join(tmpdir(), `hydra-probe-${process.pid}`)
+  const scratchSock = join(scratchDir, 'probe.sock')
+  const probeTmux = `${cfg.platform}-module-probe-${process.pid}`
+  mkdirSync(scratchDir, { recursive: true })
+  try { unlinkSync(scratchSock) } catch {}
+  tmuxKill(probeTmux)
+
+  const probeScript = join(cfg.hydraDir, 'daemon', 'boot-probe.ts')
+  try {
+    tmuxSpawn(probeTmux,
+      `cd ${shq(cfg.hydraDir)} && ${buildDaemonEnvs(cfg)} HYDRA_PROBE_SOCK=${shq(scratchSock)} bun run ${shq(probeScript)}`)
+
+    const socketReady = await waitForSocket(scratchSock, cfg.socketTimeout, true)
+    if (!socketReady) {
+      let paneOutput = ''
+      try {
+        paneOutput = execFileSync('tmux', ['capture-pane', '-t', probeTmux, '-p'],
+          { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+      } catch {}
+      const lastLine = paneOutput.split('\n').filter(l => l.trim()).pop() ?? 'probe failed to start'
+      return { ok: false, error: lastLine }
+    }
+
+    const health = await probeDaemonHealth(scratchSock, cfg.socketTimeout)
+    if (!health.ok) {
+      return { ok: false, error: `modules loaded but health check failed: ${health.error}` }
+    }
+
+    return { ok: true }
+  } finally {
+    tmuxKill(probeTmux)
+    try { unlinkSync(scratchSock) } catch {}
+    try { rmSync(scratchDir, { recursive: true }) } catch {}
   }
 }
 

@@ -26,7 +26,7 @@ export const CLAUDE_CONFIG = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.
 const LOCAL_ENV_FILE = join(import.meta.dir, '..', '.env')
 for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
   try {
-    chmodSync(envFile, 0o600)
+    if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600)
     for (const line of readFileSync(envFile, 'utf8').split('\n')) {
       const parsed = parseEnvLine(line)
       if (parsed && process.env[parsed[0]] === undefined) process.env[parsed[0]] = parsed[1]
