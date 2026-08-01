@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
 import { homedir } from 'os'
-import { gateway, STATE_DIR } from '../config.js'
+import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { ThreadMetadata } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
@@ -166,9 +166,12 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
   const cancelled = activeBuilds.length + activeReviews.length
   const cancelNote = cancelled > 0 ? ` (cancelled ${cancelled} active build/review${cancelled > 1 ? 's' : ''})` : ''
 
-  const restartScript = join(import.meta.dir, '..', '..', 'restart-daemon.sh')
+  const hydraTs = join(import.meta.dir, '..', '..', 'cli', 'hydra.ts')
+  const fast = /\+fast\b/.test(msg.content)
+  const fastFlag = fast ? ' --fast' : ''
+  const modeNote = fast ? '' : ' (validating)'
   try {
-    await gateway.send(msg.channelId, `🔄 Restarting daemon${cancelNote} — back in a moment...`, { replyTo: msg.id })
+    await gateway.send(msg.channelId, `🔄 Restarting daemon${cancelNote}${modeNote} — back in a moment...`, { replyTo: msg.id })
   } catch {}
 
   try {
@@ -178,7 +181,7 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
 
   let restartFailed = false
   try {
-    execSync(`nohup bash "${restartScript}" > /dev/null 2>&1 &`, {
+    execSync(`nohup bun "${hydraTs}" restart ${PLATFORM}${fastFlag} > /dev/null 2>&1 &`, {
       stdio: 'pipe',
       timeout: 10_000,
       shell: '/bin/bash',
