@@ -605,6 +605,8 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     return
   }
 
+  emitToolsUpdate(run, prevPhase)
+
   const ctx = makeBehaviorCtx(run)
   const phase = run.protocol.phases[run.phase]
   let handled = false
@@ -620,8 +622,6 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     await cancelRun(run, 'behavior error')
     return
   }
-
-  emitToolsUpdate(run, prevPhase)
 
   if (!handled) {
     notifyNextActor(run, content)
