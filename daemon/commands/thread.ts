@@ -229,7 +229,10 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       model: deadModel,
     })
     if (result) {
-      await announceRecovery(msg, result, thread, 'resumed — full context restored', '⏯️', lastTmuxName)
+      const method = result.bridgeOrphan
+        ? 'resumed — context restored, but bridge not yet connected (may need a moment)'
+        : 'resumed — full context restored'
+      await announceRecovery(msg, result, thread, method, '⏯️', lastTmuxName)
       return
     }
     process.stderr.write(`daemon: resume tier 1 (--resume) failed for ${lastTmuxName}, trying fork-from-dead\n`)

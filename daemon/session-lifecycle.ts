@@ -20,6 +20,7 @@ import { loadAccess } from './access.js'
 import { codexEngine } from './codex-bootstrap.js'
 import { codexSocketPath } from './codex-engine.js'
 import { emit } from './event-bus.js'
+import { classifyResumeFailure } from './resume-health.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -816,7 +817,7 @@ export async function tryResume(dead: {
   claudeSessionId?: string
   threadUrl?: string
   model?: string
-}): Promise<SpawnResult | null> {
+}): Promise<(SpawnResult & { bridgeOrphan?: boolean }) | null> {
   if (!dead.claudeSessionId) return null
   try {
     const result = await doSpawnSession(dead.topic, undefined, undefined, {
@@ -824,17 +825,59 @@ export async function tryResume(dead: {
       resumeFrom: dead.claudeSessionId,
       model: dead.model,
     })
-    const ok = await waitForBridge(result.sessionId, HEALTH_TIMEOUT_MS)
-    if (!ok) {
-      const info = registry.get(result.sessionId)
-      if (info) await killSession(info, 'resume health check failed').catch(() => {})
-      return null
-    }
+
+    // Queue the recovery notification before checking bridge health — sendOrQueue
+    // delivers immediately if connected, queues for later if not. The orphan path
+    // needs it most: when the bridge eventually connects, the session learns it
+    // was recovered.
     transport.sendOrQueue(result.sessionId, {
       type: 'notification',
       content: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off.`,
       meta: { chat_id: dead.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
+
+    const ok = await waitForBridge(result.sessionId, HEALTH_TIMEOUT_MS)
+    if (!ok) {
+      const info = registry.get(result.sessionId)
+      if (!info) return null
+
+      const verdict = classifyResumeFailure({
+        tmuxAlive: tmuxHasSession(info.tmuxName),
+        hasExitMarker: !!(info.exitFilePath && existsSync(info.exitFilePath)),
+        hasExitFilePath: !!info.exitFilePath,
+      })
+
+      if (verdict === 'kill') {
+        if (!info.exitFilePath) process.stderr.write(`daemon: resume ${info.tmuxName}: exit file path not configured (pipe-pane failed at spawn) — cannot distinguish orphan from dead, defaulting to kill\n`)
+        await killSession(info, 'resume health check failed').catch(() => {})
+        return null
+      }
+
+      // Orphan: Claude is running with restored context but the bridge hasn't
+      // connected. Preserve the session — killing it discards recovered context,
+      // and returning null would cascade to a tier that spawns a duplicate.
+      // The periodic orphan detector (daemon.ts) will monitor it from here.
+      process.stderr.write(`daemon: resume ${info.tmuxName}: bridge timeout but tmux alive — preserving as orphan\n`)
+
+      // One-shot recheck: the periodic detector runs every 5 minutes, so a
+      // session that dies right after this check could go undetected for a full
+      // cycle. This closes the gap by re-evaluating 30s later.
+      const recheckSessionId = result.sessionId
+      setTimeout(() => {
+        const s = registry.get(recheckSessionId)
+        if (!s || s.deadAt) return
+        if (transport.has(recheckSessionId)) return
+        if (!tmuxHasSession(s.tmuxName)) {
+          process.stderr.write(`daemon: resume recheck: ${s.tmuxName} died after orphan classification — marking dead\n`)
+          s.deadAt = Date.now()
+          registry.persist()
+          void gateway.send(s.threadId, `💀 **${s.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
+          refreshSessionVisual(s.threadId, { state: 'crashed' })
+        }
+      }, 30_000)
+
+      return { ...result, bridgeOrphan: true }
+    }
     return result
   } catch {
     return null
