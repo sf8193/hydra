@@ -433,6 +433,15 @@ export function onRunReconnect(sessionId: string): void {
     resetTimeout(run)
     process.stderr.write(`daemon: ${run.protocol.name} run: ${sessionId} reconnected\n`)
   }
+
+  const role = run.sessionToRole.get(sessionId)
+  if (role && run.protocol.phases[run.phase]?.actor === role) {
+    const ia = run.protocol.phaseInteraction(run.phase)
+    const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
+    const tools = computeToolsForSession(sessionId, hint ? { advanceHint: hint } : undefined)
+    transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
+    process.stderr.write(`daemon: ${run.protocol.name} run: ${sessionId} tools recomputed on reconnect\n`)
+  }
 }
 
 // ---------------------------------------------------------------------------
