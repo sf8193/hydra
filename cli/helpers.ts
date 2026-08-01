@@ -4,6 +4,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 import { spawnModel, TRANSCRIBE_TMUX } from '../shared/constants.js'
+import { withRaisedFdLimit } from '../shared/tmux-env.js'
 
 // ---------------------------------------------------------------------------
 // Config resolution (replaces env-setup.sh)
@@ -157,7 +158,7 @@ export function tmuxKill(name: string): void {
 }
 
 export function tmuxSpawn(name: string, command: string): void {
-  execFileSync('tmux', ['new-session', '-d', '-s', name, command], { stdio: 'pipe', env: execEnv() })
+  execFileSync('tmux', ['new-session', '-d', '-s', name, withRaisedFdLimit(command)], { stdio: 'pipe', env: execEnv() })
 }
 
 export function tmuxSessionAge(name: string): number | null {

@@ -12,6 +12,7 @@ import { computeToolsForSession } from './bridge-tools.js'
 import { extractPhaseBudget } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
+import { withRaisedFdLimit } from '../shared/tmux-env.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -227,7 +228,7 @@ async function spawnCodexSession(p: {
 
   process.stderr.write(`daemon: codex spawning ${p.tmuxName}\n`)
   try {
-    execFileSync('tmux', ['new-session', '-d', '-s', p.tmuxName, serverInner], { stdio: 'pipe' })
+    execFileSync('tmux', ['new-session', '-d', '-s', p.tmuxName, withRaisedFdLimit(serverInner)], { stdio: 'pipe' })
   } catch (err) {
     throw new Error(`failed to spawn codex tmux: ${err instanceof Error ? err.message : err}`)
   }
@@ -652,7 +653,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
   try {
-    execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, inner], { stdio: 'pipe' })
+    execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, withRaisedFdLimit(inner)], { stdio: 'pipe' })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn ${tmuxName}: execFileSync FAILED: ${msg}\n`)

@@ -7,6 +7,9 @@
     "discord.js": "^14.14.0",
     "ws": "^8.21.0"
   },
+  "devDependencies": {
+    "@types/bun": "^1.2.0"
+  },
   "bin": "./bridge.ts",
   "license": "Apache-2.0",
   "scripts": {
