@@ -378,18 +378,10 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
     return
   }
-  const ok = await waitForBridge(result.sessionId, 30_000)
-  if (!ok) {
-    const newInfo = registry.get(result.sessionId)
-    if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
-    throw new Error('resumed session did not connect')
-  }
-  if (isTerminal(run)) {
-    const spawnedInfo = registry.get(result.sessionId)
-    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
-    return
-  }
 
+  // Register before waitForBridge so the bridge gets correct tools (including
+  // advance) at connect time. Same order as spawnRole. The notification is
+  // queued and flushes when the bridge connects.
   if (info) info.deadAt = Date.now()
   sessionToRun.delete(deadSessionId)
   run.sessionToRole.delete(deadSessionId)
@@ -401,6 +393,18 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
+
+  const ok = await waitForBridge(result.sessionId, 30_000)
+  if (!ok) {
+    const newInfo = registry.get(result.sessionId)
+    if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
+    throw new Error('resumed session did not connect')
+  }
+  if (isTerminal(run)) {
+    const spawnedInfo = registry.get(result.sessionId)
+    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+    return
+  }
 
   resetTimeout(run)
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resumed: ${deadSessionId} → ${result.sessionId}\n`)
