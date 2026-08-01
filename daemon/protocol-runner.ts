@@ -378,13 +378,33 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
     return
   }
+
+  // Pre-register before waitForBridge so bridge-server's getAdvanceHint
+  // resolves — otherwise computeToolsForSession filters out advance/extend_phase
+  // and the resumed session can't advance the protocol.
+  run.sessionToRole.set(result.sessionId, role)
+  sessionToRun.set(result.sessionId, run.id)
+  transport.sendOrQueue(result.sessionId, {
+    type: 'notification',
+    content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
+    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+
   const ok = await waitForBridge(result.sessionId, 30_000)
   if (!ok) {
+    const t = run.disconnectTimers.get(result.sessionId)
+    if (t) { clearTimeout(t); run.disconnectTimers.delete(result.sessionId) }
+    sessionToRun.delete(result.sessionId)
+    run.sessionToRole.delete(result.sessionId)
     const newInfo = registry.get(result.sessionId)
     if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
     throw new Error('resumed session did not connect')
   }
   if (isTerminal(run)) {
+    const t = run.disconnectTimers.get(result.sessionId)
+    if (t) { clearTimeout(t); run.disconnectTimers.delete(result.sessionId) }
+    sessionToRun.delete(result.sessionId)
+    run.sessionToRole.delete(result.sessionId)
     const spawnedInfo = registry.get(result.sessionId)
     if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
     return
@@ -395,12 +415,6 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   run.sessionToRole.delete(deadSessionId)
   run.disconnectTimers.delete(deadSessionId)
   registerParticipant(run, role, result.sessionId)
-
-  transport.sendOrQueue(result.sessionId, {
-    type: 'notification',
-    content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
-    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
 
   resetTimeout(run)
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resumed: ${deadSessionId} → ${result.sessionId}\n`)
