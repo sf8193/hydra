@@ -22,7 +22,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/sessions.ts':       { layer: 'core',      desc: 'SessionRegistry, ThreadRegistry, session catalog' },
   'daemon/bridge-transport.ts': { layer: 'core',    desc: 'BridgeConn map, message queuing, flush' },
   'daemon/util.ts':           { layer: 'core',      desc: 'safeSend, chunk, getContextPercent, formatDuration' },
-  'daemon/bridge-tools.ts':   { layer: 'tools',     desc: 'BRIDGE_TOOLS, MAIN_ONLY_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)' },
+  'daemon/bridge-tools.ts':   { layer: 'tools',     desc: 'UNIVERSAL_TOOLS, MASTER_ORCHESTRATOR_ONLY_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)' },
   'daemon/bridge-dispatch.ts': { layer: 'tools',    desc: 'executeTool — tool execution dispatch' },
   'daemon/bridge-server.ts':  { layer: 'server',    desc: 'Unix socket server, bridge protocol, death detection, flap guard' },
   'daemon/protocol-registry.ts': { layer: 'server', desc: 'Protocol registration, isThreadOccupied query, dispatch{Reconnect,Reply,Disconnect}' },

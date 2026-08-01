@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { computeToolsForSession, BRIDGE_TOOLS } from '../bridge-tools.js'
-import { MAIN_ONLY_TOOLS } from '../../shared/constants.js'
+import { computeToolsForSession, UNIVERSAL_TOOLS } from '../bridge-tools.js'
+import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../../shared/constants.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -8,7 +8,7 @@ process.stderr.write = (() => true) as any
 describe('computeToolsForSession', () => {
   test('main session gets all tools', () => {
     const tools = computeToolsForSession('main')
-    expect(tools).toBe(BRIDGE_TOOLS) // same reference
+    expect(tools).toBe(UNIVERSAL_TOOLS) // same reference
     const names = tools.map(t => t.name)
     expect(names).toContain('reply')
     expect(names).toContain('spawn_session')
@@ -40,13 +40,13 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('factory_build')
   })
 
-  test('MAIN_ONLY_TOOLS restricts spawn and kill', () => {
-    expect(MAIN_ONLY_TOOLS.has('spawn_session')).toBe(true)
-    expect(MAIN_ONLY_TOOLS.has('kill_session')).toBe(true)
+  test('MASTER_ORCHESTRATOR_ONLY_TOOLS restricts spawn and kill', () => {
+    expect(MASTER_ORCHESTRATOR_ONLY_TOOLS.has('spawn_session')).toBe(true)
+    expect(MASTER_ORCHESTRATOR_ONLY_TOOLS.has('kill_session')).toBe(true)
   })
 
-  test('all BRIDGE_TOOLS have required schema fields', () => {
-    for (const tool of BRIDGE_TOOLS) {
+  test('all UNIVERSAL_TOOLS have required schema fields', () => {
+    for (const tool of UNIVERSAL_TOOLS) {
       expect(tool.name).toBeTruthy()
       expect(tool.description).toBeTruthy()
       expect(tool.inputSchema).toBeDefined()
@@ -55,7 +55,7 @@ describe('computeToolsForSession', () => {
   })
 
   test('send_to_thread schema has required fields including type', () => {
-    const tool = BRIDGE_TOOLS.find(t => t.name === 'send_to_thread')!
+    const tool = UNIVERSAL_TOOLS.find(t => t.name === 'send_to_thread')!
     expect(tool).toBeDefined()
     expect(tool.inputSchema.required).toContain('target')
     expect(tool.inputSchema.required).toContain('type')
@@ -68,7 +68,7 @@ describe('computeToolsForSession', () => {
   })
 
   test('peek_session schema has required fields', () => {
-    const tool = BRIDGE_TOOLS.find(t => t.name === 'peek_session')!
+    const tool = UNIVERSAL_TOOLS.find(t => t.name === 'peek_session')!
     expect(tool).toBeDefined()
     expect(tool.inputSchema.required).toContain('name')
     expect(tool.inputSchema.properties).toHaveProperty('name')

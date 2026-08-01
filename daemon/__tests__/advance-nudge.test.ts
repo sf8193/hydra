@@ -26,14 +26,16 @@ afterEach(() => {
   registry.delete('s1')
 })
 
-function registerTestProtocol(opts?: { advanceHint?: string }) {
+function registerTestProtocol(opts?: { advanceUsagePattern?: string }) {
   registerProtocol('test', {
     getByThread: (id) => id === 'thread-1',
     isParticipant: (id) => id === 's1',
     onReply: () => {},
     onDisconnect: () => {},
     onReconnect: () => {},
-    advanceHint: opts?.advanceHint ? () => opts.advanceHint! : undefined,
+    resolveScopedToolOverrides: opts?.advanceUsagePattern
+      ? () => ({ advance: opts.advanceUsagePattern!, extend_phase: 'extend...' })
+      : undefined,
   })
 }
 
@@ -72,8 +74,8 @@ describe('advance nudge', () => {
     expect(maybeNudgeMissingAdvance('s1', longText, 'thread-1', now + 61_000)).toBe(true)
   })
 
-  test('includes phase-specific advance hint when available', () => {
-    registerTestProtocol({ advanceHint: 'advance({ content: "...", verdict: "approve | request_changes" })' })
+  test('includes phase-specific advance pattern when available', () => {
+    registerTestProtocol({ advanceUsagePattern: 'advance({ content: "...", verdict: "approve | request_changes" })' })
     const longText = 'x'.repeat(250)
     maybeNudgeMissingAdvance('s1', longText, 'thread-1')
 
@@ -83,7 +85,7 @@ describe('advance nudge', () => {
     expect((nudge!.content as string)).toContain('verdict: "approve | request_changes"')
   })
 
-  test('falls back to generic hint without advanceHint hook', () => {
+  test('falls back to generic pattern without tool overrides hook', () => {
     registerTestProtocol()
     const longText = 'x'.repeat(250)
     maybeNudgeMissingAdvance('s1', longText, 'thread-1')
@@ -92,5 +94,25 @@ describe('advance nudge', () => {
     const nudge = msgs.find(m => (m.content as string).includes('protocol did NOT advance'))
     expect(nudge).toBeDefined()
     expect((nudge!.content as string)).toContain('advance({ content: "..." })')
+  })
+
+  test('passes chatId to resolveScopedToolOverrides hook', () => {
+    let receivedChatId: string | undefined
+    registerProtocol('test', {
+      getByThread: (id) => id === 'thread-1',
+      isParticipant: (id) => id === 's1',
+      onReply: () => {},
+      onDisconnect: () => {},
+      onReconnect: () => {},
+      resolveScopedToolOverrides: (_sessionId, chatId?) => {
+        receivedChatId = chatId
+        return { advance: 'advance({ content: "..." })', extend_phase: 'extend...' }
+      },
+    })
+
+    const longText = 'x'.repeat(250)
+    maybeNudgeMissingAdvance('s1', longText, 'thread-1')
+
+    expect(receivedChatId).toBe('thread-1')
   })
 })

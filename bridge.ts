@@ -22,7 +22,7 @@ import { join, dirname } from 'path'
 import { randomUUID } from 'crypto'
 import { readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
-import { MAIN_ONLY_TOOLS } from './shared/constants.js'
+import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from './shared/constants.js'
 
 // Resolve daemon socket path. Priority:
 // 1. DAEMON_SOCK env var (explicit override — needed when multiple daemons share a plugin cache)
@@ -297,7 +297,7 @@ const mcp = new Server(
   { name: 'hydra-bridge', version: '1.0.0' },
   {
     capabilities: {
-      tools: {},
+      tools: { listChanged: true },
       experimental: {
         'claude/channel': {},
         'claude/channel/permission': {},
@@ -519,7 +519,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
       },
     },
   ]
-  const filtered = IS_MAIN ? fallback : fallback.filter(t => !MAIN_ONLY_TOOLS.has(t.name))
+  const filtered = IS_MAIN ? fallback : fallback.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
   return { tools: [SESSION_INFO_TOOL, ...filtered] }
 })
 
