@@ -174,17 +174,26 @@ function getRunAndRole(sessionId: string): { run: ProtocolRun; role: string } | 
   return { run, role }
 }
 
+function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
+  const role = run.sessionToRole.get(sessionId)
+  if (!role) return
+  const isActor = run.protocol.phases[run.phase]?.actor === role
+  const ia = isActor ? run.protocol.phaseInteraction(run.phase) : undefined
+  const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
+  const tools = computeToolsForSession(sessionId, hint ? { advanceHint: hint } : undefined)
+  transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
+}
+
+function refreshRunTools(run: ProtocolRun): void {
+  for (const [, sid] of run.participants) refreshSessionTools(run, sid)
+}
+
 function registerParticipant(run: ProtocolRun, role: string, sessionId: string): void {
   run.participants.set(role, sessionId)
   run.sessionToRole.set(sessionId, role)
   sessionToRun.set(sessionId, run.id)
-
-  const phaseDef = run.protocol.phases[run.phase]
-  if (phaseDef?.actor === role) {
-    const ia = run.protocol.phaseInteraction(run.phase)
-    const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
-    const tools = computeToolsForSession(sessionId, hint ? { advanceHint: hint } : undefined)
-    transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
+  if (run.protocol.phases[run.phase]?.actor === role) {
+    refreshSessionTools(run, sessionId)
   }
 }
 
@@ -433,6 +442,8 @@ export function onRunReconnect(sessionId: string): void {
     resetTimeout(run)
     process.stderr.write(`daemon: ${run.protocol.name} run: ${sessionId} reconnected\n`)
   }
+
+  refreshSessionTools(run, sessionId)
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +510,7 @@ function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   run._phaseStartedAt = Date.now()
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
+  if (!isTerminal(run)) refreshRunTools(run)
   return true
 }
 
@@ -605,8 +617,6 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     return
   }
 
-  emitToolsUpdate(run, prevPhase)
-
   const ctx = makeBehaviorCtx(run)
   const phase = run.protocol.phases[run.phase]
   let handled = false
@@ -630,30 +640,6 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
   }
 }
 
-function emitToolsUpdate(run: ProtocolRun, prevPhase: string): void {
-  if (run.phase === prevPhase) return
-
-  const newActor = run.protocol.phases[run.phase]?.actor
-  const prevActor = run.protocol.phases[prevPhase]?.actor
-
-  if (newActor) {
-    const sid = run.participants.get(newActor)
-    if (sid) {
-      const ia = run.protocol.phaseInteraction(run.phase)
-      const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
-      const tools = computeToolsForSession(sid, hint ? { advanceHint: hint } : undefined)
-      transport.sendOrQueue(sid, { type: 'tools_update', tools })
-    }
-  }
-
-  if (prevActor && prevActor !== newActor) {
-    const sid = run.participants.get(prevActor)
-    if (sid) {
-      const tools = computeToolsForSession(sid)
-      transport.sendOrQueue(sid, { type: 'tools_update', tools })
-    }
-  }
-}
 
 export function formatAdvanceHint(proto: Protocol, phase: string): string {
   const ia = proto.phaseInteraction(phase)
