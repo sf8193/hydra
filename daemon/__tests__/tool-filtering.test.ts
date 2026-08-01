@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { computeToolsForSession, MAIN_ONLY_TOOLS, BRIDGE_TOOLS } from '../bridge-tools.js'
+import { computeToolsForSession, BRIDGE_TOOLS } from '../bridge-tools.js'
+import { MAIN_ONLY_TOOLS } from '../../shared/constants.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any

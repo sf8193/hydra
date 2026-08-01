@@ -1,8 +1,11 @@
 #!/bin/bash
 # macOS-specific: ps eww shows process environment
 # Shared orphan-byte reaper — sourced by start-byte.sh and stop-byte.sh.
-# Kills claude processes that are connected to the same daemon socket but have no
-# HYDRA_SESSION_ID (i.e. they registered as 'main' and are likely duplicates).
+# Kills claude processes connected to this daemon that are not spawned sessions.
+# Catches: old byte processes (HYDRA_ROLE=main) and unconfigured bridges.
+# Does NOT catch: terminal sessions that resolved the socket via fallback (no
+# DAEMON_SOCK env). Those are inert by design — they register with a stray
+# id (stray-<uuid8>) and receive no main tools.
 #
 # Requires: $SOCK (daemon socket path), $LOG (log file path)
 

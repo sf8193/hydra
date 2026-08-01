@@ -81,7 +81,7 @@ fi
 
 # Start byte
 tmux new-session -d -s "$SESSION" \
-  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR='$CONFIG_DIR' && export CHAT_PLATFORM=$CHAT_PLATFORM && $AUTH_EXPORT caffeinate -i claude --model 'claude-opus-4-6[1m]' --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions \
+  "cd '$CWD' && export DAEMON_SOCK='$SOCK' && export CLAUDE_CONFIG_DIR='$CONFIG_DIR' && export CHAT_PLATFORM=$CHAT_PLATFORM && export HYDRA_ROLE=main && $AUTH_EXPORT caffeinate -i claude --model 'claude-opus-4-6[1m]' --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions \
   \"$PROMPT\""
 
 echo "$(date): ${CHAT_PLATFORM} byte started (daemon+bridge)" >> "$LOG"

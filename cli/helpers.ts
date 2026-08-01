@@ -189,6 +189,10 @@ export async function compileCheck(hydraDir: string): Promise<{ ok: boolean; err
 
 // ---------------------------------------------------------------------------
 // Orphan byte killer (replaces kill-orphan-bytes.sh)
+// Catches: old byte processes (HYDRA_ROLE=main) and unconfigured bridges with
+// DAEMON_SOCK in env. Does NOT catch terminal sessions that resolved the socket
+// via fallback (no DAEMON_SOCK env) — those are inert by design (stray id,
+// no main tools).
 // ---------------------------------------------------------------------------
 
 export function killOrphanBytes(sockPath: string, logPath: string, signal?: string): void {

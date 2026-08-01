@@ -5,8 +5,8 @@ import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
-import { computeToolsForSession, MAIN_ONLY_TOOLS } from './bridge-tools.js'
-import { spawnModel } from '../shared/constants.js'
+import { computeToolsForSession } from './bridge-tools.js'
+import { spawnModel, MAIN_ONLY_TOOLS } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
@@ -163,12 +163,14 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       if (sessionId !== 'main' && info?.engine !== 'codex' && trackRegistration(sessionId)) {
-        process.stderr.write(`daemon: circuit breaker: ${info?.tmuxName ?? sessionId} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
-        try { execSync(`tmux kill-session -t '${info?.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {}
         if (info) {
+          process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
+          try { execSync(`tmux kill-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {}
           info.deadAt = Date.now()
           registry.persist()
           void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
+        } else {
+          process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
         }
         try { conn.socket.end() } catch {}
         break
@@ -178,12 +180,11 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // carried to mainBridge.connect() to flag a two-process fight vs. a reconnect.
       let mainHadOtherIncumbent = false
 
-      // Duplicate-'main' guard. The circuit breaker above exempts 'main' (never
-      // tmux-kill the control session), but 'main' is the id every bridge defaults
-      // to without HYDRA_SESSION_ID — so two byte processes can both claim it and
-      // evict each other unboundedly via the socket replacement below. When 'main'
-      // flaps, hold the incumbent and refuse the newcomer instead. A single
-      // legitimate byte restart (no recent flap) falls through to normal replace.
+      // Duplicate-'main' guard. Retained as a secondary defense — the primary
+      // defense is in bridge.ts: unconfigured bridges get a random ephemeral id
+      // instead of defaulting to 'main'. Only bridges with HYDRA_ROLE=main claim
+      // 'main'. This guard catches the residual case of two byte processes (e.g.
+      // a stale byte surviving a restart) both declaring HYDRA_ROLE=main.
       if (sessionId === 'main') {
         const incumbent = transport.get('main')
         const hasOtherIncumbent = !!incumbent && incumbent.socket !== conn.socket
@@ -255,9 +256,11 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         const r = mainBridge.connect(mainHadOtherIncumbent, Date.now())
         if (r.kind === 'first') process.stderr.write('daemon: main bridge connected\n')
         else if (!r.throttled) process.stderr.write(formatReconnectLine(r) + '\n')
-      } else {
+      } else if (info) {
         process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
-        if (info?.ephemeral) startEphemeralTtl(sessionId)
+        if (info.ephemeral) startEphemeralTtl(sessionId)
+      } else {
+        process.stderr.write(`daemon: stray bridge registered as ${sessionId} (no registry entry, no main tools)\n`)
       }
       break
     }

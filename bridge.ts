@@ -22,6 +22,7 @@ import { join, dirname } from 'path'
 import { randomUUID } from 'crypto'
 import { readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
+import { MAIN_ONLY_TOOLS } from './shared/constants.js'
 
 // Resolve daemon socket path. Priority:
 // 1. DAEMON_SOCK env var (explicit override — needed when multiple daemons share a plugin cache)
@@ -67,12 +68,31 @@ function resolveSocketPath(): string {
 }
 
 const SOCKET_PATH = resolveSocketPath()
-// NB: must NOT be plain SESSION_ID — Claude Code overwrites that env var with its own
-// session id when it launches MCP subprocesses, so the daemon-assigned id would be lost.
-const SESSION_ID = process.env.HYDRA_SESSION_ID ?? 'main'
-const IS_MAIN = SESSION_ID === 'main'
+
+// Who is this bridge? The most consequential decision in the file — determines
+// whether the session gets control-plane tools or is inert.
+function resolveSessionIdentity(): { sessionId: string; isMain: boolean } {
+  const explicit = process.env.HYDRA_SESSION_ID
+  const role = process.env.HYDRA_ROLE
+  if (explicit) {
+    if (role === 'main') {
+      process.stderr.write(`bridge: identity: spawned session ${explicit} (HYDRA_ROLE=main ignored — HYDRA_SESSION_ID takes priority)\n`)
+    } else {
+      process.stderr.write(`bridge: identity: spawned session ${explicit}\n`)
+    }
+    return { sessionId: explicit, isMain: false }
+  }
+  if (role === 'main') {
+    process.stderr.write(`bridge: identity: main (HYDRA_ROLE=main)\n`)
+    return { sessionId: 'main', isMain: true }
+  }
+  const id = `stray-${randomUUID().slice(0, 8)}`
+  process.stderr.write(`bridge: identity: unconfigured bridge, assigned ${id}\n`)
+  return { sessionId: id, isMain: false }
+}
+
+const { sessionId: SESSION_ID, isMain: IS_MAIN } = resolveSessionIdentity()
 const RECONNECT_INTERVAL = 5000
-const MAIN_ONLY_TOOLS = new Set(['spawn_session', 'list_sessions', 'kill_session'])
 
 const CLAUDE_SESSION_ID_ENV_NAMES = ['CLAUDE_CODE_SESSION_ID', 'SESSION_ID']
 
@@ -255,7 +275,11 @@ function connectSocket(): void {
       pendingCalls.delete(id)
     }
 
-    scheduleReconnect()
+    if (!SESSION_ID.startsWith('stray-')) {
+      scheduleReconnect()
+    } else {
+      process.stderr.write('bridge: stray bridge — not reconnecting\n')
+    }
   })
 }
 
