@@ -5,6 +5,7 @@
 // For lifecycle events (review complete, session death, etc.) use event-bus.ts.
 
 import { emit } from './event-bus.js'
+import { computeToolsForSession, UNIVERSAL_TOOLS } from './bridge-tools.js'
 
 type ProtocolHooks = {
   getByThread: (threadId: string) => boolean
@@ -13,7 +14,7 @@ type ProtocolHooks = {
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
   onAdvance?: (sessionId: string, content: string, verdict?: string) => Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }>
-  advanceHint?: (sessionId: string, chatId: string) => string | null
+  resolveScopedToolOverrides?: (sessionId: string, chatId?: string) => Record<string, string> | null
 }
 
 // Protocol names are plain strings — intentionally not a union type so new
@@ -78,11 +79,16 @@ export async function dispatchAdvance(sessionId: string, content: string, verdic
   return { ok: false, reason: 'no active protocol for this session' }
 }
 
-export function getAdvanceHint(sessionId: string, chatId: string): string | null {
+export function resolveScopedToolOverrides(sessionId: string, chatId?: string): Record<string, string> | null {
   for (const hooks of protocols.values()) {
-    if (hooks.isParticipant(sessionId)) return hooks.advanceHint?.(sessionId, chatId) ?? null
+    if (hooks.isParticipant(sessionId)) return hooks.resolveScopedToolOverrides?.(sessionId, chatId) ?? null
   }
   return null
+}
+
+export function toolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; chatId?: string }): typeof UNIVERSAL_TOOLS {
+  const overrides = resolveScopedToolOverrides(sessionId, opts?.chatId) ?? undefined
+  return computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: overrides })
 }
 
 export function _resetForTesting(): void { protocols.clear() }

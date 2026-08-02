@@ -107,7 +107,6 @@ graph TD
   daemon_bridge-server --> daemon_sessions
   daemon_bridge-server --> daemon_bridge-transport
   daemon_bridge-server --> daemon_bridge-dispatch
-  daemon_bridge-server --> daemon_bridge-tools
   daemon_bridge-server --> shared_constants
   daemon_bridge-server --> daemon_permission
   daemon_bridge-server --> daemon_session-lifecycle
@@ -120,6 +119,7 @@ graph TD
   daemon_bridge-server --> daemon_pr-watch
   daemon_bridge-server --> daemon_main-guard
   daemon_bridge-server --> daemon_util
+  daemon_protocol-registry --> daemon_bridge-tools
   daemon_permission --> daemon_bridge-transport
   daemon_permission --> daemon_access
   daemon_cli-handler --> daemon_sessions

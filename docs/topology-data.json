@@ -108,7 +108,7 @@
       "id": "daemon_bridge-tools",
       "label": "daemon/bridge-tools.ts",
       "layer": "tools",
-      "desc": "BRIDGE_TOOLS, MAIN_ONLY_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
+      "desc": "UNIVERSAL_TOOLS, MASTER_ORCHESTRATOR_ONLY_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
     },
     {
       "id": "daemon_bridge-dispatch",
@@ -444,10 +444,6 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_bridge-tools"
-    ],
-    [
-      "daemon_bridge-server",
       "shared_constants"
     ],
     [
@@ -493,6 +489,10 @@
     [
       "daemon_bridge-server",
       "daemon_util"
+    ],
+    [
+      "daemon_protocol-registry",
+      "daemon_bridge-tools"
     ],
     [
       "daemon_permission",

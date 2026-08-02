@@ -4,7 +4,7 @@
 // signal: tool choice instead of first-line tag.
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
-import { isProtocolPost, getAdvanceHint } from './protocol-registry.js'
+import { isProtocolPost, resolveScopedToolOverrides } from './protocol-registry.js'
 
 const SUBSTANTIAL_LENGTH = 200
 const NUDGE_COOLDOWN_MS = 60_000
@@ -24,9 +24,10 @@ export function maybeNudgeMissingAdvance(
   if (now - last < NUDGE_COOLDOWN_MS) return false
   lastNudgeAt.set(cooldownKey, now)
 
-  const hint = getAdvanceHint(sessionId, chatId)
-  const hintLine = hint
-    ? `If that was your deliverable, repost using \`${hint}\`.`
+  const overrides = resolveScopedToolOverrides(sessionId, chatId)
+  const advancePattern = overrides?.advance
+  const descLine = advancePattern
+    ? `If that was your deliverable, repost using \`${advancePattern}\`.`
     : `If that was your deliverable, repost using \`advance({ content: "..." })\`.`
 
   const name = registry.get(sessionId)?.tmuxName ?? sessionId
@@ -35,7 +36,7 @@ export function maybeNudgeMissingAdvance(
     type: 'notification',
     content: [
       `[system] Your last post was sent via \`reply()\` — the protocol did NOT advance.`,
-      hintLine,
+      descLine,
       `\`reply()\` is conversational only; \`advance()\` posts to the thread AND advances the protocol.`,
     ].join('\n'),
     meta: { chat_id: chatId, message_id: '', user: 'system', user_id: 'system', ts: new Date(now).toISOString() },

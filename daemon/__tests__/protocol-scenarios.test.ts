@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
-import { computeToolsForSession, PROTOCOL_ACTOR_TOOLS } from '../bridge-tools.js'
+import { computeToolsForSession, PROTOCOL_ONLY_TOOLS } from '../bridge-tools.js'
 import { protocol } from '../protocol-dsl.js'
 
 // Real protocol definitions — the harness exercises them as-is
@@ -748,25 +748,28 @@ describe('decision actor build-time validation', () => {
 // ---------------------------------------------------------------------------
 
 describe('dynamic tool scoping', () => {
-  test('worker without advanceHint excludes advance and extend_phase', () => {
+  test('worker without scopedToolOverrides excludes protocol-scoped tools', () => {
     const tools = computeToolsForSession('some-worker')
     const names = tools.map(t => t.name)
-    expect(names).not.toContain('advance')
-    expect(names).not.toContain('extend_phase')
+    for (const name of PROTOCOL_ONLY_TOOLS) expect(names).not.toContain(name)
   })
 
-  test('worker with advanceHint includes advance with custom description', () => {
-    const hint = 'advance({ content: "...", verdict: "approve" }) (or: request_changes)'
-    const tools = computeToolsForSession('worker', { advanceHint: hint })
+  test('scopedToolOverrides grants tools with custom descriptions', () => {
+    const advanceDesc = 'advance({ content: "...", verdict: "approve" }) (or: request_changes)'
+    const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: advanceDesc, extend_phase: 'extend...' } })
     const advance = tools.find(t => t.name === 'advance')
     expect(advance).toBeDefined()
-    expect(advance!.description).toBe(hint)
+    expect(advance!.description).toBe(advanceDesc)
+    const extendPhase = tools.find(t => t.name === 'extend_phase')
+    expect(extendPhase).toBeDefined()
+    expect(extendPhase!.description).toBe('extend...')
   })
 
-  test('worker with advanceHint includes extend_phase', () => {
-    const tools = computeToolsForSession('worker', { advanceHint: 'advance(...)' })
+  test('scopedToolOverrides can grant a subset of scoped tools', () => {
+    const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' } })
     const names = tools.map(t => t.name)
-    expect(names).toContain('extend_phase')
+    expect(names).toContain('advance')
+    expect(names).not.toContain('extend_phase')
   })
 
   test('main session always includes advance and extend_phase', () => {
@@ -878,5 +881,64 @@ describe('tools_update on phase transition', () => {
     expect(latest).toBeDefined()
     const tools = latest.tools as Array<{ name: string }>
     expect(tools.some(t => t.name === 'advance')).toBe(false)
+  })
+
+  test('terminal phase transition does NOT emit tools_update', async () => {
+    h = createHarness(review, { rounds: 1 })
+    await h.advance('critic', 'Critique.')
+    await h.advance('owner', 'Response.')
+    expect(h.phase).toBe('cleanup')
+
+    const countBefore = h.actorMessages('owner').filter(m => m.type === 'tools_update').length
+    await h.advance('owner', 'Summary.')
+    expect(h.isTerminated).toBe(true)
+
+    const countAfter = h.actorMessages('owner').filter(m => m.type === 'tools_update').length
+    expect(countAfter).toBe(countBefore)
+  })
+})
+
+describe('scoped tool overrides: chatId filtering and integration', () => {
+  test('actor receives tools_update with advance', () => {
+    h = createHarness(review, { rounds: 3 })
+    h.reconnect('critic')
+    const msgs = h.actorMessages('critic')
+    const toolsUpdate = msgs.find(m => m.type === 'tools_update')
+    expect(toolsUpdate).toBeDefined()
+    const tools = toolsUpdate!.tools as Array<{ name: string }>
+    expect(tools.some(t => t.name === 'advance')).toBe(true)
+  })
+
+  test('non-actor does not receive advance in tools_update', () => {
+    h = createHarness(review, { rounds: 3 })
+    h.reconnect('owner')
+    const msgs = h.actorMessages('owner')
+    const toolsUpdate = msgs.find(m => m.type === 'tools_update')
+    expect(toolsUpdate).toBeDefined()
+    const tools = toolsUpdate!.tools as Array<{ name: string }>
+    expect(tools.some(t => t.name === 'advance')).toBe(false)
+  })
+
+  test('non-participant gets no advance or extend_phase from computeToolsForSession', () => {
+    const tools = computeToolsForSession('random-session-id')
+    const names = tools.map(t => t.name)
+    expect(names).not.toContain('advance')
+    expect(names).not.toContain('extend_phase')
+  })
+
+  test('actor advance tool carries phase-specific description', async () => {
+    h = createHarness(build, { rounds: 3 })
+    await h.advance('builder', 'Implementation.')
+    expect(h.phase).toBe('reviewing')
+
+    const msgs = h.actorMessages('critic')
+    const toolsUpdates = msgs.filter(m => m.type === 'tools_update')
+    const latest = toolsUpdates[toolsUpdates.length - 1]
+    expect(latest).toBeDefined()
+    const tools = latest.tools as Array<{ name: string; description: string }>
+    const advance = tools.find(t => t.name === 'advance')
+    expect(advance).toBeDefined()
+    expect(advance!.description).toContain('approve')
+    expect(advance!.description).toContain('request_changes')
   })
 })

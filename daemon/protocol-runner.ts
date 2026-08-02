@@ -8,7 +8,7 @@ import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
 import { dumpTranscript } from './transcript-dump.js'
-import { computeToolsForSession } from './bridge-tools.js'
+import { computeToolsForSession, defaultToolDescription } from './bridge-tools.js'
 import type { Protocol } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
@@ -174,13 +174,20 @@ function getRunAndRole(sessionId: string): { run: ProtocolRun; role: string } | 
   return { run, role }
 }
 
-function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
+function scopedToolOverridesForRun(run: ProtocolRun, sessionId: string): Record<string, string> | null {
   const role = run.sessionToRole.get(sessionId)
-  if (!role) return
-  const isActor = run.protocol.phases[run.phase]?.actor === role
-  const ia = isActor ? run.protocol.phaseInteraction(run.phase) : undefined
-  const hint = ia ? formatAdvanceHint(run.protocol, run.phase) : undefined
-  const tools = computeToolsForSession(sessionId, hint ? { advanceHint: hint } : undefined)
+  if (!role) return null
+  if (run.protocol.phases[run.phase]?.actor !== role) return null
+  if (!run.protocol.phaseInteraction(run.phase)) return null
+  return {
+    advance: formatAdvanceUsagePattern(run.protocol, run.phase),
+    extend_phase: defaultToolDescription('extend_phase'),
+  }
+}
+
+function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
+  const overrides = scopedToolOverridesForRun(run, sessionId) ?? undefined
+  const tools = computeToolsForSession(sessionId, overrides ? { scopedToolOverrides: overrides } : undefined)
   transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
 }
 
@@ -388,8 +395,8 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     return
   }
 
-  // Pre-register before waitForBridge so bridge-server's getAdvanceHint
-  // resolves — otherwise computeToolsForSession filters out advance/extend_phase
+  // Pre-register before waitForBridge so toolsForSession's resolveScopedToolOverrides
+  // resolves — otherwise computeToolsForSession filters out protocol-only tools
   // and the resumed session can't advance the protocol.
   run.sessionToRole.set(result.sessionId, role)
   sessionToRun.set(result.sessionId, run.id)
@@ -641,7 +648,7 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
 }
 
 
-export function formatAdvanceHint(proto: Protocol, phase: string): string {
+export function formatAdvanceUsagePattern(proto: Protocol, phase: string): string {
   const ia = proto.phaseInteraction(phase)
   if (!ia || ia.verdict === 'none') return `advance({ content: "..." })`
 
@@ -772,7 +779,7 @@ function resetTimeout(run: ProtocolRun): void {
         return
       }
       const ctx = info ? getContextPercent(info.tmuxName) : '?'
-      const advanceHint = `Call \`${formatAdvanceHint(run.protocol, phase)}\``
+      const advanceCall = `Call \`${formatAdvanceUsagePattern(run.protocol, phase)}\``
       const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
       const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
       const totalRemaining = Math.max(0, Math.round((run._phaseStartedAt + totalMs - Date.now()) / 60_000))
@@ -780,7 +787,7 @@ function resetTimeout(run: ProtocolRun): void {
       const urgency = elapsed > ms / 60_000 ? ` Phase has been running ${elapsed}m — ${totalRemaining}m until hard limit.` : ''
       transport.sendOrQueue(actorSessionId, {
         type: 'notification',
-        content: `[system] ⏰ Phase timeout in 2 minutes. ${advanceHint} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
+        content: `[system] ⏰ Phase timeout in 2 minutes. ${advanceCall} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
         meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
       void safeSend(run.threadId, `_⏰ ${info?.tmuxName ?? 'actor'} warned: 2m remaining (${ctx} context)_`)
@@ -919,16 +926,12 @@ function runnerHooks(name: string, protoName: string) {
     onDisconnect: onRunDisconnect,
     onReconnect: onRunReconnect,
     onAdvance: onRunAdvance,
-    advanceHint: (sessionId, chatId) => {
+    resolveScopedToolOverrides: (sessionId, chatId?) => {
       const runId = sessionToRun.get(sessionId)
       const run = runId ? runs.get(runId) : undefined
-      if (!run || chatId !== run.threadId) return null
-      const role = run.sessionToRole.get(sessionId)
-      if (!role) return null
-      const phase = run.protocol.phases[run.phase]
-      if (phase?.actor !== role) return null
-      if (!run.protocol.phaseInteraction(run.phase)) return null
-      return formatAdvanceHint(run.protocol, run.phase)
+      if (!run) return null
+      if (!chatId || chatId !== run.threadId) return null
+      return scopedToolOverridesForRun(run, sessionId)
     },
   })
 }

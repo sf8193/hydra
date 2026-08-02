@@ -1,8 +1,14 @@
 // No daemon-internal imports — this module breaks the session-lifecycle ↔ bridge-dispatch cycle.
-// MAIN_ONLY_TOOLS lives in shared/constants.ts — import from there, not here.
-import { MAIN_ONLY_TOOLS } from '../shared/constants.js'
+//
+// Session tiers and tool access:
+//   master orchestrator — the primary session (reads channel, spawns workers, fleet tools)
+//   thread owner        — a session with its own thread (does the work)
+//   thread participant  — a session joined to another's thread (protocol critic, builder)
+//
+// MASTER_ORCHESTRATOR_ONLY_TOOLS lives in shared/constants.ts — import from there, not here.
+import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../shared/constants.js'
 
-export const BRIDGE_TOOLS = [
+export const UNIVERSAL_TOOLS = [
   { name: 'reply', description: 'Reply in chat. Pass chat_id from the inbound message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' }, reply_to: { type: 'string', description: 'Message ID to thread under.' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['chat_id', 'text'] } },
   { name: 'react', description: 'Add an emoji reaction to a message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, emoji: { type: 'string' } }, required: ['chat_id', 'message_id', 'emoji'] } },
   { name: 'edit_message', description: 'Edit a message the bot previously sent.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, text: { type: 'string' } }, required: ['chat_id', 'message_id', 'text'] } },
@@ -28,11 +34,21 @@ export const BRIDGE_TOOLS = [
   { name: 'extend_phase', description: 'Request more time in the current protocol phase. Resets the idle timeout. Use when you need more time to complete your work (e.g. reading a large codebase). The daemon posts a status update to the thread.', inputSchema: { type: 'object', properties: { reason: { type: 'string', description: 'Why you need more time — shown in the thread status.' }, minutes: { type: 'number', description: 'Additional minutes requested (default: 5, max: 15).' } }, required: ['reason'] } },
 ]
 
-export const PROTOCOL_ACTOR_TOOLS = new Set(['advance', 'extend_phase'])
+export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
 
-export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; advanceHint?: string }): typeof BRIDGE_TOOLS {
-  if (sessionId === 'main' || opts?.allowMainTools) return BRIDGE_TOOLS
-  const filtered = BRIDGE_TOOLS.filter(t => !MAIN_ONLY_TOOLS.has(t.name))
-  if (!opts?.advanceHint) return filtered.filter(t => !PROTOCOL_ACTOR_TOOLS.has(t.name))
-  return filtered.map(t => t.name === 'advance' ? { ...t, description: opts.advanceHint! } : t)
+export function defaultToolDescription(name: string): string {
+  const tool = UNIVERSAL_TOOLS.find(t => t.name === name)
+  if (!tool) throw new Error(`defaultToolDescription: unknown tool "${name}"`)
+  return tool.description
+}
+
+export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string> }): typeof UNIVERSAL_TOOLS {
+  if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS
+  const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
+  if (!opts?.scopedToolOverrides) return filtered.filter(t => !PROTOCOL_ONLY_TOOLS.has(t.name))
+  const overrides = opts.scopedToolOverrides
+  return filtered.filter(t => !PROTOCOL_ONLY_TOOLS.has(t.name) || t.name in overrides).map(t => {
+    const desc = overrides[t.name]
+    return desc ? { ...t, description: desc } : t
+  })
 }

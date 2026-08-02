@@ -5,12 +5,11 @@ import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
-import { computeToolsForSession } from './bridge-tools.js'
-import { spawnModel, MAIN_ONLY_TOOLS } from '../shared/constants.js'
+import { spawnModel, MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
-import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect, getAdvanceHint } from './protocol-registry.js'
+import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect, toolsForSession } from './protocol-registry.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -231,8 +230,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       transport.set(sessionId, conn)
-      const hint = info?.threadId ? getAdvanceHint(sessionId, info.threadId) : null
-      const tools = computeToolsForSession(sessionId, { allowMainTools: info?.allowMainTools, advanceHint: hint ?? undefined })
+      const tools = toolsForSession(sessionId, { allowMainTools: info?.allowMainTools, chatId: info?.threadId })
       transport.sendToBridge(conn, {
         type: 'registered',
         sessionId,
@@ -268,7 +266,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     case 'tool_call': {
       const { id, name, args } = msg as { id: string; name: string; args: Record<string, unknown> }
 
-      if (MAIN_ONLY_TOOLS.has(name) && conn.sessionId !== 'main') {
+      if (MASTER_ORCHESTRATOR_ONLY_TOOLS.has(name) && conn.sessionId !== 'main') {
         transport.sendToBridge(conn, {
           type: 'tool_result',
           id,
