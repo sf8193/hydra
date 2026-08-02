@@ -22,9 +22,8 @@ const USAGE_RE = /^(?:\/usage|usage)\s*$/i
 const LISTEN_RE = /^(listen|pause)\s*$/i
 const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
 const FORKS_RE = /^(?:forks|\/forks)\s*$/i
-const REVIEW_RE = /^(?:\/review|review)\s*(\d+)?(?:\s+([\s\S]+))?$/i
-const BUILD_RE = /^(?:\/build|build)\s*(\d+)?(?:\s+([\s\S]+))?$/i
-const BUILD_WT_RE = /^(?:\/build-wt|build-wt):\s*(\S+)\s+(\d+)?(?:\s+([\s\S]+))?$/i
+const REVIEW_RE = /^(?:\/review|review)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
+const BUILD_RE = /^(?:\/build|build)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
 
 // ---------------------------------------------------------------------------
 // Spawn
@@ -222,25 +221,38 @@ describe('review command', () => {
   test('defaults (no args)', () => {
     const m = '/review'.match(REVIEW_RE)
     expect(m).not.toBeNull()
-    expect(m![1]).toBeUndefined() // no rounds
-    expect(m![2]).toBeUndefined() // no topic
+    expect(m![1]).toBeUndefined() // no pre-model
+    expect(m![2]).toBeUndefined() // no rounds
+    expect(m![4]).toBeUndefined() // no topic
   })
 
   test('with rounds', () => {
     const m = 'review 5'.match(REVIEW_RE)
     expect(m).not.toBeNull()
-    expect(m![1]).toBe('5')
+    expect(m![2]).toBe('5')
   })
 
   test('with rounds and topic', () => {
     const m = '/review 3 focus on error handling'.match(REVIEW_RE)
     expect(m).not.toBeNull()
-    expect(m![1]).toBe('3')
-    expect(m![2]).toBe('focus on error handling')
+    expect(m![2]).toBe('3')
+    expect(m![4]).toBe('focus on error handling')
+  })
+
+  test('with model prefix', () => {
+    const m = 'review opus-5: 3 focus on auth'.match(REVIEW_RE)
+    expect(m).not.toBeNull()
+    expect(m![1]).toBe('opus-5')
+    expect(m![2]).toBe('3')
+    expect(m![4]).toBe('focus on auth')
   })
 
   test('review without slash', () => {
     expect('review'.match(REVIEW_RE)).not.toBeNull()
+  })
+
+  test('does not match reviewing (lookahead)', () => {
+    expect('reviewing the auth flow'.match(REVIEW_RE)).toBeNull()
   })
 })
 
@@ -248,22 +260,18 @@ describe('build command', () => {
   test('defaults (no args)', () => {
     const m = '/build'.match(BUILD_RE)
     expect(m).not.toBeNull()
-    expect(m![1]).toBeUndefined()
+    expect(m![2]).toBeUndefined()
   })
 
   test('with rounds and topic', () => {
     const m = 'build 2 add tests'.match(BUILD_RE)
     expect(m).not.toBeNull()
-    expect(m![1]).toBe('2')
-    expect(m![2]).toBe('add tests')
+    expect(m![2]).toBe('2')
+    expect(m![4]).toBe('add tests')
   })
 
-  test('build-wt with repo', () => {
-    const m = 'build-wt: options_bot 3 fix the handler'.match(BUILD_WT_RE)
-    expect(m).not.toBeNull()
-    expect(m![1]).toBe('options_bot')
-    expect(m![2]).toBe('3')
-    expect(m![3]).toBe('fix the handler')
+  test('does not match building (lookahead)', () => {
+    expect('building the new feature'.match(BUILD_RE)).toBeNull()
   })
 })
 
@@ -337,5 +345,135 @@ describe('interrupt prefix', () => {
 
   test('! in middle of message does not match', () => {
     expect('hey! stop'.match(INTERRUPT_RE)).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Deprecated command shims
+// ---------------------------------------------------------------------------
+
+const V2_SHIM_RE = /^(?:\/?)(?:review_v2|build_v2|spike_v2|kill\s+(?:review_v2|build_v2|spike_v2))\b/i
+const V2_CLEAN_RE = /^(\/?(?:kill\s+)?(?:review|build|spike))_v2/i
+const BUILD_WT_RE = /^(?:\/build-wt|build-wt)(?:[:\s]|$)/i
+
+describe('deprecated command shims', () => {
+  test('review_v2 is rewritten to review', () => {
+    const input = 'review_v2 3 opus: check auth'
+    expect(input.match(V2_SHIM_RE)).not.toBeNull()
+    const clean = input.replace(V2_CLEAN_RE, '$1').trim()
+    expect(clean).toBe('review 3 opus: check auth')
+  })
+
+  test('build_v2 is rewritten to build', () => {
+    const input = '/build_v2 2 fix the parser'
+    expect(input.match(V2_SHIM_RE)).not.toBeNull()
+    const clean = input.replace(V2_CLEAN_RE, '$1').trim()
+    expect(clean).toBe('/build 2 fix the parser')
+  })
+
+  test('kill review_v2 is rewritten to kill review', () => {
+    const input = 'kill review_v2'
+    expect(input.match(V2_SHIM_RE)).not.toBeNull()
+    const clean = input.replace(V2_CLEAN_RE, '$1').trim()
+    expect(clean).toBe('kill review')
+  })
+
+  test('build-wt matches rejection pattern', () => {
+    expect('build-wt: repo task'.match(BUILD_WT_RE)).not.toBeNull()
+    expect('/build-wt repo'.match(BUILD_WT_RE)).not.toBeNull()
+  })
+
+  test('"reviewing the auth flow" does not match v2 shim', () => {
+    expect('reviewing the auth flow'.match(V2_SHIM_RE)).toBeNull()
+  })
+
+  test('"build something" does not match v2 shim', () => {
+    expect('build something'.match(V2_SHIM_RE)).toBeNull()
+  })
+
+  test('/kill review_v2 is rewritten and matches cancel regex', () => {
+    const input = '/kill review_v2'
+    expect(input.match(V2_SHIM_RE)).not.toBeNull()
+    const clean = input.replace(V2_CLEAN_RE, '$1').trim()
+    expect(clean).toBe('/kill review')
+    expect(clean.match(/^\/?(?:kill review)\s*$/i)).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Cancel regexes accept optional leading slash
+// ---------------------------------------------------------------------------
+
+describe('cancel commands with leading slash', () => {
+  const CANCEL_REVIEW_RE = /^\/?(?:kill review)\s*$/i
+  const CANCEL_BUILD_RE = /^\/?(?:kill build)\s*$/i
+  const CANCEL_SPIKE_RE = /^\/?(?:kill spike)\s*$/i
+
+  test('/kill review matches', () => {
+    expect('/kill review'.match(CANCEL_REVIEW_RE)).not.toBeNull()
+  })
+  test('kill review matches', () => {
+    expect('kill review'.match(CANCEL_REVIEW_RE)).not.toBeNull()
+  })
+  test('/kill build matches', () => {
+    expect('/kill build'.match(CANCEL_BUILD_RE)).not.toBeNull()
+  })
+  test('/kill spike matches', () => {
+    expect('/kill spike'.match(CANCEL_SPIKE_RE)).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Colon-form topic extraction
+// ---------------------------------------------------------------------------
+
+describe('colon-form topic extraction', () => {
+  test('review: topic strips leading colon', () => {
+    const m = 'review: focus on auth'.match(REVIEW_RE)
+    expect(m).not.toBeNull()
+    let topic = m![4]?.trim()
+    if (topic?.startsWith(':')) topic = topic.slice(1).trim() || undefined
+    expect(topic).toBe('focus on auth')
+  })
+
+  test('build: task strips leading colon', () => {
+    const m = 'build: implement the parser'.match(BUILD_RE)
+    expect(m).not.toBeNull()
+    let task = m![4]?.trim()
+    if (task?.startsWith(':')) task = task.slice(1).trim() || undefined
+    expect(task).toBe('implement the parser')
+  })
+
+  test('review opus: topic does NOT strip colon (model alias consumes it)', () => {
+    const m = 'review opus: check the auth flow'.match(REVIEW_RE)
+    expect(m).not.toBeNull()
+    expect(m![1]).toBe('opus')
+    let topic = m![4]?.trim()
+    if (topic?.startsWith(':')) topic = topic.slice(1).trim() || undefined
+    expect(topic).toBe('check the auth flow')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Design tombstone
+// ---------------------------------------------------------------------------
+
+const DESIGN_TOMBSTONE_RE = /^(?:\/?design\s*:|\/design(?:\s|$)|kill\s+design(?:\s|$))/i
+
+describe('design tombstone', () => {
+  test('design: triggers tombstone', () => {
+    expect('design: a schema'.match(DESIGN_TOMBSTONE_RE)).not.toBeNull()
+  })
+
+  test('/design triggers tombstone', () => {
+    expect('/design'.match(DESIGN_TOMBSTONE_RE)).not.toBeNull()
+  })
+
+  test('kill design triggers tombstone', () => {
+    expect('kill design'.match(DESIGN_TOMBSTONE_RE)).not.toBeNull()
+  })
+
+  test('"design a better retry policy" does not match tombstone', () => {
+    expect('design a better retry policy'.match(DESIGN_TOMBSTONE_RE)).toBeNull()
   })
 })

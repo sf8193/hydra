@@ -110,7 +110,7 @@ if ('homeTabHandler' in gateway) {
 
 if ('homeSpawnHandler' in gateway) {
   const { doSpawnSession } = await import('./daemon/session-lifecycle.js')
-  const { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction } = await import('./daemon/templates.js')
+  const { parseTemplateTopic, buildTemplateSpawnOpts, dispatchTemplateAction } = await import('./daemon/templates.js')
   const { resolveModelAlias } = await import('./shared/constants.js')
   ;(gateway as any).homeSpawnHandler = async (topic: string, userId: string) => {
     try {
@@ -166,7 +166,7 @@ if ('homeSpawnHandler' in gateway) {
         void gateway.send(result.threadId, `_Using ${parts.join(' · ')}_`).catch(() => {})
         if (parsed.template.action) {
           try {
-            await runTemplateAction(parsed.template.action, result.threadId, result.sessionId, cleanTopic)
+            await dispatchTemplateAction(parsed.template.action, result.threadId, result.sessionId, cleanTopic)
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err)
             void gateway.send(result.threadId, `_Action **${parsed.template.action}** failed: ${errMsg}_`).catch(() => {})

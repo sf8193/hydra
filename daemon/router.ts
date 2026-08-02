@@ -12,15 +12,8 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept, handleRecoverIntercept } from './commands/global.js'
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
-import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
-import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
-import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
-import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
-import { listPostPasses } from './adversarial.js'
+import { handleProtocolIntercept, handleCancelProtocolIntercept } from './commands/protocol.js'
 import { listModifierKeys } from './modifiers.js'
-import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
-import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
-import { getDesignByThread, handleDesignAnswer } from './design.js'
 import { isThreadOccupied } from './protocol-registry.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept } from './commands/status.js'
@@ -427,7 +420,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
     const threadKillMatch = msg.content.match(/^(?:kill|\/kill)\s*$/i)
     if (threadKillMatch && msg.isThread) {
-      void handleThreadKillIntercept(msg)
+      void handleThreadKillIntercept, handleDestroyIntercept(msg)
       return
     }
 
@@ -461,9 +454,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    // Template as first-class command: "review: topic", "design: topic", etc.
+    // Template as first-class command: "review: topic", "fix: topic", etc.
     // Placed AFTER all hardcoded commands so new commands naturally take priority.
-    // Skip in active session threads — let thread-scoped commands (design, review, build) handle it.
+    // Skip in active session threads — let thread-scoped commands (review, build) handle it.
     {
       const resolvedThread = registry.resolveThreadId(msg)
       const activeSession = registry.getByThread(resolvedThread)
@@ -522,194 +515,131 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      // v2 commands checked BEFORE v1 — the v1 regex matches "review_v2" / "build_v2" otherwise
-      const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (reviewV2Match) {
-        const preModel = resolveProtocolModel(reviewV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = resolveProtocolModel(reviewV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
-        if (postModel === false) return
-        const v2Rounds = parseInt(reviewV2Match[2] ?? '3')
-        let v2Topic = reviewV2Match[4]?.trim()
-        const v2ModKeys = listModifierKeys()
-        let v2Mods: string[] = []
-        if (v2ModKeys.length > 0 && v2Topic) {
-          const v2ModRe = new RegExp(`\\+(${v2ModKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
-          v2Mods = [...v2Topic.matchAll(v2ModRe)].map(m => m[1])
-          if (v2Mods.length > 0) {
-            v2Topic = v2Topic.replace(v2ModRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
-          }
-        }
-        void handleReviewV2Intercept(msg, v2Rounds, v2Topic, preModel ?? postModel, v2Mods.length > 0 ? v2Mods : undefined)
+      // Transparently strip deprecated _v2 suffix and dispatch the cleaned command
+      let cmdContent = msg.content
+      if (/^(?:\/?)(?:review_v2|build_v2|spike_v2|kill\s+(?:review_v2|build_v2|spike_v2))\b/i.test(cmdContent)) {
+        cmdContent = cmdContent.replace(/^(\/?(?:kill\s+)?(?:review|build|spike))_v2/i, '$1').trim()
+      }
+
+      // Reject removed commands explicitly
+      if (/^(?:\/?)build-wt(?:[:\s]|$)/i.test(cmdContent)) {
+        void gateway.send(msg.channelId, `_\`build-wt\` has been removed. Use \`spawn-wt: repo topic\` then \`build\` in the spawned thread instead._`, { replyTo: msg.id }).catch(() => {})
         return
       }
 
-      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const reviewMatch = cmdContent.match(/^(?:\/review|review)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewMatch) {
         const preAlias = reviewMatch[1]?.toLowerCase()
         const postAlias = reviewMatch[3]?.toLowerCase()
-        const isCodex = preAlias === 'codex' || postAlias === 'codex'
-        const preModel = preAlias === 'codex' ? undefined : resolveProtocolModel(preAlias, msg.channelId, msg.id)
+        const reviewEngine = (preAlias === 'codex' || postAlias === 'codex') ? 'codex' as const : undefined
+        const reviewPreAlias = preAlias === 'codex' ? undefined : preAlias
+        const reviewPostAlias = postAlias === 'codex' ? undefined : postAlias
+        const preModel = resolveProtocolModel(reviewPreAlias, msg.channelId, msg.id)
         if (preModel === false) return
-        const postModel = postAlias === 'codex' ? undefined : resolveProtocolModel(postAlias, msg.channelId, msg.id)
+        const postModel = resolveProtocolModel(reviewPostAlias, msg.channelId, msg.id)
         if (postModel === false) return
-        const modelId = preModel ?? postModel
         const rounds = parseInt(reviewMatch[2] ?? '3')
         let topic = reviewMatch[4]?.trim()
-        if (!modelId && topic) {
+        if (topic?.startsWith(':')) topic = topic.slice(1).trim() || undefined
+        const modKeys = listModifierKeys()
+        let mods: string[] = []
+        if (modKeys.length > 0 && topic) {
+          const modRe = new RegExp(`\\+(${modKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
+          mods = [...topic.matchAll(modRe)].map(m => m[1])
+          if (mods.length > 0) {
+            topic = topic.replace(modRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+          }
+        }
+        if (topic && !reviewPreAlias && !reviewPostAlias) {
           const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
           if (badOrder && resolveModelAlias(badOrder[1])) {
-            void gateway.send(msg.channelId, `_Model syntax: \`/review ${badOrder[2]} ${badOrder[1]}: topic\` or \`/review ${badOrder[1]}: ${badOrder[2]} topic\`_`, { replyTo: msg.id }).catch(() => {})
+            void gateway.send(msg.channelId, `_Model syntax: \`review ${badOrder[2]} ${badOrder[1]}: topic\` or \`review ${badOrder[1]}: ${badOrder[2]} topic\`_`, { replyTo: msg.id }).catch(() => {})
             return
           }
         }
-        const knownPasses = listPostPasses()
-        let postPasses: string[] = []
-        if (knownPasses.length > 0) {
-          const passRe = new RegExp(`\\+(${knownPasses.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
-          postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
-          if (postPasses.length > 0) {
-            topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
-          }
-        }
-        void handleReviewIntercept(msg, rounds, topic, modelId, postPasses.length > 0 ? postPasses : undefined, isCodex ? 'codex' : undefined)
+        void handleProtocolIntercept('review', msg, { rounds, topic, model: preModel ?? postModel, modifierNames: mods.length > 0 ? mods : undefined, strike: true, engine: reviewEngine })
         return
       }
 
-      const cancelReviewMatch = msg.content.match(/^(?:kill review|kill review_v2)\s*$/i)
+      const cancelReviewMatch = cmdContent.match(/^\/?(?:kill review)\s*$/i)
       if (cancelReviewMatch) {
-        const threadId = registry.resolveThreadId(msg)
-        const occupied = isThreadOccupied(threadId)
-        if (occupied === 'review_v2') {
-          void handleCancelReviewV2Intercept(msg)
-        } else {
-          void handleCancelReviewIntercept(msg)
-        }
+        void handleCancelProtocolIntercept(msg, 'review')
         return
       }
 
-      const buildWtMatch = msg.content.match(/^(?:\/build-wt|build-wt):\s*(\S+)\s+(\d+)?(?:\s+([\s\S]+))?$/i)
-      if (buildWtMatch) {
-        const rawWtTask = buildWtMatch[3]?.trim()
-        const { model: wtModelId, rest: wtTask } = rawWtTask ? extractModelPrefix(rawWtTask) : { model: undefined, rest: rawWtTask }
-        void handleBuildIntercept(msg, parseInt(buildWtMatch[2] ?? '3'), wtTask, buildWtMatch[1].trim(), wtModelId)
-        return
-      }
-      // Catch malformed build-wt (missing repo)
-      if (msg.content.match(/^(?:\/build-wt|build-wt)[:\s]/i)) {
-        void gateway.send(msg.channelId, `Usage: \`build-wt: <repo> [rounds] [task]\`\nExample: \`build-wt: options_bot 3 implement ticket 1\``, { replyTo: msg.id }).catch(() => {})
-        return
-      }
-
-      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (buildV2Match) {
-        const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = resolveProtocolModel(buildV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
-        if (postModel === false) return
-        const v2Rounds = parseInt(buildV2Match[2] ?? '3')
-        const v2Task = buildV2Match[4]?.trim()
-        void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
-        return
-      }
-
-      const buildMatch = msg.content.match(/^(?:\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const buildMatch = cmdContent.match(/^(?:\/build|build)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (buildMatch) {
-        const buildPreAlias = buildMatch[1]?.toLowerCase()
-        const buildPostAlias = buildMatch[3]?.toLowerCase()
-        const buildIsCodex = buildPreAlias === 'codex' || buildPostAlias === 'codex'
-        const preModel = buildPreAlias === 'codex' ? undefined : resolveProtocolModel(buildPreAlias, msg.channelId, msg.id)
+        const preAlias = buildMatch[1]?.toLowerCase()
+        const postAlias = buildMatch[3]?.toLowerCase()
+        const buildEngine = (preAlias === 'codex' || postAlias === 'codex') ? 'codex' as const : undefined
+        const buildPreAlias = preAlias === 'codex' ? undefined : preAlias
+        const buildPostAlias = postAlias === 'codex' ? undefined : postAlias
+        const preModel = resolveProtocolModel(buildPreAlias, msg.channelId, msg.id)
         if (preModel === false) return
-        const postModel = buildPostAlias === 'codex' ? undefined : resolveProtocolModel(buildPostAlias, msg.channelId, msg.id)
+        const postModel = resolveProtocolModel(buildPostAlias, msg.channelId, msg.id)
         if (postModel === false) return
-        const buildModelId = preModel ?? postModel
         const buildRounds = parseInt(buildMatch[2] ?? '3')
-        const buildTask = buildMatch[4]?.trim()
-        if (!buildModelId && buildTask) {
+        let buildTask = buildMatch[4]?.trim()
+        if (buildTask?.startsWith(':')) buildTask = buildTask.slice(1).trim() || undefined
+        if (buildTask && !buildPreAlias && !buildPostAlias) {
           const badOrder = buildTask.match(/^(\S+)\s+(\d+)\b/)
           if (badOrder && resolveModelAlias(badOrder[1])) {
             void gateway.send(msg.channelId, `_Model syntax: \`build ${badOrder[2]} ${badOrder[1]}: task\` or \`build ${badOrder[1]}: ${badOrder[2]} task\`_`, { replyTo: msg.id }).catch(() => {})
             return
           }
         }
-        void handleBuildIntercept(msg, buildRounds, buildTask, undefined, buildModelId, buildIsCodex ? 'codex' : undefined)
+        void handleProtocolIntercept('build', msg, { rounds: buildRounds, topic: buildTask, model: preModel ?? postModel, strike: true, engine: buildEngine })
         return
       }
 
-      const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
+      const cancelBuildMatch = cmdContent.match(/^\/?(?:kill build)\s*$/i)
       if (cancelBuildMatch) {
-        const threadId = registry.resolveThreadId(msg)
-        const occupied = isThreadOccupied(threadId)
-        if (occupied === 'build_v2') {
-          void handleCancelBuildV2Intercept(msg)
-        } else {
-          void handleCancelBuildIntercept(msg)
-        }
+        void handleCancelProtocolIntercept(msg, 'build')
         return
       }
 
-      // spike only exists as v2 — the unversioned name routes through the generic runner
-      const spikeV2Match = msg.content.match(/^(?:\/spike_v2|spike_v2|\/spike|spike)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (spikeV2Match) {
-        const spikeModel = resolveProtocolModel(spikeV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
+      const spikeMatch = cmdContent.match(/^(?:\/spike|spike)(?=[\s:]|$)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (spikeMatch) {
+        const spikeAlias = spikeMatch[1]?.toLowerCase()
+        const spikeEngine = spikeAlias === 'codex' ? 'codex' as const : undefined
+        const resolvedSpikeAlias = spikeAlias === 'codex' ? undefined : spikeAlias
+        const spikeModel = resolveProtocolModel(resolvedSpikeAlias, msg.channelId, msg.id)
         if (spikeModel === false) return
-        const spikeTopic = spikeV2Match[2]?.trim()
-        void handleSpikeV2Intercept(msg, spikeTopic, spikeModel)
+        let spikeTopic = spikeMatch[2]?.trim()
+        if (spikeTopic?.startsWith(':')) spikeTopic = spikeTopic.slice(1).trim() || undefined
+        void handleProtocolIntercept('spike', msg, { rounds: 1, topic: spikeTopic, model: spikeModel, engine: spikeEngine })
         return
       }
 
-      const cancelSpikeMatch = msg.content.match(/^(?:kill spike|kill spike_v2)\s*$/i)
+      const cancelSpikeMatch = cmdContent.match(/^\/?(?:kill spike)\s*$/i)
       if (cancelSpikeMatch) {
-        const threadId = registry.resolveThreadId(msg)
-        const occupied = isThreadOccupied(threadId)
-        if (occupied === 'spike_v2') {
-          void handleCancelSpikeV2Intercept(msg)
-        } else if (!occupied) {
-          void gateway.send(msg.channelId, `No spike in progress in this thread.`, { replyTo: msg.id }).catch(() => {})
-        } else {
-          void gateway.send(msg.channelId, `A ${occupied} is running, not a spike.`, { replyTo: msg.id }).catch(() => {})
-        }
+        void handleCancelProtocolIntercept(msg, 'spike')
         return
       }
 
-      const designMatch = msg.content.match(/^(?:\/design|design):\s*([\s\S]+)$/i)
-      if (designMatch) {
-        void handleDesignIntercept(msg, designMatch[1].trim())
+      if (/^(?:\/?design\s*:|\/design(?:\s|$)|kill\s+design(?:\s|$))/i.test(cmdContent)) {
+        void gateway.send(msg.channelId, `_The \`design\` protocol has been removed. Use \`spawn:\` to start a session and orchestrate design work directly._`, { replyTo: msg.id }).catch(() => {})
         return
       }
 
-      const cancelDesignMatch = msg.content.match(/^(?:kill design)\s*$/i)
-      if (cancelDesignMatch) {
-        void handleCancelDesignIntercept(msg)
-        return
-      }
-
-      const watchMatch = msg.content.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
+      const watchMatch = cmdContent.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
       if (watchMatch) {
         void handleWatchIntercept(msg, watchMatch[1]?.trim())
         return
       }
 
-      const unwatchMatch = msg.content.match(/^(?:\/unwatch|unwatch)\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?\s*$/i)
+      const unwatchMatch = cmdContent.match(/^(?:\/unwatch|unwatch)\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?\s*$/i)
       if (unwatchMatch) {
         void handleUnwatchIntercept(msg, unwatchMatch[1].trim())
         return
       }
 
-      const watchesMatch = msg.content.match(/^(?:\/watches|watches)\s*$/i)
+      const watchesMatch = cmdContent.match(/^(?:\/watches|watches)\s*$/i)
       if (watchesMatch) {
         void handleWatchesIntercept(msg)
         return
       }
 
-      // Design answer: user message during 'answering' phase
-      const designThreadId = registry.resolveThreadId(msg)
-      const design = getDesignByThread(designThreadId)
-      if (design && design.phase === 'answering') {
-        void handleDesignAnswer(designThreadId, msg.content)
-        void gateway.react(msg.channelId, msg.id, '👍').catch(() => {})
-        return
-      }
     }
 
     if (msg.isThread) {

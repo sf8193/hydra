@@ -31,31 +31,12 @@ export function getActiveProtocolBadge(threadId: string): string | undefined {
   return undefined
 }
 
-// ---------------------------------------------------------------------------
-// Design phase indicators
-// ---------------------------------------------------------------------------
-
-// Glyph per user-visible design stage. Internal substates share a glyph (e.g. spawning/questioning/answering are all "gathering").
-// Phases not listed (cancelled, complete) get bare emoji — no indicator.
-const DESIGN_PHASE_INDICATOR: Record<string, string> = {
-  spawning: '↗', questioning: '↗', answering: '↗',
-  independent: '◆',
-  synthesis: '⊕',
-  refinement: '↻',
-  audit: '✓', brief: '✓',
-}
-
 // State line: the scaffold's spine. One grammar for every protocol status
 // post — blockquoted (scaffolding is quoted, performance is not), protocol in
 // caps, baseball-notation position, then a plain-fact clause about NOW.
 //   > **⚔️ REVIEW ¹▼₃** — 🟦 pixel (The Owner) is defending...
 export function formatStateLine(emoji: string, protocol: string, position: string, action: string): string {
   return `> **${emoji} ${protocol.toUpperCase()}${position ? ` ${position}` : ''}** — ${action}`
-}
-
-export function formatPhaseBadge(emoji: string, phase: string): string {
-  const indicator = DESIGN_PHASE_INDICATOR[phase]
-  return indicator ? `${emoji}${indicator}` : emoji
 }
 
 // ---------------------------------------------------------------------------

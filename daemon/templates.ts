@@ -99,10 +99,6 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
     prompt: 'You are the owner of a review session. An adversarial review protocol will start automatically — a critic will challenge your work across multiple rounds. Defend your design and fix valid issues.',
     action: 'review',
   },
-  design: {
-    prompt: 'You are a design session. A multi-persona design process will start automatically in your thread. Participate as the owner — answer questions from the personas and guide the synthesis toward a concrete implementation plan.',
-    action: 'design',
-  },
   build: {
     prompt: 'You are the owner of a build session. A multi-agent build protocol will start automatically — a builder will implement the task and a critic will review each round. Guide the process and answer questions.',
     action: 'build',
@@ -115,7 +111,7 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
 }
 
 const RESERVED = new Set(['spawn', 'kill', 'fork', 'resume', 'respawn', 'listen', 'pause', 'help', 'commands', 'recover', 'sessions', 'watch', 'unwatch', 'watches', 'health', 'restart', 'reconnect', 'protocols', 'templates', 'usage'])
-const VALID_ACTIONS = new Set(['review', 'build', 'design'])
+const VALID_ACTIONS = new Set(['review', 'build'])
 
 const HYDRA_DIR = join(import.meta.dir, '..')
 
@@ -216,29 +212,25 @@ export function buildTemplateSpawnOpts(templateName: string, template: SpawnTemp
   }
 }
 
-export async function runTemplateAction(
+export async function dispatchTemplateAction(
   action: string,
   threadId: string,
   sessionId: string,
   topic: string,
-): Promise<boolean> {
-  switch (action) {
-    case 'design': {
-      const { startDesign } = await import('./design.js')
-      await startDesign(threadId, topic)
-      return true
-    }
-    case 'review': {
-      const { startReview } = await import('./adversarial.js')
-      await startReview(threadId, sessionId, 3, topic)
-      return true
-    }
-    case 'build': {
-      const { startBuild } = await import('./build.js')
-      await startBuild(threadId, sessionId, 3, topic)
-      return true
-    }
-    default:
-      return false
+): Promise<void> {
+  const { isThreadOccupied } = await import('./protocol-registry.js')
+  const occupied = isThreadOccupied(threadId)
+  if (occupied) {
+    const { safeSend } = await import('./util.js')
+    void safeSend(threadId, `_A ${occupied} is already in progress — skipping template action._`)
+    return
   }
+  const { getProtocol } = await import('./commands/protocol.js')
+  const { startProtocolRun } = await import('./protocol-runner.js')
+  const proto = await getProtocol(action)
+  await startProtocolRun(proto, threadId, sessionId, {
+    rounds: 3,
+    topic,
+    strike: true,
+  })
 }

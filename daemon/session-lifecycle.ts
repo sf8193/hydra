@@ -838,7 +838,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Only the thread OWNER should call setThread — join members (protocol
   // critics, guest agents) use addMember and never touch the mapping.
   // Callers resuming a non-owner session MUST pass joinThread to preserve
-  // the real owner's routing. See auto-resume in adversarial.ts/build.ts.
+  // the real owner's routing. See auto-resume in protocol-runner.ts.
   // Headless sessions use a synthetic UUID as threadId — don't register it.
   if (!isJoin && !isHeadless) {
     registry.setThread(threadId!, sessionId)

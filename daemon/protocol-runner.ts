@@ -10,8 +10,9 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { dumpTranscript } from './transcript-dump.js'
 import { computeToolsForSession, defaultToolDescription } from './bridge-tools.js'
 import type { Protocol } from './protocol-dsl.js'
-import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
+import type { RunState, BehaviorContext, CompletionEvent, RoundAdvanceEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
+import { contributeSubscriptions } from './event-bus.js'
 import type { Modifier, SeedModifier } from './modifiers.js'
 
 let doSpawnSession = _doSpawnSession
@@ -62,16 +63,35 @@ const cancellingRuns = new Set<string>()
 // ---------------------------------------------------------------------------
 
 class ProtocolEventBus extends EventEmitter {
-  constructor() { super(); this.setMaxListeners(20) }
+  constructor() {
+    super()
+    this.setMaxListeners(20)
+    contributeSubscriptions('protocolEvents', () => {
+      const labels: Record<string, string[]> = {}
+      for (const event of ['complete', 'roundAdvance'] as const) {
+        const count = this.listenerCount(event)
+        if (count > 0) labels[event] = [`${count} listener(s)`]
+      }
+      return labels
+    })
+  }
   emitComplete(event: CompletionEvent): void {
     for (const fn of this.listeners('complete')) {
       try { (fn as (e: CompletionEvent) => void)(event) }
       catch (err) { process.stderr.write(`daemon: completion event listener error: ${err}\n`) }
     }
   }
+  emitRoundAdvance(event: RoundAdvanceEvent): void {
+    for (const fn of this.listeners('roundAdvance')) {
+      try { (fn as (e: RoundAdvanceEvent) => void)(event) }
+      catch (err) { process.stderr.write(`daemon: round advance listener error: ${err}\n`) }
+    }
+  }
   /** Listeners must be synchronous — async rejections are unhandled. */
   onComplete(fn: (event: CompletionEvent) => void): void { this.on('complete', fn) }
   offComplete(fn: (event: CompletionEvent) => void): void { this.off('complete', fn) }
+  onRoundAdvance(fn: (event: RoundAdvanceEvent) => void): void { this.on('roundAdvance', fn) }
+  offRoundAdvance(fn: (event: RoundAdvanceEvent) => void): void { this.off('roundAdvance', fn) }
 }
 
 export const protocolEvents = new ProtocolEventBus()
@@ -271,13 +291,19 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     }
 
     const prevPhaseDef = run.protocol.phases[advancePhaseFrom]
+    let roundAdvanced = false
     if (verdict) {
       const decision = Object.values(run.protocol.decisions).find(d => d.phase === advancePhaseFrom)
       if (result.to === run.protocol.initialPhase && event !== decision?.finalEvent) {
         run.currentRound++
+        roundAdvanced = true
       }
     } else if (prevPhaseDef?.finalAdvanceEvent && event !== prevPhaseDef.finalAdvanceEvent) {
       run.currentRound++
+      roundAdvanced = true
+    }
+    if (roundAdvanced) {
+      protocolEvents.emitRoundAdvance({ protocol: run.protocol.name, threadId: run.threadId, round: run.currentRound, totalRounds: run.rounds })
     }
 
     // Post content to thread — after state advance so a safeSend failure
@@ -693,10 +719,12 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   }
 
   const model = (params.model as string) ?? undefined
+  const engine = (params.engine as 'claude' | 'codex') ?? undefined
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,
     model,
+    ...(engine && { engine }),
     promptBuilder: (sessionId, tmuxName) => {
       let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
       const seedMods = ((run.params.modifiers as Modifier[] | undefined) ?? [])
@@ -913,6 +941,10 @@ export function getRunByThread(threadId: string): ProtocolRun | undefined {
   return id ? runs.get(id) : undefined
 }
 
+export function getActiveRuns(): ProtocolRun[] {
+  return [...runs.values()].filter(r => !isTerminal(r))
+}
+
 // ---------------------------------------------------------------------------
 // Protocol registry integration — register v2 protocols
 // ---------------------------------------------------------------------------
@@ -941,6 +973,6 @@ function runnerHooks(name: string, protoName: string) {
   })
 }
 
-runnerHooks('review_v2', 'review')
-runnerHooks('build_v2', 'build')
-runnerHooks('spike_v2', 'spike')
+runnerHooks('review', 'review')
+runnerHooks('build', 'build')
+runnerHooks('spike', 'spike')
