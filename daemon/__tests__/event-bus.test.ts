@@ -6,40 +6,40 @@ beforeEach(() => _resetForTesting())
 describe('event-bus', () => {
   test('on + emit delivers payload to listener', () => {
     const received: string[] = []
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:basic')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(received).toEqual(['thread-1'])
+    on('session:death', ({ sessionId }) => received.push(sessionId), 'test:basic')
+    emit('session:death', { sessionId: 'sid-1', threadId: '', wasOwner: false, tmuxName: '' })
+    expect(received).toEqual(['sid-1'])
   })
 
   test('fan-out: multiple listeners receive the same event', () => {
     const a: string[] = []
     const b: string[] = []
-    on('review:complete', ({ threadId }) => a.push(threadId), 'test:a')
-    on('review:complete', ({ threadId }) => b.push(threadId), 'test:b')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(a).toEqual(['thread-1'])
-    expect(b).toEqual(['thread-1'])
+    on('session:death', ({ sessionId }) => a.push(sessionId), 'test:a')
+    on('session:death', ({ sessionId }) => b.push(sessionId), 'test:b')
+    emit('session:death', { sessionId: 'sid-1', threadId: '', wasOwner: false, tmuxName: '' })
+    expect(a).toEqual(['sid-1'])
+    expect(b).toEqual(['sid-1'])
   })
 
   test('unsubscribe stops delivery', () => {
     const received: string[] = []
-    const unsub = on('review:complete', ({ threadId }) => received.push(threadId), 'test:unsub')
-    emit('review:complete', { threadId: 'thread-1' })
+    const unsub = on('session:death', ({ sessionId }) => received.push(sessionId), 'test:unsub')
+    emit('session:death', { sessionId: 'sid-1', threadId: '', wasOwner: false, tmuxName: '' })
     unsub()
-    emit('review:complete', { threadId: 'thread-2' })
-    expect(received).toEqual(['thread-1'])
+    emit('session:death', { sessionId: 'sid-2', threadId: '', wasOwner: false, tmuxName: '' })
+    expect(received).toEqual(['sid-1'])
   })
 
   test('error isolation: one listener throwing does not block others', () => {
     const received: string[] = []
-    on('review:complete', () => { throw new Error('boom') }, 'test:thrower')
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:receiver')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(received).toEqual(['thread-1'])
+    on('session:death', () => { throw new Error('boom') }, 'test:thrower')
+    on('session:death', ({ sessionId }) => received.push(sessionId), 'test:receiver')
+    emit('session:death', { sessionId: 'sid-1', threadId: '', wasOwner: false, tmuxName: '' })
+    expect(received).toEqual(['sid-1'])
   })
 
   test('emit with no listeners is a no-op', () => {
-    expect(() => emit('review:complete', { threadId: 'thread-1' })).not.toThrow()
+    expect(() => emit('session:death', { sessionId: 'sid-1', threadId: '', wasOwner: false, tmuxName: '' })).not.toThrow()
   })
 
   test('re-entrancy: nested emit does not double-fire outer listeners', () => {
@@ -57,20 +57,20 @@ describe('event-bus', () => {
 
   test('_resetForTesting clears all listeners', () => {
     const received: string[] = []
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:reset')
+    on('session:death', ({ sessionId }) => received.push(sessionId), 'test:reset')
     _resetForTesting()
-    emit('review:complete', { threadId: 'thread-1' })
+    emit('session:death', { sessionId: 'sid-1', threadId: '', wasOwner: false, tmuxName: '' })
     expect(received).toEqual([])
   })
 
   test('different events are independent', () => {
-    const completions: string[] = []
-    const cancellations: string[] = []
-    on('review:complete', ({ threadId }) => completions.push(threadId), 'test:complete')
-    on('review:cancelled', ({ threadId }) => cancellations.push(threadId), 'test:cancel')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(completions).toEqual(['thread-1'])
-    expect(cancellations).toEqual([])
+    const replies: string[] = []
+    const deaths: string[] = []
+    on('reply', ({ sessionId }) => replies.push(sessionId), 'test:reply')
+    on('session:death', ({ sessionId }) => deaths.push(sessionId), 'test:death')
+    emit('reply', { sessionId: 'sid-1', text: '', chatId: '', sentIds: [] })
+    expect(replies).toEqual(['sid-1'])
+    expect(deaths).toEqual([])
   })
 
   test('getSubscriptions returns labeled subscriber manifest', () => {

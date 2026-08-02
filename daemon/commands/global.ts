@@ -9,10 +9,9 @@ import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession, tryResume, tryRespawn, discoverClaudeSessionId } from '../session-lifecycle.js'
 import { tmuxHasSession, isAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { getActiveBuilds, cancelBuild } from '../build.js'
-import { getActiveReviews, cancelReview } from '../adversarial.js'
+import { getActiveRuns, cancelRun } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
-import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
+import { buildTemplateSpawnOpts, dispatchTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 import type { Access } from '../access.js'
 
@@ -67,13 +66,14 @@ async function spawnAndNotify(
     }
 
     if (template?.template.action) {
+      const action = template.template.action
       try {
-        await runTemplateAction(template.template.action, result.threadId, result.sessionId, topic)
-        process.stderr.write(`daemon: template action: started ${template.template.action} for ${topic}\n`)
+        await dispatchTemplateAction(action, result.threadId, result.sessionId, topic)
+        process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
-        process.stderr.write(`daemon: template action "${template.template.action}" failed: ${errMsg}\n`)
-        void gateway.send(result.threadId, `_Action **${template.template.action}** failed: ${errMsg}_`).catch(() => {})
+        process.stderr.write(`daemon: template action "${action}" failed: ${errMsg}\n`)
+        void gateway.send(result.threadId, `_Action **${action}** failed: ${errMsg}_`).catch(() => {})
       }
     }
 
@@ -146,25 +146,16 @@ export async function handleKillIntercept(msg: InboundMessage, name: string): Pr
 export async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
 
-  // Cancel active builds/reviews before restart — critics are join members
-  // that get killed on restart, so cancel cleanly first
-  const activeBuilds = getActiveBuilds()
-  const activeReviews = getActiveReviews()
-  for (const build of activeBuilds) {
-    process.stderr.write(`daemon: restart: cancelling active build ${build.buildId.slice(0, 8)}\n`)
-    await cancelBuild(build.buildId).catch(err => {
-      process.stderr.write(`daemon: restart: cancelBuild failed: ${err}\n`)
-    })
-  }
-  for (const review of activeReviews) {
-    process.stderr.write(`daemon: restart: cancelling active review ${review.reviewId.slice(0, 8)}\n`)
-    await cancelReview(review.reviewId).catch(err => {
-      process.stderr.write(`daemon: restart: cancelReview failed: ${err}\n`)
+  const activeRuns = getActiveRuns()
+  for (const run of activeRuns) {
+    process.stderr.write(`daemon: restart: cancelling active ${run.protocol.name} ${run.id.slice(0, 8)}\n`)
+    await cancelRun(run, 'daemon restart').catch(err => {
+      process.stderr.write(`daemon: restart: cancelRun failed: ${err}\n`)
     })
   }
 
-  const cancelled = activeBuilds.length + activeReviews.length
-  const cancelNote = cancelled > 0 ? ` (cancelled ${cancelled} active build/review${cancelled > 1 ? 's' : ''})` : ''
+  const cancelled = activeRuns.length
+  const cancelNote = cancelled > 0 ? ` (cancelled ${cancelled} active protocol${cancelled > 1 ? 's' : ''})` : ''
 
   const hydraTs = join(import.meta.dir, '..', '..', 'cli', 'hydra.ts')
   const fast = /\+fast\b/.test(msg.content)
@@ -231,7 +222,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• 🚀 `spawn <model>: <topic>` — spawn with model (sonnet, haiku, fable, etc)',
     '• 🚀 `spawn-wt: <repo> <topic>` — spawn in a git worktree',
     '• 🏭 `factory: <task>` — PM orchestrator: research → design → build → review → ship',
-    '• 🎯 `review:` / `fix:` / `design:` — templated session (`<template> <model>: topic`) · 📋 `templates`',
+    '• 🎯 `review:` / `fix:` — templated session (`<template> <model>: topic`) · 📋 `templates`',
     '• 📊 `list sessions` — show all running sessions',
     '• ☠️ `kill session: <name>` — terminate a named session',
     '',
@@ -246,13 +237,10 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• 📈 `usage` — context %, messages, runtime',
     '',
     '**Multi-agent** (thread):',
+    '• ⚔️ `review [N] [+modifier] [model:] [topic]` — adversarial review',
     '• 🔨 `build [N] [model:] [task]` — implement + review cycle',
-    '• 🏗️ `build-wt: <repo> [N] [model:] [task]` — build in a worktree',
-    '• ⚔️ `/review [N] [model:] [topic]` — adversarial review',
-    '• 🎨 `design: <topic>` — multi-persona design session',
-    '• 🔬 `spike [topic]` — single-agent deep investigation (checkpoints → decide done → report)',
-    '• ⚔️ `review_v2 [N] [+s] [topic]` · 🔨 `build_v2 [N] [task]` — v2 protocols',
-    '• 🚫 `kill build` / `kill review` / `kill design` / `kill spike`',
+    '• 🔬 `spike [model:] [topic]` — single-agent deep investigation',
+    '• 🚫 `kill review` / `kill build` / `kill spike`',
     '',
     '**Recovery** (thread, or channel for `recover`):',
     '• ⏯️ `resume` — reconnect with full context (--resume)',

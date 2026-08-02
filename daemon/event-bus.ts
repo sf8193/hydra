@@ -11,15 +11,18 @@
 export interface EventMap {
   'reply': { sessionId: string; text: string; chatId: string; sentIds: string[] }
   'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string }
-  'review:complete': { threadId: string }
-  'review:cancelled': { threadId: string }
-  'review:round': { threadId: string; round: number; totalRounds: number; text: string }
 }
 
 type Listener<T> = (payload: T) => void
 type LabeledListener = { listener: Listener<any>; label: string }
+type SubscriptionContributor = { source: string; getLabels: () => Record<string, string[]> }
 
 const listeners = new Map<string, Set<LabeledListener>>()
+const contributors: SubscriptionContributor[] = []
+
+export function contributeSubscriptions(source: string, getLabels: () => Record<string, string[]>): void {
+  contributors.push({ source, getLabels })
+}
 
 export function on<K extends keyof EventMap>(event: K, listener: Listener<EventMap[K]>, label: string): () => void {
   if (!listeners.has(event)) listeners.set(event, new Set())
@@ -49,6 +52,12 @@ export function getSubscriptions(): Record<string, string[]> {
   for (const [event, set] of listeners) {
     result[event] = [...set].map(e => e.label)
   }
+  for (const c of contributors) {
+    const labels = c.getLabels()
+    for (const [event, list] of Object.entries(labels)) {
+      result[event] = [...(result[event] ?? []), ...list.map(l => `${c.source}:${l}`)]
+    }
+  }
   return result
 }
 
@@ -62,6 +71,9 @@ export function logSubscriptions(): void {
   }
 }
 
+// Module-level singletons (e.g. ProtocolEventBus) register contributors once
+// at import time. After reset, getSubscriptions() under-reports until re-import.
 export function _resetForTesting(): void {
   listeners.clear()
+  contributors.splice(0)
 }

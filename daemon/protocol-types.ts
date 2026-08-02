@@ -40,3 +40,10 @@ export type CompletionEvent = {
   durationMs: number
   transcriptPath?: string
 }
+
+export type RoundAdvanceEvent = {
+  protocol: string
+  threadId: string
+  round: number
+  totalRounds: number
+}
