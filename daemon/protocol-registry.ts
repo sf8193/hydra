@@ -79,6 +79,11 @@ export async function dispatchAdvance(sessionId: string, content: string, verdic
   return { ok: false, reason: 'no active protocol for this session' }
 }
 
+export function isActiveActor(sessionId: string, chatId?: string): boolean {
+  const overrides = resolveScopedToolOverrides(sessionId, chatId)
+  return overrides !== null && 'advance' in overrides
+}
+
 export function resolveScopedToolOverrides(sessionId: string, chatId?: string): Record<string, string> | null {
   for (const hooks of protocols.values()) {
     if (hooks.isParticipant(sessionId)) return hooks.resolveScopedToolOverrides?.(sessionId, chatId) ?? null

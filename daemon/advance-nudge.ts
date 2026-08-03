@@ -4,7 +4,7 @@
 // signal: tool choice instead of first-line tag.
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
-import { isProtocolPost, resolveScopedToolOverrides } from './protocol-registry.js'
+import { isActiveActor, resolveScopedToolOverrides } from './protocol-registry.js'
 
 const SUBSTANTIAL_LENGTH = 200
 const NUDGE_COOLDOWN_MS = 60_000
@@ -17,7 +17,7 @@ export function maybeNudgeMissingAdvance(
   now: number = Date.now(),
 ): boolean {
   if (text.length < SUBSTANTIAL_LENGTH) return false
-  if (!isProtocolPost(sessionId, chatId)) return false
+  if (!isActiveActor(sessionId, chatId)) return false
 
   const cooldownKey = `${sessionId}:${chatId}`
   const last = lastNudgeAt.get(cooldownKey) ?? 0

@@ -351,10 +351,6 @@
       "daemon_anchor-state"
     ],
     [
-      "bridge",
-      "shared_constants"
-    ],
-    [
       "cli_hydra",
       "shared_constants"
     ],

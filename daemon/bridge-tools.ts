@@ -8,7 +8,7 @@
 // MASTER_ORCHESTRATOR_ONLY_TOOLS lives in shared/constants.ts — import from there, not here.
 import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../shared/constants.js'
 
-export const UNIVERSAL_TOOLS = [
+export const UNIVERSAL_TOOLS = Object.freeze([
   { name: 'reply', description: 'Reply in chat. Pass chat_id from the inbound message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' }, reply_to: { type: 'string', description: 'Message ID to thread under.' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['chat_id', 'text'] } },
   { name: 'react', description: 'Add an emoji reaction to a message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, emoji: { type: 'string' } }, required: ['chat_id', 'message_id', 'emoji'] } },
   { name: 'edit_message', description: 'Edit a message the bot previously sent.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, text: { type: 'string' } }, required: ['chat_id', 'message_id', 'text'] } },
@@ -32,7 +32,7 @@ export const UNIVERSAL_TOOLS = [
   { name: 'list_watches', description: 'List all PRs being watched (your session or all).', inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Show all watches, not just yours' } } } },
   { name: 'advance', description: 'Post your protocol deliverable and advance the phase. Content is posted to the thread; the protocol transition fires atomically. For phases that require a structured choice (e.g. approve/request_changes), include verdict.', inputSchema: { type: 'object', properties: { content: { type: 'string', description: 'Your deliverable — posted to the thread verbatim.' }, verdict: { type: 'string', description: 'Structured choice (e.g. "approve", "request_changes", "done"). Required when the phase declares verdict: required; optional when verdict: optional; rejected when verdict: none.' } }, required: ['content'] } },
   { name: 'extend_phase', description: 'Request more time in the current protocol phase. Resets the idle timeout. Use when you need more time to complete your work (e.g. reading a large codebase). The daemon posts a status update to the thread.', inputSchema: { type: 'object', properties: { reason: { type: 'string', description: 'Why you need more time — shown in the thread status.' }, minutes: { type: 'number', description: 'Additional minutes requested (default: 5, max: 15).' } }, required: ['reason'] } },
-]
+].map(t => Object.freeze(t)))
 
 export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
 
@@ -49,6 +49,6 @@ export function computeToolsForSession(sessionId: string, opts?: { allowMainTool
   const overrides = opts.scopedToolOverrides
   return filtered.filter(t => !PROTOCOL_ONLY_TOOLS.has(t.name) || t.name in overrides).map(t => {
     const desc = overrides[t.name]
-    return desc ? { ...t, description: desc } : t
+    return desc ? { ...t, description: desc } : { ...t } // shallow-copy: source objects are frozen
   })
 }

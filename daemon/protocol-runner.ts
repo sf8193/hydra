@@ -179,10 +179,14 @@ function scopedToolOverridesForRun(run: ProtocolRun, sessionId: string): Record<
   if (!role) return null
   if (run.protocol.phases[run.phase]?.actor !== role) return null
   if (!run.protocol.phaseInteraction(run.phase)) return null
-  return {
+  const overrides: Record<string, string> = {
     advance: formatAdvanceUsagePattern(run.protocol, run.phase),
-    extend_phase: defaultToolDescription('extend_phase'),
   }
+  const remaining = MAX_EXTENSIONS_PER_PHASE - run._extensions
+  if (remaining > 0) {
+    overrides.extend_phase = `Request more time in the current protocol phase (${remaining} remaining). Resets the idle timeout.`
+  }
+  return overrides
 }
 
 function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
@@ -311,6 +315,7 @@ export function onRunExtend(sessionId: string, reason: string, minutes: number):
   run._extensions++
   run.decisions.push({ phase: run.phase, role, value: 'extend', because: reason, context: `+${minutes}m` })
   resetTimeout(run)
+  refreshSessionTools(run, sessionId)
 
   const info = registry.get(sessionId)
   const name = info?.tmuxName ?? sessionId.slice(0, 8)
