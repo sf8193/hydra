@@ -191,7 +191,7 @@ export function clearInterceptsForSession(tmuxName: string): void {
 
 function readPlanSummary(planPath: string | null): string | null {
   if (!planPath) return null
-  if (planPath.includes('..') || planPath.includes('/')) return null
+  if (planPath.includes('..')) return null
   const fullPath = join(homedir(), '.claude', 'plans', planPath)
   const content = io.readFile(fullPath)
   if (!content) return null
@@ -274,7 +274,7 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
           } else {
             void safeSend(channelId, `> ❌ **${name}** — plan prompt no longer on screen. May have already resumed.`)
             threadIntercepts.delete(entry.threadId)
-            probeEntries.delete(name)
+            // Keep probeEntry — retains notifyCount so MAX_NOTIFICATIONS is respected
           }
         } else if (lower === 'reject') {
           const ok = confirmAndRejectPlan(name)
