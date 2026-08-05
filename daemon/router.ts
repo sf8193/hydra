@@ -28,6 +28,7 @@ import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } 
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
+import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
 import { listTemplates, getTemplate } from './templates.js'
 
@@ -689,6 +690,17 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
     if (msg.isThread) {
       const resolvedThreadId = registry.resolveThreadId(msg)
+
+      // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions
+      const intercept = getThreadIntercept(resolvedThreadId)
+      if (intercept) {
+        const lower = msg.content.trim().toLowerCase()
+        if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
+          void intercept.handler(msg.content, msg.channelId, msg.id)
+          return
+        }
+      }
+
       const mappedSession = registry.getByThread(resolvedThreadId)
       process.stderr.write(`daemon: thread routing: channelId=${msg.channelId} effectiveThreadId=${msg.effectiveThreadId} resolvedThreadId=${resolvedThreadId} mappedSession=${mappedSession ?? 'none'} threadToSession keys=[${[...registry.threadToSession.keys()].join(',')}]\n`)
       if (mappedSession) {

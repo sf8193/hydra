@@ -17,6 +17,7 @@ import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
+import { clearInterceptsForSession } from './pane-probe.js'
 import { safeSend } from './util.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import type { ButtonDef } from '../gateway.js'
@@ -467,6 +468,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
 
     info.deadAt = Date.now()
     registry.persist()
+    clearInterceptsForSession(info.tmuxName)
 
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {

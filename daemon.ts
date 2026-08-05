@@ -200,6 +200,7 @@ import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { handleSilenceEvent, handleActivityEvent, sessionsWithPendingReplies } from './daemon/reply-guard.js'
+import { probeAllSessions } from './daemon/pane-probe.js'
 import { getContextPercent, tmuxHasSession } from './daemon/util.js'
 import { refreshSessionVisual } from './daemon/anchor-state.js'
 
@@ -544,6 +545,10 @@ setInterval(() => {
     }
   }
 }, 20_000)
+
+// Pane probe: detect CC sessions stuck on interactive prompts (plan mode, login).
+// Lower cadence than reply guard — these stalls are minutes-scale.
+setInterval(() => { probeAllSessions() }, 60_000)
 
 let shuttingDown = false
 
