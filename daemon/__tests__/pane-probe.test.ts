@@ -62,6 +62,7 @@ import {
   _MAX_NOTIFICATIONS,
   _MIN_IDLE_BEFORE_PROBE_S,
   _PANE_TAIL_LINES,
+  _INTERCEPT_GRACE_MS,
   type PaneProbeIO,
   type BlockingState,
 } from '../pane-probe.js'
@@ -268,21 +269,25 @@ describe('probeAllSessions', () => {
     expect(intercept!.tmuxName).toBe('bloom')
   })
 
-  it('clears state when session is no longer stuck', async () => {
+  it('keeps intercept alive during grace period after detection clears', async () => {
     addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
     paneTails.set('bloom', PLAN_MODE_TAIL)
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    probeAllSessions(T0 + 60_000) // notification fires
     await flush()
     expect(getThreadIntercept('thread-1')).not.toBeUndefined()
 
-    // Session resumes — normal pane text
+    // Session resumes — but intercept survives grace period
     paneTails.set('bloom', NORMAL_SESSION_TAIL)
     probeAllSessions(T0 + 120_000)
-    expect(getThreadIntercept('thread-1')).toBeUndefined()
+    expect(getThreadIntercept('thread-1')).not.toBeUndefined() // still alive
+
+    // After grace period expires
+    probeAllSessions(T0 + 60_000 + _INTERCEPT_GRACE_MS + 1000)
+    expect(getThreadIntercept('thread-1')).toBeUndefined() // now cleared
   })
 
   it('clears intercept on session death', async () => {

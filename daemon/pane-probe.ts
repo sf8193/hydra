@@ -51,6 +51,7 @@ const NOTIFY_COOLDOWN_MS = 10 * 60_000
 const MAX_NOTIFICATIONS = 3
 const PANE_TAIL_LINES = 8
 const MIN_IDLE_BEFORE_PROBE_S = 30
+const INTERCEPT_GRACE_MS = 5 * 60_000
 
 // ---------------------------------------------------------------------------
 // Injectable seams (tests replace these)
@@ -190,7 +191,7 @@ export function clearInterceptsForSession(tmuxName: string): void {
 
 function readPlanSummary(planPath: string | null): string | null {
   if (!planPath) return null
-  if (planPath.includes('..')) return null
+  if (planPath.includes('..') || planPath.includes('/')) return null
   const fullPath = join(homedir(), '.claude', 'plans', planPath)
   const content = io.readFile(fullPath)
   if (!content) return null
@@ -373,27 +374,26 @@ export function probeAllSessions(now?: number): void {
     // historical plan-mode text but the session has moved on.
     const lastActivitySec = io.getWindowActivity(target.tmuxName)
     if (lastActivitySec === null) {
-      // tmux session doesn't exist — clean up any stale state
-      clearState(key)
+      clearState(key, 0) // tmux gone — force-clear, no grace
       continue
     }
     const idleSec = nowSec - lastActivitySec
     if (idleSec < MIN_IDLE_BEFORE_PROBE_S) {
-      clearState(key)
+      clearState(key, t) // active — grace period for pending intercepts
       continue
     }
 
     // Capture only the tail — where the active prompt renders
     const tailText = io.capturePaneTail(target.tmuxName, PANE_TAIL_LINES)
     if (!tailText) {
-      clearState(key)
+      clearState(key, 0) // capture failed — force-clear
       continue
     }
 
     const detected = detectBlockingState(tailText)
 
     if (!detected) {
-      clearState(key)
+      clearState(key, t) // no detection — grace period for pending intercepts
       continue
     }
 
@@ -432,11 +432,21 @@ export function probeAllSessions(now?: number): void {
   }
 }
 
-function clearState(key: string): void {
+function clearState(key: string, now: number): void {
   const existing = probeEntries.get(key)
-  if (existing) {
-    threadIntercepts.delete(existing.threadId)
-    probeEntries.delete(key)
+  if (!existing) return
+
+  // If we notified the user and registered an intercept, keep it alive for
+  // INTERCEPT_GRACE_MS after detection clears — the user may not have typed
+  // "approve" yet. Force-clear (now=0) skips the grace period.
+  if (now > 0 && existing.notifiedAt && threadIntercepts.has(existing.threadId)) {
+    const elapsed = now - existing.notifiedAt
+    if (elapsed < INTERCEPT_GRACE_MS) return
+  }
+
+  threadIntercepts.delete(existing.threadId)
+  probeEntries.delete(key)
+  if (existing.notifyCount > 0) {
     process.stderr.write(`daemon: pane-probe: ${key} cleared\n`)
   }
 }
@@ -455,3 +465,4 @@ export const _NOTIFY_COOLDOWN_MS = NOTIFY_COOLDOWN_MS
 export const _MAX_NOTIFICATIONS = MAX_NOTIFICATIONS
 export const _MIN_IDLE_BEFORE_PROBE_S = MIN_IDLE_BEFORE_PROBE_S
 export const _PANE_TAIL_LINES = PANE_TAIL_LINES
+export const _INTERCEPT_GRACE_MS = INTERCEPT_GRACE_MS

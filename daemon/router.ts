@@ -292,6 +292,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
   }
 
   if (isAllowed) {
+    // Pane-probe intercept for non-thread messages (byte plan-mode posts to root channel)
+    if (!msg.isThread) {
+      const intercept = getThreadIntercept(msg.channelId)
+      if (intercept) {
+        const lower = msg.content.trim().toLowerCase()
+        if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
+          void intercept.handler(msg.content, msg.channelId, msg.id)
+          return
+        }
+      }
+    }
+
     // "spawn codex: topic" / "spawn codex gpt-5.5: topic" — codex engine with optional model
     const spawnCodexMatch = msg.content.match(SPAWN_CODEX_RE)
     if (spawnCodexMatch) {
