@@ -27,6 +27,7 @@ export type BlockingKind = 'plan_mode' | 'login_required'
 export type BlockingState = {
   kind: BlockingKind
   planPath: string | null
+  loginExpiring: boolean
 }
 
 type ProbeEntry = {
@@ -119,14 +120,22 @@ const PLAN_ENTERED_RE = /Entered plan mode/
 const PLAN_OPTIONS_RE = /Yes, and bypass permissions|Yes, manually approve edits|Tell Claude what to change/
 const PLAN_PATH_RE = /\.claude\/plans\/([^\s·/][^\s·]*\.md)/
 
-// Login: CC renders a specific prompt. We match CC's actual auth prompts,
-// not arbitrary prose containing "/login".
-const LOGIN_PROMPT_PATTERNS = [
+// Login: CC renders a specific prompt or expiry warning. We match CC's actual
+// auth text, not arbitrary prose containing "/login".
+const LOGIN_BLOCKED_PATTERNS = [
   /^Please sign in at/m,
   /^Open this URL to sign in/m,
   /^Your session has expired/m,
   /^Authentication required/m,
   /^⚠️\s+Not authenticated/m,
+]
+
+// The expiry warning ("Your login expires in 1 day · run /login to renew") is
+// proactive — the session still works, but will freeze when the token expires.
+// Same remedy: send /login to renew.
+const LOGIN_EXPIRING_PATTERNS = [
+  /Your login expires in/,
+  /run \/login to renew/,
 ]
 
 // ---------------------------------------------------------------------------
@@ -136,10 +145,13 @@ const LOGIN_PROMPT_PATTERNS = [
 export function detectBlockingState(tailText: string): BlockingState | null {
   if (PLAN_ENTERED_RE.test(tailText) && PLAN_OPTIONS_RE.test(tailText)) {
     const pathMatch = tailText.match(PLAN_PATH_RE)
-    return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null }
+    return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginExpiring: false }
   }
-  if (LOGIN_PROMPT_PATTERNS.some(p => p.test(tailText))) {
-    return { kind: 'login_required', planPath: null }
+  if (LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
+    return { kind: 'login_required', planPath: null, loginExpiring: false }
+  }
+  if (LOGIN_EXPIRING_PATTERNS.some(p => p.test(tailText))) {
+    return { kind: 'login_required', planPath: null, loginExpiring: true }
   }
   return null
 }
@@ -210,7 +222,9 @@ function confirmAndRejectPlan(tmuxName: string): boolean {
 function confirmAndSendLogin(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
-  if (!LOGIN_PROMPT_PATTERNS.some(p => p.test(tail))) return false
+  const blocked = LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
+  const expiring = LOGIN_EXPIRING_PATTERNS.some(p => p.test(tail))
+  if (!blocked && !expiring) return false
   return io.sendKeys(tmuxName, '/login', 'Enter')
 }
 
@@ -304,13 +318,21 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
     }
 
     const loginSent = confirmAndSendLogin(name)
+    const expiring = entry.state.loginExpiring
 
-    const lines = [
-      `> ⚠️ ${mention}**${name}** needs authentication${entry.isMain ? ' — all message processing is paused' : ''}.`,
-      loginSent
-        ? `> Sent \`/login\` automatically. If a browser auth URL appears, click it to authenticate.`
-        : `> Auto-login failed. Run: \`tmux attach -t ${name}\` then type \`/login\``,
-    ]
+    const lines = expiring
+      ? [
+          `> 🔑 ${mention}**${name}** — login expiring soon.`,
+          loginSent
+            ? `> Sent \`/login\` to renew. If a browser auth URL appears, click it.`
+            : `> Auto-renew failed. Run: \`tmux attach -t ${name}\` then type \`/login\``,
+        ]
+      : [
+          `> ⚠️ ${mention}**${name}** needs authentication${entry.isMain ? ' — all message processing is paused' : ''}.`,
+          loginSent
+            ? `> Sent \`/login\` automatically. If a browser auth URL appears, click it to authenticate.`
+            : `> Auto-login failed. Run: \`tmux attach -t ${name}\` then type \`/login\``,
+        ]
 
     await safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now

@@ -89,6 +89,11 @@ Open this URL to sign in:
 
 Waiting for authentication...`
 
+const LOGIN_EXPIRING_TAIL = `✻ Wandering… (2m 3s · ↓ 1.2k tokens)
+❯
+  ctx: 15%
+  ⚠️ Your login expires in 1 day · run /login to renew`
+
 const NORMAL_SESSION_TAIL = `✻ Wandering… (9m 16s · ↓ 9.2k tokens)
   ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's
      current work
@@ -174,6 +179,14 @@ describe('detectBlockingState (pure)', () => {
     const result = detectBlockingState(LOGIN_PROMPT_TAIL)
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
+    expect(result!.loginExpiring).toBe(false)
+  })
+
+  it('detects login expiring warning', () => {
+    const result = detectBlockingState(LOGIN_EXPIRING_TAIL)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('login_required')
+    expect(result!.loginExpiring).toBe(true)
   })
 
   it('requires both plan entered AND option menu', () => {
