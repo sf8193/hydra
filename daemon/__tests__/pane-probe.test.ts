@@ -35,6 +35,12 @@ mock.module('../sessions.js', () => ({
   registry: {
     values: () => registryEntries.values(),
     get: (id: string) => registryEntries.get(id),
+    set: (id: string, info: any) => registryEntries.set(id, info),
+    has: (id: string) => registryEntries.has(id),
+    delete: (id: string) => registryEntries.delete(id),
+    get size() { return registryEntries.size },
+    persist: () => {},
+    debouncedPersist: () => {},
   },
 }))
 
