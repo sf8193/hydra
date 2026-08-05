@@ -102,6 +102,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const info = registry.get(callerSessionId)
           if (info) {
             info.lastReplyId = sentIds[sentIds.length - 1]
+            // lastReplyId drives the session's dashboard/list link — refresh (debounced) so it tracks the latest reply.
+            refreshDashboard()
             // Capture artifact links the session produced in its own thread, so
             // they surface under its Home item (chat_id === threadId scopes this
             // to the session's own workspace, not cross-posts to other channels;
@@ -232,7 +234,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             name: s.tmuxName,
             description: desc,
             thread_id: s.threadId,
-            url: s.threadUrl ?? '',
+            // Link to the session's latest reply (like dashboard.ts / cli-handler.ts), falling back to the thread anchor.
+            url: (s.lastReplyId ? gateway.getMessageUrl(s.threadId, s.lastReplyId) : '') || s.threadUrl || '',
             context: getContextPercent(s.tmuxName),
             messages: s.messageCount ?? 0,
             running_for: formatDuration(Date.now() - s.createdAt),
