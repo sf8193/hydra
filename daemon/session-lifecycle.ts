@@ -20,6 +20,7 @@ import { loadAccess } from './access.js'
 import { codexEngine } from './codex-bootstrap.js'
 import { codexSocketPath } from './codex-engine.js'
 import { emit } from './event-bus.js'
+import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -131,6 +132,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
+    clearInterceptsForSession(info.tmuxName)
 
     if (info.worktreePath && info.worktreeRepo) {
       const branch = `wt/${info.tmuxName}`

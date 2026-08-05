@@ -1,0 +1,468 @@
+// Pane probe: detect CC sessions stuck on interactive prompts (plan mode,
+// login required) by periodically capturing tmux pane text and pattern
+// matching against the pane TAIL (where the active prompt renders).
+//
+// CC-specific — coupled to Claude Code's terminal UI strings. When a
+// second harness arrives, introduce a HarnessProbe interface.
+//
+// Injectable seams: capturePaneTail, getWindowActivity, sendKeys, readFile
+// are replaceable for testing.
+
+import { execSync } from 'child_process'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
+import { registry } from './sessions.js'
+import type { SessionInfo } from './sessions.js'
+import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
+import { loadAccess } from './access.js'
+import { safeSend } from './util.js'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type BlockingKind = 'plan_mode' | 'login_required'
+
+export type BlockingState = {
+  kind: BlockingKind
+  planPath: string | null
+  loginExpiring: boolean
+}
+
+type ProbeEntry = {
+  tmuxName: string
+  threadId: string
+  isMain: boolean
+  firstSeen: number
+  consecutive: number
+  state: BlockingState
+  notifiedAt: number | null
+  notifyCount: number
+  notifying: boolean // in-flight notification guard
+}
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+const CONFIRM_PROBES = 2
+const NOTIFY_COOLDOWN_MS = 10 * 60_000
+const MAX_NOTIFICATIONS = 3
+const PANE_TAIL_LINES = 8
+const MIN_IDLE_BEFORE_PROBE_S = 30
+const INTERCEPT_GRACE_MS = 5 * 60_000
+
+// ---------------------------------------------------------------------------
+// Injectable seams (tests replace these)
+// ---------------------------------------------------------------------------
+
+export type PaneProbeIO = {
+  capturePaneTail: (tmuxName: string, lines: number) => string | null
+  getWindowActivity: (tmuxName: string) => number | null
+  sendKeys: (tmuxName: string, ...keys: string[]) => boolean
+  readFile: (path: string) => string | null
+  now: () => number
+}
+
+const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+
+const defaultIO: PaneProbeIO = {
+  capturePaneTail(tmuxName, lines) {
+    try {
+      return execSync(
+        `tmux capture-pane -t ${shq(tmuxName)} -p -S -${lines}`,
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
+      ).trimEnd()
+    } catch { return null }
+  },
+
+  getWindowActivity(tmuxName) {
+    try {
+      const raw = execSync(
+        `tmux display -t ${shq(tmuxName)} -p '#{window_activity}'`,
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 },
+      ).trim()
+      return parseInt(raw, 10) || null
+    } catch { return null }
+  },
+
+  sendKeys(tmuxName, ...keys) {
+    try {
+      execSync(['tmux', 'send-keys', '-t', tmuxName, ...keys].map(shq).join(' '), {
+        stdio: 'pipe', timeout: 3000,
+      })
+      return true
+    } catch { return false }
+  },
+
+  readFile(path) {
+    try { return readFileSync(path, 'utf8') } catch { return null }
+  },
+
+  now: () => Date.now(),
+}
+
+let io: PaneProbeIO = defaultIO
+
+export function _setIO(custom: PaneProbeIO): void { io = custom }
+export function _resetIO(): void { io = defaultIO }
+
+// ---------------------------------------------------------------------------
+// Detection patterns — anchored to the pane TAIL where the prompt renders.
+// Only the last PANE_TAIL_LINES are examined, so scrollback history
+// (which may contain "/login" in prose or "Entered plan mode" from a
+// previous state) does not trigger detection.
+// ---------------------------------------------------------------------------
+
+// Plan mode: CC renders a specific multi-line dialog. We require BOTH
+// the "plan mode" indicator AND the option menu to co-occur in the tail.
+const PLAN_ENTERED_RE = /Entered plan mode/
+const PLAN_OPTIONS_RE = /Yes, and bypass permissions|Yes, manually approve edits|Tell Claude what to change/
+const PLAN_PATH_RE = /\.claude\/plans\/([^\s·/][^\s·]*\.md)/
+
+// Login: CC renders a specific prompt or expiry warning. We match CC's actual
+// auth text, not arbitrary prose containing "/login".
+const LOGIN_BLOCKED_PATTERNS = [
+  /^Please sign in at/m,
+  /^Open this URL to sign in/m,
+  /^Your session has expired/m,
+  /^Authentication required/m,
+  /^⚠️\s+Not authenticated/m,
+]
+
+// The expiry warning ("Your login expires in 1 day · run /login to renew") is
+// proactive — the session still works, but will freeze when the token expires.
+// Same remedy: send /login to renew.
+const LOGIN_EXPIRING_PATTERNS = [
+  /Your login expires in/,
+  /run \/login to renew/,
+]
+
+// ---------------------------------------------------------------------------
+// Detection (pure — operates on tail text only)
+// ---------------------------------------------------------------------------
+
+export function detectBlockingState(tailText: string): BlockingState | null {
+  if (PLAN_ENTERED_RE.test(tailText) && PLAN_OPTIONS_RE.test(tailText)) {
+    const pathMatch = tailText.match(PLAN_PATH_RE)
+    return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginExpiring: false }
+  }
+  if (LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
+    return { kind: 'login_required', planPath: null, loginExpiring: false }
+  }
+  if (LOGIN_EXPIRING_PATTERNS.some(p => p.test(tailText))) {
+    return { kind: 'login_required', planPath: null, loginExpiring: true }
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const probeEntries = new Map<string, ProbeEntry>()
+
+const threadIntercepts = new Map<string, {
+  tmuxName: string
+  kind: BlockingKind
+  handler: (content: string, channelId: string, messageId: string) => Promise<void>
+}>()
+
+export function getThreadIntercept(threadId: string) {
+  return threadIntercepts.get(threadId)
+}
+
+export function clearInterceptsForSession(tmuxName: string): void {
+  const entry = probeEntries.get(tmuxName)
+  if (entry) {
+    threadIntercepts.delete(entry.threadId)
+    probeEntries.delete(tmuxName)
+  }
+  // Also scan by tmuxName in case the entry was already removed
+  for (const [threadId, intercept] of threadIntercepts) {
+    if (intercept.tmuxName === tmuxName) threadIntercepts.delete(threadId)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Plan file reading
+// ---------------------------------------------------------------------------
+
+function readPlanSummary(planPath: string | null): string | null {
+  if (!planPath) return null
+  if (planPath.includes('..') || planPath.includes('/')) return null
+  const fullPath = join(homedir(), '.claude', 'plans', planPath)
+  const content = io.readFile(fullPath)
+  if (!content) return null
+  const titleMatch = content.match(/^#\s+(.+)/m)
+  const title = titleMatch?.[1] ?? planPath
+  const body = content.replace(/^#\s+.+\n+/, '').trim()
+  const preview = body.length > 500 ? body.slice(0, 497) + '...' : body
+  return `**${title}**\n${preview}`
+}
+
+// ---------------------------------------------------------------------------
+// Remediation — re-confirms prompt is still on screen before sending keys
+// ---------------------------------------------------------------------------
+
+function confirmAndApprovePlan(tmuxName: string): boolean {
+  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  if (!tail) return false
+  if (!PLAN_ENTERED_RE.test(tail) || !PLAN_OPTIONS_RE.test(tail)) return false
+  return io.sendKeys(tmuxName, 'Enter')
+}
+
+function confirmAndRejectPlan(tmuxName: string): boolean {
+  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  if (!tail) return false
+  if (!PLAN_ENTERED_RE.test(tail) || !PLAN_OPTIONS_RE.test(tail)) return false
+  return io.sendKeys(tmuxName, 'Down', 'Down', 'Enter')
+}
+
+function confirmAndSendLogin(tmuxName: string): boolean {
+  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  if (!tail) return false
+  const blocked = LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
+  const expiring = LOGIN_EXPIRING_PATTERNS.some(p => p.test(tail))
+  if (!blocked && !expiring) return false
+  return io.sendKeys(tmuxName, '/login', 'Enter')
+}
+
+// ---------------------------------------------------------------------------
+// Notification + intercept registration
+// ---------------------------------------------------------------------------
+
+async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
+  if (entry.notifying) return
+  entry.notifying = true
+
+  try {
+    const planSummary = readPlanSummary(entry.state.planPath)
+    const name = entry.tmuxName
+    const channelId = entry.threadId
+
+    if (!channelId) {
+      process.stderr.write(`daemon: pane-probe: ${name} in plan mode but no channel\n`)
+      return
+    }
+
+    const lines = [
+      `> ⏸️ **${name}** is waiting for plan approval.`,
+    ]
+    if (planSummary) {
+      lines.push(`> ${planSummary.split('\n').join('\n> ')}`)
+    }
+    lines.push(`> Type **approve** to proceed or **reject** to cancel.`)
+
+    await safeSend(channelId, lines.join('\n'))
+    entry.notifiedAt = now
+    entry.notifyCount++
+
+    threadIntercepts.set(entry.threadId, {
+      tmuxName: name,
+      kind: 'plan_mode',
+      handler: async (content, replyChannelId, messageId) => {
+        const lower = content.trim().toLowerCase()
+        if (lower === 'approve') {
+          const ok = confirmAndApprovePlan(name)
+          void gateway.react(replyChannelId, messageId, ok ? '✅' : '❌').catch(() => {})
+          if (ok) {
+            void safeSend(channelId, `> ▶️ **${name}** — plan approved, resuming.`)
+            threadIntercepts.delete(entry.threadId)
+            probeEntries.delete(name)
+          } else {
+            void safeSend(channelId, `> ❌ **${name}** — plan prompt no longer on screen. May have already resumed.`)
+            threadIntercepts.delete(entry.threadId)
+            probeEntries.delete(name)
+          }
+        } else if (lower === 'reject') {
+          const ok = confirmAndRejectPlan(name)
+          void gateway.react(replyChannelId, messageId, ok ? '✅' : '❌').catch(() => {})
+          if (ok) {
+            void safeSend(channelId, `> ⏹️ **${name}** — plan rejected.`)
+          }
+          threadIntercepts.delete(entry.threadId)
+          probeEntries.delete(name)
+        }
+      },
+    })
+
+    process.stderr.write(`daemon: pane-probe: ${name} in plan mode, notified in ${channelId}\n`)
+  } finally {
+    entry.notifying = false
+  }
+}
+
+async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void> {
+  if (entry.notifying) return
+  entry.notifying = true
+
+  try {
+    const name = entry.tmuxName
+    const access = loadAccess()
+    const adminUserId = access.allowFrom[0]
+
+    let channelId: string
+    let mention = ''
+
+    if (entry.isMain) {
+      channelId = DEFAULT_SESSION_CHANNEL
+      if (adminUserId) mention = `<@${adminUserId}> `
+    } else {
+      channelId = entry.threadId
+    }
+
+    if (!channelId) {
+      process.stderr.write(`daemon: pane-probe: ${name} needs login but no channel\n`)
+      return
+    }
+
+    const loginSent = confirmAndSendLogin(name)
+    const expiring = entry.state.loginExpiring
+
+    const lines = expiring
+      ? [
+          `> 🔑 ${mention}**${name}** — login expiring soon.`,
+          loginSent
+            ? `> Sent \`/login\` to renew. If a browser auth URL appears, click it.`
+            : `> Auto-renew failed. Run: \`tmux attach -t ${name}\` then type \`/login\``,
+        ]
+      : [
+          `> ⚠️ ${mention}**${name}** needs authentication${entry.isMain ? ' — all message processing is paused' : ''}.`,
+          loginSent
+            ? `> Sent \`/login\` automatically. If a browser auth URL appears, click it to authenticate.`
+            : `> Auto-login failed. Run: \`tmux attach -t ${name}\` then type \`/login\``,
+        ]
+
+    await safeSend(channelId, lines.join('\n'))
+    entry.notifiedAt = now
+    entry.notifyCount++
+
+    process.stderr.write(`daemon: pane-probe: ${name} needs login, notified${loginSent ? ' + auto-triggered' : ''}\n`)
+  } finally {
+    entry.notifying = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main probe loop — called from daemon.ts setInterval
+// ---------------------------------------------------------------------------
+
+function byteTmuxName(): string {
+  return process.env.BYTE_SESSION_NAME ?? `${PLATFORM}-byte`
+}
+
+export function probeAllSessions(now?: number): void {
+  const t = now ?? io.now()
+  const nowSec = Math.floor(t / 1000)
+
+  const targets: Array<{ tmuxName: string; threadId: string; isMain: boolean }> = []
+  targets.push({ tmuxName: byteTmuxName(), threadId: DEFAULT_SESSION_CHANNEL, isMain: true })
+
+  for (const info of registry.values()) {
+    if (info.deadAt) continue
+    if (info.engine === 'codex') continue
+    targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
+  }
+
+  for (const target of targets) {
+    const key = target.tmuxName
+
+    // Idle gate: only probe sessions that have been idle for MIN_IDLE_BEFORE_PROBE_S.
+    // Active sessions aren't stuck on a prompt — the scrollback may contain
+    // historical plan-mode text but the session has moved on.
+    const lastActivitySec = io.getWindowActivity(target.tmuxName)
+    if (lastActivitySec === null) {
+      clearState(key, 0) // tmux gone — force-clear, no grace
+      continue
+    }
+    const idleSec = nowSec - lastActivitySec
+    if (idleSec < MIN_IDLE_BEFORE_PROBE_S) {
+      clearState(key, t) // active — grace period for pending intercepts
+      continue
+    }
+
+    // Capture only the tail — where the active prompt renders
+    const tailText = io.capturePaneTail(target.tmuxName, PANE_TAIL_LINES)
+    if (!tailText) {
+      clearState(key, 0) // capture failed — force-clear
+      continue
+    }
+
+    const detected = detectBlockingState(tailText)
+
+    if (!detected) {
+      clearState(key, t) // no detection — grace period for pending intercepts
+      continue
+    }
+
+    const existing = probeEntries.get(key)
+    if (existing && existing.state.kind === detected.kind) {
+      existing.consecutive++
+
+      if (existing.consecutive >= CONFIRM_PROBES) {
+        const cooldownElapsed = !existing.notifiedAt || (t - existing.notifiedAt) >= NOTIFY_COOLDOWN_MS
+        const underLimit = existing.notifyCount < MAX_NOTIFICATIONS
+
+        if (cooldownElapsed && underLimit) {
+          if (detected.kind === 'plan_mode') {
+            void notifyPlanMode(existing, t)
+          } else {
+            void notifyLoginRequired(existing, t)
+          }
+        } else if (!underLimit && existing.notifyCount === MAX_NOTIFICATIONS) {
+          existing.notifyCount++
+          process.stderr.write(`daemon: pane-probe: ${key} still stuck after ${MAX_NOTIFICATIONS} notifications, giving up\n`)
+        }
+      }
+    } else {
+      probeEntries.set(key, {
+        tmuxName: target.tmuxName,
+        threadId: target.threadId,
+        isMain: target.isMain,
+        firstSeen: t,
+        consecutive: 1,
+        state: detected,
+        notifiedAt: null,
+        notifyCount: 0,
+        notifying: false,
+      })
+    }
+  }
+}
+
+function clearState(key: string, now: number): void {
+  const existing = probeEntries.get(key)
+  if (!existing) return
+
+  // If we notified the user and registered an intercept, keep it alive for
+  // INTERCEPT_GRACE_MS after detection clears — the user may not have typed
+  // "approve" yet. Force-clear (now=0) skips the grace period.
+  if (now > 0 && existing.notifiedAt && threadIntercepts.has(existing.threadId)) {
+    const elapsed = now - existing.notifiedAt
+    if (elapsed < INTERCEPT_GRACE_MS) return
+  }
+
+  threadIntercepts.delete(existing.threadId)
+  probeEntries.delete(key)
+  if (existing.notifyCount > 0) {
+    process.stderr.write(`daemon: pane-probe: ${key} cleared\n`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Testing
+// ---------------------------------------------------------------------------
+
+export function _resetForTesting(): void {
+  probeEntries.clear()
+  threadIntercepts.clear()
+}
+
+export const _CONFIRM_PROBES = CONFIRM_PROBES
+export const _NOTIFY_COOLDOWN_MS = NOTIFY_COOLDOWN_MS
+export const _MAX_NOTIFICATIONS = MAX_NOTIFICATIONS
+export const _MIN_IDLE_BEFORE_PROBE_S = MIN_IDLE_BEFORE_PROBE_S
+export const _PANE_TAIL_LINES = PANE_TAIL_LINES
+export const _INTERCEPT_GRACE_MS = INTERCEPT_GRACE_MS

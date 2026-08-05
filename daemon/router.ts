@@ -28,6 +28,7 @@ import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } 
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
+import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
 import { listTemplates, getTemplate } from './templates.js'
 
@@ -291,6 +292,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
   }
 
   if (isAllowed) {
+    // Pane-probe intercept for non-thread messages (byte plan-mode posts to root channel)
+    if (!msg.isThread) {
+      const intercept = getThreadIntercept(msg.channelId)
+      if (intercept) {
+        const lower = msg.content.trim().toLowerCase()
+        if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
+          void intercept.handler(msg.content, msg.channelId, msg.id)
+          return
+        }
+      }
+    }
+
     // "spawn codex: topic" / "spawn codex gpt-5.5: topic" — codex engine with optional model
     const spawnCodexMatch = msg.content.match(SPAWN_CODEX_RE)
     if (spawnCodexMatch) {
@@ -689,6 +702,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
     if (msg.isThread) {
       const resolvedThreadId = registry.resolveThreadId(msg)
+
+      // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions.
+      // Gated on allowFrom — sending keystrokes to a tmux pane is a privileged action.
+      const intercept = getThreadIntercept(resolvedThreadId)
+      if (intercept && isAllowed) {
+        const lower = msg.content.trim().toLowerCase()
+        if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
+          void intercept.handler(msg.content, msg.channelId, msg.id)
+          return
+        }
+      }
+
       const mappedSession = registry.getByThread(resolvedThreadId)
       process.stderr.write(`daemon: thread routing: channelId=${msg.channelId} effectiveThreadId=${msg.effectiveThreadId} resolvedThreadId=${resolvedThreadId} mappedSession=${mappedSession ?? 'none'} threadToSession keys=[${[...registry.threadToSession.keys()].join(',')}]\n`)
       if (mappedSession) {
