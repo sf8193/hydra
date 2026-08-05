@@ -691,9 +691,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (msg.isThread) {
       const resolvedThreadId = registry.resolveThreadId(msg)
 
-      // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions
+      // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions.
+      // Gated on allowFrom — sending keystrokes to a tmux pane is a privileged action.
       const intercept = getThreadIntercept(resolvedThreadId)
-      if (intercept) {
+      if (intercept && isAllowed) {
         const lower = msg.content.trim().toLowerCase()
         if (intercept.kind === 'plan_mode' && (lower === 'approve' || lower === 'reject')) {
           void intercept.handler(msg.content, msg.channelId, msg.id)

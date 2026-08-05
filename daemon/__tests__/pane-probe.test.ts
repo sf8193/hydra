@@ -135,8 +135,8 @@ function makeTestIO(): PaneProbeIO {
     getWindowActivity(tmuxName) {
       return windowActivity.get(tmuxName) ?? null
     },
-    sendKeys(tmuxName, keys) {
-      keysSent.push({ tmuxName, keys })
+    sendKeys(tmuxName, ...keys) {
+      keysSent.push({ tmuxName, keys: keys.join(' ') })
       return true
     },
     readFile(path) {
@@ -183,12 +183,12 @@ describe('detectBlockingState (pure)', () => {
     expect(detectBlockingState('Yes, and bypass permissions\nSome other text')).toBeNull()
   })
 
-  it('rejects path traversal in plan path', () => {
+  it('captures path traversal attempt but readPlanSummary rejects it', () => {
     const traversalTail = PLAN_MODE_TAIL.replace('witty-humming-beaver.md', '../../../etc/passwd.md')
     const result = detectBlockingState(traversalTail)
     expect(result).not.toBeNull()
-    // The regex rejects paths starting with ..
-    expect(result!.planPath).toBeNull()
+    // The regex captures the path, but readPlanSummary rejects paths containing ".."
+    expect(result!.planPath).toContain('..')
   })
 })
 

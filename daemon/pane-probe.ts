@@ -58,7 +58,7 @@ const MIN_IDLE_BEFORE_PROBE_S = 30
 export type PaneProbeIO = {
   capturePaneTail: (tmuxName: string, lines: number) => string | null
   getWindowActivity: (tmuxName: string) => number | null
-  sendKeys: (tmuxName: string, keys: string) => boolean
+  sendKeys: (tmuxName: string, ...keys: string[]) => boolean
   readFile: (path: string) => string | null
   now: () => number
 }
@@ -81,13 +81,13 @@ const defaultIO: PaneProbeIO = {
         `tmux display -t ${shq(tmuxName)} -p '#{window_activity}'`,
         { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 },
       ).trim()
-      return parseInt(raw) || null
+      return parseInt(raw, 10) || null
     } catch { return null }
   },
 
-  sendKeys(tmuxName, keys) {
+  sendKeys(tmuxName, ...keys) {
     try {
-      execSync(`tmux send-keys -t ${shq(tmuxName)} ${keys}`, {
+      execSync(['tmux', 'send-keys', '-t', tmuxName, ...keys].map(shq).join(' '), {
         stdio: 'pipe', timeout: 3000,
       })
       return true
@@ -117,7 +117,7 @@ export function _resetIO(): void { io = defaultIO }
 // the "plan mode" indicator AND the option menu to co-occur in the tail.
 const PLAN_ENTERED_RE = /Entered plan mode/
 const PLAN_OPTIONS_RE = /Yes, and bypass permissions|Yes, manually approve edits|Tell Claude what to change/
-const PLAN_PATH_RE = /\.claude\/plans\/([\w][\w.-]*\.md)/
+const PLAN_PATH_RE = /\.claude\/plans\/([^\s·/][^\s·]*\.md)/
 
 // Login: CC renders a specific prompt. We match CC's actual auth prompts,
 // not arbitrary prose containing "/login".
@@ -204,14 +204,14 @@ function confirmAndRejectPlan(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (!PLAN_ENTERED_RE.test(tail) || !PLAN_OPTIONS_RE.test(tail)) return false
-  return io.sendKeys(tmuxName, 'Down Down Enter')
+  return io.sendKeys(tmuxName, 'Down', 'Down', 'Enter')
 }
 
 function confirmAndSendLogin(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (!LOGIN_PROMPT_PATTERNS.some(p => p.test(tail))) return false
-  return io.sendKeys(tmuxName, "'/login' Enter")
+  return io.sendKeys(tmuxName, '/login', 'Enter')
 }
 
 // ---------------------------------------------------------------------------
