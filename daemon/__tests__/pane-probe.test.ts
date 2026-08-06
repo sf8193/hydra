@@ -101,6 +101,29 @@ const LOGIN_EXPIRING_TAIL = `✻ Wandering… (2m 3s · ↓ 1.2k tokens)
   ctx: 15%
   ⚠️ Your login expires in 1 day · run /login to renew`
 
+const LOGIN_SELECT_METHOD_TAIL = `  Login
+
+  Claude Code can be used with your Claude subscription or billed based on API usage through your Console account.
+
+  Select login method:
+
+  › 1. Claude account with subscription · Pro, Max, Team, or Enterprise
+    2. Anthropic Console account · API usage billing
+    3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, or Vertex AI`
+
+const LOGIN_OAUTH_URL_TAIL = `  Login
+
+  Browser didn't open? Use the url below to sign in (c to copy)
+
+https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&state=VEtxuL6A
+
+  Paste code here if prompted >`
+
+const LOGIN_SUCCESS_TAIL = `  Login
+
+  Logged in as d.cetlin@hey.com
+  Login successful. Press Enter to continue…`
+
 const NORMAL_SESSION_TAIL = `✻ Wandering… (9m 16s · ↓ 9.2k tokens)
   ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's
      current work
@@ -182,25 +205,62 @@ describe('detectBlockingState (pure)', () => {
     expect(detectBlockingState(HISTORICAL_PLAN_MODE)).toBeNull()
   })
 
-  it('detects login prompt', () => {
-    const result = detectBlockingState(LOGIN_PROMPT_TAIL)
+  it('detects login prompt (select method)', () => {
+    const result = detectBlockingState(LOGIN_SELECT_METHOD_TAIL)
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
-    expect(result!.loginExpiring).toBe(false)
+    expect(result!.loginStage).toBe('blocked')
   })
 
   it('detects login expiring warning', () => {
     const result = detectBlockingState(LOGIN_EXPIRING_TAIL)
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
-    expect(result!.loginExpiring).toBe(true)
+    expect(result!.loginStage).toBe('expiring')
   })
 
-  it('requires both plan entered AND option menu', () => {
-    // Only the indicator, no options
-    expect(detectBlockingState('⏺ Entered plan mode\nWorking on things...')).toBeNull()
-    // Only options, no indicator
+  it('detects Select login method prompt', () => {
+    const result = detectBlockingState(LOGIN_SELECT_METHOD_TAIL)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('login_required')
+    expect(result!.loginStage).toBe('blocked')
+  })
+
+  it('detects OAuth URL screen and extracts URL', () => {
+    const result = detectBlockingState(LOGIN_OAUTH_URL_TAIL)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('login_required')
+    expect(result!.loginStage).toBe('oauth_url')
+    expect(result!.oauthUrl).toContain('claude.com/cai/oauth/authorize')
+  })
+
+  it('detects Login successful screen', () => {
+    const result = detectBlockingState(LOGIN_SUCCESS_TAIL)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('login_required')
+    expect(result!.loginStage).toBe('success')
+  })
+
+  it('requires at least two of the three plan options to co-occur', () => {
+    // Only one option — not enough
     expect(detectBlockingState('Yes, and bypass permissions\nSome other text')).toBeNull()
+    // Two options — enough
+    expect(detectBlockingState('Yes, and bypass permissions\nYes, manually approve edits')).not.toBeNull()
+  })
+
+  it('detects plan mode from options alone (long plan, Entered plan mode scrolled off)', () => {
+    // Simulates what bloom's pane looks like — only the options menu in the tail
+    const longPlanTail = `   Phase 2: Activate MCP server globally
+   ctrl+g to edit in VS Code · .claude/plans/sparkling-wondering-torvalds.md
+
+   ❯ 1. Yes, and bypass permissions
+     2. Yes, manually approve edits
+     3. Tell Claude what to change
+        shift+tab to approve with this feedback`
+    const result = detectBlockingState(longPlanTail)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('plan_mode')
+    expect(result!.planPath).toBe('sparkling-wondering-torvalds.md')
   })
 
   it('captures path traversal attempt but readPlanSummary rejects it', () => {
@@ -352,29 +412,59 @@ describe('probeAllSessions', () => {
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
-  it('auto-triggers /login with re-confirmation', async () => {
-    addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
-    paneTails.set('bloom', LOGIN_PROMPT_TAIL)
-    windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
-    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+  it('auto-triggers /login with re-confirmation when HYDRA_AUTO_LOGIN=1', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    process.env.HYDRA_AUTO_LOGIN = '1'
+    try {
+      addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+      paneTails.set('bloom', LOGIN_SELECT_METHOD_TAIL)
+      windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
-    await flush()
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
 
-    // Should have sent /login via sendKeys with re-confirmation capture
-    const loginKey = keysSent.find(k => k.tmuxName === 'bloom')
-    expect(loginKey).not.toBeUndefined()
-    expect(loginKey!.keys).toContain('/login')
+      const loginKey = keysSent.find(k => k.tmuxName === 'bloom')
+      expect(loginKey).not.toBeUndefined()
+      expect(loginKey!.keys).toContain('/login')
 
-    // Should have notified
-    const loginMsg = sentMessages.find(m => m.channelId === 'thread-1')
-    expect(loginMsg).not.toBeUndefined()
-    expect(loginMsg!.text).toContain('authentication')
+      const loginMsg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(loginMsg).not.toBeUndefined()
+      expect(loginMsg!.text).toContain('authentication')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
+  })
+
+  it('does not auto-trigger /login when HYDRA_AUTO_LOGIN is unset', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+      paneTails.set('bloom', LOGIN_SELECT_METHOD_TAIL)
+      windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
+
+      const loginKey = keysSent.find(k => k.tmuxName === 'bloom' && k.keys.includes('/login'))
+      expect(loginKey).toBeUndefined()
+
+      // Should still notify
+      const loginMsg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(loginMsg).not.toBeUndefined()
+      expect(loginMsg!.text).toContain('authentication')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
   })
 
   it('tags admin user when byte needs login', async () => {
-    paneTails.set('discord-byte', LOGIN_PROMPT_TAIL)
+    paneTails.set('discord-byte', LOGIN_SELECT_METHOD_TAIL)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
 
     probeAllSessions(T0)
@@ -436,9 +526,11 @@ describe('probeAllSessions', () => {
 
   it('reads BYTE_SESSION_NAME from env', async () => {
     const origEnv = process.env.BYTE_SESSION_NAME
+    const origLogin = process.env.HYDRA_AUTO_LOGIN
     process.env.BYTE_SESSION_NAME = 'custom-byte'
+    process.env.HYDRA_AUTO_LOGIN = '1'
     try {
-      paneTails.set('custom-byte', LOGIN_PROMPT_TAIL)
+      paneTails.set('custom-byte', LOGIN_SELECT_METHOD_TAIL)
       windowActivity.set('custom-byte', Math.floor(T0 / 1000) - 60)
 
       probeAllSessions(T0)
@@ -450,6 +542,8 @@ describe('probeAllSessions', () => {
     } finally {
       if (origEnv !== undefined) process.env.BYTE_SESSION_NAME = origEnv
       else delete process.env.BYTE_SESSION_NAME
+      if (origLogin !== undefined) process.env.HYDRA_AUTO_LOGIN = origLogin
+      else delete process.env.HYDRA_AUTO_LOGIN
     }
   })
 })

@@ -24,10 +24,13 @@ import { safeSend } from './util.js'
 
 export type BlockingKind = 'plan_mode' | 'login_required'
 
+export type LoginStage = 'expiring' | 'blocked' | 'oauth_url' | 'success'
+
 export type BlockingState = {
   kind: BlockingKind
   planPath: string | null
-  loginExpiring: boolean
+  loginStage: LoginStage | null
+  oauthUrl: string | null
 }
 
 type ProbeEntry = {
@@ -115,44 +118,62 @@ export function _resetIO(): void { io = defaultIO }
 // previous state) does not trigger detection.
 // ---------------------------------------------------------------------------
 
-// Plan mode: CC renders a specific multi-line dialog. We require BOTH
-// the "plan mode" indicator AND the option menu to co-occur in the tail.
-const PLAN_ENTERED_RE = /Entered plan mode/
-const PLAN_OPTIONS_RE = /Yes, and bypass permissions|Yes, manually approve edits|Tell Claude what to change/
+// Plan mode: CC renders a multi-line dialog. On long plans, "Entered plan mode"
+// scrolls above the tail — only the options menu is visible. The three-option
+// menu is unique to plan mode, so we require at least two of the three options
+// to co-occur (guards against a single phrase appearing in prose).
+const PLAN_OPTION_A = /Yes, and bypass permissions/
+const PLAN_OPTION_B = /Yes, manually approve edits/
+const PLAN_OPTION_C = /Tell Claude what to change/
 const PLAN_PATH_RE = /\.claude\/plans\/([^\s·/][^\s·]*\.md)/
 
-// Login: CC renders a specific prompt or expiry warning. We match CC's actual
-// auth text, not arbitrary prose containing "/login".
-const LOGIN_BLOCKED_PATTERNS = [
-  /^Please sign in at/m,
-  /^Open this URL to sign in/m,
-  /^Your session has expired/m,
-  /^Authentication required/m,
-  /^⚠️\s+Not authenticated/m,
-]
-
-// The expiry warning ("Your login expires in 1 day · run /login to renew") is
-// proactive — the session still works, but will freeze when the token expires.
-// Same remedy: send /login to renew.
+// Login: CC renders specific prompts at each stage. Patterns derived from
+// actual CC screenshots (2026-08-06).
+//
+// Stage 1 — expiry warning (session still works):
+//   "⚠️ Your login expires in 1 day · run /login to renew"
 const LOGIN_EXPIRING_PATTERNS = [
   /Your login expires in/,
   /run \/login to renew/,
 ]
+// Stage 2 — hard block (session frozen):
+//   "Login" heading + "Select login method:" menu
+const LOGIN_BLOCKED_PATTERNS = [
+  /^  +Login$/m,
+  /Select login method:/,
+]
+// Stage 3 — mid-flow: browser didn't open, OAuth URL shown:
+//   "Browser didn't open? Use the url below to sign in"
+const LOGIN_URL_RE = /Browser didn't open/
+const OAUTH_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\S+/
+// Stage 4 — success, needs Enter to dismiss:
+//   "Login successful. Press Enter to continue…"
+const LOGIN_SUCCESS_RE = /Login successful/
 
 // ---------------------------------------------------------------------------
 // Detection (pure — operates on tail text only)
 // ---------------------------------------------------------------------------
 
 export function detectBlockingState(tailText: string): BlockingState | null {
-  if (PLAN_ENTERED_RE.test(tailText) && PLAN_OPTIONS_RE.test(tailText)) {
+  const planOptionCount = [PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C]
+    .filter(re => re.test(tailText)).length
+  if (planOptionCount >= 2) {
     const pathMatch = tailText.match(PLAN_PATH_RE)
-    return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginExpiring: false }
+    return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginStage: null, oauthUrl: null }
+  }
+  // Login stages in priority order — later stages take precedence (the flow progresses)
+  if (LOGIN_SUCCESS_RE.test(tailText)) {
+    return { kind: 'login_required', planPath: null, loginStage: 'success', oauthUrl: null }
+  }
+  if (LOGIN_URL_RE.test(tailText)) {
+    const urlMatch = tailText.match(OAUTH_URL_RE)
+    return { kind: 'login_required', planPath: null, loginStage: 'oauth_url', oauthUrl: urlMatch?.[0] ?? null }
   }
   if (LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
-    return { kind: 'login_required', planPath: null, loginExpiring: false }
+    return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
   }
   if (LOGIN_EXPIRING_PATTERNS.some(p => p.test(tailText))) {
-    return { kind: 'login_required', planPath: null, loginExpiring: true }
+    return { kind: 'login_required', planPath: null, loginStage: 'expiring', oauthUrl: null }
   }
   return null
 }
@@ -208,27 +229,51 @@ function readPlanSummary(planPath: string | null): string | null {
 // Remediation — re-confirms prompt is still on screen before sending keys
 // ---------------------------------------------------------------------------
 
+function isPlanModeOnScreen(tail: string): boolean {
+  return [PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C]
+    .filter(re => re.test(tail)).length >= 2
+}
+
 function confirmAndApprovePlan(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
-  if (!tail) return false
-  if (!PLAN_ENTERED_RE.test(tail) || !PLAN_OPTIONS_RE.test(tail)) return false
+  if (!tail || !isPlanModeOnScreen(tail)) return false
   return io.sendKeys(tmuxName, 'Enter')
 }
 
 function confirmAndRejectPlan(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
-  if (!tail) return false
-  if (!PLAN_ENTERED_RE.test(tail) || !PLAN_OPTIONS_RE.test(tail)) return false
+  if (!tail || !isPlanModeOnScreen(tail)) return false
   return io.sendKeys(tmuxName, 'Down', 'Down', 'Enter')
 }
 
+function autoLoginEnabled(): boolean {
+  const v = process.env.HYDRA_AUTO_LOGIN?.trim().toLowerCase()
+  return v === '1' || v === 'true' || v === 'claude'
+}
+
 function confirmAndSendLogin(tmuxName: string): boolean {
+  if (!autoLoginEnabled()) return false
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   const blocked = LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
   const expiring = LOGIN_EXPIRING_PATTERNS.some(p => p.test(tail))
   if (!blocked && !expiring) return false
   return io.sendKeys(tmuxName, '/login', 'Enter')
+}
+
+function confirmAndDismissLoginSuccess(tmuxName: string): boolean {
+  if (!autoLoginEnabled()) return false
+  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  if (!tail) return false
+  if (!LOGIN_SUCCESS_RE.test(tail)) return false
+  return io.sendKeys(tmuxName, 'Enter')
+}
+
+function extractOauthUrl(tmuxName: string): string | null {
+  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES * 4)
+  if (!tail) return null
+  const match = tail.match(OAUTH_URL_RE)
+  return match?.[0] ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +349,7 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
 
   try {
     const name = entry.tmuxName
+    const stage = entry.state.loginStage
     const access = loadAccess()
     const adminUserId = access.allowFrom[0]
 
@@ -322,28 +368,48 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
       return
     }
 
-    const loginSent = confirmAndSendLogin(name)
-    const expiring = entry.state.loginExpiring
+    let lines: string[]
 
-    const lines = expiring
-      ? [
-          `> 🔑 ${mention}**${name}** — login expiring soon.`,
-          loginSent
-            ? `> Sent \`/login\` to renew. If a browser auth URL appears, click it.`
-            : `> Auto-renew failed. Run: \`tmux attach -t ${name}\` then type \`/login\``,
-        ]
-      : [
-          `> ⚠️ ${mention}**${name}** needs authentication${entry.isMain ? ' — all message processing is paused' : ''}.`,
-          loginSent
-            ? `> Sent \`/login\` automatically. If a browser auth URL appears, click it to authenticate.`
-            : `> Auto-login failed. Run: \`tmux attach -t ${name}\` then type \`/login\``,
-        ]
+    if (stage === 'success') {
+      // Login succeeded — dismiss with Enter
+      const dismissed = confirmAndDismissLoginSuccess(name)
+      lines = [
+        `> ✅ **${name}** — login successful.`,
+        dismissed
+          ? `> Dismissed automatically. Session resuming.`
+          : `> Press Enter in the session to continue: \`tmux attach -t ${name}\``,
+      ]
+    } else if (stage === 'oauth_url') {
+      // OAuth URL is showing — extract and post it
+      const url = entry.state.oauthUrl ?? extractOauthUrl(name)
+      lines = [
+        `> 🔗 ${mention}**${name}** — authenticate here:`,
+        url ? `> ${url}` : `> _Could not extract URL. Run: \`tmux attach -t ${name}\`_`,
+      ]
+    } else if (stage === 'expiring') {
+      const loginSent = confirmAndSendLogin(name)
+      lines = [
+        `> 🔑 ${mention}**${name}** — login expiring soon.`,
+        loginSent
+          ? `> Sent \`/login\` to renew. If a browser auth URL appears, click it.`
+          : `> Run: \`tmux attach -t ${name}\` then type \`/login\``,
+      ]
+    } else {
+      // blocked — "Select login method:" prompt
+      const loginSent = confirmAndSendLogin(name)
+      lines = [
+        `> ⚠️ ${mention}**${name}** needs authentication${entry.isMain ? ' — all message processing is paused' : ''}.`,
+        loginSent
+          ? `> Sent \`/login\` automatically. If a browser auth URL appears, click it to authenticate.`
+          : `> Run: \`tmux attach -t ${name}\` then type \`/login\``,
+      ]
+    }
 
     await safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now
     entry.notifyCount++
 
-    process.stderr.write(`daemon: pane-probe: ${name} needs login, notified${loginSent ? ' + auto-triggered' : ''}\n`)
+    process.stderr.write(`daemon: pane-probe: ${name} login stage=${stage}, notified\n`)
   } finally {
     entry.notifying = false
   }
@@ -403,6 +469,16 @@ export function probeAllSessions(now?: number): void {
 
     const existing = probeEntries.get(key)
     if (existing && existing.state.kind === detected.kind) {
+      // Login stage progression — notify immediately without debounce
+      const stageChanged = detected.kind === 'login_required' &&
+        existing.state.loginStage !== detected.loginStage
+      if (stageChanged) {
+        existing.state = detected
+        existing.notifiedAt = null // reset cooldown for new stage
+        void notifyLoginRequired(existing, t)
+        continue
+      }
+
       existing.consecutive++
 
       if (existing.consecutive >= CONFIRM_PROBES) {
