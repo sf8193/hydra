@@ -13,7 +13,14 @@ Discord/Slack Gateway → Daemon → Bridge (MCP) → Claude Code
 
 Each layer can fail independently. The daemon is long-lived (one per platform). Each Claude session gets its own bridge. The byte is the main session; spawns are children in threads.
 
-Architecture details: `README.md`. Import topology: `docs/topology.mmd` / `docs/topology.html`. Runtime health topology: `docs/health-topology.mmd`.
+Architecture details: `README.md`. Import topology: `docs/topology.mmd` / `docs/topology.html`.
+
+Key flow diagrams in `diagrams/` (mmd source + png rendered):
+- `flow-spawn` / `flow-cli-spawn` — how sessions are created through each layer
+- `flow-recovery-cascade` — resume → fork-transcript → respawn tiers + death detection
+- `flow-protocol-robustness` — protocol phases, mutual exclusion, disconnect grace handling
+- `command-topology` — two-channel routing (chat + CLI) to shared daemon primitives
+- `health-topology` — runtime component connections and state file locations
 
 ## First: Health Check
 

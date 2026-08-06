@@ -1,0 +1,67 @@
+%% Command Topology — Two Channels, One Daemon
+%% Chat is the human channel. CLI is the machine channel.
+%% Both converge on the same daemon primitives.
+
+flowchart TD
+    subgraph human["Human (Chat)<br/>Slack / Discord"]
+        chat_in["gateway.ts"]
+        chat_route["router.ts"]
+    end
+
+    subgraph machine["Machine (CLI)<br/>Scripts / Cron / Agents"]
+        cli_in["unix socket"]
+        cli_route["cli-handler.ts"]
+        cli_gates["CLI-only gates<br/><i>auth · idempotency</i>"]
+        cli_only["CLI-Only<br/>clear-key<br/><i>(future: config)</i>"]
+    end
+
+    subgraph global_cmds["Global Commands<br/>DM-scoped or any context"]
+        spawn["spawn:"]
+        list["list sessions"]
+        kill["kill session:"]
+        health["health"]
+        recover_cmd["recover"]
+        restart["restart"]
+    end
+
+    subgraph thread_cmds["Thread Commands<br/>Session thread context required"]
+        fork["fork"]
+        resume_cmd["resume"]
+        respawn_cmd["respawn"]
+        handoff_cmd["handoff"]
+        review_cmd["/review"]
+        build_cmd["build"]
+        design_cmd["design:"]
+        watch["watch"]
+    end
+
+    subgraph primitives["Shared Daemon Primitives<br/>Both channels converge here — identical lifecycle, identical guarantees"]
+        doSpawn["doSpawnSession"]
+        killSession["killSession"]
+        registry["SessionRegistry"]
+        transport["BridgeTransport"]
+        gw["Gateway"]
+    end
+
+    subgraph runtime["Runtime"]
+        tmux["tmux session<br/><i>Claude Code process</i>"]
+        thread["Chat thread<br/><i>Slack / Discord</i>"]
+        bridge["Bridge connection<br/><i>MCP relay</i>"]
+    end
+
+    chat_in --> chat_route
+    chat_route --> global_cmds
+    chat_route --> thread_cmds
+
+    cli_in --> cli_route
+    cli_route --> cli_gates
+    cli_gates --> cli_only
+    cli_gates --> global_cmds
+    cli_gates --> thread_cmds
+
+    global_cmds --> primitives
+    thread_cmds --> primitives
+
+    doSpawn --> tmux
+    registry --> thread
+    transport --> bridge

@@ -1,0 +1,31 @@
+%% resurrect 🫀 — Flow Through Layers
+%% Recovers a dead thread by spawning fresh into the SAME thread and reading history.
+
+sequenceDiagram
+    participant User
+    participant gateway as gateway.ts
+    participant router as router.ts
+    participant thread as commands/<br/>thread.ts
+    participant lifecycle as session-<br/>lifecycle.ts
+    participant sessions as sessions.ts
+    participant transport as bridge-<br/>transport.ts
+    participant cc as New Claude<br/>Code session
+
+    User->>gateway: "resurrect" in dead thread
+    gateway->>router: InboundMessage (isThread)
+    router->>thread: handleResurrectIntercept(msg)
+    thread-->>User: react(🫀)
+    thread->>thread: check resurrectsInProgress
+    thread->>lifecycle: resolveThread → stale session?
+    thread->>lifecycle: killSession(stale, "resurrecting")
+    thread->>lifecycle: doSpawnSession(opts: existingThreadId)
+    Note over lifecycle: SKIPS thread creation
+    lifecycle->>lifecycle: spawn tmux
+    lifecycle->>sessions: register to EXISTING thread
+    lifecycle-->>User: send(🫀 confirmation)
+    lifecycle->>transport: sendOrQueue(resurrect prompt)
+    Note right of transport: 'fetch_messages + read memory'
+    cc->>transport: bridge registers
+    transport->>cc: prompt delivered
+    cc->>cc: reads thread history
+    cc-->>User: reply(context summary)
