@@ -30,13 +30,19 @@ const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 // ---------------------------------------------------------------------------
 
 type ChannelProbe = { isThread: boolean; isDM: boolean; parentId: string | null }
+type ChannelResolution = {
+  targetChannelId: string
+  threadId?: string
+  parentChannelId?: string
+  warning?: string
+}
 
 export async function resolveSpawnChannel(
   chatId: string | undefined,
   defaultChannel: string,
   fetchChannel: (id: string) => Promise<ChannelProbe>,
   canThreadInDM: boolean,
-): Promise<{ targetChannelId: string; threadId?: string; parentChannelId?: string }> {
+): Promise<ChannelResolution> {
   if (!chatId) return { targetChannelId: defaultChannel }
   try {
     const ch = await fetchChannel(chatId)
@@ -45,14 +51,21 @@ export async function resolveSpawnChannel(
       if (parentChannelId) {
         return { targetChannelId: parentChannelId, parentChannelId }
       }
-      return { targetChannelId: defaultChannel }
+      return {
+        targetChannelId: defaultChannel,
+        warning: `chatId ${chatId} is a thread with no parentId — structurally unexpected, falling back to default channel`,
+      }
     }
     if (ch.isDM && !canThreadInDM) {
       return { targetChannelId: defaultChannel }
     }
     return { targetChannelId: chatId }
-  } catch {
-    return { targetChannelId: defaultChannel }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return {
+      targetChannelId: defaultChannel,
+      warning: `fetchChannel(${chatId}) failed: ${msg} — falling back to default channel`,
+    }
   }
 }
 
@@ -377,6 +390,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     targetChannelId = resolved.targetChannelId
     parentChannelId = resolved.parentChannelId
     if (resolved.threadId) threadId = resolved.threadId
+    if (resolved.warning) process.stderr.write(`daemon: WARNING: ${resolved.warning}\n`)
 
     // Clean up dead session in this thread before spawning
     if (threadId) {
@@ -457,6 +471,17 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         anchorMessageId = thread.anchorMessageId
         anchorChannelId = thread.anchorChannelId
       }
+    }
+    // Backfill anchorChannelId if still missing (e.g. resurrected sessions
+    // whose predecessors never had it). Resolve from the thread's parent.
+    if (!anchorChannelId && threadId) {
+      try {
+        const ch = await gateway.fetchChannel(threadId)
+        if (ch.isThread && ch.parentId) {
+          anchorChannelId = ch.parentId
+          process.stderr.write(`daemon: backfilled anchorChannelId=${ch.parentId} from thread ${threadId}\n`)
+        }
+      } catch {}
     }
   }
 

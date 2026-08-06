@@ -431,7 +431,7 @@ async function spawnBuilder(
   ].join('\n'))
 
   const pmInfo = registry.get(state.pmSessionId)
-  const chatId = pmInfo?.anchorChannelId || state.pmThreadId.split(':')[0] || undefined
+  const chatId = pmInfo?.anchorChannelId || state.pmThreadId
 
   const result = await doSpawnSession(`factory-builder: ${state.spec.slice(0, 60)}`, chatId, undefined, {
     forkFrom: { claudeSessionId: pmClaudeSessionId, parentName: pmTmuxName },
