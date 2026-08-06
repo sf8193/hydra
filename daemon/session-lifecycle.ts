@@ -342,8 +342,18 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       try {
         const ch = await gateway.fetchChannel(targetChannelId)
         if (ch.isThread) {
-          threadId = ch.id
+          // chatId resolved to a thread, but the caller didn't explicitly ask
+          // to join it (existingThreadId/joinThread handle that). Resolve the
+          // parent channel and create a new sibling thread instead of silently
+          // spawning into the existing one.
           parentChannelId = ch.parentId ?? undefined
+          if (parentChannelId) {
+            targetChannelId = parentChannelId
+            process.stderr.write(`daemon: chatId ${chatId} is a thread — resolved parent channel ${parentChannelId} for new thread\n`)
+          } else {
+            targetChannelId = DEFAULT_SESSION_CHANNEL
+            process.stderr.write(`daemon: chatId ${chatId} is a thread with no parent — falling back to default channel\n`)
+          }
         } else if (ch.isDM && !gateway.canThreadInDM) {
           targetChannelId = DEFAULT_SESSION_CHANNEL
         }
