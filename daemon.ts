@@ -87,8 +87,12 @@ import { logSubscriptions } from './daemon/event-bus.js'
 queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './daemon/phase-budget.js'
-import { killSession, discoverClaudeSessionId } from './daemon/session-lifecycle.js'
+import { killSession, discoverClaudeSessionId, backfillAnchorChannelIds } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)
+
+backfillAnchorChannelIds().catch(err => {
+  process.stderr.write(`daemon: anchorChannelId backfill failed: ${err}\n`)
+})
 
 import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))

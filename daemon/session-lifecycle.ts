@@ -57,6 +57,7 @@ export async function resolveSpawnChannel(
       }
     }
     if (ch.isDM && !canThreadInDM) {
+      // Intentionally silent — DMs without thread support are expected on Slack
       return { targetChannelId: defaultChannel }
     }
     return { targetChannelId: chatId }
@@ -67,6 +68,37 @@ export async function resolveSpawnChannel(
       warning: `fetchChannel(${chatId}) failed: ${msg} — falling back to default channel`,
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Boot-time backfill — resolve anchorChannelId for sessions missing it
+// ---------------------------------------------------------------------------
+
+export async function backfillAnchorChannelIds(): Promise<void> {
+  const missing = [...registry.values()].filter(s => !s.anchorChannelId && s.threadId)
+  if (missing.length === 0) return
+
+  process.stderr.write(`daemon: backfill: ${missing.length} session(s) missing anchorChannelId\n`)
+  let filled = 0
+  let failed = 0
+
+  for (const info of missing) {
+    try {
+      const ch = await gateway.fetchChannel(info.threadId)
+      if (ch.isThread && ch.parentId) {
+        info.anchorChannelId = ch.parentId
+        filled++
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: WARNING: backfill anchorChannelId failed for ${info.tmuxName} (thread ${info.threadId}): ${err}\n`)
+      failed++
+    }
+    // Stagger to avoid Discord rate limits during fleet recovery
+    if (missing.length > 1) await new Promise(r => setTimeout(r, 200))
+  }
+
+  if (filled > 0) registry.persist()
+  process.stderr.write(`daemon: backfill: ${filled} filled, ${failed} failed, ${missing.length - filled - failed} skipped\n`)
 }
 
 // Per-session pane logfile — `tmux pipe-pane` captures each spawn's output so a
@@ -472,8 +504,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         anchorChannelId = thread.anchorChannelId
       }
     }
-    // Backfill anchorChannelId if still missing (e.g. resurrected sessions
-    // whose predecessors never had it). Resolve from the thread's parent.
+    // Backfill anchorChannelId if still missing (e.g. spawning into a thread
+    // via existingThreadId/joinThread whose prior occupant lacked it).
     if (!anchorChannelId && threadId) {
       try {
         const ch = await gateway.fetchChannel(threadId)
@@ -481,7 +513,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           anchorChannelId = ch.parentId
           process.stderr.write(`daemon: backfilled anchorChannelId=${ch.parentId} from thread ${threadId}\n`)
         }
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: WARNING: backfill anchorChannelId failed for thread ${threadId}: ${err}\n`)
+      }
     }
   }
 
