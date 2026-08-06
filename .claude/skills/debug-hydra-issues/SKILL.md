@@ -1,31 +1,38 @@
 ---
 name: debug-hydra-issues
-description: Use when debugging hydra daemon issues — sessions not responding, spawns failing, bridges disconnecting, fleet health problems. Orients a fresh session with the diagnostic tools, file locations, and incident patterns learned from real outages.
+description: Use when hydra is broken — sessions not responding, spawns failing, daemon won't start, bridges disconnecting. Orients you to the diagnostic tools, file locations, and traps learned from real outages.
 ---
 
 # Debugging Hydra Issues
 
-This skill orients you to debug hydra daemon problems. Everything here was learned from real incidents — not hypothetical failure modes.
+Hydra is a four-layer pipeline:
 
-## First: Five-Second Health Check
+```
+Discord/Slack Gateway → Daemon → Bridge (MCP) → Claude Code
+```
 
-Run these before anything else:
+Each layer can fail independently. The daemon is long-lived (one per platform). Each Claude session gets its own bridge. The byte is the main session; spawns are children in threads.
+
+Architecture details: `README.md`. Import topology: `docs/topology.mmd` / `docs/topology.html`. Runtime health topology: `docs/health-topology.mmd`.
+
+## First: Health Check
+
+Run these before investigating anything:
 
 ```bash
-# 1. Is the daemon alive?
+# Is the daemon alive?
 hydra health
 
-# 2. Are tmux sessions running?
+# Are tmux sessions running?
 tmux ls
 
-# 3. Recent daemon errors (per-platform — don't use ~/hydra-daemon.log, it interleaves both platforms)
+# Recent errors — read the per-platform log, not ~/hydra-daemon.log (it interleaves both)
 tail -100 ~/hydra-discord-daemon.log | grep -i "error\|warn\|crash\|fail"
-tail -100 ~/hydra-slack-daemon.log | grep -i "error\|warn\|crash\|fail"
 
-# 4. Session state
+# Session state
 cat ~/.claude/channels/discord/sessions.json | python3 -m json.tool | head -50
 
-# 5. Is the byte's main bridge connected?
+# Is the byte's bridge connected?
 grep "bridge registered for session main" ~/hydra-discord-daemon.log | tail -3
 ```
 
@@ -33,173 +40,59 @@ grep "bridge registered for session main" ~/hydra-discord-daemon.log | tail -3
 
 | What | Path |
 |------|------|
-| Repo | `~/Documents/angellist/hydra` |
-| Discord state | `~/.claude/channels/discord/` |
-| Slack state | `~/.claude/channels/slack/` |
+| Repo | `~/Documents/hydra` (GitHub: `sf8193/hydra`) |
+| Per-platform state | `~/.claude/channels/{discord,slack}/` |
 | Session registry | `{state_dir}/sessions.json` |
-| Thread registry | `{state_dir}/threads.json` |
-| Access config | `{state_dir}/access.json` |
-| Daemon heartbeat | `{state_dir}/daemon.alive` |
-| Daemon PID | `{state_dir}/daemon.pid` |
-| Unix socket | `{state_dir}/daemon.sock` |
+| Daemon PID / heartbeat / socket | `{state_dir}/daemon.{pid,alive,sock}` |
 | Per-platform daemon log | `~/hydra-{platform}-daemon.log` |
-| Per-platform byte log | `~/hydra-{platform}-byte.log` |
 | Per-session spawn logs | `{state_dir}/spawn-logs/{name}-{uuid}.log` |
-| Factory history | `~/.hydra/factory/history.jsonl` |
-| Protocol transcripts | `{state_dir}/transcripts/` |
-| **Bridge MCP logs (the gold)** | `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl` — keyed by Claude session UUID. This is where "why did the bridge misbehave" actually lives. Undiscoverable without knowing Claude Code internals. |
+| **Bridge MCP logs** | `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl` — keyed by Claude session UUID. This is where bridge misbehavior actually lives. Undiscoverable without knowing CC internals. |
 | Managed settings gate | `/Library/Application Support/ClaudeCode/managed-settings.json` — must contain `{"channelsEnabled": true}` |
 
 ## Diagnostic Tools
 
-### CLI (from any terminal)
-| Command | What it shows |
-|---------|--------------|
-| `hydra health` | Daemon diagnostics — connected sessions, bridge status |
-| `hydra list` | Active sessions with status, context %, model |
-| `hydra status <name>` | Detailed session info |
-| `hydra peek <name>` | Read last N lines of session's tmux output (non-intrusive) |
+| Tool | What |
+|------|------|
+| `hydra health` | Daemon diagnostics — sessions, bridges, connections |
+| `hydra list` | Active sessions with status and context % |
+| `hydra peek <name>` | Read a session's terminal output (non-intrusive) |
+| `tmux capture-pane -t <name> -p` | Direct pane capture |
+| `ps aux \| grep -E "claude\|bun server.ts"` | Find orphaned processes |
 
-### Chat commands (from Discord/Slack)
-| Command | What it shows |
-|---------|--------------|
-| `health` | Same as CLI health, rendered in chat |
-| `list sessions` | Session table with lineage |
-| `protocols` | Active review/build/design protocols |
-| `peek <name>` | Peek a session's terminal from chat |
+From chat: `health`, `list sessions`, `peek <name>`.
 
-### Direct inspection
-```bash
-# Attach to a daemon's tmux (read-only observation)
-tmux attach -t discord-daemon
-tmux attach -t slack-daemon
+## How to Investigate
 
-# Peek a session's pane without attaching
-tmux capture-pane -t <session-name> -p | tail -50
+When the health check gives you a lead, follow it. When it doesn't, use this method:
 
-# Process tree — find orphaned claudes or bridges
-ps aux | grep -E "claude|bun server.ts" | grep -v grep
+1. **Compare counts.** Bridge processes (`ps aux | grep "bun server.ts" | grep -v grep | wc -l`) should roughly equal session count in `sessions.json`. A mismatch means orphans or leaked processes.
 
-# Check bridge count vs session count (should be roughly equal)
-ps aux | grep "bun server.ts" | grep -v grep | wc -l
-cat ~/.claude/channels/discord/sessions.json | python3 -c "import json,sys; print(len(json.load(sys.stdin)))"
+2. **Read the per-platform daemon log.** Not `~/hydra-daemon.log` — that interleaves both platforms. Scan for the last error, the last restart, and the last bridge registration.
 
-# Check if a session's bridge is actually connected
-grep "<session-name>" ~/hydra-discord-daemon.log | grep -E "register|disconnect" | tail -5
-```
+3. **Check sessions.json fields.** `claudeSessionId: null` means the bridge never connected. `listening: false` means the session is muted. These explain "not responding" without a crash.
 
-## Symptom → Diagnosis
+4. **Trace the message path.** A message flows: gateway → `router.ts` (command intercept + routing) → `bridge-transport.ts` (delivery) → bridge → Claude Code. Find where it stops. If the daemon log shows delivery but the session doesn't respond, the bridge is the suspect — check the bridge MCP logs.
 
-### "Session is not responding to messages"
+5. **Check the tmux server.** If spawns fail but existing sessions work, the tmux server may have lost filesystem access (this caused a real 45-minute outage). Test: `tmux new-session -d -s _probe 'ls ~/Documents/hydra > /tmp/probe.txt 2>&1; sleep 5'` then `cat /tmp/probe.txt`. "Operation not permitted" means the tmux server itself is broken — a `tmux kill-server` + `hydra up` from a granted terminal is the fix.
 
-**Check in order:**
-1. Is the session's tmux alive? `tmux has-session -t <name>`
-2. Is its bridge registered? Check `sessions.json` for `claudeSessionId` — if `null`, bridge never connected
-3. Is it listening? Check `listening` field in `sessions.json` — `false` means it's muted
-4. Is a protocol running? `protocols` — protocol mutual exclusion blocks normal message delivery
-5. Is context exhausted? `peek <name>` — look for "context limit" messages
+## Traps That Waste Time
 
-**If tmux-alive but bridge-disconnected:** This is an orphan (canon gotcha #64). The session is doing work but can't reply. The `AND` condition in crash detection (`tmux-dead AND bridge-disconnected`) means orphans are invisible to self-heal. See Recovery section.
+- **`bun`'s "low max file descriptors" error is a lie.** It scans cwd for `package.json`, gets EPERM, and misattributes. `ulimit -n` changes nothing. The real cause is filesystem access — check the tmux server (step 5 above).
 
-### "Spawn fails"
+- **`ps` argv is inherited by children.** `caffeinate` processes show claude's argv but are not claude. Check the process tree (`pstree` or `ps -o pid,ppid,comm`), not just the name.
 
-**Check in order:**
-1. Compile gate? `bun build daemon.ts --target bun --outdir /tmp/hb` — if this fails, the daemon won't start new sessions
-2. Thread already occupied? Error: `thread has a live session (X)` — kill or respawn, don't spawn fresh
-3. TCC / filesystem access? **This caused a 25-minute outage on 2026-07-31.** Probe from inside the daemon's tmux server: `tmux new-session -d -s _tcc 'ls ~/Documents/angellist > /tmp/tcc.txt 2>&1; sleep 30'`. If "Operation not permitted," the tmux server lost filesystem access — see Recovery.
-4. Factory spawn? Check `anchorChannelId` in `sessions.json` for the PM session. If missing, factory falls back to the PM's thread ID as `chatId` — fixed in PR #190 but may recur if `anchorChannelId` is absent
+- **The `AND` condition in crash detection means orphans are invisible.** `checkSessionDeath` requires both tmux-dead AND bridge-disconnected. A session that's tmux-alive but bridge-disconnected is an orphan — doing work but can't reply. `sessions.json` with `claudeSessionId: null` is the tell.
 
-**The bun error "possibly due to low max file descriptors" is a lie.** bun scans cwd for `package.json` at startup, gets EPERM, and misattributes it. Raising `ulimit -n` changes nothing. `bun --version` succeeds because it never touches cwd. This wasted 4 rounds of investigation on 2026-07-31.
+- **`bun run` is lazy.** Parse/export errors surface only when a module is imported, not at launch. A broken merge boots "fine" until the crashing code path loads.
 
-### "Daemon won't restart"
+- **Main bridge flapping** (`main bridge reconnected (cycle N, last uptime 0s)` repeating in logs) means two processes are both claiming to be `main`. They evict each other in a loop. Find duplicates: `ps aux | grep caffeinate | grep claude`.
 
-**Check in order:**
-1. Module validation probe? `hydra restart` runs a probe subprocess that imports the daemon module graph. If it fails, the old daemon stays running (by design). Check stderr for the probe failure.
-2. Is the checkout on the right branch? **The main checkout must stay on `live`, always** (canon gotcha #66). The watchdog restarts from whatever is checked out. If it's a feature branch, the running daemon executes code nobody intended to deploy.
-3. tmux server health? If the tmux server itself lost filesystem access (gotcha #65), nothing new can launch under it — restart won't work, spawns won't work, but existing sessions keep running.
+- **Don't trust `~/hydra-daemon.log`.** Both platforms tee into it. Read the per-platform logs instead.
 
-### "Factory build fails"
+## Recovery
 
-**Check in order:**
-1. "thread has a live session" error? Factory tries to fork the PM into a builder in a new thread. If `anchorChannelId` is missing on the PM session AND `doSpawnSession` can't resolve the parent channel, it may try to spawn into the PM's thread.
-2. Builder crashes immediately? Check spawn logs: `{state_dir}/spawn-logs/{builder-name}-*.log`
-3. Review fails to start? Factory transitions to `awaiting_pm` and notifies — check the PM's thread
-4. Factory state lost after restart? The `builds` map is in-memory only. `factory_retry`/`factory_accept`/`factory_abandon` won't work after daemon restart — use `peek_session` + `kill_session` directly
+For session-level issues, use `resume` (reconnects with full context) or `respawn` (fresh session, reads thread history). For daemon issues, `hydra restart <platform>` validates the module graph first — safe to run.
 
-### "Main bridge is flapping"
+For tmux server failure (step 5 above), capture the session inventory (`hydra list > /tmp/inventory.txt`) before `tmux kill-server`. Sessions die but threads persist — selectively respawn from the inventory.
 
-Symptoms: rapid `main bridge reconnected (cycle N, last uptime 0s)` in daemon log.
-
-**Root cause:** Two processes registered as `main`. The flap circuit breaker **explicitly exempts `main`** (canon gotcha #32), so they evict each other in an unbounded loop.
-
-**How duplicates arise:** A byte restart that doesn't cleanly replace the prior byte — the new `caffeinate -i claude` spawns nested inside the old byte.
-
-**Fix:** Kill all byte claudes (they outlive `tmux kill-session` — kill PIDs directly), relaunch exactly one. Check with `ps aux | grep caffeinate | grep claude`.
-
-**Mitigated in #183:** Bridge identity via `HYDRA_ROLE=main` replaces the `?? 'main'` fallback. Unconfigured bridges get `stray-` prefix. Flap guard (#126) remains as defense-in-depth.
-
-## Three Eras of Debugging History
-
-### Era 1: Bridge Resilience (June 2026)
-The daemon could crash-loop silently — watchdog faithfully restarted it every 120s while DMs got nothing. The compile gate caught import errors but not runtime crashes. Self-heal existed for Slack but not Discord. Lessons: heartbeat must be connectivity-aware (not just process-alive), compile check must run before killing the incumbent, and the watchdog must check both daemon AND byte.
-
-### Era 2: The Orphan/Flap War (July 23, 2026)
-A connectivity flap during spawn created an orphaned session (tmux-alive, bridge-never-registered). Manual recovery under-killed — left a bridge subprocess alive, causing duplicate registration, eviction ping-pong, and circuit breaker kills. 27 bridge processes vs 17 sessions. The QOL_BACKLOG (Q1-Q20) was born from this single incident. Key diagnostic discovery: bridge MCP logs at `~/Library/Caches/claude-cli-nodejs/...` are the gold — daemon logs alone can't explain bridge behavior.
-
-### Era 3: The Fleet Outage (July 31, 2026)
-The 45-day-old default tmux server lost filesystem access to `~/Documents`. Every new `bun` and `claude` launched under it died, but existing processes kept running — so the fleet looked healthy while nothing new could start. Three symptoms, one cause: daemon restart failed, spawns went to zombie, respawn fell through all tiers. `bun`'s error message ("low max file descriptors") was wrong and drove 4 wasted investigation rounds. Root cause still not definitively settled — endpoint security agent is leading candidate over TCC. Recovery: `tmux kill-server` → `hydra up` from a granted terminal. Principle 7 (health checks assert the outcome, not the precondition) was born here.
-
-## Recovery Playbook
-
-### Session recovery (least to most disruptive)
-1. **`resume`** — reconnects with full context (`--resume`). Three-tier cascade: full context → fork transcript → respawn from thread. Best option when session has a valid `claudeSessionId`.
-2. **`respawn`** — fresh session reads thread history via `fetch_messages`. Loses in-memory context but the thread carries the continuity (Design Principle 2).
-3. **`recover`** — batch recovery from DM channel. Cascade: tryResume → tryRespawn. Max 2 concurrent, 5s stagger.
-
-### Daemon recovery
-```bash
-# Restart daemon only (byte reconnects automatically)
-hydra restart discord   # validates module graph first, keeps old daemon if probe fails
-hydra restart discord --fast   # skip validation
-
-# Full restart
-hydra down discord && hydra up discord
-```
-
-### Nuclear recovery (tmux server rebuild)
-When the tmux server itself is broken (gotcha #65 — lost filesystem access):
-```bash
-# 1. Capture inventory FIRST
-hydra list > /tmp/session-inventory.txt
-
-# 2. Kill server from a terminal that has filesystem access (not from inside the broken server)
-tmux kill-server
-
-# 3. Restart from a granted terminal
-hydra up discord
-hydra up slack
-
-# 4. Reload watchdogs
-# (launchd plists auto-loaded by hydra up)
-
-# 5. Sessions are dead — threads persist. Selectively respawn from the inventory.
-```
-
-### Orphan recovery (tmux-alive, bridge-disconnected)
-**Do NOT use `resume-orphan-session.sh` as written — it under-kills** (canon gotcha #64, QOL Q13).
-
-The safe manual path:
-1. Capture the session's Claude UUID from its tmux pane — look for `Resume: claude --resume <uuid>`
-2. Kill the FULL descendant tree: `pkill -TERM -P <pane-pid>` recursively
-3. Verify no lingering `bun server.ts` for the old hydra ID: `ps aux | grep "bun server.ts" | grep -v grep`
-4. Relaunch in the shared tmux server replicating the daemon's resume form
-5. Verify `sessions.json` `claudeSessionId` flips from `null` to the UUID
-
-## Key Gotchas to Remember
-
-- **Don't trust `~/hydra-daemon.log`** — both platforms `tee` into it. Read the per-platform logs instead.
-- **`ps` argv is inherited by children** — `caffeinate` processes show claude's argv but are not claude. Check the process tree, not just the name.
-- **Bridge MCP logs are the gold** for diagnosing bridge behavior, but they're in an undiscoverable location (see "Where Things Live").
-- **The `AND` condition in crash detection means orphans are invisible** — `tmux-dead AND bridge-disconnected` both must be true.
-- **`bun run` is lazy** — parse/export errors surface only when a module is imported, not at launch. A broken merge boots "fine" until the crashing module loads.
-- **Diagnostic claims in the LOG have been wrong before** — the 2026-07-23 "nested duplicate byte claudes" was incorrect (they were bare `caffeinate` processes). Always verify process trees before acting on logged diagnoses.
+**Dangerous operations** (`tmux kill-server`, recursive `pkill`, `hydra down`) — confirm with the human before executing.

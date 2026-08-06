@@ -1,0 +1,70 @@
+%% Hydra runtime health topology — what runs, how it connects, where it breaks.
+%% Use alongside /debug-hydra-issues for diagnostic orientation.
+
+flowchart TD
+    subgraph platform["Platform"]
+        discord["Discord API"]
+        slack["Slack API"]
+    end
+
+    subgraph gateway["Gateway Process"]
+        dg["discord-gateway.ts"]
+        sg["slack-gateway.ts"]
+    end
+
+    subgraph daemon["Daemon (long-lived, one per platform)"]
+        router["router.ts<br/>command intercept + routing"]
+        transport["bridge-transport.ts<br/>session delivery"]
+        lifecycle["session-lifecycle.ts<br/>spawn / resume / kill"]
+        registry["protocol-registry.ts<br/>protocol dispatch"]
+        server["bridge-server.ts<br/>socket accept + death detect"]
+    end
+
+    subgraph sessions["Sessions (one tmux pane + bridge each)"]
+        byte["Byte (main)<br/>the primary session"]
+        spawn1["Spawn<br/>child in thread"]
+        spawn2["Spawn<br/>child in thread"]
+    end
+
+    subgraph bridges["Bridges (MCP relay, one per session)"]
+        b0["bridge.ts → byte"]
+        b1["bridge.ts → spawn"]
+        b2["bridge.ts → spawn"]
+    end
+
+    subgraph state["State (disk)"]
+        sj["sessions.json<br/>session registry"]
+        tj["threads.json<br/>thread→session map"]
+        logs["spawn-logs/<br/>per-session output"]
+        dlog["~/hydra-{platform}-daemon.log"]
+    end
+
+    discord --> dg
+    slack --> sg
+    dg --> router
+    sg --> router
+
+    router --> transport
+    router --> registry
+    transport --> server
+
+    server -- "unix socket" --> b0
+    server -- "unix socket" --> b1
+    server -- "unix socket" --> b2
+
+    b0 -- "MCP stdio" --> byte
+    b1 -- "MCP stdio" --> spawn1
+    b2 -- "MCP stdio" --> spawn2
+
+    lifecycle --> server
+    lifecycle -.-> sj
+    server -.-> sj
+    server -.-> dlog
+    lifecycle -.-> logs
+
+    %% Failure annotations
+    classDef fail stroke:#e74c3c,stroke-width:2px,stroke-dasharray:5 5
+    classDef health stroke:#27ae60,stroke-width:2px
+
+    class server,transport health
+    class dg,sg,b0,b1,b2 fail
