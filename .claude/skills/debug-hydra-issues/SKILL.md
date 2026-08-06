@@ -78,7 +78,7 @@ When the health check gives you a lead, follow it. When it doesn't, use this met
 
 3. **Check sessions.json fields.** `claudeSessionId: null` means the bridge never connected. `listening: false` means the session is muted. These explain "not responding" without a crash.
 
-4. **Trace the message path.** A message flows: gateway → `router.ts` (command intercept + routing) → `bridge-transport.ts` (delivery) → bridge → Claude Code. Find where it stops. If the daemon log shows delivery but the session doesn't respond, the bridge is the suspect — check the bridge MCP logs.
+4. **Trace the message path.** A message flows: `{platform}-gateway.ts` → `router.ts` (command intercept + routing) → `bridge-transport.ts` (delivery) → bridge → Claude Code / Codex. Find where it stops. If the daemon log shows delivery but the session doesn't respond, the bridge is the suspect — check the bridge MCP logs. (`gateway.ts` is the abstract interface — the concrete entry points are `discord-gateway.ts` and `slack-gateway.ts`.)
 
 5. **Check the tmux server.** If spawns fail but existing sessions work, the tmux server may have lost filesystem access (this caused a real 45-minute outage). Test: `tmux new-session -d -s _probe 'ls ~/Documents/angellist/hydra > /tmp/probe.txt 2>&1; sleep 5'` then `cat /tmp/probe.txt`. "Operation not permitted" means the tmux server itself is broken — a `tmux kill-server` + `hydra up` from a granted terminal is the fix.
 

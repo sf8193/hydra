@@ -4,7 +4,7 @@
 
 flowchart TD
     subgraph human["Human (Chat)<br/>Slack / Discord"]
-        chat_in["gateway.ts"]
+        chat_in["{platform}-gateway.ts"]
         chat_route["router.ts"]
     end
 
@@ -40,7 +40,7 @@ flowchart TD
         killSession["killSession"]
         registry["SessionRegistry"]
         transport["BridgeTransport"]
-        gw["Gateway"]
+        gw["Gateway<br/><i>(chat outbound only —<br/>CLI responds over socket)</i>"]
     end
 
     subgraph runtime["Runtime"]
