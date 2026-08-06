@@ -1,0 +1,28 @@
+%% spawn — Flow Through Layers
+%% Creates a new session with its own thread, tmux process, and bridge connection.
+
+sequenceDiagram
+    participant User
+    participant gateway as gateway.ts
+    participant router as router.ts
+    participant global as commands/<br/>global.ts
+    participant lifecycle as session-<br/>lifecycle.ts
+    participant sessions as sessions.ts
+    participant transport as bridge-<br/>transport.ts
+    participant cc as New Claude<br/>Code session
+
+    User->>gateway: 'spawn: investigate the bug'
+    gateway->>router: InboundMessage
+    router->>global: handleSpawnIntercept(msg, topic)
+    global-->>User: react(🚀)
+    global->>lifecycle: doSpawnSession(topic, chatId, msgId)
+    lifecycle->>sessions: pickSessionName
+    lifecycle->>gateway: createThread (Chat API)
+    lifecycle->>lifecycle: spawn tmux with claude --channels
+    lifecycle->>sessions: register session
+    lifecycle-->>User: send(confirmation + tmux attach)
+    lifecycle->>transport: sendOrQueue(spawn prompt)
+    Note right of transport: queued until bridge
+    cc->>transport: bridge registers
+    transport->>cc: prompt delivered
+    cc-->>User: reply(greeting)

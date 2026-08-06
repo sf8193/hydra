@@ -1,0 +1,35 @@
+%% CLI Spawn — Flow Through Layers
+%% The CLI path joins the daemon at doSpawnSession — same downstream as chat spawn.
+%% Green = CLI-specific. Purple = shared.
+
+sequenceDiagram
+    participant cli as CLI Client
+    participant server as bridge-server.ts
+    participant handler as cli-handler.ts
+    participant idemp as idempotency.ts
+    participant lifecycle as session-<br/>lifecycle.ts
+    participant sessions as sessions.ts
+    participant transport as bridge-<br/>transport.ts
+    participant cc as New Claude<br/>session
+
+    Note left of cli: hydra spawn --purpose X<br/>--prompt "..." --idempotency-key K
+    cli->>server: socket connect + JSON request (type: 'cli')
+    server->>handler: handleCLIRequest(req)
+    Note over handler: validateAuth
+    handler->>idemp: checkIdempotency(key)
+    Note over idemp: not blocked
+    handler->>lifecycle: doSpawnSession(topic, notifyThread)
+    lifecycle->>sessions: pickSessionName
+    lifecycle->>lifecycle: createThread (→ Chat API)
+    lifecycle->>lifecycle: spawn tmux with claude --channels
+    lifecycle->>sessions: register session
+    lifecycle->>transport: sendOrQueue(spawn prompt)
+    Note right of transport: queued until bridge
+    cc->>transport: bridge registers
+    transport->>cc: prompt delivered
+    handler->>idemp: registerIdempotency(key, sessionId)
+    Note over handler: set CLIState
+    handler->>server: CLIResponse JSON
+    server-->>cli: write response → socket.end()
+    cc-->>cli: reply(greeting in thread)
+    Note left of cli: exit 0 — spawned: spark (session-id)

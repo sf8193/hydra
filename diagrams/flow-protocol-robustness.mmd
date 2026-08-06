@@ -1,0 +1,32 @@
+%% Protocol Robustness
+%% Protocol phases, mutual exclusion, and disconnect handling.
+
+flowchart TD
+    subgraph protocols["Protocols"]
+        review["<b>Review</b><br/>critic_turn > owner_turn<br/>> cleanup > complete<br/><i>owner + critic</i>"]
+        build["<b>Build</b><br/>implementing > reviewing<br/>> complete<br/><i>owner + critic</i>"]
+        design["<b>Design</b><br/>spawning > questioning > answering<br/>> independent > synthesis > ...<br/><i>personas + singletons</i>"]
+    end
+
+    review -- blocks --> build
+    build -- blocks --> design
+    review -- blocks --> design
+
+    note["one protocol per thread"]
+
+    subgraph disconnect["Disconnect Handling"]
+        direction LR
+        disc["disconnect"] --> grace["grace timer"]
+        grace -- timeout --> cancel["cancel"]
+        grace -- reconnect --> continue["continue"]
+    end
+
+    subgraph roles["Grace Periods by Role"]
+        direction LR
+        r1["Critic (review/build): <b>30s</b><br/><i>cheap to replace</i>"]
+        r2["Owner (review/build): <b>2min</b><br/><i>human context</i>"]
+        r3["Persona (design): <b>0s</b><br/><i>expendable</i>"]
+        r4["Singleton (synth/auditor/brief): <b>30s</b><br/><i>one-of-a-kind role</i>"]
+    end
+
+    note2["All completion paths clear disconnect timers.<br/>Build heartbeat interval cleared on complete."]

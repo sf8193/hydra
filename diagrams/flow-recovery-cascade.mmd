@@ -1,0 +1,48 @@
+%% Recovery Cascade
+%% Three tiers of session recovery, plus death detection trigger.
+
+flowchart TD
+    subgraph triggers["Entry Points"]
+        resume["resume<br/><i>thread-scoped</i>"]
+        respawn["respawn<br/><i>thread-scoped</i>"]
+        recover["recover<br/><i>global batch</i>"]
+    end
+
+    subgraph cascade["Recovery Tiers"]
+        t1["<b>T1: --resume</b><br/>full context restoration"]
+        t2["<b>T2: --resume --fork-session</b><br/>transcript copy"]
+        t3["<b>T3: tryRespawn</b><br/>fresh session reads thread"]
+    end
+
+    subgraph outcomes["Outcomes"]
+        full["full history"]
+        transcript["transcript"]
+        thread["thread context"]
+        fail["<b>report failure</b>"]
+    end
+
+    subgraph death["Death Detection"]
+        detect["bridge disconnect<br/>+ tmux dead"]
+        check["checkSessionDeath()<br/><i>bridge-server.ts</i>"]
+        crashed["name crashed → resume"]
+    end
+
+    resume -.-> t1
+    recover -.-> t1
+    respawn -.-> t3
+
+    t1 -- ok --> full
+    t1 -- fail --> t2
+    t2 -- ok --> transcript
+    t2 -- fail --> t3
+    t3 -- ok --> thread
+    t3 -- fail --> fail
+
+    detect --> check --> crashed
+    crashed -.-> t1
+
+    subgraph primitives["Shared Primitives"]
+        tryResume["<b>tryResume</b><br/>drives T1 + T2"]
+        tryRespawn["<b>tryRespawn</b><br/>drives T3"]
+        waitForBridge["<b>waitForBridge</b><br/>validates health after recovery"]
+    end

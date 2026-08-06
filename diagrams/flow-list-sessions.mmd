@@ -1,0 +1,25 @@
+%% list sessions — Flow Through Layers
+%% Reads all sessions, formats time-bucketed display, enriches progressively.
+
+sequenceDiagram
+    participant User
+    participant gateway as gateway.ts
+    participant router as router.ts
+    participant status as commands/<br/>status.ts
+    participant sessions as sessions.ts<br/>SessionRegistry
+    participant transport as bridge-<br/>transport.ts
+    participant util as util.ts
+
+    User->>gateway: types "list sessions"
+    gateway->>router: InboundMessage
+    router->>status: handleListIntercept(msg)
+    status-->>User: react(📊)
+    status->>sessions: read all sessions
+    sessions->>transport: check bridge connectivity
+    transport->>util: formatDuration per session
+    status->>status: buildListOutput (time-bucketed)
+    status-->>User: send(rich Markdown list)
+    status->>status: track msg_id in FILO queue
+    Note over status: Phase 2: enrich async
+    status->>gateway: fetchMessages per thread
+    status-->>User: edit(enriched list)
