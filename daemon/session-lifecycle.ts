@@ -25,6 +25,37 @@ import { classifyResumeFailure } from './resume-health.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
+// ---------------------------------------------------------------------------
+// Channel resolution — determines where to create a new thread
+// ---------------------------------------------------------------------------
+
+type ChannelProbe = { isThread: boolean; isDM: boolean; parentId: string | null }
+
+export async function resolveSpawnChannel(
+  chatId: string | undefined,
+  defaultChannel: string,
+  fetchChannel: (id: string) => Promise<ChannelProbe>,
+  canThreadInDM: boolean,
+): Promise<{ targetChannelId: string; threadId?: string; parentChannelId?: string }> {
+  if (!chatId) return { targetChannelId: defaultChannel }
+  try {
+    const ch = await fetchChannel(chatId)
+    if (ch.isThread) {
+      const parentChannelId = ch.parentId ?? undefined
+      if (parentChannelId) {
+        return { targetChannelId: parentChannelId, parentChannelId }
+      }
+      return { targetChannelId: defaultChannel }
+    }
+    if (ch.isDM && !canThreadInDM) {
+      return { targetChannelId: defaultChannel }
+    }
+    return { targetChannelId: chatId }
+  } catch {
+    return { targetChannelId: defaultChannel }
+  }
+}
+
 // Per-session pane logfile — `tmux pipe-pane` captures each spawn's output so a
 // crash still leaves it on disk.
 
@@ -338,21 +369,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let targetChannelId = chatId
   let parentChannelId: string | undefined
   if (!threadId && !isHeadless) {
-    if (targetChannelId) {
-      try {
-        const ch = await gateway.fetchChannel(targetChannelId)
-        if (ch.isThread) {
-          threadId = ch.id
-          parentChannelId = ch.parentId ?? undefined
-        } else if (ch.isDM && !gateway.canThreadInDM) {
-          targetChannelId = DEFAULT_SESSION_CHANNEL
-        }
-      } catch {
-        targetChannelId = DEFAULT_SESSION_CHANNEL
-      }
-    } else {
-      targetChannelId = DEFAULT_SESSION_CHANNEL
-    }
+    const resolved = await resolveSpawnChannel(
+      chatId, DEFAULT_SESSION_CHANNEL,
+      id => gateway.fetchChannel(id),
+      !!gateway.canThreadInDM,
+    )
+    targetChannelId = resolved.targetChannelId
+    parentChannelId = resolved.parentChannelId
+    if (resolved.threadId) threadId = resolved.threadId
 
     // Clean up dead session in this thread before spawning
     if (threadId) {
