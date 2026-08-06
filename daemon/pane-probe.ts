@@ -118,10 +118,13 @@ export function _resetIO(): void { io = defaultIO }
 // previous state) does not trigger detection.
 // ---------------------------------------------------------------------------
 
-// Plan mode: CC renders a specific multi-line dialog. We require BOTH
-// the "plan mode" indicator AND the option menu to co-occur in the tail.
-const PLAN_ENTERED_RE = /Entered plan mode/
-const PLAN_OPTIONS_RE = /Yes, and bypass permissions|Yes, manually approve edits|Tell Claude what to change/
+// Plan mode: CC renders a multi-line dialog. On long plans, "Entered plan mode"
+// scrolls above the tail — only the options menu is visible. The three-option
+// menu is unique to plan mode, so we require at least two of the three options
+// to co-occur (guards against a single phrase appearing in prose).
+const PLAN_OPTION_A = /Yes, and bypass permissions/
+const PLAN_OPTION_B = /Yes, manually approve edits/
+const PLAN_OPTION_C = /Tell Claude what to change/
 const PLAN_PATH_RE = /\.claude\/plans\/([^\s·/][^\s·]*\.md)/
 
 // Login: CC renders specific prompts at each stage. Patterns derived from
@@ -152,7 +155,9 @@ const LOGIN_SUCCESS_RE = /Login successful/
 // ---------------------------------------------------------------------------
 
 export function detectBlockingState(tailText: string): BlockingState | null {
-  if (PLAN_ENTERED_RE.test(tailText) && PLAN_OPTIONS_RE.test(tailText)) {
+  const planOptionCount = [PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C]
+    .filter(re => re.test(tailText)).length
+  if (planOptionCount >= 2) {
     const pathMatch = tailText.match(PLAN_PATH_RE)
     return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginStage: null, oauthUrl: null }
   }
@@ -224,17 +229,20 @@ function readPlanSummary(planPath: string | null): string | null {
 // Remediation — re-confirms prompt is still on screen before sending keys
 // ---------------------------------------------------------------------------
 
+function isPlanModeOnScreen(tail: string): boolean {
+  return [PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C]
+    .filter(re => re.test(tail)).length >= 2
+}
+
 function confirmAndApprovePlan(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
-  if (!tail) return false
-  if (!PLAN_ENTERED_RE.test(tail) || !PLAN_OPTIONS_RE.test(tail)) return false
+  if (!tail || !isPlanModeOnScreen(tail)) return false
   return io.sendKeys(tmuxName, 'Enter')
 }
 
 function confirmAndRejectPlan(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
-  if (!tail) return false
-  if (!PLAN_ENTERED_RE.test(tail) || !PLAN_OPTIONS_RE.test(tail)) return false
+  if (!tail || !isPlanModeOnScreen(tail)) return false
   return io.sendKeys(tmuxName, 'Down', 'Down', 'Enter')
 }
 

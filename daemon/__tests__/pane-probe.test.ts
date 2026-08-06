@@ -241,11 +241,26 @@ describe('detectBlockingState (pure)', () => {
     expect(result!.loginStage).toBe('success')
   })
 
-  it('requires both plan entered AND option menu', () => {
-    // Only the indicator, no options
-    expect(detectBlockingState('⏺ Entered plan mode\nWorking on things...')).toBeNull()
-    // Only options, no indicator
+  it('requires at least two of the three plan options to co-occur', () => {
+    // Only one option — not enough
     expect(detectBlockingState('Yes, and bypass permissions\nSome other text')).toBeNull()
+    // Two options — enough
+    expect(detectBlockingState('Yes, and bypass permissions\nYes, manually approve edits')).not.toBeNull()
+  })
+
+  it('detects plan mode from options alone (long plan, Entered plan mode scrolled off)', () => {
+    // Simulates what bloom's pane looks like — only the options menu in the tail
+    const longPlanTail = `   Phase 2: Activate MCP server globally
+   ctrl+g to edit in VS Code · .claude/plans/sparkling-wondering-torvalds.md
+
+   ❯ 1. Yes, and bypass permissions
+     2. Yes, manually approve edits
+     3. Tell Claude what to change
+        shift+tab to approve with this feedback`
+    const result = detectBlockingState(longPlanTail)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('plan_mode')
+    expect(result!.planPath).toBe('sparkling-wondering-torvalds.md')
   })
 
   it('captures path traversal attempt but readPlanSummary rejects it', () => {
