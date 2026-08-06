@@ -2,21 +2,27 @@
 %% Protocol phases, mutual exclusion, and disconnect handling.
 
 flowchart TD
-    subgraph protocols["Protocols"]
+    subgraph protocols["Protocols (mutual exclusion — one per thread)"]
         review["<b>Review</b><br/>critic_turn > owner_turn<br/>> cleanup > complete<br/><i>owner + critic</i>"]
-        build["<b>Build</b><br/>implementing > reviewing<br/>> complete<br/><i>owner + critic</i>"]
+        build["<b>Build</b><br/>implementing > reviewing<br/>> closing > complete<br/><i>owner + critic</i>"]
         design["<b>Design</b><br/>spawning > questioning > answering<br/>> independent > synthesis > ...<br/><i>personas + singletons</i>"]
+        spike["<b>Spike</b><br/>exploring > reporting > complete<br/><i>single agent</i>"]
     end
 
     review -- blocks --> build
-    build -- blocks --> design
     review -- blocks --> design
+    review -- blocks --> spike
+    build -- blocks --> design
+    build -- blocks --> spike
+    design -- blocks --> spike
 
-    note["one protocol per thread"]
+    note["isThreadOccupied() — symmetric:<br/>any active protocol blocks any other"]
 
     subgraph disconnect["Disconnect Handling"]
         direction LR
-        disc["disconnect"] --> grace["grace timer"]
+        disc["disconnect"] --> resume_check["auto-resume<br/>decision (3s)"]
+        resume_check -- retryable --> auto_resume["auto-resume<br/>(up to 5 attempts)"]
+        resume_check -- not retryable --> grace["grace timer"]
         grace -- timeout --> cancel["cancel"]
         grace -- reconnect --> continue["continue"]
     end
@@ -29,4 +35,4 @@ flowchart TD
         r4["Singleton (synth/auditor/brief): <b>30s</b><br/><i>one-of-a-kind role</i>"]
     end
 
-    note2["All completion paths clear disconnect timers.<br/>Build heartbeat interval cleared on complete."]
+    note2["All completion paths clear disconnect timers.<br/>Protocol runner emits typed completion events."]

@@ -4,7 +4,7 @@
 
 sequenceDiagram
     participant User
-    participant gateway as gateway.ts<br/>Slack impl
+    participant gateway as {platform}-<br/>gateway.ts
     participant router as router.ts
     participant thread as commands/<br/>thread.ts
     participant lifecycle as session-<br/>lifecycle.ts
@@ -20,7 +20,7 @@ sequenceDiagram
     thread-->>User: react(🍴)
     thread->>sessions: read parent claudeSessionId
     thread->>lifecycle: doSpawnSession(topic, opts: {forkFrom})
-    lifecycle->>gateway: createThread (→ Slack API)
+    lifecycle->>gateway: createThread (→ Chat API)
     lifecycle->>lifecycle: spawn tmux with<br/>--resume --fork-session
     lifecycle->>sessions: register new session
     lifecycle->>transport: sendOrQueue(notification)

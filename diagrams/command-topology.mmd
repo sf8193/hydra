@@ -1,6 +1,6 @@
 %% Command Topology — Two Channels, One Daemon
 %% Chat is the human channel. CLI is the machine channel.
-%% Both converge on the same daemon primitives.
+%% Both converge on the same daemon primitives — but CLI only dispatches global commands.
 
 flowchart TD
     subgraph human["Human (Chat)<br/>Slack / Discord"]
@@ -11,31 +11,42 @@ flowchart TD
     subgraph machine["Machine (CLI)<br/>Scripts / Cron / Agents"]
         cli_in["unix socket"]
         cli_route["cli-handler.ts"]
-        cli_gates["CLI-only gates<br/><i>auth · idempotency</i>"]
-        cli_only["CLI-Only<br/>clear-key<br/><i>(future: config)</i>"]
+        cli_gates["CLI-only gates<br/><i>idempotency (spawn only)</i>"]
+        cli_only["CLI-Only<br/>clear-key · peek<br/>up · down · restart"]
     end
 
     subgraph global_cmds["Global Commands<br/>DM-scoped or any context"]
-        spawn["spawn:"]
+        spawn["spawn: / spawn-wt:"]
         list["list sessions"]
-        kill["kill session:"]
+        kill_g["kill session:"]
         health["health"]
         recover_cmd["recover"]
-        restart["restart"]
+        restart_g["restart"]
+        reconnect["reconnect"]
+        commands["commands / help"]
+        templates["templates"]
+        protocols["protocols"]
     end
 
-    subgraph thread_cmds["Thread Commands<br/>Session thread context required"]
+    subgraph thread_cmds["Thread Commands<br/>Session thread context required (chat only)"]
         fork["fork"]
         resume_cmd["resume"]
         respawn_cmd["respawn"]
-        handoff_cmd["handoff"]
-        review_cmd["/review"]
-        build_cmd["build"]
+        review_cmd["/review · review_v2"]
+        build_cmd["build · build-wt · build_v2"]
         design_cmd["design:"]
-        watch["watch"]
+        spike_cmd["spike"]
+        watch_g["watch · unwatch · watches"]
+        peek_cmd["peek"]
+        kill_t["kill"]
+        listen["listen · unlisten · pause"]
+        usage["usage"]
+        forks["forks"]
+        interrupt["! (interrupt)"]
+        kill_proto["kill review · kill build<br/>kill design · kill spike"]
     end
 
-    subgraph primitives["Shared Daemon Primitives<br/>Both channels converge here — identical lifecycle, identical guarantees"]
+    subgraph primitives["Shared Daemon Primitives"]
         doSpawn["doSpawnSession"]
         killSession["killSession"]
         registry["SessionRegistry"]
@@ -44,7 +55,7 @@ flowchart TD
     end
 
     subgraph runtime["Runtime"]
-        tmux["tmux session<br/><i>Claude Code process</i>"]
+        tmux["tmux session<br/><i>Claude Code / Codex</i>"]
         thread["Chat thread<br/><i>Slack / Discord</i>"]
         bridge["Bridge connection<br/><i>MCP relay</i>"]
     end
@@ -57,7 +68,6 @@ flowchart TD
     cli_route --> cli_gates
     cli_gates --> cli_only
     cli_gates --> global_cmds
-    cli_gates --> thread_cmds
 
     global_cmds --> primitives
     thread_cmds --> primitives

@@ -1,9 +1,10 @@
-%% resurrect 🫀 — Flow Through Layers
+%% respawn 🔁 — Flow Through Layers
 %% Recovers a dead thread by spawning fresh into the SAME thread and reading history.
+%% (Previously called "resurrect" — the user-facing command is "respawn".)
 
 sequenceDiagram
     participant User
-    participant gateway as gateway.ts
+    participant gw as {platform}-<br/>gateway.ts
     participant router as router.ts
     participant thread as commands/<br/>thread.ts
     participant lifecycle as session-<br/>lifecycle.ts
@@ -11,21 +12,23 @@ sequenceDiagram
     participant transport as bridge-<br/>transport.ts
     participant cc as New Claude<br/>Code session
 
-    User->>gateway: "resurrect" in dead thread
-    gateway->>router: InboundMessage (isThread)
-    router->>thread: handleResurrectIntercept(msg)
-    thread-->>User: react(🫀)
-    thread->>thread: check resurrectsInProgress
-    thread->>lifecycle: resolveThread → stale session?
-    thread->>lifecycle: killSession(stale, "resurrecting")
-    thread->>lifecycle: doSpawnSession(opts: existingThreadId)
-    Note over lifecycle: SKIPS thread creation
-    lifecycle->>lifecycle: spawn tmux
+    User->>gw: "respawn" in dead thread
+    gw->>router: InboundMessage (isThread)
+    router->>thread: handleRespawnIntercept(msg)
+    thread-->>User: react(🔁)
+    thread->>thread: check for live session in thread
+    alt live session exists
+        thread-->>User: error("session is still alive")
+    end
+    thread->>lifecycle: doSpawnSession(topic, opts: existingThreadId, resurrectFrom)
+    Note over lifecycle: SKIPS thread creation<br/>(reuses existing thread)
+    lifecycle->>lifecycle: kill dead session if present
+    lifecycle->>lifecycle: spawn tmux with claude --channels
     lifecycle->>sessions: register to EXISTING thread
-    lifecycle-->>User: send(🫀 confirmation)
+    lifecycle-->>User: send(🔁 respawn confirmation)
     lifecycle->>transport: sendOrQueue(resurrect prompt)
-    Note right of transport: 'fetch_messages + read memory'
+    Note right of transport: prompt includes instruction<br/>to read thread via fetch_messages
     cc->>transport: bridge registers
     transport->>cc: prompt delivered
-    cc->>cc: reads thread history
+    cc->>cc: reads thread history via fetch_messages
     cc-->>User: reply(context summary)
