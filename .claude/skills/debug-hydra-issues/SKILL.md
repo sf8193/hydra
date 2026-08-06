@@ -5,10 +5,10 @@ description: Use when hydra is broken — sessions not responding, spawns failin
 
 # Debugging Hydra Issues
 
-Hydra is a four-layer pipeline:
+Hydra is a four-layer pipeline. Sessions run Claude Code or Codex as their backend (`engine: 'claude' | 'codex'` on SessionInfo) — everything here applies to both unless noted.
 
 ```
-Discord/Slack Gateway → Daemon → Bridge (MCP) → Claude Code
+Discord/Slack Gateway → Daemon → Bridge (MCP) → Claude Code / Codex
 ```
 
 Each layer can fail independently. The daemon is long-lived (one per platform). Each Claude session gets its own bridge. The byte is the main session; spawns are children in threads.
@@ -47,7 +47,7 @@ grep "bridge registered for session main" ~/hydra-discord-daemon.log | tail -3
 
 | What | Path |
 |------|------|
-| Repo | `~/Documents/hydra` (GitHub: `sf8193/hydra`) |
+| Repo | `~/Documents/angellist/hydra` (GitHub: `sf8193/hydra`) |
 | Per-platform state | `~/.claude/channels/{discord,slack}/` |
 | Session registry | `{state_dir}/sessions.json` |
 | Daemon PID / heartbeat / socket | `{state_dir}/daemon.{pid,alive,sock}` |
@@ -64,7 +64,7 @@ grep "bridge registered for session main" ~/hydra-discord-daemon.log | tail -3
 | `hydra list` | Active sessions with status and context % |
 | `hydra peek <name>` | Read a session's terminal output (non-intrusive) |
 | `tmux capture-pane -t <name> -p` | Direct pane capture |
-| `ps aux \| grep -E "claude\|bun server.ts"` | Find orphaned processes |
+| `ps aux \| grep -E "claude\|codex\|bun server.ts"` | Find orphaned processes |
 
 From chat: `health`, `list sessions`, `peek <name>`.
 
@@ -80,7 +80,7 @@ When the health check gives you a lead, follow it. When it doesn't, use this met
 
 4. **Trace the message path.** A message flows: gateway → `router.ts` (command intercept + routing) → `bridge-transport.ts` (delivery) → bridge → Claude Code. Find where it stops. If the daemon log shows delivery but the session doesn't respond, the bridge is the suspect — check the bridge MCP logs.
 
-5. **Check the tmux server.** If spawns fail but existing sessions work, the tmux server may have lost filesystem access (this caused a real 45-minute outage). Test: `tmux new-session -d -s _probe 'ls ~/Documents/hydra > /tmp/probe.txt 2>&1; sleep 5'` then `cat /tmp/probe.txt`. "Operation not permitted" means the tmux server itself is broken — a `tmux kill-server` + `hydra up` from a granted terminal is the fix.
+5. **Check the tmux server.** If spawns fail but existing sessions work, the tmux server may have lost filesystem access (this caused a real 45-minute outage). Test: `tmux new-session -d -s _probe 'ls ~/Documents/angellist/hydra > /tmp/probe.txt 2>&1; sleep 5'` then `cat /tmp/probe.txt`. "Operation not permitted" means the tmux server itself is broken — a `tmux kill-server` + `hydra up` from a granted terminal is the fix.
 
 ## Traps That Waste Time
 
@@ -88,7 +88,7 @@ When the health check gives you a lead, follow it. When it doesn't, use this met
 
 - **`ps` argv is inherited by children.** `caffeinate` processes show claude's argv but are not claude. Check the process tree (`pstree` or `ps -o pid,ppid,comm`), not just the name.
 
-- **The `AND` condition in crash detection means orphans are invisible.** `checkSessionDeath` requires both tmux-dead AND bridge-disconnected. A session that's tmux-alive but bridge-disconnected is an orphan — doing work but can't reply. `sessions.json` with `claudeSessionId: null` is the tell.
+- **Orphan detection has a 90s grace window.** The daemon polls for tmux-alive + bridge-disconnected sessions and alerts the thread after `ORPHAN_GRACE_MS` (90s). It also auto-discovers `claudeSessionId` from `~/.claude/sessions/<pid>.json`. If no alert has fired but the session seems mute, it may still be in its boot grace window. The `pane-probe` module (`probeAllSessions()`, 60s interval) also detects sessions stuck on login or plan mode.
 
 - **`bun run` is lazy.** Parse/export errors surface only when a module is imported, not at launch. A broken merge boots "fine" until the crashing code path loads.
 
