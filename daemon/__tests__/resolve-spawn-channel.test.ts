@@ -18,9 +18,10 @@ describe('resolveSpawnChannel', () => {
     expect(result.targetChannelId).toBe('parent-456')
     expect(result.parentChannelId).toBe('parent-456')
     expect(result.threadId).toBeUndefined()
+    expect(result.warning).toBeUndefined()
   })
 
-  test('thread chatId with no parent falls back to default', async () => {
+  test('thread chatId with no parent falls back to default with warning', async () => {
     const result = await resolveSpawnChannel(
       'thread-123',
       DEFAULT_CHANNEL,
@@ -29,9 +30,10 @@ describe('resolveSpawnChannel', () => {
     )
     expect(result.targetChannelId).toBe(DEFAULT_CHANNEL)
     expect(result.threadId).toBeUndefined()
+    expect(result.warning).toContain('no parentId')
   })
 
-  test('regular channel chatId passes through', async () => {
+  test('regular channel chatId passes through without warning', async () => {
     const result = await resolveSpawnChannel(
       'channel-789',
       DEFAULT_CHANNEL,
@@ -40,6 +42,7 @@ describe('resolveSpawnChannel', () => {
     )
     expect(result.targetChannelId).toBe('channel-789')
     expect(result.threadId).toBeUndefined()
+    expect(result.warning).toBeUndefined()
   })
 
   test('DM without thread support falls back to default', async () => {
@@ -50,6 +53,7 @@ describe('resolveSpawnChannel', () => {
       false,
     )
     expect(result.targetChannelId).toBe(DEFAULT_CHANNEL)
+    expect(result.warning).toBeUndefined()
   })
 
   test('DM with thread support passes through', async () => {
@@ -62,7 +66,7 @@ describe('resolveSpawnChannel', () => {
     expect(result.targetChannelId).toBe('dm-123')
   })
 
-  test('fetchChannel failure falls back to default', async () => {
+  test('fetchChannel failure falls back to default with warning', async () => {
     const result = await resolveSpawnChannel(
       'broken-id',
       DEFAULT_CHANNEL,
@@ -70,9 +74,11 @@ describe('resolveSpawnChannel', () => {
       false,
     )
     expect(result.targetChannelId).toBe(DEFAULT_CHANNEL)
+    expect(result.warning).toContain('fetchChannel')
+    expect(result.warning).toContain('channel not found')
   })
 
-  test('no chatId falls back to default', async () => {
+  test('no chatId falls back to default without warning', async () => {
     const result = await resolveSpawnChannel(
       undefined,
       DEFAULT_CHANNEL,
@@ -80,5 +86,6 @@ describe('resolveSpawnChannel', () => {
       false,
     )
     expect(result.targetChannelId).toBe(DEFAULT_CHANNEL)
+    expect(result.warning).toBeUndefined()
   })
 })

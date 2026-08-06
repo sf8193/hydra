@@ -30,13 +30,19 @@ const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 // ---------------------------------------------------------------------------
 
 type ChannelProbe = { isThread: boolean; isDM: boolean; parentId: string | null }
+type ChannelResolution = {
+  targetChannelId: string
+  threadId?: string
+  parentChannelId?: string
+  warning?: string
+}
 
 export async function resolveSpawnChannel(
   chatId: string | undefined,
   defaultChannel: string,
   fetchChannel: (id: string) => Promise<ChannelProbe>,
   canThreadInDM: boolean,
-): Promise<{ targetChannelId: string; threadId?: string; parentChannelId?: string }> {
+): Promise<ChannelResolution> {
   if (!chatId) return { targetChannelId: defaultChannel }
   try {
     const ch = await fetchChannel(chatId)
@@ -45,15 +51,54 @@ export async function resolveSpawnChannel(
       if (parentChannelId) {
         return { targetChannelId: parentChannelId, parentChannelId }
       }
-      return { targetChannelId: defaultChannel }
+      return {
+        targetChannelId: defaultChannel,
+        warning: `chatId ${chatId} is a thread with no parentId — structurally unexpected, falling back to default channel`,
+      }
     }
     if (ch.isDM && !canThreadInDM) {
+      // Intentionally silent — DMs without thread support are expected on Slack
       return { targetChannelId: defaultChannel }
     }
     return { targetChannelId: chatId }
-  } catch {
-    return { targetChannelId: defaultChannel }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return {
+      targetChannelId: defaultChannel,
+      warning: `fetchChannel(${chatId}) failed: ${msg} — falling back to default channel`,
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Boot-time backfill — resolve anchorChannelId for sessions missing it
+// ---------------------------------------------------------------------------
+
+export async function backfillAnchorChannelIds(): Promise<void> {
+  const missing = [...registry.values()].filter(s => !s.anchorChannelId && s.threadId)
+  if (missing.length === 0) return
+
+  process.stderr.write(`daemon: backfill: ${missing.length} session(s) missing anchorChannelId\n`)
+  let filled = 0
+  let failed = 0
+
+  for (const info of missing) {
+    try {
+      const ch = await gateway.fetchChannel(info.threadId)
+      if (ch.isThread && ch.parentId) {
+        info.anchorChannelId = ch.parentId
+        filled++
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: WARNING: backfill anchorChannelId failed for ${info.tmuxName} (thread ${info.threadId}): ${err}\n`)
+      failed++
+    }
+    // Stagger to avoid Discord rate limits during fleet recovery
+    if (missing.length > 1) await new Promise(r => setTimeout(r, 200))
+  }
+
+  if (filled > 0) registry.persist()
+  process.stderr.write(`daemon: backfill: ${filled} filled, ${failed} failed, ${missing.length - filled - failed} skipped\n`)
 }
 
 // Per-session pane logfile — `tmux pipe-pane` captures each spawn's output so a
@@ -377,6 +422,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     targetChannelId = resolved.targetChannelId
     parentChannelId = resolved.parentChannelId
     if (resolved.threadId) threadId = resolved.threadId
+    if (resolved.warning) process.stderr.write(`daemon: WARNING: ${resolved.warning}\n`)
 
     // Clean up dead session in this thread before spawning
     if (threadId) {
@@ -456,6 +502,19 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (thread?.anchorMessageId) {
         anchorMessageId = thread.anchorMessageId
         anchorChannelId = thread.anchorChannelId
+      }
+    }
+    // Backfill anchorChannelId if still missing (e.g. spawning into a thread
+    // via existingThreadId/joinThread whose prior occupant lacked it).
+    if (!anchorChannelId && threadId) {
+      try {
+        const ch = await gateway.fetchChannel(threadId)
+        if (ch.isThread && ch.parentId) {
+          anchorChannelId = ch.parentId
+          process.stderr.write(`daemon: backfilled anchorChannelId=${ch.parentId} from thread ${threadId}\n`)
+        }
+      } catch (err) {
+        process.stderr.write(`daemon: WARNING: backfill anchorChannelId failed for thread ${threadId}: ${err}\n`)
       }
     }
   }
