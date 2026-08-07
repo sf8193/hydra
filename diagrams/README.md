@@ -27,10 +27,10 @@ Two pipelines exist. The HTML wrapper is primary — it reads `%%` header lines 
 **mmdc (fallback):** Quick renders without titles. The `%%` header lines become dead comments.
 ```bash
 # Render one
-npx -y -p @mermaid-js/mermaid-cli mmdc -i diagrams/flow-spawn.mmd -o diagrams/flow-spawn.png -t default -b white
+npx -y -p @mermaid-js/mermaid-cli mmdc -i diagrams/flow-spawn.mmd -o diagrams/flow-spawn.png -t default -b white -s 3
 
 # Render all
-for f in diagrams/*.mmd; do npx -y -p @mermaid-js/mermaid-cli mmdc -i "$f" -o "${f%.mmd}.png" -t default -b white; done
+for f in diagrams/*.mmd; do npx -y -p @mermaid-js/mermaid-cli mmdc -i "$f" -o "${f%.mmd}.png" -t default -b white -s 3; done
 ```
 
 Commit both the `.mmd` source and the `.png` render. Verify no source is unrendered:
