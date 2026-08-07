@@ -9,14 +9,7 @@ flowchart TD
         spike["<b>Spike</b><br/>exploring > reporting > complete<br/><i>single agent</i>"]
     end
 
-    review -- blocks --> build
-    review -- blocks --> design
-    review -- blocks --> spike
-    build -- blocks --> design
-    build -- blocks --> spike
-    design -- blocks --> spike
-
-    note["isThreadOccupied() — symmetric:<br/>any active protocol blocks any other"]
+    note["isThreadOccupied() — symmetric:<br/>any active protocol blocks any other.<br/>No hierarchy — first in wins."]
 
     subgraph disconnect["Disconnect Handling"]
         direction LR

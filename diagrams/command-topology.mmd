@@ -9,10 +9,11 @@ flowchart TD
     end
 
     subgraph machine["Machine (CLI)<br/>Scripts / Cron / Agents"]
+        cli_local["CLI-local (no socket)<br/><i>cli/lifecycle.ts · cli/peek.ts</i><br/>up · down · restart · install<br/>peek (local) · watchdog · preflight"]
         cli_in["unix socket"]
         cli_route["cli-handler.ts"]
         cli_gates["CLI-only gates<br/><i>idempotency (spawn only)</i>"]
-        cli_only["CLI-Only<br/>clear-key · peek<br/>up · down · restart"]
+        cli_only["CLI-Only<br/>clear-key"]
     end
 
     subgraph global_cmds["Global Commands<br/>DM-scoped or any context"]
@@ -21,7 +22,7 @@ flowchart TD
         kill_g["kill session:"]
         health["health"]
         recover_cmd["recover"]
-        restart_g["restart"]
+        restart_g["restart (chat)"]
         reconnect["reconnect"]
         commands["commands / help"]
         templates["templates"]
@@ -37,7 +38,7 @@ flowchart TD
         design_cmd["design:"]
         spike_cmd["spike"]
         watch_g["watch · unwatch · watches"]
-        peek_cmd["peek"]
+        peek_cmd["peek (chat)"]
         kill_t["kill"]
         listen["listen · unlisten · pause"]
         usage["usage"]

@@ -42,7 +42,7 @@ Commit both the `.mmd` source and the `.png` render. The source is the authority
 | `flow-cli-spawn` | CLI spawn: unix socket → cli-handler → idempotency → doSpawnSession |
 | `flow-fork` | Fork: thread command → resolve claudeSessionId → doSpawnSession with forkFrom |
 | `flow-list-sessions` | List sessions: registry query → format → gateway send |
-| `flow-resurrect` | Respawn: thread command → read thread history → doSpawnSession with resurrectFrom |
+| `flow-respawn` | Respawn: thread command → read thread history → doSpawnSession with resurrectFrom |
 | `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
 
 ### Protocol Flows
