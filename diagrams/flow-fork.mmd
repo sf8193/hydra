@@ -19,13 +19,25 @@ sequenceDiagram
     router->>thread: handleForkIntercept(msg)
     thread-->>User: react(🍴)
     thread->>sessions: read parent claudeSessionId
-    thread->>lifecycle: doSpawnSession(topic, opts: {forkFrom})
-    lifecycle->>gateway: createThread (→ Chat API)
-    lifecycle->>lifecycle: spawn tmux with<br/>--resume --fork-session
-    lifecycle->>sessions: register new session
-    lifecycle->>transport: sendOrQueue(notification)
-    Note right of transport: queued until bridge connects
-    cc->>server: socket connect + "register"
-    server->>transport: register bridge connection
-    transport->>cc: flush queued notification
-    cc-->>User: reply(greeting in new thread)
+
+    alt claudeSessionId is null
+        thread->>thread: discoverClaudeSessionId<br/>from ~/.claude/sessions/<pid>.json
+    end
+
+    alt claudeSessionId available
+        thread->>lifecycle: doSpawnSession(opts: {forkFrom})
+        lifecycle->>gateway: createThread (→ Chat API)
+        lifecycle->>lifecycle: spawn tmux with<br/>--resume --fork-session
+        lifecycle->>sessions: register new session
+        lifecycle->>transport: sendOrQueue(notification)
+        Note right of transport: queued until bridge connects
+        cc->>server: socket connect + "register"
+        server->>transport: register bridge connection
+        transport->>cc: flush queued notification
+        cc-->>User: reply(greeting in new thread)
+    else no claudeSessionId (bridge never registered)
+        thread->>lifecycle: doSpawnSession(opts: {existingThreadId})<br/>respawn fallback — reads parent thread
+        Note over thread: fork degrades to respawn:<br/>fresh session reads thread history<br/>instead of inheriting conversation
+        lifecycle->>sessions: register new session
+        cc-->>User: reply(context from thread history)
+    end
