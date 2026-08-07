@@ -1,0 +1,55 @@
+%% Bridge Lifecycle — registration, tool delivery, disconnect, reconnect
+%% Each Claude/Codex session gets its own bridge (MCP relay).
+%% Bridge identity determines tool access.
+
+sequenceDiagram
+    participant cc as Claude Code<br/>session
+    participant bridge as bridge.ts<br/>(MCP server)
+    participant server as bridge-<br/>server.ts
+    participant transport as bridge-<br/>transport.ts
+    participant tools as bridge-<br/>tools.ts
+
+    Note over bridge: Identity resolution (bridge.ts:72-90)
+    Note over bridge: HYDRA_SESSION_ID → spawned session<br/>HYDRA_ROLE=main → main (byte)<br/>neither → stray-{uuid} prefix
+
+    cc->>bridge: MCP stdio connect
+    bridge->>server: socket connect to daemon.sock
+    bridge->>server: {type: register, sessionId, claudeSessionId}
+
+    alt sessionId already registered
+        server->>server: evict incumbent<br/>(socket.end)
+    end
+
+    server->>tools: computeToolsForSession(sessionId)
+    server->>bridge: {type: registered, tools: [...]}
+    bridge->>bridge: dynamicTools = tools
+    bridge->>cc: notifications/tools/list_changed
+
+    Note over transport: Flush queued messages
+    transport->>bridge: queued notifications delivered
+
+    Note over cc: Normal operation — tool calls
+    cc->>bridge: CallToolRequest (e.g. reply)
+    bridge->>server: {type: tool_call, name, args}
+    server->>server: executeTool (bridge-dispatch.ts)
+    server->>bridge: {type: tool_result, content}
+    bridge->>cc: CallToolResult
+
+    Note over bridge: Inbound messages from chat
+    server->>bridge: {type: notification, content, meta}
+    bridge->>cc: notifications/claude/channel
+
+    Note over bridge: Disconnect
+    bridge->>server: socket close / error
+    server->>server: 3s delay (debounce reconnect)
+
+    alt session reconnects within 3s
+        bridge->>server: re-register
+        server->>server: cancel disconnect
+    else session stays disconnected
+        server->>server: checkSessionDeath
+        Note over server: if tmux dead → death notice<br/>if tmux alive → orphan detection (90s grace)
+    end
+
+    Note over bridge: Bridge MCP logs
+    Note over bridge: ~/Library/Caches/claude-cli-nodejs/<br/>{slug}/mcp-logs-*/*.jsonl<br/>(keyed by Claude session UUID)
