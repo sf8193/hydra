@@ -33,7 +33,11 @@ npx -y -p @mermaid-js/mermaid-cli mmdc -i diagrams/flow-spawn.mmd -o diagrams/fl
 for f in diagrams/*.mmd; do npx -y -p @mermaid-js/mermaid-cli mmdc -i "$f" -o "${f%.mmd}.png" -t default -b white; done
 ```
 
-Commit both the `.mmd` source and the `.png` render.
+Commit both the `.mmd` source and the `.png` render. Verify no source is unrendered:
+
+```bash
+for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; exit 1; }; done
+```
 
 ## Generated vs Hand-Drawn
 
