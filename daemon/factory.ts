@@ -828,15 +828,18 @@ protocolEvents.onRoundAdvance((event) => {
   const state = builds.get(ticket)
   if (!state || state.phase !== 'reviewing') return
 
-  // Mid-run rounds get a counter only; the final round forwards the critic's
-  // text inline so the PM can judge accept-vs-retry without opening the
-  // builder thread. Mirrors v1's onFactoryCriticRound.
-  if (event.round < event.totalRounds || !event.text) {
+  // Forward inline text only on the final round, and only when it is actually
+  // the critic's. For `review` the round counter advances out of `owner_turn`
+  // (the only phase declaring finalAdvanceEvent), so `role` is the owner and
+  // this branch does not fire — the PM gets the counter, then the critic's
+  // full assessment via onComplete's transcriptPath moments later.
+  const isCriticFinal = event.role === 'critic' && event.round >= event.totalRounds && !!event.text
+  if (!isCriticFinal) {
     void safeSend(state.pmThreadId, `🏭 **Critic Round ${event.round}/${event.totalRounds}** — in progress`)
     return
   }
 
-  const text = event.text.length > 3000 ? event.text.slice(0, 3000) + '\n...(truncated)' : event.text
+  const text = event.text!.length > 3000 ? event.text!.slice(0, 3000) + '\n...(truncated)' : event.text!
   void safeSend(state.pmThreadId, [
     `🏭 **Critic Final Round ${event.round}/${event.totalRounds}**`,
     text,

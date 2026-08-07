@@ -48,8 +48,15 @@ export type RoundAdvanceEvent = {
   totalRounds: number
   /**
    * The advancing actor's deliverable — the same text posted to the thread.
-   * Carried on the event so subscribers (e.g. the factory PM relay) get the
-   * content without racing the thread post, which happens after this emit.
+   * Carried on the event so subscribers get the content without racing the
+   * thread post, which happens after this emit.
    */
   text?: string
+  /**
+   * Which role advanced. Note the round counter increments on the advance
+   * *out of* a phase declaring `finalAdvanceEvent` — for `review` that is
+   * `owner_turn`, so this is the owner, not the critic. Subscribers that
+   * care whose text they received must check this rather than assume.
+   */
+  role?: string
 }
