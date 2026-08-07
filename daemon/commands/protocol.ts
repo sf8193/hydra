@@ -4,24 +4,11 @@ import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.
 import { isThreadOccupied } from '../protocol-registry.js'
 import { resolveModifiers } from '../modifiers.js'
 import { safeSend } from '../util.js'
-import type { Protocol } from '../protocol-dsl.js'
+import { getProtocol } from '../protocol-loader.js'
 import type { InboundMessage } from '../../gateway.js'
 
-const VALID_NAME = /^[a-z][a-z0-9-]*$/
-
-const protocols = new Map<string, Protocol>()
-
-export async function getProtocol(name: string): Promise<Protocol> {
-  let proto = protocols.get(name)
-  if (proto) return proto
-  if (!VALID_NAME.test(name)) throw new Error(`invalid protocol name "${name}"`)
-  const mod = await import(`../../protocols/${name}.js`)
-  if (!mod.default?.name) throw new Error(`protocol "${name}" has no default export`)
-  if (mod.default.name !== name) throw new Error(`protocol file "${name}" declares name "${mod.default.name}"`)
-  proto = mod.default as Protocol
-  protocols.set(name, proto)
-  return proto
-}
+// Re-exported for callers that already import it from here.
+export { getProtocol }
 
 export async function handleProtocolIntercept(
   protoName: string,

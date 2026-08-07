@@ -46,4 +46,10 @@ export type RoundAdvanceEvent = {
   threadId: string
   round: number
   totalRounds: number
+  /**
+   * The advancing actor's deliverable — the same text posted to the thread.
+   * Carried on the event so subscribers (e.g. the factory PM relay) get the
+   * content without racing the thread post, which happens after this emit.
+   */
+  text?: string
 }

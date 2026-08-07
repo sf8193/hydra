@@ -225,7 +225,7 @@ export async function dispatchTemplateAction(
     void safeSend(threadId, `_A ${occupied} is already in progress — skipping template action._`)
     return
   }
-  const { getProtocol } = await import('./commands/protocol.js')
+  const { getProtocol } = await import('./protocol-loader.js')
   const { startProtocolRun } = await import('./protocol-runner.js')
   const proto = await getProtocol(action)
   await startProtocolRun(proto, threadId, sessionId, {
