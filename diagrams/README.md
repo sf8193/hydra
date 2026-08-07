@@ -10,21 +10,21 @@ Mermaid sequence and flow diagrams documenting hydra's key flows. Each diagram h
 
 **Participants:** Use the actual source file names (`session-lifecycle.ts`, `router.ts`) not abstractions. `gateway.ts` is the abstract interface — reference the concrete implementations (`{platform}-gateway.ts` or `discord-gateway.ts` / `slack-gateway.ts`) for message entry points. The daemon is platform-agnostic; platform names appear only in gateway implementations.
 
-**When to hand-draw a diagram:**
-- A new cross-layer message flow (spawn variant, recovery path) with no declarative source
-- A structural/editorial topology change (command routing, health monitors)
+**When to create a new diagram:**
+- A new command or protocol that routes through multiple daemon layers
+- A new lifecycle flow (spawn variant, recovery path, protocol phase)
+- A structural change that affects how components connect
 
-**When NOT to hand-draw:**
-- Protocol phase mechanics — these should be **generated** from `protocol()` DSL specs or `createStateMachine()` tables. Hand-drawn protocol diagrams have a measured ~44% staleness rate and produce fictional references at a rate attention does not fix. See "Generated vs Hand-Drawn" below.
-- Single-module changes, bug fixes, config changes
+**When NOT to create a diagram:**
+- Single-module changes that don't affect cross-layer flow
+- Bug fixes that don't change the message path
+- Config or env changes
+
+**Quality discipline:** Diagrams are authored with intent — what to emphasize, what level of abstraction serves the reader. Use adversarial review (`/review`) to verify diagram claims against code. Reference actual source file names, not abstractions.
 
 ## Rendering
 
-Two pipelines exist. The HTML wrapper is primary — it reads `%%` header lines as title/subtitle and produces styled output. `mmdc` is a quick fallback that discards those headers.
-
-**HTML wrapper (primary):** Wrap the `.mmd` in an HTML shell that loads Mermaid, render via headless Chromium. This is what produced the original June diagrams with titles and styled participant boxes. Use the `html-diagram-rendering` skill (user-global, not in this repo) or build the wrapper manually.
-
-**mmdc (fallback):** Quick renders without titles. The `%%` header lines become dead comments.
+Render `.mmd` to `.png` using Mermaid CLI at 3x scale for crisp output:
 ```bash
 # Render one
 npx -y -p @mermaid-js/mermaid-cli mmdc -i diagrams/flow-spawn.mmd -o diagrams/flow-spawn.png -t default -b white -s 3
@@ -38,14 +38,6 @@ Commit both the `.mmd` source and the `.png` render. Verify no source is unrende
 ```bash
 for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; exit 1; }; done
 ```
-
-## Generated vs Hand-Drawn
-
-**Generated diagrams are the standard** when the source is machine-readable. `scripts/gen-topology.ts` is the model — it derives `docs/topology.mmd` from actual `import` statements and is provably fresh (0% staleness over its lifetime).
-
-Hand-drawn diagrams have a measured ~44% staleness rate over 5.5 weeks and produce fictional references at a rate that attention does not fix. They are appropriate only for cross-layer message flows with no single declarative source (spawn, fork, recovery cascade).
-
-**Prerequisite for protocol diagrams:** `scripts/gen-protocol-diagrams.ts` walking `protocol()` DSL specs would make phase/loop/grace errors structurally impossible. The v2 protocol DSL is already machine-readable. Until this generator exists, hand-drawn protocol diagrams should be treated as provisional and verified against code before citing.
 
 ## Catalog
 
@@ -72,8 +64,7 @@ Hand-drawn diagrams have a measured ~44% staleness rate over 5.5 weeks and produ
 | `health-topology` | Runtime components, state files, and health check connections |
 
 ### Missing (candidates for future PRs)
+- `flow-tool-scoping` — three-tier tool model + runtime `tools/list_changed` re-push cycle
 - `flow-factory` — factory_build → fork PM → builder implements → auto-review → awaiting_pm decision loop
 - `flow-bridge-lifecycle` — bridge registration, tool delivery, disconnect handling, reconnect
-- `flow-daemon-restart` — module validation probe → kill incumbent → spawn replacement → verify
-- **`gen-protocol-diagrams.ts`** — highest priority: auto-generate v2 protocol phase diagrams from `protocol()` DSL specs, same pattern as `gen-topology.ts`. Would make protocol diagram staleness structurally impossible.
 - `flow-daemon-restart` — module validation probe → kill incumbent → spawn replacement → verify
