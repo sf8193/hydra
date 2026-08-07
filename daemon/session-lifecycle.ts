@@ -110,6 +110,25 @@ export async function backfillAnchorChannelIds(): Promise<void> {
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 // ---------------------------------------------------------------------------
+// Spawn env whitelist — explicit construction, not ambient inheritance
+// ---------------------------------------------------------------------------
+// Each env var the byte carries gets a conscious routing decision here:
+//   pass-through: shared between byte and sessions (platform, socket, config)
+//   override:     session-specific identity
+//   strip:        byte-only (HYDRA_ROLE) — prevented from leaking into sessions
+
+function buildSpawnEnv(sessionId: string, tmuxName: string): string[] {
+  return [
+    `export HYDRA_SESSION_ID=${shq(sessionId)}`,
+    `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
+    `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
+    `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
+    `export CHAT_PLATFORM=${shq(PLATFORM)}`,
+    `unset HYDRA_ROLE`, // prevent spawned session from inheriting byte's HYDRA_ROLE=main
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Listen state resolution: thread override → channel group → global → false
 // ---------------------------------------------------------------------------
 
@@ -733,12 +752,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const inner = [
     `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
     `cd ${shq(effectiveCwd)}`,
-    `export HYDRA_SESSION_ID=${shq(sessionId)}`,
-    `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
-    `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
-    `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
-    `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-    `unset HYDRA_ROLE`, // prevent spawned session from inheriting byte's HYDRA_ROLE=main
+    ...buildSpawnEnv(sessionId, tmuxName),
     `${claudeArgs} 2>>${shq(stderrLog)}`,
   ].join(' && ')
 
