@@ -38,3 +38,5 @@ sequenceDiagram
     cc->>bridge: ListToolsRequest
     bridge->>cc: dynamicTools (current set)
     Note over cc: advance is present only during<br/>the session's active phase turn
+
+    Note over tools: Codex sessions: STATIC tools.<br/>codex-mcp-server.ts computes once at<br/>startup with advance always included.<br/>No tools_update, no list_changed.
