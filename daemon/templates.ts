@@ -218,16 +218,15 @@ export async function dispatchTemplateAction(
   sessionId: string,
   topic: string,
 ): Promise<void> {
+  const { safeSend } = await import('./util.js')
   const { isThreadOccupied } = await import('./protocol-registry.js')
   const occupied = isThreadOccupied(threadId)
   if (occupied) {
-    const { safeSend } = await import('./util.js')
     void safeSend(threadId, `_A ${occupied} is already in progress — skipping template action._`)
     return
   }
   if (!VALID_ACTIONS.has(action)) {
-    const { safeSend: sf } = await import('./util.js')
-    void sf(threadId, `_Template action \`${action}\` is not a valid protocol. Available: ${[...VALID_ACTIONS].join(', ')}_`)
+    void safeSend(threadId, `_Template action \`${action}\` is not a valid protocol. Available: ${[...VALID_ACTIONS].join(', ')}_`)
     return
   }
   const { getProtocol } = await import('./protocol-loader.js')

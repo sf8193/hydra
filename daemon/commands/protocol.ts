@@ -7,9 +7,6 @@ import { safeSend } from '../util.js'
 import { getProtocol } from '../protocol-loader.js'
 import type { InboundMessage } from '../../gateway.js'
 
-// Re-exported for callers that already import it from here.
-export { getProtocol }
-
 export async function handleProtocolIntercept(
   protoName: string,
   msg: InboundMessage,
