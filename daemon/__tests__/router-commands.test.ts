@@ -24,6 +24,7 @@ const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
 const FORKS_RE = /^(?:forks|\/forks)\s*$/i
 const REVIEW_RE = /^(?:\/review|review)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
 const BUILD_RE = /^(?:\/build|build)(?=[\s:]|$)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
+const SPIKE_RE = /^(?:\/spike|spike)(?=[\s:]|$)\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
 
 // ---------------------------------------------------------------------------
 // Spawn
@@ -256,6 +257,36 @@ describe('build command', () => {
 
   test('does not match building (lookahead)', () => {
     expect('building the new feature'.match(BUILD_RE)).toBeNull()
+  })
+})
+
+describe('spike command', () => {
+  test('defaults (no args)', () => {
+    const m = '/spike'.match(SPIKE_RE)
+    expect(m).not.toBeNull()
+    expect(m![2]).toBeUndefined()
+  })
+
+  // The colon form captures the colon (`\s*` stops before it). router.ts:597
+  // strips it — the regex alone is not the whole contract.
+  test('colon form captures leading colon, router strips it', () => {
+    const m = 'spike: trace the retry path'.match(SPIKE_RE)
+    expect(m).not.toBeNull()
+    expect(m![2]).toBe(': trace the retry path')
+
+    let topic = m![2]?.trim()
+    if (topic?.startsWith(':')) topic = topic.slice(1).trim() || undefined
+    expect(topic).toBe('trace the retry path')
+  })
+
+  test('bare form with topic', () => {
+    const m = 'spike trace the retry path'.match(SPIKE_RE)
+    expect(m).not.toBeNull()
+    expect(m![2]).toBe('trace the retry path')
+  })
+
+  test('does not match spiked (lookahead)', () => {
+    expect('spiked the ball'.match(SPIKE_RE)).toBeNull()
   })
 })
 
