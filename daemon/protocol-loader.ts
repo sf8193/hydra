@@ -7,6 +7,8 @@
 
 import type { Protocol } from './protocol-dsl.js'
 
+// Path-traversal guard: rejects `.`, `/`, `..` so the dynamic import below
+// can only reach `protocols/<name>.js`. Loosening (e.g. allowing dots) is unsafe.
 const VALID_NAME = /^[a-z][a-z0-9-]*$/
 
 const protocols = new Map<string, Protocol>()
