@@ -65,6 +65,7 @@ flowchart TD
     chat_route --> global_cmds
     chat_route --> thread_cmds
 
+    cli_local -- "direct (no socket)" --> tmux
     cli_in --> cli_route
     cli_route --> cli_gates
     cli_gates --> cli_only

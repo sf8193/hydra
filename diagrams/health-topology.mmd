@@ -40,6 +40,7 @@ flowchart TD
 
     subgraph state["State (disk)"]
         sj["sessions.json"]
+        tj["threads.json"]
         logs["spawn-logs/{name}-{uuid}.log"]
         dlog["~/hydra-{platform}-daemon.log"]
         alive["daemon.alive<br/>heartbeat (connectivity-aware)"]
@@ -58,7 +59,6 @@ flowchart TD
     sg --> gwh
 
     router --> transport
-    router --> preg
     transport --> server
 
     server -- "unix socket" --> b0
@@ -70,7 +70,6 @@ flowchart TD
     b2 -- "MCP stdio" --> spawn2
 
     poll --> server
-    poll --> lifecycle
     obs -.-> dlog
     mbc --> server
     watchdog -.-> alive
