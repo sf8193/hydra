@@ -2,9 +2,8 @@
 %% Phase lists, loops, mutual exclusion, and disconnect handling.
 %% For v1/v2 engine architecture, see protocol-engines.mmd.
 
-flowchart TD
+flowchart LR
     subgraph review_phases["Review Phases"]
-        direction LR
         r_ct["critic_turn"] --> r_ot["owner_turn"]
         r_ot -- "owner_posted<br/>(loop)" --> r_ct
         r_ot -- "final_round" --> r_pp["post_pass<br/><i>(v1 only)</i>"]
@@ -14,7 +13,7 @@ flowchart TD
     end
 
     subgraph build_phases["Build Phases"]
-        direction LR
+
         b_impl["implementing"] --> b_rev["reviewing"]
         b_rev -- "critic_feedback<br/>(loop)" --> b_impl
         b_rev -- "approved" --> b_close["closing"]
@@ -22,7 +21,7 @@ flowchart TD
     end
 
     subgraph design_phases["Design Phases"]
-        direction LR
+
         d_spawn["spawning"] --> d_q["questioning"]
         d_q --> d_a["answering"]
         d_a --> d_ind["independent"]
@@ -35,7 +34,7 @@ flowchart TD
     end
 
     subgraph spike_phases["Spike Phases"]
-        direction LR
+
         s_exp["exploring"] -- "checkpoint<br/>(self-loop)" --> s_exp
         s_exp -- "wrap_up" --> s_rep["reporting"]
         s_rep --> s_done["complete"]
@@ -44,7 +43,7 @@ flowchart TD
     mutex["isThreadOccupied() — symmetric:<br/>any active protocol blocks any other.<br/>No hierarchy — first in wins."]
 
     subgraph disconnect["Disconnect Handling"]
-        direction LR
+
         disc["disconnect"] --> resume_check["auto-resume<br/>decision (3s)"]
         resume_check -- retryable --> auto_resume["auto-resume<br/>(up to 5 attempts)"]
         resume_check -- not retryable --> grace["grace timer"]
@@ -53,7 +52,7 @@ flowchart TD
     end
 
     subgraph roles["Grace Periods (v1 roles / v2 per-spec)"]
-        direction LR
+
         r1["Critic: <b>30s</b>"]
         r2["Owner: <b>2min</b>"]
         r3["Persona: <b>0s</b>"]

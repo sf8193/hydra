@@ -1,6 +1,10 @@
 # Diagrams
 
-Mermaid sequence and flow diagrams documenting hydra's key flows. Each diagram has a `.mmd` source and a rendered `.png`.
+The primary orientation surface for agents and humans working on hydra. These diagrams show cross-layer message flows and architectural topology that can't be derived from reading any single file — dispatch ordering, recovery tiers, protocol mutual exclusion, the v1/v2 engine split. They make implicit structural decisions explicitly visible for review and design iteration.
+
+**Use diagrams as design tools, not just documentation.** Drawing a flow diagram *before* implementing a cross-layer feature surfaces structural questions early — the `design.ts` audit bug (issue #194) was found by drawing a diagram, not by reading code. Draw first, implement, then verify the diagram still matches.
+
+Each diagram has a `.mmd` source and a rendered `.png`.
 
 ## Conventions
 
