@@ -42,6 +42,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/advance-nudge.ts':  { layer: 'domain',    desc: 'Liveness: nudge protocol participants that post via reply() instead of advance()' },
   'daemon/reply-guard.ts':    { layer: 'domain',    desc: 'Reply guard: nudge sessions that go silent on user-authored messages' },
   'daemon/phase-budget.ts':   { layer: 'domain',    desc: 'Per-session max lifetime: nudge → grace → reap' },
+  'daemon/session-health.ts': { layer: 'domain',    desc: 'Session health poll: crash detection, orphan detection, context alerts' },
   'daemon/adversarial.ts':    { layer: 'protocols', desc: 'Adversarial review — owner/critic rounds' },
   'daemon/build.ts':          { layer: 'protocols', desc: 'Build — implement/review iteration' },
   'daemon/design.ts':         { layer: 'protocols', desc: 'Design — personas, synthesis, audit' },
