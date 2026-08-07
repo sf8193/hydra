@@ -75,14 +75,20 @@ flowchart TD
     b1 -- "MCP stdio" --> spawn1
     b2 -- "MCP stdio" --> spawn2
 
+    preg --> prun
+
     poll --> server
     poll --> lifecycle
-    probe --> sessions
+    probe --> byte
+    probe --> spawn1
     obs -.-> dlog
     mbc --> server
+    bootprobe --> lifecycle
+    rh --> lifecycle
     watchdog -.-> alive
 
     lifecycle -.-> sj
+    lifecycle -.-> tj
     lifecycle -.-> logs
     server -.-> sj
     server -.-> dlog

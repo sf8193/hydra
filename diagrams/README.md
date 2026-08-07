@@ -22,16 +22,19 @@ Mermaid sequence and flow diagrams documenting hydra's key flows. Each diagram h
 
 ## Rendering
 
-Render `.mmd` to `.png` using Mermaid CLI or the html-diagram-rendering skill:
+Render `.mmd` to `.png` using Mermaid CLI:
 
 ```bash
-# Via mmdc (if installed)
-npx -y @mermaid-js/mermaid-cli mmdc -i diagrams/flow-spawn.mmd -o diagrams/flow-spawn.png -t default -b white
+# Render one
+npx -y -p @mermaid-js/mermaid-cli mmdc -i diagrams/flow-spawn.mmd -o diagrams/flow-spawn.png -t default -b white
 
-# Or via the html-diagram-rendering skill (wraps mermaid in HTML, renders via headless Chromium)
+# Render all
+for f in diagrams/*.mmd; do npx -y -p @mermaid-js/mermaid-cli mmdc -i "$f" -o "${f%.mmd}.png" -t default -b white; done
 ```
 
-Commit both the `.mmd` source and the `.png` render. The source is the authority; the PNG is for quick reference in PRs and docs.
+Commit both the `.mmd` source and the `.png` render.
+
+**Prefer generated diagrams over hand-drawn** when the source is machine-readable. `scripts/gen-topology.ts` is the model — it derives `docs/topology.mmd` from actual `import` statements and is provably fresh. The v2 protocol DSL (`protocols/*.ts`) is similarly machine-readable; a `gen-protocol-diagrams.ts` walking `protocol()` specs would eliminate the staleness problem for protocol diagrams.
 
 ## Catalog
 
@@ -48,7 +51,8 @@ Commit both the `.mmd` source and the `.png` render. The source is the authority
 ### Protocol Flows
 | Diagram | What it shows |
 |---------|--------------|
-| `flow-protocol-robustness` | Protocol lifecycle: mutual exclusion, disconnect grace, state machine transitions |
+| `protocol-engines` | **v1/v2 engine split** — dispatch ordering, phase sets, shared infrastructure. The most important structural diagram for protocol work. |
+| `flow-protocol-robustness` | Protocol phases with loops, mutual exclusion, disconnect/auto-resume handling, grace periods |
 
 ### Structural
 | Diagram | What it shows |
@@ -58,7 +62,7 @@ Commit both the `.mmd` source and the `.png` render. The source is the authority
 
 ### Missing (candidates for future PRs)
 - `flow-factory` — factory_build → fork PM → builder implements → auto-review → awaiting_pm decision loop
-- `flow-review` / `flow-build` — adversarial review and build protocol phase flows
-- `flow-design` — multi-persona design: spawn personas → independent → synthesis → refinement → audit → brief
 - `flow-bridge-lifecycle` — bridge registration, tool delivery, disconnect handling, reconnect
+- `flow-daemon-restart` — module validation probe → kill incumbent → spawn replacement → verify
+- **`gen-protocol-diagrams.ts`** — highest priority: auto-generate v2 protocol phase diagrams from `protocol()` DSL specs, same pattern as `gen-topology.ts`. Would make protocol diagram staleness structurally impossible.
 - `flow-daemon-restart` — module validation probe → kill incumbent → spawn replacement → verify
