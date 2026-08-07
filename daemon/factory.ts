@@ -15,7 +15,7 @@ import { appendFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
-import { registry } from './sessions.js'
+import { registry, threadRegistry } from './sessions.js'
 import { safeSend } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
@@ -393,6 +393,23 @@ function killBuilder(state: FactoryBuildState): void {
   }
 }
 
+/**
+ * Resolve the channel where the factory builder's thread should be created.
+ * Must return the PARENT channel, never the PM's thread — spawning into the
+ * PM's thread hits the live-session guard.
+ */
+export function resolveBuilderChannel(
+  pmSessionId: string,
+  pmThreadId: string,
+  reg: { get(id: string): { anchorChannelId?: string } | undefined } = registry,
+  threads: { get(id: string): { parentChannelId?: string } | undefined } = threadRegistry,
+): string | undefined {
+  const pmInfo = reg.get(pmSessionId)
+  return pmInfo?.anchorChannelId
+    ?? threads.get(pmThreadId)?.parentChannelId
+    ?? undefined
+}
+
 async function spawnBuilder(
   state: FactoryBuildState,
   pmClaudeSessionId: string,
@@ -430,8 +447,7 @@ async function spawnBuilder(
     `Spec: ${state.spec.slice(0, 200)}${state.spec.length > 200 ? '...' : ''}`,
   ].join('\n'))
 
-  const pmInfo = registry.get(state.pmSessionId)
-  const chatId = pmInfo?.anchorChannelId || state.pmThreadId
+  const chatId = resolveBuilderChannel(state.pmSessionId, state.pmThreadId)
 
   const result = await doSpawnSession(`factory-builder: ${state.spec.slice(0, 60)}`, chatId, undefined, {
     forkFrom: { claudeSessionId: pmClaudeSessionId, parentName: pmTmuxName },
