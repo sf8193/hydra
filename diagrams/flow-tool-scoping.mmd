@@ -1,22 +1,21 @@
-%% Tool Scoping — three tiers, dynamic per phase
+%% Tool Scoping — two code branches, dynamic overrides per phase
 %% Why "advance" appears and disappears between protocol phases.
 %% The tool list mutates at runtime and is re-pushed over MCP.
 
 sequenceDiagram
     participant daemon as daemon.ts
     participant runner as protocol-<br/>runner.ts
-    participant registry as protocol-<br/>registry.ts
     participant tools as bridge-<br/>tools.ts
     participant transport as bridge-<br/>transport.ts
     participant bridge as bridge.ts
     participant cc as Claude Code<br/>session
 
-    Note over tools: Three tiers (bridge-tools.ts:2-8)
-    Note over tools: master orchestrator = all tools<br/>thread owner = minus spawn_session, kill_session<br/>thread participant = minus advance, extend_phase<br/>(unless in a protocol)
+    Note over tools: computeToolsForSession has two branches:
+    Note over tools: sessionId === 'main' → all UNIVERSAL_TOOLS<br/>everyone else → minus MASTER_ORCHESTRATOR_ONLY<br/>(spawn_session, kill_session) and minus<br/>PROTOCOL_ONLY (advance, extend_phase)<br/>unless scopedToolOverrides provided
 
     Note over daemon: On spawn / bridge registration
     daemon->>tools: computeToolsForSession(sessionId)
-    tools->>tools: filter by tier
+    tools->>tools: filter: main gets all,<br/>others lose fleet tools + protocol tools
     daemon->>transport: send tools in "registered" msg
     transport->>bridge: {type: registered, tools: [...]}
     bridge->>cc: notifications/tools/list_changed
@@ -24,9 +23,9 @@ sequenceDiagram
     Note over runner: On protocol phase transition
     runner->>runner: refreshRunTools(run)
     loop for each participant
-        runner->>registry: resolveScopedToolOverrides(sessionId)
-        Note over registry: returns {advance: "phase-specific description"}<br/>only for the ACTIVE actor in this phase
-        registry->>tools: computeToolsForSession(sid, {scopedToolOverrides})
+        runner->>runner: scopedToolOverridesForRun(sessionId)
+        Note over runner: returns {advance: "phase-specific description"}<br/>only for the ACTIVE actor in this phase.<br/>Non-active actors get no overrides →<br/>advance filtered out by computeToolsForSession
+        runner->>tools: computeToolsForSession(sid, {scopedToolOverrides})
         tools->>tools: include advance + extend_phase<br/>with override descriptions
         runner->>transport: {type: tools_update, tools: [...]}
         transport->>bridge: tools_update

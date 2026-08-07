@@ -9,8 +9,8 @@ sequenceDiagram
     participant transport as bridge-<br/>transport.ts
     participant tools as bridge-<br/>tools.ts
 
-    Note over bridge: Identity resolution (bridge.ts:72-90)
-    Note over bridge: HYDRA_SESSION_ID → spawned session<br/>HYDRA_ROLE=main → main (byte)<br/>neither → stray-{uuid} prefix
+    Note over bridge: Identity resolution (bridge.ts:72-90)<br/>Precedence: HYDRA_SESSION_ID wins over HYDRA_ROLE
+    Note over bridge: HYDRA_SESSION_ID set → spawned session (non-main)<br/>only HYDRA_ROLE=main → main (byte)<br/>neither → stray-{uuid} prefix
 
     cc->>bridge: MCP stdio connect
     bridge->>server: socket connect to daemon.sock
@@ -41,15 +41,9 @@ sequenceDiagram
 
     Note over bridge: Disconnect
     bridge->>server: socket close / error
-    server->>server: 3s delay (debounce reconnect)
+    server->>server: DEATH_DETECT_DELAY_MS (3s)<br/>then checkSessionDeath
 
-    alt session reconnects within 3s
-        bridge->>server: re-register
-        server->>server: cancel disconnect
-    else session stays disconnected
-        server->>server: checkSessionDeath
-        Note over server: if tmux dead → death notice<br/>if tmux alive → orphan detection (90s grace)
-    end
+    Note over server: checkSessionDeath:<br/>if bridge reconnected → no-op (transport.has returns true)<br/>if tmux dead + bridge gone → 💀 death notice<br/>if tmux alive → no action (session assumed recovering)
 
     Note over bridge: Bridge MCP logs
     Note over bridge: ~/Library/Caches/claude-cli-nodejs/<br/>{slug}/mcp-logs-*/*.jsonl<br/>(keyed by Claude session UUID)

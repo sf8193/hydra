@@ -14,8 +14,8 @@ sequenceDiagram
     factory->>factory: resolveModels(difficulty)
     factory-->>PM: ticket fb-N-xxxx (immediate)
 
+    factory->>factory: resolve chatId from<br/>PM anchorChannelId or threadId
     factory->>lifecycle: doSpawnSession(forkFrom: PM)
-    lifecycle->>lifecycle: resolve parent channel<br/>from PM thread
     lifecycle->>builder: spawn tmux<br/>(--resume --fork-session)
     Note over builder: inherits PM context +<br/>write access
 
