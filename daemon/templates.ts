@@ -225,6 +225,11 @@ export async function dispatchTemplateAction(
     void safeSend(threadId, `_A ${occupied} is already in progress — skipping template action._`)
     return
   }
+  if (!VALID_ACTIONS.has(action)) {
+    const { safeSend: sf } = await import('./util.js')
+    void sf(threadId, `_Template action \`${action}\` is not a valid protocol. Available: ${[...VALID_ACTIONS].join(', ')}_`)
+    return
+  }
   const { getProtocol } = await import('./protocol-loader.js')
   const { startProtocolRun } = await import('./protocol-runner.js')
   const proto = await getProtocol(action)
