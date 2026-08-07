@@ -10,6 +10,8 @@ Discord/Slack Gateway → Daemon → Bridge → Claude Code
 
 Import topology: `docs/topology.html` (interactive analysis dashboard) + `docs/topology.mmd` (Mermaid). Regenerate after any import change: `bun scripts/gen-topology.ts`. The generator traces actual `import` statements and produces both files — layer assignments are the editorial config in the script; edges are discovered mechanically.
 
+Flow diagrams: `diagrams/` — Mermaid `.mmd` sources with rendered `.png` for key command flows (spawn, fork, recovery, protocols) and structural topologies (command routing, health checks). See `diagrams/README.md` for conventions. When adding a new command or protocol that routes through multiple daemon layers, add a corresponding flow diagram.
+
 ## Build & Test
 
 ```sh

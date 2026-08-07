@@ -1,32 +1,61 @@
-%% Protocol Robustness
-%% Protocol phases, mutual exclusion, and disconnect handling.
+%% Protocol Robustness — shared properties across v1 and v2 engines
+%% Phase lists, loops, mutual exclusion, and disconnect handling.
+%% For v1/v2 engine architecture, see protocol-engines.mmd.
 
-flowchart TD
-    subgraph protocols["Protocols"]
-        review["<b>Review</b><br/>critic_turn > owner_turn<br/>> cleanup > complete<br/><i>owner + critic</i>"]
-        build["<b>Build</b><br/>implementing > reviewing<br/>> complete<br/><i>owner + critic</i>"]
-        design["<b>Design</b><br/>spawning > questioning > answering<br/>> independent > synthesis > ...<br/><i>personas + singletons</i>"]
+flowchart LR
+    subgraph review_phases["Review Phases"]
+        r_ct["critic_turn"] --> r_ot["owner_turn"]
+        r_ot -- "owner_posted<br/>(loop)" --> r_ct
+        r_ot -- "final_round" --> r_pp["post_pass<br/><i>(v1 only)</i>"]
+        r_pp --> r_cl["cleanup"]
+        r_ot -- "final_round<br/>(v2)" --> r_cl
+        r_cl --> r_done["complete"]
     end
 
-    review -- blocks --> build
-    build -- blocks --> design
-    review -- blocks --> design
+    subgraph build_phases["Build Phases"]
 
-    note["one protocol per thread"]
+        b_impl["implementing"] --> b_rev["reviewing"]
+        b_rev -- "critic_feedback<br/>(loop)" --> b_impl
+        b_rev -- "approved" --> b_close["closing"]
+        b_close --> b_done["complete"]
+    end
+
+    subgraph design_phases["Design Phases"]
+
+        d_spawn["spawning"] --> d_q["questioning"]
+        d_q --> d_a["answering"]
+        d_a --> d_ind["independent"]
+        d_ind --> d_syn["synthesis"]
+        d_syn --> d_ref["refinement"]
+        d_ref -- "loop" --> d_syn
+        d_ref -. "direct phase mutation<br/>(bypasses state machine)" .-> d_audit["audit"]
+        d_audit --> d_brief["brief"]
+        d_brief --> d_done["complete"]
+    end
+
+    subgraph spike_phases["Spike Phases"]
+
+        s_exp["exploring"] -- "checkpoint<br/>(self-loop)" --> s_exp
+        s_exp -- "wrap_up" --> s_rep["reporting"]
+        s_rep --> s_done["complete"]
+    end
+
+    mutex["isThreadOccupied() — symmetric:<br/>any active protocol blocks any other.<br/>No hierarchy — first in wins."]
 
     subgraph disconnect["Disconnect Handling"]
-        direction LR
-        disc["disconnect"] --> grace["grace timer"]
+
+        disc["disconnect"] --> resume_check["auto-resume<br/>decision (3s)"]
+        resume_check -- retryable --> auto_resume["auto-resume<br/>(up to 5 attempts)"]
+        resume_check -- not retryable --> grace["grace timer"]
         grace -- timeout --> cancel["cancel"]
         grace -- reconnect --> continue["continue"]
     end
 
-    subgraph roles["Grace Periods by Role"]
-        direction LR
-        r1["Critic (review/build): <b>30s</b><br/><i>cheap to replace</i>"]
-        r2["Owner (review/build): <b>2min</b><br/><i>human context</i>"]
-        r3["Persona (design): <b>0s</b><br/><i>expendable</i>"]
-        r4["Singleton (synth/auditor/brief): <b>30s</b><br/><i>one-of-a-kind role</i>"]
-    end
+    subgraph roles["Grace Periods (v1 roles / v2 per-spec)"]
 
-    note2["All completion paths clear disconnect timers.<br/>Build heartbeat interval cleared on complete."]
+        r1["Critic: <b>30s</b>"]
+        r2["Owner: <b>2min</b>"]
+        r3["Persona: <b>0s</b>"]
+        r4["Singleton: <b>30s</b>"]
+        r5["Spike explorer/guide: <b>2min</b><br/><i>(v2 spec-defined)</i>"]
+    end

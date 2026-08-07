@@ -1,4 +1,4 @@
-%% Hydra runtime health topology — what runs, how it connects, where it breaks.
+%% Hydra runtime health topology — what runs, how it connects, what monitors it.
 %% Use alongside /debug-hydra-issues for diagnostic orientation.
 
 flowchart TD
@@ -10,20 +10,26 @@ flowchart TD
     subgraph gateway["Gateway Process"]
         dg["discord-gateway.ts"]
         sg["slack-gateway.ts"]
+        gwh["gateway-health.ts<br/>shard lifecycle + reconnect"]
     end
 
     subgraph daemon["Daemon (long-lived, one per platform)"]
         router["router.ts<br/>command intercept + routing"]
         transport["bridge-transport.ts<br/>session delivery"]
         lifecycle["session-lifecycle.ts<br/>spawn / resume / kill"]
-        registry["protocol-registry.ts<br/>protocol dispatch"]
         server["bridge-server.ts<br/>socket accept + death detect"]
+    end
+
+    subgraph health["Health Monitors"]
+        poll["daemon.ts session poll<br/>5min: crash detect, orphan<br/>detect (90s grace), context alerts"]
+        obs["observability.ts<br/>60s vitals, death reports,<br/>session ID correlation"]
+        mbc["main-bridge-cycle.ts<br/>flap tracking, uptime"]
     end
 
     subgraph sessions["Sessions (one tmux pane + bridge each)"]
         byte["Byte (main)<br/>the primary session"]
-        spawn1["Spawn<br/>child in thread"]
-        spawn2["Spawn<br/>child in thread"]
+        spawn1["Spawn<br/>Claude Code / Codex"]
+        spawn2["Spawn<br/>Claude Code / Codex"]
     end
 
     subgraph bridges["Bridges (MCP relay, one per session)"]
@@ -33,19 +39,26 @@ flowchart TD
     end
 
     subgraph state["State (disk)"]
-        sj["sessions.json<br/>session registry"]
-        tj["threads.json<br/>thread→session map"]
-        logs["spawn-logs/<br/>per-session output"]
+        sj["sessions.json"]
+        tj["threads.json"]
+        logs["spawn-logs/{name}-{uuid}.log"]
         dlog["~/hydra-{platform}-daemon.log"]
+        alive["daemon.alive<br/>heartbeat (connectivity-aware)"]
+    end
+
+    subgraph external["External"]
+        watchdog["launchd watchdog<br/>120s: tmux + heartbeat check"]
+        mcp_logs["~/Library/Caches/claude-cli-nodejs/<br/>mcp-logs-*/*.jsonl<br/>(bridge stderr — the gold)"]
     end
 
     discord --> dg
     slack --> sg
     dg --> router
     sg --> router
+    dg --> gwh
+    sg --> gwh
 
     router --> transport
-    router --> registry
     transport --> server
 
     server -- "unix socket" --> b0
@@ -56,15 +69,20 @@ flowchart TD
     b1 -- "MCP stdio" --> spawn1
     b2 -- "MCP stdio" --> spawn2
 
-    lifecycle --> server
+    poll --> server
+    obs -.-> dlog
+    mbc --> server
+    watchdog -.-> alive
+
     lifecycle -.-> sj
+    lifecycle -.-> logs
     server -.-> sj
     server -.-> dlog
-    lifecycle -.-> logs
+    b0 -.-> mcp_logs
+    b1 -.-> mcp_logs
 
-    %% Failure annotations
     classDef fail stroke:#e74c3c,stroke-width:2px,stroke-dasharray:5 5
     classDef health stroke:#27ae60,stroke-width:2px
 
-    class server,transport health
+    class poll,obs,mbc,watchdog health
     class dg,sg,b0,b1,b2 fail
