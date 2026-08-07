@@ -1,0 +1,52 @@
+%% Factory — async build→review cycle with PM notification loop
+%% PM stays in their thread. Builder works in a new thread.
+%% Daemon enforces the lifecycle.
+
+sequenceDiagram
+    participant PM as PM Session
+    participant daemon as daemon.ts
+    participant factory as factory.ts
+    participant lifecycle as session-<br/>lifecycle.ts
+    participant builder as Builder<br/>(forked from PM)
+    participant review as adversarial.ts
+
+    PM->>factory: factory_build(spec, difficulty)
+    factory->>factory: resolveModels(difficulty)
+    factory-->>PM: ticket fb-N-xxxx (immediate)
+
+    factory->>factory: resolve chatId from<br/>PM anchorChannelId or threadId
+    factory->>lifecycle: doSpawnSession(forkFrom: PM)
+    lifecycle->>builder: spawn tmux<br/>(--resume --fork-session)
+    Note over builder: inherits PM context +<br/>write access
+
+    builder->>builder: implements spec
+    builder->>factory: [done] + structured artifact
+    Note over factory: event bus: reply → done detection
+
+    factory-->>PM: 🏭 build complete, starting review
+    factory->>review: startReview(builderThread,<br/>builderSession, rounds)
+    Note over builder: builder becomes review OWNER
+
+    loop review rounds
+        review->>builder: critic challenges
+        builder->>review: owner defends
+        factory-->>PM: 🏭 critic round N/M
+    end
+
+    review->>factory: event bus: review:complete
+    factory-->>PM: 🏭 awaiting your decision
+
+    alt accept
+        PM->>factory: factory_accept(ticket)
+        factory->>lifecycle: killSession(builder)
+        factory-->>PM: 🏭 accepted ✅
+    else retry
+        PM->>factory: factory_retry(ticket, instructions)
+        factory->>builder: notification with new instructions
+        Note over builder: re-enters build→review
+    else abandon
+        PM->>factory: factory_abandon(ticket)
+        factory->>review: cancelReview (if active)
+        factory->>lifecycle: killSession(builder)
+        factory-->>PM: 🏭 abandoned 🗑️
+    end

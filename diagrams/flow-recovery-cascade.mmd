@@ -8,6 +8,12 @@ flowchart TD
         recover["recover<br/><i>global batch</i>"]
     end
 
+    subgraph primitives["Shared Primitives<br/><i>session-lifecycle.ts</i>"]
+        tryResume["<b>tryResume</b><br/>drives T1 + T2"]
+        tryRespawn["<b>tryRespawn</b><br/>drives T3"]
+        waitForBridge["<b>waitForBridge</b><br/>validates health after recovery"]
+    end
+
     subgraph cascade["Recovery Tiers"]
         t1["<b>T1: --resume</b><br/>full context restoration"]
         t2["<b>T2: --resume --fork-session</b><br/>transcript copy"]
@@ -27,22 +33,25 @@ flowchart TD
         crashed["name crashed → resume"]
     end
 
-    resume -.-> t1
-    recover -.-> t1
-    respawn -.-> t3
+    resume --> tryResume
+    recover --> tryResume
+    respawn --> tryRespawn
 
-    t1 -- ok --> full
+    tryResume --> t1
+    tryResume --> t2
+
+    t1 -- ok --> waitForBridge
     t1 -- fail --> t2
-    t2 -- ok --> transcript
-    t2 -- fail --> t3
-    t3 -- ok --> thread
+    t2 -- ok --> waitForBridge
+    t2 -- fail --> tryRespawn
+
+    tryRespawn --> t3
+    t3 -- ok --> waitForBridge
     t3 -- fail --> fail
 
-    detect --> check --> crashed
-    crashed -.-> t1
+    waitForBridge -- healthy --> full
+    waitForBridge -- healthy --> transcript
+    waitForBridge -- healthy --> thread
 
-    subgraph primitives["Shared Primitives"]
-        tryResume["<b>tryResume</b><br/>drives T1 + T2"]
-        tryRespawn["<b>tryRespawn</b><br/>drives T3"]
-        waitForBridge["<b>waitForBridge</b><br/>validates health after recovery"]
-    end
+    detect --> check --> crashed
+    crashed --> tryResume

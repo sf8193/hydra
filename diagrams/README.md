@@ -60,6 +60,13 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 |---------|--------------|
 | `protocol-engines` | **v1/v2 engine split** — dispatch ordering, phase sets, shared infrastructure. The most important structural diagram for protocol work. |
 | `flow-protocol-robustness` | Protocol phases with loops, mutual exclusion, disconnect/auto-resume handling, grace periods |
+| `flow-factory` | Factory build→review cycle: PM dispatches, builder forks, daemon enforces review, PM decides |
+
+### Daemon Internals
+| Diagram | What it shows |
+|---------|--------------|
+| `flow-tool-scoping` | **Three-tier tool model** + runtime `tools/list_changed` re-push. Why `advance` appears and disappears between protocol phases. |
+| `flow-bridge-lifecycle` | Bridge registration, tool delivery, disconnect handling, reconnect, death detection |
 
 ### Structural
 | Diagram | What it shows |
@@ -68,7 +75,4 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `health-topology` | Runtime components, state files, and health check connections |
 
 ### Missing (candidates for future PRs)
-- `flow-tool-scoping` — three-tier tool model + runtime `tools/list_changed` re-push cycle
-- `flow-factory` — factory_build → fork PM → builder implements → auto-review → awaiting_pm decision loop
-- `flow-bridge-lifecycle` — bridge registration, tool delivery, disconnect handling, reconnect
 - `flow-daemon-restart` — module validation probe → kill incumbent → spawn replacement → verify
