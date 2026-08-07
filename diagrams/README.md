@@ -22,8 +22,11 @@ Mermaid sequence and flow diagrams documenting hydra's key flows. Each diagram h
 
 ## Rendering
 
-Render `.mmd` to `.png` using Mermaid CLI:
+Two pipelines exist. The HTML wrapper is primary — it reads `%%` header lines as title/subtitle and produces styled output. `mmdc` is a quick fallback that discards those headers.
 
+**HTML wrapper (primary):** Wrap the `.mmd` in an HTML shell that loads Mermaid, render via headless Chromium. This is what produced the original June diagrams with titles and styled participant boxes. Use the `html-diagram-rendering` skill (user-global, not in this repo) or build the wrapper manually.
+
+**mmdc (fallback):** Quick renders without titles. The `%%` header lines become dead comments.
 ```bash
 # Render one
 npx -y -p @mermaid-js/mermaid-cli mmdc -i diagrams/flow-spawn.mmd -o diagrams/flow-spawn.png -t default -b white
@@ -34,7 +37,13 @@ for f in diagrams/*.mmd; do npx -y -p @mermaid-js/mermaid-cli mmdc -i "$f" -o "$
 
 Commit both the `.mmd` source and the `.png` render.
 
-**Prefer generated diagrams over hand-drawn** when the source is machine-readable. `scripts/gen-topology.ts` is the model — it derives `docs/topology.mmd` from actual `import` statements and is provably fresh. The v2 protocol DSL (`protocols/*.ts`) is similarly machine-readable; a `gen-protocol-diagrams.ts` walking `protocol()` specs would eliminate the staleness problem for protocol diagrams.
+## Generated vs Hand-Drawn
+
+**Generated diagrams are the standard** when the source is machine-readable. `scripts/gen-topology.ts` is the model — it derives `docs/topology.mmd` from actual `import` statements and is provably fresh (0% staleness over its lifetime).
+
+Hand-drawn diagrams have a measured ~44% staleness rate over 5.5 weeks and produce fictional references at a rate that attention does not fix. They are appropriate only for cross-layer message flows with no single declarative source (spawn, fork, recovery cascade).
+
+**Prerequisite for protocol diagrams:** `scripts/gen-protocol-diagrams.ts` walking `protocol()` DSL specs would make phase/loop/grace errors structurally impossible. The v2 protocol DSL is already machine-readable. Until this generator exists, hand-drawn protocol diagrams should be treated as provisional and verified against code before citing.
 
 ## Catalog
 

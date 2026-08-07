@@ -29,7 +29,7 @@ flowchart TD
         d_ind --> d_syn["synthesis"]
         d_syn --> d_ref["refinement"]
         d_ref -- "loop" --> d_syn
-        d_ref --> d_audit["audit"]
+        d_ref -. "direct phase mutation<br/>(bypasses state machine)" .-> d_audit["audit"]
         d_audit --> d_brief["brief"]
         d_brief --> d_done["complete"]
     end

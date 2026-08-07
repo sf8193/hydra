@@ -17,18 +17,13 @@ flowchart TD
         router["router.ts<br/>command intercept + routing"]
         transport["bridge-transport.ts<br/>session delivery"]
         lifecycle["session-lifecycle.ts<br/>spawn / resume / kill"]
-        preg["protocol-registry.ts<br/>protocol dispatch"]
-        prun["protocol-runner.ts<br/>DSL execution"]
         server["bridge-server.ts<br/>socket accept + death detect"]
     end
 
     subgraph health["Health Monitors"]
         poll["daemon.ts session poll<br/>5min: crash detect, orphan<br/>detect (90s grace), context alerts"]
-        probe["pane-probe.ts<br/>60s: stuck-on-login,<br/>plan mode detection"]
         obs["observability.ts<br/>60s vitals, death reports,<br/>session ID correlation"]
         mbc["main-bridge-cycle.ts<br/>flap tracking, uptime"]
-        bootprobe["boot-probe.ts<br/>module validation before restart"]
-        rh["resume-health.ts<br/>classify resume failures"]
     end
 
     subgraph sessions["Sessions (one tmux pane + bridge each)"]
@@ -45,7 +40,6 @@ flowchart TD
 
     subgraph state["State (disk)"]
         sj["sessions.json"]
-        tj["threads.json"]
         logs["spawn-logs/{name}-{uuid}.log"]
         dlog["~/hydra-{platform}-daemon.log"]
         alive["daemon.alive<br/>heartbeat (connectivity-aware)"]
@@ -75,20 +69,13 @@ flowchart TD
     b1 -- "MCP stdio" --> spawn1
     b2 -- "MCP stdio" --> spawn2
 
-    preg --> prun
-
     poll --> server
     poll --> lifecycle
-    probe --> byte
-    probe --> spawn1
     obs -.-> dlog
     mbc --> server
-    bootprobe --> lifecycle
-    rh --> lifecycle
     watchdog -.-> alive
 
     lifecycle -.-> sj
-    lifecycle -.-> tj
     lifecycle -.-> logs
     server -.-> sj
     server -.-> dlog
@@ -98,5 +85,5 @@ flowchart TD
     classDef fail stroke:#e74c3c,stroke-width:2px,stroke-dasharray:5 5
     classDef health stroke:#27ae60,stroke-width:2px
 
-    class poll,probe,obs,mbc,bootprobe,watchdog health
+    class poll,obs,mbc,watchdog health
     class dg,sg,b0,b1,b2 fail

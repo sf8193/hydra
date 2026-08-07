@@ -27,7 +27,7 @@ flowchart TD
 
     subgraph shared["Shared Infrastructure"]
         registry["protocol-registry.ts<br/>mutual exclusion +<br/>reconnect/disconnect hooks"]
-        sentinel["sentinel-nudge.ts"]
+        sentinel["advance-nudge.ts"]
         autoresume["auto-resume.ts<br/>MAX_RESUME_ATTEMPTS=5"]
         tools["bridge-tools.ts<br/>dynamic tool scoping<br/>(advance per phase)"]
     end
