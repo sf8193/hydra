@@ -17,7 +17,7 @@ import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from
 import { join } from 'path'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startProtocolRun, protocolEvents, getRunByThread, cancelRun } from './protocol-runner.js'
-import { getProtocol } from './commands/protocol.js'
+import { getProtocol } from './protocol-loader.js'
 import { registry, threadRegistry } from './sessions.js'
 import { safeSend } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
@@ -827,7 +827,20 @@ protocolEvents.onRoundAdvance((event) => {
   if (!ticket) return
   const state = builds.get(ticket)
   if (!state || state.phase !== 'reviewing') return
-  void safeSend(state.pmThreadId, `🏭 **Critic Round ${event.round}/${event.totalRounds}** — in progress`)
+
+  // Mid-run rounds get a counter only; the final round forwards the critic's
+  // text inline so the PM can judge accept-vs-retry without opening the
+  // builder thread. Mirrors v1's onFactoryCriticRound.
+  if (event.round < event.totalRounds || !event.text) {
+    void safeSend(state.pmThreadId, `🏭 **Critic Round ${event.round}/${event.totalRounds}** — in progress`)
+    return
+  }
+
+  const text = event.text.length > 3000 ? event.text.slice(0, 3000) + '\n...(truncated)' : event.text
+  void safeSend(state.pmThreadId, [
+    `🏭 **Critic Final Round ${event.round}/${event.totalRounds}**`,
+    text,
+  ].join('\n'))
 })
 
 registerProtocol('factory', {

@@ -303,7 +303,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
       roundAdvanced = true
     }
     if (roundAdvanced) {
-      protocolEvents.emitRoundAdvance({ protocol: run.protocol.name, threadId: run.threadId, round: run.currentRound, totalRounds: run.rounds })
+      protocolEvents.emitRoundAdvance({ protocol: run.protocol.name, threadId: run.threadId, round: run.currentRound, totalRounds: run.rounds, text: content })
     }
 
     // Post content to thread — after state advance so a safeSend failure
