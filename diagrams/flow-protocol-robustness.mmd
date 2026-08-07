@@ -36,7 +36,8 @@ flowchart TD
 
     subgraph spike_phases["Spike Phases"]
         direction LR
-        s_exp["exploring"] --> s_rep["reporting"]
+        s_exp["exploring"] -- "checkpoint<br/>(self-loop)" --> s_exp
+        s_exp -- "wrap_up" --> s_rep["reporting"]
         s_rep --> s_done["complete"]
     end
 
