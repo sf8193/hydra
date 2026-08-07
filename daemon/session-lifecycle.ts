@@ -49,7 +49,10 @@ export async function resolveSpawnChannel(
     if (ch.isThread) {
       const parentChannelId = ch.parentId ?? undefined
       if (parentChannelId) {
-        return { targetChannelId: parentChannelId, parentChannelId }
+        // Return both: threadId so the caller can reuse the thread (respawn in
+        // dead thread), and targetChannelId=parent so new thread creation lands
+        // in the right channel if the thread can't be reused.
+        return { targetChannelId: parentChannelId, threadId: chatId, parentChannelId }
       }
       return {
         targetChannelId: defaultChannel,

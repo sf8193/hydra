@@ -8,7 +8,7 @@ function makeFetchChannel(response: { isThread: boolean; isDM: boolean; parentId
 }
 
 describe('resolveSpawnChannel', () => {
-  test('thread chatId resolves to parent channel', async () => {
+  test('thread chatId resolves to parent channel and returns threadId', async () => {
     const result = await resolveSpawnChannel(
       'thread-123',
       DEFAULT_CHANNEL,
@@ -17,7 +17,7 @@ describe('resolveSpawnChannel', () => {
     )
     expect(result.targetChannelId).toBe('parent-456')
     expect(result.parentChannelId).toBe('parent-456')
-    expect(result.threadId).toBeUndefined()
+    expect(result.threadId).toBe('thread-123')
     expect(result.warning).toBeUndefined()
   })
 
