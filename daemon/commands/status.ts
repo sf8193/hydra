@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
+import { homedir } from 'os'
 import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
@@ -203,6 +204,18 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   }
 }
 
+function getSessionCost(tmuxName: string): string {
+  try {
+    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8', timeout: 2000 }).trim().split('\n')[0]
+    if (!panePid) return '?'
+    const sessionFile = join(homedir(), '.claude', 'sessions', `${panePid}.json`)
+    const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
+    const cost = data.totalCostUsd ?? data.cost?.total_cost_usd
+    if (cost != null) return `$${Number(cost).toFixed(2)}`
+    return '?'
+  } catch { return '?' }
+}
+
 export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   const info = registry.resolveThreadSession(msg.channelId, msg.existingThreadId, msg.isThread)
   if (!info) {
@@ -219,6 +232,7 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
 
   void gateway.react(msg.channelId, msg.id, '📈').catch(() => {})
   const ctx = getContextPercent(info.tmuxName)
+  const cost = getSessionCost(info.tmuxName)
   const duration = formatDuration(Date.now() - info.createdAt)
   const msgs = info.messageCount ?? 0
   const status = transport.has(info.sessionId) ? 'connected' : 'disconnected'
@@ -228,9 +242,10 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   const forkCount = [...registry.values()].filter(s => s.originType === 'fork' && s.originFrom === info.tmuxName).length
 
   const e = sessionEmoji(info.tmuxName)
+  const costPart = cost !== '?' ? ` · ${cost}` : ''
   const lines = [
     `${e} \`${info.tmuxName}\` — ${desc}`,
-    `    ◦ ${ctx} · ${msgs} msgs · ${duration} · ${status}`,
+    `    ◦ ${ctx} · ${msgs} msgs · ${duration} · ${status}${costPart}`,
   ]
   if (forkCount > 0) lines.push(`    ◦ ${forkCount} fork${forkCount > 1 ? 's' : ''}`)
   if (info.originType === 'handoff' && info.originFrom) {
