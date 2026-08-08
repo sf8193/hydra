@@ -147,14 +147,15 @@ async function doUpdate(): Promise<void> {
   const access = loadAccess()
   if (!access.allowFrom.length) return
 
-  const userId = access.allowFrom[0]
   const sessions = getActiveSessions()
   const blocks = buildHomeBlocks(sessions)
 
-  try {
-    await (gateway as any).publishHomeTab(userId, blocks)
-  } catch (err) {
-    process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
+  for (const userId of access.allowFrom) {
+    try {
+      await (gateway as any).publishHomeTab(userId, blocks)
+    } catch (err) {
+      process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
+    }
   }
 }
 
