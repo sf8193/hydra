@@ -288,16 +288,8 @@ function confirmAndSendLogin(tmuxName: string): boolean {
   return io.sendKeys(tmuxName, '/login', 'Enter')
 }
 
-function paneInteractionExplicitlyDisabled(): boolean {
-  const v = process.env.HYDRA_AUTO_LOGIN?.trim().toLowerCase()
-  return v === '0' || v === 'false'
-}
-
 function confirmAndDismissLoginSuccess(tmuxName: string): boolean {
-  // Dismiss unless the user explicitly opted out of pane interaction.
-  // Distinguished from autoLoginEnabled(): unset means "don't initiate login"
-  // but still dismiss success prompts (cleanup, not initiation).
-  if (paneInteractionExplicitlyDisabled()) return false
+  if (!autoLoginEnabled()) return false
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (!LOGIN_SUCCESS_RE.test(tail)) return false
@@ -572,8 +564,11 @@ export function probeAllSessions(now?: number): void {
         existing.state.loginStage !== detected.loginStage
       if (stageChanged) {
         existing.state = detected
-        existing.notifiedAt = null // reset cooldown for new stage
-        void notifyLoginRequired(existing, t)
+        existing.notifiedAt = null
+        const stageMax = detected.loginStage === 'success' ? 1 : MAX_NOTIFICATIONS
+        if (existing.notifyCount < stageMax) {
+          void notifyLoginRequired(existing, t)
+        }
         continue
       }
 
@@ -581,8 +576,6 @@ export function probeAllSessions(now?: number): void {
 
       if (existing.consecutive >= CONFIRM_PROBES) {
         const cooldownElapsed = !existing.notifiedAt || (t - existing.notifiedAt) >= NOTIFY_COOLDOWN_MS
-        // Success is informational — one notification is enough. Repeating
-        // "Press Enter" every 10 minutes when the dismiss failed is pure noise.
         const effectiveMax = (detected.kind === 'login_required' && detected.loginStage === 'success') ? 1 : MAX_NOTIFICATIONS
         const underLimit = existing.notifyCount < effectiveMax
 
