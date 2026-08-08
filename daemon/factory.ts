@@ -11,7 +11,8 @@
 //      new instructions, re-enter build→review) / factory_abandon (kill, abort)
 
 import { randomBytes } from 'crypto'
-import { appendFileSync, mkdirSync, existsSync } from 'fs'
+import { execSync } from 'child_process'
+import { appendFileSync, mkdirSync, existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
@@ -42,6 +43,7 @@ type FactoryBuildState = {
   createdAt: number
   reviewed: boolean
   worktree?: string
+  diffGistUrl?: string  // set at [done] time, included in review-complete notification
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +394,54 @@ function syncPhaseToRegistry(state: FactoryBuildState): void {
   }
 }
 
+const shqLocal = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+const DIFF_SIZE_CAP = 50 * 1024  // 50KB — enough for UX, not so large it's useless
+
+/**
+ * Capture the builder's committed diff and upload as a secret GitHub Gist.
+ * Called at [done] time (before review), stored in state.diffGistUrl.
+ * Best-effort — failure is silent.
+ *
+ * Uses `git log -p HEAD~1..HEAD` to capture the most recent commit (the builder's
+ * work) rather than `git diff HEAD` which is empty after a commit.
+ */
+async function captureBuilderDiff(state: FactoryBuildState): Promise<string | undefined> {
+  if (!state.builderSessionId) return undefined
+  const info = registry.get(state.builderSessionId)
+  if (!info) return undefined
+
+  const cwd = info.worktreePath ?? info.capabilities?.cwd
+  if (!cwd) return undefined
+
+  try {
+    let diff = execSync('git log -p HEAD~1..HEAD', { cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+    if (!diff) return undefined
+
+    let truncated = false
+    if (diff.length > DIFF_SIZE_CAP) {
+      diff = diff.slice(0, DIFF_SIZE_CAP) + '\n\n... (truncated — diff exceeded 50KB)'
+      truncated = true
+    }
+
+    const tmpPath = join('/tmp', `factory-diff-${state.ticket}.diff`)
+    writeFileSync(tmpPath, diff)
+    try {
+      // --secret: not indexed by search engines; safe for private repo code
+      const gistUrl = execSync(
+        `gh gist create --secret ${shqLocal(tmpPath)}`,
+        { encoding: 'utf8', timeout: 15_000 },
+      ).trim()
+      if (truncated) process.stderr.write(`daemon: factory: diff truncated at 50KB for ${state.ticket}\n`)
+      return gistUrl || undefined
+    } finally {
+      try { execSync(`rm -f ${shqLocal(tmpPath)}`, { stdio: 'pipe' }) } catch {}
+    }
+  } catch (err) {
+    process.stderr.write(`daemon: factory: diff capture failed for ${state.ticket}: ${err instanceof Error ? err.message : err}\n`)
+    return undefined
+  }
+}
+
 function killBuilder(state: FactoryBuildState): void {
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
@@ -514,6 +564,10 @@ function onBuilderDone(sessionId: string, doneText: string): boolean {
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: builder posted [done] for ticket ${state.ticket}, starting review\n`)
 
+  // Capture the diff now — builder just committed, git log -p HEAD~1..HEAD has the work.
+  // Stored in state so onFactoryReviewComplete can include it synchronously (no race).
+  void captureBuilderDiff(state).then(url => { if (url) state.diffGistUrl = url })
+
   const artifactTruncated = doneText.length > 3000 ? doneText.slice(0, 3000) + '\n...(truncated)' : doneText
   void safeSend(state.pmThreadId, [
     `🏭 **Build complete — starting mandatory review**`,
@@ -613,15 +667,18 @@ function onFactoryReviewComplete(builderThreadId: string): boolean {
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
-  void safeSend(state.pmThreadId, [
+  // diffGistUrl was captured at [done] time — use synchronously, no race
+  const lines = [
     `🏭 **Factory build→review complete** — awaiting your decision`,
     `Ticket: \`${state.ticket}\``,
+    ...(state.diffGistUrl ? [`📄 **Diff:** ${state.diffGistUrl}`] : []),
     ``,
     `Use one of:`,
     `- \`factory_accept("${state.ticket}")\` — accept the work, kill builder`,
     `- \`factory_retry("${state.ticket}", "fix X and Y")\` — send new instructions to builder`,
     `- \`factory_abandon("${state.ticket}")\` — discard and kill builder`,
-  ].join('\n'))
+  ]
+  void safeSend(state.pmThreadId, lines.join('\n'))
 
   return true
 }
