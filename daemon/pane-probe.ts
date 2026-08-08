@@ -288,10 +288,16 @@ function confirmAndSendLogin(tmuxName: string): boolean {
   return io.sendKeys(tmuxName, '/login', 'Enter')
 }
 
+function paneInteractionExplicitlyDisabled(): boolean {
+  const v = process.env.HYDRA_AUTO_LOGIN?.trim().toLowerCase()
+  return v === '0' || v === 'false'
+}
+
 function confirmAndDismissLoginSuccess(tmuxName: string): boolean {
-  // No autoLoginEnabled() gate — dismissing a success prompt is cleanup, not
-  // login initiation. The user already authenticated; Enter just clears the
-  // screen so the session can proceed.
+  // Dismiss unless the user explicitly opted out of pane interaction.
+  // Distinguished from autoLoginEnabled(): unset means "don't initiate login"
+  // but still dismiss success prompts (cleanup, not initiation).
+  if (paneInteractionExplicitlyDisabled()) return false
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (!LOGIN_SUCCESS_RE.test(tail)) return false
@@ -588,9 +594,9 @@ export function probeAllSessions(now?: number): void {
           } else {
             void notifyLoginRequired(existing, t)
           }
-        } else if (!underLimit && existing.notifyCount === MAX_NOTIFICATIONS) {
+        } else if (!underLimit && existing.notifyCount === effectiveMax) {
           existing.notifyCount++
-          process.stderr.write(`daemon: pane-probe: ${key} still stuck after ${MAX_NOTIFICATIONS} notifications, giving up\n`)
+          process.stderr.write(`daemon: pane-probe: ${key} still stuck after ${effectiveMax} notifications, giving up\n`)
         }
       }
     } else {
