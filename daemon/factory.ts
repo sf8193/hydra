@@ -44,6 +44,7 @@ type FactoryBuildState = {
   reviewed: boolean
   worktree?: string
   diffGistUrl?: string  // set at [done] time, included in review-complete notification
+  prUrl?: string        // set at [done] time for worktree builds; preferred over gist in notification
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +443,43 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
   }
 }
 
+/**
+ * Create a GitHub PR from the builder's worktree branch.
+ * Only runs for worktree builds (info.worktreePath + info.worktreeRepo set).
+ * Best-effort — failure is silent.
+ */
+async function createBuilderPR(state: FactoryBuildState): Promise<string | undefined> {
+  if (!state.builderSessionId) return undefined
+  const info = registry.get(state.builderSessionId)
+  if (!info?.worktreePath || !info.worktreeRepo) return undefined
+
+  const branch = `wt/${info.tmuxName}`
+  try {
+    // Check if PR already exists for this branch (idempotent).
+    // gh pr view exits 1 when no PR exists — wrap in its own try so the throw
+    // doesn't prevent creation (the common path for a fresh factory build).
+    try {
+      const existing = execSync(
+        `gh pr view ${shqLocal(branch)} --json url --jq .url`,
+        { cwd: info.worktreeRepo, encoding: 'utf8', timeout: 10_000, stdio: 'pipe' },
+      ).trim()
+      if (existing) return existing
+    } catch {
+      // No existing PR — fall through to create
+    }
+
+    const title = `Factory ${state.ticket}: ${state.spec.slice(0, 60)}`
+    const prUrl = execSync(
+      `gh pr create --head ${shqLocal(branch)} --title ${shqLocal(title)} --body ${shqLocal(`Factory build from ticket \`${state.ticket}\``)}`,
+      { cwd: info.worktreeRepo, encoding: 'utf8', timeout: 15_000 },
+    ).trim()
+    return prUrl || undefined
+  } catch (err) {
+    process.stderr.write(`daemon: factory: PR creation failed for ${state.ticket}: ${err instanceof Error ? err.message : err}\n`)
+    return undefined
+  }
+}
+
 function killBuilder(state: FactoryBuildState): void {
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
@@ -567,6 +605,8 @@ function onBuilderDone(sessionId: string, doneText: string): boolean {
   // Capture the diff now — builder just committed, git log -p HEAD~1..HEAD has the work.
   // Stored in state so onFactoryReviewComplete can include it synchronously (no race).
   void captureBuilderDiff(state).then(url => { if (url) state.diffGistUrl = url })
+  // For worktree builds: create a PR from the pushed branch (builder is instructed to push before [done]).
+  void createBuilderPR(state).then(url => { if (url) state.prUrl = url })
 
   const artifactTruncated = doneText.length > 3000 ? doneText.slice(0, 3000) + '\n...(truncated)' : doneText
   void safeSend(state.pmThreadId, [
@@ -667,11 +707,17 @@ function onFactoryReviewComplete(builderThreadId: string): boolean {
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
-  // diffGistUrl was captured at [done] time — use synchronously, no race
+  // prUrl/diffGistUrl were captured at [done] time — use synchronously, no race.
+  // PR preferred over gist: better diff view, inline comments, CI.
+  const diffLink = state.prUrl
+    ? [`🔀 **PR:** ${state.prUrl}`]
+    : state.diffGistUrl
+      ? [`📄 **Diff:** ${state.diffGistUrl}`]
+      : []
   const lines = [
     `🏭 **Factory build→review complete** — awaiting your decision`,
     `Ticket: \`${state.ticket}\``,
-    ...(state.diffGistUrl ? [`📄 **Diff:** ${state.diffGistUrl}`] : []),
+    ...diffLink,
     ``,
     `Use one of:`,
     `- \`factory_accept("${state.ticket}")\` — accept the work, kill builder`,
