@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetryReview } from './factory.js'
+import { factoryBuild, factoryRetryReview, getFactoryStatus } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -360,6 +360,20 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         return {
           content: [{ type: 'text', text: `Review retry started for ticket ${ticket}. Results will be delivered as notifications in your thread.` }],
         }
+      }
+
+      case 'factory_status': {
+        if (!callerSessionId) throw new Error('factory_status requires a session context')
+        const callerInfo = registry.get(callerSessionId)
+        if (!callerInfo) throw new Error('session not found')
+
+        const statuses = getFactoryStatus(callerInfo.threadId)
+        if (statuses.length === 0) {
+          return { content: [{ type: 'text', text: 'No active factory builds.' }] }
+        }
+
+        const lines = statuses.map(s => `- **${s.ticket}**: ${s.phase}${s.worktree ? ` (worktree: ${s.worktree})` : ''}`)
+        return { content: [{ type: 'text', text: `**Active factory builds:**\n${lines.join('\n')}` }] }
       }
 
       case 'watch_pr': {

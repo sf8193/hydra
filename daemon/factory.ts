@@ -315,13 +315,13 @@ export function hasFactoryBuild(threadId: string): boolean {
   return !!tickets && tickets.size > 0
 }
 
-export function getFactoryStatus(pmThreadId: string): Array<{ ticket: string; phase: string }> {
+export function getFactoryStatus(pmThreadId: string): Array<{ ticket: string; phase: string; worktree?: string }> {
   const tickets = pmTickets.get(pmThreadId)
   if (!tickets || tickets.size === 0) return []
-  const result: Array<{ ticket: string; phase: string }> = []
+  const result: Array<{ ticket: string; phase: string; worktree?: string }> = []
   for (const ticket of tickets) {
     const state = pending.get(ticket)
-    if (state) result.push({ ticket: state.ticket, phase: state.phase })
+    if (state) result.push({ ticket: state.ticket, phase: state.phase, ...(state.worktree ? { worktree: state.worktree } : {}) })
   }
   return result
 }
