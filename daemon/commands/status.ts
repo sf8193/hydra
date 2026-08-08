@@ -283,6 +283,35 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
 // Protocols — show active review/build/design sessions
 // ---------------------------------------------------------------------------
 
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, 10)
+
+  if (threads.length === 0) {
+    await safeSend(msg.channelId, '_No completed sessions._', { replyTo: msg.id })
+    return
+  }
+
+  const lines = ['**Recent Sessions**', '']
+  for (const t of threads) {
+    const lastSession = t.sessionHistory[t.sessionHistory.length - 1]
+    const duration = lastSession?.endedAt && lastSession?.startedAt
+      ? formatDuration(lastSession.endedAt - lastSession.startedAt)
+      : '?'
+    const msgs = lastSession?.messageCount ?? t.totalMessages ?? 0
+    const url = t.threadUrl ? `<${t.threadUrl}|${lastSession?.tmuxName ?? 'session'}>` : (lastSession?.tmuxName ?? 'session')
+    const desc = (t.description || t.topic || 'untitled').slice(0, 60)
+    const model = lastSession?.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') || '?'
+    lines.push(`• ${url} — ${desc} · ${duration} · ${msgs} msgs · \`${model}\``)
+  }
+
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
+}
+
 export async function handleProtocolsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})
 
