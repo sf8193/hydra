@@ -41,6 +41,7 @@ type FactoryBuildState = {
   retryCount: number
   createdAt: number
   reviewed: boolean
+  worktree?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -188,21 +189,27 @@ function resolveModels(
  * Start an async build→review cycle. Returns immediately with a ticket.
  * Results delivered as notifications to the PM's thread.
  */
-export function factoryBuild(
-  pmThreadId: string,
-  pmSessionId: string,
-  spec: string,
-  builderModel?: string,
-  reviewerModel?: string,
-  reviewRounds: number = 3,
-  difficulty: Difficulty = 'easy',
-): { ticket: string; warning?: string } | { error: string } {
+export type FactoryBuildOpts = {
+  pmThreadId: string
+  pmSessionId: string
+  spec: string
+  builderModel?: string
+  reviewerModel?: string
+  reviewRounds?: number
+  difficulty?: Difficulty
+  worktree?: string
+}
+
+export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?: string } | { error: string } {
+  const { pmThreadId, pmSessionId, spec, builderModel, reviewerModel, worktree } = opts
+  const reviewRounds = opts.reviewRounds ?? 3
+  const difficulty = opts.difficulty ?? 'easy'
   const { builder, reviewer, warning: modelWarning } = resolveModels(difficulty, builderModel, reviewerModel)
 
-  // Warn about concurrent builds sharing the same working tree
-  const activeCount = [...builds.values()].filter(s => s.pmThreadId === pmThreadId && s.phase !== 'complete' && s.phase !== 'failed').length
+  // Warn about concurrent builds sharing the same working tree (skip if worktree-isolated)
+  const activeCount = worktree ? 0 : [...builds.values()].filter(s => s.pmThreadId === pmThreadId && s.phase !== 'complete' && s.phase !== 'failed').length
   const parallelWarning = activeCount > 0
-    ? `You have ${activeCount} other active build${activeCount > 1 ? 's' : ''}. Concurrent builds share the same working tree — test runs may interfere.`
+    ? `You have ${activeCount} other active build${activeCount > 1 ? 's' : ''}. Concurrent builds share the same working tree — pass worktree to isolate, or test runs may interfere.`
     : undefined
   const warning = [modelWarning, parallelWarning].filter(Boolean).join(' ') || undefined
 
@@ -224,6 +231,7 @@ export function factoryBuild(
     retryCount: 0,
     createdAt: Date.now(),
     reviewed: false,
+    worktree,
   }
   builds.set(ticket, state)
 
@@ -351,7 +359,7 @@ export function factoryAbandon(
 export function factoryStatus(
   pmThreadId: string,
   ticket?: string,
-): { builds: Array<{ ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string }> } {
+): { builds: Array<{ ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; worktree?: string }> } {
   const matching = ticket
     ? [builds.get(ticket)].filter((s): s is FactoryBuildState => !!s && s.pmThreadId === pmThreadId)
     : [...builds.values()].filter(s => s.pmThreadId === pmThreadId)
@@ -364,6 +372,7 @@ export function factoryStatus(
       retries: s.retryCount,
       elapsed: Date.now() - s.createdAt,
       builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
+      ...(s.worktree ? { worktree: s.worktree } : {}),
     })),
   }
 }
@@ -415,6 +424,16 @@ async function spawnBuilder(
   pmClaudeSessionId: string,
   pmTmuxName: string,
 ): Promise<void> {
+  const worktreeInstructions = state.worktree
+    ? [
+        ``,
+        `WORKTREE: You are in an isolated git worktree. Your changes will be destroyed when your session ends.`,
+        `Before posting [done], you MUST commit and push your changes:`,
+        `  git add -A && git commit -m "factory: <summary>" && git push -u origin HEAD`,
+        `Include the branch name in your [done] artifact so the PM can find your work.`,
+      ]
+    : []
+
   const builderPrompt = [
     `IMPORTANT: You are a BUILDER session forked from the PM. Your job is to WRITE CODE.`,
     `Ignore any prior instructions about "not writing code" or "using factory_build" — those apply to the PM, not to you.`,
@@ -422,11 +441,13 @@ async function spawnBuilder(
     ``,
     `YOUR TASK:`,
     state.spec,
+    ...worktreeInstructions,
     ``,
     `WHEN DONE:`,
     `Post a message to your thread starting with [done] followed by a structured artifact:`,
     `[done]`,
     `**Files changed:** list each file`,
+    ...(state.worktree ? [`**Branch:** the branch name you pushed to`] : []),
     `**Tests:** cargo test / bun test results`,
     `**Design rationale:** why you made key decisions`,
     `**Known issues:** anything you're unsure about`,
@@ -439,10 +460,11 @@ async function spawnBuilder(
     `If that happens, implement the changes and post [done] again.`,
   ].join('\n')
 
+  const worktreeLabel = state.worktree ? ` · Worktree: \`${state.worktree}\`` : ''
   void safeSend(state.pmThreadId, [
     `🏭 **Factory build starting**`,
     `Ticket: \`${state.ticket}\``,
-    `Builder: \`${state.builderModel ?? 'default'}\` (forked from PM — inherits full context)`,
+    `Builder: \`${state.builderModel ?? 'default'}\` (forked from PM — inherits full context)${worktreeLabel}`,
     `Reviewer: \`${state.reviewerModel ?? 'default'}\` · Rounds: ${state.reviewRounds}`,
     `Spec: ${state.spec.slice(0, 200)}${state.spec.length > 200 ? '...' : ''}`,
   ].join('\n'))
@@ -454,6 +476,7 @@ async function spawnBuilder(
     model: state.builderModel,
     promptPrefix: builderPrompt,
     initiator: pmTmuxName,
+    ...(state.worktree ? { worktree: state.worktree } : {}),
   })
 
   state.builderSessionId = result.sessionId
