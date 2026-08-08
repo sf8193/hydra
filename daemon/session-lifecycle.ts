@@ -1023,7 +1023,7 @@ export async function tryResume(dead: {
       // Orphan: Claude is running with restored context but the bridge hasn't
       // connected. Preserve the session — killing it discards recovered context,
       // and returning null would cascade to a tier that spawns a duplicate.
-      // The periodic orphan detector (daemon.ts) will monitor it from here.
+      // The periodic orphan detector (daemon/session-health.ts) will monitor it from here.
       process.stderr.write(`daemon: resume ${info.tmuxName}: bridge timeout but tmux alive — preserving as orphan\n`)
 
       // One-shot recheck: the periodic detector runs every 5 minutes, so a

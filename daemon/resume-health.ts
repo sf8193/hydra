@@ -16,7 +16,7 @@
  * "running", so we default to kill (absence of evidence is not evidence
  * of liveness).
  *
- * See also: daemon.ts periodic orphan detector (~line 482), which checks
+ * See also: daemon/session-health.ts periodic orphan detector, which checks
  * the same condition (tmux-alive + bridge-absent) for long-running sessions.
  * Both paths must preserve — if this predicate kills and that one preserves,
  * or vice versa, the incoherence is itself a bug.

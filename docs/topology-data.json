@@ -225,6 +225,12 @@
       "desc": "Per-session max lifetime: nudge → grace → reap"
     },
     {
+      "id": "daemon_session-health",
+      "label": "daemon/session-health.ts",
+      "layer": "domain",
+      "desc": "Session health poll: crash detection, orphan detection, context alerts"
+    },
+    {
       "id": "daemon_adversarial",
       "label": "daemon/adversarial.ts",
       "layer": "protocols",
@@ -348,7 +354,7 @@
     ],
     [
       "daemon",
-      "daemon_anchor-state"
+      "daemon_session-health"
     ],
     [
       "cli_hydra",
@@ -761,6 +767,30 @@
     [
       "daemon_phase-budget",
       "daemon_util"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_bridge-transport"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_config"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_util"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_anchor-state"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_session-lifecycle"
     ],
     [
       "daemon_adversarial",

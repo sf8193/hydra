@@ -87,7 +87,7 @@ import { logSubscriptions } from './daemon/event-bus.js'
 queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './daemon/phase-budget.js'
-import { killSession, discoverClaudeSessionId, backfillAnchorChannelIds } from './daemon/session-lifecycle.js'
+import { killSession, backfillAnchorChannelIds } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)
 
 backfillAnchorChannelIds().catch(err => {
@@ -205,8 +205,7 @@ await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { handleSilenceEvent, handleActivityEvent, sessionsWithPendingReplies } from './daemon/reply-guard.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
-import { getContextPercent, tmuxHasSession } from './daemon/util.js'
-import { refreshSessionVisual } from './daemon/anchor-state.js'
+import { tmuxHasSession } from './daemon/util.js'
 
 // ---------------------------------------------------------------------------
 // Recovery report on reconnect
@@ -444,85 +443,11 @@ void (async () => {
 })().catch(err => process.stderr.write(`daemon: Slack context backfill failed: ${err}\n`))
 
 // ---------------------------------------------------------------------------
-// Session health — crash detection + context alerts (every 5 min)
+// Session health — crash detection, orphan detection, context alerts
 // ---------------------------------------------------------------------------
 
-const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
-const SPAWN_GRACE_MS = 60_000
-const ORPHAN_GRACE_MS = 90_000
-const CONTEXT_ALERT_THRESHOLD = 70
-const contextAlerted = new Set<string>()
-const crashAlerted = new Set<string>()
-const orphanAlerted = new Set<string>()
-
-setInterval(() => {
-  const now = Date.now()
-  for (const info of registry.values()) {
-    // Crash detection — both tmux AND bridge must be gone. Bridge-only disconnects are handled
-    // by the bridge-server disconnect handler (3s delay + tmux check). Skip sessions in spawn
-    // grace period (bridge needs time to connect).
-    if (!crashAlerted.has(info.sessionId) && !info.isJoinMember && !info.deadAt && (now - info.createdAt > SPAWN_GRACE_MS) && !tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
-      crashAlerted.add(info.sessionId)
-      info.deadAt = now
-      registry.persist()
-      const thread = threadRegistry.get(info.threadId)
-      if (thread) {
-        const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
-        if (histEntry) {
-          histEntry.endedAt = now
-          histEntry.messageCount = info.messageCount ?? 0
-          histEntry.claudeSessionId = info.claudeSessionId
-        }
-        threadRegistry.persist()
-      }
-      process.stderr.write(`daemon: crash detected: ${info.tmuxName}\n`)
-      void gateway.send(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
-      refreshSessionVisual(info.threadId, { state: 'crashed' })
-      continue
-    }
-
-    // Orphan detection — tmux alive but bridge never connected past grace window.
-    // See also: daemon/resume-health.ts classifyResumeFailure, which checks
-    // the same condition at bridge-timeout time. Both paths must preserve.
-    // Discovery retries every poll (claudeSessionId may become available later).
-    // Alert fires once per orphan episode; clears when bridge reconnects.
-    if (!info.isJoinMember && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
-      if (!info.claudeSessionId && info.engine !== 'codex') {
-        const discovered = discoverClaudeSessionId(info.tmuxName)
-        if (discovered) {
-          info.claudeSessionId = discovered
-          registry.persist()
-          const thread = threadRegistry.get(info.threadId)
-          if (thread) {
-            const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
-            if (histEntry) histEntry.claudeSessionId = discovered
-            threadRegistry.persist()
-          }
-          process.stderr.write(`daemon: orphan ${info.tmuxName}: discovered claudeSessionId=${discovered}\n`)
-        }
-      }
-      if (!orphanAlerted.has(info.sessionId)) {
-        orphanAlerted.add(info.sessionId)
-        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)\n`)
-        void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread. Use \`respawn\` to start fresh.`).catch(() => {})
-      }
-    } else {
-      orphanAlerted.delete(info.sessionId)
-    }
-
-    // Context alert
-    const pct = getContextPercent(info.tmuxName)
-    if (pct === '?') continue
-    const num = parseInt(pct)
-    if (num >= CONTEXT_ALERT_THRESHOLD && !contextAlerted.has(info.sessionId)) {
-      contextAlerted.add(info.sessionId)
-      process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
-      void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`respawn\` to continue in a fresh session.`).catch(() => {})
-    }
-
-
-  }
-}, SESSION_CHECK_INTERVAL_MS)
+import { startSessionHealthPoll } from './daemon/session-health.js'
+startSessionHealthPoll()
 
 // Reply guard: poll window_activity timestamp every 20s.
 // Only checks sessions with pending replies — O(pending) not O(sessions).

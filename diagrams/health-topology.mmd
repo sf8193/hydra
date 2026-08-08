@@ -21,7 +21,7 @@ flowchart TD
     end
 
     subgraph health["Health Monitors"]
-        poll["daemon.ts session poll<br/>5min: crash detect, orphan<br/>detect (90s grace), context alerts"]
+        poll["session-health.ts poll<br/>5min: crash detect, orphan<br/>detect (90s grace), context alerts"]
         obs["observability.ts<br/>60s vitals, death reports,<br/>session ID correlation"]
         mbc["main-bridge-cycle.ts<br/>flap tracking, uptime"]
     end
