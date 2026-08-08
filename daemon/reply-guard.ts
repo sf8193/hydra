@@ -12,6 +12,7 @@ import { join } from 'path'
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
 import { gateway } from './config.js'
+import { on } from './event-bus.js'
 
 type PendingReply = {
   sessionId: string
@@ -280,6 +281,18 @@ async function escalateWithCapture(tmuxName: string, chatId: string, user: strin
     }
   }
 }
+
+// Clean up all pending/nudged state for a session when it dies.
+// Without this, entries for crashed sessions accumulate until the
+// next silence event fires for that session — which may never happen.
+on('session:death', ({ sessionId }: { sessionId: string }) => {
+  for (const [key, p] of pending) {
+    if (p.sessionId === sessionId) {
+      pending.delete(key)
+      nudgedKeys.delete(key)
+    }
+  }
+}, 'reply-guard:cleanup')
 
 export function _resetReplyGuardForTesting(): void {
   pending.clear()

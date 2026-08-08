@@ -11,17 +11,29 @@
 
 export const MAX_ARTIFACTS = 10
 
+// Cache capacity — 2K entries per cache keeps peak RSS negligible even on
+// long-lived daemons (20d+). Each entry is a short string pair; 2K × ~200B ≈ 400KB.
+const CACHE_MAX = 2_000
+
+/** Insert into a Map, evicting the oldest entry when the cap is reached. */
+function boundedSet<V>(map: Map<string, V>, key: string, value: V, max: number = CACHE_MAX): void {
+  if (!map.has(key) && map.size >= max) {
+    map.delete(map.keys().next().value!)
+  }
+  map.set(key, value)
+}
+
 // In-memory PR title cache — populated at artifact capture time, used for rendering.
 const prTitleCache = new Map<string, string>()
-export function cachePrTitle(url: string, title: string): void { prTitleCache.set(url, title) }
+export function cachePrTitle(url: string, title: string): void { boundedSet(prTitleCache, url, title) }
 
 // In-memory Slack channel name cache — keyed by channel ID (e.g. "C01NJ09D6UW").
 const slackChannelNames = new Map<string, string>()
-export function cacheSlackChannel(id: string, name: string): void { slackChannelNames.set(id, name) }
+export function cacheSlackChannel(id: string, name: string): void { boundedSet(slackChannelNames, id, name) }
 
 // In-memory Slack thread summary cache — keyed by archive URL.
 const slackThreadSummaries = new Map<string, string>()
-export function cacheSlackThread(url: string, summary: string): void { slackThreadSummaries.set(url, summary) }
+export function cacheSlackThread(url: string, summary: string): void { boundedSet(slackThreadSummaries, url, summary) }
 
 // Strict per-type matchers. Each captures the pieces needed to build a *canonical*
 // URL — so trailing markdown (`*`, `**`), quotes/brackets (["url"]), HTML entities

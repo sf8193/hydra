@@ -1,5 +1,6 @@
 import { transport } from './bridge-transport.js'
 import { loadAccess } from './access.js'
+import { on } from './event-bus.js'
 import type { ChatGateway, ButtonDef } from '../gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -72,3 +73,12 @@ export function setupPermissionHandler(gateway: ChatGateway): void {
     void click.clearButtons(`${click.messageContent}\n\n${label}`)
   })
 }
+
+// Clean up pending permission requests when a session dies.
+// Without this, requests from crashed sessions strand indefinitely
+// (the request_id-keyed map has no TTL or other eviction path).
+on('session:death', ({ sessionId }: { sessionId: string }) => {
+  for (const [requestId, entry] of pendingPermissions) {
+    if (entry.sessionId === sessionId) pendingPermissions.delete(requestId)
+  }
+}, 'permission:cleanup')

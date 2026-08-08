@@ -324,3 +324,61 @@ describe('assembleContextLines', () => {
     expect(assembleContextLines({ watches: [], artifacts: [], contextLinks: [] })).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Cache eviction — uses small cap via test helpers to avoid filling 2K entries
+// ---------------------------------------------------------------------------
+
+// Re-export test seams: cachePrTitle et al. call boundedSet with CACHE_MAX as
+// the default max. For eviction tests we pass tiny maps directly via the
+// module's exported functions — but since the actual cap is 2000 and we can't
+// override it from outside, we use small dedicated maps here by creating a
+// local bounded helper. We verify the eviction contract by checking observable
+// side-effects (title lookup miss → fallback render).
+
+import { cachePrTitle, cacheSlackChannel, cacheSlackThread, renderArtifactLink, renderContextLink } from '../artifacts.js'
+
+describe('cache eviction', () => {
+  test('cachePrTitle evicts oldest entries when cap is reached', () => {
+    // We can't override the cap from outside, so fill just past 2000 entries.
+    // This is slow (~8ms) but proves the cap is enforced end-to-end.
+    const firstUrl = 'https://github.com/o/r/pull/777777'
+    cachePrTitle(firstUrl, 'first')
+    // Fill 2000 more distinct URLs (cap is 2000, so firstUrl gets evicted)
+    for (let i = 0; i < 2000; i++) {
+      cachePrTitle(`https://github.com/o/r/pull/evict${i}`, `t${i}`)
+    }
+    // firstUrl was evicted — render falls back to repo#N format (no title lookup)
+    const rendered = renderArtifactLink(firstUrl)
+    expect(rendered).toBe('• 📎 <https://github.com/o/r/pull/777777|r#777777>')
+    expect(rendered).not.toContain('first')
+  })
+
+  test('cacheSlackChannel evicts oldest entries when cap is reached', () => {
+    // Fill cache past cap. The channel ID 'CEVICT0000' is added first,
+    // then 2000 more distinct IDs push it out.
+    const firstId = 'CEVICT0000'
+    cacheSlackChannel(firstId, 'evicted-channel')
+    for (let i = 0; i < 2000; i++) {
+      cacheSlackChannel(`CFILL${String(i).padStart(5, '0')}`, `ch${i}`)
+    }
+    // Render a Slack thread URL that references firstId — since the channel name
+    // was evicted, it renders without the cached name.
+    const threadUrl = `https://ws.slack.com/archives/${firstId}/p12345`
+    const rendered = renderContextLink(threadUrl)
+    // Should fall back to generic "Slack thread" (no cached name)
+    expect(rendered).toBe(`• 🔗 <${threadUrl}|Slack thread>`)
+    expect(rendered).not.toContain('evicted-channel')
+  })
+
+  test('cacheSlackThread evicts oldest entries when cap is reached', () => {
+    const firstUrl = 'https://ws.slack.com/archives/C000/p9999999999'
+    cacheSlackThread(firstUrl, 'evicted summary')
+    for (let i = 0; i < 2000; i++) {
+      cacheSlackThread(`https://ws.slack.com/archives/C000/p${String(i).padStart(10, '0')}`, `s${i}`)
+    }
+    // firstUrl was evicted — render falls back (no summary in cache)
+    const rendered = renderContextLink(firstUrl)
+    expect(rendered).not.toContain('evicted summary')
+  })
+})
