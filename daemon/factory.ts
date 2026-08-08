@@ -11,8 +11,9 @@
 //      new instructions, re-enter build→review) / factory_abandon (kill, abort)
 
 import { randomBytes } from 'crypto'
-import { execSync } from 'child_process'
-import { appendFileSync, mkdirSync, existsSync, writeFileSync } from 'fs'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
@@ -395,7 +396,7 @@ function syncPhaseToRegistry(state: FactoryBuildState): void {
   }
 }
 
-const shqLocal = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+const execAsync = promisify(execFile)
 const DIFF_SIZE_CAP = 50 * 1024  // 50KB — enough for UX, not so large it's useless
 
 /**
@@ -415,7 +416,8 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
   if (!cwd) return undefined
 
   try {
-    let diff = execSync('git log -p HEAD~1..HEAD', { cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+    const { stdout: rawDiff } = await execAsync('git', ['log', '-p', 'HEAD~1..HEAD'], { cwd, timeout: 10_000, maxBuffer: 1024 * 1024 })
+    let diff = rawDiff.trim()
     if (!diff) return undefined
 
     let truncated = false
@@ -428,14 +430,11 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
     writeFileSync(tmpPath, diff)
     try {
       // --secret: not indexed by search engines; safe for private repo code
-      const gistUrl = execSync(
-        `gh gist create --secret ${shqLocal(tmpPath)}`,
-        { encoding: 'utf8', timeout: 15_000 },
-      ).trim()
+      const { stdout } = await execAsync('gh', ['gist', 'create', '--secret', tmpPath], { timeout: 15_000 })
       if (truncated) process.stderr.write(`daemon: factory: diff truncated at 50KB for ${state.ticket}\n`)
-      return gistUrl || undefined
+      return stdout.trim() || undefined
     } finally {
-      try { execSync(`rm -f ${shqLocal(tmpPath)}`, { stdio: 'pipe' }) } catch {}
+      try { unlinkSync(tmpPath) } catch {}
     }
   } catch (err) {
     process.stderr.write(`daemon: factory: diff capture failed for ${state.ticket}: ${err instanceof Error ? err.message : err}\n`)
@@ -459,21 +458,23 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
     // gh pr view exits 1 when no PR exists — wrap in its own try so the throw
     // doesn't prevent creation (the common path for a fresh factory build).
     try {
-      const existing = execSync(
-        `gh pr view ${shqLocal(branch)} --json url --jq .url`,
-        { cwd: info.worktreeRepo, encoding: 'utf8', timeout: 10_000, stdio: 'pipe' },
-      ).trim()
+      const { stdout } = await execAsync(
+        'gh', ['pr', 'view', branch, '--json', 'url', '--jq', '.url'],
+        { cwd: info.worktreeRepo, timeout: 10_000 },
+      )
+      const existing = stdout.trim()
       if (existing) return existing
     } catch {
       // No existing PR — fall through to create
     }
 
     const title = `Factory ${state.ticket}: ${state.spec.slice(0, 60)}`
-    const prUrl = execSync(
-      `gh pr create --head ${shqLocal(branch)} --title ${shqLocal(title)} --body ${shqLocal(`Factory build from ticket \`${state.ticket}\``)}`,
-      { cwd: info.worktreeRepo, encoding: 'utf8', timeout: 15_000 },
-    ).trim()
-    return prUrl || undefined
+    const body = `Factory build from ticket \`${state.ticket}\``
+    const { stdout } = await execAsync(
+      'gh', ['pr', 'create', '--head', branch, '--title', title, '--body', body],
+      { cwd: info.worktreeRepo, timeout: 15_000 },
+    )
+    return stdout.trim() || undefined
   } catch (err) {
     process.stderr.write(`daemon: factory: PR creation failed for ${state.ticket}: ${err instanceof Error ? err.message : err}\n`)
     return undefined
@@ -602,11 +603,19 @@ function onBuilderDone(sessionId: string, doneText: string): boolean {
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: builder posted [done] for ticket ${state.ticket}, starting review\n`)
 
-  // Capture the diff now — builder just committed, git log -p HEAD~1..HEAD has the work.
-  // Stored in state so onFactoryReviewComplete can include it synchronously (no race).
-  void captureBuilderDiff(state).then(url => { if (url) state.diffGistUrl = url })
-  // For worktree builds: create a PR from the pushed branch (builder is instructed to push before [done]).
-  void createBuilderPR(state).then(url => { if (url) state.prUrl = url })
+  // Capture diff and PR concurrently before starting review.
+  // Awaited in doBuilderDoneAsync so onFactoryReviewComplete reads them without a race.
+  void doBuilderDoneAsync(state, doneText)
+
+  return true
+}
+
+async function doBuilderDoneAsync(state: FactoryBuildState, doneText: string): Promise<void> {
+  // Await both captures before starting review — guarantees state.diffGistUrl / state.prUrl
+  // are populated by the time onFactoryReviewComplete fires (no race).
+  const [gistUrl, prUrl] = await Promise.all([captureBuilderDiff(state), createBuilderPR(state)])
+  if (gistUrl) state.diffGistUrl = gistUrl
+  if (prUrl) state.prUrl = prUrl
 
   const artifactTruncated = doneText.length > 3000 ? doneText.slice(0, 3000) + '\n...(truncated)' : doneText
   void safeSend(state.pmThreadId, [
@@ -635,8 +644,6 @@ function onBuilderDone(sessionId: string, doneText: string): boolean {
         `- \`factory_abandon("${state.ticket}")\` — discard`,
       ].join('\n'))
     })
-
-  return true
 }
 
 /**
@@ -752,20 +759,15 @@ function onFactoryReviewCancelled(threadId: string): boolean {
   return true
 }
 
-function onFactoryCriticRound(builderThreadId: string, round: number, totalRounds: number, criticText: string): void {
+function onFactoryCriticRound(builderThreadId: string, round: number, totalRounds: number, _criticText: string): void {
   const ticket = builderThreadToTicket.get(builderThreadId)
   if (!ticket) return
   const state = builds.get(ticket)
   if (!state) return
 
-  if (round < totalRounds) {
-    void safeSend(state.pmThreadId, `🏭 **Critic Round ${round}/${totalRounds}** — in progress (full transcript in builder thread)`)
-  } else {
-    void safeSend(state.pmThreadId, [
-      `🏭 **Critic Final Round ${round}/${totalRounds}**`,
-      criticText,
-    ].join('\n'))
-  }
+  // Only log progress — full transcript stays in the builder's thread.
+  // PM gets the summary in the review-complete notification.
+  process.stderr.write(`daemon: factory: critic round ${round}/${totalRounds} for ticket ${state.ticket}\n`)
 }
 
 function cleanupState(ticket: string): void {
