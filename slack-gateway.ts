@@ -80,6 +80,35 @@ export class SlackGateway implements ChatGateway {
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
 
+  // Serial rate-limited queue for chat.postMessage and chat.update.
+  // Slack tier-3 limit: 1 per second per channel; we use a conservative global
+  // 1200ms gap (50/min) to stay well clear across all channels.
+  private _sendQueue: Array<{ fn: () => Promise<any>; resolve: (v: any) => void; reject: (e: any) => void }> = []
+  private _sendQueueRunning = false
+
+  private _enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this._sendQueue.push({ fn, resolve: resolve as (v: any) => void, reject })
+      if (!this._sendQueueRunning) void this._drainSendQueue()
+    })
+  }
+
+  private async _drainSendQueue(): Promise<void> {
+    this._sendQueueRunning = true
+    while (this._sendQueue.length > 0) {
+      const item = this._sendQueue.shift()!
+      try {
+        item.resolve(await item.fn())
+      } catch (err) {
+        item.reject(err)
+      }
+      if (this._sendQueue.length > 0) {
+        await new Promise(r => setTimeout(r, 1200))
+      }
+    }
+    this._sendQueueRunning = false
+  }
+
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
     const networkUp = await this.checkNetwork()
@@ -427,7 +456,7 @@ export class SlackGateway implements ChatGateway {
       payload.unfurl_media = false
     }
 
-    const result = await this.app.client.chat.postMessage(payload as any)
+    const result = await this._enqueueSend(() => this.app!.client.chat.postMessage(payload as any))
     const sentId = result.ts!
     this.noteSent(sentId)
     return { id: sentId, channelId }
@@ -438,7 +467,7 @@ export class SlackGateway implements ChatGateway {
     const { channel } = this.parseChannelId(channelId)
     const payload: Record<string, unknown> = { channel, ts: messageId }
     applyMessageBody(payload, text, false)
-    const result = await this.app.client.chat.update(payload as any)
+    const result = await this._enqueueSend(() => this.app!.client.chat.update(payload as any))
     return result.ts!
   }
 
