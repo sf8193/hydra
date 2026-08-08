@@ -34,7 +34,9 @@ Hydra resolves `CLAUDE_CONFIG_DIR` the same way (`cli/helpers.ts:70`). If the se
 
 ## Step 0 — Is the Session Alive? (CC only)
 
-Before any daemon check. Every daemon instrument can read green while the backing model is dead. **Codex sessions:** pane-probe skips Codex entirely (`pane-probe.ts:524`). For Codex, check the unix socket instead: `[ -S ~/.codex/hydra-<name>/app-server-control/app-server-control.sock ]`.
+Before any daemon check. Every daemon instrument can read green while the backing model is dead.
+
+**Codex sessions** — pane-probe skips Codex entirely (`pane-probe.ts:524`). Instead: (1) check socket exists: `[ -S ~/.codex/hydra-<name>/app-server-control/app-server-control.sock ]`, (2) check process alive: `ps aux | grep codex`, (3) check for watchdog timeout in daemon log — `CodexEngine` fires after `WATCHDOG_MS` if a turn stalls (`codex-engine.ts`). If all three are clean but the session is silent, the issue is upstream (daemon/bridge).
 
 ```bash
 tmux capture-pane -t <session-name> -p -J | tail -30
@@ -62,7 +64,7 @@ Token expiry is routine. Treat it as a first-class hypothesis, not an edge case.
 
 - **`CLAUDE_CODE_OAUTH_TOKEN` skips the keychain.** Setting this env var makes Claude Code bypass keychain entirely. Side effect: every OAuth-based MCP server silently stops working. Presenting symptom: "MCPs are broken." Cause: auth configuration, not MCP.
 
-- **`restart` only cycles the daemon — the byte keeps running.** `lifecycleRestart` restarts the daemon process but does not touch the byte session, transcription, or watchdog. The byte keeps running with whatever auth, env, and config it had at boot. `lifecycleUp` starts the full stack. If auth or env changed, the byte is stale — use `hydra down <platform>` then `hydra up <platform>`.
+- **`restart` only cycles the daemon — the byte keeps running.** `lifecycleRestart` restarts the daemon process but does not touch the byte session, transcription, or watchdog. The byte keeps running with whatever auth, env, and config it had at boot. **Decision rule:** if the issue is in the daemon (config reload, code change, module graph), `restart` is correct and less disruptive. If the issue is auth, env, or anything the byte baked in at launch, `restart` leaves the stale byte running — use `hydra down <platform>` then `hydra up <platform>`.
 
 ## Step 2 — Daemon & Bridge
 
@@ -82,7 +84,7 @@ tail -100 ~/hydra-${PLATFORM}-daemon.log | grep -i "error\|warn\|crash\|fail"
 
 2. **Check sessions.json fields.** `claudeSessionId: null` → bridge never connected. `listening: false` → session is muted. These explain "not responding" without a crash.
 
-3. **Trace the message path.** Gateway (`{platform}-gateway.ts`) → `router.ts` → `bridge-transport.ts` → bridge → CC/Codex. Find where it stops. If the daemon log shows delivery but the session doesn't respond, check bridge MCP logs: `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl` (keyed by Claude session UUID).
+3. **Trace the message path.** Gateway (`{platform}-gateway.ts`) → `router.ts` → `bridge-transport.ts` → bridge → CC/Codex. Find where it stops. If the daemon log shows delivery but the session doesn't respond, check bridge MCP logs (keyed by Claude session UUID): macOS `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl`, Linux `${XDG_CACHE_HOME:-~/.cache}/claude-cli-nodejs/...`.
 
 ## Step 3 — Spawn & Resume Failures
 
@@ -147,7 +149,7 @@ cat /tmp/probe.txt
 | Daemon PID / heartbeat / socket | `$STATE_DIR/daemon.{pid,alive,sock}` |
 | Per-platform daemon log | `~/hydra-${PLATFORM}-daemon.log` |
 | Per-session spawn logs | `$STATE_DIR/spawn-logs/{name}-{uuid}.log` |
-| Bridge MCP logs | `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl` |
+| Bridge MCP logs | macOS: `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl`; Linux: `${XDG_CACHE_HOME:-~/.cache}/claude-cli-nodejs/...` |
 | Managed settings gate | `/Library/Application Support/ClaudeCode/managed-settings.json` — must contain `{"channelsEnabled": true}` |
 
 ## Diagnostic Tools
