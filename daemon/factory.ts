@@ -49,7 +49,6 @@ type FactoryBuildState = {
   worktree?: string
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
-  reviewSummary?: string // captured from builder's [summary] post at review completion
 }
 
 // ---------------------------------------------------------------------------
@@ -793,15 +792,11 @@ protocolEvents.onComplete((event) => {
       : state.diffGistUrl
         ? [`📄 **Diff:** ${state.diffGistUrl}`]
         : []
-    const summaryBlock = state.reviewSummary
-      ? [``, state.reviewSummary.length > 3000 ? state.reviewSummary.slice(0, 3000) + '\n...(truncated)' : state.reviewSummary, ``]
-      : []
     void safeSend(state.pmThreadId, [
       `🏭 **Factory build→review complete** — awaiting your decision`,
       `Ticket: \`${state.ticket}\``,
       ...(transcriptLine ? [transcriptLine] : []),
       ...diffLink,
-      ...summaryBlock,
       `Use one of:`,
       `- \`factory_accept("${state.ticket}")\` — accept the work, kill builder`,
       `- \`factory_retry("${state.ticket}", "fix X and Y")\` — send new instructions to builder`,
@@ -835,11 +830,11 @@ protocolEvents.onRoundAdvance((event) => {
   // full assessment via onComplete's transcriptPath moments later.
   const isCriticFinal = event.role === 'critic' && event.round >= event.totalRounds && !!event.text
   if (!isCriticFinal) {
-    void safeSend(state.pmThreadId, `🏭 **Critic Round ${event.round}/${event.totalRounds}** — in progress`)
+    void safeSend(state.pmThreadId, `🏭 **Review Round ${event.round}/${event.totalRounds}** — in progress`)
     return
   }
 
-  const text = event.text!.length > 3000 ? event.text!.slice(0, 3000) + '\n...(truncated)' : event.text!
+  const text = (event.text ?? '').length > 3000 ? (event.text ?? '').slice(0, 3000) + '\n...(truncated)' : (event.text ?? '')
   void safeSend(state.pmThreadId, [
     `🏭 **Critic Final Round ${event.round}/${event.totalRounds}**`,
     text,
