@@ -37,6 +37,16 @@ async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
   return chatId
 }
 
+function friendlySpawnError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (msg.includes('not a git repo')) return `${msg}\n_Check that the repo directory exists at \`$SPAWN_CWD/<name>\`._`
+  if (msg.includes('SPAWN_CWD')) return `${msg}\n_Set \`SPAWN_CWD\` in the daemon environment to the working directory for sessions._`
+  if (msg.includes('failed to spawn tmux')) return `${msg}\n_Is tmux installed? \`brew install tmux\`_`
+  if (msg.includes('thread has a live session')) return `${msg}\n_Kill the existing session first: \`kill\` in the thread._`
+  if (msg.includes('worktree')) return `${msg}\n_Check the target repo exists and has no locked worktrees: \`git worktree list\`_`
+  return msg
+}
+
 async function spawnAndNotify(
   msg: InboundMessage,
   topic: string,
@@ -102,7 +112,7 @@ async function spawnAndNotify(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn failed: ${errMsg}\n`)
-    try { await gateway.send(msg.channelId, `Spawn failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+    try { await gateway.send(msg.channelId, `Spawn failed: ${friendlySpawnError(err)}`, { replyTo: msg.id }) } catch {}
   }
 }
 
