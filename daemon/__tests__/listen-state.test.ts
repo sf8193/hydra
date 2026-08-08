@@ -29,4 +29,13 @@ describe('resolveListenStatePure', () => {
   test('respawn path: no channelId, parent from thread registry', () => {
     expect(resolveListenStatePure(undefined, { groups: { 'parent-ch': { defaultListen: true } } }, undefined, 'parent-ch')).toBe(true)
   })
+
+  test('recovery path: no channelId or parentChannelId, anchorChannelId from thread registry', () => {
+    expect(resolveListenStatePure(undefined, { groups: { 'anchor-ch': { defaultListen: true } } }, undefined, undefined, 'anchor-ch')).toBe(true)
+  })
+
+  test('anchorChannelId is lowest priority in group lookup', () => {
+    const access = { groups: { 'parent-ch': { defaultListen: false }, 'anchor-ch': { defaultListen: true } } }
+    expect(resolveListenStatePure(undefined, access, undefined, 'parent-ch', 'anchor-ch')).toBe(false)
+  })
 })

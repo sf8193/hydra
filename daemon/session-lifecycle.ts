@@ -163,9 +163,9 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 // Listen state resolution: thread override → channel group → global → false
 // ---------------------------------------------------------------------------
 
-export function resolveListenState(threadId: string, channelId?: string, fallbackParentChannelId?: string): boolean {
+export function resolveListenState(threadId: string, channelId?: string): boolean {
   const thread = threadRegistry.get(threadId)
-  return resolveListenStatePure(channelId, loadAccess(), thread?.listenOverride, fallbackParentChannelId ?? thread?.parentChannelId)
+  return resolveListenStatePure(channelId, loadAccess(), thread?.listenOverride, thread?.parentChannelId, thread?.anchorChannelId)
 }
 
 export function resolveListenStatePure(
@@ -173,9 +173,10 @@ export function resolveListenStatePure(
   access: { groups: Record<string, { defaultListen?: boolean }>; defaultListen?: boolean },
   listenOverride?: boolean,
   parentChannelId?: string,
+  anchorChannelId?: string,
 ): boolean {
   if (listenOverride !== undefined) return listenOverride
-  for (const id of [channelId, parentChannelId]) {
+  for (const id of [channelId, parentChannelId, anchorChannelId]) {
     if (id) {
       const group = access.groups[id]
       if (group?.defaultListen !== undefined) return group.defaultListen
@@ -724,7 +725,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     const url = await gateway.getThreadUrl(threadId!)
     registry.set(sessionId, {
       sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
-      tmuxName, listening: resolveListenState(threadId!, chatId ?? targetChannelId, parentChannelId), originType, originFrom, capabilities,
+      tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
       threadUrl: url || undefined, engine: 'codex', codexThreadId: codexThreadId!,
       ...(spawnLogPath ? { spawnLogPath } : {}),
       ...(respawnCount > 0 ? { respawnCount } : {}),
@@ -874,7 +875,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   registry.set(sessionId, {
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
-    tmuxName, listening: resolveListenState(threadId!, chatId ?? targetChannelId, parentChannelId), originType, originFrom, capabilities,
+    tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
     threadUrl: url || undefined,
     ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
