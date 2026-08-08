@@ -90,6 +90,8 @@ export async function backfillAnchorChannelIds(): Promise<void> {
       const ch = await gateway.fetchChannel(info.threadId)
       if (ch.isThread && ch.parentId) {
         info.anchorChannelId = ch.parentId
+        const thread = threadRegistry.get(info.threadId)
+        if (thread && !thread.anchorChannelId) thread.anchorChannelId = ch.parentId
         filled++
       }
     } catch (err) {
@@ -742,7 +744,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
     if (!isJoin) {
       threadRegistry.recordSpawn(threadId!, {
-        anchorMessageId, threadUrl: url || undefined, topic, respawnCount,
+        anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
         sessionId, tmuxName, originType, originFrom, model: opts?.model ?? 'codex-default', parentChannelId,
       })
     }
@@ -907,6 +909,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (!isJoin && !isHeadless) {
     threadRegistry.recordSpawn(threadId!, {
       anchorMessageId,
+      anchorChannelId,
       threadUrl: url || undefined,
       topic,
       respawnCount,
