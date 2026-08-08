@@ -172,9 +172,7 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   }
   // Resume prompt: CC's session resume dialog blocks the session. Detect before
   // login — the resume prompt fills the tail and pushes login messages out of view.
-  const resumeOptionCount = [RESUME_OPTION_A, RESUME_OPTION_B, RESUME_OPTION_C]
-    .filter(re => re.test(tailText)).length
-  if (resumeOptionCount >= 2) {
+  if (isResumePromptOnScreen(tailText)) {
     return { kind: 'resume_prompt', planPath: null, loginStage: null, oauthUrl: null }
   }
   // Login stages in priority order — later stages take precedence (the flow progresses)
@@ -188,6 +186,8 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   if (LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
     return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
   }
+  // "Login expired" is functionally identical to "blocked" — session can't proceed.
+  // No separate LoginStage variant needed; the remediation path is the same.
   if (LOGIN_EXPIRED_RE.test(tailText)) {
     return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
   }
@@ -274,6 +274,7 @@ function confirmAndSendLogin(tmuxName: string): boolean {
   if (!autoLoginEnabled()) return false
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
+  if (isResumePromptOnScreen(tail)) return false
   const blocked = LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
   const expired = LOGIN_EXPIRED_RE.test(tail)
   const expiring = LOGIN_EXPIRING_PATTERNS.some(p => p.test(tail))
@@ -295,8 +296,10 @@ function isResumePromptOnScreen(tail: string): boolean {
 }
 
 function confirmAndDismissResumePrompt(tmuxName: string): boolean {
+  if (!autoLoginEnabled()) return false
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail || !isResumePromptOnScreen(tail)) return false
+  // CC pre-selects option 1 ("Resume from summary"). Enter confirms it.
   return io.sendKeys(tmuxName, 'Enter')
 }
 

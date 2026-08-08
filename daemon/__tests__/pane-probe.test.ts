@@ -582,41 +582,79 @@ describe('probeAllSessions', () => {
     expect(sentMessages.length).toBe(afterMax)
   })
 
-  it('auto-dismisses resume prompt with Enter', async () => {
-    addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
-    paneTails.set('ember', RESUME_PROMPT_TAIL)
-    windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
-    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+  it('auto-dismisses resume prompt with Enter when HYDRA_AUTO_LOGIN=1', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    process.env.HYDRA_AUTO_LOGIN = '1'
+    try {
+      addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+      paneTails.set('ember', RESUME_PROMPT_TAIL)
+      windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
-    await flush()
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
 
-    const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
-    expect(enterKey).not.toBeUndefined()
+      const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
+      expect(enterKey).not.toBeUndefined()
 
-    const msg = sentMessages.find(m => m.channelId === 'thread-1')
-    expect(msg).not.toBeUndefined()
-    expect(msg!.text).toContain('auto-dismissed resume prompt')
+      const msg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(msg).not.toBeUndefined()
+      expect(msg!.text).toContain('auto-dismissed resume prompt')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
   })
 
-  it('notifies when resume prompt cannot be auto-dismissed', async () => {
-    addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
-    paneTails.set('ember', RESUME_PROMPT_TAIL)
-    windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
-    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+  it('does not auto-dismiss resume prompt when HYDRA_AUTO_LOGIN is unset', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+      paneTails.set('ember', RESUME_PROMPT_TAIL)
+      windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    const failIO = makeTestIO()
-    failIO.sendKeys = () => false
-    _setIO(failIO)
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
-    await flush()
+      const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
+      expect(enterKey).toBeUndefined()
 
-    const msg = sentMessages.find(m => m.channelId === 'thread-1')
-    expect(msg).not.toBeUndefined()
-    expect(msg!.text).toContain('stuck on a resume prompt')
+      const msg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(msg).not.toBeUndefined()
+      expect(msg!.text).toContain('stuck on a resume prompt')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
+  it('notifies when resume prompt sendKeys fails', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    process.env.HYDRA_AUTO_LOGIN = '1'
+    try {
+      addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+      paneTails.set('ember', RESUME_PROMPT_TAIL)
+      windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      const failIO = makeTestIO()
+      failIO.sendKeys = () => false
+      _setIO(failIO)
+
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
+
+      const msg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(msg).not.toBeUndefined()
+      expect(msg!.text).toContain('stuck on a resume prompt')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
   })
 
   it('reads BYTE_SESSION_NAME from env', async () => {
