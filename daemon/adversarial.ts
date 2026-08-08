@@ -18,6 +18,29 @@ import { reviewSummaryFormat } from './prompts/review-summary.js'
 import { getLenses, getLensesSync, type LensDef } from './lens-loader.js'
 
 // ---------------------------------------------------------------------------
+// Critic spawn semaphore — cap concurrent spawns to avoid resource exhaustion
+// when many factory builds post [done] simultaneously.
+// ---------------------------------------------------------------------------
+
+const MAX_CONCURRENT_CRITICS = 2
+let activeCriticSpawns = 0
+const criticSpawnQueue: Array<() => void> = []
+
+async function withCriticSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeCriticSpawns >= MAX_CONCURRENT_CRITICS) {
+    await new Promise<void>(resolve => criticSpawnQueue.push(resolve))
+  }
+  activeCriticSpawns++
+  try {
+    return await fn()
+  } finally {
+    activeCriticSpawns--
+    const next = criticSpawnQueue.shift()
+    if (next) next()
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -365,9 +388,9 @@ export function onParticipantDisconnect(sessionId: string): void {
         state._resumeAttempts = (state._resumeAttempts ?? 0) + 1
         if (currentInfo) recordSessionDeath(currentInfo, 'critic exited (auto-resuming)')
         try {
-          const result = await doSpawnSession(currentInfo?.topic ?? `Review critic (${state.rounds} rounds)`, undefined, undefined, {
+          const result = await withCriticSlot(() => doSpawnSession(currentInfo?.topic ?? `Review critic (${state.rounds} rounds)`, undefined, undefined, {
             joinThread: state.ownerThreadId, resumeFrom: claudeSessionId, model: state.model,
-          })
+          }))
           // Pre-queue notification so it flushes on bridge connect — prevents
           // Claude Code from exiting before receiving new input.
           transport.sendOrQueue(result.sessionId, {
@@ -720,14 +743,14 @@ async function spawnCritic(state: ReviewState): Promise<void> {
 
   const criticModel = state.engine === 'codex' ? state.model : (state.model ?? reviewModel())
   try {
-    const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
+    const result = await withCriticSlot(() => doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
       trigger: 'review',
       joinThread: state.ownerThreadId,
       ...(criticModel ? { model: criticModel } : {}),
       ...(state.engine ? { engine: state.engine } : {}),
       promptBuilder: (sessionId, tmuxName) =>
         reviewCriticPrompt({ sessionId, tmuxName, rounds: state.rounds, threadId: state.ownerThreadId, topic: state.topic }),
-    })
+    }))
 
     state.criticSessionId = result.sessionId
     sessionToReview.set(result.sessionId, state.reviewId)
