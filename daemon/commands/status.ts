@@ -172,11 +172,12 @@ export async function handleListIntercept(msg: InboundMessage, filter?: string):
   } else {
     sessions = sessions.filter(s => {
       if (!isAlive(s)) return false
+      // isFactoryBuilder marks sessions forked by factory builds — 'spawn' originType is too broad (matches everything)
       if (f === 'factory') return !!s.isFactoryBuilder
       if (f === 'fork' || f === 'forks') return s.originType === 'fork'
       if (f === 'headless') return !!s.headless
       if (s.capabilities?.model?.toLowerCase().includes(f)) return true
-      if (s.tmuxName.includes(f)) return true
+      if (s.tmuxName.toLowerCase().includes(f)) return true
       if (s.topic?.toLowerCase().includes(f)) return true
       if (s.description?.toLowerCase().includes(f)) return true
       return false
@@ -203,8 +204,10 @@ export async function handleListIntercept(msg: InboundMessage, filter?: string):
     sentMsg = await gateway.send(msg.channelId, initialText, { replyTo: msg.id, unfurl: false })
   } catch { return }
 
-  // Track for auto-refresh on lifecycle events (FILO — most recent first)
-  if (sentMsg) {
+  // Track for auto-refresh on lifecycle events (FILO — most recent first).
+  // Filtered results are NOT tracked: refreshListDisplay has no filter context,
+  // so it would overwrite a filtered view with unfiltered live sessions.
+  if (sentMsg && !filter) {
     lastListMsgs.unshift({ channelId: msg.channelId, messageId: sentMsg.id })
     if (lastListMsgs.length > MAX_LIST_MSGS) lastListMsgs.pop()
     persistListMsgs()
