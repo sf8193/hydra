@@ -56,17 +56,91 @@ function formatSessionEntry(e: SessionEntry): string {
   return lines.join('\n')
 }
 
-function buildListOutput(list: SessionEntry[], now: number): string {
-  const buckets = new Map<string, SessionEntry[]>()
+/** Build a parent→children map. Only links within the current list. */
+function buildSessionTree(list: SessionEntry[]): Map<string, SessionEntry[]> {
+  const byName = new Map(list.map(e => [e.session.tmuxName, e]))
+  const children = new Map<string, SessionEntry[]>()
   for (const e of list) {
+    const parent = e.session.originFrom
+    if (parent && byName.has(parent)) {
+      const arr = children.get(parent) ?? []
+      arr.push(e)
+      children.set(parent, arr)
+    }
+  }
+  return children
+}
+
+function formatSessionEntryIndented(e: SessionEntry, prefix: string): string {
+  const s = e.session
+  const thread = threadRegistry.get(s.threadId)
+  const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
+  const duration = formatDuration(Date.now() - s.createdAt)
+  const msgCount = s.messageCount ?? 0
+  const ctx = getContextPercent(s.tmuxName)
+  const badge = transport.has(s.sessionId) ? '' : ' ⚠️'
+  const emoji = sessionEmoji(s.tmuxName)
+  const url = thread?.threadUrl
+  const title = url ? `[**${desc}**](${url})` : `**${desc}**`
+  const lines = [
+    `${prefix}${emoji} \`${s.tmuxName}\`${badge}`,
+    `${prefix}- ${title}`,
+    `${prefix}- ${ctx} (${msgCount} msgs · ${duration})`,
+  ]
+  if (e.latestLine) lines.push(`${prefix}- ${e.latestLine}`)
+  return lines.join('\n')
+}
+
+function buildListOutput(list: SessionEntry[], now: number): string {
+  const children = buildSessionTree(list)
+  const byName = new Map(list.map(e => [e.session.tmuxName, e]))
+  // Sessions that have no parent in this list are top-level
+  const isChild = new Set<string>()
+  for (const kids of children.values()) {
+    for (const k of kids) isChild.add(k.session.tmuxName)
+  }
+
+  // If there are no parent-child relationships at all, use original flat format
+  const hasTree = isChild.size > 0
+  if (!hasTree) {
+    const buckets = new Map<string, SessionEntry[]>()
+    for (const e of list) {
+      const bucket = listTimeBucket(e.session.lastActive, now)
+      const arr = buckets.get(bucket) ?? []
+      arr.push(e)
+      buckets.set(bucket, arr)
+    }
+    const sections: string[] = []
+    for (const [label, items] of buckets) {
+      sections.push(`### ${label}\n\n${items.map(formatSessionEntry).join('\n\n')}`)
+    }
+    return sections.join('\n')
+  }
+
+  // Tree mode: group by time bucket using top-level sessions' lastActive
+  const topLevel = list.filter(e => !isChild.has(e.session.tmuxName))
+  const buckets = new Map<string, SessionEntry[]>()
+  for (const e of topLevel) {
     const bucket = listTimeBucket(e.session.lastActive, now)
     const arr = buckets.get(bucket) ?? []
     arr.push(e)
     buckets.set(bucket, arr)
   }
+
   const sections: string[] = []
   for (const [label, items] of buckets) {
-    sections.push(`### ${label}\n\n${items.map(formatSessionEntry).join('\n\n')}`)
+    const rendered: string[] = []
+    for (const e of items) {
+      rendered.push(formatSessionEntryIndented(e, ''))
+      const kids = children.get(e.session.tmuxName) ?? []
+      for (let i = 0; i < kids.length; i++) {
+        const isLast = i === kids.length - 1
+        const connector = isLast ? '└─ ' : '├─ '
+        const childPrefix = isLast ? '   ' : '│  '
+        rendered.push(formatSessionEntryIndented(kids[i], connector))
+      }
+    }
+    sections.push(`### ${label}\n\n${rendered.join('\n\n')}`)
   }
   return sections.join('\n')
 }
