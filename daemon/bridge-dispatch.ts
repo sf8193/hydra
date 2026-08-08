@@ -290,32 +290,26 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'factory_build': {
-        const spec = args.spec as string
-        const builderModel = (args.builder_model as string | undefined)?.trim() || undefined
-        const reviewerModel = (args.reviewer_model as string | undefined)?.trim() || undefined
-        const reviewRounds = (args.review_rounds as number | undefined) ?? 3
         const difficultyRaw = (args.difficulty as string | undefined)?.trim() || undefined
         if (difficultyRaw && !(VALID_DIFFICULTIES as readonly string[]).includes(difficultyRaw)) {
           throw new Error(`invalid difficulty "${difficultyRaw}" — must be one of: ${VALID_DIFFICULTIES.join(', ')}`)
         }
-        const difficulty: Difficulty = (difficultyRaw as Difficulty) ?? 'easy'
-        const worktree = (args.worktree as string | undefined)?.trim() || undefined
 
         if (!callerSessionId) throw new Error('factory_build requires a session context')
         const callerInfo = registry.get(callerSessionId)
         if (!callerInfo) throw new Error('session not found')
         if (callerInfo.isFactoryBuilder) throw new Error('factory builders cannot call factory_build (recursion guard)')
 
-        const result = factoryBuild(
-          callerInfo.threadId,
-          callerSessionId,
-          spec,
-          builderModel,
-          reviewerModel,
-          reviewRounds,
-          difficulty,
-          worktree,
-        )
+        const result = factoryBuild({
+          pmThreadId: callerInfo.threadId,
+          pmSessionId: callerSessionId,
+          spec: args.spec as string,
+          builderModel: (args.builder_model as string | undefined)?.trim() || undefined,
+          reviewerModel: (args.reviewer_model as string | undefined)?.trim() || undefined,
+          reviewRounds: (args.review_rounds as number | undefined) ?? undefined,
+          difficulty: (difficultyRaw as Difficulty) ?? undefined,
+          worktree: (args.worktree as string | undefined)?.trim() || undefined,
+        })
 
         if ('error' in result) {
           return { content: [{ type: 'text', text: `Factory build failed: ${result.error}` }], isError: true }

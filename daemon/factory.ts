@@ -189,16 +189,21 @@ function resolveModels(
  * Start an async build→review cycle. Returns immediately with a ticket.
  * Results delivered as notifications to the PM's thread.
  */
-export function factoryBuild(
-  pmThreadId: string,
-  pmSessionId: string,
-  spec: string,
-  builderModel?: string,
-  reviewerModel?: string,
-  reviewRounds: number = 3,
-  difficulty: Difficulty = 'easy',
-  worktree?: string,
-): { ticket: string; warning?: string } | { error: string } {
+export type FactoryBuildOpts = {
+  pmThreadId: string
+  pmSessionId: string
+  spec: string
+  builderModel?: string
+  reviewerModel?: string
+  reviewRounds?: number
+  difficulty?: Difficulty
+  worktree?: string
+}
+
+export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?: string } | { error: string } {
+  const { pmThreadId, pmSessionId, spec, builderModel, reviewerModel, worktree } = opts
+  const reviewRounds = opts.reviewRounds ?? 3
+  const difficulty = opts.difficulty ?? 'easy'
   const { builder, reviewer, warning: modelWarning } = resolveModels(difficulty, builderModel, reviewerModel)
 
   // Warn about concurrent builds sharing the same working tree (skip if worktree-isolated)
