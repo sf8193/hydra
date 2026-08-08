@@ -25,15 +25,16 @@ HYDRA_REPO="${HYDRA_REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 PLATFORM="${CHAT_PLATFORM:-discord}"  # or slack
 STATE_DIR="${HYDRA_STATE_DIR:-$CLAUDE_CONFIG_DIR/channels/$PLATFORM}"
+[ -f "/Library/Application Support/ClaudeCode/managed-settings.json" ] && grep -q '"channelsEnabled": true' "/Library/Application Support/ClaudeCode/managed-settings.json" || echo "warning: managed-settings.json missing or channelsEnabled not set" >&2
 ```
 
 Hydra resolves `CLAUDE_CONFIG_DIR` the same way (`cli/helpers.ts:70`). If the session runs under a non-default config dir, every `~/.claude` path in this doc is wrong unless you resolved this first.
 
 **CLI fallback:** if `hydra` is not on PATH (no `hydra install` yet), use `bun "$HYDRA_REPO/cli/hydra.ts" <cmd> <platform>`.
 
-## Step 0 — Is the Session Alive?
+## Step 0 — Is the Session Alive? (CC only)
 
-Before any daemon check. Every daemon instrument can read green while the backing model is dead.
+Before any daemon check. Every daemon instrument can read green while the backing model is dead. **Codex sessions:** pane-probe skips Codex entirely (`pane-probe.ts:524`). For Codex, check the unix socket instead: `[ -S ~/.codex/hydra-<name>/app-server-control/app-server-control.sock ]`.
 
 ```bash
 tmux capture-pane -t <session-name> -p -J | tail -30
@@ -53,17 +54,19 @@ tmux capture-pane -t <session-name> -p -J | tail -30
 
 The `pane-probe` module (`daemon/pane-probe.ts`) detects these states automatically on a 60s interval — `login_required` (stages: `expiring`, `blocked`, `oauth_url`, `success`), `plan_mode`, `resume_prompt`. If pane-probe hasn't alerted, the session may still be in its boot grace window.
 
-## Step 1 — Auth
+## Step 1 — Auth (CC only)
 
-Token expiry is routine. Treat it as a first-class hypothesis, not an edge case.
+Token expiry is routine. Treat it as a first-class hypothesis, not an edge case. **Codex sessions** authenticate differently — this section does not apply.
 
 - **Keychain is scoped by config dir.** Claude Code stores credentials under roughly `Claude Code-credentials-SHA256($CLAUDE_CONFIG_DIR)[:8]`. A valid token in the default keychain entry does nothing for a session running under a different config dir. Symptom: you re-authenticate, it "takes", but the session stays broken — because the session reads a different entry.
 
 - **`CLAUDE_CODE_OAUTH_TOKEN` skips the keychain.** Setting this env var makes Claude Code bypass keychain entirely. Side effect: every OAuth-based MCP server silently stops working. Presenting symptom: "MCPs are broken." Cause: auth configuration, not MCP.
 
-- **`restart` is not a smaller `up`.** Some setup (env sourcing, managed-settings checks) only runs on the `up` path. An agent reaching for `restart` because it's less disruptive can sit in a broken state. If auth changed, use `hydra down <platform>` then `hydra up <platform>`.
+- **`restart` only cycles the daemon — the byte keeps running.** `lifecycleRestart` restarts the daemon process but does not touch the byte session, transcription, or watchdog. The byte keeps running with whatever auth, env, and config it had at boot. `lifecycleUp` starts the full stack. If auth or env changed, the byte is stale — use `hydra down <platform>` then `hydra up <platform>`.
 
 ## Step 2 — Daemon & Bridge
+
+**Codex note:** Codex sessions use unix sockets, not MCP bridges. The bridge process count and bridge MCP logs below are CC-only. For Codex, check socket connectivity and `CodexEngine` events in the daemon log.
 
 ```bash
 hydra health                       # daemon diagnostics — sessions, bridges, connections
