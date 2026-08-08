@@ -565,10 +565,8 @@ export function probeAllSessions(now?: number): void {
       if (stageChanged) {
         existing.state = detected
         existing.notifiedAt = null
-        const stageMax = detected.loginStage === 'success' ? 1 : MAX_NOTIFICATIONS
-        if (existing.notifyCount < stageMax) {
-          void notifyLoginRequired(existing, t)
-        }
+        existing.notifyCount = 0
+        void notifyLoginRequired(existing, t)
         continue
       }
 

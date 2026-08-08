@@ -607,6 +607,39 @@ describe('probeAllSessions', () => {
     }
   })
 
+  it('notifies success even after prior login stages', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+      windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      // Stage 1: expiring
+      paneTails.set('bloom', LOGIN_EXPIRING_TAIL)
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
+      const afterExpiring = sentMessages.filter(m => m.channelId === 'thread-1').length
+      expect(afterExpiring).toBe(1)
+
+      // Stage 2: success (stage change)
+      paneTails.set('bloom', LOGIN_SUCCESS_TAIL)
+      probeAllSessions(T0 + 120_000)
+      await flush()
+      const afterSuccess = sentMessages.filter(m => m.channelId === 'thread-1').length
+      expect(afterSuccess).toBe(2) // must fire despite prior notifyCount
+
+      // No repeat of success after cooldown
+      probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 180_000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1').length).toBe(afterSuccess)
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
+  })
+
   it('does not dismiss login-success when HYDRA_AUTO_LOGIN is unset', async () => {
     const origEnv = process.env.HYDRA_AUTO_LOGIN
     delete process.env.HYDRA_AUTO_LOGIN
