@@ -129,6 +129,37 @@ function buildSpawnEnv(sessionId: string, tmuxName: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Fork CWD resolution — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * When forking into a worktree, the process must start in the PM's original
+ * CWD (spawnCwd) so that `--resume --fork-session` can locate the conversation
+ * file at ~/.claude/projects/<cwd>/<sessionId>.jsonl. For all other spawn
+ * forms, use effectiveCwd (which may be the worktree path itself).
+ */
+export function resolveForkSpawnCwd(
+  isFork: boolean,
+  hasWorktree: boolean,
+  spawnCwd: string,
+  effectiveCwd: string,
+): string {
+  return (isFork && hasWorktree) ? spawnCwd : effectiveCwd
+}
+
+/**
+ * Append worktree location to the prompt for fork+worktree builders.
+ * The builder starts from spawnCwd (for --resume CWD compatibility), so it
+ * needs an explicit path to cd into. Returns '' for all other spawn forms.
+ */
+export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string | undefined): string {
+  if (isFork && worktreePath) {
+    return `\n\nWORKTREE: Your isolated worktree is at ${worktreePath}. cd there before making any code changes.`
+  }
+  return ''
+}
+
+// ---------------------------------------------------------------------------
 // Listen state resolution: thread override → channel group → global → false
 // ---------------------------------------------------------------------------
 
@@ -724,6 +755,12 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
   }
 
+  // For fork+worktree: tell the builder its exact worktree path via the prompt.
+  // (The process starts from spawnCwd for --resume CWD compatibility, so the
+  // builder can't infer its worktree from $PWD.)
+  const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
+  if (worktreeAppend) prompt += worktreeAppend
+
   // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
   let claudeArgs: string
   let assignedClaudeSessionId: string | undefined
@@ -769,9 +806,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     `} > ${shq(exitFile)}`,
   ].join('; ')
   claudeArgs += ` --debug-file ${shq(debugLog)}`
+  const spawnCd = resolveForkSpawnCwd(isFork, !!worktreeTarget, spawnCwd, effectiveCwd)
+  if (isFork && worktreeTarget) {
+    process.stderr.write(`daemon: spawn ${tmuxName}: fork+worktree — using PM CWD ${spawnCwd} for fork (worktree ${effectiveCwd} in prompt)\n`)
+  }
   const inner = [
     `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
-    `cd ${shq(effectiveCwd)}`,
+    `cd ${shq(spawnCd)}`,
     ...buildSpawnEnv(sessionId, tmuxName),
     `${claudeArgs} 2>>${shq(stderrLog)}`,
   ].join(' && ')
@@ -1039,7 +1080,11 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
       const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
       if (data.sessionId && data.cwd) {
         // Verify the conversation file exists (Claude creates .jsonl lazily —
-        // freshly spawned sessions may not have one yet)
+        // freshly spawned sessions may not have one yet).
+        // NOTE: For fork+worktree builders, data.cwd reflects Claude's launch CWD
+        // (spawnCwd, e.g. /Users/sam/trading), not the worktree the builder later
+        // `cd`s to via Bash. Claude's session file captures the startup CWD and does
+        // not update on shell cd — so the conversation file will be found correctly.
         const projectDir = join(homedir(), '.claude', 'projects', data.cwd.replace(/\//g, '-'))
         const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
         if (existsSync(conversationFile)) return data.sessionId

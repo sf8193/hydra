@@ -424,11 +424,14 @@ async function spawnBuilder(
   pmClaudeSessionId: string,
   pmTmuxName: string,
 ): Promise<void> {
+  // NOTE: The worktree path and `cd` instruction are injected by doSpawnSession
+  // (after fork CWD resolution). Only include the "done" obligations here —
+  // not the CWD framing, which would assume the builder starts in the worktree.
   const worktreeInstructions = state.worktree
     ? [
         ``,
-        `WORKTREE: You are in an isolated git worktree. Your changes will be destroyed when your session ends.`,
-        `Before posting [done], you MUST commit and push your changes:`,
+        `WORKTREE DONE OBLIGATIONS: Your changes will be destroyed when your session ends.`,
+        `Before posting [done], you MUST commit and push your changes from the worktree:`,
         `  git add -A && git commit -m "factory: <summary>" && git push -u origin HEAD`,
         `Include the branch name in your [done] artifact so the PM can find your work.`,
       ]

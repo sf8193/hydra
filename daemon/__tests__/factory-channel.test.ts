@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { resolveBuilderChannel } from '../factory.js'
+import { resolveForkSpawnCwd, buildWorktreePromptAppend } from '../session-lifecycle.js'
 
 // Suppress stderr logging during tests
 process.stderr.write = (() => true) as any
@@ -37,5 +38,49 @@ describe('resolveBuilderChannel', () => {
     const reg = { get: () => ({ anchorChannelId: 'anchor-chan' }) }
     const threads = { get: () => ({ parentChannelId: 'parent-chan' }) }
     expect(resolveBuilderChannel('pm-1', 'thread-1', reg, threads)).toBe('anchor-chan')
+  })
+})
+
+describe('resolveForkSpawnCwd', () => {
+  const spawnCwd = '/Users/sam/trading'
+  const worktreeCwd = '/Users/sam/trading/.worktrees/options_bot-vale'
+
+  test('fork + worktree uses spawnCwd so --resume can find the conversation file', () => {
+    expect(resolveForkSpawnCwd(true, true, spawnCwd, worktreeCwd)).toBe(spawnCwd)
+  })
+
+  test('fork without worktree uses effectiveCwd (no override needed)', () => {
+    expect(resolveForkSpawnCwd(true, false, spawnCwd, spawnCwd)).toBe(spawnCwd)
+  })
+
+  test('non-fork worktree spawn uses worktree effectiveCwd directly', () => {
+    expect(resolveForkSpawnCwd(false, true, spawnCwd, worktreeCwd)).toBe(worktreeCwd)
+  })
+
+  test('plain spawn uses effectiveCwd (same as spawnCwd)', () => {
+    expect(resolveForkSpawnCwd(false, false, spawnCwd, spawnCwd)).toBe(spawnCwd)
+  })
+})
+
+describe('buildWorktreePromptAppend', () => {
+  const worktreePath = '/Users/sam/trading/.worktrees/options_bot-vale'
+
+  test('fork + worktree returns cd instruction with absolute path', () => {
+    const result = buildWorktreePromptAppend(true, worktreePath)
+    expect(result).toContain(worktreePath)
+    expect(result).toContain('cd there')
+    expect(result).not.toBe('')
+  })
+
+  test('fork without worktree returns empty string', () => {
+    expect(buildWorktreePromptAppend(true, undefined)).toBe('')
+  })
+
+  test('non-fork with worktree returns empty string (builder starts in worktree already)', () => {
+    expect(buildWorktreePromptAppend(false, worktreePath)).toBe('')
+  })
+
+  test('plain spawn returns empty string', () => {
+    expect(buildWorktreePromptAppend(false, undefined)).toBe('')
   })
 })
