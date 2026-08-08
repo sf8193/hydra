@@ -289,7 +289,9 @@ function confirmAndSendLogin(tmuxName: string): boolean {
 }
 
 function confirmAndDismissLoginSuccess(tmuxName: string): boolean {
-  if (!autoLoginEnabled()) return false
+  // No autoLoginEnabled() gate — dismissing a success prompt is cleanup, not
+  // login initiation. The user already authenticated; Enter just clears the
+  // screen so the session can proceed.
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (!LOGIN_SUCCESS_RE.test(tail)) return false
@@ -573,7 +575,10 @@ export function probeAllSessions(now?: number): void {
 
       if (existing.consecutive >= CONFIRM_PROBES) {
         const cooldownElapsed = !existing.notifiedAt || (t - existing.notifiedAt) >= NOTIFY_COOLDOWN_MS
-        const underLimit = existing.notifyCount < MAX_NOTIFICATIONS
+        // Success is informational — one notification is enough. Repeating
+        // "Press Enter" every 10 minutes when the dismiss failed is pure noise.
+        const effectiveMax = (detected.kind === 'login_required' && detected.loginStage === 'success') ? 1 : MAX_NOTIFICATIONS
+        const underLimit = existing.notifyCount < effectiveMax
 
         if (cooldownElapsed && underLimit) {
           if (detected.kind === 'plan_mode') {
