@@ -3,7 +3,7 @@
  */
 
 import { gateway, PLATFORM } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration, tmuxHasSession } from './util.js'
 import { loadAccess } from './access.js'
@@ -13,8 +13,11 @@ import { assembleContextLines } from './artifacts.js'
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
 // Each session = up to 3 blocks (section + context + divider). Slack caps views at 100.
-// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6. (100-6)/3 = 31.
-const MAX_SESSION_BLOCKS = 31
+// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6.
+// Recent section: divider + header + up to 5 section blocks = 7 more fixed.
+// (100 - 6 - 7) / 3 = 29.
+const MAX_SESSION_BLOCKS = 29
+const MAX_RECENT = 5
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 type SessionRow = {
@@ -61,6 +64,37 @@ function getActiveSessions(): SessionRow[] {
   }
 
   return rows
+}
+
+type RecentRow = {
+  name: string
+  desc: string
+  duration: string
+  url: string
+  model: string
+}
+
+function getRecentCompleted(limit: number = MAX_RECENT): RecentRow[] {
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, limit)
+
+  return threads.map(t => {
+    const last = t.sessionHistory[t.sessionHistory.length - 1]
+    const duration = last?.endedAt && last?.startedAt
+      ? formatDuration(last.endedAt - last.startedAt)
+      : '?'
+    const model = last?.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') ?? ''
+    const rawDesc = t.description || t.topic || ''
+    return {
+      name: last?.tmuxName ?? '?',
+      desc: rawDesc.length > 60 ? rawDesc.slice(0, 57) + '...' : rawDesc,
+      duration,
+      url: t.threadUrl ?? '',
+      model,
+    }
+  })
 }
 
 function escapeMrkdwn(text: string): string {
@@ -111,6 +145,23 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
       blocks.push({
         type: 'context',
         elements: [{ type: 'mrkdwn', text: `_+${sessions.length - MAX_SESSION_BLOCKS} more not shown_` }],
+      })
+    }
+  }
+
+  const recent = getRecentCompleted()
+  if (recent.length > 0) {
+    blocks.push({ type: 'divider' })
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: `Recent (${recent.length})` },
+    })
+    for (const r of recent) {
+      const link = r.url ? `<${r.url}|${r.name}>` : r.name
+      const modelTag = r.model ? ` · \`${r.model}\`` : ''
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `${link} — ${escapeMrkdwn(r.desc)} · _${r.duration}_${modelTag}` },
       })
     }
   }
