@@ -22,7 +22,7 @@ import { safeSend } from './util.js'
 // Types
 // ---------------------------------------------------------------------------
 
-export type BlockingKind = 'plan_mode' | 'login_required'
+export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt'
 
 export type LoginStage = 'expiring' | 'blocked' | 'oauth_url' | 'success'
 
@@ -149,6 +149,15 @@ const OAUTH_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\S+/
 // Stage 4 — success, needs Enter to dismiss:
 //   "Login successful. Press Enter to continue…"
 const LOGIN_SUCCESS_RE = /Login successful/
+// Stage 5 — expired (past tense, session was resumed after expiry):
+//   "● Login expired · Please run /login"
+const LOGIN_EXPIRED_RE = /Login expired/
+
+// Resume prompt: CC shows this when a session is resumed and the conversation
+// is large enough to warrant a choice. The three-option menu is unique.
+const RESUME_OPTION_A = /Resume from summary/
+const RESUME_OPTION_B = /Resume full session/
+const RESUME_OPTION_C = /Don't ask me again/
 
 // ---------------------------------------------------------------------------
 // Detection (pure — operates on tail text only)
@@ -161,6 +170,13 @@ export function detectBlockingState(tailText: string): BlockingState | null {
     const pathMatch = tailText.match(PLAN_PATH_RE)
     return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginStage: null, oauthUrl: null }
   }
+  // Resume prompt: CC's session resume dialog blocks the session. Detect before
+  // login — the resume prompt fills the tail and pushes login messages out of view.
+  const resumeOptionCount = [RESUME_OPTION_A, RESUME_OPTION_B, RESUME_OPTION_C]
+    .filter(re => re.test(tailText)).length
+  if (resumeOptionCount >= 2) {
+    return { kind: 'resume_prompt', planPath: null, loginStage: null, oauthUrl: null }
+  }
   // Login stages in priority order — later stages take precedence (the flow progresses)
   if (LOGIN_SUCCESS_RE.test(tailText)) {
     return { kind: 'login_required', planPath: null, loginStage: 'success', oauthUrl: null }
@@ -170,6 +186,9 @@ export function detectBlockingState(tailText: string): BlockingState | null {
     return { kind: 'login_required', planPath: null, loginStage: 'oauth_url', oauthUrl: urlMatch?.[0] ?? null }
   }
   if (LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
+    return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
+  }
+  if (LOGIN_EXPIRED_RE.test(tailText)) {
     return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
   }
   if (LOGIN_EXPIRING_PATTERNS.some(p => p.test(tailText))) {
@@ -256,8 +275,9 @@ function confirmAndSendLogin(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   const blocked = LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
+  const expired = LOGIN_EXPIRED_RE.test(tail)
   const expiring = LOGIN_EXPIRING_PATTERNS.some(p => p.test(tail))
-  if (!blocked && !expiring) return false
+  if (!blocked && !expired && !expiring) return false
   return io.sendKeys(tmuxName, '/login', 'Enter')
 }
 
@@ -266,6 +286,17 @@ function confirmAndDismissLoginSuccess(tmuxName: string): boolean {
   const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (!LOGIN_SUCCESS_RE.test(tail)) return false
+  return io.sendKeys(tmuxName, 'Enter')
+}
+
+function isResumePromptOnScreen(tail: string): boolean {
+  return [RESUME_OPTION_A, RESUME_OPTION_B, RESUME_OPTION_C]
+    .filter(re => re.test(tail)).length >= 2
+}
+
+function confirmAndDismissResumePrompt(tmuxName: string): boolean {
+  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  if (!tail || !isResumePromptOnScreen(tail)) return false
   return io.sendKeys(tmuxName, 'Enter')
 }
 
@@ -415,6 +446,40 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
   }
 }
 
+async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void> {
+  if (entry.notifying) return
+  entry.notifying = true
+
+  try {
+    const name = entry.tmuxName
+    const channelId = entry.isMain ? DEFAULT_SESSION_CHANNEL : entry.threadId
+
+    if (!channelId) {
+      process.stderr.write(`daemon: pane-probe: ${name} stuck on resume prompt but no channel\n`)
+      return
+    }
+
+    const dismissed = confirmAndDismissResumePrompt(name)
+
+    const lines = dismissed
+      ? [
+          `> ▶️ **${name}** — auto-dismissed resume prompt (resuming from summary).`,
+        ]
+      : [
+          `> ⏸️ **${name}** is stuck on a resume prompt.`,
+          `> Run: \`tmux attach -t ${name}\` and choose a resume option.`,
+        ]
+
+    await safeSend(channelId, lines.join('\n'))
+    entry.notifiedAt = now
+    entry.notifyCount++
+
+    process.stderr.write(`daemon: pane-probe: ${name} resume prompt, dismissed=${dismissed}\n`)
+  } finally {
+    entry.notifying = false
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main probe loop — called from daemon.ts setInterval
 // ---------------------------------------------------------------------------
@@ -488,6 +553,8 @@ export function probeAllSessions(now?: number): void {
         if (cooldownElapsed && underLimit) {
           if (detected.kind === 'plan_mode') {
             void notifyPlanMode(existing, t)
+          } else if (detected.kind === 'resume_prompt') {
+            void notifyResumePrompt(existing, t)
           } else {
             void notifyLoginRequired(existing, t)
           }
