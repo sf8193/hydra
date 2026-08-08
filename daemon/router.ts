@@ -367,9 +367,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const listMatch = msg.content.match(/^(?:\/sessions|list sessions)\s*$/i)
+    const listMatch = msg.content.match(/^(?:\/sessions|list sessions)\s*(.*)?$/i)
     if (listMatch) {
-      void handleListIntercept(msg)
+      void handleListIntercept(msg, listMatch[1]?.trim() || undefined)
       return
     }
 

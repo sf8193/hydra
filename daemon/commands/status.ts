@@ -158,23 +158,49 @@ async function refreshListDisplay(): Promise<void> {
 // Command handlers
 // ---------------------------------------------------------------------------
 
-export async function handleListIntercept(msg: InboundMessage): Promise<void> {
+export async function handleListIntercept(msg: InboundMessage, filter?: string): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '📊').catch(() => {})
-  const liveSessions = [...registry.values()].filter(s => isAlive(s))
-  if (liveSessions.length === 0) {
-    try { await gateway.send(msg.channelId, 'No active sessions.', { replyTo: msg.id }) } catch {}
+
+  // Apply filter
+  const f = filter?.toLowerCase()
+  let sessions = [...registry.values()]
+
+  if (!f || f === 'all') {
+    sessions = sessions.filter(s => isAlive(s))
+  } else if (f === 'dead') {
+    sessions = sessions.filter(s => !isAlive(s))
+  } else {
+    sessions = sessions.filter(s => {
+      if (!isAlive(s)) return false
+      if (f === 'factory') return !!s.isFactoryBuilder
+      if (f === 'fork' || f === 'forks') return s.originType === 'fork'
+      if (f === 'headless') return !!s.headless
+      if (s.capabilities?.model?.toLowerCase().includes(f)) return true
+      if (s.tmuxName.includes(f)) return true
+      if (s.topic?.toLowerCase().includes(f)) return true
+      if (s.description?.toLowerCase().includes(f)) return true
+      return false
+    })
+  }
+
+  const filterLabel = f && f !== 'all' ? ` (filter: \`${f}\`)` : ''
+
+  if (sessions.length === 0) {
+    const msg2 = filter ? `No sessions matching \`${filter}\`.` : 'No active sessions.'
+    try { await gateway.send(msg.channelId, msg2, { replyTo: msg.id }) } catch {}
     return
   }
 
   const now = Date.now()
-  const all = liveSessions.sort((a, b) => b.lastActive - a.lastActive)
+  const all = sessions.sort((a, b) => b.lastActive - a.lastActive)
 
   const entries: SessionEntry[] = all.map(s => ({ session: s }))
 
   // Phase 1: post immediately without latest-message info, grouped by time
+  const initialText = filterLabel ? `**Sessions**${filterLabel}\n\n${buildListOutput(entries, now)}` : buildListOutput(entries, now)
   let sentMsg: { id: string } | undefined
   try {
-    sentMsg = await gateway.send(msg.channelId, buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
+    sentMsg = await gateway.send(msg.channelId, initialText, { replyTo: msg.id, unfurl: false })
   } catch { return }
 
   // Track for auto-refresh on lifecycle events (FILO — most recent first)
@@ -197,7 +223,8 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   }))
 
   const enriched = entries.map((e, i) => ({ ...e, latestLine: latestInfos[i] }))
-  const richText = buildListOutput(enriched, now)
+  const richOutput = buildListOutput(enriched, now)
+  const richText = filterLabel ? `**Sessions**${filterLabel}\n\n${richOutput}` : richOutput
   if (sentMsg) {
     try { await gateway.edit(msg.channelId, sentMsg.id, richText) } catch {}
   }
