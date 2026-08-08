@@ -16,6 +16,11 @@ export interface EventMap {
   'review:round': { threadId: string; round: number; totalRounds: number; text: string }
 }
 
+/**
+ * Async listeners are supported — rejections are caught and logged.
+ * emit() is fire-and-forget: callers cannot await listener completion or
+ * observe listener failures (failures go to stderr only).
+ */
 type Listener<T> = (payload: T) => void | Promise<void>
 type LabeledListener = { listener: Listener<any>; label: string }
 
@@ -38,13 +43,19 @@ export function emit<K extends keyof EventMap>(event: K, payload: EventMap[K]): 
   for (const { listener, label } of [...set]) {
     try {
       const result = listener(payload)
-      if (result && typeof (result as Promise<void>).catch === 'function') {
+      // Check for thenable (works across realms, unlike instanceof Promise)
+      if (result !== null && result !== undefined && typeof result === 'object' &&
+          typeof (result as any).then === 'function' && typeof (result as any).catch === 'function') {
         (result as Promise<void>).catch(err => {
-          process.stderr.write(`daemon: event-bus: '${label}' async listener for '${event}' rejected: ${err}\n`)
+          try {
+            const msg = err instanceof Error ? (err.stack ?? err.message) : String(err)
+            process.stderr.write(`daemon: event-bus: '${label}' async listener for '${event}' rejected: ${msg}\n`)
+          } catch {}
         })
       }
     } catch (err) {
-      process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' threw: ${err}\n`)
+      const msg = err instanceof Error ? (err.stack ?? err.message) : String(err)
+      process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' threw: ${msg}\n`)
     }
   }
 }
