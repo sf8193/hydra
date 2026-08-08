@@ -18,6 +18,14 @@ const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
 const RETRYABLE_PATTERNS = /ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|socket hang up|not connected|network/i
 
+function str(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined
+}
+
 function isRetryable(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
   return RETRYABLE_PATTERNS.test(msg)
@@ -290,9 +298,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'factory_build': {
-        const difficultyRaw = (args.difficulty as string | undefined)?.trim() || undefined
-        if (difficultyRaw && !(VALID_DIFFICULTIES as readonly string[]).includes(difficultyRaw)) {
-          throw new Error(`invalid difficulty "${difficultyRaw}" — must be one of: ${VALID_DIFFICULTIES.join(', ')}`)
+        const difficulty = str(args.difficulty)
+        if (difficulty && !(VALID_DIFFICULTIES as readonly string[]).includes(difficulty)) {
+          throw new Error(`invalid difficulty "${difficulty}" — must be one of: ${VALID_DIFFICULTIES.join(', ')}`)
         }
 
         if (!callerSessionId) throw new Error('factory_build requires a session context')
@@ -304,11 +312,11 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           pmThreadId: callerInfo.threadId,
           pmSessionId: callerSessionId,
           spec: args.spec as string,
-          builderModel: (args.builder_model as string | undefined)?.trim() || undefined,
-          reviewerModel: (args.reviewer_model as string | undefined)?.trim() || undefined,
-          reviewRounds: (args.review_rounds as number | undefined) ?? undefined,
-          difficulty: (difficultyRaw as Difficulty) ?? undefined,
-          worktree: (args.worktree as string | undefined)?.trim() || undefined,
+          builderModel: str(args.builder_model),
+          reviewerModel: str(args.reviewer_model),
+          reviewRounds: num(args.review_rounds),
+          difficulty: difficulty as Difficulty | undefined,
+          worktree: str(args.worktree),
         })
 
         if ('error' in result) {
@@ -361,7 +369,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'factory_status': {
-        const ticket = (args.ticket as string | undefined)?.trim() || undefined
+        const ticket = str(args.ticket)
         if (!callerSessionId) throw new Error('factory_status requires a session context')
         const callerInfo = registry.get(callerSessionId)
         if (!callerInfo) throw new Error('session not found')
