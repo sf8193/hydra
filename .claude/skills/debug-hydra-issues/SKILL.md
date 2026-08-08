@@ -20,7 +20,8 @@ Architecture details: `README.md`. Import topology: `docs/topology.mmd` / `docs/
 Before running any diagnostic, resolve these — half the confusing symptoms trace to the wrong value:
 
 ```bash
-HYDRA_REPO="$(git rev-parse --show-toplevel 2>/dev/null || { echo "error: not in hydra repo — set HYDRA_REPO" >&2; })"
+HYDRA_REPO="${HYDRA_REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+[ -f "$HYDRA_REPO/daemon.ts" ] || { echo "error: resolve HYDRA_REPO to the hydra checkout" >&2; return 1 2>/dev/null || true; }
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 PLATFORM="${CHAT_PLATFORM:-discord}"  # or slack
 STATE_DIR="${HYDRA_STATE_DIR:-$CLAUDE_CONFIG_DIR/channels/$PLATFORM}"
@@ -98,7 +99,7 @@ Recovery flows through three tiers (see `diagrams/flow-recovery-cascade.mmd`):
 
 **Don't trust the correlate line.** The observability layer (`daemon/observability.ts`) resolves transcript paths against a base path that may differ from the session's actual config dir. The daemon log can print a transcript path *that exists* while the session itself cannot see it. Verify which config dir the file is actually under.
 
-The kill/orphan classification logic lives in `daemon/resume-health.ts` — it distinguishes "Claude exited" (kill, cascade continues) from "Claude is running but bridge hasn't connected" (orphan, preserve). Both the resume path and the periodic orphan detector must agree; incoherence between them is itself a bug.
+The kill/orphan classification lives in `daemon/resume-health.ts`. Trap: **when no exit-marker path was configured, a fully alive session is still classified `kill`** — "absence of evidence is not evidence of liveness." Symptom: the cascade killed a running session for no visible reason. The periodic orphan detector (`daemon/session-health.ts`) checks the same condition — both must agree on preserve-vs-kill, or the incoherence is itself a bug.
 
 For daemon issues, `hydra restart <platform>` validates the module graph first — safe to run.
 
