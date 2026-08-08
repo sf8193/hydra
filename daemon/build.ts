@@ -682,10 +682,10 @@ function resetTimeout(state: BuildState): void {
       const criticInfo = registry.get(currentCriticId)
       if (criticInfo) {
         try {
-          execSync(`tmux has-session -t '${criticInfo.tmuxName}' 2>/dev/null`, { stdio: 'pipe' })
+          execFileSync('tmux', ['has-session', '-t', criticInfo.tmuxName], { stdio: 'pipe' })
           process.stderr.write(`daemon: build: critic ${criticInfo.tmuxName} alive (${elapsed}m elapsed)\n`)
-        } catch {
-          process.stderr.write(`daemon: build critic tmux session died\n`)
+        } catch (err) {
+          process.stderr.write(`daemon: build: critic heartbeat check failed (${err}) — treating as critic death\n`)
           if (state._heartbeat) clearInterval(state._heartbeat)
           await gateway.send(state.ownerThreadId, `Build critic (${criticInfo.tmuxName}) died. Cancelling.`).catch(() => {})
           await cancelBuild(state.buildId)

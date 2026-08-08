@@ -1,6 +1,6 @@
 import { realpathSync, writeFileSync, renameSync } from 'fs'
 import { join, sep } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { gateway, STATE_DIR } from './config.js'
 import { formatDiscordTables } from '../discord-table-format.js'
 
@@ -33,7 +33,7 @@ export function isAlive(info: { tmuxName: string; deadAt?: number }): boolean {
 
 export function tmuxHasSession(name: string): boolean {
   try {
-    execSync(`tmux has-session -t '${name}' 2>/dev/null`, { stdio: 'pipe' })
+    execFileSync('tmux', ['has-session', '-t', name], { stdio: 'pipe' })
     return true
   } catch {
     return false
@@ -42,7 +42,7 @@ export function tmuxHasSession(name: string): boolean {
 
 export function getContextPercent(tmuxName: string): string {
   try {
-    const pane = execSync(`tmux capture-pane -t '${tmuxName}' -p 2>/dev/null`, { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
+    const pane = execFileSync('tmux', ['capture-pane', '-t', tmuxName, '-p'], { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
     // Match from the last few lines only (Claude's status bar) to avoid matching percentages in conversation text
     const lines = pane.trimEnd().split('\n')
     const tail = lines.slice(-3).join('\n')

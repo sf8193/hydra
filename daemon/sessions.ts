@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
 
@@ -322,14 +322,14 @@ export class SessionRegistry {
         // Orphaned join members can't be re-associated with their review state
         // after restart — kill them and discard
         if (info.isJoinMember) {
-          try { execSync(`tmux kill-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
           pruned++
           continue
         }
 
         let tmuxAlive = false
         try {
-          execSync(`tmux has-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' })
+          execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
           tmuxAlive = true
         } catch {}
 

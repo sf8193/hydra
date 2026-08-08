@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { registry, threadRegistry } from './sessions.js'
@@ -165,7 +165,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       if (sessionId !== 'main' && info?.engine !== 'codex' && trackRegistration(sessionId)) {
         if (info) {
           process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
-          try { execSync(`tmux kill-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
           info.deadAt = Date.now()
           registry.persist()
           void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
@@ -417,7 +417,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
   if (!info) return
 
   let tmuxAlive = false
-  try { execSync(`tmux has-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }); tmuxAlive = true } catch {}
+  try { execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' }); tmuxAlive = true } catch {}
 
   if (!tmuxAlive) {
     // Read the pane tail once, for the autopsy — which goes to the daemon log
@@ -542,11 +542,17 @@ export function startBridgeServer(): void {
     if (existsSync(SOCK_PATH)) {
       unlinkSync(SOCK_PATH)
     }
-  } catch {}
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(`daemon: startBridgeServer: failed to unlink stale socket: ${err}\n`)
+    }
+  }
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
 
   socketServer.listen(SOCK_PATH, () => {
-    try { chmodSync(SOCK_PATH, 0o700) } catch {}
+    try { chmodSync(SOCK_PATH, 0o700) } catch (err) {
+      process.stderr.write(`daemon: startBridgeServer: failed to chmod socket: ${err}\n`)
+    }
     process.stderr.write(`daemon: listening on ${SOCK_PATH}\n`)
   })
 }

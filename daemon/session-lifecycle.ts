@@ -253,7 +253,10 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       try {
         // codexEngine imported at module scope
         codexEngine.disconnect(info.sessionId)
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: killSession: codexEngine.disconnect failed for ${info.tmuxName}: ${err}
+`)
+      }
     }
     try {
       execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
@@ -326,7 +329,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
         // Only kill if the tmux session isn't owned by a new session (name recycling)
         const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName)
         if (!currentOwner) {
-          execSync(`tmux has-session -t "${tmuxName}"`, { stdio: 'pipe' })
+          execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
           execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
           process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
         }
@@ -496,7 +499,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          try { execSync(`tmux has-session -t '${existing.tmuxName}' 2>/dev/null`, { stdio: 'pipe' }) } catch {
+          try { execFileSync('tmux', ['has-session', '-t', existing.tmuxName], { stdio: 'pipe' }) } catch {
             respawnCount = (existing.respawnCount ?? 0) + 1
             await killSession(existing, 'replaced by new spawn')
           }
@@ -1043,7 +1046,8 @@ export async function tryResume(dead: {
       return { ...result, bridgeOrphan: true }
     }
     return result
-  } catch {
+  } catch (err) {
+    process.stderr.write(`daemon: tryResume: doSpawnSession failed for ${dead.threadId}: ${err}\n`)
     return null
   }
 }
@@ -1060,7 +1064,8 @@ export async function tryRespawn(
       resurrectFrom,
       model,
     })
-  } catch {
+  } catch (err) {
+    process.stderr.write(`daemon: tryRespawn: doSpawnSession failed for ${threadId}: ${err}\n`)
     return null
   }
 }
@@ -1071,7 +1076,7 @@ export async function tryRespawn(
 
 export function discoverClaudeSessionId(tmuxName: string): string | null {
   try {
-    const panePid = execSync(`tmux list-panes -t '${tmuxName}' -F '#{pane_pid}' 2>/dev/null`, { encoding: 'utf8', timeout: 2000 }).trim()
+    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8', timeout: 2000 }).toString().trim()
     if (!panePid) return null
 
     // Primary: read Claude's session file at ~/.claude/sessions/<pid>.json
@@ -1092,9 +1097,9 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
     } catch {}
 
     // Fallback: scan child process environments
-    const childPids = execSync(`pgrep -P ${panePid} 2>/dev/null`, { encoding: 'utf8', timeout: 2000 }).trim().split('\n').filter(Boolean)
+    const childPids = execFileSync('pgrep', ['-P', panePid], { encoding: 'utf8', timeout: 2000 }).toString().trim().split('\n').filter(Boolean)
     for (const childPid of childPids) {
-      const envOutput = execSync(`ps -E -p ${childPid} 2>/dev/null`, { encoding: 'utf8', timeout: 2000 })
+      const envOutput = execFileSync('ps', ['-E', '-p', childPid], { encoding: 'utf8', timeout: 2000 }).toString()
       if (!envOutput.includes('HYDRA_SESSION_ID')) continue
       const hydraId = envOutput.match(/HYDRA_SESSION_ID=([^\s]+)/)?.[1]
       const candidates = [...envOutput.matchAll(/([A-Z_]*SESSION[A-Z_]*)=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g)]
