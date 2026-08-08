@@ -20,7 +20,7 @@ Architecture details: `README.md`. Import topology: `docs/topology.mmd` / `docs/
 Before running any diagnostic, resolve these — half the confusing symptoms trace to the wrong value:
 
 ```bash
-HYDRA_REPO="$(git rev-parse --show-toplevel 2>/dev/null || echo "$HOME/Documents/hydra")"
+HYDRA_REPO="$(git rev-parse --show-toplevel 2>/dev/null || { echo "error: not in hydra repo — set HYDRA_REPO" >&2; })"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 PLATFORM="${CHAT_PLATFORM:-discord}"  # or slack
 STATE_DIR="${HYDRA_STATE_DIR:-$CLAUDE_CONFIG_DIR/channels/$PLATFORM}"
@@ -98,6 +98,8 @@ Recovery flows through three tiers (see `diagrams/flow-recovery-cascade.mmd`):
 
 **Don't trust the correlate line.** The observability layer (`daemon/observability.ts`) resolves transcript paths against a base path that may differ from the session's actual config dir. The daemon log can print a transcript path *that exists* while the session itself cannot see it. Verify which config dir the file is actually under.
 
+The kill/orphan classification logic lives in `daemon/resume-health.ts` — it distinguishes "Claude exited" (kill, cascade continues) from "Claude is running but bridge hasn't connected" (orphan, preserve). Both the resume path and the periodic orphan detector must agree; incoherence between them is itself a bug.
+
 For daemon issues, `hydra restart <platform>` validates the module graph first — safe to run.
 
 ## Step 4 — Environment
@@ -123,7 +125,7 @@ cat /tmp/probe.txt
 
 - **`ps` argv is inherited by children.** `caffeinate` processes show claude's argv but are not claude. Check the process tree (`pstree` or `ps -o pid,ppid,comm`), not just the name.
 
-- **Orphan detection has a 90s grace window.** The daemon polls for tmux-alive + bridge-disconnected sessions and alerts the thread after `ORPHAN_GRACE_MS` (90s). It also auto-discovers `claudeSessionId` from `$CLAUDE_CONFIG_DIR/sessions/<pid>.json`. If no alert has fired but the session seems mute, it may still be in its boot grace window. The `pane-probe` module (`probeAllSessions()`, 60s interval) also detects sessions stuck on login or plan mode.
+- **Orphan detection has a 90s grace window.** The daemon polls for tmux-alive + bridge-disconnected sessions and alerts the thread after `ORPHAN_GRACE_MS` (90s). It also auto-discovers `claudeSessionId` from `~/.claude/sessions/<pid>.json` — note: this path is **hardcoded to homedir** in `session-lifecycle.ts`, not `$CLAUDE_CONFIG_DIR`. A session under a suffixed config dir has its sessionId discovered from the wrong location. If no alert has fired but the session seems mute, it may still be in its boot grace window. The `pane-probe` module (`probeAllSessions()`, 60s interval) also detects sessions stuck on login or plan mode.
 
 - **`bun run` is lazy.** Parse/export errors surface only when a module is imported, not at launch. A broken merge boots "fine" until the crashing code path loads.
 
