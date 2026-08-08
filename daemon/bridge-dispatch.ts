@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild } from './factory.js'
+import { factoryBuild, factoryRetryReview } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -318,6 +318,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const builderModel = (args.builder_model as string | undefined)?.trim() || undefined
         const reviewerModel = (args.reviewer_model as string | undefined)?.trim() || undefined
         const reviewRounds = (args.review_rounds as number | undefined) ?? 3
+        const worktree = (args.worktree as string | undefined)?.trim() || undefined
 
         if (!callerSessionId) throw new Error('factory_build requires a session context')
         const callerInfo = registry.get(callerSessionId)
@@ -331,6 +332,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           builderModel,
           reviewerModel,
           reviewRounds,
+          worktree,
         )
 
         if ('error' in result) {
@@ -339,6 +341,24 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         return {
           content: [{ type: 'text', text: `Factory build started. Ticket: ${result.ticket}. Builder is forking from your session — results will be delivered as notifications in your thread. Continue working or wait for updates.` }],
+        }
+      }
+
+      case 'factory_retry_review': {
+        const ticket = args.ticket as string
+        const reviewerModel = (args.reviewer_model as string | undefined)?.trim() || undefined
+        const reviewRounds = args.review_rounds as number | undefined
+
+        if (!callerSessionId) throw new Error('factory_retry_review requires a session context')
+
+        const result = factoryRetryReview(ticket, callerSessionId, reviewerModel, reviewRounds)
+
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: `Retry review failed: ${result.error}` }], isError: true }
+        }
+
+        return {
+          content: [{ type: 'text', text: `Review retry started for ticket ${ticket}. Results will be delivered as notifications in your thread.` }],
         }
       }
 

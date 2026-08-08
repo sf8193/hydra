@@ -123,6 +123,7 @@ export type SpawnOpts = {
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   allowMainTools?: boolean    // grant access to spawn_session/kill_session (from template)
+  worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
 }
 
 // ---------------------------------------------------------------------------

@@ -121,6 +121,17 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 
     if (info.worktreePath && info.worktreeRepo) {
       const branch = `wt/${info.tmuxName}`
+
+      // Warn if worktree branch has commits that may not have been pushed
+      try {
+        const commits = execSync(`git -C ${shq(info.worktreeRepo)} log ${shq(branch)} --not --remotes --oneline 2>/dev/null`, { stdio: 'pipe' }).toString().trim()
+        if (commits) {
+          const count = commits.split('\n').length
+          process.stderr.write(`daemon: worktree ${info.tmuxName} has ${count} unpushed commit(s) on ${branch}\n`)
+          void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` has ${count} unpushed commit(s). Verify changes were pushed before cleanup.`).catch(() => {})
+        }
+      } catch {}
+
       const cleanupScript = `${info.worktreePath}/bin/dev/on-worktree-remove.sh`
       try {
         execSync(`test -x ${shq(cleanupScript)} && ${shq(cleanupScript)} ${shq(info.tmuxName)}`, { stdio: 'pipe' })
@@ -275,12 +286,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let anchorChannelId: string | undefined
 
   // Parse worktree:repo_name prefix early so it doesn't leak into thread names/prompts
-  let worktreeTarget: string | undefined
+  let worktreeTarget: string | undefined = opts?.worktree
   topic = topic || 'session'
-  const worktreeMatch = topic.match(/^(?:worktree|wt):(\S+)\s+/)
-  if (worktreeMatch) {
-    worktreeTarget = worktreeMatch[1]
-    topic = topic.slice(worktreeMatch[0].length)
+  if (!worktreeTarget) {
+    const worktreeMatch = topic.match(/^(?:worktree|wt):(\S+)\s+/)
+    if (worktreeMatch) {
+      worktreeTarget = worktreeMatch[1]
+      topic = topic.slice(worktreeMatch[0].length)
+    }
   }
 
   // Parse --phase-budget from the topic (works for every spawn form); an
@@ -448,22 +461,30 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch {}
     try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch {}
 
-    // Detect default branch (main/master) so worktree always starts clean
-    let defaultBranch = 'main'
+    // Start worktree from the repo's current branch (preserves feature-branch
+    // context for forks). Falls back to default branch (main/master) if HEAD
+    // is detached or unreadable.
+    let baseBranch: string | undefined
     try {
-      defaultBranch = execSync(`git -C ${shq(repoDir)} symbolic-ref refs/remotes/origin/HEAD`, { stdio: 'pipe' }).toString().trim().replace('refs/remotes/origin/', '')
-    } catch {
+      const current = execSync(`git -C ${shq(repoDir)} branch --show-current`, { stdio: 'pipe' }).toString().trim()
+      if (current) baseBranch = current
+    } catch {}
+    if (!baseBranch) {
+      baseBranch = 'main'
       try {
-        // Fallback: check if 'main' exists, otherwise use 'master'
-        execSync(`git -C ${shq(repoDir)} rev-parse --verify main`, { stdio: 'pipe' })
+        baseBranch = execSync(`git -C ${shq(repoDir)} symbolic-ref refs/remotes/origin/HEAD`, { stdio: 'pipe' }).toString().trim().replace('refs/remotes/origin/', '')
       } catch {
-        defaultBranch = 'master'
+        try {
+          execSync(`git -C ${shq(repoDir)} rev-parse --verify main`, { stdio: 'pipe' })
+        } catch {
+          baseBranch = 'master'
+        }
       }
     }
 
     try {
-      execFileSync('git', ['-C', repoDir, 'worktree', 'add', '-b', branch, wtDir, defaultBranch], { stdio: 'pipe' })
-      process.stderr.write(`daemon: created worktree ${wtDir} (branch ${branch}) from ${defaultBranch}\n`)
+      execFileSync('git', ['-C', repoDir, 'worktree', 'add', '-b', branch, wtDir, baseBranch], { stdio: 'pipe' })
+      process.stderr.write(`daemon: created worktree ${wtDir} (branch ${branch}) from ${baseBranch}\n`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new Error(`failed to create worktree: ${msg}`)

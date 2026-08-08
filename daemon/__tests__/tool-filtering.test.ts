@@ -37,6 +37,7 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('kill_session')
     expect(names).toContain('reply')
     expect(names).toContain('factory_build')
+    expect(names).toContain('factory_retry_review')
   })
 
   test('MAIN_ONLY_TOOLS restricts spawn and kill', () => {
