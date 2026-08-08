@@ -564,7 +564,8 @@ export function probeAllSessions(now?: number): void {
         existing.state.loginStage !== detected.loginStage
       if (stageChanged) {
         existing.state = detected
-        existing.notifiedAt = null // reset cooldown for new stage
+        existing.notifiedAt = null
+        existing.notifyCount = 0
         void notifyLoginRequired(existing, t)
         continue
       }
@@ -573,7 +574,8 @@ export function probeAllSessions(now?: number): void {
 
       if (existing.consecutive >= CONFIRM_PROBES) {
         const cooldownElapsed = !existing.notifiedAt || (t - existing.notifiedAt) >= NOTIFY_COOLDOWN_MS
-        const underLimit = existing.notifyCount < MAX_NOTIFICATIONS
+        const effectiveMax = (detected.kind === 'login_required' && detected.loginStage === 'success') ? 1 : MAX_NOTIFICATIONS
+        const underLimit = existing.notifyCount < effectiveMax
 
         if (cooldownElapsed && underLimit) {
           if (detected.kind === 'plan_mode') {
@@ -583,9 +585,9 @@ export function probeAllSessions(now?: number): void {
           } else {
             void notifyLoginRequired(existing, t)
           }
-        } else if (!underLimit && existing.notifyCount === MAX_NOTIFICATIONS) {
+        } else if (!underLimit && existing.notifyCount === effectiveMax) {
           existing.notifyCount++
-          process.stderr.write(`daemon: pane-probe: ${key} still stuck after ${MAX_NOTIFICATIONS} notifications, giving up\n`)
+          process.stderr.write(`daemon: pane-probe: ${key} still stuck after ${effectiveMax} notifications, giving up\n`)
         }
       }
     } else {
