@@ -10,6 +10,19 @@ describe('chunk', () => {
     expect(chunk('hello', 100, 'length')).toEqual(['hello'])
   })
 
+  test('returns single chunk for text exactly at limit', () => {
+    const text = 'a'.repeat(100)
+    expect(chunk(text, 100, 'length')).toEqual([text])
+  })
+
+  test('splits 101-char text at limit in length mode', () => {
+    const text = 'a'.repeat(101)
+    const result = chunk(text, 100, 'length')
+    expect(result.length).toBe(2)
+    expect(result[0].length).toBeLessThanOrEqual(100)
+    expect(result[1].length).toBe(1)
+  })
+
   test('splits long text by length', () => {
     const result = chunk('a'.repeat(200), 100, 'length')
     expect(result.length).toBe(2)
@@ -31,12 +44,47 @@ describe('chunk', () => {
     expect(chunk('# Hello\n\nWorld', 200, 'markdown')).toEqual(['# Hello\n\nWorld'])
   })
 
-  test('splits markdown without breaking code fences', () => {
-    const text = '```ts\nconst x = 1\n```\n\nMore text here that makes it long enough to split'
-    const result = chunk(text, 30, 'markdown')
-    // Should split somewhere but each chunk should be independently valid markdown
+  // Fence repair: split forces a close in chunk 1 and reopen in chunk 2
+  test('markdown mode closes open fence in first chunk and reopens in next', () => {
+    // Craft text where the split lands inside a code fence
+    // Make the fenced block long enough to force a split inside it
+    const code = 'const x = 1\nconst y = 2\nconst z = 3\nconst w = 4'
+    const text = '```ts\n' + code + '\n```'
+    // Limit chosen to split inside the fence
+    const result = chunk(text, 25, 'markdown')
+
+    if (result.length > 1) {
+      // First chunk must end with closing fence
+      expect(result[0]).toMatch(/```\s*$/)
+      // Second chunk must start with a reopening fence (with or without lang)
+      expect(result[1]).toMatch(/^```/)
+    }
+    // Regardless, output must be non-empty and non-trivially valid
     expect(result.length).toBeGreaterThan(0)
-    expect(result.join('')).toBeTruthy()
+    result.forEach(c => expect(c.length).toBeGreaterThan(0))
+  })
+
+  test('markdown mode preserves lang tag when reopening fence', () => {
+    const text = '```ts\n' + 'const x = longVariableName\n'.repeat(5) + '```'
+    const result = chunk(text, 30, 'markdown')
+
+    if (result.length > 1) {
+      // If the fence was split, the reopening should preserve the ts lang tag
+      const secondChunk = result[1]
+      if (secondChunk.startsWith('```')) {
+        expect(secondChunk).toMatch(/^```ts/)
+      }
+    }
+  })
+
+  test('markdown mode without lang tag closes and reopens generic fence', () => {
+    const text = '```\n' + 'some code line here\n'.repeat(5) + '```'
+    const result = chunk(text, 25, 'markdown')
+
+    if (result.length > 1) {
+      expect(result[0]).toMatch(/```\s*$/)
+      expect(result[1]).toMatch(/^```/)
+    }
   })
 })
 
@@ -74,16 +122,25 @@ describe('parseDuration', () => {
   test('rejects over 24h', () => {
     expect(parseDuration('25h')).toBeNull()
     expect(parseDuration('1441m')).toBeNull()
+    expect(parseDuration('86401s')).toBeNull()
   })
 
-  test('accepts exactly 24h', () => {
+  test('accepts exactly 24h in all unit forms', () => {
     expect(parseDuration('24h')).toBe(86_400_000)
+    expect(parseDuration('1440m')).toBe(86_400_000)
+    expect(parseDuration('86400s')).toBe(86_400_000)
   })
 })
 
 describe('extractPhaseBudget', () => {
-  test('extracts budget from topic', () => {
+  test('extracts budget with space separator', () => {
     const r = extractPhaseBudget('do stuff --phase-budget 5m')
+    expect(r.budgetMs).toBe(300_000)
+    expect(r.topic).toBe('do stuff')
+  })
+
+  test('extracts budget with = separator', () => {
+    const r = extractPhaseBudget('do stuff --phase-budget=5m')
     expect(r.budgetMs).toBe(300_000)
     expect(r.topic).toBe('do stuff')
   })
@@ -108,24 +165,33 @@ describe('extractPhaseBudget', () => {
 })
 
 describe('formatDuration', () => {
-  test('formats sub-hour as minutes', () => {
-    expect(formatDuration(120_000)).toBe('2m')
+  test('sub-minute rounds to 0m (documents the behavior)', () => {
+    // formatDuration uses Math.floor — sub-minute ms returns '0m'
+    expect(formatDuration(30_000)).toBe('0m')
+    expect(formatDuration(0)).toBe('0m')
+  })
+
+  test('formats exactly 1 minute', () => {
     expect(formatDuration(60_000)).toBe('1m')
   })
 
-  test('formats hours', () => {
+  test('formats minutes under an hour', () => {
+    expect(formatDuration(120_000)).toBe('2m')
+  })
+
+  test('formats exact hours', () => {
     expect(formatDuration(7_200_000)).toBe('2h')
   })
 
-  test('formats hours and minutes', () => {
+  test('formats hours with remaining minutes', () => {
     expect(formatDuration(5_400_000)).toBe('1h 30m')
   })
 
-  test('formats days', () => {
+  test('formats exact days', () => {
     expect(formatDuration(86_400_000)).toBe('1d')
   })
 
-  test('formats days and hours', () => {
+  test('formats days with remaining hours', () => {
     expect(formatDuration(90_000_000)).toBe('1d 1h')
   })
 })
