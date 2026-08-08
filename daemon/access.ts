@@ -86,6 +86,16 @@ export function loadAccess(): Access {
   return BOOT_ACCESS ?? readAccessFile()
 }
 
+export function autoAddGroup(channelId: string): void {
+  const access = loadAccess()
+  if (access.groups[channelId]) return
+  access.groups[channelId] = {
+    requireMention: true,
+    allowFrom: [],
+  }
+  saveAccess(access)
+}
+
 export function saveAccess(a: Access): void {
   if (STATIC) return
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })

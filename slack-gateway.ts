@@ -1,4 +1,3 @@
-// @ts-nocheck — Slack Bolt type mismatches (pre-existing, runtime-safe under Bun)
 /**
  * Slack gateway implementation.
  *
@@ -6,7 +5,8 @@
  * similar to Discord's gateway model.
  */
 
-import { App, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
+import { App } from '@slack/bolt'
+import type { GenericMessageEvent, BotMessageEvent } from '@slack/types'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { sanitizeFilename, COUNT_EMOJI } from './gateway.js'
 import type {
@@ -210,10 +210,13 @@ export class SlackGateway implements ChatGateway {
       this.touchHeartbeat()
       if (!this.messageHandler) return
 
-      let username = event.user
+      const userId = event.user ?? ''
+      let username = userId
       try {
-        const userInfo = await client.users.info({ user: event.user })
-        username = userInfo.user?.profile?.display_name || userInfo.user?.real_name || userInfo.user?.name || event.user
+        if (userId) {
+          const userInfo = await client.users.info({ user: userId })
+          username = userInfo.user?.profile?.display_name || userInfo.user?.real_name || userInfo.user?.name || userId
+        }
       } catch {}
 
       // app_mention doesn't have the same shape as GenericMessageEvent,
@@ -221,7 +224,7 @@ export class SlackGateway implements ChatGateway {
       const normalized: InboundMessage = {
         id: event.ts,
         channelId: event.channel,
-        authorId: event.user,
+        authorId: userId,
         authorUsername: username,
         content: event.text ?? '',
         isDM: false,
@@ -229,9 +232,9 @@ export class SlackGateway implements ChatGateway {
         isBot: false,
         parentChannelId: event.thread_ts ? event.channel : null,
         hasExistingThread: false,
-        existingThreadId: (!!event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
+        existingThreadId: (event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
         referenceMessageId: event.thread_ts ?? null,
-        effectiveThreadId: (!!event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
+        effectiveThreadId: (event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
         attachments: [],
         createdAt: new Date(parseFloat(event.ts) * 1000),
       }
@@ -410,12 +413,13 @@ export class SlackGateway implements ChatGateway {
         try {
           const content = readFileSync(filePath)
           const fileName = filePath.split('/').pop() ?? 'file'
+          const threadTs = opts?.replyTo ?? parsed.threadTs
           await this.app.client.files.uploadV2({
             channel_id: parsed.channel,
             file: content,
             filename: fileName,
-            thread_ts: opts?.replyTo ?? parsed.threadTs,
-          })
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+          } as any)
         } catch (err) {
           process.stderr.write(`slack gateway: file upload failed for ${filePath}: ${err}\n`)
         }
@@ -745,41 +749,9 @@ export class SlackGateway implements ChatGateway {
     anchorChannelId?: string
     anchorMessageId?: string
   }): Promise<void> {
-    return; // no-op: visual state communicated via reactions, disabled on Slack
-
-    const anchor = this.getThreadAnchor(threadId)
-    if (!anchor) return
-
-    await Promise.allSettled([
-      this.unreact(anchor.channelId, anchor.messageId, '🚀'),
-      this.unreact(anchor.channelId, anchor.messageId, '☠️'),
-      this.unreact(anchor.channelId, anchor.messageId, '💥'),
-      this.unreact(anchor.channelId, anchor.messageId, '🧟'),
-    ])
-
-    switch (opts.state) {
-      case 'live':
-        await this.react(anchor.channelId, anchor.messageId, '🚀')
-        break
-      case 'killed':
-        await this.react(anchor.channelId, anchor.messageId, '☠️')
-        break
-      case 'crashed':
-        await this.react(anchor.channelId, anchor.messageId, '💥')
-        break
-      case 'zombie':
-        await this.react(anchor.channelId, anchor.messageId, '🚀')
-        await this.react(anchor.channelId, anchor.messageId, '🧟')
-        if (opts.respawnCount && opts.respawnCount > 0) {
-          const idx = Math.min(opts.respawnCount - 1, SlackGateway.COUNT_EMOJI.length - 1)
-          await this.react(anchor.channelId, anchor.messageId, SlackGateway.COUNT_EMOJI[idx])
-          if (opts.respawnCount > 1) {
-            await this.unreact(anchor.channelId, anchor.messageId,
-              SlackGateway.COUNT_EMOJI[Math.min(opts.respawnCount - 2, SlackGateway.COUNT_EMOJI.length - 1)])
-          }
-        }
-        break
-    }
+    // no-op: visual state communicated via reactions, disabled on Slack
+    // Re-enable all three (react/unreact/updateSessionVisual) together when
+    // workspace-level settings can suppress bot-reaction push notifications.
   }
 
   /** Get thread context (starter info). */

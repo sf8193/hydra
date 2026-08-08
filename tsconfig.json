@@ -12,5 +12,5 @@
     "resolveJsonModule": true
   },
   "include": ["*.ts", "daemon/**/*.ts", "cli/**/*.ts", "shared/**/*.ts"],
-  "exclude": ["node_modules", "slack-gateway.ts"]
+  "exclude": ["node_modules"]
 }
