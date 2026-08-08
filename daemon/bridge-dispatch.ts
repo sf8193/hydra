@@ -299,6 +299,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           throw new Error(`invalid difficulty "${difficultyRaw}" — must be one of: ${VALID_DIFFICULTIES.join(', ')}`)
         }
         const difficulty: Difficulty = (difficultyRaw as Difficulty) ?? 'easy'
+        const worktree = (args.worktree as string | undefined)?.trim() || undefined
 
         if (!callerSessionId) throw new Error('factory_build requires a session context')
         const callerInfo = registry.get(callerSessionId)
@@ -313,6 +314,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           reviewerModel,
           reviewRounds,
           difficulty,
+          worktree,
         )
 
         if ('error' in result) {
