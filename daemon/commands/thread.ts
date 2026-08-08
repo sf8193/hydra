@@ -376,11 +376,14 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   // Fallback: text capture
   try {
     const safeName = name.replace(/'/g, "'\\''")
-    const text = execSync(
-      `tmux capture-pane -t '${safeName}' -p -S -60`,
+    const raw = execSync(
+      `tmux capture-pane -t '${safeName}' -p -S -30`,
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
     ).trimEnd()
-    await gateway.send(msg.channelId, `${header}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``, { replyTo: msg.id })
+    // Strip ANSI escape codes so code block renders cleanly in chat
+    const text = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b[()][0-9A-Za-z]/g, '')
+    const truncated = text.length > 1500 ? '...\n' + text.slice(-1500) : text
+    await gateway.send(msg.channelId, `${header}\n\`\`\`\n${(truncated || '(empty)')}\n\`\`\``, { replyTo: msg.id })
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'peek', `capture failed: ${err}`)
   }
