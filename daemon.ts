@@ -449,6 +449,9 @@ void (async () => {
 import { startSessionHealthPoll } from './daemon/session-health.js'
 startSessionHealthPoll()
 
+import { startWorktreeScanner } from './daemon/session-lifecycle.js'
+startWorktreeScanner()
+
 // Reply guard: poll window_activity timestamp every 20s.
 // Only checks sessions with pending replies — O(pending) not O(sessions).
 const MIN_IDLE_BEFORE_NUDGE_S = 45
