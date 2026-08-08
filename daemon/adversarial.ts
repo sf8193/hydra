@@ -297,7 +297,7 @@ export function onReviewReply(sessionId: string, text: string, chatId: string, s
         const result = reviewMachine.transition(state.phase, 'summary_posted')
         if (result.ok) {
           state.phase = result.to
-          finalizeReview(state)
+          finalizeReview(state, text)
         }
       } else if (!state._cleanupNudged) {
         state._cleanupNudged = true
@@ -684,7 +684,7 @@ async function deleteReviewMessages(state: ReviewState): Promise<void> {
   void safeSend(state.ownerThreadId, `_📼 transcript saved: \`${dumpPath}\` · ${struck}/${state.messageIds.length} messages struck${failNote}_`)
 }
 
-function finalizeReview(state: ReviewState): void {
+function finalizeReview(state: ReviewState, summaryText?: string): void {
   if (state.phase !== 'complete') return
   if (state._finalizing) return
   state._finalizing = true
@@ -698,7 +698,7 @@ function finalizeReview(state: ReviewState): void {
   refreshSessionVisual(state.ownerThreadId)
 
   // If this review is part of a factory_build, signal completion
-  emit('review:complete', { threadId: state.ownerThreadId })
+  emit('review:complete', { threadId: state.ownerThreadId, summary: summaryText })
 
   cleaningUpThreads.add(state.ownerThreadId)
   void deleteReviewMessages(state)

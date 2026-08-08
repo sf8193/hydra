@@ -46,6 +46,7 @@ type FactoryBuildState = {
   worktree?: string
   diffGistUrl?: string  // set at [done] time, included in review-complete notification
   prUrl?: string        // set at [done] time for worktree builds; preferred over gist in notification
+  reviewSummary?: string // captured from builder's [summary] post at review completion
 }
 
 // ---------------------------------------------------------------------------
@@ -701,7 +702,7 @@ export function onBuilderDeath(sessionId: string): void {
   }
 }
 
-function onFactoryReviewComplete(builderThreadId: string): boolean {
+function onFactoryReviewComplete(builderThreadId: string, summaryText?: string): boolean {
   const ticket = builderThreadToTicket.get(builderThreadId)
   if (!ticket) return false
 
@@ -711,6 +712,7 @@ function onFactoryReviewComplete(builderThreadId: string): boolean {
   // Move to awaiting_pm — builder stays alive for potential retry
   state.phase = 'awaiting_pm'
   state.reviewed = true
+  if (summaryText) state.reviewSummary = summaryText
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
@@ -721,11 +723,15 @@ function onFactoryReviewComplete(builderThreadId: string): boolean {
     : state.diffGistUrl
       ? [`📄 **Diff:** ${state.diffGistUrl}`]
       : []
+  // Truncate summary for the notification (full text in builder thread)
+  const summaryBlock = state.reviewSummary
+    ? [``, state.reviewSummary.length > 3000 ? state.reviewSummary.slice(0, 3000) + '\n...(truncated)' : state.reviewSummary, ``]
+    : []
   const lines = [
     `🏭 **Factory build→review complete** — awaiting your decision`,
     `Ticket: \`${state.ticket}\``,
     ...diffLink,
-    ``,
+    ...summaryBlock,
     `Use one of:`,
     `- \`factory_accept("${state.ticket}")\` — accept the work, kill builder`,
     `- \`factory_retry("${state.ticket}", "fix X and Y")\` — send new instructions to builder`,
@@ -812,8 +818,8 @@ function factorySessionDeath({ sessionId }: { sessionId: string }): void {
   }
 }
 
-function factoryReviewComplete({ threadId }: { threadId: string }): void {
-  onFactoryReviewComplete(threadId)
+function factoryReviewComplete({ threadId, summary }: { threadId: string; summary?: string }): void {
+  onFactoryReviewComplete(threadId, summary)
 }
 
 function factoryReviewCancelled({ threadId }: { threadId: string }): void {
