@@ -124,6 +124,44 @@ const LOGIN_SUCCESS_TAIL = `  Login
   Logged in as d.cetlin@hey.com
   Login successful. Press Enter to continue…`
 
+const LOGIN_EXPIRED_TAIL = `← discord · tanval8345: compare the cpc on the US campaign from this weekend to las…
+
+● Login expired · Please run /login
+
+✱ Churned for 0s
+
+← discord · system: [system] ⚠ Reply check: the message from tanval8345 (messa…
+
+● Login expired · Please run /login
+
+✱ Churned for 0s`
+
+const RESUME_PROMPT_TAIL = `This session is 12h 6m old and 148.8k tokens.
+
+Resuming the full session will consume a substantial portion of your usage
+limits. We recommend resuming from a summary.
+
+❯ 1. Resume from summary (recommended)
+  2. Resume full session as-is
+  3. Don't ask me again
+
+Enter to confirm · Esc to cancel`
+
+const RESUME_WITH_LOGIN_EXPIRED = `● Login expired · Please run /login
+
+✱ Churned for 0s
+──────────────────────────────────────────────────────────────────────────────
+This session is 12h 6m old and 148.8k tokens.
+
+Resuming the full session will consume a substantial portion of your usage
+limits. We recommend resuming from a summary.
+
+❯ 1. Resume from summary (recommended)
+  2. Resume full session as-is
+  3. Don't ask me again
+
+Enter to confirm · Esc to cancel`
+
 const NORMAL_SESSION_TAIL = `✻ Wandering… (9m 16s · ↓ 9.2k tokens)
   ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's
      current work
@@ -239,6 +277,26 @@ describe('detectBlockingState (pure)', () => {
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
     expect(result!.loginStage).toBe('success')
+  })
+
+  it('detects login expired (past tense)', () => {
+    const result = detectBlockingState(LOGIN_EXPIRED_TAIL)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('login_required')
+    expect(result!.loginStage).toBe('blocked')
+  })
+
+  it('detects resume prompt', () => {
+    const result = detectBlockingState(RESUME_PROMPT_TAIL)
+    expect(result).not.toBeNull()
+    expect(result!.kind).toBe('resume_prompt')
+  })
+
+  it('detects resume prompt even when login expired is also in the text', () => {
+    const result = detectBlockingState(RESUME_WITH_LOGIN_EXPIRED)
+    expect(result).not.toBeNull()
+    // Resume prompt takes priority — it fills the tail and must be dismissed first
+    expect(result!.kind).toBe('resume_prompt')
   })
 
   it('requires at least two of the three plan options to co-occur', () => {
@@ -522,6 +580,81 @@ describe('probeAllSessions', () => {
     probeAllSessions(T0 + (_MAX_NOTIFICATIONS + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
     await flush()
     expect(sentMessages.length).toBe(afterMax)
+  })
+
+  it('auto-dismisses resume prompt with Enter when HYDRA_AUTO_LOGIN=1', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    process.env.HYDRA_AUTO_LOGIN = '1'
+    try {
+      addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+      paneTails.set('ember', RESUME_PROMPT_TAIL)
+      windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
+
+      const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
+      expect(enterKey).not.toBeUndefined()
+
+      const msg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(msg).not.toBeUndefined()
+      expect(msg!.text).toContain('auto-dismissed resume prompt')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
+  })
+
+  it('does not auto-dismiss resume prompt when HYDRA_AUTO_LOGIN is unset', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+      paneTails.set('ember', RESUME_PROMPT_TAIL)
+      windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
+
+      const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
+      expect(enterKey).toBeUndefined()
+
+      const msg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(msg).not.toBeUndefined()
+      expect(msg!.text).toContain('stuck on a resume prompt')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
+  it('notifies when resume prompt sendKeys fails', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    process.env.HYDRA_AUTO_LOGIN = '1'
+    try {
+      addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+      paneTails.set('ember', RESUME_PROMPT_TAIL)
+      windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      const failIO = makeTestIO()
+      failIO.sendKeys = () => false
+      _setIO(failIO)
+
+      probeAllSessions(T0)
+      probeAllSessions(T0 + 60_000)
+      await flush()
+
+      const msg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(msg).not.toBeUndefined()
+      expect(msg!.text).toContain('stuck on a resume prompt')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
   })
 
   it('reads BYTE_SESSION_NAME from env', async () => {
