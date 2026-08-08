@@ -116,6 +116,12 @@ export function _resetIO(): void { io = defaultIO }
 // Only the last PANE_TAIL_LINES are examined, so scrollback history
 // (which may contain "/login" in prose or "Entered plan mode" from a
 // previous state) does not trigger detection.
+//
+// COUPLING: These regexes are derived from Claude Code's terminal UI strings
+// (CC ~2.1.x, verified 2026-08-06/08). CC can change these at any release.
+// Failure mode is graceful: missed detection → no action → session stays
+// stuck until a human notices. Keys are never sent without re-verifying the
+// screen state. Review these patterns after any CC major version upgrade.
 // ---------------------------------------------------------------------------
 
 // Plan mode: CC renders a multi-line dialog. On long plans, "Entered plan mode"
@@ -491,9 +497,24 @@ function byteTmuxName(): string {
   return process.env.BYTE_SESSION_NAME ?? `${PLATFORM}-byte`
 }
 
+// Heartbeat: periodic log so total silence is distinguishable from "nothing stuck"
+let _probeCount = 0
+let _detectCount = 0
+let _lastHeartbeat = 0
+const HEARTBEAT_INTERVAL_MS = 6 * 60 * 60_000 // 6 hours
+
 export function probeAllSessions(now?: number): void {
   const t = now ?? io.now()
   const nowSec = Math.floor(t / 1000)
+  _probeCount++
+
+  if (_lastHeartbeat === 0) _lastHeartbeat = t
+  if (t - _lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
+    process.stderr.write(`daemon: pane-probe heartbeat: ${_probeCount} probes, ${_detectCount} detections, ${probeEntries.size} active entries\n`)
+    _probeCount = 0
+    _detectCount = 0
+    _lastHeartbeat = t
+  }
 
   const targets: Array<{ tmuxName: string; threadId: string; isMain: boolean }> = []
   targets.push({ tmuxName: byteTmuxName(), threadId: DEFAULT_SESSION_CHANNEL, isMain: true })
@@ -534,6 +555,7 @@ export function probeAllSessions(now?: number): void {
       clearState(key, t) // no detection — grace period for pending intercepts
       continue
     }
+    _detectCount++
 
     const existing = probeEntries.get(key)
     if (existing && existing.state.kind === detected.kind) {
