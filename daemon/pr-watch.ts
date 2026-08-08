@@ -340,7 +340,9 @@ async function pollPr(entry: WatchEntry): Promise<void> {
       refreshDashboard()
       return
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`daemon: pr-watch: pollPr #${entry.prNumber} fetch failed: ${err}\n`)
+  }
 
   const [reviewCommentsRaw, reviewsRaw, issueCommentsRaw, checkResult] = await Promise.all([
     fetchNewReviewComments(entry),
