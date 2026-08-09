@@ -18,7 +18,7 @@ import { join } from 'path'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
 import { registry, threadRegistry } from './sessions.js'
-import { safeSend } from './util.js'
+import { safeSend, formatDuration, getContextPercent } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
@@ -47,6 +47,7 @@ type FactoryBuildState = {
   diffGistUrl?: string  // set at [done] time, included in review-complete notification
   prUrl?: string        // set at [done] time for worktree builds; preferred over gist in notification
   reviewSummary?: string // captured from builder's [summary] post at review completion
+  _progressTimer?: ReturnType<typeof setInterval>
 }
 
 // ---------------------------------------------------------------------------
@@ -590,6 +591,7 @@ async function spawnBuilder(
     registry.persist()
   }
 
+  startProgressUpdates(state)
   process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) forked for ticket ${state.ticket}\n`)
 }
 
@@ -776,9 +778,42 @@ function onFactoryCriticRound(builderThreadId: string, round: number, totalRound
   process.stderr.write(`daemon: factory: critic round ${round}/${totalRounds} for ticket ${state.ticket}\n`)
 }
 
+// ---------------------------------------------------------------------------
+// Progress updates — periodic status to PM during build and review phases
+// ---------------------------------------------------------------------------
+
+const PROGRESS_INTERVAL_MS = 3 * 60_000 // every 3 minutes
+
+function startProgressUpdates(state: FactoryBuildState): void {
+  if (state._progressTimer) return
+  state._progressTimer = setInterval(() => {
+    if (state.phase !== 'building' && state.phase !== 'reviewing') {
+      stopProgressUpdates(state)
+      return
+    }
+    const builderInfo = state.builderSessionId ? registry.get(state.builderSessionId) : undefined
+    const builderName = builderInfo?.tmuxName ?? 'builder'
+    const elapsed = formatDuration(Date.now() - state.createdAt)
+    const ctx = builderInfo ? getContextPercent(builderInfo.tmuxName) : '?'
+    const ctxStr = ctx !== '?' ? ` · ctx ${ctx}` : ''
+    const phaseLabel = state.phase === 'reviewing' ? 'reviewing' : 'building'
+    void safeSend(state.pmThreadId,
+      `🏭 _\`${state.ticket}\` ${phaseLabel} · \`${builderName}\` · ${elapsed} elapsed${ctxStr}_`
+    ).catch(() => {})
+  }, PROGRESS_INTERVAL_MS)
+}
+
+function stopProgressUpdates(state: FactoryBuildState): void {
+  if (state._progressTimer) {
+    clearInterval(state._progressTimer)
+    state._progressTimer = undefined
+  }
+}
+
 function cleanupState(ticket: string): void {
   const state = builds.get(ticket)
   if (!state) return
+  stopProgressUpdates(state)
   if (state.builderSessionId) builderSessionToTicket.delete(state.builderSessionId)
   if (state.builderThreadId) builderThreadToTicket.delete(state.builderThreadId)
   builds.delete(ticket)
