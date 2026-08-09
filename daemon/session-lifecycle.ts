@@ -260,7 +260,9 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
     try {
       execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
-    } catch {}
+    } catch (err) {
+      process.stderr.write(`daemon: tmux kill-session failed for ${tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+    }
 
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
@@ -277,27 +279,42 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
           process.stderr.write(`daemon: worktree ${info.tmuxName} has ${count} unpushed commit(s) on ${branch}\n`)
           void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` has ${count} unpushed commit(s). Verify changes were pushed before cleanup.`).catch(() => {})
         }
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: worktree unpushed-check failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+      }
 
       const cleanupScript = `${info.worktreePath}/bin/dev/on-worktree-remove.sh`
       try {
         execSync(`test -x ${shq(cleanupScript)} && ${shq(cleanupScript)} ${shq(info.tmuxName)}`, { stdio: 'pipe' })
         process.stderr.write(`daemon: ran worktree cleanup hook for ${info.tmuxName}\n`)
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: worktree cleanup hook failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+      }
       try {
         execSync(`git -C ${shq(info.worktreeRepo)} worktree remove ${shq(info.worktreePath)} --force`, { stdio: 'pipe' })
         process.stderr.write(`daemon: removed worktree ${info.worktreePath}\n`)
-      } catch {
+      } catch (removeErr) {
+        process.stderr.write(`daemon: git worktree remove failed for ${info.tmuxName} (${info.worktreePath}): ${removeErr instanceof Error ? removeErr.message : removeErr}\n`)
         if (info.worktreePath.includes('/.worktrees/') && existsSync(info.worktreePath)) {
-          execSync(`rm -rf ${shq(info.worktreePath)}`, { stdio: 'pipe' })
-          process.stderr.write(`daemon: rm -rf worktree ${info.worktreePath} (git remove failed)\n`)
+          try {
+            execSync(`rm -rf ${shq(info.worktreePath)}`, { stdio: 'pipe' })
+            process.stderr.write(`daemon: rm -rf worktree ${info.worktreePath} (git remove failed)\n`)
+          } catch (rmErr) {
+            process.stderr.write(`daemon: rm -rf worktree also failed for ${info.worktreePath}: ${rmErr instanceof Error ? rmErr.message : rmErr}\n`)
+          }
         }
       }
-      try { execSync(`git -C ${shq(info.worktreeRepo)} worktree prune`, { stdio: 'pipe' }) } catch {}
+      try {
+        execSync(`git -C ${shq(info.worktreeRepo)} worktree prune`, { stdio: 'pipe' })
+      } catch (err) {
+        process.stderr.write(`daemon: git worktree prune failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+      }
       try {
         execSync(`git -C ${shq(info.worktreeRepo)} branch -D ${shq(branch)}`, { stdio: 'pipe' })
         process.stderr.write(`daemon: deleted branch ${branch}\n`)
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: git branch -D ${branch} failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+      }
     }
 
     // Update thread metadata before deleting session
@@ -610,9 +627,17 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     const branch = `wt/${tmuxName}`
 
     // Clean up stale worktree/branch from previous runs
-    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch {}
-    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch {}
-    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.status !== 128) {
+        process.stderr.write(`daemon: stale worktree remove failed for ${wtDir}: ${err instanceof Error ? err.message : err}\n`)
+      }
+    }
+    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
+      process.stderr.write(`daemon: git worktree prune failed for ${repoDir}: ${err instanceof Error ? err.message : err}\n`)
+    }
+    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch {
+      // Branch may not exist yet on first spawn — silence expected ENOENT
+    }
 
     // Start worktree from current branch (preserves feature-branch context for forks).
     // Falls back to default branch (main/master) if HEAD is detached.
