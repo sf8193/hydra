@@ -346,7 +346,13 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
           execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
           process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
         }
-      } catch {}
+      } catch (err) {
+        // Session already gone or tmux error — not actionable, but log for diagnostics
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!msg.includes('can\'t find session') && !msg.includes('no server running')) {
+          process.stderr.write(`daemon: deferred kill for "${tmuxName}" failed: ${msg}\n`)
+        }
+      }
       killsInProgress.delete(info.sessionId)
     }, 3000)
   } catch (err) {
@@ -1149,16 +1155,24 @@ const WORKTREE_SCAN_INTERVAL_MS = 30 * 60_000 // 30 minutes
 export function startWorktreeScanner(): void {
   setInterval(() => {
     try {
-      const wtBase = resolve(process.env.SPAWN_CWD ?? '', '..', '.worktrees')
-      if (!existsSync(wtBase)) return
-      const entries = readdirSync(wtBase, { withFileTypes: true }).filter(e => e.isDirectory())
-      if (entries.length === 0) return
+      const spawnCwd = process.env.SPAWN_CWD
+      if (!spawnCwd) return
 
-      for (const entry of entries) {
-        // Worktree dirs are named <repoName>-<tmuxName>
-        const owner = [...registry.values()].find(s => s.worktreePath?.endsWith(`/${entry.name}`))
-        if (!owner) {
-          process.stderr.write(`daemon: stale worktree detected: ${entry.name} at ${wtBase} — no active session owns it (safe to remove with: git worktree remove --force ${join(wtBase, entry.name)})\n`)
+      // Worktrees are created at <repoDir>/../.worktrees/ = <spawnCwd>/<repoName>/../.worktrees
+      // = <spawnCwd>/.worktrees — so scan direct sibling of SPAWN_CWD's repos.
+      // We look for .worktrees dirs that are siblings of any subdir of SPAWN_CWD.
+      const spawnDirEntries = readdirSync(spawnCwd, { withFileTypes: true }).filter(e => e.isDirectory())
+      for (const repoEntry of spawnDirEntries) {
+        const wtBase = join(spawnCwd, repoEntry.name, '..', '.worktrees')
+        if (!existsSync(wtBase)) continue
+        const entries = readdirSync(wtBase, { withFileTypes: true }).filter(e => e.isDirectory())
+        for (const entry of entries) {
+          const fullPath = join(wtBase, entry.name)
+          // Use exact path match against registry
+          const owner = [...registry.values()].find(s => s.worktreePath === fullPath)
+          if (!owner) {
+            process.stderr.write(`daemon: stale worktree detected: ${fullPath} — no active session owns it (safe to remove with: git worktree remove --force ${fullPath})\n`)
+          }
         }
       }
     } catch (err) {
