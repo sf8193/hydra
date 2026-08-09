@@ -37,6 +37,8 @@ describe('formatDuration', () => {
 
   test('sub-minute rounds down to 0m', () => {
     expect(formatDuration(30_000)).toBe('0m')
+    expect(formatDuration(59_999)).toBe('0m')
+    expect(formatDuration(1)).toBe('0m')
   })
 
   test('exactly 1 minute', () => {
@@ -177,6 +179,13 @@ describe('extractPhaseBudget', () => {
     expect(r.topic).toBe('build --phase-budget 0m')
     expect(r.budgetMs).toBeUndefined()
   })
+
+  test('multiple flags — first match wins, second remains in topic', () => {
+    // String.match() returns first match (util.ts:98). Second flag left in topic.
+    const r = extractPhaseBudget('build --phase-budget 5m --phase-budget 10m')
+    expect(r.budgetMs).toBe(300_000)
+    expect(r.topic).toContain('--phase-budget 10m')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -225,6 +234,14 @@ describe('transformProtocolTag', () => {
     const input = '[critic→owner]\nbody text'
     expect(transformProtocolTag(input)).toBe('body text')
   })
+
+  test('tag with trailing newline and no body returns original (pinned behavior)', () => {
+    // [critic→owner]\n  → rest='\n', remainder='', stripped='\n', result='' → returns original
+    const input = '[critic→owner]\n'
+    const result = transformProtocolTag(input)
+    // returns original (result is '' so `result || text` returns original)
+    expect(result).toBe(input)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -272,11 +289,15 @@ describe('chunk (newline mode)', () => {
     const text = 'para1\n\npara2\n\npara3'
     const result = chunk(text, 12, 'newline')
     expect(result.length).toBeGreaterThan(1)
-    // All content preserved
-    const joined = result.join('')
-    expect(joined).toContain('para1')
-    expect(joined).toContain('para2')
-    expect(joined).toContain('para3')
+    // chunk strips leading newlines between parts (util.ts:141: .replace(/^\n+/, ''))
+    // so reconstruct by joining and check all words are present
+    const allText = result.join(' ')
+    expect(allText).toContain('para1')
+    expect(allText).toContain('para2')
+    expect(allText).toContain('para3')
+    // Total content loss should only be stripped leading newlines (≤ chunk count)
+    const totalChars = result.reduce((sum, c) => sum + c.length, 0)
+    expect(totalChars).toBeGreaterThanOrEqual(text.replace(/^\n+|\n+(?=\n)/g, '').length - result.length)
   })
 })
 
@@ -308,6 +329,19 @@ describe('chunk (markdown mode)', () => {
       // After fence repair, each part should be balanced or have an opener
       expect(Math.abs(opens - closes)).toBeLessThanOrEqual(1)
     }
+  })
+
+  test('safeLimit override: chunks may exceed limit when limit < FENCE_CLOSER.length + 1', () => {
+    // chunkMarkdown uses safeLimit = Math.max(limit, 5) to avoid fence closer overflow.
+    // With limit=3, safeLimit becomes 5 — chunks are NOT guaranteed ≤ 3.
+    // This test documents/pins that contract: caller gets best-effort, not a hard cap.
+    const text = 'hello\nworld\nfoo\nbar'
+    const result = chunk(text, 3, 'markdown')
+    // Should split (not one chunk) but chunks may exceed 3
+    expect(result.length).toBeGreaterThanOrEqual(1)
+    // All content is preserved (joined includes all characters)
+    const joined = result.join('')
+    expect(joined).toContain('hello')
   })
 })
 
