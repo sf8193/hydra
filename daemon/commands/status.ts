@@ -74,17 +74,38 @@ function buildBucketOutput(list: SessionEntry[], now: number): string {
   return sections.join('\n')
 }
 
-/** Render a session node and its children recursively, returning formatted lines. */
+/** Max lastActive across a node and all its descendants (for subtree bucketing). */
+function subtreeLastActive(
+  e: SessionEntry,
+  childrenMap: Map<string, SessionEntry[]>,
+): number {
+  let max = e.session.lastActive
+  for (const kid of (childrenMap.get(e.session.tmuxName) ?? [])) {
+    max = Math.max(max, subtreeLastActive(kid, childrenMap))
+  }
+  return max
+}
+
+/**
+ * Render a session node and its children recursively.
+ * visited guards against cycles in originFrom data (corrupt persist or fork bug).
+ * NOTE: originFrom stores tmuxName (a recycled display name, not a stable ID).
+ * buildListOutput cross-checks createdAt to avoid false parent matches on name reuse.
+ */
 function renderTreeNode(
   e: SessionEntry,
   childrenMap: Map<string, SessionEntry[]>,
   indent: string,
   connector: string,
+  visited: Set<string>,
 ): string[] {
-  const kids = (childrenMap.get(e.session.tmuxName) ?? [])
+  const name = e.session.tmuxName
+  if (visited.has(name)) return [] // cycle guard — should never fire in practice
+  visited.add(name)
+
+  const kids = (childrenMap.get(name) ?? [])
     .sort((a, b) => a.session.createdAt - b.session.createdAt)
 
-  // Continuation indent for this node's detail lines
   const hasConnector = connector !== ''
   const contIndent = indent + (hasConnector ? (connector.startsWith('└') ? '   ' : '│  ') : '')
   const treePrefix = indent + connector
@@ -95,25 +116,28 @@ function renderTreeNode(
   for (let i = 0; i < kids.length; i++) {
     const isLast = i === kids.length - 1
     const childConnector = isLast ? '└─ ' : '├─ '
-    const childIndent = contIndent
-    result.push('', ...renderTreeNode(kids[i], childrenMap, childIndent, childConnector))
+    result.push('', ...renderTreeNode(kids[i], childrenMap, contIndent, childConnector, new Set(visited)))
   }
 
   return result
 }
 
 function buildListOutput(list: SessionEntry[], now: number): string {
-  // Build parent→children map
+  // Build parent→children map.
+  // originFrom stores tmuxName (recycled display name). Cross-check createdAt so
+  // a new session that inherits a recycled name isn't mistaken for the old parent.
   const byName = new Map(list.map(e => [e.session.tmuxName, e]))
   const childrenMap = new Map<string, SessionEntry[]>()
   const roots: SessionEntry[] = []
 
   for (const e of list) {
     const parentName = e.session.originFrom
-    if (parentName && byName.has(parentName)) {
-      const arr = childrenMap.get(parentName) ?? []
+    const parentEntry = parentName ? byName.get(parentName) : undefined
+    // Validate: parent must exist AND have been created before the child
+    if (parentEntry && parentEntry.session.createdAt < e.session.createdAt) {
+      const arr = childrenMap.get(parentName!) ?? []
       arr.push(e)
-      childrenMap.set(parentName, arr)
+      childrenMap.set(parentName!, arr)
     } else {
       roots.push(e)
     }
@@ -124,10 +148,12 @@ function buildListOutput(list: SessionEntry[], now: number): string {
     return buildBucketOutput(list, now)
   }
 
-  // Tree view: group roots by time bucket, then render each with children
+  // Tree view: bucket by max lastActive of the entire subtree so an active child
+  // doesn't bury its idle parent under an old time bucket.
   const buckets = new Map<string, SessionEntry[]>()
   for (const e of roots) {
-    const bucket = listTimeBucket(e.session.lastActive, now)
+    const effective = subtreeLastActive(e, childrenMap)
+    const bucket = listTimeBucket(effective, now)
     const arr = buckets.get(bucket) ?? []
     arr.push(e)
     buckets.set(bucket, arr)
@@ -138,7 +164,7 @@ function buildListOutput(list: SessionEntry[], now: number): string {
     const treeLines: string[] = []
     for (const root of items) {
       if (treeLines.length > 0) treeLines.push('')
-      treeLines.push(...renderTreeNode(root, childrenMap, '', ''))
+      treeLines.push(...renderTreeNode(root, childrenMap, '', '', new Set()))
     }
     sections.push(`### ${label}\n\n${treeLines.join('\n')}`)
   }
