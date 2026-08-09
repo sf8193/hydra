@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { execSync, execFileSync } from 'child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
@@ -277,27 +277,40 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
           process.stderr.write(`daemon: worktree ${info.tmuxName} has ${count} unpushed commit(s) on ${branch}\n`)
           void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` has ${count} unpushed commit(s). Verify changes were pushed before cleanup.`).catch(() => {})
         }
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: worktree ${info.tmuxName}: unpushed-commit check failed: ${err instanceof Error ? err.message : err}\n`)
+      }
 
       const cleanupScript = `${info.worktreePath}/bin/dev/on-worktree-remove.sh`
       try {
         execSync(`test -x ${shq(cleanupScript)} && ${shq(cleanupScript)} ${shq(info.tmuxName)}`, { stdio: 'pipe' })
         process.stderr.write(`daemon: ran worktree cleanup hook for ${info.tmuxName}\n`)
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: worktree ${info.tmuxName}: cleanup hook failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+      }
       try {
         execSync(`git -C ${shq(info.worktreeRepo)} worktree remove ${shq(info.worktreePath)} --force`, { stdio: 'pipe' })
         process.stderr.write(`daemon: removed worktree ${info.worktreePath}\n`)
-      } catch {
+      } catch (err) {
+        process.stderr.write(`daemon: worktree ${info.tmuxName}: git worktree remove failed: ${err instanceof Error ? err.message : err}\n`)
         if (info.worktreePath.includes('/.worktrees/') && existsSync(info.worktreePath)) {
-          execSync(`rm -rf ${shq(info.worktreePath)}`, { stdio: 'pipe' })
-          process.stderr.write(`daemon: rm -rf worktree ${info.worktreePath} (git remove failed)\n`)
+          try {
+            execSync(`rm -rf ${shq(info.worktreePath)}`, { stdio: 'pipe' })
+            process.stderr.write(`daemon: rm -rf worktree ${info.worktreePath} (git remove failed)\n`)
+          } catch (rmErr) {
+            process.stderr.write(`daemon: worktree ${info.tmuxName}: rm -rf also failed: ${rmErr instanceof Error ? rmErr.message : rmErr}\n`)
+          }
         }
       }
-      try { execSync(`git -C ${shq(info.worktreeRepo)} worktree prune`, { stdio: 'pipe' }) } catch {}
+      try { execSync(`git -C ${shq(info.worktreeRepo)} worktree prune`, { stdio: 'pipe' }) } catch (err) {
+        process.stderr.write(`daemon: worktree ${info.tmuxName}: worktree prune failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+      }
       try {
         execSync(`git -C ${shq(info.worktreeRepo)} branch -D ${shq(branch)}`, { stdio: 'pipe' })
         process.stderr.write(`daemon: deleted branch ${branch}\n`)
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: worktree ${info.tmuxName}: branch delete failed for ${branch} (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+      }
     }
 
     // Update thread metadata before deleting session
@@ -610,9 +623,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     const branch = `wt/${tmuxName}`
 
     // Clean up stale worktree/branch from previous runs
-    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch {}
-    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch {}
-    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: stale worktree pre-cleanup failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+    }
+    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: worktree prune failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+    }
+    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
+      process.stderr.write(`daemon: spawn ${tmuxName}: stale branch delete failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+    }
 
     // Start worktree from current branch (preserves feature-branch context for forks).
     // Falls back to default branch (main/master) if HEAD is detached.
@@ -1110,4 +1129,47 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
   } catch {
     return null
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stale worktree scanner — logs orphaned worktrees (no auto-delete)
+// ---------------------------------------------------------------------------
+
+const STALE_WORKTREE_SCAN_INTERVAL_MS = 30 * 60_000 // 30 minutes
+
+/**
+ * Periodically scan .worktrees directories for worktrees that have no active
+ * session owner. Logs findings — never auto-deletes, since worktrees may hold
+ * committed work the user hasn't reviewed.
+ */
+export function startStaleWorktreeScanner(): void {
+  setInterval(() => {
+    const spawnCwd = process.env.SPAWN_CWD
+    if (!spawnCwd) return
+
+    try {
+      // .worktrees lives alongside the repo dirs, one level up from each repo's worktree dir
+      // Layout: <spawnCwd>/<repo>/../.worktrees/<repo>-<sessionName>
+      // We scan <spawnCwd>/.worktrees if it exists (common layout), then per-repo layouts.
+      const worktreesRoot = resolve(spawnCwd, '..', '.worktrees')
+      if (!existsSync(worktreesRoot)) return
+
+      const entries = readdirSync(worktreesRoot, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const wtPath = join(worktreesRoot, entry.name)
+        // Extract session name from worktree dir name (format: <repo>-<sessionName>)
+        const lastDash = entry.name.lastIndexOf('-')
+        if (lastDash < 0) continue
+        const sessionName = entry.name.slice(lastDash + 1)
+
+        const owner = [...registry.values()].find(s => s.worktreePath === wtPath || s.tmuxName === sessionName)
+        if (!owner) {
+          process.stderr.write(`daemon: stale-worktree-scan: orphaned worktree detected: ${wtPath} (no active session "${sessionName}") — remove manually if safe\n`)
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: stale-worktree-scan: scan failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+    }
+  }, STALE_WORKTREE_SCAN_INTERVAL_MS).unref()
 }
