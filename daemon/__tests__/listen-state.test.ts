@@ -38,4 +38,9 @@ describe('resolveListenStatePure', () => {
     const access = { groups: { 'parent-ch': { defaultListen: false }, 'anchor-ch': { defaultListen: true } } }
     expect(resolveListenStatePure(undefined, access, undefined, 'parent-ch', 'anchor-ch')).toBe(false)
   })
+
+  test('full priority chain: channelId > parentChannelId > anchorChannelId', () => {
+    const access = { groups: { 'ch': { defaultListen: false }, 'parent-ch': { defaultListen: true }, 'anchor-ch': { defaultListen: true } } }
+    expect(resolveListenStatePure('ch', access, undefined, 'parent-ch', 'anchor-ch')).toBe(false)
+  })
 })
