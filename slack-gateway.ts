@@ -7,6 +7,7 @@
  */
 
 import { App, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
+import { SerialQueue } from './throttled-queue.js'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { sanitizeFilename, COUNT_EMOJI } from './gateway.js'
 import type {
@@ -77,6 +78,9 @@ export class SlackGateway implements ChatGateway {
   private reconnecting = false
   private reconnectAttempts = 0
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
+  // Serial queue for chat.postMessage + chat.update — Slack tier-4 limit is ~1/s per channel.
+  // 1200ms ensures we stay well under 50 posts/min across all channels.
+  private sendQueue = new SerialQueue(1200)
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
 
@@ -427,7 +431,7 @@ export class SlackGateway implements ChatGateway {
       payload.unfurl_media = false
     }
 
-    const result = await this.app.client.chat.postMessage(payload as any)
+    const result = await this.sendQueue.add(() => this.app!.client.chat.postMessage(payload as any))
     const sentId = result.ts!
     this.noteSent(sentId)
     return { id: sentId, channelId }
@@ -438,7 +442,7 @@ export class SlackGateway implements ChatGateway {
     const { channel } = this.parseChannelId(channelId)
     const payload: Record<string, unknown> = { channel, ts: messageId }
     applyMessageBody(payload, text, false)
-    const result = await this.app.client.chat.update(payload as any)
+    const result = await this.sendQueue.add(() => this.app!.client.chat.update(payload as any))
     return result.ts!
   }
 
@@ -535,21 +539,21 @@ export class SlackGateway implements ChatGateway {
       threadTs = opts.messageId
     } else {
       // Post a parent message that acts as the thread anchor
-      const anchor = await this.app.client.chat.postMessage({
+      const anchor = await this.sendQueue.add(() => this.app!.client.chat.postMessage({
         channel,
         text: `*${name}*`,
-      })
+      }))
       threadTs = anchor.ts!
       this.noteSent(threadTs)
     }
 
     let messageId: string | undefined
     if (opts?.text) {
-      const reply = await this.app.client.chat.postMessage({
+      const reply = await this.sendQueue.add(() => this.app!.client.chat.postMessage({
         channel,
         text: opts.text,
         thread_ts: threadTs,
-      })
+      }))
       messageId = reply.ts!
       this.noteSent(messageId)
     }
@@ -657,7 +661,7 @@ export class SlackGateway implements ChatGateway {
       ]
     }
 
-    await this.app.client.chat.postMessage(payload as any)
+    await this.sendQueue.add(() => this.app!.client.chat.postMessage(payload as any))
   }
 
   async isMentioned(msg: InboundMessage, extraPatterns?: string[]): Promise<boolean> {

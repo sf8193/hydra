@@ -54,3 +54,46 @@ export class ThrottledQueue<V> {
     })
   }
 }
+
+// ---------------------------------------------------------------------------
+// SerialQueue — simple serial rate limiter for API calls.
+//
+// Unlike ThrottledQueue (which coalesces by key), SerialQueue preserves every
+// call and executes them one at a time with a minimum interval between runs.
+// Suitable for Slack's chat.postMessage / chat.update rate limits.
+// ---------------------------------------------------------------------------
+
+export class SerialQueue {
+  private queue: Array<() => Promise<void>> = []
+  private running = false
+  private lastRunAt = 0
+
+  constructor(private minIntervalMs: number) {}
+
+  add<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          resolve(await fn())
+        } catch (err) {
+          reject(err)
+        }
+      })
+      if (!this.running) this.scheduleNext()
+    })
+  }
+
+  private scheduleNext(): void {
+    if (this.queue.length === 0) { this.running = false; return }
+    this.running = true
+    const elapsed = Date.now() - this.lastRunAt
+    const delay = Math.max(0, this.minIntervalMs - elapsed)
+    setTimeout(async () => {
+      const task = this.queue.shift()
+      if (!task) { this.running = false; return }
+      this.lastRunAt = Date.now()
+      try { await task() } catch {}
+      this.scheduleNext()
+    }, delay)
+  }
+}
