@@ -80,6 +80,26 @@ export class SlackGateway implements ChatGateway {
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
 
+  // Rate-limited serial queue for chat.postMessage and chat.update.
+  // Slack's tier-4 write methods allow ~1/sec per channel; a shared 1.2s
+  // minimum gap across all channels is conservative but safe under burst load
+  // (10+ concurrent sessions each posting simultaneously).
+  private chatRateChain: Promise<unknown> = Promise.resolve()
+  private lastChatCallAt = 0
+  private static readonly CHAT_RATE_LIMIT_MS = 1200
+
+  private rateLimit<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.chatRateChain.then(async () => {
+      const wait = Math.max(0, this.lastChatCallAt + SlackGateway.CHAT_RATE_LIMIT_MS - Date.now())
+      if (wait > 0) await new Promise(r => setTimeout(r, wait))
+      this.lastChatCallAt = Date.now()
+      return fn()
+    })
+    // Chain without holding the resolved value — avoids unbounded memory growth
+    this.chatRateChain = result.then(() => {}, () => {})
+    return result
+  }
+
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
     const networkUp = await this.checkNetwork()
@@ -427,7 +447,7 @@ export class SlackGateway implements ChatGateway {
       payload.unfurl_media = false
     }
 
-    const result = await this.app.client.chat.postMessage(payload as any)
+    const result = await this.rateLimit(() => this.app!.client.chat.postMessage(payload as any))
     const sentId = result.ts!
     this.noteSent(sentId)
     return { id: sentId, channelId }
@@ -438,7 +458,7 @@ export class SlackGateway implements ChatGateway {
     const { channel } = this.parseChannelId(channelId)
     const payload: Record<string, unknown> = { channel, ts: messageId }
     applyMessageBody(payload, text, false)
-    const result = await this.app.client.chat.update(payload as any)
+    const result = await this.rateLimit(() => this.app!.client.chat.update(payload as any))
     return result.ts!
   }
 
