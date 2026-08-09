@@ -3,7 +3,7 @@
  */
 
 import { gateway, PLATFORM } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, threadRegistry, sessionEmoji } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration, tmuxHasSession } from './util.js'
 import { loadAccess } from './access.js'
@@ -13,8 +13,11 @@ import { assembleContextLines } from './artifacts.js'
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
 // Each session = up to 3 blocks (section + context + divider). Slack caps views at 100.
-// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6. (100-6)/3 = 31.
-const MAX_SESSION_BLOCKS = 31
+// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6.
+// Reserve 7 blocks for the Recent section (divider + header + up to 5 rows).
+// (100 - 6 - 7) / 3 ≈ 29. Use 25 for a comfortable margin.
+const MAX_SESSION_BLOCKS = 25
+const MAX_RECENT_SESSIONS = 5
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 type SessionRow = {
@@ -29,6 +32,45 @@ type SessionRow = {
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
+}
+
+type RecentRow = {
+  name: string
+  desc: string
+  duration: string
+  model: string
+  url: string
+}
+
+function getRecentCompleted(): RecentRow[] {
+  const now = Date.now()
+  const rows: RecentRow[] = []
+
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, MAX_RECENT_SESSIONS)
+
+  for (const t of threads) {
+    const last = [...t.sessionHistory].reverse().find(h => h.endedAt)
+    if (!last) continue
+    const duration = last.endedAt && last.startedAt
+      ? formatDuration(last.endedAt - last.startedAt)
+      : '?'
+    const rawModel = last.model ?? ''
+    const model = rawModel.replace(/^claude-/, '').replace(/\[1m\]$/, '')
+    const rawDesc = t.description || t.topic || last.tmuxName
+    const desc = rawDesc.length > 60 ? rawDesc.slice(0, 57) + '...' : rawDesc
+    rows.push({
+      name: last.tmuxName,
+      desc,
+      duration,
+      model,
+      url: t.threadUrl ?? '',
+    })
+  }
+
+  return rows
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -115,6 +157,27 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
     }
   }
 
+  // Recent completed sessions
+  const recent = getRecentCompleted()
+  if (recent.length > 0) {
+    blocks.push({ type: 'divider' })
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: `Recent (${recent.length})` },
+    })
+    for (const r of recent) {
+      const link = r.url ? `<${r.url}|${r.name}>` : r.name
+      const modelTag = r.model ? ` · \`${r.model}\`` : ''
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `${link} — ${escapeMrkdwn(r.desc)} · _${r.duration}_${modelTag}`,
+        },
+      })
+    }
+  }
+
   blocks.push({ type: 'divider' })
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ' ' } })
   blocks.push({
@@ -147,14 +210,15 @@ async function doUpdate(): Promise<void> {
   const access = loadAccess()
   if (!access.allowFrom.length) return
 
-  const userId = access.allowFrom[0]
   const sessions = getActiveSessions()
   const blocks = buildHomeBlocks(sessions)
 
-  try {
-    await (gateway as any).publishHomeTab(userId, blocks)
-  } catch (err) {
-    process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
+  for (const userId of access.allowFrom) {
+    try {
+      await (gateway as any).publishHomeTab(userId, blocks)
+    } catch (err) {
+      process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
+    }
   }
 }
 
