@@ -102,8 +102,30 @@ async function spawnAndNotify(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn failed: ${errMsg}\n`)
-    try { await gateway.send(msg.channelId, `Spawn failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+    try { await gateway.send(msg.channelId, friendlySpawnError(errMsg), { replyTo: msg.id }) } catch {}
   }
+}
+
+function friendlySpawnError(errMsg: string): string {
+  if (/not a git repo|not a git repository/i.test(errMsg)) {
+    return `Spawn failed: ${errMsg}\n_Check that the repo directory exists at \`$SPAWN_CWD/<name>\`._`
+  }
+  if (/SPAWN_CWD/i.test(errMsg)) {
+    return `Spawn failed: ${errMsg}\n_Set \`SPAWN_CWD\` in the daemon environment to the working directory for sessions._`
+  }
+  if (/failed to spawn tmux|tmux.*not found|tmux.*command not found/i.test(errMsg)) {
+    return `Spawn failed: ${errMsg}\n_Is tmux installed? \`brew install tmux\`_`
+  }
+  if (/thread has a live session/i.test(errMsg)) {
+    return `Spawn failed: ${errMsg}\n_Kill the existing session first: type \`kill\` in the thread, or use \`spawn:\` to start a new thread._`
+  }
+  if (/worktree/i.test(errMsg)) {
+    return `Spawn failed: ${errMsg}\n_Check the target repo exists and has no locked worktrees: \`git worktree list\`_`
+  }
+  if (/ENOENT/i.test(errMsg)) {
+    return `Spawn failed: ${errMsg}\n_A required file or directory was not found — check \`$SPAWN_CWD\` is set correctly._`
+  }
+  return `Spawn failed: ${errMsg}`
 }
 
 export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
