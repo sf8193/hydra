@@ -12,7 +12,7 @@ import { debouncedRefreshListDisplay } from './status.js'
 import { getActiveBuilds, cancelBuild } from '../build.js'
 import { getActiveReviews, cancelReview } from '../adversarial.js'
 import type { SpawnTemplate } from '../templates.js'
-import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
+import { buildTemplateSpawnOpts, runTemplateAction, listTemplates } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 import type { Access } from '../access.js'
 
@@ -223,7 +223,7 @@ export async function handleReconnectIntercept(msg: InboundMessage): Promise<voi
 
 export async function handleCommandsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '📋').catch(() => {})
-  const text = [
+  const lines = [
     '**Help / Commands**',
     '',
     '**Channel** (work anywhere):',
@@ -265,9 +265,39 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '',
     '**Daemon:**',
     '• 💚 `health` · 🧩 `protocols` · 🔌 `reconnect` · 🔄 `restart`',
-    '• 📋 `help` / `commands` — this list',
-  ].join('\n')
+    '• 📋 `help` / `commands` — this list · 📑 `templates` — list all templates',
+  ]
+
+  const templates = listTemplates()
+  if (templates.length > 0) {
+    lines.push('', '**Templates** (prefix any with `<name>: <topic>`):')
+    for (const t of templates) {
+      const modelBadge = t.model ? ` · model: ${t.model}` : ''
+      const actionNote = t.action ? ` → auto-starts ${t.action}` : ''
+      lines.push(`• 🎯 \`${t.name}:\` <topic>${modelBadge}${actionNote}`)
+    }
+  }
+
+  const text = lines.join('\n')
   await safeSend(msg.channelId, text, { replyTo: msg.id })
+}
+
+export async function handleTemplatesIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📑').catch(() => {})
+  const templates = listTemplates()
+  if (templates.length === 0) {
+    try { await gateway.send(msg.channelId, 'No templates configured.', { replyTo: msg.id }) } catch {}
+    return
+  }
+  const lines = ['**Templates**', '']
+  for (const t of templates) {
+    const preview = t.prompt.length > 80 ? t.prompt.slice(0, 77) + '...' : t.prompt
+    lines.push(`**\`${t.name}:\`**${t.model ? ` (model: ${t.model})` : ''}${t.action ? ` → ${t.action}` : ''}`)
+    lines.push(`> ${preview}`)
+    lines.push(`Usage: \`${t.name}: <your topic>\``)
+    lines.push('')
+  }
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }
 
 // ---------------------------------------------------------------------------

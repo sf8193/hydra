@@ -158,13 +158,42 @@ async function refreshListDisplay(): Promise<void> {
 // Command handlers
 // ---------------------------------------------------------------------------
 
+function parseListFilter(content: string): string {
+  return content
+    .replace(/^(?:\/sessions|list sessions|sessions)\s*/i, '')
+    .trim()
+    .toLowerCase()
+}
+
+function applySessionFilter(sessions: SessionInfo[], filter: string): SessionInfo[] {
+  if (!filter) return sessions
+  const EXACT_KEYWORDS: Record<string, (s: SessionInfo) => boolean> = {
+    factory: s => !!s.isFactoryBuilder,
+    fork: s => s.originType === 'fork',
+    handoff: s => s.originType === 'handoff',
+    resurrect: s => s.originType === 'resurrect',
+    dead: s => !isAlive(s),
+  }
+  if (EXACT_KEYWORDS[filter]) return sessions.filter(EXACT_KEYWORDS[filter])
+  return sessions.filter(s => {
+    const model = s.capabilities?.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') ?? ''
+    return s.tmuxName.toLowerCase().includes(filter) || model.toLowerCase().includes(filter)
+  })
+}
+
 export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '📊').catch(() => {})
-  const liveSessions = [...registry.values()].filter(s => isAlive(s))
+  const filter = parseListFilter(msg.content)
+  const allSessions = [...registry.values()].filter(s => isAlive(s))
+  const liveSessions = filter ? applySessionFilter(allSessions, filter) : allSessions
+
   if (liveSessions.length === 0) {
-    try { await gateway.send(msg.channelId, 'No active sessions.', { replyTo: msg.id }) } catch {}
+    const emptyMsg = filter ? `No sessions matching "${filter}".` : 'No active sessions.'
+    try { await gateway.send(msg.channelId, emptyMsg, { replyTo: msg.id }) } catch {}
     return
   }
+
+  const filterHeader = filter ? `**Filtered: "${filter}"** — ${liveSessions.length} session(s)\n` : ''
 
   const now = Date.now()
   const all = liveSessions.sort((a, b) => b.lastActive - a.lastActive)
@@ -174,7 +203,7 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   // Phase 1: post immediately without latest-message info, grouped by time
   let sentMsg: { id: string } | undefined
   try {
-    sentMsg = await gateway.send(msg.channelId, buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
+    sentMsg = await gateway.send(msg.channelId, filterHeader + buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
   } catch { return }
 
   // Track for auto-refresh on lifecycle events (FILO — most recent first)
@@ -197,10 +226,40 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   }))
 
   const enriched = entries.map((e, i) => ({ ...e, latestLine: latestInfos[i] }))
-  const richText = buildListOutput(enriched, now)
+  const richText = filterHeader + buildListOutput(enriched, now)
   if (sentMsg) {
     try { await gateway.edit(msg.channelId, sentMsg.id, richText) } catch {}
   }
+}
+
+const HISTORY_LIMIT = 10
+
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+  const now = Date.now()
+  const dead = [...registry.values()]
+    .filter(s => !isAlive(s) && !s.isJoinMember)
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, HISTORY_LIMIT)
+
+  if (dead.length === 0) {
+    try { await gateway.send(msg.channelId, 'No completed sessions found.', { replyTo: msg.id }) } catch {}
+    return
+  }
+
+  const lines = [`**Recent Sessions** (${dead.length})`]
+  for (const s of dead) {
+    const thread = threadRegistry.get(s.threadId)
+    const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
+    const runtime = formatDuration(s.lastActive - s.createdAt)
+    const endedAgo = formatDuration(now - s.lastActive)
+    const emoji = sessionEmoji(s.tmuxName)
+    const url = thread?.threadUrl
+    const nameLink = url ? `[\`${s.tmuxName}\`](${url})` : `\`${s.tmuxName}\``
+    lines.push(`${emoji} ${nameLink} — ${desc} · ran ${runtime} · ended ${endedAgo} ago`)
+  }
+
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }
 
 export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
@@ -326,4 +385,33 @@ export async function handleProtocolsIntercept(msg: InboundMessage): Promise<voi
   }
 
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
+}
+
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+  const HISTORY_LIMIT = 10
+  const now = Date.now()
+  const dead = [...registry.values()]
+    .filter(s => !isAlive(s) && !s.isJoinMember)
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, HISTORY_LIMIT)
+
+  if (dead.length === 0) {
+    try { await gateway.send(msg.channelId, 'No completed sessions found.', { replyTo: msg.id }) } catch {}
+    return
+  }
+
+  const histLines = [`**Recent Sessions** (${dead.length})`]
+  for (const s of dead) {
+    const thread = threadRegistry.get(s.threadId)
+    const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
+    const duration = formatDuration(s.lastActive - s.createdAt)
+    const age = formatDuration(now - s.lastActive)
+    const emoji = sessionEmoji(s.tmuxName)
+    const url = thread?.threadUrl
+    const nameLink = url ? `[\`${s.tmuxName}\`](${url})` : `\`${s.tmuxName}\``
+    histLines.push(`${emoji} ${nameLink} — ${desc} · ran ${duration} · ended ${age} ago`)
+  }
+
+  await safeSend(msg.channelId, histLines.join('\n'), { replyTo: msg.id })
 }

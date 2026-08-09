@@ -16,7 +16,7 @@ export interface EventMap {
   'review:round': { threadId: string; round: number; totalRounds: number; text: string }
 }
 
-type Listener<T> = (payload: T) => void
+type Listener<T> = (payload: T) => void | Promise<void>
 type LabeledListener = { listener: Listener<any>; label: string }
 
 const listeners = new Map<string, Set<LabeledListener>>()
@@ -37,7 +37,12 @@ export function emit<K extends keyof EventMap>(event: K, payload: EventMap[K]): 
   // before the outer emit resumes delivering to remaining listeners.
   for (const { listener, label } of [...set]) {
     try {
-      listener(payload)
+      const result = listener(payload)
+      if (result && typeof result.then === 'function') {
+        result.then(undefined, (err: unknown) => {
+          process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' rejected: ${err}\n`)
+        })
+      }
     } catch (err) {
       process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' threw: ${err}\n`)
     }

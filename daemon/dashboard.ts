@@ -29,6 +29,9 @@ type SessionRow = {
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
+  originType?: string
+  isFactoryBuilder?: boolean
+  model?: string
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -45,6 +48,10 @@ function getActiveSessions(): SessionRow[] {
     const url = s.lastReplyId
       ? gateway.getMessageUrl(s.threadId, s.lastReplyId) || s.threadUrl || ''
       : s.threadUrl ?? ''
+    const rawModel = s.capabilities?.model
+    const model = rawModel
+      ? rawModel.replace(/^claude-/, '').replace(/\[1m\]$/, '')
+      : undefined
     rows.push({
       name: s.tmuxName,
       sessionId: s.sessionId,
@@ -57,6 +64,9 @@ function getActiveSessions(): SessionRow[] {
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
+      originType: s.originType,
+      isFactoryBuilder: s.isFactoryBuilder,
+      model,
     })
   }
 
@@ -67,9 +77,21 @@ function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*~`]/g, '')
 }
 
+function buildOriginBadge(s: SessionRow): string {
+  if (s.isFactoryBuilder) return '🏭 factory'
+  switch (s.originType) {
+    case 'fork': return '🍴 fork'
+    case 'handoff': return '🤝 handoff'
+    case 'resurrect': return '🫀 resurrect'
+    default: return '🚀 spawn'
+  }
+}
+
 function buildSessionText(s: SessionRow): string {
   const link = s.url ? `<${s.url}|${s.name}>` : s.name
-  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_`
+  const origin = buildOriginBadge(s)
+  const modelBadge = s.model ? ` · ${s.model}` : ''
+  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_ · ${origin}${modelBadge}`
 }
 
 
@@ -147,15 +169,16 @@ async function doUpdate(): Promise<void> {
   const access = loadAccess()
   if (!access.allowFrom.length) return
 
-  const userId = access.allowFrom[0]
   const sessions = getActiveSessions()
   const blocks = buildHomeBlocks(sessions)
 
-  try {
-    await (gateway as any).publishHomeTab(userId, blocks)
-  } catch (err) {
-    process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
-  }
+  await Promise.allSettled(access.allowFrom.map(async userId => {
+    try {
+      await (gateway as any).publishHomeTab(userId, blocks)
+    } catch (err) {
+      process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
+    }
+  }))
 }
 
 export function refreshDashboard(): void {

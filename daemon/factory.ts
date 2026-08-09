@@ -13,15 +13,16 @@
 import { randomBytes } from 'crypto'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'fs'
+import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
 import { registry, threadRegistry } from './sessions.js'
-import { safeSend } from './util.js'
+import { safeSend, atomicWriteFileSync } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
+import { STATE_DIR } from './config.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,6 +94,75 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// State persistence — survive daemon restarts
+// ---------------------------------------------------------------------------
+
+const BUILDS_STATE_FILE = join(STATE_DIR, 'factory-builds.json')
+
+type PersistedFactoryState = {
+  ticketCounter: number
+  builds: FactoryBuildState[]
+}
+
+function persistFactoryState(): void {
+  try {
+    const data: PersistedFactoryState = {
+      ticketCounter,
+      builds: [...builds.values()],
+    }
+    atomicWriteFileSync(BUILDS_STATE_FILE, JSON.stringify(data) + '\n')
+  } catch (err) {
+    process.stderr.write(`daemon: factory: persist state failed: ${err}\n`)
+  }
+}
+
+/**
+ * Restore factory state on daemon startup. Call after registry is booted.
+ * Marks builds whose builder sessions are no longer alive as failed.
+ */
+export function restoreFactoryState(): void {
+  try {
+    const raw = readFileSync(BUILDS_STATE_FILE, 'utf8')
+    const data = JSON.parse(raw) as PersistedFactoryState
+
+    let restored = 0
+    let stale = 0
+
+    for (const state of data.builds) {
+      // For active builds, check if the builder session still exists
+      if (state.phase === 'building' || state.phase === 'reviewing') {
+        const builderAlive = state.builderSessionId && registry.get(state.builderSessionId)
+        if (!builderAlive) {
+          process.stderr.write(`daemon: factory: stale build ${state.ticket} (phase=${state.phase}, builder gone) — marking failed\n`)
+          state.phase = 'failed'
+          stale++
+          continue
+        }
+      }
+
+      // Restore the build into memory maps
+      builds.set(state.ticket, state)
+      if (state.builderSessionId) builderSessionToTicket.set(state.builderSessionId, state.ticket)
+      if (state.builderThreadId) builderThreadToTicket.set(state.builderThreadId, state.ticket)
+      restored++
+    }
+
+    // Restore counter — must be strictly greater than any existing ticket number
+    if (typeof data.ticketCounter === 'number' && data.ticketCounter > ticketCounter) {
+      ticketCounter = data.ticketCounter
+    }
+
+    if (restored > 0 || stale > 0) {
+      process.stderr.write(`daemon: factory: restored ${restored} active build(s), ${stale} stale (marked failed)\n`)
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(`daemon: factory: restore state failed: ${err}\n`)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Model resolution — difficulty ladder with auto-fallback
 // ---------------------------------------------------------------------------
 
@@ -101,7 +171,7 @@ export type Difficulty = (typeof VALID_DIFFICULTIES)[number]
 
 // Hardcoded per tier — consistent, no env-var surprise.
 // Easy = sonnet builds, opus reviews (Sam's request).
-function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
+export function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
   switch (difficulty) {
     case 'easy':   return { builder: 'claude-sonnet-4-6[1m]',  reviewer: 'claude-opus-4-6[1m]' }
     case 'medium': return { builder: 'claude-opus-4-6[1m]',    reviewer: 'claude-opus-4-8[1m]' }
@@ -109,7 +179,7 @@ function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewe
   }
 }
 
-function resolveModels(
+export function resolveModels(
   difficulty: Difficulty,
   builderRaw?: string,
   reviewerRaw?: string,
@@ -239,6 +309,7 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     worktree,
   }
   builds.set(ticket, state)
+  persistFactoryState()
 
   // Spawn builder async — don't await
   void spawnBuilder(state, pmInfo.claudeSessionId, pmInfo.tmuxName).catch(err => {
@@ -274,6 +345,7 @@ export function factoryRetry(
   state.phase = 'building'
   state.retryCount++
   syncPhaseToRegistry(state)
+  persistFactoryState()
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
@@ -576,11 +648,9 @@ async function spawnBuilder(
   state.builderThreadId = result.threadId
   builderSessionToTicket.set(result.sessionId, state.ticket)
   builderThreadToTicket.set(result.threadId, state.ticket)
+  persistFactoryState()
 
   // Stamp registry fields for sweep notifications + phase-aware restart messages.
-  // NOTE: these are informational only — the in-memory `builds` map is NOT reconstructed
-  // from registry on restart. Factory tools (retry/accept/abandon) will not work after
-  // restart; the PM must use peek_session + kill_session directly.
   const builderInfo = registry.get(result.sessionId)
   if (builderInfo) {
     builderInfo.isFactoryBuilder = true
@@ -602,6 +672,7 @@ function onBuilderDone(sessionId: string, doneText: string): boolean {
 
   state.phase = 'reviewing'
   syncPhaseToRegistry(state)
+  persistFactoryState()
   process.stderr.write(`daemon: factory: builder posted [done] for ticket ${state.ticket}, starting review\n`)
 
   // Capture diff and PR concurrently before starting review.
@@ -714,6 +785,7 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   state.reviewed = true
   if (summaryText) state.reviewSummary = summaryText
   syncPhaseToRegistry(state)
+  persistFactoryState()
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
   // prUrl/diffGistUrl were captured at [done] time — use synchronously, no race.
@@ -782,6 +854,7 @@ function cleanupState(ticket: string): void {
   if (state.builderSessionId) builderSessionToTicket.delete(state.builderSessionId)
   if (state.builderThreadId) builderThreadToTicket.delete(state.builderThreadId)
   builds.delete(ticket)
+  persistFactoryState()
 }
 
 // ---------------------------------------------------------------------------
