@@ -392,7 +392,10 @@ function syncPhaseToRegistry(state: FactoryBuildState): void {
     const info = registry.get(state.builderSessionId)
     if (info) {
       info.factoryPhase = state.phase
-      registry.debouncedPersist()
+      // Use persist() not debouncedPersist() — factoryPhase is read on
+      // daemon restart to reconstruct the orphan-sweep message; a crash in
+      // the 2s debounce window would lose the phase and send the wrong message.
+      registry.persist()
     }
   }
 }
