@@ -387,31 +387,3 @@ export async function handleProtocolsIntercept(msg: InboundMessage): Promise<voi
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }
 
-export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
-  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
-  const HISTORY_LIMIT = 10
-  const now = Date.now()
-  const dead = [...registry.values()]
-    .filter(s => !isAlive(s) && !s.isJoinMember)
-    .sort((a, b) => b.lastActive - a.lastActive)
-    .slice(0, HISTORY_LIMIT)
-
-  if (dead.length === 0) {
-    try { await gateway.send(msg.channelId, 'No completed sessions found.', { replyTo: msg.id }) } catch {}
-    return
-  }
-
-  const histLines = [`**Recent Sessions** (${dead.length})`]
-  for (const s of dead) {
-    const thread = threadRegistry.get(s.threadId)
-    const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
-    const duration = formatDuration(s.lastActive - s.createdAt)
-    const age = formatDuration(now - s.lastActive)
-    const emoji = sessionEmoji(s.tmuxName)
-    const url = thread?.threadUrl
-    const nameLink = url ? `[\`${s.tmuxName}\`](${url})` : `\`${s.tmuxName}\``
-    histLines.push(`${emoji} ${nameLink} — ${desc} · ran ${duration} · ended ${age} ago`)
-  }
-
-  await safeSend(msg.channelId, histLines.join('\n'), { replyTo: msg.id })
-}
