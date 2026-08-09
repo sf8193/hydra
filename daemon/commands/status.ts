@@ -34,7 +34,7 @@ function listTimeBucket(lastActiveMs: number, now: number): string {
   return `${daysDiff} days ago`
 }
 
-function formatSessionEntry(e: SessionEntry): string {
+function formatSessionEntry(e: SessionEntry, indent?: string, connector?: string): string {
   const s = e.session
   const thread = threadRegistry.get(s.threadId)
   const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
@@ -45,20 +45,51 @@ function formatSessionEntry(e: SessionEntry): string {
   const emoji = sessionEmoji(s.tmuxName)
   const url = thread?.threadUrl
   const title = url ? `[**${desc}**](${url})` : `**${desc}**`
-  const provenanceEmoji = s.originType === 'handoff' ? '🤝' : s.originType === 'resurrect' ? '🫀' : '🍴'
-  const provenance = s.originFrom ? ` ← ${provenanceEmoji} (${s.originFrom})` : ''
+  const prefix = connector ? `${connector} ` : ''
+  const childIndent = indent ?? ''
   const lines = [
-    `${emoji} \`${s.tmuxName}\`${badge}${provenance}`,
-    `- ${title}`,
-    `- ${ctx} (${msgCount} msgs · ${duration})`,
+    `${childIndent}${prefix}${emoji} \`${s.tmuxName}\`${badge}`,
+    `${childIndent}  - ${title}`,
+    `${childIndent}  - ${ctx} (${msgCount} msgs · ${duration})`,
   ]
-  if (e.latestLine) lines.push(`- ${e.latestLine}`)
+  if (e.latestLine) lines.push(`${childIndent}  - ${e.latestLine}`)
   return lines.join('\n')
 }
 
 function buildListOutput(list: SessionEntry[], now: number): string {
-  const buckets = new Map<string, SessionEntry[]>()
+  // Build name → entry map for parent lookup
+  const byName = new Map(list.map(e => [e.session.tmuxName, e]))
+
+  // Separate roots (no parent in this list) from children
+  const roots: SessionEntry[] = []
+  const childrenOf = new Map<string, SessionEntry[]>()
+
   for (const e of list) {
+    const parentName = e.session.originFrom
+    if (parentName && byName.has(parentName)) {
+      const arr = childrenOf.get(parentName) ?? []
+      arr.push(e)
+      childrenOf.set(parentName, arr)
+    } else {
+      roots.push(e)
+    }
+  }
+
+  // Render an entry and its subtree
+  function renderTree(e: SessionEntry, indent: string, connector: string): string {
+    const parts = [formatSessionEntry(e, indent, connector)]
+    const children = childrenOf.get(e.session.tmuxName) ?? []
+    for (let i = 0; i < children.length; i++) {
+      const isLast = i === children.length - 1
+      const childConnector = isLast ? '└─' : '├─'
+      const childIndent = indent + (connector === '└─' ? '    ' : '│   ')
+      parts.push(renderTree(children[i], childIndent, childConnector))
+    }
+    return parts.join('\n')
+  }
+
+  const buckets = new Map<string, SessionEntry[]>()
+  for (const e of roots) {
     const bucket = listTimeBucket(e.session.lastActive, now)
     const arr = buckets.get(bucket) ?? []
     arr.push(e)
@@ -66,7 +97,8 @@ function buildListOutput(list: SessionEntry[], now: number): string {
   }
   const sections: string[] = []
   for (const [label, items] of buckets) {
-    sections.push(`### ${label}\n\n${items.map(formatSessionEntry).join('\n\n')}`)
+    const rendered = items.map(e => renderTree(e, '', '')).join('\n\n')
+    sections.push(`### ${label}\n\n${rendered}`)
   }
   return sections.join('\n')
 }
