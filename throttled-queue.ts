@@ -1,4 +1,51 @@
 // ---------------------------------------------------------------------------
+// SerialRateLimiter — serializes promise-returning calls with a min interval.
+//
+// Unlike ThrottledQueue, this preserves return values and call order. Each
+// call is queued and executed after the previous one completes, with a
+// minimum delay of drainMs between completions. Designed for Slack API calls
+// where we need both rate-limiting and the return value (e.g., message ts).
+// ---------------------------------------------------------------------------
+
+export class SerialRateLimiter {
+  private queue: Array<{
+    fn: () => Promise<unknown>
+    resolve: (v: unknown) => void
+    reject: (e: unknown) => void
+  }> = []
+  private running = false
+  private lastFinishedAt = 0
+
+  constructor(private minIntervalMs: number) {}
+
+  add<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ fn: fn as () => Promise<unknown>, resolve, reject })
+      if (!this.running) this.drain()
+    })
+  }
+
+  private drain(): void {
+    const next = this.queue.shift()
+    if (!next) { this.running = false; return }
+
+    this.running = true
+    const delay = Math.max(0, this.minIntervalMs - (Date.now() - this.lastFinishedAt))
+    setTimeout(async () => {
+      try {
+        const result = await next.fn()
+        next.resolve(result)
+      } catch (err) {
+        next.reject(err)
+      } finally {
+        this.lastFinishedAt = Date.now()
+        this.drain()
+      }
+    }, delay)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ThrottledQueue — coalescing queue with retry.
 //
 // Coalesces by key (latest value wins), drains one item per interval,

@@ -8,6 +8,7 @@
 
 import { App, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { SerialRateLimiter } from './throttled-queue.js'
 import { sanitizeFilename, COUNT_EMOJI } from './gateway.js'
 import type {
   ChatGateway,
@@ -78,6 +79,9 @@ export class SlackGateway implements ChatGateway {
   private reconnectAttempts = 0
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
+  // Rate limiter: Slack tier 4 (chat.postMessage/chat.update) allows ~1/sec per channel.
+  // We use a single global limiter at 1200ms — conservative but safe across channels.
+  private sendRateLimiter = new SerialRateLimiter(1200)
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
 
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
@@ -427,7 +431,7 @@ export class SlackGateway implements ChatGateway {
       payload.unfurl_media = false
     }
 
-    const result = await this.app.client.chat.postMessage(payload as any)
+    const result = await this.sendRateLimiter.add(() => this.app!.client.chat.postMessage(payload as any))
     const sentId = result.ts!
     this.noteSent(sentId)
     return { id: sentId, channelId }
@@ -438,7 +442,7 @@ export class SlackGateway implements ChatGateway {
     const { channel } = this.parseChannelId(channelId)
     const payload: Record<string, unknown> = { channel, ts: messageId }
     applyMessageBody(payload, text, false)
-    const result = await this.app.client.chat.update(payload as any)
+    const result = await this.sendRateLimiter.add(() => this.app!.client.chat.update(payload as any))
     return result.ts!
   }
 
