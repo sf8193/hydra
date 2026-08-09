@@ -392,7 +392,7 @@ function syncPhaseToRegistry(state: FactoryBuildState): void {
     const info = registry.get(state.builderSessionId)
     if (info) {
       info.factoryPhase = state.phase
-      registry.debouncedPersist()
+      registry.persist()
     }
   }
 }
