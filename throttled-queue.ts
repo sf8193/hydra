@@ -1,4 +1,47 @@
 // ---------------------------------------------------------------------------
+// SerialQueue — FIFO rate-limited queue for sequential API calls.
+//
+// Each add() call enqueues a promise-returning function and returns a Promise
+// that resolves/rejects with the function's result. Calls are executed one at
+// a time with at least `minIntervalMs` between the START of each call. This
+// limits throughput to 1/minIntervalMs without coalescing (all calls go through).
+// ---------------------------------------------------------------------------
+
+export class SerialQueue {
+  private queue: Array<() => Promise<unknown>> = []
+  private lastRunAt = 0
+  private timer: ReturnType<typeof setTimeout> | null = null
+
+  constructor(private minIntervalMs: number) {}
+
+  add<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.queue.push(async () => {
+        try { resolve(await fn()) } catch (err) { reject(err as Error) }
+      })
+      this.schedule()
+    })
+  }
+
+  private schedule(): void {
+    if (this.timer !== null) return
+    const now = Date.now()
+    const delay = Math.max(0, this.lastRunAt + this.minIntervalMs - now)
+    this.timer = setTimeout(() => { this.run() }, delay)
+  }
+
+  private run(): void {
+    this.timer = null
+    const fn = this.queue.shift()
+    if (!fn) return
+    this.lastRunAt = Date.now()
+    fn().finally(() => {
+      if (this.queue.length > 0) this.schedule()
+    })
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ThrottledQueue — coalescing queue with retry.
 //
 // Coalesces by key (latest value wins), drains one item per interval,
