@@ -37,6 +37,27 @@ async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
   return chatId
 }
 
+function friendlySpawnError(msg: string): string {
+  const base = `Spawn failed: ${msg}`
+  if (/not a git repo|not a git repository/i.test(msg))
+    return `${base}\n_Check that the target repo directory exists at \`$SPAWN_CWD/<repo>\`._`
+  if (/SPAWN_CWD|spawn.cwd/i.test(msg))
+    return `${base}\n_Set \`SPAWN_CWD\` in your daemon \`.env\` to the working directory for sessions._`
+  if (/failed to spawn tmux|tmux.*new-session|tmux.*not found/i.test(msg))
+    return `${base}\n_Is tmux installed? \`brew install tmux\`_`
+  if (/thread has a live session/i.test(msg))
+    return `${base}\n_Kill the existing session first: type \`kill\` in the thread, or spawn in a new thread._`
+  if (/worktree.*already\|already.*worktree|worktree.*exist/i.test(msg))
+    return `${base}\n_A worktree for that name already exists: \`git worktree list\` to inspect, or \`git worktree prune\` to clean up._`
+  if (/no such file or directory.*SPAWN_CWD|ENOENT.*spawn.cwd/i.test(msg))
+    return `${base}\n_\`$SPAWN_CWD\` points to a directory that doesn't exist. Check your daemon config._`
+  if (/EACCES|permission denied/i.test(msg))
+    return `${base}\n_Permission denied — check directory ownership or file permissions._`
+  if (/no session name/i.test(msg))
+    return `${base}\n_Out of session names — kill some sessions first: \`list sessions\`._`
+  return base
+}
+
 async function spawnAndNotify(
   msg: InboundMessage,
   topic: string,
@@ -102,7 +123,7 @@ async function spawnAndNotify(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn failed: ${errMsg}\n`)
-    try { await gateway.send(msg.channelId, `Spawn failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+    try { await gateway.send(msg.channelId, friendlySpawnError(errMsg), { replyTo: msg.id }) } catch {}
   }
 }
 
