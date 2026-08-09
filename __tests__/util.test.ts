@@ -46,11 +46,12 @@ describe('chunk — length mode', () => {
     expect(result.join('')).toBe(t)
   })
 
-  test('splits at space boundary when possible', () => {
+  test('hard-cuts at exact limit (no word-boundary search)', () => {
     const t = 'hello world this is longer than limit'
     const result = chunk(t, 12, 'length')
-    // length mode doesn't split at spaces, cuts hard at limit
-    expect(result[0].length).toBeLessThanOrEqual(12)
+    // length mode hard-cuts at limit — no space/paragraph search
+    expect(result[0].length).toBe(12)
+    expect(result[0]).toBe(t.slice(0, 12))
   })
 
   test('empty string returns single empty chunk', () => {
@@ -84,8 +85,10 @@ describe('chunk — newline mode', () => {
   test('preserves all content across chunks', () => {
     const t = 'aaaa\n\nbbbb\n\ncccc\n\ndddd'
     const result = chunk(t, 10, 'newline')
-    // Every piece of content should appear somewhere
+    // Every segment must appear in some chunk
     expect(result.some(c => c.includes('aaaa'))).toBe(true)
+    expect(result.some(c => c.includes('bbbb'))).toBe(true)
+    expect(result.some(c => c.includes('cccc'))).toBe(true)
     expect(result.some(c => c.includes('dddd'))).toBe(true)
   })
 })
@@ -99,12 +102,12 @@ describe('chunk — markdown mode', () => {
   test('closes open code fence when splitting', () => {
     const t = '```js\nconst x = 1;\nconst y = 2;\nconst z = 3;\n```'
     const result = chunk(t, 25, 'markdown')
-    if (result.length > 1) {
-      // First chunk should close the fence
-      expect(result[0]).toMatch(/```$/)
-      // Second chunk should reopen
-      expect(result[1]).toMatch(/^```/)
-    }
+    // Must actually split — if not, the fence repair test is a no-op
+    expect(result.length).toBeGreaterThan(1)
+    // First chunk should close the fence
+    expect(result[0]).toMatch(/```$/)
+    // Second chunk should reopen
+    expect(result[1]).toMatch(/^```/)
   })
 
   test('prefers splitting at paragraph breaks', () => {
@@ -148,6 +151,8 @@ describe('parseDuration', () => {
   test('rejects empty string', () => expect(parseDuration('')).toBeNull())
   test('rejects text', () => expect(parseDuration('abc')).toBeNull())
   test('rejects number with spaces', () => expect(parseDuration('5 m')).toBeNull())
+  test('rejects negative number', () => expect(parseDuration('-5m')).toBeNull())
+  test('leading zeros parse as integer (007s → 7000ms)', () => expect(parseDuration('007s')).toBe(7_000))
 
   test('MAX_DURATION_MS is 24h', () => expect(MAX_DURATION_MS).toBe(24 * 3_600_000))
 })
@@ -198,6 +203,12 @@ describe('extractPhaseBudget', () => {
     expect(r.topic).toBe('phase-budget 5m')
     expect(r.budgetMs).toBeUndefined()
   })
+
+  test('double flag: first match wins, second flag stays in topic', () => {
+    const r = extractPhaseBudget('task --phase-budget 5m --phase-budget 10m')
+    expect(r.budgetMs).toBe(300_000) // first match
+    expect(r.topic).toContain('--phase-budget 10m') // second flag remains
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -218,6 +229,10 @@ describe('formatDuration', () => {
   test('1 day exact', () => expect(formatDuration(86_400_000)).toBe('1d'))
   test('1d 12h', () => expect(formatDuration(86_400_000 + 12 * 3_600_000)).toBe('1d 12h'))
   test('2 days exact', () => expect(formatDuration(2 * 86_400_000)).toBe('2d'))
+  test('negative input returns negative minutes (no guard)', () => {
+    // Callers always pass Date.now() - pastTs (non-negative), but document behavior
+    expect(formatDuration(-1)).toBe('-1m')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -260,6 +275,14 @@ describe('transformProtocolTag', () => {
   test('tag case insensitive', () => {
     const result = transformProtocolTag('[CRITIC→OWNER] text')
     expect(result).toBe('text')
+  })
+
+  test('ASCII arrow -> does NOT match (strict U+2192 only)', () => {
+    expect(transformProtocolTag('[critic->owner] text')).toBe('[critic->owner] text')
+  })
+
+  test('double arrow => does NOT match', () => {
+    expect(transformProtocolTag('[critic=>owner] text')).toBe('[critic=>owner] text')
   })
 
   test('tag with hyphenated role name', () => {
