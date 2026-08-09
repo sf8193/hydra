@@ -283,6 +283,50 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
 // Protocols — show active review/build/design sessions
 // ---------------------------------------------------------------------------
 
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, 10)
+
+  if (threads.length === 0) {
+    try { await gateway.send(msg.channelId, '_No completed sessions._', { replyTo: msg.id }) } catch {}
+    return
+  }
+
+  const now = Date.now()
+  const lines: string[] = ['**Recent Sessions**', '']
+
+  for (const t of threads) {
+    // Use the most recently ended session entry for metadata
+    const endedEntries = t.sessionHistory.filter(h => h.endedAt)
+    if (endedEntries.length === 0) continue
+    const last = endedEntries[endedEntries.length - 1]
+
+    const duration = last.endedAt && last.startedAt
+      ? formatDuration(last.endedAt - last.startedAt)
+      : '?'
+    const msgs = last.messageCount ?? t.totalMessages ?? 0
+    const model = last.model
+      ? last.model.replace(/^claude-/, '').replace(/\[1m\]$/, '')
+      : '?'
+    const desc = (t.description ?? t.topic ?? 'untitled').slice(0, 80)
+    const emoji = sessionEmoji(last.tmuxName)
+    const link = t.threadUrl
+      ? `[${emoji} \`${last.tmuxName}\`](${t.threadUrl})`
+      : `${emoji} \`${last.tmuxName}\``
+    const age = formatDuration(now - (last.endedAt ?? t.lastActive))
+
+    lines.push(`${link} — ${desc}`)
+    lines.push(`  _${duration} · ${msgs} msgs · \`${model}\` · ended ${age} ago_`)
+    lines.push('')
+  }
+
+  await safeSend(msg.channelId, lines.join('\n').trimEnd(), { replyTo: msg.id })
+}
+
 export async function handleProtocolsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})
 
