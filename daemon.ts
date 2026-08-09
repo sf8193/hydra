@@ -248,14 +248,6 @@ try {
   const bridgeSrc = join(import.meta.dir, 'bridge.ts')
   const discordCache = join(CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord')
   const daemonConfig = JSON.stringify({ socket: SOCK_PATH, platform: PLATFORM })
-  const mcpJson = JSON.stringify({
-    mcpServers: {
-      discord: {
-        command: 'bun',
-        args: ['run', '--cwd', '${CLAUDE_PLUGIN_ROOT}', '--shell=bun', '--silent', 'start'],
-      },
-    },
-  }, null, 2)
   const pluginJson = JSON.stringify({
     name: 'discord',
     description: 'Discord channel for Claude Code — messaging bridge with built-in access control.',
@@ -267,6 +259,14 @@ try {
     const targetDir = join(discordCache, d.name)
     copyFileSync(bridgeSrc, join(targetDir, 'server.ts'))
     writeFileSync(join(targetDir, `daemon-${PLATFORM}.json`), daemonConfig)
+    const mcpJson = JSON.stringify({
+      mcpServers: {
+        discord: {
+          command: 'bun',
+          args: ['run', '--cwd', targetDir, '--shell=bun', '--silent', 'start'],
+        },
+      },
+    }, null, 2)
     writeFileSync(join(targetDir, '.mcp.json'), mcpJson)
     mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
     writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), pluginJson)
