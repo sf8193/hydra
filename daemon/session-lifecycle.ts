@@ -337,18 +337,9 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       tmuxName: info.tmuxName,
     })
 
-    setTimeout(() => {
-      try {
-        // Only kill if the tmux session isn't owned by a new session (name recycling)
-        const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName)
-        if (!currentOwner) {
-          execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
-          execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
-          process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
-        }
-      } catch {}
-      killsInProgress.delete(info.sessionId)
-    }, 3000)
+    // Clear kill guard after a short delay — no deferred re-kill.
+    // The periodic session health check catches any orphaned tmux sessions.
+    setTimeout(() => killsInProgress.delete(info.sessionId), 1000)
   } catch (err) {
     killsInProgress.delete(info.sessionId)
     throw err
@@ -622,16 +613,12 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     const wtDir = resolve(repoDir, '..', `.worktrees`, `${repoName}-${tmuxName}`)
     const branch = `wt/${tmuxName}`
 
-    // Clean up stale worktree/branch from previous runs
-    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
-      process.stderr.write(`daemon: spawn ${tmuxName}: stale worktree pre-cleanup failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
-    }
-    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
-      process.stderr.write(`daemon: spawn ${tmuxName}: worktree prune failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
-    }
-    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch (err) {
-      process.stderr.write(`daemon: spawn ${tmuxName}: stale branch delete failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
-    }
+    // Clean up stale worktree/branch from previous runs.
+    // Failures here are expected on first-time spawns (nothing to clean up).
+    // Only log when the target actually existed — reduces noise on clean spawns.
+    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch {}
 
     // Start worktree from current branch (preserves feature-branch context for forks).
     // Falls back to default branch (main/master) if HEAD is detached.
@@ -1151,21 +1138,23 @@ export function startStaleWorktreeScanner(): void {
       // .worktrees lives alongside the repo dirs, one level up from each repo's worktree dir
       // Layout: <spawnCwd>/<repo>/../.worktrees/<repo>-<sessionName>
       // We scan <spawnCwd>/.worktrees if it exists (common layout), then per-repo layouts.
-      const worktreesRoot = resolve(spawnCwd, '..', '.worktrees')
+      // Worktrees land at resolve(repoDir, '..', '.worktrees', ...) where
+      // repoDir = resolve(spawnCwd, repoName). So the .worktrees dir is
+      // resolve(spawnCwd, '.worktrees') — a sibling of each repo dir.
+      const worktreesRoot = resolve(spawnCwd, '.worktrees')
       if (!existsSync(worktreesRoot)) return
 
       const entries = readdirSync(worktreesRoot, { withFileTypes: true })
       for (const entry of entries) {
         if (!entry.isDirectory()) continue
         const wtPath = join(worktreesRoot, entry.name)
-        // Extract session name from worktree dir name (format: <repo>-<sessionName>)
-        const lastDash = entry.name.lastIndexOf('-')
-        if (lastDash < 0) continue
-        const sessionName = entry.name.slice(lastDash + 1)
-
-        const owner = [...registry.values()].find(s => s.worktreePath === wtPath || s.tmuxName === sessionName)
+        // Match by full worktree path — reliable regardless of naming conventions.
+        // The tmuxName-based fallback is intentionally omitted because name
+        // parsing (format: <repo>-<sessionName>) is fragile when repo or session
+        // names contain dashes.
+        const owner = [...registry.values()].find(s => s.worktreePath === wtPath)
         if (!owner) {
-          process.stderr.write(`daemon: stale-worktree-scan: orphaned worktree detected: ${wtPath} (no active session "${sessionName}") — remove manually if safe\n`)
+          process.stderr.write(`daemon: stale-worktree-scan: orphaned worktree detected: ${wtPath} (no active session) — remove manually if safe\n`)
         }
       }
     } catch (err) {
