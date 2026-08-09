@@ -19,6 +19,7 @@ import {
   transformProtocolTag,
   chunk,
   fallbackDescription,
+  formatSpawnLine,
 } from '../daemon/util.js'
 
 // ---------------------------------------------------------------------------
@@ -183,6 +184,14 @@ describe('extractPhaseBudget', () => {
     expect(r.topic).toBe('')
     expect(r.budgetMs).toBe(300_000)
   })
+
+  test('duplicate flags — only first is consumed, second stays in topic', () => {
+    // String.match() returns first match; second flag remains in topic string.
+    // This documents current behavior rather than asserting it's ideal.
+    const r = extractPhaseBudget('work --phase-budget 5m --phase-budget 10m end')
+    expect(r.budgetMs).toBe(300_000)        // first flag consumed
+    expect(r.topic).toContain('--phase-budget 10m')  // second stays
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -260,7 +269,8 @@ describe('chunk — length mode', () => {
   test('all chunks concatenate to original (length mode)', () => {
     const text = 'ab cd ef gh ij kl mn op qr st uv wx yz'
     const result = chunk(text, 10, 'length')
-    expect(result.join('')).toBe(text.replace(/\n+/g, ''))
+    // length mode never strips content — rejoin without separator restores original
+    expect(result.join('')).toBe(text)
   })
 })
 
@@ -304,15 +314,20 @@ describe('chunk — markdown mode', () => {
   })
 
   test('closes open code fence when splitting', () => {
-    const text = '```js\nconst x = 1;\nconst y = 2;\nconst z = 3;\n```'
-    const result = chunk(text, 30, 'markdown')
-    if (result.length > 1) {
-      // If split inside a fence, each chunk should have balanced fences
-      for (const c of result) {
-        const opens = (c.match(/^```/gm) ?? []).length
-        const closes = (c.match(/^```$/gm) ?? []).length
-        // Either balanced or the opener restores the fence
-        expect(Math.abs(opens - closes)).toBeLessThanOrEqual(1)
+    // Construct text that MUST be split: 3 long lines inside a fence, limit=40
+    const text = '```js\nconst alpha = "aaaaaaaaaa";\nconst beta = "bbbbbbbbbbb";\nconst gamma = "cccccccccc";\n```'
+    const result = chunk(text, 40, 'markdown')
+    // With limit=40, the full text (97 chars) must split
+    expect(result.length).toBeGreaterThan(1)
+    // Every split chunk that opened a fence must close it (fence repair)
+    for (let i = 0; i < result.length - 1; i++) {
+      const c = result[i]
+      // Count openers (``` followed by anything) vs closers (``` alone on a line)
+      const openers = (c.match(/^```\S*/gm) ?? []).length
+      const closers = (c.match(/^```$/gm) ?? []).length
+      // An open fence in a non-final chunk must be closed
+      if (openers > closers) {
+        expect(c.trimEnd()).toMatch(/```$/)
       }
     }
   })
@@ -364,5 +379,52 @@ describe('fallbackDescription', () => {
     const result = fallbackDescription(long)
     expect(result.endsWith('...')).toBe(true)
     expect(result.length).toBe(100)
+  })
+
+  test('slash command with no space — entire token stripped, returns empty', () => {
+    // /spawn:topic matches /^\\/\\S+\\s*/ as one token → entire string stripped → empty
+    // This documents the edge case: fallbackDescription can return '' for
+    // inputs like '/spawn:topic' where the command and content are joined.
+    const result = fallbackDescription('/spawn:topic')
+    expect(result).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// formatSpawnLine
+// ---------------------------------------------------------------------------
+
+describe('formatSpawnLine', () => {
+  test('minimal: emoji, name, model, trigger — no roleLabel or initiator', () => {
+    const result = formatSpawnLine({ emoji: '🌱', name: 'cedar', model: 'opus', trigger: 'spawn:' })
+    expect(result).toBe('> ⚡ spawned [ 🌱 cedar ] · model `opus` · by spawn:')
+  })
+
+  test('with initiator shows "trigger from initiator"', () => {
+    const result = formatSpawnLine({ emoji: '🌱', name: 'cedar', model: 'opus', trigger: 'factory:', initiator: 'comet' })
+    expect(result).toBe('> ⚡ spawned [ 🌱 cedar ] · model `opus` · by factory: from comet')
+  })
+
+  test('with roleLabel adds "The Role •" prefix', () => {
+    const result = formatSpawnLine({ emoji: '⚔️', name: 'fern', model: 'sonnet', trigger: 'review', roleLabel: 'critic' })
+    expect(result).toContain('The Critic •')
+    expect(result).toContain('⚔️ fern')
+  })
+
+  test('roleLabel is title-cased including hyphenated parts', () => {
+    const result = formatSpawnLine({ emoji: '🔨', name: 'bolt', model: 'haiku', trigger: 'build', roleLabel: 'build-owner' })
+    expect(result).toContain('The Build-Owner •')
+  })
+
+  test('all params present', () => {
+    const result = formatSpawnLine({
+      emoji: '🏗️', name: 'sage', model: 'opus-5', trigger: 'factory:',
+      roleLabel: 'builder', initiator: 'comet',
+    })
+    expect(result).toContain('The Builder •')
+    expect(result).toContain('🏗️ sage')
+    expect(result).toContain('opus-5')
+    expect(result).toContain('factory: from comet')
+    expect(result.startsWith('> ⚡ spawned [')).toBe(true)
   })
 })
