@@ -2,8 +2,8 @@
 //
 // Protocols emit events (review lifecycle, session replies, deaths).
 // Any module can subscribe without importing the emitter.
-// Each listener is isolated: a throw logs and continues to the next.
-// Listeners are sync fire-and-forget — async work must handle its own errors.
+// Each listener is isolated: a throw or rejection logs and continues to the next.
+// Listeners may be sync or async — async rejections are caught and logged.
 //
 // Extensible: other modules can augment EventMap via:
 //   declare module './event-bus' { interface EventMap { 'my:event': { ... } } }
@@ -11,12 +11,12 @@
 export interface EventMap {
   'reply': { sessionId: string; text: string; chatId: string; sentIds: string[] }
   'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string }
-  'review:complete': { threadId: string }
+  'review:complete': { threadId: string; summary?: string }
   'review:cancelled': { threadId: string }
   'review:round': { threadId: string; round: number; totalRounds: number; text: string }
 }
 
-type Listener<T> = (payload: T) => void
+type Listener<T> = (payload: T) => void | Promise<void>
 type LabeledListener = { listener: Listener<any>; label: string }
 
 const listeners = new Map<string, Set<LabeledListener>>()
@@ -37,7 +37,12 @@ export function emit<K extends keyof EventMap>(event: K, payload: EventMap[K]): 
   // before the outer emit resumes delivering to remaining listeners.
   for (const { listener, label } of [...set]) {
     try {
-      listener(payload)
+      const result = listener(payload)
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch(err => {
+          process.stderr.write(`daemon: event-bus: '${label}' async listener for '${event}' rejected: ${err}\n`)
+        })
+      }
     } catch (err) {
       process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' threw: ${err}\n`)
     }

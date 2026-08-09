@@ -81,4 +81,37 @@ describe('event-bus', () => {
     expect(subs['reply']).toEqual(['factory:done-detection'])
     expect(subs['session:death']).toEqual(['factory:session-death', 'cli:idempotency'])
   })
+
+  test('async listener: resolved promise does not throw', async () => {
+    const received: string[] = []
+    on('review:complete', async ({ threadId }) => {
+      await Promise.resolve()
+      received.push(threadId)
+    }, 'test:async')
+    emit('review:complete', { threadId: 'thread-1' })
+    await new Promise(r => setTimeout(r, 10))
+    expect(received).toEqual(['thread-1'])
+  })
+
+  test('async listener: rejection is caught and does not block other listeners', async () => {
+    const received: string[] = []
+    on('review:complete', async () => { throw new Error('async-boom') }, 'test:async-throw')
+    on('review:complete', ({ threadId }) => received.push(threadId), 'test:after-async-throw')
+    emit('review:complete', { threadId: 'thread-1' })
+    await new Promise(r => setTimeout(r, 10))
+    expect(received).toEqual(['thread-1'])
+  })
+
+  test('async and sync listeners can coexist', async () => {
+    const order: string[] = []
+    on('review:complete', ({ threadId }) => order.push(`sync:${threadId}`), 'test:sync-coexist')
+    on('review:complete', async ({ threadId }) => {
+      await Promise.resolve()
+      order.push(`async:${threadId}`)
+    }, 'test:async-coexist')
+    emit('review:complete', { threadId: 'thread-1' })
+    expect(order).toEqual(['sync:thread-1'])
+    await new Promise(r => setTimeout(r, 10))
+    expect(order).toEqual(['sync:thread-1', 'async:thread-1'])
+  })
 })
