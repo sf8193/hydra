@@ -102,8 +102,20 @@ async function spawnAndNotify(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn failed: ${errMsg}\n`)
-    try { await gateway.send(msg.channelId, `Spawn failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+    try { await gateway.send(msg.channelId, friendlySpawnError(errMsg), { replyTo: msg.id }) } catch {}
   }
+}
+
+function friendlySpawnError(msg: string): string {
+  if (msg.includes('not a git repo')) return `Spawn failed: ${msg}\n_Check that the repo directory exists at \`$SPAWN_CWD/<name>\`._`
+  if (msg.includes('SPAWN_CWD')) return `Spawn failed: ${msg}\n_Set \`SPAWN_CWD\` in the daemon env to the working directory for sessions._`
+  if (msg.includes('failed to spawn tmux') || msg.includes('tmux new-session')) return `Spawn failed: ${msg}\n_Is tmux installed? \`brew install tmux\`_`
+  if (msg.includes('thread has a live session')) return `Spawn failed: ${msg}\n_Kill the existing session first: type \`kill\` in that thread._`
+  if (msg.includes('worktree target') && msg.includes('not a git repo')) return `Spawn failed: ${msg}\n_Check the target repo exists at \`$SPAWN_CWD/<repo>\`._`
+  if (msg.includes('failed to create worktree')) return `Spawn failed: ${msg}\n_Check the repo has no locked worktrees: \`git worktree list\`_`
+  if (msg.includes('plugin not found') || msg.includes('bridge plugin')) return `Spawn failed: ${msg}\n_Reinstall the bridge plugin: \`claude plugin install discord@claude-plugins-official\`_`
+  if (msg.includes('ENOENT') && msg.includes('claude')) return `Spawn failed: ${msg}\n_Is Claude Code installed? \`npm install -g @anthropic-ai/claude-code\`_`
+  return `Spawn failed: ${msg}`
 }
 
 export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
