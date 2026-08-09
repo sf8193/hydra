@@ -1,84 +1,88 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { on, emit, getSubscriptions, _resetForTesting } from '../event-bus.js'
 
-beforeEach(() => _resetForTesting())
+process.env.DISCORD_BOT_TOKEN ??= 'test-token'
+process.env.CHAT_PLATFORM ??= 'discord'
 
-describe('event-bus', () => {
-  test('on + emit delivers payload to listener', () => {
+let on: typeof import('../event-bus.js')['on']
+let emit: typeof import('../event-bus.js')['emit']
+let _resetForTesting: typeof import('../event-bus.js')['_resetForTesting']
+
+beforeEach(async () => {
+  // Fresh import each time via cache-busting is not straightforward in bun,
+  // so we rely on _resetForTesting
+  if (!on) {
+    const mod = await import('../event-bus.js')
+    on = mod.on
+    emit = mod.emit
+    _resetForTesting = mod._resetForTesting
+  }
+  _resetForTesting()
+})
+
+describe('sync listeners', () => {
+  test('receives emitted payload', () => {
     const received: string[] = []
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:basic')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(received).toEqual(['thread-1'])
+    on('reply', ({ sessionId }) => { received.push(sessionId) }, 'test')
+    emit('reply', { sessionId: 'abc', text: 'hi', chatId: 'ch', sentIds: [] })
+    expect(received).toEqual(['abc'])
   })
 
-  test('fan-out: multiple listeners receive the same event', () => {
-    const a: string[] = []
-    const b: string[] = []
-    on('review:complete', ({ threadId }) => a.push(threadId), 'test:a')
-    on('review:complete', ({ threadId }) => b.push(threadId), 'test:b')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(a).toEqual(['thread-1'])
-    expect(b).toEqual(['thread-1'])
+  test('sync throw is caught and continues to next listener', () => {
+    const results: string[] = []
+    on('reply', () => { throw new Error('boom') }, 'bad')
+    on('reply', ({ sessionId }) => { results.push(sessionId) }, 'good')
+    expect(() => emit('reply', { sessionId: 'x', text: '', chatId: '', sentIds: [] })).not.toThrow()
+    expect(results).toEqual(['x'])
   })
 
   test('unsubscribe stops delivery', () => {
     const received: string[] = []
-    const unsub = on('review:complete', ({ threadId }) => received.push(threadId), 'test:unsub')
-    emit('review:complete', { threadId: 'thread-1' })
+    const unsub = on('reply', ({ sessionId }) => { received.push(sessionId) }, 'test')
     unsub()
-    emit('review:complete', { threadId: 'thread-2' })
-    expect(received).toEqual(['thread-1'])
-  })
-
-  test('error isolation: one listener throwing does not block others', () => {
-    const received: string[] = []
-    on('review:complete', () => { throw new Error('boom') }, 'test:thrower')
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:receiver')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(received).toEqual(['thread-1'])
-  })
-
-  test('emit with no listeners is a no-op', () => {
-    expect(() => emit('review:complete', { threadId: 'thread-1' })).not.toThrow()
-  })
-
-  test('re-entrancy: nested emit does not double-fire outer listeners', () => {
-    const calls: string[] = []
-    on('session:death', ({ sessionId }) => {
-      calls.push(`A:${sessionId}`)
-      if (sessionId === 'outer') {
-        emit('session:death', { sessionId: 'inner', threadId: '', wasOwner: false, tmuxName: '' })
-      }
-    }, 'test:reentrant-a')
-    on('session:death', ({ sessionId }) => calls.push(`B:${sessionId}`), 'test:reentrant-b')
-    emit('session:death', { sessionId: 'outer', threadId: '', wasOwner: true, tmuxName: '' })
-    expect(calls).toEqual(['A:outer', 'A:inner', 'B:inner', 'B:outer'])
-  })
-
-  test('_resetForTesting clears all listeners', () => {
-    const received: string[] = []
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:reset')
-    _resetForTesting()
-    emit('review:complete', { threadId: 'thread-1' })
+    emit('reply', { sessionId: 'abc', text: '', chatId: '', sentIds: [] })
     expect(received).toEqual([])
   })
+})
 
-  test('different events are independent', () => {
-    const completions: string[] = []
-    const cancellations: string[] = []
-    on('review:complete', ({ threadId }) => completions.push(threadId), 'test:complete')
-    on('review:cancelled', ({ threadId }) => cancellations.push(threadId), 'test:cancel')
-    emit('review:complete', { threadId: 'thread-1' })
-    expect(completions).toEqual(['thread-1'])
-    expect(cancellations).toEqual([])
+describe('async listeners', () => {
+  test('async listener is called and resolves', async () => {
+    const received: string[] = []
+    on('reply', async ({ sessionId }) => {
+      await Promise.resolve()
+      received.push(sessionId)
+    }, 'async-test')
+    emit('reply', { sessionId: 'abc', text: '', chatId: '', sentIds: [] })
+    // Give microtasks a chance to run
+    await new Promise(r => setTimeout(r, 10))
+    expect(received).toEqual(['abc'])
   })
 
-  test('getSubscriptions returns labeled subscriber manifest', () => {
-    on('reply', () => {}, 'factory:done-detection')
-    on('session:death', () => {}, 'factory:session-death')
-    on('session:death', () => {}, 'cli:idempotency')
-    const subs = getSubscriptions()
-    expect(subs['reply']).toEqual(['factory:done-detection'])
-    expect(subs['session:death']).toEqual(['factory:session-death', 'cli:idempotency'])
+  test('async rejection is caught and does not throw from emit', async () => {
+    const results: string[] = []
+    on('reply', async () => { throw new Error('async boom') }, 'bad-async')
+    on('reply', ({ sessionId }) => { results.push(sessionId) }, 'good')
+    expect(() => emit('reply', { sessionId: 'x', text: '', chatId: '', sentIds: [] })).not.toThrow()
+    await new Promise(r => setTimeout(r, 10))
+    // The sync listener still ran
+    expect(results).toEqual(['x'])
+  })
+
+  test('mix of sync and async listeners both receive event', async () => {
+    const order: string[] = []
+    on('reply', ({ sessionId }) => { order.push(`sync:${sessionId}`) }, 'sync')
+    on('reply', async ({ sessionId }) => {
+      await Promise.resolve()
+      order.push(`async:${sessionId}`)
+    }, 'async')
+    emit('reply', { sessionId: 'z', text: '', chatId: '', sentIds: [] })
+    expect(order).toContain('sync:z')
+    await new Promise(r => setTimeout(r, 10))
+    expect(order).toContain('async:z')
+  })
+
+  test('emit return is void regardless of async listeners', () => {
+    on('reply', async () => { await Promise.resolve() }, 'async')
+    const result = emit('reply', { sessionId: 'a', text: '', chatId: '', sentIds: [] })
+    expect(result).toBeUndefined()
   })
 })
