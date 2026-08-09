@@ -283,6 +283,43 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
 // Protocols — show active review/build/design sessions
 // ---------------------------------------------------------------------------
 
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+
+  // Collect threads that have at least one completed session (endedAt set)
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, 10)
+
+  if (threads.length === 0) {
+    try { await gateway.send(msg.channelId, '_No completed sessions._', { replyTo: msg.id }) } catch {}
+    return
+  }
+
+  const lines: string[] = ['**Recent Sessions**', '']
+  for (const t of threads) {
+    // Use the last session entry that has ended
+    const lastEnded = [...t.sessionHistory].reverse().find(h => h.endedAt)
+    if (!lastEnded) continue
+
+    const duration = lastEnded.endedAt && lastEnded.startedAt
+      ? formatDuration(lastEnded.endedAt - lastEnded.startedAt)
+      : '?'
+    const msgs = lastEnded.messageCount ?? 0
+    const model = lastEnded.model
+      ? lastEnded.model.replace(/^claude-/, '').replace(/\[1m\]$/, '')
+      : '?'
+    const desc = (t.description || t.topic || 'untitled').slice(0, 70)
+    const emoji = sessionEmoji(lastEnded.tmuxName)
+    const link = t.threadUrl ? `<${t.threadUrl}|${lastEnded.tmuxName}>` : lastEnded.tmuxName
+    lines.push(`${emoji} **${link}** — ${desc}`)
+    lines.push(`  _${duration} · ${msgs} msgs · \`${model}\`_`)
+  }
+
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
+}
+
 export async function handleProtocolsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})
 
