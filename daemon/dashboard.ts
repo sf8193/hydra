@@ -3,7 +3,7 @@
  */
 
 import { gateway, PLATFORM } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, threadRegistry, sessionEmoji } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration, tmuxHasSession } from './util.js'
 import { loadAccess } from './access.js'
@@ -12,9 +12,12 @@ import { assembleContextLines } from './artifacts.js'
 
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
-// Each session = up to 3 blocks (section + context + divider). Slack caps views at 100.
-// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6. (100-6)/3 = 31.
-const MAX_SESSION_BLOCKS = 31
+// Each active session = up to 3 blocks (section + context + divider). Slack caps views at 100.
+// Fixed blocks: 2 headers + 2 dividers + spacer + input + timestamp + overflow msg = 8.
+// Recent section: up to 7 blocks (header + 5 sessions + divider).
+// Remaining for active: (100-8-7)/3 = 28.
+const MAX_SESSION_BLOCKS = 25
+const MAX_RECENT_SESSIONS = 5
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 type SessionRow = {
@@ -29,6 +32,14 @@ type SessionRow = {
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
+}
+
+type RecentSession = {
+  name: string
+  desc: string
+  duration: string
+  model: string
+  url: string
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -63,6 +74,33 @@ function getActiveSessions(): SessionRow[] {
   return rows
 }
 
+function getRecentCompleted(): RecentSession[] {
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, MAX_RECENT_SESSIONS)
+
+  return threads.map(t => {
+    // Use most recently ended session entry
+    const lastEnded = [...t.sessionHistory]
+      .filter(h => h.endedAt)
+      .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0]
+    const duration = lastEnded?.endedAt && lastEnded?.startedAt
+      ? formatDuration(lastEnded.endedAt - lastEnded.startedAt)
+      : '?'
+    const model = lastEnded?.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') ?? ''
+    const rawDesc = t.description || t.topic || lastEnded?.tmuxName || ''
+    const desc = rawDesc.length > 60 ? rawDesc.slice(0, 57) + '...' : rawDesc
+    return {
+      name: lastEnded?.tmuxName ?? '?',
+      desc,
+      duration,
+      model,
+      url: t.threadUrl ?? '',
+    }
+  })
+}
+
 function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*~`]/g, '')
 }
@@ -73,7 +111,7 @@ function buildSessionText(s: SessionRow): string {
 }
 
 
-function buildHomeBlocks(sessions: SessionRow[]): any[] {
+function buildHomeBlocks(sessions: SessionRow[], recent: RecentSession[]): any[] {
   const blocks: any[] = [
     {
       type: 'header',
@@ -115,6 +153,26 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
     }
   }
 
+  // Recent completed sessions section
+  if (recent.length > 0) {
+    blocks.push({ type: 'divider' })
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: `Recent (${recent.length})` },
+    })
+    for (const r of recent) {
+      const link = r.url ? `<${r.url}|${r.name}>` : r.name
+      const modelTag = r.model ? ` · \`${r.model}\`` : ''
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `${link} — ${escapeMrkdwn(r.desc)} · _${r.duration}_ ☑️${modelTag}`,
+        },
+      })
+    }
+  }
+
   blocks.push({ type: 'divider' })
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ' ' } })
   blocks.push({
@@ -149,7 +207,8 @@ async function doUpdate(): Promise<void> {
 
   const userId = access.allowFrom[0]
   const sessions = getActiveSessions()
-  const blocks = buildHomeBlocks(sessions)
+  const recent = getRecentCompleted()
+  const blocks = buildHomeBlocks(sessions, recent)
 
   try {
     await (gateway as any).publishHomeTab(userId, blocks)
