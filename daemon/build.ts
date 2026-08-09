@@ -1,5 +1,5 @@
-import { execSync, execFileSync } from 'child_process'
-import { resolve } from 'path'
+import { execFileSync } from 'child_process'
+import { createWorktree, destroyWorktree } from './worktree-manager.js'
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession, killSession, killsInProgress, waitForBridge } from './session-lifecycle.js'
@@ -17,8 +17,6 @@ import { createStateMachine } from './state-machine.js'
 import { buildModel } from '../shared/constants.js'
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
-
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
 export function taskToBranchName(task: string): string {
   const slug = task
@@ -174,32 +172,18 @@ export async function startBuild(
   if (worktreeTarget) {
     const spawnCwd = process.env.SPAWN_CWD
     if (!spawnCwd) throw new Error('SPAWN_CWD env var is required for worktree builds')
-    const repoDir = resolve(spawnCwd, worktreeTarget)
-
-    try {
-      execSync(`git -C ${shq(repoDir)} rev-parse --git-dir`, { stdio: 'pipe' })
-    } catch {
-      throw new Error(`worktree target "${worktreeTarget}" is not a git repo at ${repoDir}`)
-    }
 
     const branch = taskToBranchName(task ?? 'build')
-    const wtDir = resolve(repoDir, '..', '.worktrees', `${worktreeTarget}-build-${buildId}`)
+    const wt = await createWorktree({
+      repoName: worktreeTarget,
+      spawnCwd,
+      branchName: branch,
+      dirSuffix: `${worktreeTarget}-build-${buildId}`,
+    })
 
-    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch {}
-    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch {}
-    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch {}
-
-    try {
-      execFileSync('git', ['-C', repoDir, 'worktree', 'add', '-b', branch, wtDir], { stdio: 'pipe' })
-      process.stderr.write(`daemon: build worktree created at ${wtDir} (branch ${branch})\n`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      throw new Error(`failed to create build worktree: ${msg}`)
-    }
-
-    worktreeRepo = repoDir
-    worktreePath = wtDir
-    worktreeBranch = branch
+    worktreeRepo = wt.repoDir
+    worktreePath = wt.worktreePath
+    worktreeBranch = wt.branch
   }
 
   const state: BuildState = {
@@ -610,19 +594,9 @@ async function completeBuild(state: BuildState, approved: boolean, lastCriticTex
 
 function cleanupWorktree(state: BuildState): void {
   if (!state.worktreeRepo || !state.worktreePath) return
-  try {
-    execSync(`git -C ${shq(state.worktreeRepo)} worktree remove ${shq(state.worktreePath)} --force`, { stdio: 'pipe' })
-    process.stderr.write(`daemon: build worktree removed: ${state.worktreePath}\n`)
-  } catch (err) {
-    process.stderr.write(`daemon: build worktree removal failed: ${err instanceof Error ? err.message : String(err)}\n`)
-  }
-  try { execSync(`git -C ${shq(state.worktreeRepo)} worktree prune`, { stdio: 'pipe' }) } catch {}
-  if (state.worktreeBranch) {
-    try {
-      execSync(`git -C ${shq(state.worktreeRepo)} branch -D ${shq(state.worktreeBranch)}`, { stdio: 'pipe' })
-      process.stderr.write(`daemon: build branch deleted: ${state.worktreeBranch}\n`)
-    } catch {}
-  }
+  void destroyWorktree(state.worktreeRepo, state.worktreePath, state.worktreeBranch ?? '').catch(err => {
+    process.stderr.write(`daemon: build worktree cleanup failed: ${err}\n`)
+  })
 }
 
 // ---------------------------------------------------------------------------
