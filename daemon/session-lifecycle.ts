@@ -941,7 +941,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     void safeSend(threadId!, spawnLine + guestNote).then(ids => {
       if (ids.length > 0) {
         const info = registry.get(sessionId)
-        if (info) info.spawnAnnounceId = ids[0]
+        if (info) {
+          info.spawnAnnounceId = ids[0]
+          registry.persist()
+        }
       }
     })
     // Echo to the causing thread — but only when it IS a thread we track

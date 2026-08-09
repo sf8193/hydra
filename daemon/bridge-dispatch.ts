@@ -124,7 +124,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
               const before = info.artifacts ?? []
               const newLinks = extractArtifactLinks(text)
               const { next, changed } = mergeArtifacts(sanitizeArtifacts(before), newLinks)
-              if (JSON.stringify(next) !== JSON.stringify(before)) {
+              const artifactsUpdated = JSON.stringify(next) !== JSON.stringify(before)
+              if (artifactsUpdated) {
                 info.artifacts = next
                 refreshDashboard()
               }
@@ -136,8 +137,17 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
                   }).catch(() => {})
                 }
               }
+              // Persist immediately when new artifact links were captured — these are
+              // durable session deliverables (PR URLs, Arti docs) that must survive a
+              // daemon crash. lastReplyId is display-only and can be debounced.
+              if (artifactsUpdated) {
+                registry.persist()
+              } else {
+                registry.debouncedPersist()
+              }
+            } else {
+              registry.debouncedPersist()
             }
-            registry.debouncedPersist()
           }
         }
 
