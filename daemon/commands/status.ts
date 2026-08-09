@@ -34,7 +34,7 @@ function listTimeBucket(lastActiveMs: number, now: number): string {
   return `${daysDiff} days ago`
 }
 
-function formatSessionEntry(e: SessionEntry): string {
+function formatSessionEntry(e: SessionEntry, treePrefix = '', contPrefix = ''): string {
   const s = e.session
   const thread = threadRegistry.get(s.threadId)
   const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
@@ -45,18 +45,21 @@ function formatSessionEntry(e: SessionEntry): string {
   const emoji = sessionEmoji(s.tmuxName)
   const url = thread?.threadUrl
   const title = url ? `[**${desc}**](${url})` : `**${desc}**`
+  // Show provenance only in flat view (treePrefix='' means flat)
   const provenanceEmoji = s.originType === 'handoff' ? '🤝' : s.originType === 'resurrect' ? '🫀' : '🍴'
-  const provenance = s.originFrom ? ` ← ${provenanceEmoji} (${s.originFrom})` : ''
+  const provenance = !treePrefix && s.originFrom ? ` ← ${provenanceEmoji} (${s.originFrom})` : ''
+  const c = contPrefix // indent for continuation lines
   const lines = [
-    `${emoji} \`${s.tmuxName}\`${badge}${provenance}`,
-    `- ${title}`,
-    `- ${ctx} (${msgCount} msgs · ${duration})`,
+    `${treePrefix}${emoji} \`${s.tmuxName}\`${badge}${provenance}`,
+    `${c}- ${title}`,
+    `${c}- ${ctx} (${msgCount} msgs · ${duration})`,
   ]
-  if (e.latestLine) lines.push(`- ${e.latestLine}`)
+  if (e.latestLine) lines.push(`${c}- ${e.latestLine}`)
   return lines.join('\n')
 }
 
-function buildListOutput(list: SessionEntry[], now: number): string {
+/** Flat time-bucket view — used when no parent-child relationships exist. */
+function buildBucketOutput(list: SessionEntry[], now: number): string {
   const buckets = new Map<string, SessionEntry[]>()
   for (const e of list) {
     const bucket = listTimeBucket(e.session.lastActive, now)
@@ -66,7 +69,78 @@ function buildListOutput(list: SessionEntry[], now: number): string {
   }
   const sections: string[] = []
   for (const [label, items] of buckets) {
-    sections.push(`### ${label}\n\n${items.map(formatSessionEntry).join('\n\n')}`)
+    sections.push(`### ${label}\n\n${items.map(e => formatSessionEntry(e)).join('\n\n')}`)
+  }
+  return sections.join('\n')
+}
+
+/** Render a session node and its children recursively, returning formatted lines. */
+function renderTreeNode(
+  e: SessionEntry,
+  childrenMap: Map<string, SessionEntry[]>,
+  indent: string,
+  connector: string,
+): string[] {
+  const kids = (childrenMap.get(e.session.tmuxName) ?? [])
+    .sort((a, b) => a.session.createdAt - b.session.createdAt)
+
+  // Continuation indent for this node's detail lines
+  const hasConnector = connector !== ''
+  const contIndent = indent + (hasConnector ? (connector.startsWith('└') ? '   ' : '│  ') : '')
+  const treePrefix = indent + connector
+
+  const entry = formatSessionEntry(e, treePrefix, contIndent)
+  const result: string[] = [entry]
+
+  for (let i = 0; i < kids.length; i++) {
+    const isLast = i === kids.length - 1
+    const childConnector = isLast ? '└─ ' : '├─ '
+    const childIndent = contIndent
+    result.push('', ...renderTreeNode(kids[i], childrenMap, childIndent, childConnector))
+  }
+
+  return result
+}
+
+function buildListOutput(list: SessionEntry[], now: number): string {
+  // Build parent→children map
+  const byName = new Map(list.map(e => [e.session.tmuxName, e]))
+  const childrenMap = new Map<string, SessionEntry[]>()
+  const roots: SessionEntry[] = []
+
+  for (const e of list) {
+    const parentName = e.session.originFrom
+    if (parentName && byName.has(parentName)) {
+      const arr = childrenMap.get(parentName) ?? []
+      arr.push(e)
+      childrenMap.set(parentName, arr)
+    } else {
+      roots.push(e)
+    }
+  }
+
+  // No tree structure — use flat bucket view
+  if (childrenMap.size === 0) {
+    return buildBucketOutput(list, now)
+  }
+
+  // Tree view: group roots by time bucket, then render each with children
+  const buckets = new Map<string, SessionEntry[]>()
+  for (const e of roots) {
+    const bucket = listTimeBucket(e.session.lastActive, now)
+    const arr = buckets.get(bucket) ?? []
+    arr.push(e)
+    buckets.set(bucket, arr)
+  }
+
+  const sections: string[] = []
+  for (const [label, items] of buckets) {
+    const treeLines: string[] = []
+    for (const root of items) {
+      if (treeLines.length > 0) treeLines.push('')
+      treeLines.push(...renderTreeNode(root, childrenMap, '', ''))
+    }
+    sections.push(`### ${label}\n\n${treeLines.join('\n')}`)
   }
   return sections.join('\n')
 }
