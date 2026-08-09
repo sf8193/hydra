@@ -3,7 +3,7 @@
  */
 
 import { gateway, PLATFORM } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration, tmuxHasSession } from './util.js'
 import { loadAccess } from './access.js'
@@ -13,8 +13,10 @@ import { assembleContextLines } from './artifacts.js'
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
 // Each session = up to 3 blocks (section + context + divider). Slack caps views at 100.
-// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6. (100-6)/3 = 31.
-const MAX_SESSION_BLOCKS = 31
+// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6.
+// Reserve 6 blocks for "Recent" section (header + up to 5 rows). (100-6-6)/3 = 29.
+const MAX_SESSION_BLOCKS = 29
+const MAX_RECENT = 5
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 type SessionRow = {
@@ -65,6 +67,36 @@ function getActiveSessions(): SessionRow[] {
 
 function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*~`]/g, '')
+}
+
+type RecentRow = {
+  name: string
+  desc: string
+  duration: string
+  url: string
+  model: string
+}
+
+function getRecentCompleted(): RecentRow[] {
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, MAX_RECENT)
+
+  return threads.map(t => {
+    const last = [...t.sessionHistory].reverse().find(h => h.endedAt)
+    const duration = last?.endedAt && last?.startedAt
+      ? formatDuration(last.endedAt - last.startedAt)
+      : '?'
+    const model = last?.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') ?? ''
+    return {
+      name: last?.tmuxName ?? t.topic.slice(0, 20) ?? '?',
+      desc: escapeMrkdwn((t.description || t.topic || '').slice(0, 60)),
+      duration,
+      url: t.threadUrl ?? '',
+      model,
+    }
+  })
 }
 
 function buildSessionText(s: SessionRow): string {
@@ -129,6 +161,25 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
     },
     label: { type: 'plain_text', text: 'Spawn Session' },
   })
+
+  // Recent completed sessions
+  const recent = getRecentCompleted()
+  if (recent.length > 0) {
+    blocks.push({ type: 'divider' })
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: `Recent (${recent.length})` },
+    })
+    for (const r of recent) {
+      const link = r.url ? `<${r.url}|${r.name}>` : r.name
+      const modelTag = r.model ? ` · \`${r.model}\`` : ''
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `${link} — ${r.desc} · _${r.duration}_${modelTag}` },
+      })
+    }
+  }
+
   blocks.push({
     type: 'context',
     elements: [{
