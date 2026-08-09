@@ -43,6 +43,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/reply-guard.ts':    { layer: 'domain',    desc: 'Reply guard: nudge sessions that go silent on user-authored messages' },
   'daemon/phase-budget.ts':   { layer: 'domain',    desc: 'Per-session max lifetime: nudge → grace → reap' },
   'daemon/session-health.ts': { layer: 'domain',    desc: 'Session health poll: crash detection, orphan detection, context alerts' },
+  'daemon/protocol-loader.ts': { layer: 'domain',   desc: 'Protocol loader: dynamic import + cache + validation' },
   'daemon/commands/global.ts':  { layer: 'commands', desc: 'spawn, kill, restart, recover' },
   'daemon/commands/status.ts':  { layer: 'commands', desc: 'sessions list, status display' },
   'daemon/commands/thread.ts':  { layer: 'commands', desc: 'listen, pause, resume, join, handoff' },
