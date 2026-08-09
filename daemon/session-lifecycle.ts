@@ -102,7 +102,10 @@ export async function backfillAnchorChannelIds(): Promise<void> {
     if (missing.length > 1) await new Promise(r => setTimeout(r, 200))
   }
 
-  if (filled > 0) registry.persist()
+  if (filled > 0) {
+    registry.persist()
+    threadRegistry.persist()
+  }
   process.stderr.write(`daemon: backfill: ${filled} filled, ${failed} failed, ${missing.length - filled - failed} skipped\n`)
 }
 
