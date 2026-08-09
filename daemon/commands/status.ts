@@ -3,7 +3,7 @@ import { join } from 'path'
 import { execSync } from 'child_process'
 import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo, ThreadMetadata, ThreadSessionEntry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { fallbackDescription, formatDuration, getContextPercent, atomicWriteFileSync, isAlive, safeSend } from '../util.js'
 import { getWatchesBySession } from '../pr-watch.js'
@@ -283,15 +283,25 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
 // Protocols — show active review/build/design sessions
 // ---------------------------------------------------------------------------
 
-export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+export async function handleHistoryIntercept(msg: InboundMessage, args?: string): Promise<void> {
+  if (args && args.trim()) {
+    try { await gateway.send(msg.channelId, '_Usage: `history` or `/history` — no arguments supported._', { replyTo: msg.id }) } catch {}
+    return
+  }
+
   void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
 
-  const threads = [...threadRegistry.values()]
-    .filter(t => t.sessionHistory.some(h => h.endedAt))
-    .sort((a, b) => b.lastActive - a.lastActive)
-    .slice(0, 10)
+  // Collect all ended session entries across all threads, sorted by end time (most recent first)
+  const rows: Array<{ thread: ThreadMetadata; entry: ThreadSessionEntry }> = []
+  for (const t of threadRegistry.values()) {
+    for (const h of t.sessionHistory) {
+      if (h.endedAt) rows.push({ thread: t, entry: h })
+    }
+  }
+  rows.sort((a, b) => (b.entry.endedAt ?? 0) - (a.entry.endedAt ?? 0))
+  const limited = rows.slice(0, 10)
 
-  if (threads.length === 0) {
+  if (limited.length === 0) {
     try { await gateway.send(msg.channelId, '_No completed sessions._', { replyTo: msg.id }) } catch {}
     return
   }
@@ -299,28 +309,27 @@ export async function handleHistoryIntercept(msg: InboundMessage): Promise<void>
   const now = Date.now()
   const lines: string[] = ['**Recent Sessions**', '']
 
-  for (const t of threads) {
-    // Use the most recently ended session entry for metadata
-    const endedEntries = t.sessionHistory.filter(h => h.endedAt)
-    if (endedEntries.length === 0) continue
-    const last = endedEntries[endedEntries.length - 1]
+  for (const { thread, entry } of limited) {
+    const endedAt = entry.endedAt!
+    const duration = formatDuration(endedAt - entry.startedAt)
+    const msgs = entry.messageCount ?? 0
+    const model = entry.model
+      ? entry.model.replace(/^claude-/, '').replace(/\[1m\]$/, '')
+      : '?'
+    // Use thread description/topic only — the session entry doesn't carry its own description
+    const desc = (thread.description ?? thread.topic ?? 'untitled').slice(0, 80)
+    const emoji = sessionEmoji(entry.tmuxName)
+    const link = thread.threadUrl
+      ? `[${emoji} \`${entry.tmuxName}\`](${thread.threadUrl})`
+      : `${emoji} \`${entry.tmuxName}\``
+    const age = formatDuration(now - endedAt)
 
-    const duration = last.endedAt && last.startedAt
-      ? formatDuration(last.endedAt - last.startedAt)
-      : '?'
-    const msgs = last.messageCount ?? t.totalMessages ?? 0
-    const model = last.model
-      ? last.model.replace(/^claude-/, '').replace(/\[1m\]$/, '')
-      : '?'
-    const desc = (t.description ?? t.topic ?? 'untitled').slice(0, 80)
-    const emoji = sessionEmoji(last.tmuxName)
-    const link = t.threadUrl
-      ? `[${emoji} \`${last.tmuxName}\`](${t.threadUrl})`
-      : `${emoji} \`${last.tmuxName}\``
-    const age = formatDuration(now - (last.endedAt ?? t.lastActive))
+    // Surface respawn count if the thread had multiple sessions
+    const totalEnded = thread.sessionHistory.filter(h => h.endedAt).length
+    const respawnNote = totalEnded > 1 ? ` · ${totalEnded} sessions in thread` : ''
 
     lines.push(`${link} — ${desc}`)
-    lines.push(`  _${duration} · ${msgs} msgs · \`${model}\` · ended ${age} ago_`)
+    lines.push(`  _${duration} · ${msgs} msgs · \`${model}\` · ended ${age} ago${respawnNote}_`)
     lines.push('')
   }
 

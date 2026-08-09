@@ -374,9 +374,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const historyMatch = msg.content.match(/^(?:\/history|history)\s*$/i)
+    const historyMatch = msg.content.match(/^(?:\/history|history)\s*(.*)?$/i)
     if (historyMatch) {
-      void handleHistoryIntercept(msg)
+      void handleHistoryIntercept(msg, historyMatch[1])
       return
     }
 
