@@ -368,7 +368,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const listMatch = msg.content.match(/^(?:\/sessions|list sessions)\s*$/i)
+    const listMatch = msg.content.match(/^(?:\/sessions|list sessions)\s*(.*)/i)
     if (listMatch) {
       void handleListIntercept(msg)
       return
@@ -396,7 +396,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const historyMatch = msg.content.match(/^(?:\/history|history)\s*$/i)
+    const historyMatch = msg.content.match(/^(?:\/history)\s*$/i)
     if (historyMatch) {
       void handleHistoryIntercept(msg)
       return
@@ -502,6 +502,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const forkModelMatch = msg.content.match(FORK_MODEL_RE)
       if (forkModelMatch) {
         void handleForkIntercept(msg, forkModelMatch[2].trim(), resolveModelAlias(forkModelMatch[1]))
+        return
+      }
+
+      const forkEphMatch = msg.content.match(/^(?:fork-e|\/fork-e)(?::\s*([\s\S]+))?$/i)
+      if (forkEphMatch) {
+        void handleForkIntercept(msg, forkEphMatch[1]?.trim(), undefined, { ephemeral: true })
         return
       }
 
