@@ -98,8 +98,6 @@ backfillAnchorChannelIds().catch(err => {
 import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
-import { startWorktreeCleanupTimer } from './daemon/worktree-cleanup.js'
-startWorktreeCleanupTimer()
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 import { debouncedRefreshListDisplay } from './daemon/commands/status.js'
