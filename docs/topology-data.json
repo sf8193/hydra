@@ -174,7 +174,7 @@
       "id": "daemon_templates",
       "label": "daemon/templates.ts",
       "layer": "domain",
-      "desc": "Spawn templates (review:, fix:, design:)"
+      "desc": "Spawn templates (review:, fix:)"
     },
     {
       "id": "daemon_pr-watch",
@@ -231,22 +231,10 @@
       "desc": "Session health poll: crash detection, orphan detection, context alerts"
     },
     {
-      "id": "daemon_adversarial",
-      "label": "daemon/adversarial.ts",
-      "layer": "protocols",
-      "desc": "Adversarial review — owner/critic rounds"
-    },
-    {
-      "id": "daemon_build",
-      "label": "daemon/build.ts",
-      "layer": "protocols",
-      "desc": "Build — implement/review iteration"
-    },
-    {
-      "id": "daemon_design",
-      "label": "daemon/design.ts",
-      "layer": "protocols",
-      "desc": "Design — personas, synthesis, audit"
+      "id": "daemon_protocol-loader",
+      "label": "daemon/protocol-loader.ts",
+      "layer": "domain",
+      "desc": "Protocol loader: dynamic import + cache + validation"
     },
     {
       "id": "daemon_commands_global",
@@ -267,22 +255,10 @@
       "desc": "listen, pause, resume, join, handoff"
     },
     {
-      "id": "daemon_commands_review",
-      "label": "daemon/commands/review.ts",
+      "id": "daemon_commands_protocol",
+      "label": "daemon/commands/protocol.ts",
       "layer": "commands",
-      "desc": "review command handler"
-    },
-    {
-      "id": "daemon_commands_build",
-      "label": "daemon/commands/build.ts",
-      "layer": "commands",
-      "desc": "build command handler"
-    },
-    {
-      "id": "daemon_commands_design",
-      "label": "daemon/commands/design.ts",
-      "layer": "commands",
-      "desc": "design command handler"
+      "desc": "unified protocol command handler"
     },
     {
       "id": "daemon_commands_watch",
@@ -614,23 +590,7 @@
     ],
     [
       "daemon_router",
-      "daemon_commands_review"
-    ],
-    [
-      "daemon_router",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_router",
-      "daemon_commands_build"
-    ],
-    [
-      "daemon_router",
-      "daemon_commands_design"
-    ],
-    [
-      "daemon_router",
-      "daemon_design"
+      "daemon_commands_protocol"
     ],
     [
       "daemon_router",
@@ -793,122 +753,6 @@
       "daemon_session-lifecycle"
     ],
     [
-      "daemon_adversarial",
-      "daemon_config"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_session-lifecycle"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_bridge-transport"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_util"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_protocol-registry"
-    ],
-    [
-      "daemon_adversarial",
-      "shared_constants"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_state-machine"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_anchor-state"
-    ],
-    [
-      "daemon_adversarial",
-      "daemon_transcript-dump"
-    ],
-    [
-      "daemon_build",
-      "daemon_config"
-    ],
-    [
-      "daemon_build",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_build",
-      "daemon_session-lifecycle"
-    ],
-    [
-      "daemon_build",
-      "daemon_bridge-transport"
-    ],
-    [
-      "daemon_build",
-      "daemon_util"
-    ],
-    [
-      "daemon_build",
-      "daemon_protocol-registry"
-    ],
-    [
-      "daemon_build",
-      "daemon_anchor-state"
-    ],
-    [
-      "daemon_build",
-      "daemon_pr-watch"
-    ],
-    [
-      "daemon_build",
-      "daemon_state-machine"
-    ],
-    [
-      "daemon_build",
-      "shared_constants"
-    ],
-    [
-      "daemon_build",
-      "daemon_transcript-dump"
-    ],
-    [
-      "daemon_design",
-      "daemon_config"
-    ],
-    [
-      "daemon_design",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_design",
-      "daemon_session-lifecycle"
-    ],
-    [
-      "daemon_design",
-      "daemon_bridge-transport"
-    ],
-    [
-      "daemon_design",
-      "daemon_protocol-registry"
-    ],
-    [
-      "daemon_design",
-      "daemon_state-machine"
-    ],
-    [
-      "daemon_design",
-      "daemon_anchor-state"
-    ],
-    [
-      "daemon_design",
-      "daemon_util"
-    ],
-    [
       "daemon_commands_global",
       "daemon_config"
     ],
@@ -931,14 +775,6 @@
     [
       "daemon_commands_global",
       "daemon_commands_status"
-    ],
-    [
-      "daemon_commands_global",
-      "daemon_build"
-    ],
-    [
-      "daemon_commands_global",
-      "daemon_adversarial"
     ],
     [
       "daemon_commands_global",
@@ -969,18 +805,6 @@
       "daemon_pr-watch"
     ],
     [
-      "daemon_commands_status",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_commands_status",
-      "daemon_build"
-    ],
-    [
-      "daemon_commands_status",
-      "daemon_design"
-    ],
-    [
       "daemon_commands_thread",
       "daemon_config"
     ],
@@ -1009,48 +833,24 @@
       "daemon_util"
     ],
     [
-      "daemon_commands_thread",
+      "daemon_commands_protocol",
+      "daemon_config"
+    ],
+    [
+      "daemon_commands_protocol",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_commands_protocol",
       "daemon_protocol-registry"
     ],
     [
-      "daemon_commands_thread",
-      "daemon_pr-watch"
+      "daemon_commands_protocol",
+      "daemon_util"
     ],
     [
-      "daemon_commands_review",
-      "daemon_config"
-    ],
-    [
-      "daemon_commands_review",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_commands_review",
-      "daemon_adversarial"
-    ],
-    [
-      "daemon_commands_build",
-      "daemon_config"
-    ],
-    [
-      "daemon_commands_build",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_commands_build",
-      "daemon_build"
-    ],
-    [
-      "daemon_commands_design",
-      "daemon_config"
-    ],
-    [
-      "daemon_commands_design",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_commands_design",
-      "daemon_design"
+      "daemon_commands_protocol",
+      "daemon_protocol-loader"
     ],
     [
       "daemon_commands_watch",
