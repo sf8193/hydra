@@ -431,12 +431,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-
     const destroyMatch = msg.content.match(/^(?:destroy|\/destroy)\s*$/i)
     if (destroyMatch && msg.isThread) {
       void handleDestroyIntercept(msg)
       return
     }
+
     const respawnMatch = msg.content.match(/^(?:respawn|\/respawn)(?::\s*([\s\S]+))?$/i)
     if (respawnMatch) {
       void handleRespawnIntercept(msg, respawnMatch[1]?.trim() || undefined)

@@ -10,6 +10,8 @@ import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError, safeSend } from '../util.js'
 import { isThreadOccupied } from '../protocol-registry.js'
+import { unwatchBySession } from "../pr-watch.js"
+import { emit } from "../event-bus.js"
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
@@ -312,7 +314,6 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
 }
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // Destroy — permanently delete thread + anchor message (Discord only)
 // ---------------------------------------------------------------------------
 
@@ -368,6 +369,14 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
   if (info && sessionId) {
     registry.delete(sessionId)
     registry.deleteThread(threadId)
+    registry.persist()
+    unwatchBySession(sessionId)
+    emit('session:death', {
+      sessionId,
+      threadId,
+      wasOwner: !info.isJoinMember,
+      tmuxName: info.tmuxName,
+    })
   }
   threadRegistry.delete(threadId)
 
@@ -384,6 +393,7 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
 
   debouncedRefreshListDisplay()
 }
+
 // Peek — screenshot the tmux pane and post it to the thread
 // ---------------------------------------------------------------------------
 
