@@ -2,8 +2,6 @@
  * Dashboard — auto-updating session overview in Slack's App Home tab.
  */
 
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import { gateway, PLATFORM } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
@@ -12,7 +10,6 @@ import { formatDuration, tmuxHasSession, safeSend, getContextPercent } from './u
 import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
-const execFileAsync = promisify(execFile)
 
 // killSession import removed from here — kill action now sends a confirmation DM
 import { formatCostUsd } from './observability.js'
@@ -176,18 +173,6 @@ export function groupSessions(sessions: SessionRow[]): GroupedSession[] {
   return result
 }
 
-function buildOverflowMenu(s: SessionRow): any {
-  const options: any[] = [
-    { text: { type: 'plain_text', text: '📸 Peek' }, value: `peek:${s.sessionId}` },
-    { text: { type: 'plain_text', text: s.paused ? '▶️ Resume' : '⏸️ Pause' }, value: `pause:${s.sessionId}` },
-    { text: { type: 'plain_text', text: '🔪 Kill' }, value: `kill:${s.sessionId}` },
-  ]
-  return {
-    type: 'overflow',
-    action_id: `home:action:${s.sessionId}`,
-    options,
-  }
-}
 
 function buildHomeBlocks(sessions: SessionRow[]): any[] {
   const blocks: any[] = [
@@ -217,11 +202,9 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
           elements: [{ type: 'mrkdwn', text: childText }],
         })
       } else {
-        // Root sessions get a full section block with overflow menu
         blocks.push({
           type: 'section',
           text: { type: 'mrkdwn', text: buildSessionText(s) },
-          accessory: buildOverflowMenu(s),
         })
         const contextLines = assembleContextLines({
           watches: s.watches,
@@ -284,13 +267,11 @@ async function doUpdate(): Promise<void> {
   const sessions = getActiveSessions()
   const blocks = buildHomeBlocks(sessions)
 
-  await Promise.allSettled(access.allowFrom.map(async userId => {
-    try {
-      await (gateway as any).publishHomeTab(userId, blocks)
-    } catch (err) {
-      process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
-    }
-  }))
+  try {
+    await (gateway as any).publishHomeTab(access.allowFrom[0], blocks)
+  } catch (err) {
+    process.stderr.write(`dashboard: home tab publish failed: ${err}\n`)
+  }
 }
 
 export function refreshDashboard(): void {
@@ -309,54 +290,6 @@ export function refreshDashboardNow(): void {
   })
 }
 
-export async function handleHomeAction(actionValue: string, userId: string): Promise<void> {
-  const [action, sessionId] = actionValue.split(':', 2)
-  if (!sessionId) return
-
-  const info = registry.get(sessionId)
-  if (!info) {
-    void gateway.send(userId, `_Session not found — it may have already ended._`).catch(() => {})
-    return
-  }
-
-  switch (action) {
-    case 'kill': {
-      void gateway.sendDM(userId, `Kill **${info.tmuxName}**? Type \`kill ${info.tmuxName}\` to confirm.`).catch(() => {})
-      break
-    }
-    case 'peek': {
-      if (!tmuxHasSession(info.tmuxName)) {
-        void gateway.send(userId, `_**${info.tmuxName}** tmux not running_`).catch(() => {})
-        return
-      }
-      const ctx = getContextPercent(info.tmuxName)
-      const duration = formatDuration(Date.now() - info.createdAt)
-      const msgs = info.messageCount ?? 0
-      const header = `📸 **${info.tmuxName}** · ${ctx} · ${msgs} msgs · ${duration}`
-      try {
-        const { stdout } = await execFileAsync(
-          'tmux', ['capture-pane', '-t', info.tmuxName, '-p', '-S', '-60'],
-          { encoding: 'utf8', timeout: 5000 },
-        )
-        const text = stdout.trimEnd()
-        void gateway.send(userId, `${header}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``).catch(() => {})
-      } catch {
-        void gateway.send(userId, `${header}\n_Capture failed_`).catch(() => {})
-      }
-      break
-    }
-    case 'pause': {
-      info.paused = !info.paused
-      registry.debouncedPersist()
-      refreshDashboardNow()
-      const state = info.paused ? 'paused ⏸️' : 'resumed ▶️'
-      void gateway.send(userId, `_**${info.tmuxName}** ${state}_`).catch(() => {})
-      break
-    }
-    default:
-      process.stderr.write(`dashboard: unknown home action: ${action}\n`)
-  }
-}
 
 // Periodic fallback refresh — keeps dashboard fresh even when no session changes occur
 setInterval(() => {
