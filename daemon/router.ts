@@ -41,7 +41,7 @@ const COMMAND_PREFIXES = [
   ...Object.keys(MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
   'kill session:', 'kill:', '/kill',
   '/sessions', 'list sessions',
-  '/history', 'history',
+  '/history',
   '/restart', 'restart daemon', 'restart',
   '/health', 'health', 'status',
   '/protocols', 'protocols',
