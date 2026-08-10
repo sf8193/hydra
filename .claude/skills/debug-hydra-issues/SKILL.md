@@ -20,19 +20,23 @@ Architecture details: `README.md`. Import topology: `docs/topology.mmd` / `docs/
 Before running any diagnostic, resolve these — half the confusing symptoms trace to the wrong value:
 
 ```bash
-HYDRA_REPO="$(git rev-parse --show-toplevel 2>/dev/null || echo "$HOME/Documents/hydra")"
+HYDRA_REPO="${HYDRA_REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+[ -f "$HYDRA_REPO/daemon.ts" ] || { echo "error: resolve HYDRA_REPO to the hydra checkout" >&2; return 1 2>/dev/null || true; }
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 PLATFORM="${CHAT_PLATFORM:-discord}"  # or slack
 STATE_DIR="${HYDRA_STATE_DIR:-$CLAUDE_CONFIG_DIR/channels/$PLATFORM}"
+[ -f "/Library/Application Support/ClaudeCode/managed-settings.json" ] && grep -q '"channelsEnabled": true' "/Library/Application Support/ClaudeCode/managed-settings.json" || echo "warning: managed-settings.json missing or channelsEnabled not set" >&2
 ```
 
 Hydra resolves `CLAUDE_CONFIG_DIR` the same way (`cli/helpers.ts:70`). If the session runs under a non-default config dir, every `~/.claude` path in this doc is wrong unless you resolved this first.
 
 **CLI fallback:** if `hydra` is not on PATH (no `hydra install` yet), use `bun "$HYDRA_REPO/cli/hydra.ts" <cmd> <platform>`.
 
-## Step 0 — Is the Session Alive?
+## Step 0 — Is the Session Alive? (CC only)
 
 Before any daemon check. Every daemon instrument can read green while the backing model is dead.
+
+**Codex sessions** — pane-probe skips Codex entirely (`pane-probe.ts:524`). Instead: (1) check socket exists: `[ -S ~/.codex/hydra-<name>/app-server-control/app-server-control.sock ]`, (2) check process alive: `ps aux | grep codex`, (3) check for watchdog timeout in daemon log — `CodexEngine` fires after `WATCHDOG_MS` if a turn stalls (`codex-engine.ts`). If all three are clean but the session is silent, the issue is upstream (daemon/bridge).
 
 ```bash
 tmux capture-pane -t <session-name> -p -J | tail -30
@@ -52,17 +56,19 @@ tmux capture-pane -t <session-name> -p -J | tail -30
 
 The `pane-probe` module (`daemon/pane-probe.ts`) detects these states automatically on a 60s interval — `login_required` (stages: `expiring`, `blocked`, `oauth_url`, `success`), `plan_mode`, `resume_prompt`. If pane-probe hasn't alerted, the session may still be in its boot grace window.
 
-## Step 1 — Auth
+## Step 1 — Auth (CC only)
 
-Token expiry is routine. Treat it as a first-class hypothesis, not an edge case.
+Token expiry is routine. Treat it as a first-class hypothesis, not an edge case. **Codex sessions** authenticate differently — this section does not apply.
 
 - **Keychain is scoped by config dir.** Claude Code stores credentials under roughly `Claude Code-credentials-SHA256($CLAUDE_CONFIG_DIR)[:8]`. A valid token in the default keychain entry does nothing for a session running under a different config dir. Symptom: you re-authenticate, it "takes", but the session stays broken — because the session reads a different entry.
 
 - **`CLAUDE_CODE_OAUTH_TOKEN` skips the keychain.** Setting this env var makes Claude Code bypass keychain entirely. Side effect: every OAuth-based MCP server silently stops working. Presenting symptom: "MCPs are broken." Cause: auth configuration, not MCP.
 
-- **`restart` is not a smaller `up`.** Some setup (env sourcing, managed-settings checks) only runs on the `up` path. An agent reaching for `restart` because it's less disruptive can sit in a broken state. If auth changed, use `hydra down <platform>` then `hydra up <platform>`.
+- **`restart` only cycles the daemon — the byte keeps running.** `lifecycleRestart` restarts the daemon process but does not touch the byte session, transcription, or watchdog. The byte keeps running with whatever auth, env, and config it had at boot. **Decision rule:** if the issue is in the daemon (config reload, code change, module graph), `restart` is correct and less disruptive. If the issue is auth, env, or anything the byte baked in at launch, `restart` leaves the stale byte running — use `hydra down <platform>` then `hydra up <platform>`.
 
 ## Step 2 — Daemon & Bridge
+
+**Codex note:** Codex sessions use unix sockets, not MCP bridges. The bridge process count and bridge MCP logs below are CC-only. For Codex, check socket connectivity and `CodexEngine` events in the daemon log.
 
 ```bash
 hydra health                       # daemon diagnostics — sessions, bridges, connections
@@ -78,7 +84,7 @@ tail -100 ~/hydra-${PLATFORM}-daemon.log | grep -i "error\|warn\|crash\|fail"
 
 2. **Check sessions.json fields.** `claudeSessionId: null` → bridge never connected. `listening: false` → session is muted. These explain "not responding" without a crash.
 
-3. **Trace the message path.** Gateway (`{platform}-gateway.ts`) → `router.ts` → `bridge-transport.ts` → bridge → CC/Codex. Find where it stops. If the daemon log shows delivery but the session doesn't respond, check bridge MCP logs: `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl` (keyed by Claude session UUID).
+3. **Trace the message path.** Gateway (`{platform}-gateway.ts`) → `router.ts` → `bridge-transport.ts` → bridge → CC/Codex. Find where it stops. If the daemon log shows delivery but the session doesn't respond, check bridge MCP logs (keyed by Claude session UUID): macOS `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl`, Linux `${XDG_CACHE_HOME:-~/.cache}/claude-cli-nodejs/...`.
 
 ## Step 3 — Spawn & Resume Failures
 
@@ -97,6 +103,8 @@ Recovery flows through three tiers (see `diagrams/flow-recovery-cascade.mmd`):
 - **Root cause:** compare config dirs. The session may be launching under a different `$CLAUDE_CONFIG_DIR` than where the conversation was stored.
 
 **Don't trust the correlate line.** The observability layer (`daemon/observability.ts`) resolves transcript paths against a base path that may differ from the session's actual config dir. The daemon log can print a transcript path *that exists* while the session itself cannot see it. Verify which config dir the file is actually under.
+
+The kill/orphan classification lives in `daemon/resume-health.ts`. Trap: **when no exit-marker path was configured, a fully alive session is still classified `kill`** — "absence of evidence is not evidence of liveness." Symptom: the cascade killed a running session for no visible reason. The periodic orphan detector (`daemon/session-health.ts`) checks the same condition — both must agree on preserve-vs-kill, or the incoherence is itself a bug.
 
 For daemon issues, `hydra restart <platform>` validates the module graph first — safe to run.
 
@@ -123,7 +131,7 @@ cat /tmp/probe.txt
 
 - **`ps` argv is inherited by children.** `caffeinate` processes show claude's argv but are not claude. Check the process tree (`pstree` or `ps -o pid,ppid,comm`), not just the name.
 
-- **Orphan detection has a 90s grace window.** The daemon polls for tmux-alive + bridge-disconnected sessions and alerts the thread after `ORPHAN_GRACE_MS` (90s). It also auto-discovers `claudeSessionId` from `$CLAUDE_CONFIG_DIR/sessions/<pid>.json`. If no alert has fired but the session seems mute, it may still be in its boot grace window. The `pane-probe` module (`probeAllSessions()`, 60s interval) also detects sessions stuck on login or plan mode.
+- **Orphan detection has a 90s grace window.** The daemon polls for tmux-alive + bridge-disconnected sessions and alerts the thread after `ORPHAN_GRACE_MS` (90s). It also auto-discovers `claudeSessionId` from `~/.claude/sessions/<pid>.json` — note: this path is **hardcoded to homedir** in `session-lifecycle.ts`, not `$CLAUDE_CONFIG_DIR`. A session under a suffixed config dir has its sessionId discovered from the wrong location. If no alert has fired but the session seems mute, it may still be in its boot grace window. The `pane-probe` module (`probeAllSessions()`, 60s interval) also detects sessions stuck on login or plan mode.
 
 - **`bun run` is lazy.** Parse/export errors surface only when a module is imported, not at launch. A broken merge boots "fine" until the crashing code path loads.
 
@@ -141,7 +149,7 @@ cat /tmp/probe.txt
 | Daemon PID / heartbeat / socket | `$STATE_DIR/daemon.{pid,alive,sock}` |
 | Per-platform daemon log | `~/hydra-${PLATFORM}-daemon.log` |
 | Per-session spawn logs | `$STATE_DIR/spawn-logs/{name}-{uuid}.log` |
-| Bridge MCP logs | `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl` |
+| Bridge MCP logs | macOS: `~/Library/Caches/claude-cli-nodejs/{project-slug}/mcp-logs-plugin-discord-discord/*.jsonl`; Linux: `${XDG_CACHE_HOME:-~/.cache}/claude-cli-nodejs/...` |
 | Managed settings gate | `/Library/Application Support/ClaudeCode/managed-settings.json` — must contain `{"channelsEnabled": true}` |
 
 ## Diagnostic Tools
