@@ -49,12 +49,12 @@ export default protocol('build', {
 
   seed: {
     critic: (ctx) => protocolSeed(ctx.protocol, 'critic', ctx)
-      + `\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
+      + `\n\n**Task:** ${ctx.topic ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
   },
 
   ownerKickoff: (params) => {
-    const task = params.task ?? params.topic ?? 'Begin implementing.'
-    return `[Build — starting]\n\n**Task:** ${task}\n\nYou are the builder. Implement the task, then call \`advance({ content: "your implementation summary" })\` when ready for review.`
+    const topic = params.topic ?? 'Begin implementing.'
+    return `[Build — starting]\n\n**Task:** ${topic}\n\nYou are the builder. Implement the task, then call \`advance({ content: "your implementation summary" })\` when ready for review.`
   },
 
   summaryFormat: (run) => {

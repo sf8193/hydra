@@ -107,13 +107,13 @@ describe('build protocol (TypeScript DSL)', () => {
     expect(build.decisions.critic_verdict.options).toEqual(['approve', 'request_changes'])
   })
 
-  test('critic seed renders with task context', () => {
+  test('critic seed renders with topic context', () => {
     const seed = build.seed('critic', {
       name: 'qubit',
       sessionId: 'abc',
       threadId: 'thread-1',
       rounds: 3,
-      task: 'Fix the race condition',
+      topic: 'Fix the race condition',
     })
     expect(seed).toContain('qubit')
     expect(seed).toContain('Fix the race condition')
