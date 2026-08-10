@@ -671,7 +671,7 @@ async function spawnBuilder(
   process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) forked for ticket ${state.ticket}\n`)
 }
 
-function onBuilderDone(sessionId: string, doneText: string): boolean {
+export function onBuilderDone(sessionId: string, doneText: string): boolean {
   const ticket = builderSessionToTicket.get(sessionId)
   if (!ticket) return false
 
