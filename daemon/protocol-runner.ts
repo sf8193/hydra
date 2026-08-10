@@ -14,7 +14,6 @@ import type { RunState, BehaviorContext, CompletionEvent, RoundAdvanceEvent } fr
 import { EventEmitter } from 'events'
 import { contributeSubscriptions } from './event-bus.js'
 import type { Modifier, SeedModifier } from './modifiers.js'
-import { startHeartbeat, stopHeartbeat } from './uds-heartbeat.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -506,7 +505,6 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 
   try {
     for (const [role, sid] of run.participants) {
-      stopHeartbeat(sid)
       if (sid === run.ownerSessionId) continue
       const info = registry.get(sid)
       if (info && !killsInProgress.has(sid)) {
@@ -720,43 +718,25 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
     ...params,
   }
 
-  const isGuest = role !== run.protocol.ownerRole
   const model = (params.model as string) ?? undefined
   const engine = (params.engine as 'claude' | 'codex') ?? undefined
-  let seed: string | undefined
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,
     model,
     ...(engine && { engine }),
-    ...(isGuest && { channelSeed: true }),
     promptBuilder: (sessionId, tmuxName) => {
-      let s = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
+      let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
       const seedMods = ((run.params.modifiers as Modifier[] | undefined) ?? [])
         .filter((m): m is SeedModifier => m.type === 'seed' && m.target === role)
       for (const mod of seedMods) {
-        s += `\n\n---\n**+${mod.name}:**\n${mod.instructions}`
+        seed += `\n\n---\n**+${mod.name}:**\n${mod.instructions}`
       }
-      seed = s
-      return s
+      return seed
     },
   })
 
   registerParticipant(run, role, result.sessionId)
-
-  if (isGuest && seed) {
-    const ok = await waitForBridge(result.sessionId, 30_000)
-    if (!ok) {
-      process.stderr.write(`daemon: ${run.protocol.name} run: ${role} bridge timeout for channel seed delivery\n`)
-      throw new Error(`${role} bridge did not connect for seed delivery`)
-    }
-    transport.sendOrQueue(result.sessionId, {
-      type: 'notification',
-      content: seed,
-      meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-    })
-    process.stderr.write(`daemon: ${run.protocol.name} run: ${role} seed delivered via channel notification (${seed.length} chars)\n`)
-  }
 }
 
 async function postStatusLine(run: ProtocolRun): Promise<void> {
@@ -921,7 +901,6 @@ async function completeRun(run: ProtocolRun): Promise<void> {
   protocolEvents.emitComplete(completionEvent)
 
   for (const [, sid] of run.participants) {
-    stopHeartbeat(sid)
     if (sid === run.ownerSessionId) continue
     sessionToRun.delete(sid)
     const info = registry.get(sid)
