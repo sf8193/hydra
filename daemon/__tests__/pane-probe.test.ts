@@ -35,6 +35,7 @@ mock.module('../sessions.js', () => ({
   registry: {
     values: () => registryEntries.values(),
     get: (id: string) => registryEntries.get(id),
+    findByName: (name: string) => [...registryEntries.values()].find(s => s.tmuxName === name),
     set: (id: string, info: any) => registryEntries.set(id, info),
     has: (id: string) => registryEntries.has(id),
     delete: (id: string) => registryEntries.delete(id),

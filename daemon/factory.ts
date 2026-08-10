@@ -735,7 +735,9 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
-  // prUrl/diffGistUrl were captured at factory_done time — use synchronously, no race.
+  // prUrl/diffGistUrl are captured asynchronously after factory_done (line ~661).
+  // If review completes before the GitHub API calls finish, these will be undefined.
+  // In practice reviews take minutes so this is unlikely, but not guaranteed.
   // PR preferred over gist: better diff view, inline comments, CI.
   const diffLink = state.prUrl
     ? [`🔀 **PR:** ${state.prUrl}`]

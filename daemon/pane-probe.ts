@@ -58,6 +58,7 @@ const MIN_IDLE_BEFORE_PROBE_S = 30
 const INTERCEPT_GRACE_MS = 5 * 60_000
 const BUILDER_IDLE_NUDGE_S = 90
 const BUILDER_MAX_NUDGES = 3
+const BUILDER_NUDGE_COOLDOWN_MS = 3 * 60_000
 
 // ---------------------------------------------------------------------------
 // Injectable seams (tests replace these)
@@ -526,7 +527,7 @@ function nudgeIdleBuilder(info: SessionInfo, idleSec: number, now: number): void
 
   const entry = builderNudges.get(key) ?? { count: 0, lastNudge: 0 }
   if (entry.count >= BUILDER_MAX_NUDGES) return
-  if (now - entry.lastNudge < NOTIFY_COOLDOWN_MS) return
+  if (now - entry.lastNudge < BUILDER_NUDGE_COOLDOWN_MS) return
 
   entry.count++
   entry.lastNudge = now
@@ -604,7 +605,7 @@ export function probeAllSessions(now?: number): void {
       // Idle builder nudge: session is idle, no blocking prompt, but it's a
       // factory builder that hasn't completed. Nudge via bridge notification.
       if (idleSec >= BUILDER_IDLE_NUDGE_S) {
-        const info = [...registry.values()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
+        const info = registry.findByName(target.tmuxName)
         if (info?.isFactoryBuilder && info.factoryPhase === 'building') {
           nudgeIdleBuilder(info, idleSec, t)
         }
