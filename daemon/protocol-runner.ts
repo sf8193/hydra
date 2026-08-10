@@ -14,7 +14,6 @@ import type { RunState, BehaviorContext, CompletionEvent, RoundAdvanceEvent } fr
 import { EventEmitter } from 'events'
 import { contributeSubscriptions } from './event-bus.js'
 import type { Modifier, SeedModifier } from './modifiers.js'
-import { startHeartbeat, stopHeartbeat } from './uds-heartbeat.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -506,7 +505,6 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 
   try {
     for (const [role, sid] of run.participants) {
-      stopHeartbeat(sid)
       if (sid === run.ownerSessionId) continue
       const info = registry.get(sid)
       if (info && !killsInProgress.has(sid)) {
@@ -739,7 +737,6 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   })
 
   registerParticipant(run, role, result.sessionId)
-  if (role !== run.protocol.ownerRole) startHeartbeat(result.sessionId)
 }
 
 async function postStatusLine(run: ProtocolRun): Promise<void> {
@@ -904,7 +901,6 @@ async function completeRun(run: ProtocolRun): Promise<void> {
   protocolEvents.emitComplete(completionEvent)
 
   for (const [, sid] of run.participants) {
-    stopHeartbeat(sid)
     if (sid === run.ownerSessionId) continue
     sessionToRun.delete(sid)
     const info = registry.get(sid)

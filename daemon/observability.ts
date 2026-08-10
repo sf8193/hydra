@@ -62,6 +62,7 @@ export type ConversationForensics = {
   lastStopReason: string | null
   lastToolCalled: string | null
   lastToolPending: boolean
+  pendingToolCount: number
   apiCallCount: number
   lastAssistantText: string | null
 }
@@ -75,7 +76,7 @@ export function readConversationForensics(transcriptPath: string): ConversationF
     let lastToolCalled: string | null = null
     let lastAssistantText: string | null = null
     let apiCallCount = 0
-    let lastToolUseId: string | null = null
+    const lastTurnToolIds = new Set<string>()
     const answeredToolIds = new Set<string>()
 
     for (const line of lines) {
@@ -87,12 +88,13 @@ export function readConversationForensics(transcriptPath: string): ConversationF
         const msg = entry.message
         if (!msg) continue
         lastStopReason = msg.stop_reason ?? null
+        lastTurnToolIds.clear()
         const content = msg.content
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'tool_use') {
               lastToolCalled = block.name ?? null
-              lastToolUseId = block.id ?? null
+              if (block.id) lastTurnToolIds.add(block.id)
             }
             if (block.type === 'text' && block.text) {
               lastAssistantText = block.text.slice(0, 200)
@@ -114,8 +116,9 @@ export function readConversationForensics(transcriptPath: string): ConversationF
       }
     }
 
-    const lastToolPending = lastToolUseId !== null && !answeredToolIds.has(lastToolUseId)
-    return { totalTurns, lastStopReason, lastToolCalled, lastToolPending, apiCallCount, lastAssistantText }
+    const pendingIds = [...lastTurnToolIds].filter(id => !answeredToolIds.has(id))
+    const lastToolPending = pendingIds.length > 0
+    return { totalTurns, lastStopReason, lastToolCalled, lastToolPending, pendingToolCount: pendingIds.length, apiCallCount, lastAssistantText }
   } catch {
     return null
   }
@@ -298,7 +301,7 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
     if (forensics) {
       lines.push(`  conversation: ${forensics.totalTurns} turns, ${forensics.apiCallCount} api calls`)
       lines.push(`  last stop_reason: ${forensics.lastStopReason ?? 'none'}`)
-      lines.push(`  last tool: ${forensics.lastToolCalled ?? 'none'}${forensics.lastToolPending ? ' (PENDING — died mid-execution)' : ''}`)
+      lines.push(`  last tool: ${forensics.lastToolCalled ?? 'none'}${forensics.lastToolPending ? ` (${forensics.pendingToolCount} PENDING — died mid-execution)` : ''}`)
       if (forensics.lastAssistantText) lines.push(`  last text: ${forensics.lastAssistantText.slice(0, 120)}...`)
     }
   }
