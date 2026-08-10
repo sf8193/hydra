@@ -460,7 +460,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let respawnCount = 0
   let resumeCount = 0
   if (isResume) {
-    const predecessor = [...registry.values()].find(s => s.claudeSessionId === opts!.resumeFrom)
+    const predecessor = [...registry.values()]
+      .filter(s => s.claudeSessionId === opts!.resumeFrom && s.deadAt)
+      .sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
     if (predecessor) resumeCount = (predecessor.resumeCount ?? 0) + 1
   }
   if (isJoin) {
