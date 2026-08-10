@@ -11,7 +11,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept, handleRecoverIntercept } from './commands/global.js'
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
-import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
+import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
@@ -431,6 +431,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
+
+    const destroyMatch = msg.content.match(/^(?:destroy|\/destroy)\s*$/i)
+    if (destroyMatch && msg.isThread) {
+      void handleDestroyIntercept(msg)
+      return
+    }
     const respawnMatch = msg.content.match(/^(?:respawn|\/respawn)(?::\s*([\s\S]+))?$/i)
     if (respawnMatch) {
       void handleRespawnIntercept(msg, respawnMatch[1]?.trim() || undefined)

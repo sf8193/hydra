@@ -1009,6 +1009,10 @@
       "daemon_util"
     ],
     [
+      "daemon_commands_thread",
+      "daemon_protocol-registry"
+    ],
+    [
       "daemon_commands_review",
       "daemon_config"
     ],

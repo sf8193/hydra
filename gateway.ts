@@ -188,6 +188,7 @@ export interface ChatGateway {
   }): Promise<ThreadInfo>
   startThreadOnMessage(msg: InboundMessage, preview: string, archiveDuration: number): Promise<string | null>
   renameThread?(threadId: string, name: string): Promise<void>
+  deleteThread?(threadId: string): Promise<void>
   getThreadStarterInfo(channelId: string): Promise<ThreadStarterInfo | null>
 
   // Attachments
