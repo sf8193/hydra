@@ -659,7 +659,10 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
   }).catch(err => {
       const errMsg = err instanceof Error ? err.message : String(err)
       process.stderr.write(`daemon: factory: review failed to start: ${errMsg}\n`)
-      if (state.phase !== 'reviewing') return
+      if (state.phase !== 'reviewing') {
+        process.stderr.write(`daemon: factory: review start failed but phase already moved to ${state.phase}, skipping PM notification\n`)
+        return
+      }
       state.phase = 'awaiting_pm'
       syncPhaseToRegistry(state)
       void safeSend(state.pmThreadId, [
@@ -910,8 +913,8 @@ export async function sweepOrphanedBuilders(): Promise<void> {
       retryCount: 0,
       createdAt: info.createdAt,
       reviewed: false,
-    reviewAttempted: false,
-    }
+      reviewAttempted: false,
+      }
     logBuild(orphanState, 'orphaned')
 
     if (pmThreadId) {

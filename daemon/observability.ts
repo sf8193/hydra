@@ -69,8 +69,16 @@ export type ConversationForensics = {
 
 export function readConversationForensics(transcriptPath: string): ConversationForensics | null {
   try {
-    const raw = readFileSync(transcriptPath, 'utf8')
+    const TAIL_BYTES = 32 * 1024
+    const fd = openSync(transcriptPath, 'r')
+    const stat = statSync(transcriptPath)
+    const offset = Math.max(0, stat.size - TAIL_BYTES)
+    const buf = Buffer.alloc(Math.min(stat.size, TAIL_BYTES))
+    readSync(fd, buf, 0, buf.length, offset)
+    closeSync(fd)
+    const raw = buf.toString('utf8')
     const lines = raw.split('\n').filter(l => l.trim())
+    if (offset > 0) lines.shift()
     let totalTurns = 0
     let lastStopReason: string | null = null
     let lastToolCalled: string | null = null

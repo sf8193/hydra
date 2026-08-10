@@ -49,13 +49,12 @@ export function defaultToolDescription(name: string): string {
   return tool.description
 }
 
-export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string> }): typeof UNIVERSAL_TOOLS {
+export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string>; isGuest?: boolean }): typeof UNIVERSAL_TOOLS {
   if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS.filter(t => !FACTORY_ONLY_TOOLS.has(t.name))
   const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
   if (!opts?.scopedToolOverrides) return filtered.filter(t => !SCOPED_TOOLS.has(t.name))
   const overrides = opts.scopedToolOverrides
-  const isGuest = 'advance' in overrides
-  const base = isGuest
+  const base = opts.isGuest
     ? filtered.filter(t => GUEST_TOOLS.has(t.name))
     : filtered.filter(t => !SCOPED_TOOLS.has(t.name) || t.name in overrides)
   return base.map(t => {

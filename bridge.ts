@@ -137,8 +137,8 @@ function sendToSocket(obj: Record<string, unknown>): void {
 
 function handleDaemonMessage(msg: Record<string, unknown>): void {
   const type = msg.type as string
-  const size = JSON.stringify(msg).length
-  process.stderr.write(`bridge: ← daemon msg type=${type} size=${size}b ts=${new Date().toISOString()}\n`)
+  const size = typeof msg.content === 'string' ? msg.content.length : undefined
+  process.stderr.write(`bridge: ← daemon msg type=${type}${size !== undefined ? ` size=${size}b` : ''} ts=${new Date().toISOString()}\n`)
 
   switch (type) {
     case 'registered': {

@@ -769,7 +769,27 @@ describe('dynamic tool scoping', () => {
     const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' } })
     const names = tools.map(t => t.name)
     expect(names).toContain('advance')
+    expect(names).not.toContain('extend_phase') // owner only gets tools in overrides
+  })
+
+  test('isGuest restricts to GUEST_TOOLS set', () => {
+    const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' }, isGuest: true })
+    const names = tools.map(t => t.name)
+    expect(names).toContain('advance')
     expect(names).toContain('extend_phase') // guest tool set includes both
+    expect(names).toContain('reply')
+    expect(names).not.toContain('spawn_session')
+    expect(names).not.toContain('factory_build')
+  })
+
+  test('owner keeps full tool set with advance override', () => {
+    const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' }, isGuest: false })
+    const names = tools.map(t => t.name)
+    expect(names).toContain('advance')
+    expect(names).toContain('reply')
+    expect(names).toContain('factory_build')
+    expect(names).toContain('fetch_messages')
+    expect(names).not.toContain('spawn_session') // master-orchestrator-only
   })
 
   test('main session always includes advance and extend_phase', () => {

@@ -211,7 +211,9 @@ function scopedToolOverridesForRun(run: ProtocolRun, sessionId: string): Record<
 
 function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
   const overrides = scopedToolOverridesForRun(run, sessionId) ?? undefined
-  const tools = computeToolsForSession(sessionId, overrides ? { scopedToolOverrides: overrides } : undefined)
+  const role = run.sessionToRole.get(sessionId)
+  const isGuest = role ? role !== run.protocol.ownerRole : false
+  const tools = computeToolsForSession(sessionId, overrides ? { scopedToolOverrides: overrides, isGuest } : undefined)
   transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
 }
 
