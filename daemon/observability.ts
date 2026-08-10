@@ -329,7 +329,7 @@ export function tailSpawnLog(path: string, maxLines: number = CRASH_LOG_TAIL_LIN
   return lines
 }
 
-export function recordSessionDeath(info: SessionInfo, reason: string): void {
+export function recordSessionDeath(info: SessionInfo, reason: string, protocolContext?: AutopsyExtras['protocolContext']): void {
   let tail: string[] = []
   if (info.spawnLogPath) {
     try { tail = tailSpawnLog(info.spawnLogPath) } catch {}
@@ -346,7 +346,7 @@ export function recordSessionDeath(info: SessionInfo, reason: string): void {
   if (info.debugLogPath) {
     try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
   }
-  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, resumeCount: info.resumeCount }) + '\n')
+  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext, resumeCount: info.resumeCount }) + '\n')
   info.deadAt = Date.now()
 }
 

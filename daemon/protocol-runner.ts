@@ -410,7 +410,7 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
   const info = registry.get(deadSessionId)
-  if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`)
+  if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
 
   const result = await doSpawnSession(
     info?.topic ?? `${run.protocol.display} ${run.protocol.roles[role]}`,
