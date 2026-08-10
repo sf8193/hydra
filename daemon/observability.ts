@@ -296,6 +296,11 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   } else {
     lines.push(`  last output: none captured`)
   }
+  const pctx = extras?.protocolContext
+  if (pctx) {
+    lines.push(`  protocol: ${pctx.protocol} (${pctx.phase}, round ${pctx.round})`)
+    lines.push(`  role: ${pctx.role}, advance called: ${pctx.advanceCalled}`)
+  }
   if (transcript) {
     const forensics = readConversationForensics(transcript)
     if (forensics) {

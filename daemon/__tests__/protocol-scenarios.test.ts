@@ -769,7 +769,7 @@ describe('dynamic tool scoping', () => {
     const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' } })
     const names = tools.map(t => t.name)
     expect(names).toContain('advance')
-    expect(names).not.toContain('extend_phase')
+    expect(names).toContain('extend_phase') // guest tool set includes both
   })
 
   test('main session always includes advance and extend_phase', () => {
