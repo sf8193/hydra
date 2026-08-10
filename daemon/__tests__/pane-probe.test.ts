@@ -44,6 +44,15 @@ mock.module('../sessions.js', () => ({
   },
 }))
 
+const transportMessages: Array<{ sessionId: string; msg: any }> = []
+const connectedSessions = new Set<string>()
+mock.module('../bridge-transport.js', () => ({
+  transport: {
+    sendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
+    has: (sessionId: string) => connectedSessions.has(sessionId),
+  },
+}))
+
 mock.module('../util.js', () => ({
   safeSend: async (channelId: string, text: string) => {
     sentMessages.push({ channelId, text })
@@ -738,6 +747,66 @@ describe('probeAllSessions', () => {
       if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
       else delete process.env.HYDRA_AUTO_LOGIN
     }
+  })
+
+  it('nudges idle factory builders via bridge notification', async () => {
+    const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    const info = registryEntries.get('s1')!
+    info.isFactoryBuilder = true
+    info.factoryPhase = 'building'
+    info.sessionId = 's1'
+    connectedSessions.add('s1')
+
+    paneTails.set('vale', NORMAL)
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 120)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    transportMessages.length = 0
+    probeAllSessions(T0)
+
+    expect(transportMessages.length).toBe(1)
+    expect(transportMessages[0].sessionId).toBe('s1')
+    expect(transportMessages[0].msg.content).toContain('factory_done')
+    connectedSessions.delete('s1')
+  })
+
+  it('notifies PM when builder has no bridge', async () => {
+    const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    const info = registryEntries.get('s1')!
+    info.isFactoryBuilder = true
+    info.factoryPhase = 'building'
+    info.sessionId = 's1'
+    info.factoryPmThreadId = 'pm-thread'
+    info.factoryTicket = 'fb-99'
+    // NOT adding to connectedSessions — bridge is down
+
+    paneTails.set('vale', NORMAL)
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 130) // idle >120s bridgeless threshold
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    sentMessages.length = 0
+    probeAllSessions(T0)
+
+    const pmMsg = sentMessages.find(m => m.channelId === 'pm-thread')
+    expect(pmMsg).not.toBeUndefined()
+    expect(pmMsg!.text).toContain('lost its bridge')
+    expect(pmMsg!.text).toContain('factory_abandon')
+  })
+
+  it('does not nudge non-builder sessions', async () => {
+    const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+
+    paneTails.set('vale', NORMAL)
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 120)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    transportMessages.length = 0
+    probeAllSessions(T0)
+
+    expect(transportMessages.length).toBe(0)
   })
 
   it('reads BYTE_SESSION_NAME from env', async () => {

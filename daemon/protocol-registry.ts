@@ -56,7 +56,7 @@ async function dispatchReply(sessionId: string, text: string, chatId: string, se
 }
 
 // Encapsulates dispatch ordering: protocol registry processes the reply first,
-// then the event bus notifies general subscribers (e.g. factory checks for [done]).
+// then the event bus notifies general subscribers (e.g. factory session death handler).
 export async function dispatchSessionReply(sessionId: string, text: string, chatId: string, sentIds: string[]): Promise<void> {
   await dispatchReply(sessionId, text, chatId, sentIds)
   emit('reply', { sessionId, text, chatId, sentIds })

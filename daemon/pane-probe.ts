@@ -17,6 +17,7 @@ import type { SessionInfo } from './sessions.js'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { loadAccess } from './access.js'
 import { safeSend } from './util.js'
+import { transport } from './bridge-transport.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +56,8 @@ const MAX_NOTIFICATIONS = 3
 const PANE_TAIL_LINES = 8
 const MIN_IDLE_BEFORE_PROBE_S = 30
 const INTERCEPT_GRACE_MS = 5 * 60_000
+const BUILDER_IDLE_NUDGE_S = 90
+const BUILDER_MAX_NUDGES = 3
 
 // ---------------------------------------------------------------------------
 // Injectable seams (tests replace these)
@@ -497,6 +500,51 @@ function byteTmuxName(): string {
   return process.env.BYTE_SESSION_NAME ?? `${PLATFORM}-byte`
 }
 
+// ---------------------------------------------------------------------------
+// Idle builder nudge — detect factory builders that go idle without calling
+// factory_done. Sends a bridge notification (not sendKeys) so CC processes
+// it as input on its next turn.
+// ---------------------------------------------------------------------------
+
+const builderNudges = new Map<string, { count: number; lastNudge: number }>()
+
+const BUILDER_BRIDGELESS_ABORT_S = 120
+
+function nudgeIdleBuilder(info: SessionInfo, idleSec: number, now: number): void {
+  const key = info.sessionId
+  const connected = transport.has(info.sessionId)
+
+  if (!connected && idleSec >= BUILDER_BRIDGELESS_ABORT_S) {
+    process.stderr.write(`daemon: pane-probe: builder ${info.tmuxName} idle ${idleSec}s with no bridge — notifying PM thread\n`)
+    void safeSend(info.factoryPmThreadId ?? info.threadId, [
+      `> ⚠️ **${info.tmuxName}** — factory builder lost its bridge connection (idle ${idleSec}s, no MCP tools).`,
+      `> The builder cannot work without tools. Use \`factory_abandon("${info.factoryTicket}")\` to abort, or wait for it to reconnect.`,
+    ].join('\n'))
+    builderNudges.set(key, { count: BUILDER_MAX_NUDGES, lastNudge: now })
+    return
+  }
+
+  const entry = builderNudges.get(key) ?? { count: 0, lastNudge: 0 }
+  if (entry.count >= BUILDER_MAX_NUDGES) return
+  if (now - entry.lastNudge < NOTIFY_COOLDOWN_MS) return
+
+  entry.count++
+  entry.lastNudge = now
+  builderNudges.set(key, entry)
+
+  transport.sendOrQueue(info.sessionId, {
+    type: 'notification',
+    content: `[system] You appear idle (${idleSec}s). You are a factory builder — your task is not complete until you call factory_done with your results. Continue working on the spec and call factory_done when done.`,
+    meta: { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+
+  process.stderr.write(`daemon: pane-probe: nudged idle builder ${info.tmuxName} (${entry.count}/${BUILDER_MAX_NUDGES}, idle ${idleSec}s)\n`)
+}
+
+export function clearBuilderNudge(sessionId: string): void {
+  builderNudges.delete(sessionId)
+}
+
 // Heartbeat: periodic log so total silence is distinguishable from "nothing stuck"
 let _probeCount = 0
 let _detectCount = 0
@@ -553,6 +601,14 @@ export function probeAllSessions(now?: number): void {
 
     if (!detected) {
       clearState(key, t) // no detection — grace period for pending intercepts
+      // Idle builder nudge: session is idle, no blocking prompt, but it's a
+      // factory builder that hasn't completed. Nudge via bridge notification.
+      if (idleSec >= BUILDER_IDLE_NUDGE_S) {
+        const info = [...registry.values()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
+        if (info?.isFactoryBuilder && info.factoryPhase === 'building') {
+          nudgeIdleBuilder(info, idleSec, t)
+        }
+      }
       continue
     }
     _detectCount++
@@ -632,6 +688,7 @@ function clearState(key: string, now: number): void {
 export function _resetForTesting(): void {
   probeEntries.clear()
   threadIntercepts.clear()
+  builderNudges.clear()
 }
 
 export const _CONFIRM_PROBES = CONFIRM_PROBES

@@ -5,14 +5,21 @@ import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 
+const sentMessages: Array<Record<string, unknown>> = []
+let origSendOrQueue: typeof transport.sendOrQueue
 let origStderrWrite: typeof process.stderr.write
 
 beforeEach(() => {
   origStderrWrite = process.stderr.write
   process.stderr.write = (() => true) as any
+  origSendOrQueue = transport.sendOrQueue.bind(transport)
+  sentMessages.length = 0
+  transport.sendOrQueue = ((sessionId: string, msg: Record<string, unknown>) => {
+    sentMessages.push({ sessionId, ...msg })
+  }) as any
   resetRegistry()
   _resetNudgesForTesting()
-  transport.messageQueues.clear()
+  transport.messageQueues?.clear()
 
   registry.set('s1', {
     sessionId: 's1', topic: 'test', threadId: 'thread-1',
@@ -23,6 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.stderr.write = origStderrWrite
+  transport.sendOrQueue = origSendOrQueue
   registry.delete('s1')
 })
 
@@ -46,7 +54,7 @@ describe('advance nudge', () => {
     const result = maybeNudgeMissingAdvance('s1', longText, 'thread-1')
     expect(result).toBe(true)
 
-    const msgs = transport.messageQueues.get('s1') ?? []
+    const msgs = sentMessages
     expect(msgs.some(m => (m.content as string).includes('reply()'))).toBe(true)
     expect(msgs.some(m => (m.content as string).includes('advance('))).toBe(true)
   })
@@ -100,7 +108,7 @@ describe('advance nudge', () => {
     const longText = 'x'.repeat(250)
     maybeNudgeMissingAdvance('s1', longText, 'thread-1')
 
-    const msgs = transport.messageQueues.get('s1') ?? []
+    const msgs = sentMessages
     const nudge = msgs.find(m => (m.content as string).includes('protocol did NOT advance'))
     expect(nudge).toBeDefined()
     expect((nudge!.content as string)).toContain('verdict: "approve | request_changes"')
@@ -111,7 +119,7 @@ describe('advance nudge', () => {
     const longText = 'x'.repeat(250)
     maybeNudgeMissingAdvance('s1', longText, 'thread-1')
 
-    const msgs = transport.messageQueues.get('s1') ?? []
+    const msgs = sentMessages
     const nudge = msgs.find(m => (m.content as string).includes('protocol did NOT advance'))
     expect(nudge).toBeDefined()
     expect((nudge!.content as string)).toContain('advance({ content: "..." })')
