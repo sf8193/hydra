@@ -972,6 +972,13 @@ function runnerHooks(name: string, protoName: string) {
       if (!chatId || chatId !== run.threadId) return null
       return scopedToolOverridesForRun(run, sessionId)
     },
+    resolveIsGuest: (sessionId) => {
+      const runId = sessionToRun.get(sessionId)
+      const run = runId ? runs.get(runId) : undefined
+      if (!run) return false
+      const role = run.sessionToRole.get(sessionId)
+      return role ? role !== run.protocol.ownerRole : false
+    },
   })
 }
 

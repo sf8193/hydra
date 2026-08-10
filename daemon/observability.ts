@@ -2,7 +2,7 @@
 // death report to the daemon log. A crashed spawn otherwise leaves no cause, no
 // stderr, and no link to its transcript.
 
-import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, fstatSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execFileSync } from 'child_process'
@@ -58,32 +58,36 @@ export function transcriptPathFor(claudeSessionId: string): string | undefined {
 }
 
 export type ConversationForensics = {
-  totalTurns: number
+  tailTurns: number
   lastStopReason: string | null
   lastToolCalled: string | null
   lastToolPending: boolean
   pendingToolCount: number
-  apiCallCount: number
+  tailApiCalls: number
   lastAssistantText: string | null
+  isTail: boolean
 }
 
 export function readConversationForensics(transcriptPath: string): ConversationForensics | null {
+  let fd: number | undefined
   try {
     const TAIL_BYTES = 32 * 1024
-    const fd = openSync(transcriptPath, 'r')
-    const stat = statSync(transcriptPath)
+    fd = openSync(transcriptPath, 'r')
+    const stat = fstatSync(fd)
+    const isTail = stat.size > TAIL_BYTES
     const offset = Math.max(0, stat.size - TAIL_BYTES)
     const buf = Buffer.alloc(Math.min(stat.size, TAIL_BYTES))
     readSync(fd, buf, 0, buf.length, offset)
     closeSync(fd)
+    fd = undefined
     const raw = buf.toString('utf8')
     const lines = raw.split('\n').filter(l => l.trim())
-    if (offset > 0) lines.shift()
-    let totalTurns = 0
+    if (isTail) lines.shift()
+    let tailTurns = 0
     let lastStopReason: string | null = null
     let lastToolCalled: string | null = null
     let lastAssistantText: string | null = null
-    let apiCallCount = 0
+    let tailApiCalls = 0
     const lastTurnToolIds = new Set<string>()
     const answeredToolIds = new Set<string>()
 
@@ -92,7 +96,7 @@ export function readConversationForensics(transcriptPath: string): ConversationF
       try { entry = JSON.parse(line) } catch { continue }
 
       if (entry.type === 'assistant') {
-        totalTurns++
+        tailTurns++
         const msg = entry.message
         if (!msg) continue
         lastStopReason = msg.stop_reason ?? null
@@ -109,7 +113,7 @@ export function readConversationForensics(transcriptPath: string): ConversationF
             }
           }
         }
-        if (msg.usage) apiCallCount++
+        if (msg.usage) tailApiCalls++
       }
 
       if (entry.type === 'user') {
@@ -126,8 +130,9 @@ export function readConversationForensics(transcriptPath: string): ConversationF
 
     const pendingIds = [...lastTurnToolIds].filter(id => !answeredToolIds.has(id))
     const lastToolPending = pendingIds.length > 0
-    return { totalTurns, lastStopReason, lastToolCalled, lastToolPending, pendingToolCount: pendingIds.length, apiCallCount, lastAssistantText }
+    return { tailTurns, lastStopReason, lastToolCalled, lastToolPending, pendingToolCount: pendingIds.length, tailApiCalls, lastAssistantText, isTail }
   } catch {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
     return null
   }
 }
@@ -317,7 +322,8 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   if (transcript) {
     const forensics = readConversationForensics(transcript)
     if (forensics) {
-      lines.push(`  conversation: ${forensics.totalTurns} turns, ${forensics.apiCallCount} api calls`)
+      const tailLabel = forensics.isTail ? 'recent ' : ''
+      lines.push(`  conversation: ${tailLabel}${forensics.tailTurns} turns, ${forensics.tailApiCalls} api calls${forensics.isTail ? ' (tail)' : ''}`)
       lines.push(`  last stop_reason: ${forensics.lastStopReason ?? 'none'}`)
       lines.push(`  last tool: ${forensics.lastToolCalled ?? 'none'}${forensics.lastToolPending ? ` (${forensics.pendingToolCount} PENDING — died mid-execution)` : ''}`)
       if (forensics.lastAssistantText) lines.push(`  last text: ${forensics.lastAssistantText.slice(0, 120)}...`)

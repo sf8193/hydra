@@ -914,7 +914,7 @@ export async function sweepOrphanedBuilders(): Promise<void> {
       createdAt: info.createdAt,
       reviewed: false,
       reviewAttempted: false,
-      }
+    }
     logBuild(orphanState, 'orphaned')
 
     if (pmThreadId) {
