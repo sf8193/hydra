@@ -137,6 +137,8 @@ function sendToSocket(obj: Record<string, unknown>): void {
 
 function handleDaemonMessage(msg: Record<string, unknown>): void {
   const type = msg.type as string
+  const size = JSON.stringify(msg).length
+  process.stderr.write(`bridge: ← daemon msg type=${type} size=${size}b ts=${new Date().toISOString()}\n`)
 
   switch (type) {
     case 'registered': {
@@ -193,8 +195,10 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       mcp.notification({
         method: 'notifications/claude/channel',
         params: { content, meta },
+      }).then(() => {
+        process.stderr.write(`bridge: → CC notifications/claude/channel delivered ts=${new Date().toISOString()} size=${content.length}b\n`)
       }).catch(err => {
-        process.stderr.write(`bridge: failed to deliver notification: ${err}\n`)
+        process.stderr.write(`bridge: → CC notifications/claude/channel FAILED: ${err} ts=${new Date().toISOString()}\n`)
       })
       break
     }
@@ -218,8 +222,10 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       const tools = msg.tools as Array<Record<string, unknown>> | undefined
       if (tools) {
         dynamicTools = tools
-        mcp.notification({ method: 'notifications/tools/list_changed' }).catch(err => {
-          process.stderr.write(`bridge: failed to send tools/list_changed: ${err}\n`)
+        mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {
+          process.stderr.write(`bridge: → CC notifications/tools/list_changed delivered ts=${new Date().toISOString()} tools=${tools.length}\n`)
+        }).catch(err => {
+          process.stderr.write(`bridge: → CC notifications/tools/list_changed FAILED: ${err} ts=${new Date().toISOString()}\n`)
         })
       }
       break
@@ -259,11 +265,15 @@ function connectSocket(): void {
   })
 
   sock.on('error', (err: Error) => {
-    process.stderr.write(`bridge: socket error: ${err.message}\n`)
+    process.stderr.write(`bridge: socket error: ${err.message} ts=${new Date().toISOString()} pendingCalls=${pendingCalls.size}\n`)
+  })
+
+  sock.on('end', () => {
+    process.stderr.write(`bridge: socket end (daemon closed its side) ts=${new Date().toISOString()} pendingCalls=${pendingCalls.size}\n`)
   })
 
   sock.on('close', () => {
-    process.stderr.write(`bridge: socket closed\n`)
+    process.stderr.write(`bridge: socket closed ts=${new Date().toISOString()} pendingCalls=${pendingCalls.size}\n`)
     socketReady = false
     sock = null
 

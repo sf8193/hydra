@@ -57,6 +57,70 @@ export function transcriptPathFor(claudeSessionId: string): string | undefined {
   return undefined
 }
 
+export type ConversationForensics = {
+  totalTurns: number
+  lastStopReason: string | null
+  lastToolCalled: string | null
+  lastToolPending: boolean
+  apiCallCount: number
+  lastAssistantText: string | null
+}
+
+export function readConversationForensics(transcriptPath: string): ConversationForensics | null {
+  try {
+    const raw = readFileSync(transcriptPath, 'utf8')
+    const lines = raw.split('\n').filter(l => l.trim())
+    let totalTurns = 0
+    let lastStopReason: string | null = null
+    let lastToolCalled: string | null = null
+    let lastAssistantText: string | null = null
+    let apiCallCount = 0
+    let lastToolUseId: string | null = null
+    const answeredToolIds = new Set<string>()
+
+    for (const line of lines) {
+      let entry: any
+      try { entry = JSON.parse(line) } catch { continue }
+
+      if (entry.type === 'assistant') {
+        totalTurns++
+        const msg = entry.message
+        if (!msg) continue
+        lastStopReason = msg.stop_reason ?? null
+        const content = msg.content
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_use') {
+              lastToolCalled = block.name ?? null
+              lastToolUseId = block.id ?? null
+            }
+            if (block.type === 'text' && block.text) {
+              lastAssistantText = block.text.slice(0, 200)
+            }
+          }
+        }
+        if (msg.usage) apiCallCount++
+      }
+
+      if (entry.type === 'user') {
+        const content = entry.message?.content
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result' && block.tool_use_id) {
+              answeredToolIds.add(block.tool_use_id)
+            }
+          }
+        }
+      }
+    }
+
+    const lastToolPending = lastToolUseId !== null && !answeredToolIds.has(lastToolUseId)
+    return { totalTurns, lastStopReason, lastToolCalled, lastToolPending, apiCallCount, lastAssistantText }
+  } catch {
+    return null
+  }
+}
+
 export function logCorrelation(info: SessionInfo): void {
   if (correlatedSessions.has(info.sessionId)) return
   correlatedSessions.add(info.sessionId)
@@ -228,6 +292,15 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
     }
   } else {
     lines.push(`  last output: none captured`)
+  }
+  if (transcript) {
+    const forensics = readConversationForensics(transcript)
+    if (forensics) {
+      lines.push(`  conversation: ${forensics.totalTurns} turns, ${forensics.apiCallCount} api calls`)
+      lines.push(`  last stop_reason: ${forensics.lastStopReason ?? 'none'}`)
+      lines.push(`  last tool: ${forensics.lastToolCalled ?? 'none'}${forensics.lastToolPending ? ' (PENDING — died mid-execution)' : ''}`)
+      if (forensics.lastAssistantText) lines.push(`  last text: ${forensics.lastAssistantText.slice(0, 120)}...`)
+    }
   }
   lines.push(`  ═══ end autopsy ═══`)
   return lines.join('\n')
