@@ -383,12 +383,23 @@ describe('review cancellation', () => {
     expect(cancelMsg!.text).toContain('factory_abandon')
   })
 
-  test('cancelled review requires allow_unreviewed for accept', async () => {
+  test('cancelled review with reviewAttempted accepts without override', async () => {
     const ticket = await buildAndDone()
     const builds = [...__test.builds.values()]
     builds[0].phase = 'reviewing'
+    builds[0].reviewAttempted = true
 
     emitReviewComplete('cancelled')
+
+    const result = factoryAccept(ticket, PM_SESSION)
+    expect(result).toEqual({ ok: true })
+  })
+
+  test('unreviewed build without attempt requires allow_unreviewed', async () => {
+    const ticket = await buildAndDone()
+    const builds = [...__test.builds.values()]
+    builds[0].phase = 'awaiting_pm'
+    builds[0].reviewAttempted = false
 
     const result = factoryAccept(ticket, PM_SESSION)
     expect('error' in result).toBe(true)
@@ -650,6 +661,7 @@ describe('builder death', () => {
     await buildAndDone()
     const builds = [...__test.builds.values()]
     builds[0].phase = 'awaiting_pm'
+    builds[0].reviewAttempted = false
 
     sent.length = 0
     onBuilderDeath(BUILDER_SESSION)
