@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, VALID_DIFFICULTIES, type Difficulty } from './factory.js'
+import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, onBuilderDone, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -340,7 +340,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if ('error' in result) {
           return { content: [{ type: 'text', text: `Factory retry failed: ${result.error}` }], isError: true }
         }
-        return { content: [{ type: 'text', text: `Retry instructions sent to builder. Ticket: ${ticket}. Waiting for [done].` }] }
+        return { content: [{ type: 'text', text: `Retry instructions sent to builder. Ticket: ${ticket}. Waiting for factory_done.` }] }
       }
 
       case 'factory_accept': {
@@ -366,6 +366,26 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           return { content: [{ type: 'text', text: `Factory abandon failed: ${result.error}` }], isError: true }
         }
         return { content: [{ type: 'text', text: `Build abandoned. Ticket: ${ticket}. Builder killed.` }] }
+      }
+
+      case 'factory_done': {
+        if (!callerSessionId) throw new Error('factory_done requires a session context')
+        const callerInfo = registry.get(callerSessionId)
+        if (!callerInfo?.isFactoryBuilder) throw new Error('factory_done can only be called by factory builders')
+        if (!Array.isArray(args.files_changed)) throw new Error('files_changed must be an array of strings')
+        if (typeof args.test_results !== 'string') throw new Error('test_results must be a string')
+        const doneArgs: FactoryDoneArgs = {
+          files_changed: (args.files_changed as unknown[]).filter((f): f is string => typeof f === 'string'),
+          test_results: args.test_results as string,
+          rationale: typeof args.rationale === 'string' ? args.rationale : undefined,
+          known_issues: typeof args.known_issues === 'string' ? args.known_issues : undefined,
+          branch: typeof args.branch === 'string' ? args.branch : undefined,
+        }
+        const result = onBuilderDone(callerSessionId, doneArgs)
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: result.error }], isError: true }
+        }
+        return { content: [{ type: 'text', text: 'Build complete. Adversarial review will start shortly — you will defend your implementation as the review owner.' }] }
       }
 
       case 'factory_status': {

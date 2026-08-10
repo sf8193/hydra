@@ -6,9 +6,8 @@ import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../../shared/constants.js'
 process.stderr.write = (() => true) as any
 
 describe('computeToolsForSession', () => {
-  test('main session gets all tools', () => {
+  test('main session gets all tools except factory-only', () => {
     const tools = computeToolsForSession('main')
-    expect(tools).toBe(UNIVERSAL_TOOLS) // same reference
     const names = tools.map(t => t.name)
     expect(names).toContain('reply')
     expect(names).toContain('spawn_session')
@@ -16,6 +15,7 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('kill_session')
     expect(names).toContain('send_to_thread')
     expect(names).toContain('peek_session')
+    expect(names).not.toContain('factory_done')
   })
 
   test('worker session does NOT get spawn/kill tools', () => {
@@ -29,6 +29,19 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('peek_session')
     expect(names).not.toContain('spawn_session')
     expect(names).not.toContain('kill_session')
+  })
+
+  test('factory builder with scopedToolOverrides gets factory_done', () => {
+    const tools = computeToolsForSession('builder-id', {
+      scopedToolOverrides: { factory_done: 'Signal build complete.' },
+    })
+    const names = tools.map(t => t.name)
+    expect(names).toContain('factory_done')
+    expect(names).toContain('reply')
+    expect(names).not.toContain('spawn_session')
+    expect(names).not.toContain('advance')
+    const factoryDone = tools.find(t => t.name === 'factory_done')!
+    expect(factoryDone.description).toBe('Signal build complete.')
   })
 
   test('worker with allowMainTools gets spawn/kill tools', () => {
