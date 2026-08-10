@@ -40,11 +40,11 @@ sequenceDiagram
 
         handler->>gateway: deleteThread(threadId)
         alt Discord API error
-            handler->>user: "Thread deletion failed: <error>"
+            handler->>user: "Thread deletion failed: error"
             Note over handler: log to stderr, abort
         end
 
-        opt parentChannelId + anchorMessageId known
+        alt parentChannelId + anchorMessageId known
             handler->>gateway: delete(parentChannelId, anchorMessageId)
             Note over handler: catch silently — thread already gone
         else missing parentChannelId or anchorMessageId
