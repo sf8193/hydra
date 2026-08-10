@@ -27,6 +27,35 @@ import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktre
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
 // ---------------------------------------------------------------------------
+// Friendly spawn error messages — converts raw exceptions to user-actionable text
+// ---------------------------------------------------------------------------
+
+export function friendlySpawnError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  const lower = raw.toLowerCase()
+
+  if (lower.includes('no server running') || (lower.includes('tmux') && lower.includes('error connecting'))) {
+    return 'tmux is not running. Start it with `tmux new-session -d` or restart the daemon.'
+  }
+  if (lower.includes('enoent') && lower.includes('claude')) {
+    return 'Claude CLI not found. Install it or check your PATH.'
+  }
+  if (lower.includes('worktree') && lower.includes('already exists')) {
+    return 'A worktree for this branch already exists. Use `git worktree list` to check, or try a different session name.'
+  }
+  if (lower.includes('failed to create worktree')) {
+    return `${raw} — Use \`git worktree list\` to check for conflicts, or try a different session name.`
+  }
+  if (lower.includes('eacces') || lower.includes('permission denied')) {
+    return 'Permission denied — check file permissions on the target directory.'
+  }
+  if (lower.includes('no available session names')) {
+    return `${raw} All session name slots are taken. Kill some sessions with \`/kill <name>\` to free up names.`
+  }
+  return `Spawn failed: ${raw}. Try \`/health\` to diagnose.`
+}
+
+// ---------------------------------------------------------------------------
 // Channel resolution — determines where to create a new thread
 // ---------------------------------------------------------------------------
 
