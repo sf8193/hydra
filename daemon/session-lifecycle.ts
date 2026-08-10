@@ -734,7 +734,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     assignedClaudeSessionId = randomUUID()
     const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
     const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
+    const promptArg = opts?.channelSeed ? '' : ` ${shq(prompt)}`
+    claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions${promptArg}${disallowed}${toolsFlag}`
+    if (opts?.channelSeed) process.stderr.write(`daemon: spawn ${tmuxName}: channelSeed mode — prompt will be delivered via channel notification\n`)
     if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
     if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
   }
