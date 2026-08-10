@@ -57,6 +57,11 @@ export function transcriptPathFor(claudeSessionId: string): string | undefined {
   return undefined
 }
 
+export function formatCostUsd(costUsd: number): string {
+  if (costUsd < 0.01) return `$${costUsd.toFixed(4)}`
+  return `$${costUsd.toFixed(2)}`
+}
+
 export function logCorrelation(info: SessionInfo): void {
   if (correlatedSessions.has(info.sessionId)) return
   correlatedSessions.add(info.sessionId)

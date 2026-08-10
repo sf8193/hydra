@@ -97,10 +97,7 @@ backfillAnchorChannelIds().catch(err => {
 import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
-import { startWorktreeCleanupTimer } from './daemon/worktree-cleanup.js'
-startWorktreeCleanupTimer()
-
-import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
+import { refreshDashboard, refreshDashboardNow, handleHomeAction } from './daemon/dashboard.js'
 import { debouncedRefreshListDisplay } from './daemon/commands/status.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle, cacheSlackChannel, cacheSlackThread } from './daemon/artifacts.js'
 registry.onPersist = refreshDashboard
@@ -109,6 +106,10 @@ if ('homeTabHandler' in gateway) {
   (gateway as any).homeTabHandler = async (_userId: string) => {
     refreshDashboardNow()
   }
+}
+
+if ('homeActionHandler' in gateway) {
+  (gateway as any).homeActionHandler = handleHomeAction
 }
 
 if ('homeSpawnHandler' in gateway) {
@@ -480,7 +481,7 @@ setInterval(() => {
 
 // Pane probe: detect CC sessions stuck on interactive prompts (plan mode, login).
 // Lower cadence than reply guard — these stalls are minutes-scale.
-setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
+setInterval(() => { probeAllSessions() }, 60_000)
 
 let shuttingDown = false
 

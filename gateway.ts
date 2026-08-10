@@ -213,4 +213,8 @@ export interface ChatGateway {
   getThreadUrl(threadId: string): Promise<string>
   getMessageUrl(threadId: string, messageTs: string): string
   getLastReplyId?(threadId: string): Promise<string | null>
+
+  // Slack-specific — optional, only implemented by SlackGateway
+  openDMChannel?(userId: string): Promise<string | null>
+  publishHomeTab?(userId: string, blocks: any[]): Promise<void>
 }

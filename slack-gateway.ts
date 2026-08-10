@@ -8,7 +8,7 @@
 
 import { App, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { sanitizeFilename, COUNT_EMOJI } from './gateway.js'
+import { sanitizeFilename } from './gateway.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -79,6 +79,7 @@ export class SlackGateway implements ChatGateway {
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
+  homeActionHandler: ((actionValue: string, userId: string) => Promise<void>) | null = null
 
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
@@ -178,7 +179,24 @@ export class SlackGateway implements ChatGateway {
       )
     })
 
-
+    // Home tab: session overflow menu actions (kill, peek, pause)
+    this.app.action(/^home:action:/, async ({ action, body, ack }: any) => {
+      this.touchHeartbeat()
+      await ack()
+      const userId = body?.user?.id
+      if (!userId) return
+      const { loadAccess } = await import('./daemon/access.js')
+      const access = loadAccess()
+      if (!access.allowFrom.includes(userId)) {
+        process.stderr.write(`slack gateway: home:action rejected — user ${userId} not in allowFrom\n`)
+        return
+      }
+      const value = action?.selected_option?.value
+      if (!value || !this.homeActionHandler) return
+      this.homeActionHandler(value, userId).catch((e: Error) =>
+        process.stderr.write(`slack gateway: home:action handler error: ${e}\n`),
+      )
+    })
 
     // Auto-add channel to access groups when bot is invited
     this.app.event('member_joined_channel', async ({ event }) => {
@@ -449,13 +467,11 @@ export class SlackGateway implements ChatGateway {
   }
 
   async react(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
-    // no-op: bot reactions trigger push notifications on Slack
-    // NOTE: updateSessionVisual also depends on react/unreact being live — re-enable all three together
-    // (and drop the PLATFORM check on reply-guard's react-settle in bridge-server.ts)
+    // No-op: bot reactions trigger push notifications on both platforms
   }
 
   async unreact(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
-    // no-op: bot reactions trigger push notifications on Slack
+    // No-op: bot reactions trigger push notifications on both platforms
   }
 
   async typing(channelId: string): Promise<void> {
@@ -731,9 +747,7 @@ export class SlackGateway implements ChatGateway {
     return `${msg.channelId}:${msg.id}`
   }
 
-  private static readonly COUNT_EMOJI = COUNT_EMOJI
-
-  async updateSessionVisual(threadId: string, opts: {
+  async updateSessionVisual(_threadId: string, _opts: {
     state: 'live' | 'killed' | 'crashed' | 'zombie'
     emoji: string
     sessionName: string
@@ -745,41 +759,7 @@ export class SlackGateway implements ChatGateway {
     anchorChannelId?: string
     anchorMessageId?: string
   }): Promise<void> {
-    return; // no-op: visual state communicated via reactions, disabled on Slack
-
-    const anchor = this.getThreadAnchor(threadId)
-    if (!anchor) return
-
-    await Promise.allSettled([
-      this.unreact(anchor.channelId, anchor.messageId, '🚀'),
-      this.unreact(anchor.channelId, anchor.messageId, '☠️'),
-      this.unreact(anchor.channelId, anchor.messageId, '💥'),
-      this.unreact(anchor.channelId, anchor.messageId, '🧟'),
-    ])
-
-    switch (opts.state) {
-      case 'live':
-        await this.react(anchor.channelId, anchor.messageId, '🚀')
-        break
-      case 'killed':
-        await this.react(anchor.channelId, anchor.messageId, '☠️')
-        break
-      case 'crashed':
-        await this.react(anchor.channelId, anchor.messageId, '💥')
-        break
-      case 'zombie':
-        await this.react(anchor.channelId, anchor.messageId, '🚀')
-        await this.react(anchor.channelId, anchor.messageId, '🧟')
-        if (opts.respawnCount && opts.respawnCount > 0) {
-          const idx = Math.min(opts.respawnCount - 1, SlackGateway.COUNT_EMOJI.length - 1)
-          await this.react(anchor.channelId, anchor.messageId, SlackGateway.COUNT_EMOJI[idx])
-          if (opts.respawnCount > 1) {
-            await this.unreact(anchor.channelId, anchor.messageId,
-              SlackGateway.COUNT_EMOJI[Math.min(opts.respawnCount - 2, SlackGateway.COUNT_EMOJI.length - 1)])
-          }
-        }
-        break
-    }
+    // No-op: visual state via reactions is disabled on Slack (bot reactions trigger push notifications)
   }
 
   /** Get thread context (starter info). */
