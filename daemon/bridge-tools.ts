@@ -39,6 +39,10 @@ export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
 export const FACTORY_ONLY_TOOLS = new Set(['factory_done'])
 const SCOPED_TOOLS = new Set([...PROTOCOL_ONLY_TOOLS, ...FACTORY_ONLY_TOOLS])
 
+// Protocol guests get a minimal tool set to stay below CC's deferred-tool threshold.
+// With 25 tools, CC defers most of them — including advance, which the guest exists to call.
+const GUEST_TOOLS = new Set(['advance', 'extend_phase', 'reply', 'fetch_messages', 'react', 'edit_message', 'download_attachment', 'set_description'])
+
 export function defaultToolDescription(name: string): string {
   const tool = UNIVERSAL_TOOLS.find(t => t.name === name)
   if (!tool) throw new Error(`defaultToolDescription: unknown tool "${name}"`)
@@ -50,7 +54,11 @@ export function computeToolsForSession(sessionId: string, opts?: { allowMainTool
   const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
   if (!opts?.scopedToolOverrides) return filtered.filter(t => !SCOPED_TOOLS.has(t.name))
   const overrides = opts.scopedToolOverrides
-  return filtered.filter(t => !SCOPED_TOOLS.has(t.name) || t.name in overrides).map(t => {
+  const isGuest = 'advance' in overrides
+  const base = isGuest
+    ? filtered.filter(t => GUEST_TOOLS.has(t.name))
+    : filtered.filter(t => !SCOPED_TOOLS.has(t.name) || t.name in overrides)
+  return base.map(t => {
     const desc = overrides[t.name]
     return desc ? { ...t, description: desc } : { ...t } // shallow-copy: source objects are frozen
   })

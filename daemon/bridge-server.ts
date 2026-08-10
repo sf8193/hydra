@@ -10,6 +10,7 @@ import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect, toolsForSession } from './protocol-registry.js'
+import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -453,7 +454,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     if (info.debugLogPath) {
       try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
     }
-    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail }) + '\n')
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext: getProtocolContext(info.sessionId) }) + '\n')
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {

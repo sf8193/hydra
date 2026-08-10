@@ -976,3 +976,21 @@ function runnerHooks(name: string, protoName: string) {
 runnerHooks('review', 'review')
 runnerHooks('build', 'build')
 runnerHooks('spike', 'spike')
+
+// Protocol context for autopsy — joins session to protocol state
+export function getProtocolContext(sessionId: string): { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null {
+  const runId = sessionToRun.get(sessionId)
+  if (!runId) return null
+  const run = runs.get(runId)
+  if (!run) return null
+  const role = run.sessionToRole.get(sessionId)
+  if (!role) return null
+  const advanceCalled = run.decisions.some(d => d.role === role)
+  return {
+    protocol: run.protocol.name,
+    phase: run.phase,
+    round: `${run.currentRound}/${run.rounds}`,
+    advanceCalled,
+    role,
+  }
+}
