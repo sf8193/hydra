@@ -136,6 +136,7 @@ export function restoreFactoryState(): void {
         if (!builderAlive) {
           process.stderr.write(`daemon: factory: stale build ${state.ticket} (phase=${state.phase}, builder gone) — marking failed\n`)
           state.phase = 'failed'
+          logBuild(state, 'stale_on_restore')
           stale++
           continue
         }
@@ -145,6 +146,7 @@ export function restoreFactoryState(): void {
       builds.set(state.ticket, state)
       if (state.builderSessionId) builderSessionToTicket.set(state.builderSessionId, state.ticket)
       if (state.builderThreadId) builderThreadToTicket.set(state.builderThreadId, state.ticket)
+      if (state.phase === 'building') startProgressTimer(state)
       restored++
     }
 
@@ -710,6 +712,7 @@ async function doBuilderDoneAsync(state: FactoryBuildState, doneText: string): P
       // Transition to awaiting_pm so the PM can retry (builder is still alive with the work)
       state.phase = 'awaiting_pm'
       syncPhaseToRegistry(state)
+      persistFactoryState()
       void safeSend(state.pmThreadId, [
         `🏭 **Review failed to start** ⚠️`,
         `Ticket: \`${state.ticket}\``,
@@ -830,6 +833,7 @@ function onFactoryReviewCancelled(threadId: string): boolean {
   // Move to awaiting_pm so PM can retry
   state.phase = 'awaiting_pm'
   syncPhaseToRegistry(state)
+  persistFactoryState()
   void safeSend(state.pmThreadId, [
     `🏭 **Factory review cancelled** ⚠️`,
     `Ticket: \`${state.ticket}\``,
