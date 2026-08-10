@@ -480,7 +480,7 @@ setInterval(() => {
 
 // Pane probe: detect CC sessions stuck on interactive prompts (plan mode, login).
 // Lower cadence than reply guard — these stalls are minutes-scale.
-setInterval(() => { probeAllSessions() }, 60_000)
+setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
 
 let shuttingDown = false
 
