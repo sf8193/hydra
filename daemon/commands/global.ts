@@ -11,7 +11,7 @@ import { tmuxHasSession, isAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { getActiveRuns, cancelRun } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
-import { buildTemplateSpawnOpts, dispatchTemplateAction } from '../templates.js'
+import { buildTemplateSpawnOpts, tryDispatchTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 import type { Access } from '../access.js'
 
@@ -66,15 +66,7 @@ async function spawnAndNotify(
     }
 
     if (template?.template.action) {
-      const action = template.template.action
-      try {
-        await dispatchTemplateAction(action, result.threadId, result.sessionId, topic)
-        process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err)
-        process.stderr.write(`daemon: template action "${action}" failed: ${errMsg}\n`)
-        void gateway.send(result.threadId, `_Action **${action}** failed: ${errMsg}_`).catch(() => {})
-      }
+      await tryDispatchTemplateAction(template.template.action, result.threadId, result.sessionId, topic)
     }
 
     if (msg.isDM) {

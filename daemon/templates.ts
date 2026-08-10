@@ -238,3 +238,20 @@ export async function dispatchTemplateAction(
     strike: true,
   })
 }
+
+export async function tryDispatchTemplateAction(
+  action: string,
+  threadId: string,
+  sessionId: string,
+  topic: string,
+): Promise<void> {
+  try {
+    await dispatchTemplateAction(action, threadId, sessionId, topic)
+    process.stderr.write(`daemon: template action: started ${action} for ${topic}\n`)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: template action "${action}" failed: ${errMsg}\n`)
+    const { gateway } = await import('./config.js')
+    void gateway.send(threadId, `_Action **${action}** failed: ${errMsg}_`).catch(() => {})
+  }
+}
