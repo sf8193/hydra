@@ -1,9 +1,17 @@
-import { describe, test, expect, beforeEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { on, once, emit, getSubscriptions, listenerCount, _resetForTesting } from '../event-bus.js'
 
-process.stderr.write = (() => true) as any
+let origStderrWrite: typeof process.stderr.write
 
-beforeEach(() => _resetForTesting())
+beforeEach(() => {
+  origStderrWrite = process.stderr.write
+  process.stderr.write = (() => true) as any
+  _resetForTesting()
+})
+
+afterEach(() => {
+  process.stderr.write = origStderrWrite
+})
 
 describe('event-bus', () => {
   test('on + emit delivers payload to listener', () => {

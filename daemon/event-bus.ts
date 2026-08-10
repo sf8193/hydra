@@ -33,16 +33,16 @@ const listeners = new Map<string, Set<LabeledListener>>()
 
 function formatError(err: unknown): string {
   if (err instanceof Error) {
-    return err.stack ? `${err.message}\n${err.stack}` : err.message
+    return err.stack ?? err.message
   }
   return String(err)
 }
 
-function handleListenerError(label: string, event: string, err: unknown, onError?: (err: unknown) => void): void {
+function handleListenerError(label: string, event: string, err: unknown, verb: string, onError?: (err: unknown) => void): void {
   if (onError) {
     try { onError(err) } catch {}
   } else {
-    process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' rejected: ${formatError(err)}\n`)
+    process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' ${verb}: ${formatError(err)}\n`)
   }
 }
 
@@ -84,15 +84,11 @@ export function emit<K extends keyof EventMap>(event: K, payload: EventMap[K]): 
       const result = listener(payload)
       if (result && typeof result.then === 'function') {
         result.then(undefined, (err: unknown) => {
-          handleListenerError(label, event, err, onError)
+          handleListenerError(label, event, err, 'rejected', onError)
         })
       }
     } catch (err) {
-      if (onError) {
-        try { onError(err) } catch {}
-      } else {
-        process.stderr.write(`daemon: event-bus: '${label}' listener for '${event}' threw: ${formatError(err)}\n`)
-      }
+      handleListenerError(label, event, err, 'threw', onError)
     }
   }
 }
