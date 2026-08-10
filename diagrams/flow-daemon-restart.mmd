@@ -1,0 +1,69 @@
+%% Daemon Restart — two entry paths sharing a compile→kill→spawn→verify pipeline
+%% CLI path: `hydra restart <platform>` — validates by default, --fast skips
+%% Chat path: user sends `restart` [+fast] — cancels protocols, delegates to CLI
+
+sequenceDiagram
+    participant user as User<br/>(chat or CLI)
+    participant router as router.ts
+    participant global as commands/<br/>global.ts
+    participant gateway as gateway
+    participant cli as cli/hydra.ts
+    participant lifecycle as cli/<br/>lifecycle.ts
+    participant tmux as tmux
+    participant daemon as daemon.ts<br/>(new instance)
+
+    alt CLI path: hydra restart <platform>
+        user->>cli: hydra restart discord [--fast]
+        cli->>lifecycle: lifecycleRestart(platform,<br/>{validate: !fast})
+    else Chat path: user sends "restart"
+        user->>gateway: "restart" [+fast]
+        gateway->>router: onMessage
+        router->>global: handleRestartIntercept(msg)
+
+        loop cancel active protocols
+            global->>global: cancelRun(run, 'daemon restart')
+        end
+
+        global->>gateway: "🔄 Restarting daemon..."
+        global->>global: write restart-pending.json<br/>(chatId + messageId + ts)
+        global->>cli: nohup bun hydra.ts restart<br/>[--fast] (background exec)
+        cli->>lifecycle: lifecycleRestart(platform,<br/>{validate: !fast})
+    end
+
+    Note over lifecycle: Pre-flight gates
+
+    lifecycle->>lifecycle: compileCheck(hydraDir)<br/>bun build daemon.ts + cli + bridge
+    alt compile fails
+        lifecycle-->>user: ❌ compile check FAILED<br/>old daemon left running
+    end
+
+    opt validate (default — skipped with --fast)
+        lifecycle->>lifecycle: validateModuleGraph(cfg)<br/>probe new code in subprocess
+        alt validation fails
+            lifecycle-->>user: ❌ module validation FAILED<br/>old daemon left running
+        end
+    end
+
+    Note over lifecycle: Kill → Spawn → Verify
+
+    lifecycle->>tmux: tmuxKill(daemonTmux)
+    Note over tmux: 500ms grace period
+    lifecycle->>lifecycle: unlinkSync(sockPath)
+
+    lifecycle->>tmux: tmuxSpawn(daemonTmux,<br/>"bun run daemon.ts")
+    tmux->>daemon: new process
+
+    daemon->>daemon: listen on unix socket
+
+    lifecycle->>lifecycle: waitForSocket(sockPath, 15s)
+    alt socket appears
+        lifecycle-->>user: ✅ daemon restarted
+    else timeout
+        lifecycle-->>user: ❌ TIMEOUT — socket<br/>did not appear
+    end
+
+    opt Chat-initiated restart
+        daemon->>daemon: announceRestartComplete()<br/>read restart-pending.json
+        daemon->>gateway: "✨ Back online — restart took Ns."
+        daemon->>daemon: unlink restart-pending.json
+    end

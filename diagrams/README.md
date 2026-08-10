@@ -1,6 +1,6 @@
 # Diagrams
 
-The primary orientation surface for agents and humans working on hydra. These diagrams show cross-layer message flows and architectural topology that can't be derived from reading any single file — dispatch ordering, recovery tiers, protocol mutual exclusion, the v1/v2 engine split. They make implicit structural decisions explicitly visible for review and design iteration.
+The primary orientation surface for agents and humans working on hydra. These diagrams show cross-layer message flows and architectural topology that can't be derived from reading any single file — dispatch paths, recovery tiers, protocol mutual exclusion, the protocol engine architecture. They make implicit structural decisions explicitly visible for review and design iteration.
 
 **Use diagrams as design tools, not just documentation.** Drawing a flow diagram *before* implementing a cross-layer feature surfaces structural questions early — the `design.ts` audit bug (issue #194) was found by drawing a diagram, not by reading code. Draw first, implement, then verify the diagram still matches.
 
@@ -59,7 +59,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 ### Protocol Flows
 | Diagram | What it shows |
 |---------|--------------|
-| `protocol-engines` | **v1/v2 engine split** — dispatch ordering, phase sets, shared infrastructure. The most important structural diagram for protocol work. |
+| `protocol-engines` | **Protocol engine architecture** — dispatch, DSL, runner, shared infrastructure, factory event consumers. The most important structural diagram for protocol work. |
 | `flow-protocol-robustness` | Protocol phases with loops, mutual exclusion, disconnect/auto-resume handling, grace periods |
 | `flow-factory` | Factory build→review cycle: PM dispatches, builder forks, daemon enforces review, PM decides |
 
@@ -68,12 +68,10 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 |---------|--------------|
 | `flow-tool-scoping` | **Three-tier tool model** + runtime `tools/list_changed` re-push. Why `advance` appears and disappears between protocol phases. |
 | `flow-bridge-lifecycle` | Bridge registration, tool delivery, disconnect handling, reconnect, death detection |
+| `flow-daemon-restart` | Two-path restart: CLI compile→kill→spawn→verify + chat cancel→delegate→resume via restart-pending.json |
 
 ### Structural
 | Diagram | What it shows |
 |---------|--------------|
 | `command-topology` | Two-channel routing (chat + CLI) converging on shared daemon primitives |
 | `health-topology` | Runtime components, state files, and health check connections |
-
-### Missing (candidates for future PRs)
-- `flow-daemon-restart` — module validation probe → kill incumbent → spawn replacement → verify
