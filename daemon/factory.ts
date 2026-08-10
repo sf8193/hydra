@@ -15,11 +15,19 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { startProtocolRun, protocolEvents, getRunByThread, cancelRun } from './protocol-runner.js'
-import { getProtocol } from './protocol-loader.js'
+import { doSpawnSession as _doSpawnSession, killSession as _killSession } from './session-lifecycle.js'
+import { startProtocolRun as _startProtocolRun, protocolEvents, getRunByThread as _getRunByThread, cancelRun as _cancelRun } from './protocol-runner.js'
+import { getProtocol as _getProtocol } from './protocol-loader.js'
 import { registry, threadRegistry } from './sessions.js'
-import { safeSend } from './util.js'
+import { safeSend as _safeSend } from './util.js'
+
+let doSpawnSession = _doSpawnSession
+let killSession = _killSession
+let startProtocolRun = _startProtocolRun
+let getRunByThread = _getRunByThread
+let cancelRun = _cancelRun
+let getProtocol = _getProtocol
+let safeSend = _safeSend
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
@@ -920,6 +928,32 @@ export const __test = process.env.NODE_ENV === 'test'
         builderSessionToTicket.clear()
         builderThreadToTicket.clear()
         ticketCounter = 0
+      },
+      setDeps(overrides: {
+        doSpawnSession?: typeof _doSpawnSession
+        killSession?: typeof _killSession
+        startProtocolRun?: typeof _startProtocolRun
+        getRunByThread?: typeof _getRunByThread
+        cancelRun?: typeof _cancelRun
+        getProtocol?: typeof _getProtocol
+        safeSend?: typeof _safeSend
+      }) {
+        if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
+        if (overrides.killSession) killSession = overrides.killSession
+        if (overrides.startProtocolRun) startProtocolRun = overrides.startProtocolRun
+        if (overrides.getRunByThread) getRunByThread = overrides.getRunByThread
+        if (overrides.cancelRun) cancelRun = overrides.cancelRun
+        if (overrides.getProtocol) getProtocol = overrides.getProtocol
+        if (overrides.safeSend) safeSend = overrides.safeSend
+      },
+      resetDeps() {
+        doSpawnSession = _doSpawnSession
+        killSession = _killSession
+        startProtocolRun = _startProtocolRun
+        getRunByThread = _getRunByThread
+        cancelRun = _cancelRun
+        getProtocol = _getProtocol
+        safeSend = _safeSend
       },
     } as const
   : undefined
