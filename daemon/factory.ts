@@ -3,8 +3,8 @@
 // Flow:
 //   1. PM calls factory_build → returns ticket immediately
 //   2. Daemon forks PM → Builder (full context + write access, NOT ephemeral)
-//   3. Builder implements spec, calls factory_done tool with structured artifact
-//   4. Daemon starts adversarial review in builder's thread
+//   3. Builder implements spec, posts [done] with structured artifact
+//   4. Daemon detects [done], starts adversarial review in builder's thread
 //      Builder is the review OWNER — defends its own code
 //   5. Review completes → builder stays alive, PM gets notification
 //   6. PM decides: factory_accept (kill builder, done) / factory_retry (send
@@ -13,17 +13,16 @@
 import { randomBytes } from 'crypto'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'fs'
+import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
 import { registry, threadRegistry } from './sessions.js'
-import { safeSend } from './util.js'
+import { safeSend, atomicWriteFileSync, formatDuration, getContextPercent } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
-import { registerProtocol } from './protocol-registry.js'
-import { clearBuilderNudge } from './pane-probe.js'
+import { STATE_DIR } from './config.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,9 +45,10 @@ type FactoryBuildState = {
   createdAt: number
   reviewed: boolean
   worktree?: string
-  diffGistUrl?: string  // set at factory_done time, included in review-complete notification
-  prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
+  diffGistUrl?: string  // set at [done] time, included in review-complete notification
+  prUrl?: string        // set at [done] time for worktree builds; preferred over gist in notification
   reviewSummary?: string // captured from builder's [summary] post at review completion
+  progressTimer?: ReturnType<typeof setInterval> // runtime-only, not persisted
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +95,75 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// State persistence — survive daemon restarts
+// ---------------------------------------------------------------------------
+
+const BUILDS_STATE_FILE = join(STATE_DIR, 'factory-builds.json')
+
+type PersistedFactoryState = {
+  ticketCounter: number
+  builds: FactoryBuildState[]
+}
+
+function persistFactoryState(): void {
+  try {
+    const data: PersistedFactoryState = {
+      ticketCounter,
+      builds: [...builds.values()],
+    }
+    atomicWriteFileSync(BUILDS_STATE_FILE, JSON.stringify(data) + '\n')
+  } catch (err) {
+    process.stderr.write(`daemon: factory: persist state failed: ${err}\n`)
+  }
+}
+
+/**
+ * Restore factory state on daemon startup. Call after registry is booted.
+ * Marks builds whose builder sessions are no longer alive as failed.
+ */
+export function restoreFactoryState(): void {
+  try {
+    const raw = readFileSync(BUILDS_STATE_FILE, 'utf8')
+    const data = JSON.parse(raw) as PersistedFactoryState
+
+    let restored = 0
+    let stale = 0
+
+    for (const state of data.builds) {
+      // For active builds, check if the builder session still exists
+      if (state.phase === 'building' || state.phase === 'reviewing') {
+        const builderAlive = state.builderSessionId && registry.get(state.builderSessionId)
+        if (!builderAlive) {
+          process.stderr.write(`daemon: factory: stale build ${state.ticket} (phase=${state.phase}, builder gone) — marking failed\n`)
+          state.phase = 'failed'
+          stale++
+          continue
+        }
+      }
+
+      // Restore the build into memory maps
+      builds.set(state.ticket, state)
+      if (state.builderSessionId) builderSessionToTicket.set(state.builderSessionId, state.ticket)
+      if (state.builderThreadId) builderThreadToTicket.set(state.builderThreadId, state.ticket)
+      restored++
+    }
+
+    // Restore counter — must be strictly greater than any existing ticket number
+    if (typeof data.ticketCounter === 'number' && data.ticketCounter > ticketCounter) {
+      ticketCounter = data.ticketCounter
+    }
+
+    if (restored > 0 || stale > 0) {
+      process.stderr.write(`daemon: factory: restored ${restored} active build(s), ${stale} stale (marked failed)\n`)
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(`daemon: factory: restore state failed: ${err}\n`)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Model resolution — difficulty ladder with auto-fallback
 // ---------------------------------------------------------------------------
 
@@ -103,7 +172,7 @@ export type Difficulty = (typeof VALID_DIFFICULTIES)[number]
 
 // Hardcoded per tier — consistent, no env-var surprise.
 // Easy = sonnet builds, opus reviews (Sam's request).
-export function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
+function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
   switch (difficulty) {
     case 'easy':   return { builder: 'claude-sonnet-4-6[1m]',  reviewer: 'claude-opus-4-6[1m]' }
     case 'medium': return { builder: 'claude-opus-4-6[1m]',    reviewer: 'claude-opus-4-8[1m]' }
@@ -111,7 +180,7 @@ export function getDifficultyLadder(difficulty: Difficulty): { builder: string; 
   }
 }
 
-export function resolveModels(
+function resolveModels(
   difficulty: Difficulty,
   builderRaw?: string,
   reviewerRaw?: string,
@@ -241,6 +310,7 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     worktree,
   }
   builds.set(ticket, state)
+  persistFactoryState()
 
   // Spawn builder async — don't await
   void spawnBuilder(state, pmInfo.claudeSessionId, pmInfo.tmuxName).catch(err => {
@@ -276,6 +346,8 @@ export function factoryRetry(
   state.phase = 'building'
   state.retryCount++
   syncPhaseToRegistry(state)
+  persistFactoryState()
+  startProgressTimer(state)
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
@@ -285,7 +357,7 @@ export function factoryRetry(
       ``,
       instructions,
       ``,
-      `When done, call \`factory_done\` with your results as before.`,
+      `When done, post \`[done]\` with your structured artifact as before.`,
     ].join('\n'),
     meta: { chat_id: state.builderThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
@@ -293,7 +365,7 @@ export function factoryRetry(
   void safeSend(state.pmThreadId, [
     `🏭 **Factory retry** (attempt ${state.retryCount + 1})`,
     `Ticket: \`${ticket}\``,
-    `Instructions sent to builder. Waiting for \`factory_done\`.`,
+    `Instructions sent to builder. Waiting for \`[done]\`.`,
   ].join('\n'))
 
   process.stderr.write(`daemon: factory: retry ${ticket} (attempt ${state.retryCount + 1})\n`)
@@ -404,7 +476,7 @@ const DIFF_SIZE_CAP = 50 * 1024  // 50KB — enough for UX, not so large it's us
 
 /**
  * Capture the builder's committed diff and upload as a secret GitHub Gist.
- * Called at factory_done time (before review), stored in state.diffGistUrl.
+ * Called at [done] time (before review), stored in state.diffGistUrl.
  * Best-effort — failure is silent.
  *
  * Uses `git log -p HEAD~1..HEAD` to capture the most recent commit (the builder's
@@ -432,7 +504,8 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
     const tmpPath = join('/tmp', `factory-diff-${state.ticket}.diff`)
     writeFileSync(tmpPath, diff)
     try {
-      const { stdout } = await execAsync('gh', ['gist', 'create', tmpPath], { timeout: 15_000 })
+      // --secret: not indexed by search engines; safe for private repo code
+      const { stdout } = await execAsync('gh', ['gist', 'create', '--secret', tmpPath], { timeout: 15_000 })
       if (truncated) process.stderr.write(`daemon: factory: diff truncated at 50KB for ${state.ticket}\n`)
       return stdout.trim() || undefined
     } finally {
@@ -522,9 +595,9 @@ async function spawnBuilder(
     ? [
         ``,
         `WORKTREE DONE OBLIGATIONS: Your changes will be destroyed when your session ends.`,
-        `Before calling factory_done, you MUST commit and push your changes from the worktree:`,
+        `Before posting [done], you MUST commit and push your changes from the worktree:`,
         `  git add -A && git commit -m "factory: <summary>" && git push -u origin HEAD`,
-        `Include the branch name in your factory_done call so the PM can find your work.`,
+        `Include the branch name in your [done] artifact so the PM can find your work.`,
       ]
     : []
 
@@ -538,19 +611,20 @@ async function spawnBuilder(
     ...worktreeInstructions,
     ``,
     `WHEN DONE:`,
-    `Call the factory_done tool with your results:`,
-    `- files_changed: list of files you created or modified`,
-    ...(state.worktree ? [`- branch: the branch name you pushed to`] : []),
-    `- test_results: test output summary (e.g. "1388 pass, 0 fail")`,
-    `- rationale: key design decisions and why (optional)`,
-    `- known_issues: anything you're unsure about (optional)`,
+    `Post a message to your thread starting with [done] followed by a structured artifact:`,
+    `[done]`,
+    `**Files changed:** list each file`,
+    ...(state.worktree ? [`**Branch:** the branch name you pushed to`] : []),
+    `**Tests:** cargo test / bun test results`,
+    `**Design rationale:** why you made key decisions`,
+    `**Known issues:** anything you're unsure about`,
     ``,
-    `After calling factory_done, an adversarial review will start automatically.`,
+    `After posting [done], an adversarial review will start automatically.`,
     `You will be the OWNER — defend your implementation against the critic.`,
     `Reply with [owner→critic] as the first line of each defense.`,
     ``,
     `After the review, the PM may send you additional instructions via [system] notification.`,
-    `If that happens, implement the changes and call \`factory_done\` again.`,
+    `If that happens, implement the changes and post [done] again.`,
   ].join('\n')
 
   const worktreeLabel = state.worktree ? ` · Worktree: \`${state.worktree}\`` : ''
@@ -576,11 +650,9 @@ async function spawnBuilder(
   state.builderThreadId = result.threadId
   builderSessionToTicket.set(result.sessionId, state.ticket)
   builderThreadToTicket.set(result.threadId, state.ticket)
+  persistFactoryState()
 
   // Stamp registry fields for sweep notifications + phase-aware restart messages.
-  // NOTE: these are informational only — the in-memory `builds` map is NOT reconstructed
-  // from registry on restart. Factory tools (retry/accept/abandon) will not work after
-  // restart; the PM must use peek_session + kill_session directly.
   const builderInfo = registry.get(result.sessionId)
   if (builderInfo) {
     builderInfo.isFactoryBuilder = true
@@ -590,43 +662,38 @@ async function spawnBuilder(
     registry.persist()
   }
 
+  startProgressTimer(state)
   process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) forked for ticket ${state.ticket}\n`)
 }
 
-export type FactoryDoneArgs = {
-  files_changed: string[]
-  test_results: string
-  rationale?: string
-  known_issues?: string
-  branch?: string
-}
-
-export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: true } | { error: string } {
+function onBuilderDone(sessionId: string, doneText: string): boolean {
   const ticket = builderSessionToTicket.get(sessionId)
-  if (!ticket) return { error: 'No active factory build for this session.' }
+  if (!ticket) return false
 
   const state = builds.get(ticket)
-  if (!state || state.phase !== 'building') return { error: `Cannot complete — build is in phase "${state?.phase ?? 'unknown'}", expected "building".` }
+  if (!state || state.phase !== 'building') return false
 
+  clearProgressTimer(state)
   state.phase = 'reviewing'
   syncPhaseToRegistry(state)
-  process.stderr.write(`daemon: factory: builder called factory_done for ticket ${state.ticket}, starting review\n`)
+  persistFactoryState()
+  process.stderr.write(`daemon: factory: builder posted [done] for ticket ${state.ticket}, starting review\n`)
 
-  void doBuilderDoneAsync(state, args)
+  // Capture diff and PR concurrently before starting review.
+  // Awaited in doBuilderDoneAsync so onFactoryReviewComplete reads them without a race.
+  void doBuilderDoneAsync(state, doneText)
 
-  return { ok: true }
+  return true
 }
 
-async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArgs): Promise<void> {
-  const artifact = [
-    args.branch ? `**Branch:** ${args.branch}` : null,
-    `**Files changed:** ${args.files_changed.join(', ')}`,
-    `**Tests:** ${args.test_results}`,
-    args.rationale ? `**Design rationale:** ${args.rationale}` : null,
-    args.known_issues ? `**Known issues:** ${args.known_issues}` : null,
-  ].filter(Boolean).join('\n')
+async function doBuilderDoneAsync(state: FactoryBuildState, doneText: string): Promise<void> {
+  // Await both captures before starting review — guarantees state.diffGistUrl / state.prUrl
+  // are populated by the time onFactoryReviewComplete fires (no race).
+  const [gistUrl, prUrl] = await Promise.all([captureBuilderDiff(state), createBuilderPR(state)])
+  if (gistUrl) state.diffGistUrl = gistUrl
+  if (prUrl) state.prUrl = prUrl
 
-  const artifactTruncated = artifact.length > 3000 ? artifact.slice(0, 3000) + '\n...(truncated)' : artifact
+  const artifactTruncated = doneText.length > 3000 ? doneText.slice(0, 3000) + '\n...(truncated)' : doneText
   void safeSend(state.pmThreadId, [
     `🏭 **Build complete — starting mandatory review**`,
     `Ticket: \`${state.ticket}\``,
@@ -636,14 +703,11 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
     artifactTruncated,
   ].join('\n'))
 
-  // Start review BEFORE diff/PR capture — closes the protocol ownership gap.
-  // During diff capture (up to 15s of GitHub API calls), the review protocol
-  // owns the session so bridge disconnects are handled correctly.
-  // Diff/PR URLs are only needed in onFactoryReviewComplete, not at review start.
   startReview(state.builderThreadId!, state.builderSessionId!, state.reviewRounds, state.spec, state.reviewerModel)
     .catch(err => {
       const errMsg = err instanceof Error ? err.message : String(err)
       process.stderr.write(`daemon: factory: review failed to start: ${errMsg}\n`)
+      // Transition to awaiting_pm so the PM can retry (builder is still alive with the work)
       state.phase = 'awaiting_pm'
       syncPhaseToRegistry(state)
       void safeSend(state.pmThreadId, [
@@ -656,18 +720,10 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
         `- \`factory_abandon("${state.ticket}")\` — discard`,
       ].join('\n'))
     })
-
-  // Capture diff/PR concurrently — not blocking the review start.
-  void Promise.all([captureBuilderDiff(state), createBuilderPR(state)]).then(([gistUrl, prUrl]) => {
-    if (gistUrl) state.diffGistUrl = gistUrl
-    if (prUrl) state.prUrl = prUrl
-  }).catch(err => {
-    process.stderr.write(`daemon: factory: diff/PR capture failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
-  })
 }
 
 /**
- * Called when a builder session dies WITHOUT calling factory_done — crash/timeout.
+ * Called when a builder session dies WITHOUT posting [done] — crash/timeout.
  */
 export function onBuilderDeath(sessionId: string): void {
   const ticket = builderSessionToTicket.get(sessionId)
@@ -677,13 +733,13 @@ export function onBuilderDeath(sessionId: string): void {
   if (!state) return
 
   if (state.phase === 'building') {
-    process.stderr.write(`daemon: factory: builder died without calling factory_done for ticket ${state.ticket}\n`)
+    process.stderr.write(`daemon: factory: builder died without [done] for ticket ${state.ticket}\n`)
     state.phase = 'failed'
     logBuild(state, 'builder_crashed')
     void safeSend(state.pmThreadId, [
       `🏭 **Builder crashed** ❌`,
       `Ticket: \`${state.ticket}\``,
-      `_Builder died without calling factory_done. Build did not complete. No review will run._`,
+      `_Builder died without posting [done]. Build did not complete. No review will run._`,
       `_Retry with factory_build if needed._`,
     ].join('\n'))
     cleanupState(ticket)
@@ -733,9 +789,10 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   state.reviewed = true
   if (summaryText) state.reviewSummary = summaryText
   syncPhaseToRegistry(state)
+  persistFactoryState()
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
-  // prUrl/diffGistUrl were captured at factory_done time — use synchronously, no race.
+  // prUrl/diffGistUrl were captured at [done] time — use synchronously, no race.
   // PR preferred over gist: better diff view, inline comments, CI.
   const diffLink = state.prUrl
     ? [`🔀 **PR:** ${state.prUrl}`]
@@ -795,28 +852,54 @@ function onFactoryCriticRound(builderThreadId: string, round: number, totalRound
   process.stderr.write(`daemon: factory: critic round ${round}/${totalRounds} for ticket ${state.ticket}\n`)
 }
 
+// ---------------------------------------------------------------------------
+// Progress timer — periodic build status to PM during building phase
+// ---------------------------------------------------------------------------
+
+const PROGRESS_INTERVAL_MS = 3 * 60 * 1000 // 3 minutes
+
+function clearProgressTimer(state: FactoryBuildState): void {
+  if (state.progressTimer) {
+    clearInterval(state.progressTimer)
+    state.progressTimer = undefined
+  }
+}
+
+function startProgressTimer(state: FactoryBuildState): void {
+  clearProgressTimer(state)
+  state.progressTimer = setInterval(() => {
+    if (state.phase !== 'building') {
+      clearProgressTimer(state)
+      return
+    }
+    const builderInfo = state.builderSessionId ? registry.get(state.builderSessionId) : undefined
+    if (!builderInfo) return
+    const elapsed = formatDuration(Date.now() - state.createdAt)
+    const ctx = getContextPercent(builderInfo.tmuxName)
+    void safeSend(state.pmThreadId, `🏭 Builder \`${builderInfo.tmuxName}\` working · ${elapsed} · ctx ${ctx}`)
+  }, PROGRESS_INTERVAL_MS)
+}
+
 function cleanupState(ticket: string): void {
   const state = builds.get(ticket)
   if (!state) return
-  if (state.builderSessionId) {
-    builderSessionToTicket.delete(state.builderSessionId)
-    clearBuilderNudge(state.builderSessionId)
-    const info = registry.get(state.builderSessionId)
-    if (info) {
-      delete info.isFactoryBuilder
-      delete info.factoryPmThreadId
-      delete info.factoryTicket
-      delete info.factoryPhase
-      registry.persist()
-    }
-  }
+  clearProgressTimer(state)
+  if (state.builderSessionId) builderSessionToTicket.delete(state.builderSessionId)
   if (state.builderThreadId) builderThreadToTicket.delete(state.builderThreadId)
   builds.delete(ticket)
+  persistFactoryState()
 }
 
 // ---------------------------------------------------------------------------
 // Event bus subscriptions
 // ---------------------------------------------------------------------------
+
+const FACTORY_DONE_RE = /^\[done\]/m
+
+function factoryDoneDetection({ sessionId, text }: { sessionId: string; text: string }): void {
+  if (!builderSessionToTicket.has(sessionId)) return
+  if (FACTORY_DONE_RE.test(text)) onBuilderDone(sessionId, text)
+}
 
 function factorySessionDeath({ sessionId }: { sessionId: string }): void {
   onBuilderDeath(sessionId)
@@ -853,38 +936,11 @@ function factoryReviewRound({ threadId, round, totalRounds, text }: { threadId: 
   onFactoryCriticRound(threadId, round, totalRounds, text)
 }
 
+on('reply', factoryDoneDetection, 'factory:done-detection')
 on('review:complete', factoryReviewComplete, 'factory:review-complete')
 on('review:cancelled', factoryReviewCancelled, 'factory:review-cancelled')
 on('review:round', factoryReviewRound, 'factory:review-round')
 on('session:death', factorySessionDeath, 'factory:session-death')
-
-// Register factory hooks so builders get factory_done via scoped tool overrides.
-// getByThread returns false — factory does NOT occupy threads for mutual exclusion.
-// The builder's thread must remain free for the nested review to start.
-// isParticipant is gated to building phase — during review, the review protocol
-// owns the session. Without this gate, both protocols claim the session and
-// resolution depends on Map iteration order (registration order).
-registerProtocol('factory', {
-  getByThread: () => false,
-  isParticipant: (sessionId) => {
-    const ticket = builderSessionToTicket.get(sessionId)
-    if (!ticket) return false
-    const state = builds.get(ticket)
-    return !!state && state.phase === 'building'
-  },
-  onReply: () => {},
-  onDisconnect: () => {},
-  onReconnect: (sessionId) => {
-    if (builderSessionToTicket.has(sessionId)) clearBuilderNudge(sessionId)
-  },
-  resolveScopedToolOverrides: (sessionId) => {
-    if (!builderSessionToTicket.has(sessionId)) return null
-    const ticket = builderSessionToTicket.get(sessionId)!
-    const state = builds.get(ticket)
-    if (!state || state.phase !== 'building') return null
-    return { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' }
-  },
-})
 
 /**
  * Startup sweep: kill orphaned factory builders left by a daemon restart.
