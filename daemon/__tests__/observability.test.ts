@@ -143,4 +143,33 @@ describe('buildAutopsy', () => {
     const out = buildAutopsy(fakeInfo({ claudeSessionId: 'no-such-claude-id-xyz' }), 'crashed', [], NOW, undefined)
     expect(out.includes('transcript: not found')).toBe(true)
   })
+
+  test('shows resume count when > 0', () => {
+    const out = buildAutopsy(fakeInfo(), 'critic exited (auto-resuming)', [], NOW, undefined, { resumeCount: 3 })
+    expect(out.includes('resume #3 of conversation')).toBe(true)
+  })
+
+  test('omits resume count when 0', () => {
+    const out = buildAutopsy(fakeInfo(), 'critic exited (auto-resuming)', [], NOW, undefined, { resumeCount: 0 })
+    expect(out.includes('resume #')).toBe(false)
+  })
+
+  test('omits resume count when not provided', () => {
+    const out = buildAutopsy(fakeInfo(), 'crashed', [], NOW, undefined)
+    expect(out.includes('resume #')).toBe(false)
+  })
+
+  test('renders protocol context when provided', () => {
+    const pctx = { protocol: 'review', phase: 'critic_turn', round: '1/3', advanceCalled: false, role: 'critic' }
+    const out = buildAutopsy(fakeInfo(), 'crashed', [], NOW, undefined, { protocolContext: pctx })
+    expect(out.includes('protocol: review (critic_turn, round 1/3)')).toBe(true)
+    expect(out.includes('role: critic, advance called: false')).toBe(true)
+  })
+
+  test('renders both protocol context and resume count together', () => {
+    const pctx = { protocol: 'review', phase: 'critic_turn', round: '1/3', advanceCalled: true, role: 'critic' }
+    const out = buildAutopsy(fakeInfo(), 'critic exited', [], NOW, undefined, { protocolContext: pctx, resumeCount: 5 })
+    expect(out.includes('protocol: review')).toBe(true)
+    expect(out.includes('resume #5 of conversation')).toBe(true)
+  })
 })

@@ -239,6 +239,8 @@ export type AutopsyExtras = {
   exitFileLines?: string[]
   stderrTail?: string[]
   debugTail?: string[]
+  protocolContext?: { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string }
+  resumeCount?: number
 }
 
 export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, extras?: AutopsyExtras): string {
@@ -301,6 +303,9 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
     lines.push(`  protocol: ${pctx.protocol} (${pctx.phase}, round ${pctx.round})`)
     lines.push(`  role: ${pctx.role}, advance called: ${pctx.advanceCalled}`)
   }
+  if (extras?.resumeCount && extras.resumeCount > 0) {
+    lines.push(`  resume #${extras.resumeCount} of conversation`)
+  }
   if (transcript) {
     const forensics = readConversationForensics(transcript)
     if (forensics) {
@@ -341,7 +346,7 @@ export function recordSessionDeath(info: SessionInfo, reason: string): void {
   if (info.debugLogPath) {
     try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
   }
-  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail }) + '\n')
+  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, resumeCount: info.resumeCount }) + '\n')
   info.deadAt = Date.now()
 }
 

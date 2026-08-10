@@ -454,7 +454,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     if (info.debugLogPath) {
       try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
     }
-    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext: getProtocolContext(info.sessionId) }) + '\n')
+    process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext: getProtocolContext(info.sessionId), resumeCount: info.resumeCount }) + '\n')
 
     const thread = threadRegistry.get(info.threadId)
     if (thread) {
