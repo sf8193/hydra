@@ -22,7 +22,7 @@ import { codexSocketPath } from './codex-engine.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
-import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
+// worktree-manager.ts removed — worktree ops inlined here for direct control
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -299,17 +299,35 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     if (info.worktreePath && info.worktreeRepo) {
       const branch = `wt/${info.tmuxName}`
 
-      // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort)
-      void (async () => {
-        const unpushed = await checkUnpushedCommits(info.worktreeRepo!, branch)
-        if (unpushed > 0) {
-          process.stderr.write(`daemon: worktree ${info.tmuxName} has ${unpushed} unpushed commit(s) on ${branch}\n`)
-          void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` has ${unpushed} unpushed commit(s). Verify changes were pushed before cleanup.`).catch(() => {})
+      // Warn if worktree branch has commits that may not have been pushed
+      try {
+        const commits = execSync(`git -C ${shq(info.worktreeRepo)} log ${shq(branch)} --not --remotes --oneline 2>/dev/null`, { stdio: 'pipe' }).toString().trim()
+        if (commits) {
+          const count = commits.split('\n').length
+          process.stderr.write(`daemon: worktree ${info.tmuxName} has ${count} unpushed commit(s) on ${branch}\n`)
+          void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` has ${count} unpushed commit(s). Verify changes were pushed before cleanup.`).catch(() => {})
         }
-        await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch)
-      })().catch(err => {
-        process.stderr.write(`daemon: worktree cleanup failed for ${info.tmuxName}: ${err}\n`)
-      })
+      } catch {}
+
+      const cleanupScript = `${info.worktreePath}/bin/dev/on-worktree-remove.sh`
+      try {
+        execSync(`test -x ${shq(cleanupScript)} && ${shq(cleanupScript)} ${shq(info.tmuxName)}`, { stdio: 'pipe' })
+        process.stderr.write(`daemon: ran worktree cleanup hook for ${info.tmuxName}\n`)
+      } catch {}
+      try {
+        execSync(`git -C ${shq(info.worktreeRepo)} worktree remove ${shq(info.worktreePath)} --force`, { stdio: 'pipe' })
+        process.stderr.write(`daemon: removed worktree ${info.worktreePath}\n`)
+      } catch {
+        if (info.worktreePath.includes('/.worktrees/') && existsSync(info.worktreePath)) {
+          execSync(`rm -rf ${shq(info.worktreePath)}`, { stdio: 'pipe' })
+          process.stderr.write(`daemon: rm -rf worktree ${info.worktreePath} (git remove failed)\n`)
+        }
+      }
+      try { execSync(`git -C ${shq(info.worktreeRepo)} worktree prune`, { stdio: 'pipe' }) } catch {}
+      try {
+        execSync(`git -C ${shq(info.worktreeRepo)} branch -D ${shq(branch)}`, { stdio: 'pipe' })
+        process.stderr.write(`daemon: deleted branch ${branch}\n`)
+      } catch {}
     }
 
     // Update thread metadata before deleting session
@@ -608,18 +626,56 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let worktreePath: string | undefined
   let effectiveCwd = spawnCwd
   if (worktreeTarget) {
-    const wt = await createWorktree({
-      repoName: worktreeTarget,
-      spawnCwd,
-      branchName: `wt/${tmuxName}`,
-      dirSuffix: `${worktreeTarget}-${tmuxName}`,
-    })
+    const repoName = worktreeTarget
+    const repoDir = resolve(spawnCwd, repoName)
 
-    worktreeRepo = wt.repoDir
-    worktreePath = wt.worktreePath
-    effectiveCwd = wt.worktreePath
+    // Verify the target is a git repo
+    try {
+      execSync(`git -C ${shq(repoDir)} rev-parse --git-dir`, { stdio: 'pipe' })
+    } catch {
+      throw new Error(`worktree target "${repoName}" is not a git repo at ${repoDir}`)
+    }
 
-    // Pre-approve Claude trust for the worktree paths (Claude-specific, not git)
+    const wtDir = resolve(repoDir, '..', `.worktrees`, `${repoName}-${tmuxName}`)
+    const branch = `wt/${tmuxName}`
+
+    // Clean up stale worktree/branch from previous runs
+    try { execSync(`git -C ${shq(repoDir)} worktree remove ${shq(wtDir)} --force 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+    try { execSync(`git -C ${shq(repoDir)} worktree prune 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+    try { execSync(`git -C ${shq(repoDir)} branch -D ${shq(branch)} 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+
+    // Start worktree from current branch (preserves feature-branch context for forks).
+    // Falls back to default branch (main/master) if HEAD is detached.
+    let baseBranch: string | undefined
+    try {
+      const current = execSync(`git -C ${shq(repoDir)} branch --show-current`, { stdio: 'pipe' }).toString().trim()
+      if (current) baseBranch = current
+    } catch {}
+    if (!baseBranch) {
+      baseBranch = 'main'
+      try {
+        baseBranch = execSync(`git -C ${shq(repoDir)} symbolic-ref refs/remotes/origin/HEAD`, { stdio: 'pipe' }).toString().trim().replace('refs/remotes/origin/', '')
+      } catch {
+        try {
+          execSync(`git -C ${shq(repoDir)} rev-parse --verify main`, { stdio: 'pipe' })
+        } catch {
+          baseBranch = 'master'
+        }
+      }
+    }
+
+    try {
+      execFileSync('git', ['-C', repoDir, 'worktree', 'add', '-b', branch, wtDir, baseBranch], { stdio: 'pipe' })
+      process.stderr.write(`daemon: created worktree ${wtDir} (branch ${branch}) from ${baseBranch}\n`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new Error(`failed to create worktree: ${msg}`)
+    }
+
+    worktreeRepo = repoDir
+    worktreePath = wtDir
+    effectiveCwd = wtDir
+
     const claudeJsonPath = join(CLAUDE_CONFIG, '.claude.json')
     try {
       const claudeJson = JSON.parse(readFileSync(claudeJsonPath, 'utf8'))
@@ -637,7 +693,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         projectOnboardingSeenCount: 0,
       }
       let changed = false
-      for (const p of [wt.worktreePath, wt.repoDir]) {
+      for (const p of [wtDir, repoDir]) {
         const existing = claudeJson.projects[p]
         if (!existing || !existing.hasClaudeMdExternalIncludesApproved) {
           claudeJson.projects[p] = { ...existing, ...trustEntry }
