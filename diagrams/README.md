@@ -54,6 +54,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-list-sessions` | List sessions: registry query → format → gateway send |
 | `flow-respawn` | Respawn: thread command → read thread history → doSpawnSession with resurrectFrom |
 | `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
+| `flow-destroy` | Destroy: delete thread + anchor message (Discord only, dead/orphan threads) |
 
 ### Protocol Flows
 | Diagram | What it shows |

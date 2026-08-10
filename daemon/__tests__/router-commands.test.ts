@@ -18,6 +18,7 @@ const HEALTH_RE = /^(?:\/health|health|status)\s*$/i
 const RECONNECT_RE = /^(?:\/reconnect|reconnect)\s*$/i
 const COMMANDS_RE = /^(?:\/commands|commands|list commands|show commands|\/help|help)\s*$/i
 const THREAD_KILL_RE = /^(?:kill|\/kill)\s*$/i
+const DESTROY_RE = /^(?:destroy|\/destroy)\s*$/i
 const USAGE_RE = /^(?:\/usage|usage)\s*$/i
 const LISTEN_RE = /^(listen|pause)\s*$/i
 const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
@@ -120,6 +121,28 @@ describe('kill command', () => {
     // "kill" alone should match THREAD_KILL_RE, not KILL_RE (which needs an argument)
     expect('kill'.match(KILL_RE)).toBeNull()
     expect('kill'.match(THREAD_KILL_RE)).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Destroy command
+// ---------------------------------------------------------------------------
+
+describe('destroy command', () => {
+  test('destroy matches in thread context', () => {
+    expect('destroy'.match(DESTROY_RE)).not.toBeNull()
+    expect('/destroy'.match(DESTROY_RE)).not.toBeNull()
+    expect('DESTROY'.match(DESTROY_RE)).not.toBeNull()
+  })
+
+  test('destroy does not match with arguments', () => {
+    expect('destroy thread-123'.match(DESTROY_RE)).toBeNull()
+    expect('destroy all'.match(DESTROY_RE)).toBeNull()
+  })
+
+  test('destroy does not match partial words', () => {
+    expect('destroyer'.match(DESTROY_RE)).toBeNull()
+    expect('undestroy'.match(DESTROY_RE)).toBeNull()
   })
 })
 

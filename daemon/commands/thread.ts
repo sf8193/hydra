@@ -8,7 +8,8 @@ import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn } from '../session-lifecycle.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError } from '../util.js'
+import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError, safeSend } from '../util.js'
+import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
@@ -308,6 +309,70 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   } else {
     await reportError(msg.channelId, msg.id, 'respawn', 'failed to spawn session')
   }
+}
+
+// ---------------------------------------------------------------------------
+// Destroy — permanently delete thread + anchor message (Discord only)
+// ---------------------------------------------------------------------------
+
+export async function handleDestroyIntercept(msg: InboundMessage): Promise<void> {
+  if (!gateway.deleteThread) {
+    void safeSend(msg.channelId, `_\`destroy\` is only available on Discord._`)
+    return
+  }
+
+  const threadId = msg.effectiveThreadId ?? msg.channelId
+
+  const occupied = isThreadOccupied(threadId)
+  if (occupied) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void safeSend(msg.channelId, `_A **${occupied}** is in progress. Cancel or wait for completion._`)
+    return
+  }
+
+  const sessionId = registry.getByThread(threadId)
+  const info = sessionId ? registry.get(sessionId) : undefined
+
+  if (info && !info.deadAt) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void safeSend(msg.channelId, `_Session **${info.tmuxName}** is still alive. Kill it first with \`kill\`._`)
+    return
+  }
+
+  void gateway.react(msg.channelId, msg.id, '💀').catch(() => {})
+
+  const thread = threadRegistry.get(threadId)
+  const parentChannelId = thread?.parentChannelId ?? info?.anchorChannelId
+  const anchorMessageId = thread?.anchorMessageId ?? info?.anchorMessageId
+
+  if (info && sessionId) {
+    registry.delete(sessionId)
+    registry.deleteThread(threadId)
+  }
+  threadRegistry.delete(threadId)
+
+  try {
+    await gateway.deleteThread(threadId)
+    process.stderr.write(`daemon: destroy: deleted thread ${threadId}\n`)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: destroy: thread deletion failed: ${errMsg}\n`)
+    void safeSend(parentChannelId ?? msg.channelId, `_Thread deletion failed: ${errMsg}_`)
+    return
+  }
+
+  if (parentChannelId && anchorMessageId) {
+    try {
+      await gateway.delete(parentChannelId, anchorMessageId)
+      process.stderr.write(`daemon: destroy: deleted anchor message ${anchorMessageId} in ${parentChannelId}\n`)
+    } catch (err) {
+      process.stderr.write(`daemon: destroy: anchor deletion failed (thread already gone): ${err}\n`)
+    }
+  } else {
+    process.stderr.write(`daemon: destroy: skipped anchor deletion (parentChannelId=${parentChannelId ?? 'unknown'}, anchorMessageId=${anchorMessageId ?? 'unknown'})\n`)
+  }
+
+  debouncedRefreshListDisplay()
 }
 
 // ---------------------------------------------------------------------------

@@ -187,6 +187,7 @@ export interface ChatGateway {
     files?: string[]
   }): Promise<ThreadInfo>
   startThreadOnMessage(msg: InboundMessage, preview: string, archiveDuration: number): Promise<string | null>
+  deleteThread?(threadId: string): Promise<void>
   renameThread?(threadId: string, name: string): Promise<void>
   getThreadStarterInfo(channelId: string): Promise<ThreadStarterInfo | null>
 

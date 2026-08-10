@@ -11,7 +11,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept, handleRecoverIntercept } from './commands/global.js'
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
-import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
+import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleProtocolIntercept, handleCancelProtocolIntercept } from './commands/protocol.js'
 import { listModifierKeys } from './modifiers.js'
 import { isThreadOccupied } from './protocol-registry.js'
@@ -421,6 +421,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const threadKillMatch = msg.content.match(/^(?:kill|\/kill)\s*$/i)
     if (threadKillMatch && msg.isThread) {
       void handleThreadKillIntercept(msg)
+      return
+    }
+
+    const destroyMatch = msg.content.match(/^(?:destroy|\/destroy)\s*$/i)
+    if (destroyMatch && msg.isThread) {
+      void handleDestroyIntercept(msg)
       return
     }
 
