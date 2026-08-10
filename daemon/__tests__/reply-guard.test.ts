@@ -46,7 +46,7 @@ function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): Sessio
     threadId: 'thread-1',
     createdAt: T0,
     lastActive: T0,
-    tmuxName: 'cedar',
+    tmuxName: 'test-cedar-rg',
     listening: false,
     ...over,
   }
@@ -226,20 +226,20 @@ describe('handleSilenceEvent', () => {
   })
 
   test('nudges a live non-main session by tmuxName', () => {
-    liveSession('sess-1', { tmuxName: 'cedar' })
+    liveSession('sess-1', { tmuxName: 'test-cedar-rg' })
     const sent = fakeBridge('sess-1')
     notePendingReply('sess-1', meta(), T0)
-    noteActivityForSession('cedar', T0 + 1000)
-    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(1)
+    noteActivityForSession('test-cedar-rg', T0 + 1000)
+    expect(handleSilenceEvent('test-cedar-rg', T0 + 60_000)).toBe(1)
     expect(sent.length).toBe(1)
   })
 
   test('prunes entries for dead sessions without nudging', () => {
-    liveSession('sess-1', { tmuxName: 'cedar', deadAt: T0 + 1 })
+    liveSession('sess-1', { tmuxName: 'test-cedar-rg', deadAt: T0 + 1 })
     fakeBridge('sess-1')
     notePendingReply('sess-1', meta(), T0)
-    noteActivityForSession('cedar', T0 + 1000)
-    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(0)
+    noteActivityForSession('test-cedar-rg', T0 + 1000)
+    expect(handleSilenceEvent('test-cedar-rg', T0 + 60_000)).toBe(0)
     expect(_pendingForTesting().size).toBe(0)
   })
 
