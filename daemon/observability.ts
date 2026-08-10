@@ -3,12 +3,15 @@
 // stderr, and no link to its transcript.
 
 import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
+import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
-import { execFileSync } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
+import { promisify } from 'util'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
+import { computeTokenCost } from '../shared/constants.js'
 
 const PROJECTS_ROOT = join(homedir(), '.claude', 'projects')
 const VITALS_INTERVAL_MS = 60_000
@@ -57,10 +60,66 @@ export function transcriptPathFor(claudeSessionId: string): string | undefined {
   return undefined
 }
 
+// ---------------------------------------------------------------------------
+// Cost tracking — read from transcript token usage
+// ---------------------------------------------------------------------------
+
+const lastCostScanSize = new Map<string, number>()
+
+export async function captureCost(info: SessionInfo): Promise<void> {
+  if (!info.claudeSessionId) return
+  const path = transcriptPathFor(info.claudeSessionId)
+  if (!path) return
+
+  let size: number
+  try { size = statSync(path).size } catch { return }
+
+  const lastSize = lastCostScanSize.get(info.sessionId)
+  if (lastSize !== undefined && size === lastSize) return
+  lastCostScanSize.set(info.sessionId, size)
+
+  try {
+    const raw = await readFile(path, 'utf8')
+    const tokensByModel = new Map<string, { input: number; output: number; cacheWrite: number; cacheRead: number }>()
+
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue
+      let entry: Record<string, unknown>
+      try { entry = JSON.parse(line) } catch { continue }
+
+      const msg = entry.message as Record<string, unknown> | undefined
+      if (!msg) continue
+      const model = (msg.model as string | undefined)?.replace(/\[1m\]$/, '')
+      if (!model) continue
+      const usage = msg.usage as Record<string, unknown> | undefined
+      if (!usage) continue
+
+      const cur = tokensByModel.get(model) ?? { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }
+      cur.input += (usage.input_tokens as number) || 0
+      cur.output += (usage.output_tokens as number) || 0
+      cur.cacheWrite += (usage.cache_creation_input_tokens as number) || 0
+      cur.cacheRead += (usage.cache_read_input_tokens as number) || 0
+      tokensByModel.set(model, cur)
+    }
+
+    let total = 0
+    let hasKnownModel = false
+    for (const [model, tokens] of tokensByModel) {
+      const cost = computeTokenCost(model, tokens.input, tokens.output, tokens.cacheWrite, tokens.cacheRead)
+      if (cost !== undefined) { total += cost; hasKnownModel = true }
+    }
+
+    if (hasKnownModel) info.costUsd = total
+  } catch (err) {
+    process.stderr.write(`daemon: cost capture failed for ${info.tmuxName}: ${err}\n`)
+  }
+}
+
 export function formatCostUsd(costUsd: number): string {
   if (costUsd < 0.01) return `$${costUsd.toFixed(4)}`
   return `$${costUsd.toFixed(2)}`
 }
+
 
 export function logCorrelation(info: SessionInfo): void {
   if (correlatedSessions.has(info.sessionId)) return
@@ -74,37 +133,52 @@ export function logCorrelation(info: SessionInfo): void {
   )
 }
 
+const execFileAsync = promisify(execFile)
+
 // Direct children of a pid (empty if none — pgrep exits non-zero, which throws).
-function childPids(pid: string): string[] {
+// Exported for testing.
+export async function childPids(pid: string): Promise<string[]> {
   try {
-    return execFileSync('pgrep', ['-P', pid], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+    const { stdout } = await execFileAsync('pgrep', ['-P', pid], { encoding: 'utf8' })
+    return stdout.trim().split('\n').filter(Boolean)
   } catch { return [] }
 }
 
 // The pane's whole process subtree. Claude's tree is shell → node → claude, so a
 // direct-children-only walk undercounts RSS — descend the full tree.
-function descendantPids(rootPid: string): string[] {
+// Exported for testing.
+export async function descendantPids(rootPid: string): Promise<string[]> {
   const all: string[] = []
   const queue = [rootPid]
   while (queue.length) {
-    for (const kid of childPids(queue.shift()!)) { all.push(kid); queue.push(kid) }
+    const kids = await childPids(queue.shift()!)
+    for (const kid of kids) { all.push(kid); queue.push(kid) }
   }
   return all
 }
 
 // pid + summed RSS (MB) of the pane's process subtree.
-// execFileSync (array form, no shell) throughout — removes the quoting question
-// even though tmuxName is daemon-controlled.
-// TODO: async — this sync-spawns several subprocesses per session each tick.
-function paneVitals(tmuxName: string): { pid?: number; rssMB?: number } {
+// Batches all PIDs into one `ps` call instead of N individual calls.
+// Exported for testing.
+export async function paneVitals(tmuxName: string): Promise<{ pid?: number; rssMB?: number }> {
   try {
-    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim().split('\n')[0]
+    const { stdout: paneOut } = await execFileAsync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8' })
+    const panePid = paneOut.trim().split('\n')[0]
     if (!panePid) return {}
-    const subtree = descendantPids(panePid)
+    const subtree = await descendantPids(panePid)
+    const allPids = [panePid, ...subtree]
+
+    // One ps call for all PIDs — cheaper than N individual calls.
+    // ps exits non-zero if no PIDs remain (all gone); rssKb stays 0.
     let rssKb = 0
-    for (const pid of [panePid, ...subtree]) {
-      try { rssKb += parseInt(execFileSync('ps', ['-o', 'rss=', '-p', pid], { encoding: 'utf8' }).trim() || '0', 10) } catch { /* pid gone */ }
-    }
+    try {
+      const { stdout } = await execFileAsync('ps', ['-o', 'pid=,rss=', '-p', allPids.join(',')], { encoding: 'utf8' })
+      for (const line of stdout.trim().split('\n').filter(Boolean)) {
+        const parts = line.trim().split(/\s+/)
+        if (parts.length >= 2) rssKb += parseInt(parts[1] || '0', 10)
+      }
+    } catch { /* all pids gone */ }
+
     const pid = subtree[0] ? parseInt(subtree[0], 10) : parseInt(panePid, 10)
     return { pid, rssMB: Math.round(rssKb / 1024) }
   } catch {
@@ -112,8 +186,8 @@ function paneVitals(tmuxName: string): { pid?: number; rssMB?: number } {
   }
 }
 
-export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (id: string) => boolean): string {
-  const v = paneVitals(info.tmuxName)
+export async function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (id: string) => boolean): Promise<string> {
+  const v = await paneVitals(info.tmuxName)
   if (v.rssMB != null) vitalsSamples.set(info.sessionId, { rssMB: v.rssMB, at: now })
   const conn = isConnected(info.sessionId) ? '' : ' [disconnected]'
   return `${info.tmuxName} pid=${v.pid ?? '?'} rss=${v.rssMB ?? '?'}MB up=${dur(now - info.createdAt)} idle=${dur(now - info.lastActive)}${conn}`
@@ -150,28 +224,35 @@ export function trimSpawnLog(path: string): void {
   }
 }
 
+async function runVitalsSnapshot(isConnected: (id: string) => boolean): Promise<void> {
+  const now = Date.now()
+  // Prune diagnostic state for gone-or-dead sessions. Each map/set is pruned by
+  // liveness independently: a session that registered (→ correlatedSessions) but
+  // never yielded an RSS sample (→ absent from vitalsSamples) must still be
+  // reclaimed. buildAutopsy reads its sample before deadAt is set
+  // (checkSessionDeath), so this never races the autopsy.
+  const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }
+  for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
+  for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
+  for (const id of lastCostScanSize.keys()) if (goneOrDead(id)) lastCostScanSize.delete(id)
+  const live = [...registry.values()].filter(s => !s.deadAt)
+  for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
+  for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
+  if (live.length === 0) return
+  // Capture cost for all live sessions (file-size cached — cheap when unchanged)
+  for (const s of live) await captureCost(s)
+  const lines = await Promise.all(live.map(async s => '  ' + await sessionVitalsLine(s, now, isConnected)))
+  process.stderr.write(`daemon: vitals (${live.length} live):\n${lines.join('\n')}\n`)
+}
+
 export function startVitalsSnapshots(isConnected: (id: string) => boolean): void {
   let snapshotRunning = false
   setInterval(() => {
-    if (snapshotRunning) return          // skip tick if previous snapshot still pending
+    if (snapshotRunning) return
     snapshotRunning = true
-    try {
-    const now = Date.now()
-    // Prune diagnostic state for gone-or-dead sessions. Each map/set is pruned by
-    // liveness independently: a session that registered (→ correlatedSessions) but
-    // never yielded an RSS sample (→ absent from vitalsSamples) must still be
-    // reclaimed. buildAutopsy reads its sample before deadAt is set
-    // (checkSessionDeath), so this never races the autopsy.
-    const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }
-    for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
-    for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
-    const live = [...registry.values()].filter(s => !s.deadAt)
-    for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
-    for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
-    if (live.length === 0) return
-    const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected))
-    process.stderr.write(`daemon: vitals (${live.length} live):\n${lines.join('\n')}\n`)
-    } finally { snapshotRunning = false }
+    void runVitalsSnapshot(isConnected).catch(err => {
+      process.stderr.write(`daemon: vitals snapshot failed: ${err}\n`)
+    }).finally(() => { snapshotRunning = false })
   }, VITALS_INTERVAL_MS).unref()
 }
 

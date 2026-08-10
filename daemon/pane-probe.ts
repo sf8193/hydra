@@ -549,9 +549,13 @@ export function clearBuilderNudge(sessionId: string): void {
 let _probeCount = 0
 let _detectCount = 0
 let _lastHeartbeat = 0
+let probeRunning = false
 const HEARTBEAT_INTERVAL_MS = 6 * 60 * 60_000 // 6 hours
 
 export async function probeAllSessions(now?: number): Promise<void> {
+  if (probeRunning) return
+  probeRunning = true
+  try {
   const t = now ?? io.now()
   const nowSec = Math.floor(t / 1000)
   _probeCount++
@@ -659,6 +663,9 @@ export async function probeAllSessions(now?: number): Promise<void> {
         notifying: false,
       })
     }
+  }
+  } finally {
+    probeRunning = false
   }
 }
 

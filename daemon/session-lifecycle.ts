@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
-import { execSync, execFileSync } from 'child_process'
+import { execSync, execFileSync, execFile } from 'child_process'
+import { promisify } from 'util'
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
@@ -24,6 +25,7 @@ import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 // worktree-manager.ts removed — worktree ops inlined here for direct control
 
+const execFileAsync = promisify(execFile)
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
 // ---------------------------------------------------------------------------
@@ -301,7 +303,8 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 
       // Warn if worktree branch has commits that may not have been pushed
       try {
-        const commits = execSync(`git -C ${shq(info.worktreeRepo)} log ${shq(branch)} --not --remotes --oneline 2>/dev/null`, { stdio: 'pipe' }).toString().trim()
+        const { stdout } = await execFileAsync('git', ['-C', info.worktreeRepo, 'log', branch, '--not', '--remotes', '--oneline'], { encoding: 'utf8', timeout: 10_000 })
+        const commits = stdout.trim()
         if (commits) {
           const count = commits.split('\n').length
           process.stderr.write(`daemon: worktree ${info.tmuxName} has ${count} unpushed commit(s) on ${branch}\n`)
@@ -311,21 +314,21 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 
       const cleanupScript = `${info.worktreePath}/bin/dev/on-worktree-remove.sh`
       try {
-        execSync(`test -x ${shq(cleanupScript)} && ${shq(cleanupScript)} ${shq(info.tmuxName)}`, { stdio: 'pipe' })
+        await execFileAsync(cleanupScript, [info.tmuxName], { timeout: 10_000 })
         process.stderr.write(`daemon: ran worktree cleanup hook for ${info.tmuxName}\n`)
       } catch {}
       try {
-        execSync(`git -C ${shq(info.worktreeRepo)} worktree remove ${shq(info.worktreePath)} --force`, { stdio: 'pipe' })
+        await execFileAsync('git', ['-C', info.worktreeRepo, 'worktree', 'remove', info.worktreePath, '--force'], { timeout: 10_000 })
         process.stderr.write(`daemon: removed worktree ${info.worktreePath}\n`)
       } catch {
         if (info.worktreePath.includes('/.worktrees/') && existsSync(info.worktreePath)) {
-          execSync(`rm -rf ${shq(info.worktreePath)}`, { stdio: 'pipe' })
+          await execFileAsync('rm', ['-rf', info.worktreePath], { timeout: 10_000 })
           process.stderr.write(`daemon: rm -rf worktree ${info.worktreePath} (git remove failed)\n`)
         }
       }
-      try { execSync(`git -C ${shq(info.worktreeRepo)} worktree prune`, { stdio: 'pipe' }) } catch {}
+      try { await execFileAsync('git', ['-C', info.worktreeRepo, 'worktree', 'prune'], { timeout: 10_000 }) } catch {}
       try {
-        execSync(`git -C ${shq(info.worktreeRepo)} branch -D ${shq(branch)}`, { stdio: 'pipe' })
+        await execFileAsync('git', ['-C', info.worktreeRepo, 'branch', '-D', branch], { timeout: 10_000 })
         process.stderr.write(`daemon: deleted branch ${branch}\n`)
       } catch {}
     }

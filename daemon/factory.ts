@@ -109,7 +109,10 @@ function persistFactoryState(): void {
   try {
     const data: PersistedFactoryState = {
       ticketCounter,
-      builds: [...builds.values()],
+      builds: [...builds.values()].map(state => {
+        const { progressTimer, ...rest } = state
+        return rest
+      }),
     }
     atomicWriteFileSync(BUILDS_STATE_FILE, JSON.stringify(data) + '\n')
   } catch (err) {
@@ -884,14 +887,14 @@ function startProgressTimer(state: FactoryBuildState): void {
   }, PROGRESS_INTERVAL_MS)
 }
 
-function cleanupState(ticket: string): void {
+function cleanupState(ticket: string, skipPersist?: boolean): void {
   const state = builds.get(ticket)
   if (!state) return
   clearProgressTimer(state)
   if (state.builderSessionId) builderSessionToTicket.delete(state.builderSessionId)
   if (state.builderThreadId) builderThreadToTicket.delete(state.builderThreadId)
   builds.delete(ticket)
-  persistFactoryState()
+  if (!skipPersist && !sweeping) persistFactoryState()
 }
 
 // ---------------------------------------------------------------------------
@@ -949,46 +952,55 @@ on('session:death', factorySessionDeath, 'factory:session-death')
 /**
  * Startup sweep: kill orphaned factory builders left by a daemon restart.
  */
+let sweeping = false
+
 export async function sweepOrphanedBuilders(): Promise<void> {
   let swept = 0
-  const builders = [...registry.values()].filter(i => i.isFactoryBuilder)
-  for (const info of builders) {
-    const pmThreadId = info.factoryPmThreadId
-    const ticketInfo = info.factoryTicket ? ` (ticket: \`${info.factoryTicket}\`, phase: ${info.factoryPhase ?? 'unknown'})` : ''
+  sweeping = true
+  try {
+    const builders = [...registry.values()].filter(i => i.isFactoryBuilder)
+    for (const info of builders) {
+      const pmThreadId = info.factoryPmThreadId
+      const ticketInfo = info.factoryTicket ? ` (ticket: \`${info.factoryTicket}\`, phase: ${info.factoryPhase ?? 'unknown'})` : ''
 
-    // Leave awaiting_pm builders alive — they hold completed work the PM hasn't accepted yet
-    if (info.factoryPhase === 'awaiting_pm') {
-      process.stderr.write(`daemon: factory: leaving awaiting_pm builder ${info.tmuxName} alive${ticketInfo}\n`)
-      if (pmThreadId) {
-        void safeSend(pmThreadId, `🏭 **Builder survived restart** ℹ️\nBuilder \`${info.tmuxName}\`${ticketInfo} is still alive with completed work. Factory ticket state was lost — use \`peek_session("${info.tmuxName}")\` to inspect, then \`kill_session\` when done. Work remains on disk.`).catch(() => {})
+      // Leave awaiting_pm builders alive — they hold completed work the PM hasn't accepted yet
+      if (info.factoryPhase === 'awaiting_pm') {
+        process.stderr.write(`daemon: factory: leaving awaiting_pm builder ${info.tmuxName} alive${ticketInfo}\n`)
+        if (pmThreadId) {
+          void safeSend(pmThreadId, `🏭 **Builder survived restart** ℹ️\nBuilder \`${info.tmuxName}\`${ticketInfo} is still alive with completed work. Factory ticket state was lost — use \`peek_session("${info.tmuxName}")\` to inspect, then \`kill_session\` when done. Work remains on disk.`).catch(() => {})
+        }
+        continue
       }
-      continue
-    }
 
-    process.stderr.write(`daemon: factory: sweeping orphaned builder ${info.tmuxName} (${info.sessionId})\n`)
-    try {
-      await killSession(info, 'orphaned factory builder (daemon restarted)')
-    } catch (err) {
-      process.stderr.write(`daemon: factory: sweep kill failed for ${info.tmuxName}: ${err}\n`)
-    }
-    // Log the orphan for history
-    const orphanState: FactoryBuildState = {
-      ticket: info.factoryTicket ?? 'unknown',
-      pmThreadId: pmThreadId ?? 'unknown',
-      pmSessionId: 'unknown',
-      spec: '(orphaned — daemon restarted)',
-      reviewRounds: 0,
-      phase: 'failed',
-      retryCount: 0,
-      createdAt: info.createdAt,
-      reviewed: false,
-    }
-    logBuild(orphanState, 'orphaned')
+      process.stderr.write(`daemon: factory: sweeping orphaned builder ${info.tmuxName} (${info.sessionId})\n`)
+      try {
+        await killSession(info, 'orphaned factory builder (daemon restarted)')
+      } catch (err) {
+        process.stderr.write(`daemon: factory: sweep kill failed for ${info.tmuxName}: ${err}\n`)
+      }
+      // Log the orphan for history
+      const orphanState: FactoryBuildState = {
+        ticket: info.factoryTicket ?? 'unknown',
+        pmThreadId: pmThreadId ?? 'unknown',
+        pmSessionId: 'unknown',
+        spec: '(orphaned — daemon restarted)',
+        reviewRounds: 0,
+        phase: 'failed',
+        retryCount: 0,
+        createdAt: info.createdAt,
+        reviewed: false,
+      }
+      logBuild(orphanState, 'orphaned')
 
-    if (pmThreadId) {
-      void safeSend(pmThreadId, `🏭 **Orphaned builder killed** ⚠️\nBuilder \`${info.tmuxName}\`${ticketInfo} was still running after daemon restart. Killed for safety. Retry with factory_build if needed.`).catch(() => {})
+      if (pmThreadId) {
+        void safeSend(pmThreadId, `🏭 **Orphaned builder killed** ⚠️\nBuilder \`${info.tmuxName}\`${ticketInfo} was still running after daemon restart. Killed for safety. Retry with factory_build if needed.`).catch(() => {})
+      }
+      swept++
     }
-    swept++
+  } finally {
+    sweeping = false
   }
+  // Persist once after the entire sweep instead of per-cleanup
+  persistFactoryState()
   if (swept > 0) process.stderr.write(`daemon: factory: swept ${swept} orphaned builder(s)\n`)
 }

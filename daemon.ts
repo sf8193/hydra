@@ -77,8 +77,9 @@ reconnectCodexSessions().then(() => {
   process.stderr.write(`daemon: codex reconnection failed: ${err}\n`)
 })
 
-// Sweep orphaned factory builders left by previous daemon instance
-import { sweepOrphanedBuilders } from './daemon/factory.js'
+// Restore factory state from previous daemon instance, then sweep orphans
+import { sweepOrphanedBuilders, restoreFactoryState } from './daemon/factory.js'
+restoreFactoryState()
 sweepOrphanedBuilders().catch(err => {
   process.stderr.write(`daemon: factory sweep failed: ${err}\n`)
 })

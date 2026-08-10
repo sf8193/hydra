@@ -2,7 +2,8 @@
  * Dashboard — auto-updating session overview in Slack's App Home tab.
  */
 
-import { execSync } from 'child_process'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { gateway, PLATFORM } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
@@ -11,7 +12,9 @@ import { formatDuration, tmuxHasSession, safeSend, getContextPercent } from './u
 import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
-import { killSession } from './session-lifecycle.js'
+const execFileAsync = promisify(execFile)
+
+// killSession import removed from here — kill action now sends a confirmation DM
 import { formatCostUsd } from './observability.js'
 
 const DEBOUNCE_MS = 2000
@@ -135,7 +138,8 @@ export function groupSessions(sessions: SessionRow[]): GroupedSession[] {
     }
   }
 
-  // Flatten into ordered list with depth, preserving input order within each level
+  // Flatten into ordered list with depth, preserving input order within each level.
+  // Roots come before their children so truncation never orphans displayed children.
   const result: GroupedSession[] = []
 
   function visit(row: SessionRow, depth: number, isLastChild: boolean): void {
@@ -147,6 +151,27 @@ export function groupSessions(sessions: SessionRow[]): GroupedSession[] {
   }
 
   for (const root of roots) visit(root, 0, false)
+
+  // Sort so roots always precede their children. The visit() walk already
+  // produces this order, but if the input `sessions` array had children listed
+  // before their parents (e.g. sorted by lastActive), a child could appear as
+  // a root because its parent hadn't been indexed yet. Re-sort the flattened
+  // output: group by root, roots first, children after.
+  const rootOrder = new Map<string, number>()
+  let idx = 0
+  for (const g of result) {
+    if (g.depth === 0) rootOrder.set(g.session.name, idx++)
+  }
+  result.sort((a, b) => {
+    const aRoot = a.depth === 0 ? a.session.name : (a.session.originFrom ?? a.session.name)
+    const bRoot = b.depth === 0 ? b.session.name : (b.session.originFrom ?? b.session.name)
+    const aRootIdx = rootOrder.get(aRoot) ?? Infinity
+    const bRootIdx = rootOrder.get(bRoot) ?? Infinity
+    if (aRootIdx !== bRootIdx) return aRootIdx - bRootIdx
+    // Within the same root group, root comes first, then children in original order
+    if (a.depth !== b.depth) return a.depth - b.depth
+    return 0
+  })
 
   return result
 }
@@ -296,13 +321,7 @@ export async function handleHomeAction(actionValue: string, userId: string): Pro
 
   switch (action) {
     case 'kill': {
-      void gateway.send(userId, `_Killing **${info.tmuxName}**…_`).catch(() => {})
-      try {
-        await killSession(info, 'killed from Home tab')
-        refreshDashboardNow()
-      } catch (err) {
-        void gateway.send(userId, `_Kill failed: ${err instanceof Error ? err.message : String(err)}_`).catch(() => {})
-      }
+      void gateway.sendDM(userId, `Kill **${info.tmuxName}**? Type \`kill ${info.tmuxName}\` to confirm.`).catch(() => {})
       break
     }
     case 'peek': {
@@ -315,11 +334,11 @@ export async function handleHomeAction(actionValue: string, userId: string): Pro
       const msgs = info.messageCount ?? 0
       const header = `📸 **${info.tmuxName}** · ${ctx} · ${msgs} msgs · ${duration}`
       try {
-        const safeName = info.tmuxName.replace(/'/g, "'\\''")
-        const text = execSync(
-          `tmux capture-pane -t '${safeName}' -p -S -60`,
-          { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
-        ).trimEnd()
+        const { stdout } = await execFileAsync(
+          'tmux', ['capture-pane', '-t', info.tmuxName, '-p', '-S', '-60'],
+          { encoding: 'utf8', timeout: 5000 },
+        )
+        const text = stdout.trimEnd()
         void gateway.send(userId, `${header}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``).catch(() => {})
       } catch {
         void gateway.send(userId, `${header}\n_Capture failed_`).catch(() => {})

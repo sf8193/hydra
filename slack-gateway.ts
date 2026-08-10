@@ -475,8 +475,11 @@ export class SlackGateway implements ChatGateway {
   }
 
   async typing(channelId: string): Promise<void> {
-    // Slack doesn't have a typing indicator API for bots.
-    // No-op.
+    // Slack doesn't have a typing indicator API for bots — but route through
+    // the throttle so any future implementation is already rate-limited.
+    await slackThrottle.call('chat.postMessage', async () => {
+      // No-op: Slack has no typing indicator API for bots.
+    })
   }
 
   async fetchChannel(id: string): Promise<ChannelInfo> {
