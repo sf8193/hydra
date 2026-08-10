@@ -340,6 +340,12 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
     return
   }
 
+  if (info?.initiator && info.initiator !== msg.authorId) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void safeSend(msg.channelId, `_Only the session creator can destroy this thread._`)
+    return
+  }
+
   void gateway.react(msg.channelId, msg.id, '💀').catch(() => {})
 
   const thread = threadRegistry.get(threadId)
