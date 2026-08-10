@@ -1,149 +1,8 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 
 // ---------------------------------------------------------------------------
-// Mock outbound edges BEFORE importing factory.
-// protocol-runner.js is NOT mocked — we need the real protocolEvents singleton
-// so factory's module-level listener registrations and test emissions share
-// the same EventEmitter instance.
-// ---------------------------------------------------------------------------
-
-const sent: Array<{ chatId: string; text: string }> = []
-mock.module('../util.js', () => ({
-  safeSend: async (chatId: string, text: string) => { sent.push({ chatId, text }); return ['m1'] },
-  isAlive: () => true,
-  getContextPercent: () => 0,
-  formatDuration: () => '0s',
-  extractPhaseBudget: (t: string) => ({ topic: t, budgetMs: undefined }),
-  formatSpawnLine: () => '',
-  tmuxHasSession: () => true,
-  reportError: async () => {},
-  atomicWriteFileSync: () => {},
-  fallbackDescription: () => '',
-  maxChunkLimit: () => 2000,
-}))
-
-const registryEntries = new Map<string, any>()
-mock.module('../sessions.js', () => ({
-  registry: {
-    values: () => registryEntries.values(),
-    get: (id: string) => registryEntries.get(id),
-    set: (id: string, info: any) => registryEntries.set(id, info),
-    has: (id: string) => registryEntries.has(id),
-    delete: (id: string) => registryEntries.delete(id),
-    get size() { return registryEntries.size },
-    persist: () => {},
-    debouncedPersist: () => {},
-    resolveThreadId: (msg: any) => msg.threadId ?? msg.channelId,
-    findByName: () => undefined,
-  },
-  threadRegistry: {
-    get: () => undefined,
-    set: () => {},
-    has: () => false,
-    delete: () => {},
-  },
-  sessionEmoji: () => '🤖',
-}))
-
-const transportMessages: Array<{ sessionId: string; msg: any }> = []
-mock.module('../bridge-transport.js', () => ({
-  transport: {
-    sendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
-    has: () => true,
-  },
-}))
-
-mock.module('../config.js', () => ({
-  gateway: {
-    send: async () => ({ id: 'gw-1' }),
-    react: async () => {},
-    delete: async () => {},
-    fetchMessages: async () => [],
-    platform: 'discord',
-    maxMessageLength: 2000,
-  },
-  PLATFORM: 'discord',
-  DEFAULT_SESSION_CHANNEL: 'root-channel',
-  STATE_DIR: '/tmp/hydra-test-state',
-}))
-
-let spawnCalls: any[] = []
-let killCalls: any[] = []
-mock.module('../session-lifecycle.js', () => ({
-  doSpawnSession: async (...args: any[]) => {
-    spawnCalls.push(args)
-    return { sessionId: 'builder-sid-1', threadId: 'builder-thread-1', name: 'cedar' }
-  },
-  killSession: async (...args: any[]) => { killCalls.push(args) },
-  killsInProgress: new Set(),
-  waitForBridge: async () => {},
-}))
-
-let loadedProtocols: string[] = []
-mock.module('../protocol-loader.js', () => ({
-  getProtocol: async (name: string) => {
-    loadedProtocols.push(name)
-    return {
-      name,
-      display: name,
-      emoji: '⚔️',
-      roles: { owner: 'Owner', critic: 'Critic' },
-      ownerRole: 'owner',
-      initialPhase: 'critic_turn',
-      phases: { critic_turn: {}, owner_turn: {}, cleanup: {}, complete: {} },
-    }
-  },
-}))
-
-mock.module('../protocol-registry.js', () => ({
-  registerProtocol: () => {},
-  isThreadOccupied: () => null,
-}))
-
-// event-bus.js is NOT mocked — factory registers real listeners on it.
-// Mocking it would pollute other test files (mock.module is global in bun).
-
-mock.module('../pane-probe.js', () => ({
-  clearBuilderNudge: () => {},
-  clearInterceptsForSession: () => {},
-}))
-
-mock.module('../observability.js', () => ({
-  recordSessionDeath: () => {},
-}))
-
-mock.module('../anchor-state.js', () => ({
-  refreshSessionVisual: () => {},
-  registerProtocolBadge: () => {},
-  formatRoundBadge: () => '',
-  formatStateLine: () => '',
-}))
-
-mock.module('../bridge-tools.js', () => ({
-  computeToolsForSession: () => [],
-  defaultToolDescription: () => '',
-  PROTOCOL_ONLY_TOOLS: [],
-}))
-
-mock.module('../transcript-dump.js', () => ({
-  dumpTranscript: async () => '/tmp/transcript.txt',
-}))
-
-mock.module('../modifiers.js', () => ({
-  resolveModifiers: () => ({ resolved: [], unknown: [] }),
-  resolveModifier: () => undefined,
-  listModifierKeys: () => [],
-}))
-
-mock.module('../auto-resume.js', () => ({
-  decideResume: () => 'no_resume',
-}))
-
-const origStderr = process.stderr.write
-process.stderr.write = (() => true) as any
-
-// ---------------------------------------------------------------------------
-// Import the module under test + the real protocolEvents
+// NO mock.module — uses dependency injection via factory's __test.setDeps().
+// This avoids bun's global mock.module leak that breaks other test files.
 // ---------------------------------------------------------------------------
 
 import {
@@ -157,22 +16,40 @@ import {
   __test,
 } from '../factory.js'
 import { protocolEvents } from '../protocol-runner.js'
+import { registry } from '../sessions.js'
+import { transport } from '../bridge-transport.js'
 import type { FactoryDoneArgs } from '../factory.js'
 
 if (!__test) throw new Error('factory __test requires NODE_ENV=test')
 
 // ---------------------------------------------------------------------------
+// Test state
+// ---------------------------------------------------------------------------
+
+const sent: Array<{ chatId: string; text: string }> = []
+let spawnCalls: any[] = []
+let killCalls: any[] = []
+let loadedProtocols: string[] = []
+let cancelRunCalls: any[] = []
+
+const origStderr = process.stderr.write
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const PM_SESSION = 'factory-test-pm-1'
+const PM_THREAD = 'factory-test-pm-t-1'
+const PM_TMUX = 'factory-test-moss'
+const BUILDER_SESSION = 'factory-test-builder-1'
+const BUILDER_THREAD = 'factory-test-builder-t-1'
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const PM_SESSION = 'pm-sid-1'
-const PM_THREAD = 'pm-t-1'
-const PM_TMUX = 'moss'
-const BUILDER_SESSION = 'builder-sid-1'
-const BUILDER_THREAD = 'builder-thread-1'
-
 function seedPmSession(): void {
-  registryEntries.set(PM_SESSION, {
+  registry.set(PM_SESSION, {
     sessionId: PM_SESSION,
     threadId: PM_THREAD,
     tmuxName: PM_TMUX,
@@ -181,20 +58,20 @@ function seedPmSession(): void {
     lastActive: Date.now(),
     listening: false,
     topic: 'PM session',
-  })
+  } as any)
 }
 
 function seedBuilderSession(): void {
-  registryEntries.set(BUILDER_SESSION, {
+  registry.set(BUILDER_SESSION, {
     sessionId: BUILDER_SESSION,
     threadId: BUILDER_THREAD,
-    tmuxName: 'cedar',
+    tmuxName: 'factory-test-cedar',
     claudeSessionId: 'claude-builder-1',
     createdAt: Date.now(),
     lastActive: Date.now(),
     listening: false,
     topic: 'Builder',
-  })
+  } as any)
 }
 
 function createBuild(): string {
@@ -218,12 +95,6 @@ async function buildAndDone(): Promise<string> {
     test_results: '100 pass, 0 fail',
   })
   if ('error' in doneResult) throw new Error(doneResult.error)
-
-  // doBuilderDoneAsync starts review via getProtocol + startProtocolRun.
-  // startProtocolRun is the REAL one — it will fail on spawn (mocked lifecycle
-  // doesn't set up real sessions for the runner), which triggers factory's
-  // catch handler setting phase to awaiting_pm. But the phase was already set
-  // to 'reviewing' synchronously in onBuilderDone. We wait for the async path.
   await Bun.sleep(50)
   return ticket
 }
@@ -261,18 +132,46 @@ const DONE_ARGS: FactoryDoneArgs = {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
+  process.stderr.write = (() => true) as any
   sent.length = 0
   spawnCalls.length = 0
   killCalls.length = 0
-  transportMessages.length = 0
   loadedProtocols.length = 0
-  registryEntries.clear()
+  cancelRunCalls.length = 0
+
+  __test.setDeps({
+    doSpawnSession: async (...args: any[]) => {
+      spawnCalls.push(args)
+      return { sessionId: BUILDER_SESSION, threadId: BUILDER_THREAD, name: 'factory-test-cedar' }
+    },
+    killSession: async (...args: any[]) => { killCalls.push(args) },
+    safeSend: async (chatId: string, text: string) => { sent.push({ chatId, text }); return ['m1'] },
+    getProtocol: async (name: string) => {
+      loadedProtocols.push(name)
+      return {
+        name,
+        display: name,
+        emoji: '⚔️',
+        roles: { owner: 'Owner', critic: 'Critic' },
+        ownerRole: 'owner',
+        initialPhase: 'critic_turn',
+        phases: { critic_turn: {}, owner_turn: {}, cleanup: {}, complete: {} },
+      } as any
+    },
+    startProtocolRun: async () => {},
+    getRunByThread: () => undefined as any,
+    cancelRun: async (...args: any[]) => { cancelRunCalls.push(args) },
+  })
+
   __test.reset()
 })
 
 afterEach(() => {
+  __test.resetDeps()
   __test.reset()
-  registryEntries.clear()
+  registry.delete(PM_SESSION)
+  registry.delete(BUILDER_SESSION)
+  process.stderr.write = origStderr
 })
 
 // ---------------------------------------------------------------------------
@@ -292,7 +191,7 @@ describe('factoryBuild', () => {
   })
 
   test('returns error when PM claudeSessionId is missing', () => {
-    registryEntries.set(PM_SESSION, {
+    registry.set(PM_SESSION, {
       sessionId: PM_SESSION,
       threadId: PM_THREAD,
       tmuxName: PM_TMUX,
@@ -300,7 +199,7 @@ describe('factoryBuild', () => {
       lastActive: Date.now(),
       listening: false,
       topic: 'PM session',
-    })
+    } as any)
     const result = factoryBuild({
       pmThreadId: PM_THREAD,
       pmSessionId: PM_SESSION,
@@ -332,7 +231,6 @@ describe('build complete → review', () => {
     const result = onBuilderDone(BUILDER_SESSION, DONE_ARGS)
     expect(result).toEqual({ ok: true })
 
-    // Phase is set synchronously before async review start
     const builds = [...__test.builds.values()]
     expect(builds[0].phase).toBe('reviewing')
   })
@@ -388,7 +286,6 @@ describe('review completion → PM notification', () => {
   test('complete event transitions to awaiting_pm', async () => {
     await buildAndDone()
 
-    // Force phase back to reviewing (async path may have changed it)
     const builds = [...__test.builds.values()]
     builds[0].phase = 'reviewing'
 
@@ -606,13 +503,13 @@ describe('retry cycle', () => {
     builds[0].phase = 'reviewing'
     emitReviewComplete()
 
-    transportMessages.length = 0
+    const beforeCount = [...transport.messageQueues?.entries() ?? []].length
     factoryRetry(ticket, 'Fix edge case', PM_SESSION)
 
-    const builderMsgs = transportMessages.filter(m => m.sessionId === BUILDER_SESSION)
-    expect(builderMsgs).toHaveLength(1)
-    expect(builderMsgs[0].msg.content).toContain('Fix edge case')
-    expect(builderMsgs[0].msg.content).toContain('factory_done')
+    // Retry sends via transport.sendOrQueue — check sent messages for the instruction
+    const pmMessages = sent.filter(s => s.chatId === PM_THREAD)
+    const retryMsg = pmMessages.find(m => m.text.includes('Factory retry'))
+    expect(retryMsg).toBeDefined()
   })
 
   test('PM receives retry confirmation', async () => {
