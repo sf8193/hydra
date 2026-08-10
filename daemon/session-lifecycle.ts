@@ -774,7 +774,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: spawn ${tmuxName}: execFileSync FAILED: ${msg}\n`)
-    throw new Error(`failed to spawn tmux session: ${msg}`)
+    throw new Error(friendlySpawnError(err))
   }
 
   // Verify the tmux session actually exists after creation
