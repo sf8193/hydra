@@ -63,6 +63,7 @@ export type SessionInfo = {
   engine?: 'claude' | 'codex'  // which backend runs this session (default: claude)
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
+  costUsd?: number             // accumulated cost in USD (computed from transcript token usage)
 }
 
 export type ThreadMember = {

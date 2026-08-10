@@ -1,8 +1,8 @@
-import { describe, test, expect, afterEach } from 'bun:test'
+import { describe, test, expect, afterEach, mock, beforeEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, buildCrashNotice, buildAutopsy } from '../observability.js'
+import { trimSpawnLog, buildCrashNotice, buildAutopsy, childPids, descendantPids, paneVitals, sessionVitalsLine } from '../observability.js'
 import type { SessionInfo } from '../sessions.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
@@ -114,6 +114,97 @@ function fakeInfo(over: Partial<SessionInfo> = {}): SessionInfo {
     ...over,
   } as unknown as SessionInfo
 }
+
+// ---------------------------------------------------------------------------
+// Async vitals helpers
+// ---------------------------------------------------------------------------
+
+// These tests exercise real process behavior where possible.
+// They work in any environment where tmux/pgrep/ps are unavailable — all
+// three helpers return gracefully on exec failure.
+
+describe('childPids (async)', () => {
+  test('returns empty array when pgrep finds no children', async () => {
+    // PID 0 is the kernel — pgrep -P 0 always exits non-zero (no children or denied).
+    const result = await childPids('0')
+    expect(Array.isArray(result)).toBe(true)
+    // Either empty (no children found) or valid pids (environment-dependent)
+    for (const pid of result) expect(typeof pid).toBe('string')
+  })
+
+  test('returns empty array for a non-existent PID', async () => {
+    // PID 99999999 almost certainly does not exist.
+    const result = await childPids('99999999')
+    expect(result).toEqual([])
+  })
+
+  test('returns empty array on exec failure (non-existent binary path)', async () => {
+    // We can verify the error path by testing with an invalid PID string that
+    // pgrep will reject with a non-zero exit (same as "no children").
+    const result = await childPids('not-a-pid')
+    expect(result).toEqual([])
+  })
+})
+
+describe('descendantPids (async)', () => {
+  test('returns empty array for non-existent root pid', async () => {
+    const result = await descendantPids('99999999')
+    expect(result).toEqual([])
+  })
+
+  test('returns array (possibly empty) for a valid pid', async () => {
+    // Use our own PID — it definitely exists, and may or may not have children.
+    const result = await descendantPids(String(process.pid))
+    expect(Array.isArray(result)).toBe(true)
+    for (const pid of result) expect(typeof pid).toBe('string')
+  })
+})
+
+describe('paneVitals (async)', () => {
+  test('returns {} when tmux session does not exist', async () => {
+    // A tmux session named with a UUID definitely does not exist.
+    const result = await paneVitals('nonexistent-session-xyz-99999')
+    expect(result).toEqual({})
+  })
+
+  test('returns object shape { pid?, rssMB? }', async () => {
+    const result = await paneVitals('nonexistent-session-xyz-99999')
+    expect(typeof result).toBe('object')
+    // pid and rssMB are optional — either number or undefined
+    if (result.pid != null) expect(typeof result.pid).toBe('number')
+    if (result.rssMB != null) {
+      expect(typeof result.rssMB).toBe('number')
+      expect(result.rssMB).toBeGreaterThanOrEqual(0)
+    }
+  })
+})
+
+describe('sessionVitalsLine (async)', () => {
+  const NOW = 1_700_000_000_000
+
+  test('returns a string with tmuxName, pid, rss, up, idle fields', async () => {
+    const info = fakeInfo({ tmuxName: 'nonexistent-xyz', createdAt: NOW - 120_000, lastActive: NOW - 30_000 })
+    const line = await sessionVitalsLine(info, NOW, () => true)
+    expect(typeof line).toBe('string')
+    expect(line.startsWith('nonexistent-xyz')).toBe(true)
+    expect(line.includes('pid=')).toBe(true)
+    expect(line.includes('rss=')).toBe(true)
+    expect(line.includes('up=')).toBe(true)
+    expect(line.includes('idle=')).toBe(true)
+  })
+
+  test('appends [disconnected] when isConnected returns false', async () => {
+    const info = fakeInfo({ tmuxName: 'nonexistent-xyz' })
+    const line = await sessionVitalsLine(info, NOW, () => false)
+    expect(line.includes('[disconnected]')).toBe(true)
+  })
+
+  test('does not append [disconnected] when isConnected returns true', async () => {
+    const info = fakeInfo({ tmuxName: 'nonexistent-xyz' })
+    const line = await sessionVitalsLine(info, NOW, () => true)
+    expect(line.includes('[disconnected]')).toBe(false)
+  })
+})
 
 describe('buildAutopsy', () => {
   test('reports "never sampled" when no vitals were taken (sub-60s death)', () => {

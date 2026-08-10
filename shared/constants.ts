@@ -70,6 +70,53 @@ export function extractModelPrefix(raw: string): { model?: string; rest?: string
   if (!resolved) return { rest: raw }
   return { model: resolved, rest: match[2]?.trim() || undefined }
 }
+// ---------------------------------------------------------------------------
+// Model pricing — cost per 1M tokens (USD). Best-effort; update as needed.
+// ---------------------------------------------------------------------------
+
+export type ModelPricing = {
+  inputPerM: number
+  outputPerM: number
+  cacheWritePerM: number
+  cacheReadPerM: number
+}
+
+export const MODEL_PRICING: Record<string, ModelPricing> = {
+  'claude-opus-5':            { inputPerM: 15,   outputPerM: 75,   cacheWritePerM: 18.75, cacheReadPerM: 1.50 },
+  'claude-sonnet-5':          { inputPerM: 3,    outputPerM: 15,   cacheWritePerM: 3.75,  cacheReadPerM: 0.30 },
+  'claude-fable-5':           { inputPerM: 3,    outputPerM: 15,   cacheWritePerM: 3.75,  cacheReadPerM: 0.30 },
+  'claude-opus-4-8':          { inputPerM: 15,   outputPerM: 75,   cacheWritePerM: 18.75, cacheReadPerM: 1.50 },
+  'claude-opus-4-7':          { inputPerM: 15,   outputPerM: 75,   cacheWritePerM: 18.75, cacheReadPerM: 1.50 },
+  'claude-opus-4-6':          { inputPerM: 15,   outputPerM: 75,   cacheWritePerM: 18.75, cacheReadPerM: 1.50 },
+  'claude-sonnet-4-6':        { inputPerM: 3,    outputPerM: 15,   cacheWritePerM: 3.75,  cacheReadPerM: 0.30 },
+  'claude-opus-4-5-20251101': { inputPerM: 15,   outputPerM: 75,   cacheWritePerM: 18.75, cacheReadPerM: 1.50 },
+  'claude-sonnet-4-5-20250929': { inputPerM: 3,  outputPerM: 15,   cacheWritePerM: 3.75,  cacheReadPerM: 0.30 },
+  'claude-haiku-4-5-20251001':  { inputPerM: 0.8, outputPerM: 4,   cacheWritePerM: 1.00,  cacheReadPerM: 0.08 },
+}
+
+/**
+ * Compute cost in USD for token counts using the model's pricing.
+ * Returns undefined if the model has no pricing entry.
+ */
+export function computeTokenCost(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cacheCreationTokens: number,
+  cacheReadTokens: number,
+): number | undefined {
+  const normalized = model.replace(/\[1m\]$/, '')
+  const pricing = MODEL_PRICING[normalized]
+  if (!pricing) return undefined
+  return (
+    (inputTokens * pricing.inputPerM +
+      outputTokens * pricing.outputPerM +
+      cacheCreationTokens * pricing.cacheWritePerM +
+      cacheReadTokens * pricing.cacheReadPerM) /
+    1_000_000
+  )
+}
+
 export function reviewModel(): string {
   return process.env.HYDRA_REVIEW_MODEL?.trim() || spawnModel()
 }
