@@ -720,26 +720,43 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
     ...params,
   }
 
+  const isGuest = role !== run.protocol.ownerRole
   const model = (params.model as string) ?? undefined
   const engine = (params.engine as 'claude' | 'codex') ?? undefined
+  let seed: string | undefined
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,
     model,
     ...(engine && { engine }),
+    ...(isGuest && { channelSeed: true }),
     promptBuilder: (sessionId, tmuxName) => {
-      let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
+      let s = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
       const seedMods = ((run.params.modifiers as Modifier[] | undefined) ?? [])
         .filter((m): m is SeedModifier => m.type === 'seed' && m.target === role)
       for (const mod of seedMods) {
-        seed += `\n\n---\n**+${mod.name}:**\n${mod.instructions}`
+        s += `\n\n---\n**+${mod.name}:**\n${mod.instructions}`
       }
-      return seed
+      seed = s
+      return s
     },
   })
 
   registerParticipant(run, role, result.sessionId)
-  if (role !== run.protocol.ownerRole) startHeartbeat(result.sessionId)
+
+  if (isGuest && seed) {
+    const ok = await waitForBridge(result.sessionId, 30_000)
+    if (!ok) {
+      process.stderr.write(`daemon: ${run.protocol.name} run: ${role} bridge timeout for channel seed delivery\n`)
+      throw new Error(`${role} bridge did not connect for seed delivery`)
+    }
+    transport.sendOrQueue(result.sessionId, {
+      type: 'notification',
+      content: seed,
+      meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
+    process.stderr.write(`daemon: ${run.protocol.name} run: ${role} seed delivered via channel notification (${seed.length} chars)\n`)
+  }
 }
 
 async function postStatusLine(run: ProtocolRun): Promise<void> {
