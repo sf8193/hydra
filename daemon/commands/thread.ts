@@ -346,12 +346,8 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
   const parentChannelId = thread?.parentChannelId ?? info?.anchorChannelId
   const anchorMessageId = thread?.anchorMessageId ?? info?.anchorMessageId
 
-  if (info && sessionId) {
-    registry.delete(sessionId)
-    registry.deleteThread(threadId)
-  }
-  threadRegistry.delete(threadId)
-
+  // Delete thread BEFORE registry cleanup — if the API call fails, the registry
+  // stays intact so the thread isn't orphaned from hydra's perspective.
   try {
     await gateway.deleteThread(threadId)
     process.stderr.write(`daemon: destroy: deleted thread ${threadId}\n`)
@@ -361,6 +357,13 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
     void safeSend(parentChannelId ?? msg.channelId, `_Thread deletion failed: ${errMsg}_`)
     return
   }
+
+  // Clean up registry only after successful thread deletion
+  if (info && sessionId) {
+    registry.delete(sessionId)
+    registry.deleteThread(threadId)
+  }
+  threadRegistry.delete(threadId)
 
   if (parentChannelId && anchorMessageId) {
     try {

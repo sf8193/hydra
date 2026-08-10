@@ -32,17 +32,17 @@ sequenceDiagram
     else dead session or no session (happy path)
         handler->>user: react 💀
 
-        opt session exists in registry
-            handler->>registry: registry.delete(sessionId)
-            handler->>registry: registry.deleteThread(threadId)
-            handler->>registry: threadRegistry.delete(threadId)
-        end
-
         handler->>gateway: deleteThread(threadId)
         alt Discord API error
             handler->>user: "Thread deletion failed: error"
             Note over handler: log to stderr, abort
         end
+
+        opt session exists in registry
+            handler->>registry: registry.delete(sessionId)
+            handler->>registry: registry.deleteThread(threadId)
+        end
+        handler->>registry: threadRegistry.delete(threadId)
 
         alt parentChannelId + anchorMessageId known
             handler->>gateway: delete(parentChannelId, anchorMessageId)
