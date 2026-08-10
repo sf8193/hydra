@@ -23,7 +23,7 @@ import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/d
 import { getDesignByThread, handleDesignAnswer } from './design.js'
 import { isThreadOccupied } from './protocol-registry.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept } from './commands/status.js'
+import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept, handleHistoryIntercept } from './commands/status.js'
 import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
@@ -41,6 +41,7 @@ const COMMAND_PREFIXES = [
   ...Object.keys(MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
   'kill session:', 'kill:', '/kill',
   '/sessions', 'list sessions',
+  '/history', 'history',
   '/restart', 'restart daemon', 'restart',
   '/health', 'health', 'status',
   '/protocols', 'protocols',
@@ -392,6 +393,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const restartMatch = msg.content.match(/^(?:\/restart|restart daemon|restart)\s*$/i)
     if (restartMatch) {
       void handleRestartIntercept(msg)
+      return
+    }
+
+    const historyMatch = msg.content.match(/^(?:\/history|history)\s*$/i)
+    if (historyMatch) {
+      void handleHistoryIntercept(msg)
       return
     }
 

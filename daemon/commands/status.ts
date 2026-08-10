@@ -244,6 +244,36 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }
 
+const HISTORY_LIMIT = 10
+
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+  const now = Date.now()
+  const dead = [...registry.values()]
+    .filter(s => !isAlive(s) && !s.isJoinMember)
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, HISTORY_LIMIT)
+
+  if (dead.length === 0) {
+    try { await gateway.send(msg.channelId, 'No completed sessions found.', { replyTo: msg.id }) } catch {}
+    return
+  }
+
+  const lines = [`**Recent Sessions** (${dead.length})`]
+  for (const s of dead) {
+    const thread = threadRegistry.get(s.threadId)
+    const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
+    const runtime = formatDuration(s.lastActive - s.createdAt)
+    const endedAgo = formatDuration(now - s.lastActive)
+    const emoji = sessionEmoji(s.tmuxName)
+    const url = thread?.threadUrl
+    const nameLink = url ? `[\`${s.tmuxName}\`](${url})` : `\`${s.tmuxName}\``
+    lines.push(`${emoji} ${nameLink} — ${desc} · ran ${runtime} · ended ${endedAgo} ago`)
+  }
+
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
+}
+
 export async function handleHealthIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '💚').catch(() => {})
   const uptimeMin = Math.round((Date.now() - daemonStartedAt) / 60000)
