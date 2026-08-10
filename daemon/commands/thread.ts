@@ -350,8 +350,23 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
   void gateway.react(msg.channelId, msg.id, '💀').catch(() => {})
 
   const thread = threadRegistry.get(threadId)
-  const parentChannelId = thread?.parentChannelId ?? info?.anchorChannelId
-  const anchorMessageId = thread?.anchorMessageId ?? info?.anchorMessageId
+  let parentChannelId = thread?.parentChannelId ?? info?.anchorChannelId
+  let anchorMessageId = thread?.anchorMessageId ?? info?.anchorMessageId
+
+  if (!parentChannelId || !anchorMessageId) {
+    try {
+      const channelInfo = await gateway.fetchChannel(threadId)
+      if (channelInfo.isThread && channelInfo.parentId) {
+        parentChannelId = parentChannelId ?? channelInfo.parentId
+      }
+      if (!anchorMessageId) {
+        const starter = await gateway.getThreadStarterInfo(threadId)
+        if (starter) anchorMessageId = starter.starterId
+      }
+    } catch {
+      process.stderr.write(`daemon: destroy: failed to fetch thread anchor info for ${threadId}\n`)
+    }
+  }
 
   // Delete thread BEFORE registry cleanup — if the API call fails, the registry
   // stays intact so the thread isn't orphaned from hydra's perspective.
