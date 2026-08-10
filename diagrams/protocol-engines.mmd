@@ -1,65 +1,67 @@
-%% Protocol Engines — v1 (hand-written) vs v2 (DSL)
-%% Two parallel protocol systems with load-bearing dispatch ordering.
-%% router.ts checks v2 BEFORE v1 — the v1 regex matches "review_v2" / "build_v2" otherwise.
+%% Protocol Engine — declarative DSL + generic runner
+%% Single protocol system after v1 removal (PR #148).
+%% router.ts dispatches review/build/spike through commands/protocol.ts → protocol-loader.ts → runner.
 
 flowchart TD
-    subgraph dispatch["router.ts — dispatch order matters"]
-        v2check["v2 commands checked FIRST<br/><i>review_v2, build_v2, spike</i>"]
-        v1check["v1 commands checked SECOND<br/><i>review, build, design</i>"]
-        v2check --> v1check
+    subgraph dispatch["Dispatch — router.ts → commands/protocol.ts"]
+        cmd["commands/protocol.ts<br/><b>handleProtocolIntercept</b><br/><i>review, build, spike</i><br/>_v2 suffix stripped transparently"]
+        loader["protocol-loader.ts<br/>dynamic import + validation<br/><i>path-traversal guard</i>"]
+        cmd --> loader
     end
 
-    subgraph v1["v1 — Hand-Written State Machines"]
-        v1_review["adversarial.ts<br/><b>review</b><br/>critic_turn → owner_turn<br/>→ post_pass → cleanup → complete<br/><i>Loops: owner_posted → critic_turn</i>"]
-        v1_build["build.ts<br/><b>build</b><br/>implementing → reviewing<br/>→ closing → complete<br/><i>Loops: critic_feedback → implementing</i>"]
-        v1_design["design.ts<br/><b>design</b><br/>spawning → questioning → answering<br/>→ independent → synthesis → ...<br/><i>Autonomous multi-persona</i>"]
-        v1_sm["state-machine.ts<br/>createStateMachine()"]
+    subgraph definitions["Protocol Definitions — protocols/"]
+        p_review["protocols/review.ts<br/><b>review</b><br/>critic_turn → owner_turn<br/>→ cleanup → complete"]
+        p_build["protocols/build.ts<br/><b>build</b><br/>implementing → reviewing<br/>→ closing → complete"]
+        p_spike["protocols/spike.ts<br/><b>spike</b><br/>exploring → reporting → complete"]
     end
 
-    subgraph v2["v2 — Declarative DSL + Generic Runner"]
-        v2_review["protocols/review.ts<br/><b>review_v2</b><br/>critic_turn → owner_turn<br/>→ cleanup → complete<br/><i>No post_pass</i>"]
-        v2_build["protocols/build.ts<br/><b>build_v2</b><br/>implementing → reviewing<br/>→ closing → complete"]
-        v2_spike["protocols/spike.ts<br/><b>spike</b><br/>exploring → reporting → complete"]
-        v2_dsl["protocol-dsl.ts<br/>protocol() spec"]
-        v2_runner["protocol-runner.ts<br/>generic runner"]
-        v2_mods["modifiers.ts<br/>+readability, +r"]
+    subgraph engine["Protocol Engine"]
+        dsl["protocol-dsl.ts<br/>protocol() builder →<br/>frozen typed Protocol"]
+        types["protocol-types.ts<br/>RunState, BehaviorContext,<br/>CompletionEvent, RoundAdvanceEvent"]
+        runner["protocol-runner.ts<br/>generic runner:<br/>fireTransition · advancePhase<br/>spawn from seeds · protocolEvents"]
+        sm["state-machine.ts<br/>createStateMachine()"]
+        mods["modifiers.ts<br/>+security (+s)"]
     end
 
-    subgraph shared["Shared Infrastructure"]
+    subgraph infra["Shared Infrastructure"]
         registry["protocol-registry.ts<br/>mutual exclusion +<br/>reconnect/disconnect hooks"]
-        sentinel["advance-nudge.ts"]
+        nudge["advance-nudge.ts<br/>missing-advance liveness check"]
         autoresume["auto-resume.ts<br/>MAX_RESUME_ATTEMPTS=5"]
         tools["bridge-tools.ts<br/>dynamic tool scoping<br/>(advance per phase)"]
     end
 
-    v2check --> v2_runner
-    v1check --> v1_review
-    v1check --> v1_build
-    v1check --> v1_design
+    subgraph consumers["Event Consumers"]
+        factory["factory.ts<br/>protocolEvents.onComplete<br/>protocolEvents.onRoundAdvance<br/><i>build→review cycle</i>"]
+    end
 
-    v2_dsl --> v2_runner
-    v2_review --> v2_dsl
-    v2_build --> v2_dsl
-    v2_spike --> v2_dsl
-    v2_runner --> v2_mods
+    loader --> p_review
+    loader --> p_build
+    loader --> p_spike
 
-    v1_review --> v1_sm
-    v1_build --> v1_sm
-    v1_design --> v1_sm
+    p_review --> dsl
+    p_build --> dsl
+    p_spike --> dsl
 
-    v1_review --> registry
-    v1_build --> registry
-    v1_design --> registry
-    v2_runner --> registry
+    dsl --> sm
+    dsl --> runner
+    types -.-> runner
+    runner --> mods
 
-    registry --> sentinel
+    runner --> registry
+    registry --> nudge
     registry --> autoresume
     registry --> tools
 
-    classDef v1style fill:#fff3e0,stroke:#e65100
-    classDef v2style fill:#e3f2fd,stroke:#1565c0
-    classDef shared fill:#f3e5f5,stroke:#6a1b9a
+    runner -.-> factory
 
-    class v1_review,v1_build,v1_design,v1_sm v1style
-    class v2_review,v2_build,v2_spike,v2_dsl,v2_runner,v2_mods v2style
-    class registry,sentinel,autoresume,tools shared
+    classDef dispatchstyle fill:#fce4ec,stroke:#c62828
+    classDef defstyle fill:#e3f2fd,stroke:#1565c0
+    classDef engstyle fill:#e8f5e9,stroke:#2e7d32
+    classDef infrastyle fill:#f3e5f5,stroke:#6a1b9a
+    classDef consumestyle fill:#fff3e0,stroke:#e65100
+
+    class cmd,loader dispatchstyle
+    class p_review,p_build,p_spike defstyle
+    class dsl,types,runner,sm,mods engstyle
+    class registry,nudge,autoresume,tools infrastyle
+    class factory consumestyle

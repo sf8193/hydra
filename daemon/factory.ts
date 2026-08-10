@@ -909,3 +909,17 @@ export async function sweepOrphanedBuilders(): Promise<void> {
   }
   if (swept > 0) process.stderr.write(`daemon: factory: swept ${swept} orphaned builder(s)\n`)
 }
+
+export const __test = process.env.NODE_ENV === 'test'
+  ? {
+      builds,
+      builderSessionToTicket,
+      builderThreadToTicket,
+      reset() {
+        builds.clear()
+        builderSessionToTicket.clear()
+        builderThreadToTicket.clear()
+        ticketCounter = 0
+      },
+    } as const
+  : undefined
