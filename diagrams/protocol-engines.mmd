@@ -24,6 +24,7 @@ flowchart TD
     end
 
     subgraph infra["Shared Infrastructure"]
+        eventbus["event-bus.ts<br/>session:death lifecycle events"]
         registry["protocol-registry.ts<br/>mutual exclusion +<br/>reconnect/disconnect hooks"]
         nudge["advance-nudge.ts<br/>missing-advance liveness check"]
         autoresume["auto-resume.ts<br/>MAX_RESUME_ATTEMPTS=5"]
@@ -53,6 +54,7 @@ flowchart TD
     registry --> tools
 
     runner -.-> factory
+    eventbus -.-> factory
 
     classDef dispatchstyle fill:#fce4ec,stroke:#c62828
     classDef defstyle fill:#e3f2fd,stroke:#1565c0
@@ -63,5 +65,5 @@ flowchart TD
     class cmd,loader dispatchstyle
     class p_review,p_build,p_spike defstyle
     class dsl,types,runner,sm,mods engstyle
-    class registry,nudge,autoresume,tools infrastyle
+    class registry,nudge,autoresume,tools,eventbus infrastyle
     class factory consumestyle

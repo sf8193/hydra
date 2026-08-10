@@ -1,19 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
-
-// Mock the outbound edges so a run can be driven without a gateway/tmux.
-const sent: Array<{ chatId: string; text: string }> = []
-mock.module('../util.js', () => ({
-  safeSend: async (chatId: string, text: string) => { sent.push({ chatId, text }); return ['m1'] },
-  formatSpawnLine: () => '',
-  tmuxHasSession: () => true,
-  getContextPercent: () => 0,
-  formatDuration: () => '0s',
-  extractPhaseBudget: (t: string) => ({ topic: t, budgetMs: undefined }),
-  reportError: async () => {},
-  atomicWriteFileSync: () => {},
-  fallbackDescription: () => '',
-  maxChunkLimit: () => 2000,
-}))
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 
 import { protocolEvents } from '../protocol-runner.js'
 import type { RoundAdvanceEvent } from '../protocol-types.js'

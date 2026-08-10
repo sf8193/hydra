@@ -54,6 +54,7 @@ type FactoryBuildState = {
   retryCount: number
   createdAt: number
   reviewed: boolean
+  reviewAttempted: boolean
   worktree?: string
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
@@ -246,6 +247,7 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     retryCount: 0,
     createdAt: Date.now(),
     reviewed: false,
+    reviewAttempted: false,
     worktree,
   }
   builds.set(ticket, state)
@@ -320,12 +322,12 @@ export function factoryAccept(
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can accept it.' }
   if (state.phase !== 'awaiting_pm') return { error: `Cannot accept — build is in phase "${state.phase}", expected "awaiting_pm".` }
-  if (!state.reviewed && !allowUnreviewed) return { error: 'Build was NOT adversarially reviewed (review failed or was cancelled). Pass allow_unreviewed=true to accept anyway.' }
+  if (!state.reviewed && !state.reviewAttempted && !allowUnreviewed) return { error: 'Build was NOT adversarially reviewed. Pass allow_unreviewed=true to accept anyway.' }
 
   state.phase = 'complete'
   logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
-  const reviewWarning = state.reviewed ? '' : '\n⚠️ **This build was NOT adversarially reviewed** (review failed or was cancelled).'
+  const reviewWarning = state.reviewed ? '' : state.reviewAttempted ? '\n⚠️ Review was attempted but critic failed — accepted without completed review.' : '\n⚠️ **This build was NOT adversarially reviewed.**'
   void safeSend(state.pmThreadId, `🏭 **Factory build accepted** ✅\nTicket: \`${ticket}\`${reviewWarning}`)
 
   killBuilder(state)
@@ -617,6 +619,7 @@ export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: t
   if (!state || state.phase !== 'building') return { error: `Cannot complete — build is in phase "${state?.phase ?? 'unknown'}", expected "building".` }
 
   state.phase = 'reviewing'
+  state.reviewAttempted = true
   syncPhaseToRegistry(state)
   process.stderr.write(`daemon: factory: builder called factory_done for ticket ${state.ticket}, starting review\n`)
 
@@ -907,6 +910,7 @@ export async function sweepOrphanedBuilders(): Promise<void> {
       retryCount: 0,
       createdAt: info.createdAt,
       reviewed: false,
+    reviewAttempted: false,
     }
     logBuild(orphanState, 'orphaned')
 
@@ -930,21 +934,21 @@ export const __test = process.env.NODE_ENV === 'test'
         ticketCounter = 0
       },
       setDeps(overrides: {
-        doSpawnSession?: typeof _doSpawnSession
-        killSession?: typeof _killSession
-        startProtocolRun?: typeof _startProtocolRun
-        getRunByThread?: typeof _getRunByThread
-        cancelRun?: typeof _cancelRun
-        getProtocol?: typeof _getProtocol
-        safeSend?: typeof _safeSend
+        doSpawnSession: typeof _doSpawnSession
+        killSession: typeof _killSession
+        startProtocolRun: typeof _startProtocolRun
+        getRunByThread: typeof _getRunByThread
+        cancelRun: typeof _cancelRun
+        getProtocol: typeof _getProtocol
+        safeSend: typeof _safeSend
       }) {
-        if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
-        if (overrides.killSession) killSession = overrides.killSession
-        if (overrides.startProtocolRun) startProtocolRun = overrides.startProtocolRun
-        if (overrides.getRunByThread) getRunByThread = overrides.getRunByThread
-        if (overrides.cancelRun) cancelRun = overrides.cancelRun
-        if (overrides.getProtocol) getProtocol = overrides.getProtocol
-        if (overrides.safeSend) safeSend = overrides.safeSend
+        doSpawnSession = overrides.doSpawnSession
+        killSession = overrides.killSession
+        startProtocolRun = overrides.startProtocolRun
+        getRunByThread = overrides.getRunByThread
+        cancelRun = overrides.cancelRun
+        getProtocol = overrides.getProtocol
+        safeSend = overrides.safeSend
       },
       resetDeps() {
         doSpawnSession = _doSpawnSession
