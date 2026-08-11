@@ -55,10 +55,11 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     const baseChatId = msg.parentChannelId ?? msg.channelId
     const parentThreadId = info.threadId
     try {
+      const ephemeralSuffix = opts?.ephemeral ? `\n\nWhen you are finished, post exactly \`[done]\` on its own line to your thread. This signals the system to clean up your session automatically.` : ''
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
         model: forkModel,
         ephemeral: opts?.ephemeral,
-        promptPrefix: `Read the parent thread for context using fetch_messages(channel="${parentThreadId}", limit=50). Reconstruct what was discussed there, then continue the work in YOUR thread.`,
+        promptPrefix: `Read the parent thread for context using fetch_messages(channel="${parentThreadId}", limit=50). Reconstruct what was discussed there, then continue the work in YOUR thread.${ephemeralSuffix}`,
       })
       const e = sessionEmoji(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (session not forkable yet — reading thread from **${info.tmuxName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
@@ -80,11 +81,13 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   const baseChatId = msg.parentChannelId ?? msg.channelId
 
   try {
+    const ephemeralPrefix = opts?.ephemeral ? `When you are finished, post exactly \`[done]\` on its own line to your thread. This signals the system to clean up your session automatically.\n\n` : undefined
     const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
       forkFrom: { claudeSessionId: info.claudeSessionId, parentName, codexThreadId: info.codexThreadId },
       model: forkModel,
       engine: info.engine,
       ephemeral: opts?.ephemeral,
+      ...(ephemeralPrefix ? { promptPrefix: ephemeralPrefix } : {}),
     })
 
     const pe = sessionEmoji(parentName)
