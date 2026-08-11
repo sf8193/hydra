@@ -352,7 +352,9 @@ export class DiscordGateway implements ChatGateway {
 
   async deleteThread(threadId: string): Promise<void> {
     const channel = await this.client.channels.fetch(threadId)
-    if (channel?.isThread()) await channel.delete()
+    if (!channel) throw new Error('channel not found')
+    if (!channel.isThread()) throw new Error('channel is not a thread')
+    await channel.delete()
   }
   async delete(channelId: string, messageId: string): Promise<void> {
     const ch = await this.fetchTextChannel(channelId)

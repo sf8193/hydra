@@ -341,7 +341,7 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
     return
   }
 
-  if (info?.initiator && info.initiator !== msg.authorId) {
+  if (info?.initiator && info.initiator !== msg.authorUsername) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void safeSend(msg.channelId, `_Only the session creator can destroy this thread._`)
     return
@@ -382,6 +382,7 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
 
   // Clean up registry only after successful thread deletion
   if (info && sessionId) {
+    threadRegistry.recordKill(threadId, sessionId, info.messageCount ?? 0, info.claudeSessionId)
     registry.delete(sessionId)
     registry.deleteThread(threadId)
     registry.persist()
