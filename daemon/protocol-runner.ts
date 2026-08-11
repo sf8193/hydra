@@ -53,6 +53,7 @@ const MAX_EXTENSIONS_PER_PHASE = 2
 const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
 const KEEPALIVE_INTERVAL_MS = 30_000
+const KEEPALIVE_ENABLED = process.env.HYDRA_KEEPALIVE !== '0'
 
 const runs = new Map<string, ProtocolRun>()
 const threadToRun = new Map<string, string>()
@@ -579,6 +580,7 @@ export function sendKeepaliveNotification(run: ProtocolRun, sessionId: string, a
 
 function startKeepalive(run: ProtocolRun): void {
   if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
+  if (!KEEPALIVE_ENABLED) return
   const actor = run.protocol.phases[run.phase]?.actor
   if (!actor) return
   run._keepaliveTimer = setInterval(() => {
