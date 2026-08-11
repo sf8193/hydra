@@ -111,12 +111,12 @@ export const VALID_DIFFICULTIES = ['easy', 'medium', 'hard'] as const
 export type Difficulty = (typeof VALID_DIFFICULTIES)[number]
 
 // Hardcoded per tier — consistent, no env-var surprise.
-// Easy = sonnet builds, opus reviews (Sam's request).
+// Different opus versions per tier for review diversity.
 export function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
   switch (difficulty) {
-    case 'easy':   return { builder: 'claude-sonnet-4-6[1m]',  reviewer: 'claude-opus-4-6[1m]' }
-    case 'medium': return { builder: 'claude-opus-4-6[1m]',    reviewer: 'claude-opus-4-8[1m]' }
-    case 'hard':   return { builder: 'claude-opus-5[1m]',      reviewer: 'claude-fable-5[1m]' }
+    case 'easy':   return { builder: 'claude-opus-4-6[1m]',  reviewer: 'claude-opus-4-8[1m]' }
+    case 'medium': return { builder: 'claude-opus-4-8[1m]',  reviewer: 'claude-opus-4-6[1m]' }
+    case 'hard':   return { builder: 'claude-opus-5[1m]',    reviewer: 'claude-fable-5[1m]' }
   }
 }
 
@@ -161,12 +161,10 @@ export function resolveModels(
 
   // Ladder reviewer is also the same — pick from a different family
   const FALLBACK_REVIEWERS: Record<string, string> = {
-    'claude-opus-4-6': 'claude-sonnet-4-6[1m]',
-    'claude-opus-4-7': 'claude-sonnet-4-6[1m]',
-    'claude-opus-4-8': 'claude-sonnet-4-6[1m]',
+    'claude-opus-4-6': 'claude-opus-4-8[1m]',
+    'claude-opus-4-7': 'claude-opus-4-8[1m]',
+    'claude-opus-4-8': 'claude-opus-4-6[1m]',
     'claude-opus-5': 'claude-fable-5[1m]',
-    'claude-sonnet-4-6': 'claude-opus-4-6[1m]',
-    'claude-sonnet-5': 'claude-opus-5[1m]',
     'claude-fable-5': 'claude-opus-5[1m]',
   }
 
@@ -179,8 +177,8 @@ export function resolveModels(
     }
   }
 
-  // Unknown model with no fallback — use sonnet as a safe generic reviewer
-  const genericFallback = 'claude-sonnet-4-6[1m]'
+  // Unknown model with no fallback — use opus as a safe generic reviewer
+  const genericFallback = 'claude-opus-4-6[1m]'
   if (effectiveBuilder !== genericFallback.replace(/\[1m\]$/, '')) {
     return {
       builder,
@@ -189,11 +187,11 @@ export function resolveModels(
     }
   }
 
-  // Builder IS sonnet — use opus
+  // Builder IS the generic fallback — use a different opus version
   return {
     builder,
-    reviewer: 'claude-opus-4-6[1m]',
-    warning: (warning ? warning + ' ' : '') + `${collisionMsg} Auto-selected claude-opus-4-6 as reviewer.`,
+    reviewer: 'claude-opus-4-8[1m]',
+    warning: (warning ? warning + ' ' : '') + `${collisionMsg} Auto-selected claude-opus-4-8 as reviewer.`,
   }
 }
 
