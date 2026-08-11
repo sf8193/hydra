@@ -188,20 +188,10 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
       text: { type: 'mrkdwn', text: '_No sessions running._' },
     })
   } else {
-    const grouped = groupSessions(sessions)
-    const shown = grouped.slice(0, MAX_SESSION_BLOCKS)
+    const shown = sessions.slice(0, MAX_SESSION_BLOCKS)
     for (let i = 0; i < shown.length; i++) {
-      const { session: s, depth } = shown[i]
-      const isChild = depth > 0
-
-      if (isChild) {
-        // Children render as compact context blocks with ↳ indent
-        const childText = `↳ ${buildSessionText(s)}`
-        blocks.push({
-          type: 'context',
-          elements: [{ type: 'mrkdwn', text: childText }],
-        })
-      } else {
+      const s = shown[i]
+      {
         blocks.push({
           type: 'section',
           text: { type: 'mrkdwn', text: buildSessionText(s) },
@@ -227,7 +217,7 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
     if (grouped.length > MAX_SESSION_BLOCKS) {
       blocks.push({
         type: 'context',
-        elements: [{ type: 'mrkdwn', text: `_+${grouped.length - MAX_SESSION_BLOCKS} more not shown_` }],
+        elements: [{ type: 'mrkdwn', text: `_+${sessions.length - MAX_SESSION_BLOCKS} more not shown_` }],
       })
     }
   }
