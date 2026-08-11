@@ -648,7 +648,7 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
   ].join('\n'))
 
   // Start review BEFORE diff/PR capture — closes the protocol ownership gap.
-  getProtocol('review').then(proto => {
+  void getProtocol('review').then(proto => {
     if (state.phase !== 'reviewing') return
     return startProtocolRun(proto, state.builderThreadId!, state.builderSessionId!, {
       rounds: state.reviewRounds,
@@ -845,7 +845,8 @@ protocolEvents.onRoundAdvance((event) => {
     return
   }
 
-  const text = (event.text ?? '').length > 3000 ? (event.text ?? '').slice(0, 3000) + '\n...(truncated)' : (event.text ?? '')
+  const raw = event.text ?? ''
+  const text = raw.length > 3000 ? raw.slice(0, 3000) + '\n...(truncated)' : raw
   void safeSend(state.pmThreadId, [
     `🏭 **Critic Final Round ${event.round}/${event.totalRounds}**`,
     text,
@@ -910,7 +911,7 @@ export async function sweepOrphanedBuilders(): Promise<void> {
       retryCount: 0,
       createdAt: info.createdAt,
       reviewed: false,
-    reviewAttempted: false,
+      reviewAttempted: false,
     }
     logBuild(orphanState, 'orphaned')
 
