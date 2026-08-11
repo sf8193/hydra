@@ -821,7 +821,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
     threadUrl: url || undefined,
-    ...(opts?.trigger ? { trigger: opts.trigger } : {}),
     ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),

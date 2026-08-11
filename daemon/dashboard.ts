@@ -29,7 +29,6 @@ type SessionRow = {
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
-  trigger?: string
   originType?: string
   isFactoryBuilder?: boolean
 }
@@ -60,7 +59,6 @@ function getActiveSessions(): SessionRow[] {
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
-      trigger: s.trigger,
       originType: s.originType,
       isFactoryBuilder: s.isFactoryBuilder,
     })
@@ -74,7 +72,6 @@ function escapeMrkdwn(text: string): string {
 }
 
 function buildOriginBadge(s: SessionRow): string {
-  if (s.trigger && s.trigger !== 'spawn') return s.trigger.replace(/:$/, '')
   if (s.isFactoryBuilder) return 'factory'
   if (s.originType === 'fork') return 'fork'
   if (s.originType === 'handoff') return 'handoff'
