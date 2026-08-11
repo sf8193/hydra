@@ -8,7 +8,10 @@ import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn } from '../session-lifecycle.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError } from '../util.js'
+import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError, safeSend } from '../util.js'
+import { isThreadOccupied } from '../protocol-registry.js'
+import { unwatchBySession } from "../pr-watch.js"
+import { emit } from "../event-bus.js"
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
@@ -313,6 +316,102 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
 }
 
 // ---------------------------------------------------------------------------
+// Destroy — permanently delete thread + anchor message (Discord only)
+// ---------------------------------------------------------------------------
+
+export async function handleDestroyIntercept(msg: InboundMessage): Promise<void> {
+  if (!gateway.deleteThread) {
+    void safeSend(msg.channelId, `_\`destroy\` is only available on Discord._`)
+    return
+  }
+
+  const threadId = msg.effectiveThreadId ?? msg.channelId
+
+  const occupied = isThreadOccupied(threadId)
+  if (occupied) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void safeSend(msg.channelId, `_A **${occupied}** is in progress. Cancel or wait for completion._`)
+    return
+  }
+
+  const sessionId = registry.getByThread(threadId)
+  const info = sessionId ? registry.get(sessionId) : undefined
+
+  if (info && !info.deadAt) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void safeSend(msg.channelId, `_Session **${info.tmuxName}** is still alive. Kill it first with \`kill\`._`)
+    return
+  }
+
+  if (info?.initiator && info.initiator !== msg.authorUsername) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    void safeSend(msg.channelId, `_Only the session creator can destroy this thread._`)
+    return
+  }
+
+  void gateway.react(msg.channelId, msg.id, '💀').catch(() => {})
+
+  const thread = threadRegistry.get(threadId)
+  let parentChannelId = thread?.parentChannelId ?? info?.anchorChannelId
+  let anchorMessageId = thread?.anchorMessageId ?? info?.anchorMessageId
+
+  if (!parentChannelId || !anchorMessageId) {
+    try {
+      const channelInfo = await gateway.fetchChannel(threadId)
+      if (channelInfo.isThread && channelInfo.parentId) {
+        parentChannelId = parentChannelId ?? channelInfo.parentId
+      }
+      if (!anchorMessageId) {
+        const starter = await gateway.getThreadStarterInfo(threadId)
+        if (starter) anchorMessageId = starter.starterId
+      }
+    } catch {
+      process.stderr.write(`daemon: destroy: failed to fetch thread anchor info for ${threadId}\n`)
+    }
+  }
+
+  // Delete thread BEFORE registry cleanup — if the API call fails, the registry
+  // stays intact so the thread isn't orphaned from hydra's perspective.
+  try {
+    await gateway.deleteThread(threadId)
+    process.stderr.write(`daemon: destroy: deleted thread ${threadId}\n`)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: destroy: thread deletion failed: ${errMsg}\n`)
+    void safeSend(parentChannelId ?? msg.channelId, `_Thread deletion failed: ${errMsg}_`)
+    return
+  }
+
+  // Clean up registry only after successful thread deletion
+  if (info && sessionId) {
+    threadRegistry.recordKill(threadId, sessionId, info.messageCount ?? 0, info.claudeSessionId)
+    registry.delete(sessionId)
+    registry.deleteThread(threadId)
+    registry.persist()
+    unwatchBySession(sessionId)
+    emit('session:death', {
+      sessionId,
+      threadId,
+      wasOwner: !info.isJoinMember,
+      tmuxName: info.tmuxName,
+    })
+  }
+  threadRegistry.delete(threadId)
+
+  if (parentChannelId && anchorMessageId) {
+    try {
+      await gateway.delete(parentChannelId, anchorMessageId)
+      process.stderr.write(`daemon: destroy: deleted anchor message ${anchorMessageId} in ${parentChannelId}\n`)
+    } catch (err) {
+      process.stderr.write(`daemon: destroy: anchor deletion failed (thread already gone): ${err}\n`)
+    }
+  } else {
+    process.stderr.write(`daemon: destroy: skipped anchor deletion (parentChannelId=${parentChannelId ?? 'unknown'}, anchorMessageId=${anchorMessageId ?? 'unknown'})\n`)
+  }
+
+  debouncedRefreshListDisplay()
+}
+
 // Peek — screenshot the tmux pane and post it to the thread
 // ---------------------------------------------------------------------------
 

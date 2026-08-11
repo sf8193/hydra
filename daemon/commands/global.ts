@@ -240,6 +240,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• 🍴 `fork` / `fork: <focus>` / `fork <model>: <focus>` — fork with optional model override',
     '• 🍽️ `forks` — list forks from this thread',
     '• ☠️ `kill` — kill this session',
+    '• 💀 `destroy` — permanently delete this thread + anchor (Discord only)',
     '• 👂 `listen` / 🔇 `unlisten` — mute/unmute message delivery',
     '• ⏸️ `pause` / ▶️ `unpause` — mark as paused (visual only)',
     '• 📸 `peek` / `peek <name>` — screenshot the tmux pane',
