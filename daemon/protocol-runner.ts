@@ -41,6 +41,7 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   _extensions: number
   _phaseStartedAt: number
   _resumeAttempts?: number
+  _keepaliveTimer?: ReturnType<typeof setInterval>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
   strike: boolean
@@ -51,6 +52,7 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
 const MAX_EXTENSIONS_PER_PHASE = 2
 const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
+const KEEPALIVE_INTERVAL_MS = 60_000
 
 const runs = new Map<string, ProtocolRun>()
 const threadToRun = new Map<string, string>()
@@ -563,6 +565,24 @@ function clearPhaseTimers(run: ProtocolRun): void {
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
+  if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
+}
+
+function startKeepalive(run: ProtocolRun): void {
+  if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
+  const actor = run.protocol.phases[run.phase]?.actor
+  if (!actor) return
+  run._keepaliveTimer = setInterval(() => {
+    if (isTerminal(run)) { clearInterval(run._keepaliveTimer!); run._keepaliveTimer = undefined; return }
+    const sid = run.participants.get(actor)
+    if (!sid) { clearInterval(run._keepaliveTimer!); run._keepaliveTimer = undefined; return }
+    transport.sendOrQueue(sid, {
+      type: 'notification',
+      content: `[system] You are the active actor. Continue your work.`,
+      meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
+    process.stderr.write(`daemon: ${run.protocol.name} run: keepalive sent to ${actor}\n`)
+  }, KEEPALIVE_INTERVAL_MS)
 }
 
 function clearTimers(run: ProtocolRun): void {
@@ -678,6 +698,8 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     await postStatusLine(run)
     resetTimeout(run)
   }
+
+  startKeepalive(run)
 }
 
 
@@ -920,7 +942,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
 export const __test = process.env.NODE_ENV === 'test'
   ? {
-      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR,
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
