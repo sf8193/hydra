@@ -29,6 +29,7 @@ type SessionRow = {
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
+  trigger?: string
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -57,6 +58,7 @@ function getActiveSessions(): SessionRow[] {
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
+      trigger: s.trigger,
     })
   }
 
@@ -69,7 +71,8 @@ function escapeMrkdwn(text: string): string {
 
 function buildSessionText(s: SessionRow): string {
   const link = s.url ? `<${s.url}|${s.name}>` : s.name
-  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_`
+  const triggerBadge = s.trigger && s.trigger !== 'spawn' ? ` · ${s.trigger.replace(/:$/, '')}` : ''
+  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_${triggerBadge}`
 }
 
 

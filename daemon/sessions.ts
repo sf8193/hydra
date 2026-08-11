@@ -34,6 +34,7 @@ export type SessionInfo = {
   claudeSessionId?: string
   originType?: 'spawn' | 'fork' | 'handoff' | 'resurrect'
   originFrom?: string
+  trigger?: string          // template/protocol that spawned this (e.g. 'factory:', 'review:', 'incident:')
   initiator?: string
   capabilities?: SessionCapabilities
   respawnCount?: number
