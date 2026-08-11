@@ -457,20 +457,16 @@ describe('protocol runner — keepalive', () => {
     await onRunAdvance('test-critic', 'Finding #1', 'approve')
     expect(run.phase).toBe('owner_turn')
     expect(run._keepaliveTimer).toBeDefined()
-    clearInterval(run._keepaliveTimer!)
-    run._keepaliveTimer = undefined
   })
 
   test('keepalive timer clears on next transition', async () => {
     const run = createTestRun()
     await onRunAdvance('test-critic', 'Finding #1', 'approve')
-    expect(run._keepaliveTimer).toBeDefined()
     const firstTimer = run._keepaliveTimer
+    expect(firstTimer).toBeDefined()
     await onRunAdvance('test-owner', 'Addressed.')
     expect(run._keepaliveTimer).toBeDefined()
     expect(run._keepaliveTimer).not.toBe(firstTimer)
-    clearInterval(run._keepaliveTimer!)
-    run._keepaliveTimer = undefined
   })
 
   test('keepalive timer clears on run cancellation', async () => {
@@ -482,17 +478,31 @@ describe('protocol runner — keepalive', () => {
     expect(run._keepaliveTimer).toBeUndefined()
   })
 
-  test('keepalive sends notification to active actor', async () => {
-    const run = createTestRun()
-    await onRunAdvance('test-critic', 'Finding #1', 'approve')
+  test('keepalive timer clears on run completion', async () => {
+    const run = createTestRun({ currentRound: 3, rounds: 3 })
+    await onRunAdvance('test-critic', 'Final finding', 'approve')
     expect(run.phase).toBe('owner_turn')
-    const queued = transport.messageQueues.get('test-owner') ?? []
-    const keepalivesBefore = queued.filter((m: any) => m.content?.includes('active actor')).length
-    // Manually fire the interval callback — we can't wait 60s in a test
-    // Instead, verify the timer is set and the mechanism works by checking
-    // that a notification was queued during the phase transition (notifyNextActor)
     expect(run._keepaliveTimer).toBeDefined()
-    clearInterval(run._keepaliveTimer!)
-    run._keepaliveTimer = undefined
+    await onRunAdvance('test-owner', 'Final defense')
+    // closing phase should still have a keepalive
+    expect(run.phase).toBe('closing')
+    // complete the run by advancing through closing
+    await onRunAdvance('test-owner', 'Summary.')
+    // run is now terminal — timer cleared
+    expect(run._keepaliveTimer).toBeUndefined()
+  })
+
+  test('sendKeepaliveNotification queues inert system message', () => {
+    const { sendKeepaliveNotification } = __test!
+    const run = createTestRun()
+    sendKeepaliveNotification(run as any, 'test-critic', 'critic')
+    const queued = transport.messageQueues.get('test-critic') ?? []
+    const keepalives = queued.filter((m: any) => m.content === '[system] keepalive')
+    expect(keepalives.length).toBe(1)
+    expect(keepalives[0].meta.user).toBe('system')
+  })
+
+  test('KEEPALIVE_INTERVAL_MS is 30 seconds', () => {
+    expect(__test!.KEEPALIVE_INTERVAL_MS).toBe(30_000)
   })
 })
