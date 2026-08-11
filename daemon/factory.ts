@@ -103,7 +103,7 @@ export type Difficulty = (typeof VALID_DIFFICULTIES)[number]
 
 // Hardcoded per tier — consistent, no env-var surprise.
 // Easy = sonnet builds, opus reviews (Sam's request).
-function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
+export function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewer: string } {
   switch (difficulty) {
     case 'easy':   return { builder: 'claude-sonnet-4-6[1m]',  reviewer: 'claude-opus-4-6[1m]' }
     case 'medium': return { builder: 'claude-opus-4-6[1m]',    reviewer: 'claude-opus-4-8[1m]' }
@@ -111,7 +111,7 @@ function getDifficultyLadder(difficulty: Difficulty): { builder: string; reviewe
   }
 }
 
-function resolveModels(
+export function resolveModels(
   difficulty: Difficulty,
   builderRaw?: string,
   reviewerRaw?: string,
