@@ -498,6 +498,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
+      const forkEphMatch = msg.content.match(/^(?:fork-e|\/fork-e)(?::\s*([\s\S]+))?$/i)
+      if (forkEphMatch) {
+        void handleForkIntercept(msg, forkEphMatch[1]?.trim(), undefined, { ephemeral: true })
+        return
+      }
+
       const forkMatch = msg.content.match(/^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i)
       if (forkMatch) {
         void handleForkIntercept(msg, forkMatch[1]?.trim())

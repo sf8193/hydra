@@ -22,7 +22,7 @@ export async function handleThreadKillIntercept(msg: InboundMessage): Promise<vo
   debouncedRefreshListDisplay()
 }
 
-export async function handleForkIntercept(msg: InboundMessage, description?: string, model?: string): Promise<void> {
+export async function handleForkIntercept(msg: InboundMessage, description?: string, model?: string, opts?: { ephemeral?: boolean }): Promise<void> {
   const info = registry.resolveThreadSessionFromMsg(msg)
   if (!info) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
@@ -54,6 +54,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     try {
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
         model: forkModel,
+        ephemeral: opts?.ephemeral,
         promptPrefix: `Read the parent thread for context using fetch_messages(channel="${parentThreadId}", limit=50). Reconstruct what was discussed there, then continue the work in YOUR thread.`,
       })
       const e = sessionEmoji(result.name)
@@ -80,6 +81,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       forkFrom: { claudeSessionId: info.claudeSessionId, parentName, codexThreadId: info.codexThreadId },
       model: forkModel,
       engine: info.engine,
+      ephemeral: opts?.ephemeral,
     })
 
     const pe = sessionEmoji(parentName)
