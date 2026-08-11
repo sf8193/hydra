@@ -30,6 +30,8 @@ type SessionRow = {
   contextLinks: string[]
   artifacts: string[]
   trigger?: string
+  originType?: string
+  isFactoryBuilder?: boolean
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -59,6 +61,8 @@ function getActiveSessions(): SessionRow[] {
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
       trigger: s.trigger,
+      originType: s.originType,
+      isFactoryBuilder: s.isFactoryBuilder,
     })
   }
 
@@ -69,10 +73,20 @@ function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*~`]/g, '')
 }
 
+function buildOriginBadge(s: SessionRow): string {
+  if (s.trigger && s.trigger !== 'spawn') return s.trigger.replace(/:$/, '')
+  if (s.isFactoryBuilder) return 'factory'
+  if (s.originType === 'fork') return 'fork'
+  if (s.originType === 'handoff') return 'handoff'
+  if (s.originType === 'resurrect') return 'resurrect'
+  return ''
+}
+
 function buildSessionText(s: SessionRow): string {
   const link = s.url ? `<${s.url}|${s.name}>` : s.name
-  const triggerBadge = s.trigger && s.trigger !== 'spawn' ? ` · ${s.trigger.replace(/:$/, '')}` : ''
-  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_${triggerBadge}`
+  const origin = buildOriginBadge(s)
+  const originBadge = origin ? ` · ${origin}` : ''
+  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_${originBadge}`
 }
 
 
