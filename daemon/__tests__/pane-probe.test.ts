@@ -211,13 +211,13 @@ const fileContents = new Map<string, string>()
 
 function makeTestIO(): PaneProbeIO {
   return {
-    capturePaneTail(tmuxName, _lines) {
+    async capturePaneTail(tmuxName, _lines) {
       return paneTails.get(tmuxName) ?? null
     },
-    getWindowActivity(tmuxName) {
+    async getWindowActivity(tmuxName) {
       return windowActivity.get(tmuxName) ?? null
     },
-    sendKeys(tmuxName, ...keys) {
+    async sendKeys(tmuxName, ...keys) {
       keysSent.push({ tmuxName, keys: keys.join(' ') })
       return true
     },
@@ -356,7 +356,7 @@ describe('probeAllSessions', () => {
     _resetIO()
   })
 
-  it('does not probe active sessions (idle gate)', () => {
+  it('does not probe active sessions (idle gate)', async () => {
     addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
     paneTails.set('bloom', PLAN_MODE_TAIL)
     // Session was active 5 seconds ago — below MIN_IDLE_BEFORE_PROBE_S
@@ -364,7 +364,7 @@ describe('probeAllSessions', () => {
     // Also set byte to avoid byte probing
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
+    await probeAllSessions(T0)
     expect(sentMessages).toHaveLength(0)
   })
 
@@ -375,11 +375,11 @@ describe('probeAllSessions', () => {
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     // First probe — sets consecutive=1, no notification yet
-    probeAllSessions(T0)
+    await probeAllSessions(T0)
     expect(sentMessages).toHaveLength(0)
 
     // Second probe — confirms, sends notification
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     expect(sentMessages.length).toBeGreaterThan(0)
     expect(sentMessages[0].channelId).toBe('thread-1')
@@ -392,8 +392,8 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const intercept = getThreadIntercept('thread-1')
@@ -408,18 +408,18 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000) // notification fires
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000) // notification fires
     await flush()
     expect(getThreadIntercept('thread-1')).not.toBeUndefined()
 
     // Session resumes — but intercept survives grace period
     paneTails.set('bloom', NORMAL_SESSION_TAIL)
-    probeAllSessions(T0 + 120_000)
+    await probeAllSessions(T0 + 120_000)
     expect(getThreadIntercept('thread-1')).not.toBeUndefined() // still alive
 
     // After grace period expires
-    probeAllSessions(T0 + 60_000 + _INTERCEPT_GRACE_MS + 1000)
+    await probeAllSessions(T0 + 60_000 + _INTERCEPT_GRACE_MS + 1000)
     expect(getThreadIntercept('thread-1')).toBeUndefined() // now cleared
   })
 
@@ -429,8 +429,8 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     expect(getThreadIntercept('thread-1')).not.toBeUndefined()
 
@@ -445,37 +445,37 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     expect(getThreadIntercept('thread-1')).not.toBeUndefined()
 
     // tmux dies — getWindowActivity returns null
     windowActivity.delete('bloom')
-    probeAllSessions(T0 + 120_000)
+    await probeAllSessions(T0 + 120_000)
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
-  it('skips codex sessions', () => {
+  it('skips codex sessions', async () => {
     addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1', engine: 'codex' })
     paneTails.set('cedar', PLAN_MODE_TAIL)
     windowActivity.set('cedar', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     // Only byte might trigger, not cedar
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
-  it('skips dead sessions', () => {
+  it('skips dead sessions', async () => {
     addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1', deadAt: T0 - 1000 })
     paneTails.set('cedar', PLAN_MODE_TAIL)
     windowActivity.set('cedar', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
@@ -488,8 +488,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const loginKey = keysSent.find(k => k.tmuxName === 'bloom')
@@ -514,8 +514,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const loginKey = keysSent.find(k => k.tmuxName === 'bloom' && k.keys.includes('/login'))
@@ -534,8 +534,8 @@ describe('probeAllSessions', () => {
     paneTails.set('discord-byte', LOGIN_SELECT_METHOD_TAIL)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const byteMsg = sentMessages.find(m => m.channelId === 'root-channel-123')
@@ -550,16 +550,16 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000) // first notification
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000) // first notification
     await flush()
     const firstCount = sentMessages.length
 
-    probeAllSessions(T0 + 120_000) // within cooldown
+    await probeAllSessions(T0 + 120_000) // within cooldown
     await flush()
     expect(sentMessages.length).toBe(firstCount) // no new message
 
-    probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 120_000) // after cooldown
+    await probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 120_000) // after cooldown
     await flush()
     expect(sentMessages.length).toBeGreaterThan(firstCount) // new notification
   })
@@ -571,14 +571,14 @@ describe('probeAllSessions', () => {
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     // First two probes to confirm
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     const afterFirst = sentMessages.length
 
     // Send remaining notifications
     for (let i = 1; i < _MAX_NOTIFICATIONS; i++) {
-      probeAllSessions(T0 + (i + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
+      await probeAllSessions(T0 + (i + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
       await flush()
     }
     const afterAll = sentMessages.length
@@ -586,7 +586,7 @@ describe('probeAllSessions', () => {
 
     // One more — should not notify
     const afterMax = sentMessages.length
-    probeAllSessions(T0 + (_MAX_NOTIFICATIONS + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
+    await probeAllSessions(T0 + (_MAX_NOTIFICATIONS + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
     await flush()
     expect(sentMessages.length).toBe(afterMax)
   })
@@ -600,14 +600,14 @@ describe('probeAllSessions', () => {
       windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
       const afterFirst = sentMessages.filter(m => m.channelId === 'thread-1').length
       expect(afterFirst).toBe(1)
 
       // After cooldown — should NOT notify again (cap is 1 for success)
-      probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 120_000)
+      await probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 120_000)
       await flush()
       expect(sentMessages.filter(m => m.channelId === 'thread-1').length).toBe(afterFirst)
     } finally {
@@ -626,21 +626,21 @@ describe('probeAllSessions', () => {
 
       // Stage 1: expiring
       paneTails.set('bloom', LOGIN_EXPIRING_TAIL)
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
       const afterExpiring = sentMessages.filter(m => m.channelId === 'thread-1').length
       expect(afterExpiring).toBe(1)
 
       // Stage 2: success (stage change)
       paneTails.set('bloom', LOGIN_SUCCESS_TAIL)
-      probeAllSessions(T0 + 120_000)
+      await probeAllSessions(T0 + 120_000)
       await flush()
       const afterSuccess = sentMessages.filter(m => m.channelId === 'thread-1').length
       expect(afterSuccess).toBe(2) // must fire despite prior notifyCount
 
       // No repeat of success after cooldown
-      probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 180_000)
+      await probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 180_000)
       await flush()
       expect(sentMessages.filter(m => m.channelId === 'thread-1').length).toBe(afterSuccess)
     } finally {
@@ -658,8 +658,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const enterKey = keysSent.find(k => k.tmuxName === 'bloom' && k.keys === 'Enter')
@@ -683,8 +683,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
@@ -708,8 +708,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
@@ -733,11 +733,11 @@ describe('probeAllSessions', () => {
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
       const failIO = makeTestIO()
-      failIO.sendKeys = () => false
+      failIO.sendKeys = async () => false
       _setIO(failIO)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const msg = sentMessages.find(m => m.channelId === 'thread-1')
@@ -818,8 +818,8 @@ describe('probeAllSessions', () => {
       paneTails.set('custom-byte', LOGIN_SELECT_METHOD_TAIL)
       windowActivity.set('custom-byte', Math.floor(T0 / 1000) - 60)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const loginKey = keysSent.find(k => k.tmuxName === 'custom-byte')
@@ -856,8 +856,8 @@ describe('intercept handler', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const intercept = getThreadIntercept('thread-1')
@@ -878,8 +878,8 @@ describe('intercept handler', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     // Session has moved on
@@ -902,8 +902,8 @@ describe('intercept handler', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const intercept = getThreadIntercept('thread-1')!
