@@ -17,9 +17,7 @@ import { join } from 'path'
 // bump the count in the same commit.
 
 const SANCTIONED_RAW_SENDS: Record<string, number> = {
-  'design.ts': 5,
   'adversarial.ts': 5,
-  'build.ts': 4,
 }
 
 describe('raw gateway.send ratchet (protocol files)', () => {

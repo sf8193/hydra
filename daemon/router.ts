@@ -568,7 +568,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      // v2 commands checked BEFORE v1 — the v1 regex matches "review_v2" / "build_v2" otherwise
+      // _v2 suffix still accepted for backwards compat — plain names are primary
       const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewV2Match) {
         const preModel = resolveProtocolModel(reviewV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
@@ -634,20 +634,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const buildWtMatch = msg.content.match(/^(?:\/build-wt|build-wt):\s*(\S+)\s+(\d+)?(?:\s+([\s\S]+))?$/i)
-      if (buildWtMatch) {
-        const rawWtTask = buildWtMatch[3]?.trim()
-        const { model: wtModelId, rest: wtTask } = rawWtTask ? extractModelPrefix(rawWtTask) : { model: undefined, rest: rawWtTask }
-        void handleBuildIntercept(msg, parseInt(buildWtMatch[2] ?? '3'), wtTask, buildWtMatch[1].trim(), wtModelId)
-        return
-      }
-      // Catch malformed build-wt (missing repo)
-      if (msg.content.match(/^(?:\/build-wt|build-wt)[:\s]/i)) {
-        void gateway.send(msg.channelId, `Usage: \`build-wt: <repo> [rounds] [task]\`\nExample: \`build-wt: options_bot 3 implement ticket 1\``, { replyTo: msg.id }).catch(() => {})
-        return
-      }
-
-      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2|\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (buildV2Match) {
         const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
         if (preModel === false) return
@@ -659,38 +646,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const buildMatch = msg.content.match(/^(?:\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (buildMatch) {
-        const buildPreAlias = buildMatch[1]?.toLowerCase()
-        const buildPostAlias = buildMatch[3]?.toLowerCase()
-        const buildIsCodex = buildPreAlias === 'codex' || buildPostAlias === 'codex'
-        const preModel = buildPreAlias === 'codex' ? undefined : resolveProtocolModel(buildPreAlias, msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = buildPostAlias === 'codex' ? undefined : resolveProtocolModel(buildPostAlias, msg.channelId, msg.id)
-        if (postModel === false) return
-        const buildModelId = preModel ?? postModel
-        const buildRounds = parseInt(buildMatch[2] ?? '3')
-        const buildTask = buildMatch[4]?.trim()
-        if (!buildModelId && buildTask) {
-          const badOrder = buildTask.match(/^(\S+)\s+(\d+)\b/)
-          if (badOrder && resolveModelAlias(badOrder[1])) {
-            void gateway.send(msg.channelId, `_Model syntax: \`build ${badOrder[2]} ${badOrder[1]}: task\` or \`build ${badOrder[1]}: ${badOrder[2]} task\`_`, { replyTo: msg.id }).catch(() => {})
-            return
-          }
-        }
-        void handleBuildIntercept(msg, buildRounds, buildTask, undefined, buildModelId, buildIsCodex ? 'codex' : undefined)
-        return
-      }
-
       const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
       if (cancelBuildMatch) {
-        const threadId = registry.resolveThreadId(msg)
-        const occupied = isThreadOccupied(threadId)
-        if (occupied === 'build_v2') {
-          void handleCancelBuildV2Intercept(msg)
-        } else {
-          void handleCancelBuildIntercept(msg)
-        }
+        void handleCancelBuildV2Intercept(msg)
         return
       }
 
@@ -718,18 +676,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const designMatch = msg.content.match(/^(?:\/design|design):\s*([\s\S]+)$/i)
-      if (designMatch) {
-        void handleDesignIntercept(msg, designMatch[1].trim())
-        return
-      }
-
-      const cancelDesignMatch = msg.content.match(/^(?:kill design)\s*$/i)
-      if (cancelDesignMatch) {
-        void handleCancelDesignIntercept(msg)
-        return
-      }
-
       const watchMatch = msg.content.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
       if (watchMatch) {
         void handleWatchIntercept(msg, watchMatch[1]?.trim())
@@ -748,14 +694,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      // Design answer: user message during 'answering' phase
-      const designThreadId = registry.resolveThreadId(msg)
-      const design = getDesignByThread(designThreadId)
-      if (design && design.phase === 'answering') {
-        void handleDesignAnswer(designThreadId, msg.content)
-        void gateway.react(msg.channelId, msg.id, '👍').catch(() => {})
-        return
-      }
     }
 
     if (msg.isThread) {
