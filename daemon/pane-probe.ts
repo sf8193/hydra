@@ -72,6 +72,14 @@ export type PaneProbeIO = {
   sendKeys: (tmuxName: string, ...keys: string[]) => Promise<boolean>
   readFile: (path: string) => string | null
   now: () => number
+  safeSend: (channelId: string, text: string) => Promise<string[]>
+  react: (channelId: string, messageId: string, emoji: string) => Promise<void>
+  getSessions: () => Iterable<SessionInfo>
+  transportHas: (sessionId: string) => boolean
+  transportSendOrQueue: (sessionId: string, msg: any) => void
+  loadAccess: () => { allowFrom: string[] }
+  platform: string
+  defaultChannel: string
 }
 
 const defaultIO: PaneProbeIO = {
@@ -107,6 +115,14 @@ const defaultIO: PaneProbeIO = {
   },
 
   now: () => Date.now(),
+  safeSend: (channelId, text) => safeSend(channelId, text),
+  react: (channelId, messageId, emoji) => gateway.react(channelId, messageId, emoji).catch(() => {}),
+  getSessions: () => registry.values(),
+  transportHas: (sessionId) => transport.has(sessionId),
+  transportSendOrQueue: (sessionId, msg) => transport.sendOrQueue(sessionId, msg),
+  loadAccess: () => loadAccess(),
+  platform: PLATFORM,
+  defaultChannel: DEFAULT_SESSION_CHANNEL,
 }
 
 let io: PaneProbeIO = defaultIO
@@ -345,7 +361,7 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
     }
     lines.push(`> Type **approve** to proceed or **reject** to cancel.`)
 
-    await safeSend(channelId, lines.join('\n'))
+    await io.safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now
     entry.notifyCount++
 
@@ -356,13 +372,13 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
         const lower = content.trim().toLowerCase()
         if (lower === 'approve') {
           const ok = await confirmAndApprovePlan(name)
-          void gateway.react(replyChannelId, messageId, ok ? '✅' : '❌').catch(() => {})
+          void io.react(replyChannelId, messageId, ok ? '✅' : '❌')
           if (ok) {
-            void safeSend(channelId, `> ▶️ **${name}** — plan approved, resuming.`)
+            void io.safeSend(channelId, `> ▶️ **${name}** — plan approved, resuming.`)
             threadIntercepts.delete(entry.threadId)
             probeEntries.delete(name)
           } else {
-            void safeSend(channelId, `> ❌ **${name}** — plan prompt no longer on screen. May have already resumed.`)
+            void io.safeSend(channelId, `> ❌ **${name}** — plan prompt no longer on screen. May have already resumed.`)
             threadIntercepts.delete(entry.threadId)
             // Keep probeEntry as a notifyCount tombstone — the intercept is gone so
             // no commands are swallowed, but the count survives so a re-detection
@@ -370,9 +386,9 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
           }
         } else if (lower === 'reject') {
           const ok = await confirmAndRejectPlan(name)
-          void gateway.react(replyChannelId, messageId, ok ? '✅' : '❌').catch(() => {})
+          void io.react(replyChannelId, messageId, ok ? '✅' : '❌')
           if (ok) {
-            void safeSend(channelId, `> ⏹️ **${name}** — plan rejected.`)
+            void io.safeSend(channelId, `> ⏹️ **${name}** — plan rejected.`)
           }
           threadIntercepts.delete(entry.threadId)
           probeEntries.delete(name)
@@ -393,14 +409,14 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
   try {
     const name = entry.tmuxName
     const stage = entry.state.loginStage
-    const access = loadAccess()
+    const access = io.loadAccess()
     const adminUserId = access.allowFrom[0]
 
     let channelId: string
     let mention = ''
 
     if (entry.isMain) {
-      channelId = DEFAULT_SESSION_CHANNEL
+      channelId = io.defaultChannel
       if (adminUserId) mention = `<@${adminUserId}> `
     } else {
       channelId = entry.threadId
@@ -448,7 +464,7 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
       ]
     }
 
-    await safeSend(channelId, lines.join('\n'))
+    await io.safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now
     entry.notifyCount++
 
@@ -464,7 +480,7 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
 
   try {
     const name = entry.tmuxName
-    const channelId = entry.isMain ? DEFAULT_SESSION_CHANNEL : entry.threadId
+    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
 
     if (!channelId) {
       process.stderr.write(`daemon: pane-probe: ${name} stuck on resume prompt but no channel\n`)
@@ -482,7 +498,7 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
           `> Run: \`tmux attach -t ${name}\` and choose a resume option.`,
         ]
 
-    await safeSend(channelId, lines.join('\n'))
+    await io.safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now
     entry.notifyCount++
 
@@ -497,7 +513,7 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
 // ---------------------------------------------------------------------------
 
 function byteTmuxName(): string {
-  return process.env.BYTE_SESSION_NAME ?? `${PLATFORM}-byte`
+  return process.env.BYTE_SESSION_NAME ?? `${io.platform}-byte`
 }
 
 // ---------------------------------------------------------------------------
@@ -512,11 +528,11 @@ const BUILDER_BRIDGELESS_ABORT_S = 120
 
 function nudgeIdleBuilder(info: SessionInfo, idleSec: number, now: number): void {
   const key = info.sessionId
-  const connected = transport.has(info.sessionId)
+  const connected = io.transportHas(info.sessionId)
 
   if (!connected && idleSec >= BUILDER_BRIDGELESS_ABORT_S) {
     process.stderr.write(`daemon: pane-probe: builder ${info.tmuxName} idle ${idleSec}s with no bridge — notifying PM thread\n`)
-    void safeSend(info.factoryPmThreadId ?? info.threadId, [
+    void io.safeSend(info.factoryPmThreadId ?? info.threadId, [
       `> ⚠️ **${info.tmuxName}** — factory builder lost its bridge connection (idle ${idleSec}s, no MCP tools).`,
       `> The builder cannot work without tools. Use \`factory_abandon("${info.factoryTicket}")\` to abort, or wait for it to reconnect.`,
     ].join('\n'))
@@ -532,7 +548,7 @@ function nudgeIdleBuilder(info: SessionInfo, idleSec: number, now: number): void
   entry.lastNudge = now
   builderNudges.set(key, entry)
 
-  transport.sendOrQueue(info.sessionId, {
+  io.transportSendOrQueue(info.sessionId, {
     type: 'notification',
     content: `[system] You appear idle (${idleSec}s). You are a factory builder — your task is not complete until you call factory_done with your results. Continue working on the spec and call factory_done when done.`,
     meta: { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
@@ -569,9 +585,9 @@ export async function probeAllSessions(now?: number): Promise<void> {
   }
 
   const targets: Array<{ tmuxName: string; threadId: string; isMain: boolean }> = []
-  targets.push({ tmuxName: byteTmuxName(), threadId: DEFAULT_SESSION_CHANNEL, isMain: true })
+  targets.push({ tmuxName: byteTmuxName(), threadId: io.defaultChannel, isMain: true })
 
-  for (const info of registry.values()) {
+  for (const info of io.getSessions()) {
     if (info.deadAt) continue
     if (info.engine === 'codex') continue
     targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
@@ -608,7 +624,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
       // Idle builder nudge: session is idle, no blocking prompt, but it's a
       // factory builder that hasn't completed. Nudge via bridge notification.
       if (idleSec >= BUILDER_IDLE_NUDGE_S) {
-        const info = [...registry.values()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
+        const info = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
         if (info?.isFactoryBuilder && info.factoryPhase === 'building') {
           nudgeIdleBuilder(info, idleSec, t)
         }
