@@ -855,6 +855,7 @@ async function spawnBuilder(
     promptPrefix: builderPrompt,
     ...(initiator ? { initiator } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
+    scopedToolOverrides: { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' },
   })
 
   state.builderSessionId = result.sessionId

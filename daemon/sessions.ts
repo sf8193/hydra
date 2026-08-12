@@ -130,6 +130,7 @@ export type SpawnOpts = {
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   allowMainTools?: boolean    // grant access to spawn_session/kill_session (from template)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
+  scopedToolOverrides?: Record<string, string>
 }
 
 // ---------------------------------------------------------------------------
