@@ -165,6 +165,7 @@ graph TD
   daemon_router --> daemon_templates
   daemon_access --> daemon_config
   daemon_templates --> shared_constants
+  daemon_templates --> daemon_sessions
   daemon_pr-watch --> daemon_config
   daemon_pr-watch --> daemon_sessions
   daemon_pr-watch --> daemon_bridge-transport

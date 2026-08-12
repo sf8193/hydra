@@ -17,7 +17,7 @@ import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './comman
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
 import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
 import { listPostPasses } from './adversarial.js'
-import { listModifierKeys, resolveTemplateModifier } from './modifiers.js'
+import { listModifierKeys, partitionSpawnModifiers } from './modifiers.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
 import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
 import { getDesignByThread, handleDesignAnswer } from './design.js'
@@ -330,16 +330,21 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const spawnModMatch = msg.content.match(/^(?:new session|spawn)\s+((?:\+\w+\s*)+):\s*([\s\S]+)/i)
     if (spawnModMatch) {
       const modNames = [...spawnModMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase())
-      const templateMod = resolveTemplateModifier(modNames)
+      const { template: templateMod, ignored } = partitionSpawnModifiers(modNames)
       const topic = spawnModMatch[2].trim()
-      if (templateMod) {
-        const template = getTemplate(templateMod.templateName)
-        if (template) {
-          void handleTemplateSpawn(msg, templateMod.templateName, topic, template, access)
-          return
-        }
+      if (!templateMod) {
+        void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. Available: \`+f\`/\`+factory\`._`, { replyTo: msg.id }).catch(() => {})
+        return
       }
-      void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. Available: \`+f\`/\`+factory\`._`, { replyTo: msg.id }).catch(() => {})
+      const template = getTemplate(templateMod.templateName)
+      if (!template) {
+        void gateway.send(msg.channelId, `_Template \`${templateMod.templateName}\` is registered as a modifier but missing from the template registry._`, { replyTo: msg.id }).catch(() => {})
+        return
+      }
+      if (ignored.length > 0) {
+        void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — only a template modifier (\`+f\`/\`+factory\`) applies to a spawn._`, { replyTo: msg.id }).catch(() => {})
+      }
+      void handleTemplateSpawn(msg, templateMod.templateName, topic, template, access)
       return
     }
 
@@ -467,8 +472,20 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const respawnMatch = msg.content.match(/^(?:respawn|\/respawn)(?:\s+((?:\+\w+\s*)+))?(?::\s*([\s\S]*))?$/i)
     if (respawnMatch) {
       const respawnModNames = respawnMatch[1] ? [...respawnMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase()) : []
-      const respawnTemplateMod = resolveTemplateModifier(respawnModNames)
-      void handleRespawnIntercept(msg, respawnMatch[2]?.trim() || undefined, respawnTemplateMod?.templateName)
+      const respawnTopic = respawnMatch[2]?.trim() || undefined
+      if (respawnModNames.length > 0) {
+        const { template: respawnTemplateMod, ignored } = partitionSpawnModifiers(respawnModNames)
+        if (!respawnTemplateMod) {
+          void gateway.send(msg.channelId, `_No template matched \`${respawnModNames.map(n => `+${n}`).join(' ')}\`. Available: \`+f\`/\`+factory\`._`, { replyTo: msg.id }).catch(() => {})
+          return
+        }
+        if (ignored.length > 0) {
+          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — only a template modifier (\`+f\`/\`+factory\`) applies to a respawn._`, { replyTo: msg.id }).catch(() => {})
+        }
+        void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName)
+      } else {
+        void handleRespawnIntercept(msg, respawnTopic)
+      }
       return
     }
 

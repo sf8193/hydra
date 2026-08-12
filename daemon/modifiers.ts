@@ -54,15 +54,20 @@ export function listModifierKeys(): string[] {
   return [...registry.keys()]
 }
 
-// Return the first template modifier among the given names, or undefined.
-// Template modifiers are mutually exclusive (a spawn uses one template), so the
-// first match wins.
-export function resolveTemplateModifier(names: string[]): TemplateModifier | undefined {
+// Split spawn/respawn `+mods` into the single template modifier that applies
+// (first one wins — a spawn uses exactly one template) and everything else that
+// was ignored: unknown names, seed modifiers (which only apply to protocol
+// critics, not spawns), and any second template modifier. The caller warns on
+// `ignored` so nothing is silently dropped.
+export function partitionSpawnModifiers(names: string[]): { template?: TemplateModifier; ignored: string[] } {
+  let template: TemplateModifier | undefined
+  const ignored: string[] = []
   for (const name of names) {
     const mod = registry.get(name)
-    if (mod?.type === 'template') return mod
+    if (mod?.type === 'template' && !template) template = mod
+    else ignored.push(name)
   }
-  return undefined
+  return { template, ignored }
 }
 
 // ---------------------------------------------------------------------------

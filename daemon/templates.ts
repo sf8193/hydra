@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, statSync } from 'fs'
 import { join } from 'path'
 import { isKnownModel } from '../shared/constants.js'
+import type { SpawnOpts } from './sessions.js'
 
 export type SpawnTemplate = {
   prompt: string
@@ -208,7 +209,7 @@ export function parseTemplateTopic(raw: string): { templateName: string; templat
   return { templateName: candidate, template: t, topic: raw.slice(colonIdx + 1).trim() }
 }
 
-export function buildTemplateSpawnOpts(templateName: string, template: SpawnTemplate, modelOverride?: string): Record<string, unknown> {
+export function buildTemplateSpawnOpts(templateName: string, template: SpawnTemplate, modelOverride?: string): Partial<SpawnOpts> {
   const resolvedModel = modelOverride ?? template.model
   return {
     promptPrefix: template.prompt,

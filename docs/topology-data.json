@@ -677,6 +677,10 @@
       "shared_constants"
     ],
     [
+      "daemon_templates",
+      "daemon_sessions"
+    ],
+    [
       "daemon_pr-watch",
       "daemon_config"
     ],

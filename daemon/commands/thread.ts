@@ -306,10 +306,9 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.capabilities?.model
 
   // A template respawn layers the template's prompt/tool settings onto the
-  // resurrect spawn. `trigger` is dropped — the resurrect prompt owns the framing.
-  const extraOpts = template
-    ? (() => { const { trigger, ...rest } = buildTemplateSpawnOpts(templateName!, template); return rest })()
-    : undefined
+  // resurrect spawn. `trigger` is kept so the session's origin still reads as the
+  // template (e.g. `factory:`) in the spawn announce + `list sessions`.
+  const extraOpts = template ? buildTemplateSpawnOpts(templateName!, template) : undefined
 
   const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel, extraOpts)
   if (result) {

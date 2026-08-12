@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { resolveModifier, resolveModifiers, listModifierKeys, resolveTemplateModifier } from '../modifiers.js'
+import { resolveModifier, resolveModifiers, listModifierKeys, partitionSpawnModifiers } from '../modifiers.js'
 
 describe('modifier registry', () => {
   test('security modifier resolves by name', () => {
@@ -45,14 +45,33 @@ describe('modifier registry', () => {
     expect(byAlias!.name).toBe('factory')
   })
 
-  test('resolveTemplateModifier returns the first template modifier', () => {
-    expect(resolveTemplateModifier(['f'])?.templateName).toBe('factory')
-    expect(resolveTemplateModifier(['factory'])?.templateName).toBe('factory')
-    // seed modifiers are not template modifiers
-    expect(resolveTemplateModifier(['s'])).toBeUndefined()
-    // a seed modifier before a template modifier: the template one still wins
-    expect(resolveTemplateModifier(['s', 'f'])?.name).toBe('factory')
-    // unknown names are ignored
-    expect(resolveTemplateModifier(['nope'])).toBeUndefined()
+  test('partitionSpawnModifiers picks the template and reports the rest as ignored', () => {
+    // the template modifier is selected, nothing ignored
+    const a = partitionSpawnModifiers(['f'])
+    expect(a.template?.templateName).toBe('factory')
+    expect(a.ignored).toEqual([])
+
+    // full name works too
+    expect(partitionSpawnModifiers(['factory']).template?.templateName).toBe('factory')
+
+    // a seed modifier before a template: template still wins, seed is ignored
+    const b = partitionSpawnModifiers(['s', 'f'])
+    expect(b.template?.name).toBe('factory')
+    expect(b.ignored).toEqual(['s'])
+
+    // no template modifier at all: none selected, seed reported as ignored
+    const c = partitionSpawnModifiers(['s'])
+    expect(c.template).toBeUndefined()
+    expect(c.ignored).toEqual(['s'])
+
+    // unknown names are ignored, not matched
+    const d = partitionSpawnModifiers(['nope'])
+    expect(d.template).toBeUndefined()
+    expect(d.ignored).toEqual(['nope'])
+
+    // a second template modifier is ignored (a spawn uses exactly one)
+    const e = partitionSpawnModifiers(['f', 'factory'])
+    expect(e.template?.name).toBe('factory')
+    expect(e.ignored).toEqual(['factory'])
   })
 })
