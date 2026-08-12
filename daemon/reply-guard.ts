@@ -11,8 +11,30 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
+import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
+
+export type ReplyGuardDeps = {
+  registryGet: (sessionId: string) => SessionInfo | undefined
+  registryValues: () => Iterable<SessionInfo>
+  transportHas: (sessionId: string) => boolean
+  transportSendOrQueue: (sessionId: string, msg: any) => void
+  gatewaySend: (channelId: string, text: string, opts?: any) => Promise<any>
+}
+
+const defaultDeps: ReplyGuardDeps = {
+  registryGet: (id) => registry.get(id),
+  registryValues: () => registry.values(),
+  transportHas: (id) => transport.has(id),
+  transportSendOrQueue: (id, msg) => transport.sendOrQueue(id, msg),
+  gatewaySend: (ch, text, opts) => gateway.send(ch, text, opts),
+}
+
+let deps: ReplyGuardDeps = defaultDeps
+
+export function _setDeps(custom: ReplyGuardDeps): void { deps = custom }
+export function _resetDeps(): void { deps = defaultDeps }
 
 type PendingReply = {
   sessionId: string
@@ -97,7 +119,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
   if (tmuxName === 'main') {
     sessionId = 'main'
   } else {
-    for (const info of registry.values()) {
+    for (const info of deps.registryValues()) {
       if (info.tmuxName === tmuxName) {
         sessionId = info.sessionId
         break
@@ -112,7 +134,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
 
     // Session gone (killed/crashed) — nobody left to nudge.
     if (p.sessionId !== 'main') {
-      const info = registry.get(p.sessionId)
+      const info = deps.registryGet(p.sessionId)
       if (!info || info.deadAt) {
         pending.delete(key)
         nudgedKeys.delete(key)
@@ -122,7 +144,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
 
     // Bridge offline: the message is queued and unseen — skip, will be
     // re-armed from queue on reconnect.
-    if (!transport.has(p.sessionId)) continue
+    if (!deps.transportHas(p.sessionId)) continue
 
     // Activity gate: only nudge if the session showed activity after
     // delivery (meaning it processed the message but didn't reply).
@@ -141,7 +163,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     nudgedKeys.set(key, { at: now, count: nudgeCount })
     nudged++
     const mins = Math.max(1, Math.round((now - p.deliveredAt) / 60_000))
-    const name = registry.get(p.sessionId)?.tmuxName ?? p.sessionId
+    const name = deps.registryGet(p.sessionId)?.tmuxName ?? p.sessionId
 
     if (nudgeCount > ESCALATION_AFTER_NUDGES) {
       // Escalation: nudges were ignored. Capture the pane and send it
@@ -153,7 +175,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     }
 
     process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, nudging (${nudgeCount})\n`)
-    transport.sendOrQueue(p.sessionId, {
+    deps.transportSendOrQueue(p.sessionId, {
       type: 'notification',
       content: [
         `[system] ⚠️ Reply check: the message from ${p.user} (message_id ${p.messageId}) has gone ~${mins}m with no \`reply\` sent to that chat.`,
@@ -172,12 +194,11 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
  * `deliveredAt`. Called from handleActivityEvent below.
  */
 export function noteActivityForSession(tmuxName: string, now: number = Date.now()): void {
-  // Resolve tmuxName → sessionId
   let sessionId: string | undefined
   if (tmuxName === 'main') {
     sessionId = 'main'
   } else {
-    for (const info of registry.values()) {
+    for (const info of deps.registryValues()) {
       if (info.tmuxName === tmuxName) {
         sessionId = info.sessionId
         break
@@ -213,7 +234,7 @@ export function sessionsWithPendingReplies(): Set<string> {
     if (p.sessionId === 'main') {
       names.add('main')
     } else {
-      const info = registry.get(p.sessionId)
+      const info = deps.registryGet(p.sessionId)
       if (info && !info.deadAt) names.add(info.tmuxName)
     }
   }
@@ -262,7 +283,7 @@ async function escalateWithCapture(tmuxName: string, chatId: string, user: strin
   const screenshot = capturePaneScreenshot(tmuxName)
   if (screenshot) {
     try {
-      await gateway.send(chatId, header, { files: [screenshot] })
+      await deps.gatewaySend(chatId, header, { files: [screenshot] })
       try { unlinkSync(screenshot) } catch {}
       return
     } catch (err) {
@@ -275,7 +296,7 @@ async function escalateWithCapture(tmuxName: string, chatId: string, user: strin
   const text = capturePaneText(tmuxName, 50)
   if (text) {
     try {
-      await gateway.send(chatId, `${header}\n\`\`\`\n${text.slice(-1800)}\n\`\`\``)
+      await deps.gatewaySend(chatId, `${header}\n\`\`\`\n${text.slice(-1800)}\n\`\`\``)
     } catch (err) {
       process.stderr.write(`daemon: reply guard escalation text send failed: ${err}\n`)
     }
