@@ -139,6 +139,17 @@ describe('suggestWorktreeFromCwd', () => {
     expect(suggestWorktreeFromCwd(nestedRepo, root)).toBe('Documents/hydra')
   })
 
+  test('returns "." when the repo IS SPAWN_CWD (createWorktree resolves "." fine)', () => {
+    _setGitIO(fakeGit)
+    const repoRoot = mkdtempSync(join(tmpdir(), 'wt-selfroot-'))
+    markRepo(repoRoot)
+    try {
+      expect(suggestWorktreeFromCwd(repoRoot, repoRoot)).toBe('.')
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true })
+    }
+  })
+
   test('returns undefined when the PM cwd is not a git repo', () => {
     _setGitIO(fakeGit)
     expect(suggestWorktreeFromCwd(plainDir, root)).toBeUndefined()

@@ -316,9 +316,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const spawnCwd = process.env.SPAWN_CWD
           const pmCwd = callerInfo?.capabilities?.cwd
           if (!spawnCwd) throw new Error('worktree: true requires SPAWN_CWD to be set')
-          if (!pmCwd) throw new Error('worktree: true requires PM CWD — bridge may not have connected yet')
+          if (!pmCwd) throw new Error('worktree: true could not read your CWD (bridge may not have connected yet). Pass an explicit path relative to SPAWN_CWD instead, e.g. worktree="Documents/hydra".')
           worktreeResolved = suggestWorktreeFromCwd(pmCwd, spawnCwd)
-          if (!worktreeResolved) throw new Error(`worktree: true but PM CWD (${pmCwd}) is not inside a git repo under SPAWN_CWD (${spawnCwd})`)
+          if (!worktreeResolved) throw new Error(`worktree: true but your CWD (${pmCwd}) is not inside a git repo under SPAWN_CWD (${spawnCwd}). Call factory_status to list valid repos, or pass an explicit path like worktree="Documents/hydra".`)
         } else {
           worktreeResolved = str(worktreeRaw)
         }

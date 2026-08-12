@@ -211,7 +211,7 @@ export function suggestWorktreeFromCwd(pmCwd: string, spawnCwd: string): string 
     try { base = realpathSync(spawnCwd) } catch {}
     if (top === base || top.startsWith(base + '/')) {
       const rel = relative(base, top)
-      return rel || undefined  // rel === '' means the repo IS spawnCwd — not a valid nested target
+      return rel || '.'  // rel === '' means the repo IS spawnCwd; '.' targets it (createWorktree resolves it fine)
     }
   } catch {
     // pmCwd not a repo, git missing, etc. — no suggestion
