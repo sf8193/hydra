@@ -135,6 +135,33 @@ describe('ThreadRegistry', () => {
     expect(tr.has('thread-join')).toBe(false)
   })
 
+  test('boot sets parentChannelId from anchorChannelId on new threads', () => {
+    const tr = new ThreadRegistry()
+    const reg = new SessionRegistry()
+    reg.set('sid-p', makeInfo({ sessionId: 'sid-p', threadId: 'thread-p', anchorChannelId: 'channel-123' }))
+    tr.boot(reg)
+    expect(tr.get('thread-p')!.parentChannelId).toBe('channel-123')
+  })
+
+  test('boot backfills parentChannelId on existing threads missing it', () => {
+    const tr = new ThreadRegistry()
+    const existing = makeThread({ threadId: 'thread-bf', anchorChannelId: 'channel-456' })
+    expect(existing.parentChannelId).toBeUndefined()
+    tr.set('thread-bf', existing)
+    const reg = new SessionRegistry()
+    tr.boot(reg)
+    expect(tr.get('thread-bf')!.parentChannelId).toBe('channel-456')
+  })
+
+  test('boot does not overwrite existing parentChannelId', () => {
+    const tr = new ThreadRegistry()
+    const existing = makeThread({ threadId: 'thread-keep', anchorChannelId: 'channel-old', parentChannelId: 'channel-original' })
+    tr.set('thread-keep', existing)
+    const reg = new SessionRegistry()
+    tr.boot(reg)
+    expect(tr.get('thread-keep')!.parentChannelId).toBe('channel-original')
+  })
+
   test('boot does not overwrite existing threads', () => {
     const tr = new ThreadRegistry()
     const existing = makeThread({ threadId: 'thread-existing', topic: 'original topic', respawnCount: 3, totalMessages: 10 })

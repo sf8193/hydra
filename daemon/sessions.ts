@@ -480,6 +480,7 @@ export class ThreadRegistry {
         threadId: session.threadId,
         anchorMessageId: session.anchorMessageId,
         anchorChannelId: session.anchorChannelId,
+        parentChannelId: session.anchorChannelId,
         threadUrl: session.threadUrl,
         topic: session.topic ?? '',
         description: session.description,
@@ -500,8 +501,18 @@ export class ThreadRegistry {
       created++
     }
 
-    if (created > 0) {
-      process.stderr.write(`daemon: created ${created} thread(s) from sessions\n`)
+    // Backfill parentChannelId from anchorChannelId for threads missing it
+    let backfilled = 0
+    for (const thread of this.threads.values()) {
+      if (!thread.parentChannelId && thread.anchorChannelId) {
+        thread.parentChannelId = thread.anchorChannelId
+        backfilled++
+      }
+    }
+
+    if (created > 0 || backfilled > 0) {
+      if (created > 0) process.stderr.write(`daemon: created ${created} thread(s) from sessions\n`)
+      if (backfilled > 0) process.stderr.write(`daemon: backfilled parentChannelId on ${backfilled} thread(s)\n`)
       this.persist()
     }
   }
