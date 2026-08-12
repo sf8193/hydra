@@ -508,6 +508,7 @@ export function factoryAccept(
 export function factoryAbandon(
   ticket: string,
   callerSessionId: string,
+  reason: string,
 ): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
@@ -519,7 +520,7 @@ export function factoryAbandon(
 
   const wasPhase = state.phase
   state.phase = 'failed'
-  logBuild(state, 'abandoned')
+  logBuild(state, `abandoned: ${reason}`)
 
   void safeSend(state.pmThreadId, `🏭 \`${ticket}\` abandoned`)
 
