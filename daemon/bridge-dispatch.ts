@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
+import { factoryBuild, factoryRetry, factoryRespawn, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -344,6 +344,18 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           return { content: [{ type: 'text', text: `Factory retry failed: ${result.error}` }], isError: true }
         }
         return { content: [{ type: 'text', text: `Retry instructions sent to builder. Ticket: ${ticket}. Waiting for factory_done.` }] }
+      }
+
+      case 'factory_respawn': {
+        if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
+        const ticket = args.ticket
+        if (!callerSessionId) throw new Error('factory_respawn requires a session context')
+
+        const result = factoryRespawn(ticket, callerSessionId)
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: `Factory respawn failed: ${result.error}` }], isError: true }
+        }
+        return { content: [{ type: 'text', text: `Respawning builder for ticket ${ticket}. It will read the thread history and re-enter the build→review cycle.` }] }
       }
 
       case 'factory_accept': {

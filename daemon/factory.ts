@@ -50,6 +50,7 @@ type FactoryBuildState = {
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
   reviewSummary?: string // captured from builder's [summary] post at review completion
+  builderBranch?: string // branch the builder pushed to (worktree builds); lets a respawn recover prior work
   _progressTimer?: ReturnType<typeof setInterval> // periodic progress update timer
 }
 
@@ -330,6 +331,153 @@ export function factoryRetry(
 }
 
 /**
+ * Respawn a dead or stuck builder into its existing thread and re-enter the
+ * build→review cycle. Unlike factory_retry (which messages a *live* builder),
+ * respawn creates a *fresh* session that reads the thread history to reconstruct
+ * context. Used when a builder exited without finishing (phase `failed`) or is
+ * stuck at the prompt (phase `awaiting_pm` — the old builder is killed first).
+ */
+export function factoryRespawn(
+  ticket: string,
+  callerSessionId: string,
+): { ok: true } | { error: string } {
+  const state = builds.get(ticket)
+  if (!state) return { error: `Unknown ticket: ${ticket}` }
+  if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can respawn it.' }
+  if (state.phase !== 'failed' && state.phase !== 'awaiting_pm') {
+    return { error: `Cannot respawn — build is in phase "${state.phase}", expected "failed" (dead builder) or "awaiting_pm" (stuck builder).` }
+  }
+  if (!state.builderThreadId) return { error: 'No builder thread to respawn into — use factory_build to start a new build.' }
+
+  // Force-respawn: kill any still-alive builder (e.g. a stuck builder in awaiting_pm)
+  // and detach its refs before spawning the replacement into the same thread.
+  const oldSessionId = state.builderSessionId
+  if (oldSessionId) {
+    const oldInfo = registry.get(oldSessionId)
+    if (oldInfo) {
+      oldInfo.suppressDeathMessage = true
+      void killSession(oldInfo, 'factory respawn').catch(() => {})
+    }
+    releaseDeadBuilder(state)
+  }
+
+  state.phase = 'building'
+  state.retryCount++
+
+  void spawnRespawnImpl(state).catch(err => {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: factory: respawn failed for ${state.ticket}: ${errMsg}\n`)
+    state.phase = 'failed'
+    logBuild(state, 'respawn_failed')
+    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ respawn failed — ${errMsg}\n↳ factory_respawn to retry, factory_abandon to give up`)
+  })
+
+  process.stderr.write(`daemon: factory: respawn ${ticket} (attempt ${state.retryCount + 1})\n`)
+  return { ok: true }
+}
+
+/**
+ * Spawn a fresh builder into the ticket's existing thread. The new builder reads
+ * the thread history to recover prior work + review feedback, then re-enters the
+ * build→review cycle. Passes the original worktree target through so the builder
+ * always lands in the correct repo.
+ */
+async function spawnFactoryRespawn(state: FactoryBuildState): Promise<void> {
+  const threadId = state.builderThreadId!
+
+  const worktreeInstructions = state.worktree
+    ? [
+        ``,
+        `WORKTREE: This is a worktree build — your changes are destroyed when your session ends.`,
+        ...(state.builderBranch
+          ? [`The previous builder pushed work to branch \`${state.builderBranch}\`. To continue it: \`git fetch origin ${state.builderBranch} && git reset --hard FETCH_HEAD\`.`]
+          : []),
+        `Before calling factory_done, commit and push from the worktree:`,
+        `  git add -A && git commit -m "factory: <summary>" && git push -u origin HEAD`,
+        `Include the branch name in your factory_done call.`,
+      ]
+    : []
+
+  const respawnPrompt = [
+    `IMPORTANT: You are a BUILDER session, RESPAWNED to continue a prior factory build. Your job is to WRITE CODE.`,
+    `The previous builder for this task exited before finishing. FIRST, read the thread history to see what was built, what the review said, and what remains:`,
+    `  fetch_messages(channel="${threadId}", limit=50)`,
+    `You have full file access. Write code, run tests, implement the spec.`,
+    ``,
+    `YOUR TASK:`,
+    state.spec,
+    ...worktreeInstructions,
+    ``,
+    `WHEN DONE:`,
+    `Call the factory_done tool with your results:`,
+    `- files_changed: list of files you created or modified`,
+    ...(state.worktree ? [`- branch: the branch name you pushed to`] : []),
+    `- test_results: test output summary (e.g. "1388 pass, 0 fail")`,
+    `- rationale: key design decisions and why (optional)`,
+    `- known_issues: anything you're unsure about (optional)`,
+    ``,
+    `After calling factory_done, an adversarial review will start automatically.`,
+    `You will be the OWNER — defend your implementation against the critic.`,
+    `Reply with [owner→critic] as the first line of each defense.`,
+  ].join('\n')
+
+  const specPreview = state.spec.slice(0, 140) + (state.spec.length > 140 ? '…' : '')
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` respawning builder (attempt ${state.retryCount + 1})\n${specPreview}`)
+
+  const result = await doSpawnSession(`factory-builder (respawn): ${state.spec.slice(0, 60)}`, undefined, undefined, {
+    existingThreadId: threadId,
+    model: state.builderModel,
+    promptPrefix: respawnPrompt,
+    ...(state.worktree ? { worktree: state.worktree } : {}),
+  })
+
+  state.builderSessionId = result.sessionId
+  state.builderThreadId = result.threadId
+  builderSessionToTicket.set(result.sessionId, state.ticket)
+  builderThreadToTicket.set(result.threadId, state.ticket)
+
+  // Stamp registry fields for sweep notifications + phase-aware restart messages.
+  const builderInfo = registry.get(result.sessionId)
+  if (builderInfo) {
+    builderInfo.isFactoryBuilder = true
+    builderInfo.factoryPmThreadId = state.pmThreadId
+    builderInfo.factoryTicket = state.ticket
+    builderInfo.factoryPhase = state.phase
+    registry.persist()
+  }
+
+  process.stderr.write(`daemon: factory: respawned builder ${result.name} (${result.sessionId}) for ticket ${state.ticket}\n`)
+
+  // Resume periodic progress updates so the PM gets status during the rebuild.
+  startProgressUpdates(state)
+}
+
+// Indirection so tests can substitute the real session spawn with a stub.
+let spawnRespawnImpl: (state: FactoryBuildState) => Promise<void> = spawnFactoryRespawn
+
+// Test-only seam. Lets unit tests seed/read build state and stub the respawn
+// spawn without pulling in the full session-spawn machinery. Not part of the
+// runtime API — prefixed and grouped to keep it obvious.
+export const __factoryTestHooks = {
+  seedBuild(overrides: Partial<FactoryBuildState> & Pick<FactoryBuildState, 'ticket' | 'pmSessionId' | 'phase'>): void {
+    builds.set(overrides.ticket, {
+      pmThreadId: 'pm-thread',
+      spec: 'test spec',
+      reviewRounds: 3,
+      retryCount: 0,
+      createdAt: Date.now(),
+      reviewed: false,
+      ...overrides,
+    })
+  },
+  getPhase(ticket: string): string | undefined { return builds.get(ticket)?.phase },
+  getRetryCount(ticket: string): number | undefined { return builds.get(ticket)?.retryCount },
+  reset(): void { builds.clear(); builderSessionToTicket.clear(); builderThreadToTicket.clear() },
+  setRespawnImpl(fn: (state: FactoryBuildState) => Promise<void>): void { spawnRespawnImpl = fn },
+  restoreRespawnImpl(): void { spawnRespawnImpl = spawnFactoryRespawn },
+}
+
+/**
  * Accept a build — PM is satisfied. Kill builder, clean up.
  */
 export function factoryAccept(
@@ -364,7 +512,10 @@ export function factoryAbandon(
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can abandon it.' }
-  if (state.phase === 'complete' || state.phase === 'failed') return { error: 'Build already terminated.' }
+  // A `failed` ticket still in the map is recoverable (builder died in awaiting_pm,
+  // held open for factory_respawn) — abandoning it is valid. Only a fully-complete
+  // build cannot be abandoned.
+  if (state.phase === 'complete') return { error: 'Build already completed.' }
 
   const wasPhase = state.phase
   state.phase = 'failed'
@@ -706,6 +857,7 @@ export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: t
 }
 
 async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArgs): Promise<void> {
+  if (args.branch) state.builderBranch = args.branch
   const fileCount = args.files_changed.length
   const testShort = args.test_results.slice(0, 80)
   const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''
@@ -770,12 +922,37 @@ export function onBuilderDeath(sessionId: string): void {
     void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed during review`)
     cleanupState(ticket)
   } else if (state.phase === 'awaiting_pm') {
-    process.stderr.write(`daemon: factory: builder died while awaiting PM for ticket ${state.ticket}\n`)
-    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ builder exited (work on disk, ticket closed)`)
+    // Keep the ticket alive so the PM can factory_respawn (or factory_abandon).
+    // Clear only the dead builder's session refs — preserve builderThreadId and
+    // the build state so a respawn can reuse the thread + prior work.
+    process.stderr.write(`daemon: factory: builder died while awaiting PM for ticket ${state.ticket} — keeping ticket alive for respawn\n`)
     state.phase = 'failed'
     logBuild(state, 'builder_died_awaiting')
-    cleanupState(ticket)
+    releaseDeadBuilder(state)
+    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ builder exited — \`factory_respawn\` to continue, \`factory_abandon\` to give up`)
   }
+}
+
+/**
+ * Detach a dead/killed builder session from a build without deleting the ticket.
+ * Clears reverse lookups, nudge state, and registry stamps on the old session,
+ * but preserves builderThreadId + the build state so factory_respawn can reuse them.
+ */
+function releaseDeadBuilder(state: FactoryBuildState): void {
+  stopProgressUpdates(state)
+  const sessionId = state.builderSessionId
+  if (!sessionId) return
+  builderSessionToTicket.delete(sessionId)
+  clearBuilderNudge(sessionId)
+  const info = registry.get(sessionId)
+  if (info) {
+    delete info.isFactoryBuilder
+    delete info.factoryPmThreadId
+    delete info.factoryTicket
+    delete info.factoryPhase
+    registry.persist()
+  }
+  state.builderSessionId = undefined
 }
 
 function onFactoryReviewComplete(builderThreadId: string, summaryText?: string): boolean {
