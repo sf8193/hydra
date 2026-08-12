@@ -99,7 +99,7 @@ describe('factory admin/CLI functions', () => {
 
   test('factoryAcceptByTicket on unknown ticket returns error', async () => {
     const { factoryAcceptByTicket } = await import('../factory.js')
-    const r = factoryAcceptByTicket('fb-nope')
+    const r = await factoryAcceptByTicket('fb-nope')
     expect('error' in r).toBe(true)
     if ('error' in r) expect(r.error).toContain('Unknown ticket')
   })

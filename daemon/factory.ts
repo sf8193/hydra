@@ -471,10 +471,10 @@ export function factoryAccept(
   ticket: string,
   callerSessionId: string,
   allowUnreviewed: boolean = false,
-): { ok: true } | { error: string } {
+): Promise<{ ok: true } | { error: string }> {
   const state = builds.get(ticket)
-  if (!state) return { error: `Unknown ticket: ${ticket}` }
-  if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can accept it.' }
+  if (!state) return Promise.resolve({ error: `Unknown ticket: ${ticket}` })
+  if (state.pmSessionId !== callerSessionId) return Promise.resolve({ error: 'Only the PM that started this build can accept it.' })
   return acceptCore(state, allowUnreviewed)
 }
 
@@ -484,14 +484,14 @@ export function factoryAccept(
 export function factoryAcceptByTicket(
   ticket: string,
   allowUnreviewed: boolean = false,
-): { ok: true } | { error: string } {
+): Promise<{ ok: true } | { error: string }> {
   const state = builds.get(ticket)
-  if (!state) return { error: `Unknown ticket: ${ticket}` }
+  if (!state) return Promise.resolve({ error: `Unknown ticket: ${ticket}` })
   return acceptCore(state, allowUnreviewed)
 }
 
 /** Shared accept logic — assumes caller authorization already checked. */
-function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: true } | { error: string } {
+async function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): Promise<{ ok: true } | { error: string }> {
   if (state.phase !== 'awaiting_pm') return { error: `Cannot accept — build is in phase "${state.phase}", expected "awaiting_pm".` }
   if (!state.reviewed && !allowUnreviewed) return { error: 'Build was NOT adversarially reviewed (review failed or was cancelled). Pass allow_unreviewed=true to accept anyway.' }
 
@@ -500,6 +500,20 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
 
   const reviewWarning = state.reviewed ? '' : ' (unreviewed)'
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}`)
+
+  // Squash builder commits into one clean commit before killing — best-effort,
+  // non-fatal (accept still succeeds if the squash/push fails).
+  if (state.builderSessionId) {
+    const info = registry.get(state.builderSessionId)
+    if (info?.worktreePath) {
+      try {
+        await squashBuilderCommits(info.worktreePath, cleanSpecTitle(state.spec))
+        process.stderr.write(`daemon: factory: squashed commits for ${state.ticket}\n`)
+      } catch (err) {
+        process.stderr.write(`daemon: factory: squash failed (non-fatal): ${err instanceof Error ? err.message : err}\n`)
+      }
+    }
+  }
 
   killBuilder(state, true)
   cleanupState(state.ticket)
@@ -512,31 +526,32 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
 export function factoryAbandon(
   ticket: string,
   callerSessionId: string,
+  reason?: string,
 ): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can abandon it.' }
-  return abandonCore(state)
+  return abandonCore(state, reason)
 }
 
 /**
  * Abandon a build by ticket alone (admin/CLI path — skips PM ownership check).
  */
-export function factoryAbandonByTicket(ticket: string): { ok: true } | { error: string } {
+export function factoryAbandonByTicket(ticket: string, reason?: string): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
-  return abandonCore(state)
+  return abandonCore(state, reason)
 }
 
 /** Shared abandon logic — assumes caller authorization already checked. */
-function abandonCore(state: FactoryBuildState): { ok: true } | { error: string } {
+function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | { error: string } {
   if (state.phase === 'complete' || state.phase === 'failed') return { error: 'Build already terminated.' }
 
   const wasPhase = state.phase
   state.phase = 'failed'
   logBuild(state, 'abandoned')
 
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned`)
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ` — ${reason}` : ''}`)
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
@@ -696,6 +711,31 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
 }
 
 /**
+ * Derive a clean, human-readable PR/commit title from the spec's first
+ * non-empty line — stripped of markdown heading/list markers, capped at 72 chars.
+ */
+function cleanSpecTitle(spec: string): string {
+  const firstLine = spec.split('\n').find(l => l.trim())?.trim() ?? 'factory build'
+  return firstLine.replace(/^#+\s*/, '').replace(/^[-*]\s*/, '').slice(0, 72)
+}
+
+/**
+ * Squash all builder commits since main into a single commit and force-push.
+ * Called on accept so the merged PR carries one clean commit, not build +
+ * review-fix noise. No-op when there is nothing to squash.
+ */
+async function squashBuilderCommits(worktreePath: string, message: string): Promise<void> {
+  const { stdout: base } = await execAsync('git', ['merge-base', 'HEAD', 'main'], { cwd: worktreePath, timeout: 10_000 })
+  const baseSha = base.trim()
+  if (!baseSha) return
+  const { stdout: diffCheck } = await execAsync('git', ['diff', '--stat', baseSha + '..HEAD'], { cwd: worktreePath, timeout: 5_000 })
+  if (!diffCheck.trim()) return
+  await execAsync('git', ['reset', '--soft', baseSha], { cwd: worktreePath, timeout: 10_000 })
+  await execAsync('git', ['commit', '-m', message], { cwd: worktreePath, timeout: 10_000 })
+  await execAsync('git', ['push', '--force-with-lease'], { cwd: worktreePath, timeout: 15_000 })
+}
+
+/**
  * Create a GitHub PR from the builder's worktree branch.
  * Only runs for worktree builds (info.worktreePath + info.worktreeRepo set).
  * Best-effort — failure is silent.
@@ -721,8 +761,8 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
       // No existing PR — fall through to create
     }
 
-    const title = `Factory ${state.ticket}: ${state.spec.slice(0, 60)}`
-    const body = `Factory build from ticket \`${state.ticket}\``
+    const title = cleanSpecTitle(state.spec)
+    const body = `Factory build \`${state.ticket}\`\n\n${state.spec.slice(0, 500)}`
     const { stdout } = await execAsync(
       'gh', ['pr', 'create', '--head', branch, '--title', title, '--body', body],
       { cwd: info.worktreeRepo, timeout: 15_000 },
