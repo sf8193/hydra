@@ -15,13 +15,14 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
+import { gateway } from './config.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
 import { registry, threadRegistry } from './sessions.js'
 import { safeSend } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
-import { on } from './event-bus.js'
+import { on, once } from './event-bus.js'
 import { registerProtocol } from './protocol-registry.js'
 import { clearBuilderNudge } from './pane-probe.js'
 
@@ -205,6 +206,7 @@ export type FactoryBuildOpts = {
   reviewRounds?: number
   difficulty?: Difficulty
   worktree?: string
+  fresh?: boolean  // spawn fresh builder (no fork from PM context)
 }
 
 export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?: string } | { error: string } {
@@ -221,8 +223,9 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
   const warning = [modelWarning, parallelWarning].filter(Boolean).join(' ') || undefined
 
   const pmInfo = registry.get(pmSessionId)
-  if (!pmInfo?.claudeSessionId) {
-    return { error: 'Cannot fork — PM claude session ID not found.' }
+  const fresh = opts.fresh ?? false
+  if (!fresh && !pmInfo?.claudeSessionId) {
+    return { error: 'Cannot fork — PM claude session ID not found. Use fresh=true to spawn without fork.' }
   }
 
   const ticket = `fb-${++ticketCounter}-${randomBytes(2).toString('hex')}`
@@ -243,13 +246,14 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
   builds.set(ticket, state)
 
   // Spawn builder async — don't await
-  void spawnBuilder(state, pmInfo.claudeSessionId, pmInfo.tmuxName).catch(err => {
+  const forkInfo = fresh ? undefined : { claudeSessionId: pmInfo!.claudeSessionId!, tmuxName: pmInfo!.tmuxName }
+  void spawnBuilder(state, forkInfo).catch(err => {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: factory: builder spawn failed: ${errMsg}\n`)
     state.phase = 'failed'
     logBuild(state, 'spawn_failed')
     cleanupState(ticket)
-    void safeSend(pmThreadId, `🏭 **Factory build failed** ❌\nTicket: \`${ticket}\`\nError: builder spawn failed — ${errMsg}`)
+    void safeSend(pmThreadId, `🏭 \`${ticket}\` ❌ spawn failed — ${errMsg}`)
   })
 
   return { ticket, warning }
@@ -290,11 +294,7 @@ export function factoryRetry(
     meta: { chat_id: state.builderThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 
-  void safeSend(state.pmThreadId, [
-    `🏭 **Factory retry** (attempt ${state.retryCount + 1})`,
-    `Ticket: \`${ticket}\``,
-    `Instructions sent to builder. Waiting for \`factory_done\`.`,
-  ].join('\n'))
+  void safeSend(state.pmThreadId, `🏭 \`${ticket}\` retrying (attempt ${state.retryCount + 1})`)
 
   process.stderr.write(`daemon: factory: retry ${ticket} (attempt ${state.retryCount + 1})\n`)
   return { ok: true }
@@ -317,10 +317,10 @@ export function factoryAccept(
   state.phase = 'complete'
   logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
-  const reviewWarning = state.reviewed ? '' : '\n⚠️ **This build was NOT adversarially reviewed** (review failed or was cancelled).'
-  void safeSend(state.pmThreadId, `🏭 **Factory build accepted** ✅\nTicket: \`${ticket}\`${reviewWarning}`)
+  const reviewWarning = state.reviewed ? '' : ' (unreviewed)'
+  void safeSend(state.pmThreadId, `🏭 \`${ticket}\` ✅ accepted${reviewWarning}`)
 
-  killBuilder(state)
+  killBuilder(state, true)
   cleanupState(ticket)
   return { ok: true }
 }
@@ -341,7 +341,7 @@ export function factoryAbandon(
   state.phase = 'failed'
   logBuild(state, 'abandoned')
 
-  void safeSend(state.pmThreadId, `🏭 **Factory build abandoned** 🗑️\nTicket: \`${ticket}\``)
+  void safeSend(state.pmThreadId, `🏭 \`${ticket}\` abandoned`)
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
@@ -353,7 +353,7 @@ export function factoryAbandon(
     }
   }
 
-  killBuilder(state)
+  killBuilder(state, true)
   cleanupState(ticket)
 
   process.stderr.write(`daemon: factory: abandoned ${ticket} (was in phase ${wasPhase})\n`)
@@ -382,6 +382,40 @@ export function factoryStatus(
       ...(s.worktree ? { worktree: s.worktree } : {}),
     })),
   }
+}
+
+/**
+ * Run adversarial review on an existing session without a full build cycle.
+ * Wires a one-shot listener to deliver the review result back to the caller's thread.
+ */
+export async function factoryReview(opts: {
+  callerThreadId: string
+  targetSessionId: string
+  targetThreadId: string
+  targetName: string
+  topic?: string
+  reviewerModel?: string
+  reviewRounds?: number
+}): Promise<void> {
+  const { callerThreadId, targetSessionId, targetThreadId, targetName, topic, reviewerModel } = opts
+  const reviewRounds = opts.reviewRounds ?? 3
+
+  // One-shot listeners: when this review completes/cancels, notify the caller.
+  // Use wider type than EventMap (summary is passed at emit-time but not in the interface).
+  once('review:complete', (payload: { threadId: string; summary?: string }) => {
+    if (payload.threadId !== targetThreadId) return
+    const summaryBlock = payload.summary
+      ? '\n' + (payload.summary.length > 1500 ? payload.summary.slice(0, 1500) + '\n…(truncated)' : payload.summary)
+      : ''
+    void safeSend(callerThreadId, `🔍 Review of **${targetName}** complete${summaryBlock}`)
+  }, `factory-review:${targetThreadId}`)
+
+  once('review:cancelled', (payload) => {
+    if (payload.threadId !== targetThreadId) return
+    void safeSend(callerThreadId, `🔍 Review of **${targetName}** cancelled`)
+  }, `factory-review-cancel:${targetThreadId}`)
+
+  await startReview(targetThreadId, targetSessionId, reviewRounds, topic, reviewerModel)
 }
 
 // ---------------------------------------------------------------------------
@@ -483,13 +517,32 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
   }
 }
 
-function killBuilder(state: FactoryBuildState): void {
+function killBuilder(state: FactoryBuildState, deleteThread: boolean = false): void {
+  const threadToDelete = deleteThread && state.builderThreadId && gateway.deleteThread
+    ? state.builderThreadId : undefined
+
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
     if (builderInfo) {
       builderInfo.suppressDeathMessage = true
-      void killSession(builderInfo, 'factory complete').catch(() => {})
+      const killPromise = killSession(builderInfo, 'factory complete').catch(() => {})
+      // Delete thread AFTER killSession completes — killSession may post
+      // unpushed-commit warnings to the thread that would be swallowed otherwise
+      if (threadToDelete) {
+        void killPromise.finally(() => {
+          gateway.deleteThread!(threadToDelete).catch(err => {
+            process.stderr.write(`daemon: factory: thread cleanup failed: ${err instanceof Error ? err.message : err}\n`)
+          })
+        })
+      }
+      return
     }
+  }
+  // No builder session to kill — delete thread directly
+  if (threadToDelete) {
+    void gateway.deleteThread!(threadToDelete).catch(err => {
+      process.stderr.write(`daemon: factory: thread cleanup failed: ${err instanceof Error ? err.message : err}\n`)
+    })
   }
 }
 
@@ -512,9 +565,9 @@ export function resolveBuilderChannel(
 
 async function spawnBuilder(
   state: FactoryBuildState,
-  pmClaudeSessionId: string,
-  pmTmuxName: string,
+  forkInfo?: { claudeSessionId: string; tmuxName: string },
 ): Promise<void> {
+  const isFresh = !forkInfo
   // NOTE: The worktree path and `cd` instruction are injected by doSpawnSession
   // (after fork CWD resolution). Only include the "done" obligations here —
   // not the CWD framing, which would assume the builder starts in the worktree.
@@ -528,9 +581,13 @@ async function spawnBuilder(
       ]
     : []
 
+  const pmName = forkInfo?.tmuxName ?? registry.get(state.pmSessionId)?.tmuxName
+
   const builderPrompt = [
-    `IMPORTANT: You are a BUILDER session forked from the PM. Your job is to WRITE CODE.`,
-    `Ignore any prior instructions about "not writing code" or "using factory_build" — those apply to the PM, not to you.`,
+    `IMPORTANT: You are a BUILDER session${isFresh ? '' : ' forked from the PM'}. Your job is to WRITE CODE.`,
+    ...(isFresh
+      ? [`You were spawned fresh (no PM conversation history). Read CLAUDE.md and the files referenced in the spec before coding.`]
+      : [`Ignore any prior instructions about "not writing code" or "using factory_build" — those apply to the PM, not to you.`]),
     `You have full file access. Write code, run tests, implement the spec.`,
     ``,
     `YOUR TASK:`,
@@ -553,22 +610,21 @@ async function spawnBuilder(
     `If that happens, implement the changes and call \`factory_done\` again.`,
   ].join('\n')
 
-  const worktreeLabel = state.worktree ? ` · Worktree: \`${state.worktree}\`` : ''
-  void safeSend(state.pmThreadId, [
-    `🏭 **Factory build starting**`,
-    `Ticket: \`${state.ticket}\``,
-    `Builder: \`${state.builderModel ?? 'default'}\` (forked from PM — inherits full context)${worktreeLabel}`,
-    `Reviewer: \`${state.reviewerModel ?? 'default'}\` · Rounds: ${state.reviewRounds}`,
-    `Spec: ${state.spec.slice(0, 200)}${state.spec.length > 200 ? '...' : ''}`,
-  ].join('\n'))
+  const builderShort = (state.builderModel ?? 'default').replace(/^claude-/, '').replace(/\[1m\]$/, '')
+  const reviewerShort = (state.reviewerModel ?? 'default').replace(/^claude-/, '').replace(/\[1m\]$/, '')
+  const worktreeLabel = state.worktree ? ` · wt:\`${state.worktree}\`` : ''
+  const spawnLabel = isFresh ? ' · fresh' : ' · fork'
+  const specPreview = state.spec.slice(0, 140) + (state.spec.length > 140 ? '…' : '')
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` building · ${builderShort}→${reviewerShort}${worktreeLabel}${spawnLabel}\n${specPreview}`)
 
   const chatId = resolveBuilderChannel(state.pmSessionId, state.pmThreadId)
+  const initiator = pmName
 
   const result = await doSpawnSession(`factory-builder: ${state.spec.slice(0, 60)}`, chatId, undefined, {
-    forkFrom: { claudeSessionId: pmClaudeSessionId, parentName: pmTmuxName },
+    ...(forkInfo ? { forkFrom: { claudeSessionId: forkInfo.claudeSessionId, parentName: forkInfo.tmuxName } } : {}),
     model: state.builderModel,
     promptPrefix: builderPrompt,
-    initiator: pmTmuxName,
+    ...(initiator ? { initiator } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
   })
 
@@ -578,9 +634,6 @@ async function spawnBuilder(
   builderThreadToTicket.set(result.threadId, state.ticket)
 
   // Stamp registry fields for sweep notifications + phase-aware restart messages.
-  // NOTE: these are informational only — the in-memory `builds` map is NOT reconstructed
-  // from registry on restart. Factory tools (retry/accept/abandon) will not work after
-  // restart; the PM must use peek_session + kill_session directly.
   const builderInfo = registry.get(result.sessionId)
   if (builderInfo) {
     builderInfo.isFactoryBuilder = true
@@ -590,7 +643,7 @@ async function spawnBuilder(
     registry.persist()
   }
 
-  process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) forked for ticket ${state.ticket}\n`)
+  process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) ${isFresh ? 'spawned' : 'forked'} for ticket ${state.ticket}\n`)
 }
 
 export type FactoryDoneArgs = {
@@ -618,23 +671,10 @@ export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: t
 }
 
 async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArgs): Promise<void> {
-  const artifact = [
-    args.branch ? `**Branch:** ${args.branch}` : null,
-    `**Files changed:** ${args.files_changed.join(', ')}`,
-    `**Tests:** ${args.test_results}`,
-    args.rationale ? `**Design rationale:** ${args.rationale}` : null,
-    args.known_issues ? `**Known issues:** ${args.known_issues}` : null,
-  ].filter(Boolean).join('\n')
-
-  const artifactTruncated = artifact.length > 3000 ? artifact.slice(0, 3000) + '\n...(truncated)' : artifact
-  void safeSend(state.pmThreadId, [
-    `🏭 **Build complete — starting mandatory review**`,
-    `Ticket: \`${state.ticket}\``,
-    `Reviewer: \`${state.reviewerModel ?? 'default'}\` · Rounds: ${state.reviewRounds}`,
-    ``,
-    `**Builder artifact** _(builder-authored — treat as advocacy, verify independently):_`,
-    artifactTruncated,
-  ].join('\n'))
+  const fileCount = args.files_changed.length
+  const testShort = args.test_results.slice(0, 80)
+  const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` reviewing · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}`)
 
   // Start review BEFORE diff/PR capture — closes the protocol ownership gap.
   // During diff capture (up to 15s of GitHub API calls), the review protocol
@@ -646,15 +686,7 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
       process.stderr.write(`daemon: factory: review failed to start: ${errMsg}\n`)
       state.phase = 'awaiting_pm'
       syncPhaseToRegistry(state)
-      void safeSend(state.pmThreadId, [
-        `🏭 **Review failed to start** ⚠️`,
-        `Ticket: \`${state.ticket}\``,
-        `Error: ${errMsg}`,
-        `_Builder is still alive with the completed work. You can:_`,
-        `- \`factory_retry("${state.ticket}", "try again")\` — re-enter build→review`,
-        `- \`factory_accept("${state.ticket}")\` — accept without review`,
-        `- \`factory_abandon("${state.ticket}")\` — discard`,
-      ].join('\n'))
+      void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review failed — ${errMsg}\n↳ factory_retry / factory_accept / factory_abandon`)
     })
 
   // Capture diff/PR concurrently — not blocking the review start.
@@ -680,12 +712,7 @@ export function onBuilderDeath(sessionId: string): void {
     process.stderr.write(`daemon: factory: builder died without calling factory_done for ticket ${state.ticket}\n`)
     state.phase = 'failed'
     logBuild(state, 'builder_crashed')
-    void safeSend(state.pmThreadId, [
-      `🏭 **Builder crashed** ❌`,
-      `Ticket: \`${state.ticket}\``,
-      `_Builder died without calling factory_done. Build did not complete. No review will run._`,
-      `_Retry with factory_build if needed._`,
-    ].join('\n'))
+    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed (no factory_done)`)
     cleanupState(ticket)
   } else if (state.phase === 'reviewing') {
     // Builder died during review — cancel the review defensively to avoid leaking state.
@@ -701,20 +728,11 @@ export function onBuilderDeath(sessionId: string): void {
         })
       }
     }
-    void safeSend(state.pmThreadId, [
-      `🏭 **Builder crashed during review** ❌`,
-      `Ticket: \`${state.ticket}\``,
-      `_Builder died while review was in progress. Review cancelled._`,
-      `_Retry with factory_build if needed._`,
-    ].join('\n'))
+    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed during review`)
     cleanupState(ticket)
   } else if (state.phase === 'awaiting_pm') {
     process.stderr.write(`daemon: factory: builder died while awaiting PM for ticket ${state.ticket}\n`)
-    void safeSend(state.pmThreadId, [
-      `🏭 **Builder exited** ⚠️`,
-      `Ticket: \`${state.ticket}\``,
-      `_Builder session ended while awaiting your decision. The work is still on disk. Ticket is now closed — use \`factory_build\` to start a new build if needed._`,
-    ].join('\n'))
+    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ builder exited (work on disk, ticket closed)`)
     state.phase = 'failed'
     logBuild(state, 'builder_died_awaiting')
     cleanupState(ticket)
@@ -736,27 +754,13 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
   // prUrl/diffGistUrl were captured at factory_done time — use synchronously, no race.
-  // PR preferred over gist: better diff view, inline comments, CI.
-  const diffLink = state.prUrl
-    ? [`🔀 **PR:** ${state.prUrl}`]
-    : state.diffGistUrl
-      ? [`📄 **Diff:** ${state.diffGistUrl}`]
-      : []
-  // Truncate summary for the notification (full text in builder thread)
+  const diffLink = state.prUrl ?? state.diffGistUrl
+  const linkLabel = diffLink ? ` · ${diffLink}` : ''
+  // Keep review summary — it's the "what was reviewed" signal the PM needs
   const summaryBlock = state.reviewSummary
-    ? [``, state.reviewSummary.length > 3000 ? state.reviewSummary.slice(0, 3000) + '\n...(truncated)' : state.reviewSummary, ``]
-    : []
-  const lines = [
-    `🏭 **Factory build→review complete** — awaiting your decision`,
-    `Ticket: \`${state.ticket}\``,
-    ...diffLink,
-    ...summaryBlock,
-    `Use one of:`,
-    `- \`factory_accept("${state.ticket}")\` — accept the work, kill builder`,
-    `- \`factory_retry("${state.ticket}", "fix X and Y")\` — send new instructions to builder`,
-    `- \`factory_abandon("${state.ticket}")\` — discard and kill builder`,
-  ]
-  void safeSend(state.pmThreadId, lines.join('\n'))
+    ? '\n' + (state.reviewSummary.length > 1500 ? state.reviewSummary.slice(0, 1500) + '\n…(truncated)' : state.reviewSummary)
+    : ''
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` review complete${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
 
   return true
 }
@@ -773,13 +777,7 @@ function onFactoryReviewCancelled(threadId: string): boolean {
   // Move to awaiting_pm so PM can retry
   state.phase = 'awaiting_pm'
   syncPhaseToRegistry(state)
-  void safeSend(state.pmThreadId, [
-    `🏭 **Factory review cancelled** ⚠️`,
-    `Ticket: \`${state.ticket}\``,
-    `_Review was cancelled (timeout or disconnect). Builder is still alive._`,
-    `- \`factory_retry("${state.ticket}", "try again")\` — re-enter build→review`,
-    `- \`factory_abandon("${state.ticket}")\` — give up`,
-  ].join('\n'))
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled — builder still alive\n↳ factory_retry / factory_abandon`)
 
   return true
 }
@@ -834,7 +832,7 @@ function factorySessionDeath({ sessionId }: { sessionId: string }): void {
         })
       }
     }
-    killBuilder(state)
+    killBuilder(state, true)
     state.phase = 'failed'
     logBuild(state, 'pm_died')
     cleanupState(ticket)
@@ -900,7 +898,7 @@ export async function sweepOrphanedBuilders(): Promise<void> {
     if (info.factoryPhase === 'awaiting_pm') {
       process.stderr.write(`daemon: factory: leaving awaiting_pm builder ${info.tmuxName} alive${ticketInfo}\n`)
       if (pmThreadId) {
-        void safeSend(pmThreadId, `🏭 **Builder survived restart** ℹ️\nBuilder \`${info.tmuxName}\`${ticketInfo} is still alive with completed work. Factory ticket state was lost — use \`peek_session("${info.tmuxName}")\` to inspect, then \`kill_session\` when done. Work remains on disk.`).catch(() => {})
+        void safeSend(pmThreadId, `🏭 \`${info.tmuxName}\` survived restart${ticketInfo} — peek/kill when ready`).catch(() => {})
       }
       continue
     }
@@ -926,7 +924,7 @@ export async function sweepOrphanedBuilders(): Promise<void> {
     logBuild(orphanState, 'orphaned')
 
     if (pmThreadId) {
-      void safeSend(pmThreadId, `🏭 **Orphaned builder killed** ⚠️\nBuilder \`${info.tmuxName}\`${ticketInfo} was still running after daemon restart. Killed for safety. Retry with factory_build if needed.`).catch(() => {})
+      void safeSend(pmThreadId, `🏭 \`${info.tmuxName}\`${ticketInfo} orphaned — killed on restart`).catch(() => {})
     }
     swept++
   }

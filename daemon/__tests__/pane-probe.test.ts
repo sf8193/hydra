@@ -764,6 +764,7 @@ describe('probeAllSessions', () => {
 
     transportMessages.length = 0
     await probeAllSessions(T0)
+    await flush()
 
     expect(transportMessages.length).toBe(1)
     expect(transportMessages[0].sessionId).toBe('s1')
@@ -788,6 +789,7 @@ describe('probeAllSessions', () => {
 
     sentMessages.length = 0
     await probeAllSessions(T0)
+    await flush()
 
     const pmMsg = sentMessages.find(m => m.channelId === 'pm-thread')
     expect(pmMsg).not.toBeUndefined()

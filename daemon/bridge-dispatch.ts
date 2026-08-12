@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, onBuilderDone, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
+import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -308,6 +308,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!callerInfo) throw new Error('session not found')
         if (callerInfo.isFactoryBuilder) throw new Error('factory builders cannot call factory_build (recursion guard)')
 
+        const fresh = args.fresh === true
+
         const result = factoryBuild({
           pmThreadId: callerInfo.threadId,
           pmSessionId: callerSessionId,
@@ -317,6 +319,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           reviewRounds: num(args.review_rounds),
           difficulty: difficulty as Difficulty | undefined,
           worktree: str(args.worktree),
+          fresh,
         })
 
         if ('error' in result) {
@@ -325,7 +328,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         const warningNote = result.warning ? ` Note: ${result.warning}` : ''
         return {
-          content: [{ type: 'text', text: `Factory build started. Ticket: ${result.ticket}. Builder is forking from your session — results will be delivered as notifications in your thread.${warningNote}` }],
+          content: [{ type: 'text', text: `Build started. Ticket: ${result.ticket}.${warningNote}` }],
         }
       }
 
@@ -399,6 +402,34 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           return { content: [{ type: 'text', text: 'No active factory builds.' }] }
         }
         return { content: [{ type: 'text', text: JSON.stringify(result.builds, null, 2) }] }
+      }
+
+      case 'factory_review': {
+        const name = str(args.name)
+        if (!name) throw new Error('name is required')
+        const topic = str(args.topic)
+        const reviewerModel = str(args.reviewer_model)
+        const reviewRounds = num(args.review_rounds) ?? 3
+        if (!callerSessionId) throw new Error('factory_review requires a session context')
+        const callerInfo = registry.get(callerSessionId)
+        if (!callerInfo) throw new Error('session not found')
+
+        const target = registry.findByName(name)
+        if (!target) throw new Error(`session "${name}" not found`)
+        if (!target.threadId) throw new Error(`session "${name}" has no thread`)
+        if (target.sessionId === callerSessionId) throw new Error('cannot review yourself')
+
+        await factoryReview({
+          callerThreadId: callerInfo.threadId,
+          targetSessionId: target.sessionId,
+          targetThreadId: target.threadId,
+          targetName: name,
+          topic,
+          reviewerModel,
+          reviewRounds,
+        })
+
+        return { content: [{ type: 'text', text: `Review started on ${name} (${reviewRounds} rounds). Results will be delivered to your thread.` }] }
       }
 
       case 'watch_pr': {

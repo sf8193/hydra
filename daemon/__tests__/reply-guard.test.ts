@@ -56,6 +56,10 @@ function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): Sessio
 
 beforeEach(() => {
   _resetReplyGuardForTesting()
+  // Clear persisted sessions loaded from disk — they pollute tmuxName lookups
+  for (const id of [...registry.sessions.keys()]) {
+    registry.delete(id)
+  }
 })
 
 afterEach(() => {
