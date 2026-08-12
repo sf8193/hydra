@@ -51,6 +51,11 @@ export const PROTOCOL_GUEST_DISALLOWED_BUILTINS = Object.freeze([
   'WebSearch', 'WebFetch', 'NotebookEdit', 'Agent', 'Write', 'Edit',
 ]) as readonly string[]
 
+/** Fuse disallowedTools into spawn opts for protocol guests (pattern #46). */
+export function withGuestToolScoping<T extends Record<string, unknown>>(opts: T): T & { disallowedTools: string[] } {
+  return { ...opts, disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS] }
+}
+
 export function defaultToolDescription(name: string): string {
   const tool = UNIVERSAL_TOOLS.find(t => t.name === name)
   if (!tool) throw new Error(`defaultToolDescription: unknown tool "${name}"`)

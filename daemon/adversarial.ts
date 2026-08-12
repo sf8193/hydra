@@ -16,7 +16,7 @@ import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
 import { getLenses, getLensesSync, type LensDef } from './lens-loader.js'
-import { PROTOCOL_GUEST_DISALLOWED_BUILTINS } from './bridge-tools.js'
+import { withGuestToolScoping } from './bridge-tools.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -366,10 +366,10 @@ export function onParticipantDisconnect(sessionId: string): void {
         state._resumeAttempts = (state._resumeAttempts ?? 0) + 1
         if (currentInfo) recordSessionDeath(currentInfo, 'critic exited (auto-resuming)')
         try {
-          const result = await doSpawnSession(currentInfo?.topic ?? `Review critic (${state.rounds} rounds)`, undefined, undefined, {
+          const result = await doSpawnSession(currentInfo?.topic ?? `Review critic (${state.rounds} rounds)`, undefined, undefined, withGuestToolScoping({
             joinThread: state.ownerThreadId, resumeFrom: claudeSessionId, model: state.model,
             disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
-          })
+          }))
           // Pre-queue notification so it flushes on bridge connect — prevents
           // Claude Code from exiting before receiving new input.
           transport.sendOrQueue(result.sessionId, {
@@ -722,7 +722,7 @@ async function spawnCritic(state: ReviewState): Promise<void> {
 
   const criticModel = state.engine === 'codex' ? state.model : (state.model ?? reviewModel())
   try {
-    const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
+    const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, withGuestToolScoping({
       trigger: 'review',
       joinThread: state.ownerThreadId,
       disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
@@ -730,7 +730,7 @@ async function spawnCritic(state: ReviewState): Promise<void> {
       ...(state.engine ? { engine: state.engine } : {}),
       promptBuilder: (sessionId, tmuxName) =>
         reviewCriticPrompt({ sessionId, tmuxName, rounds: state.rounds, threadId: state.ownerThreadId, topic: state.topic }),
-    })
+    }))
 
     state.criticSessionId = result.sessionId
     sessionToReview.set(result.sessionId, state.reviewId)

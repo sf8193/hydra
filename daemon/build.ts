@@ -17,7 +17,7 @@ import { createStateMachine } from './state-machine.js'
 import { buildModel } from '../shared/constants.js'
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
-import { PROTOCOL_GUEST_DISALLOWED_BUILTINS } from './bridge-tools.js'
+import { withGuestToolScoping } from './bridge-tools.js'
 
 export function taskToBranchName(task: string): string {
   const slug = task
@@ -378,10 +378,10 @@ export function onBuildParticipantDisconnect(sessionId: string): void {
         state._resumeAttempts = (state._resumeAttempts ?? 0) + 1
         if (currentInfo) recordSessionDeath(currentInfo, 'critic exited (auto-resuming)')
         try {
-          const result = await doSpawnSession(currentInfo?.topic ?? `Build critic (${state.rounds} rounds)`, undefined, undefined, {
+          const result = await doSpawnSession(currentInfo?.topic ?? `Build critic (${state.rounds} rounds)`, undefined, undefined, withGuestToolScoping({
             joinThread: state.ownerThreadId, resumeFrom: claudeSessionId, model: state.model,
             disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
-          })
+          }))
           // Pre-queue notification so it flushes on bridge connect — prevents
           // Claude Code from exiting before receiving new input.
           transport.sendOrQueue(result.sessionId, {
@@ -615,7 +615,7 @@ async function spawnCritic(state: BuildState, implementationText: string): Promi
 
   const criticModel = state.engine === 'codex' ? state.model : (state.model ?? buildModel())
   try {
-    const result = await doSpawnSession(`Build CRITIC (${state.rounds} rounds)`, undefined, undefined, {
+    const result = await doSpawnSession(`Build CRITIC (${state.rounds} rounds)`, undefined, undefined, withGuestToolScoping({
       trigger: 'build',
       joinThread: state.ownerThreadId,
       disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
@@ -623,7 +623,7 @@ async function spawnCritic(state: BuildState, implementationText: string): Promi
       ...(state.engine ? { engine: state.engine } : {}),
       promptBuilder: (sessionId, tmuxName) =>
         buildCriticPrompt({ sessionId, tmuxName, rounds: state.rounds, threadId: state.ownerThreadId, task: state.task, ownerCwd, implementationText }),
-    })
+    }))
 
     state.criticSessionId = result.sessionId
     sessionToBuild.set(result.sessionId, state.buildId)
