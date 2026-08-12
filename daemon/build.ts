@@ -17,7 +17,6 @@ import { createStateMachine } from './state-machine.js'
 import { buildModel } from '../shared/constants.js'
 import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
-import { PROTOCOL_GUEST_DISALLOWED_BUILTINS } from './bridge-tools.js'
 
 export function taskToBranchName(task: string): string {
   const slug = task
@@ -380,7 +379,6 @@ export function onBuildParticipantDisconnect(sessionId: string): void {
         try {
           const result = await doSpawnSession(currentInfo?.topic ?? `Build critic (${state.rounds} rounds)`, undefined, undefined, {
             joinThread: state.ownerThreadId, resumeFrom: claudeSessionId, model: state.model,
-            disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
           })
           // Pre-queue notification so it flushes on bridge connect — prevents
           // Claude Code from exiting before receiving new input.
@@ -618,7 +616,6 @@ async function spawnCritic(state: BuildState, implementationText: string): Promi
     const result = await doSpawnSession(`Build CRITIC (${state.rounds} rounds)`, undefined, undefined, {
       trigger: 'build',
       joinThread: state.ownerThreadId,
-      disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
       ...(criticModel ? { model: criticModel } : {}),
       ...(state.engine ? { engine: state.engine } : {}),
       promptBuilder: (sessionId, tmuxName) =>

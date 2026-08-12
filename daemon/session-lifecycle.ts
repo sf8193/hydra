@@ -737,19 +737,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       shq(prompt),
     ].join(' ')
   } else if (isResume) {
-    // Thread disallowedTools through resume so an auto-resumed protocol critic
-    // keeps its reduced built-in set — otherwise CC re-grants the built-ins on
-    // resume, the tool count climbs back over the deferral threshold, and
-    // `advance` becomes uncallable again (the exact Population-A failure).
-    const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
     claudeArgs = [
       `claude`,
       `--resume ${shq(opts!.resumeFrom!)}`,
       `--model ${shq(model)}`,
       `--channels ${shq(channelFlag)}`,
       `--dangerously-skip-permissions`,
-    ].join(' ') + disallowed
-    if (disallowed) process.stderr.write(`daemon: disallowedTools flag (resume): ${disallowed}\n`)
+    ].join(' ')
   } else {
     assignedClaudeSessionId = randomUUID()
     const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
