@@ -42,6 +42,12 @@ Session management:
   hydra clear-key <key>                Clear a stuck idempotency key
   hydra check-key <key>                Check if an idempotency key exists
 
+Factory:
+  hydra factory list                   List all active factory builds
+  hydra factory status <ticket>        Show a build's phase, spec, retries
+  hydra factory accept <ticket>        Accept a build (--allow-unreviewed to bypass review gate)
+  hydra factory abandon <ticket>       Abandon a build
+
 Platform: slack | discord (required for lifecycle commands)
 
 Spawn options:
@@ -50,6 +56,7 @@ Spawn options:
   --model <id|alias>                   Model ID or alias (see below)
   --channel <id>                       Target channel for the spawned thread
   --message <id>                       Create thread on this message (requires --channel)
+  --read-thread                        Tell the session to read --channel history first (requires --channel)
   --quiet                              Suppress spawn announcement in chat
   --ephemeral                          Auto-kill on [done], skip death visuals
 
@@ -126,6 +133,7 @@ async function main(): Promise<void> {
       let message: string | undefined
       let quiet = false
       let ephemeral = false
+      let readThread = false
       let model: string | undefined
       const promptParts: string[] = []
 
@@ -142,6 +150,8 @@ async function main(): Promise<void> {
           quiet = true
         } else if (filtered[i] === '--ephemeral') {
           ephemeral = true
+        } else if (filtered[i] === '--read-thread') {
+          readThread = true
         } else if (filtered[i] === '--model' && i + 1 < filtered.length) {
           model = filtered[++i]
         } else {
@@ -149,7 +159,7 @@ async function main(): Promise<void> {
         }
       }
 
-      const prompt = promptParts.join(' ')
+      let prompt = promptParts.join(' ')
       if (!prompt) {
         console.error('error: prompt is required')
         process.exit(1)
@@ -165,6 +175,13 @@ async function main(): Promise<void> {
       if (message && !channel) {
         console.error('error: --message requires --channel')
         process.exit(1)
+      }
+      if (readThread && !channel) {
+        console.error('error: --read-thread requires --channel (the thread/channel to read)')
+        process.exit(1)
+      }
+      if (readThread && channel) {
+        prompt = `Read the recent history in this channel for context: fetch_messages(channel="${channel}", limit=50). Then continue with the task below.\n\n${prompt}`
       }
       const response = await sendRequest(socketPath, {
         type: 'cli',
@@ -239,6 +256,28 @@ async function main(): Promise<void> {
       }
       const response = await sendRequest(socketPath, {
         type: 'cli', command: 'check-key', id: randomUUID(), params: { key },
+      })
+      printResponse(response, json)
+      break
+    }
+
+    case 'factory': {
+      const sub = filtered[1]
+      // First non-flag arg after the subcommand is the ticket (order-independent vs flags).
+      const ticket = filtered.slice(2).find(a => !a.startsWith('--'))
+      const validSubs = ['list', 'status', 'accept', 'abandon']
+      if (!sub || !validSubs.includes(sub)) {
+        console.error('error: usage: hydra factory <list|status|accept|abandon> [ticket]')
+        process.exit(1)
+      }
+      if (sub !== 'list' && !ticket) {
+        console.error(`error: hydra factory ${sub} requires a ticket`)
+        process.exit(1)
+      }
+      const allowUnreviewed = filtered.includes('--allow-unreviewed')
+      const response = await sendRequest(socketPath, {
+        type: 'cli', command: 'factory', id: randomUUID(),
+        params: { sub, ...(ticket && { ticket }), ...(allowUnreviewed && { allowUnreviewed }) },
       })
       printResponse(response, json)
       break

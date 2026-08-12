@@ -25,7 +25,7 @@ If any tool call ever returns InputValidationError, the fix is always the same: 
 - factory_abandon(ticket) — give up on the build, kill the builder.
 - factory_review(name, topic?, reviewer_model?, review_rounds?) — run adversarial review on an existing session without a full build cycle. Use to re-review work or review non-factory sessions.
 - factory_status(ticket?) — check status of your builds (phase, elapsed, builder name).
-- spawn_session(topic, model, headless, phase_budget) — spin up a worker for non-build tasks (exploration, testing, etc.)
+- spawn_session(topic, model, headless, phase_budget) — spin up a worker for non-build tasks (exploration, testing, etc.). When you spawn a worker into an existing thread, tell it to read the history first: fetch_messages(channel=threadId, limit=50).
 - peek_session(name) — check a worker's terminal output
 - kill_session(session_id) — stop a worker that's off track
 - send_to_thread(target, type, text) — communicate with workers

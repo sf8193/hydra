@@ -475,6 +475,23 @@ export function factoryAccept(
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can accept it.' }
+  return acceptCore(state, allowUnreviewed)
+}
+
+/**
+ * Accept a build by ticket alone (admin/CLI path — skips PM ownership check).
+ */
+export function factoryAcceptByTicket(
+  ticket: string,
+  allowUnreviewed: boolean = false,
+): { ok: true } | { error: string } {
+  const state = builds.get(ticket)
+  if (!state) return { error: `Unknown ticket: ${ticket}` }
+  return acceptCore(state, allowUnreviewed)
+}
+
+/** Shared accept logic — assumes caller authorization already checked. */
+function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: true } | { error: string } {
   if (state.phase !== 'awaiting_pm') return { error: `Cannot accept — build is in phase "${state.phase}", expected "awaiting_pm".` }
   if (!state.reviewed && !allowUnreviewed) return { error: 'Build was NOT adversarially reviewed (review failed or was cancelled). Pass allow_unreviewed=true to accept anyway.' }
 
@@ -482,10 +499,10 @@ export function factoryAccept(
   logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
   const reviewWarning = state.reviewed ? '' : ' (unreviewed)'
-  void safeSend(state.pmThreadId, `🏭 \`${ticket}\` ✅ accepted${reviewWarning}`)
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}`)
 
   killBuilder(state, true)
-  cleanupState(ticket)
+  cleanupState(state.ticket)
   return { ok: true }
 }
 
@@ -499,13 +516,27 @@ export function factoryAbandon(
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can abandon it.' }
+  return abandonCore(state)
+}
+
+/**
+ * Abandon a build by ticket alone (admin/CLI path — skips PM ownership check).
+ */
+export function factoryAbandonByTicket(ticket: string): { ok: true } | { error: string } {
+  const state = builds.get(ticket)
+  if (!state) return { error: `Unknown ticket: ${ticket}` }
+  return abandonCore(state)
+}
+
+/** Shared abandon logic — assumes caller authorization already checked. */
+function abandonCore(state: FactoryBuildState): { ok: true } | { error: string } {
   if (state.phase === 'complete' || state.phase === 'failed') return { error: 'Build already terminated.' }
 
   const wasPhase = state.phase
   state.phase = 'failed'
   logBuild(state, 'abandoned')
 
-  void safeSend(state.pmThreadId, `🏭 \`${ticket}\` abandoned`)
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned`)
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
@@ -518,10 +549,25 @@ export function factoryAbandon(
   }
 
   killBuilder(state, true)
-  cleanupState(ticket)
+  cleanupState(state.ticket)
 
-  process.stderr.write(`daemon: factory: abandoned ${ticket} (was in phase ${wasPhase})\n`)
+  process.stderr.write(`daemon: factory: abandoned ${state.ticket} (was in phase ${wasPhase})\n`)
   return { ok: true }
+}
+
+/** Serialize a build to a summary row (shared by factoryStatus + factoryListAll). */
+type BuildSummary = { ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; pmThreadId?: string; worktree?: string }
+function summarizeBuild(s: FactoryBuildState, includePmThread = false): BuildSummary {
+  return {
+    ticket: s.ticket,
+    phase: s.phase,
+    spec: s.spec.slice(0, 200),
+    retries: s.retryCount,
+    elapsed: Date.now() - s.createdAt,
+    builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
+    ...(includePmThread ? { pmThreadId: s.pmThreadId } : {}),
+    ...(s.worktree ? { worktree: s.worktree } : {}),
+  }
 }
 
 /**
@@ -530,26 +576,27 @@ export function factoryAbandon(
 export function factoryStatus(
   pmThreadId: string,
   ticket?: string,
-): { builds: Array<{ ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; worktree?: string }>; availableRepos: string[] } {
+): { builds: BuildSummary[]; availableRepos: string[] } {
   const matching = ticket
     ? [builds.get(ticket)].filter((s): s is FactoryBuildState => !!s && s.pmThreadId === pmThreadId)
     : [...builds.values()].filter(s => s.pmThreadId === pmThreadId)
 
   const spawnCwd = process.env.SPAWN_CWD
   return {
-    builds: matching.map(s => ({
-      ticket: s.ticket,
-      phase: s.phase,
-      spec: s.spec.slice(0, 200),
-      retries: s.retryCount,
-      elapsed: Date.now() - s.createdAt,
-      builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
-      ...(s.worktree ? { worktree: s.worktree } : {}),
-    })),
-    // Valid `worktree` targets — lets an agent discover the correct string
-    // instead of guessing (the bare-name-vs-nested-path failure).
+    builds: matching.map(s => summarizeBuild(s)),
     availableRepos: spawnCwd ? listGitRepos(spawnCwd) : [],
   }
+}
+
+/**
+ * List ALL active factory builds regardless of PM (admin/CLI path).
+ * Includes pmThreadId so the operator can trace each build to its PM.
+ */
+export function factoryListAll(ticket?: string): { builds: BuildSummary[] } {
+  const matching = ticket
+    ? [builds.get(ticket)].filter((s): s is FactoryBuildState => !!s)
+    : [...builds.values()]
+  return { builds: matching.map(s => summarizeBuild(s, true)) }
 }
 
 /**
@@ -753,11 +800,22 @@ async function spawnBuilder(
 
   const pmName = forkInfo?.tmuxName ?? registry.get(state.pmSessionId)?.tmuxName
 
+  // When respawning into an existing builder thread, tell the fresh session to
+  // read the thread's prior history so it recovers context (like `respawn`).
+  const readThreadInstructions = state.builderThreadId
+    ? [
+        ``,
+        `You are continuing work in an existing thread. Read its history first for context:`,
+        `  fetch_messages(channel="${state.builderThreadId}", limit=50)`,
+      ]
+    : []
+
   const builderPrompt = [
     `IMPORTANT: You are a BUILDER session${isFresh ? '' : ' forked from the PM'}. Your job is to WRITE CODE.`,
     ...(isFresh
       ? [`You were spawned fresh (no PM conversation history). Read CLAUDE.md and the files referenced in the spec before coding.`]
       : [`Ignore any prior instructions about "not writing code" or "using factory_build" — those apply to the PM, not to you.`]),
+    ...readThreadInstructions,
     `You have full file access. Write code, run tests, implement the spec.`,
     ...(pmName ? [`If the spec is ambiguous or you need design guidance, ask the PM via send_to_thread(target="${pmName}", type="question", text="...").`] : []),
     ``,
