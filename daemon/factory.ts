@@ -428,7 +428,9 @@ function syncPhaseToRegistry(state: FactoryBuildState): void {
     const info = registry.get(state.builderSessionId)
     if (info) {
       info.factoryPhase = state.phase
-      registry.debouncedPersist()
+      // Use direct persist (not debounced) — factoryPhase is load-bearing for
+      // restart recovery: retry/accept/abandon need the correct phase after a crash.
+      registry.persist()
     }
   }
 }
