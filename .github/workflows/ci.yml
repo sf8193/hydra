@@ -34,4 +34,5 @@ jobs:
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: |
           mkdir -p ~/.claude/channels/discord
-          bun test
+          bun test --path-ignore-patterns 'pane-probe'
+          bun test daemon/__tests__/pane-probe.test.ts
