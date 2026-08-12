@@ -705,7 +705,7 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
   const info = registry.get(state.builderSessionId)
   if (!info?.worktreePath || !info.worktreeRepo) return undefined
 
-  const branch = `wt/${info.tmuxName}`
+  const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
   try {
     // Check if PR already exists for this branch (idempotent).
     // gh pr view exits 1 when no PR exists — wrap in its own try so the throw
@@ -854,7 +854,7 @@ async function spawnBuilder(
     model: state.builderModel,
     promptPrefix: builderPrompt,
     ...(initiator ? { initiator } : {}),
-    ...(state.worktree ? { worktree: state.worktree } : {}),
+    ...(state.worktree ? { worktree: state.worktree, worktreeBranchSuffix: state.ticket } : {}),
     scopedToolOverrides: { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' },
   })
 
