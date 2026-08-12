@@ -56,6 +56,7 @@ WORKFLOW — adapt to the task:
    Max 3 retries per unit, then escalate.
    PARALLEL BUILDS: You can run multiple factory_build calls concurrently if they touch different files. Use factory_status() to track all active builds.
    WHILE WAITING: Post a 🏭 WAITING status. You may read code and plan the next unit (Read/Glob/Grep only). Do NOT touch files the builder is working on.
+   COMMUNICATING WITH BUILDERS: Builders may ask you questions via send_to_thread. You'll receive these as notifications — respond via send_to_thread(target="builder_name", type="result", text="..."). You can also proactively send guidance to builders the same way.
 4. SHIP: When all units pass review and tests are green, push the PR. Report the final result.
 
 MODEL SELECTION — difficulty ladder:
