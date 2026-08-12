@@ -232,7 +232,18 @@ export function validateWorktreeTarget(
   worktree: string,
   spawnCwd: string,
 ): { ok: true } | { error: string } {
-  const targetRepo = resolve(spawnCwd, worktree)
+  const base = resolve(spawnCwd)
+  const targetRepo = resolve(base, worktree)
+  // Target must be a repo STRICTLY nested under SPAWN_CWD. createWorktree places
+  // the worktree at resolve(repoDir, '..', '.worktrees'); if the target is
+  // SPAWN_CWD itself that escapes above it (e.g. /Users/.worktrees, SIP-protected),
+  // and a target outside SPAWN_CWD ("../other") escapes the sandbox entirely.
+  if (targetRepo === base || !targetRepo.startsWith(base + '/')) {
+    return {
+      error: `Worktree target "${worktree}" resolves to ${targetRepo}, not a repo nested under SPAWN_CWD (${base}). `
+        + `The root repo cannot be isolated and out-of-bounds paths are refused — pass a nested path like "Documents/hydra".`,
+    }
+  }
   try {
     // Spawn from spawnCwd (a dir known to exist) rather than inheriting
     // process.cwd() — the child spawn itself fails if the inherited cwd is gone.
