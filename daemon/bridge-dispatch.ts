@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, VALID_DIFFICULTIES, type Difficulty } from './factory.js'
+import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -308,6 +308,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!callerInfo) throw new Error('session not found')
         if (callerInfo.isFactoryBuilder) throw new Error('factory builders cannot call factory_build (recursion guard)')
 
+        const fresh = args.fresh === true
+
         const result = factoryBuild({
           pmThreadId: callerInfo.threadId,
           pmSessionId: callerSessionId,
@@ -317,6 +319,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           reviewRounds: num(args.review_rounds),
           difficulty: difficulty as Difficulty | undefined,
           worktree: str(args.worktree),
+          fresh,
         })
 
         if ('error' in result) {
@@ -325,7 +328,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         const warningNote = result.warning ? ` Note: ${result.warning}` : ''
         return {
-          content: [{ type: 'text', text: `Factory build started. Ticket: ${result.ticket}. Builder is forking from your session — results will be delivered as notifications in your thread.${warningNote}` }],
+          content: [{ type: 'text', text: `Build started. Ticket: ${result.ticket}.${warningNote}` }],
         }
       }
 
@@ -340,7 +343,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if ('error' in result) {
           return { content: [{ type: 'text', text: `Factory retry failed: ${result.error}` }], isError: true }
         }
-        return { content: [{ type: 'text', text: `Retry instructions sent to builder. Ticket: ${ticket}. Waiting for [done].` }] }
+        return { content: [{ type: 'text', text: `Retry instructions sent to builder. Ticket: ${ticket}. Waiting for factory_done.` }] }
       }
 
       case 'factory_accept': {
@@ -368,6 +371,26 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         return { content: [{ type: 'text', text: `Build abandoned. Ticket: ${ticket}. Builder killed.` }] }
       }
 
+      case 'factory_done': {
+        if (!callerSessionId) throw new Error('factory_done requires a session context')
+        const callerInfo = registry.get(callerSessionId)
+        if (!callerInfo?.isFactoryBuilder) throw new Error('factory_done can only be called by factory builders')
+        if (!Array.isArray(args.files_changed)) throw new Error('files_changed must be an array of strings')
+        if (typeof args.test_results !== 'string') throw new Error('test_results must be a string')
+        const doneArgs: FactoryDoneArgs = {
+          files_changed: (args.files_changed as unknown[]).filter((f): f is string => typeof f === 'string'),
+          test_results: args.test_results as string,
+          rationale: typeof args.rationale === 'string' ? args.rationale : undefined,
+          known_issues: typeof args.known_issues === 'string' ? args.known_issues : undefined,
+          branch: typeof args.branch === 'string' ? args.branch : undefined,
+        }
+        const result = onBuilderDone(callerSessionId, doneArgs)
+        if ('error' in result) {
+          return { content: [{ type: 'text', text: result.error }], isError: true }
+        }
+        return { content: [{ type: 'text', text: 'Build complete. Adversarial review will start shortly — you will defend your implementation as the review owner.' }] }
+      }
+
       case 'factory_status': {
         const ticket = str(args.ticket)
         if (!callerSessionId) throw new Error('factory_status requires a session context')
@@ -379,6 +402,34 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           return { content: [{ type: 'text', text: 'No active factory builds.' }] }
         }
         return { content: [{ type: 'text', text: JSON.stringify(result.builds, null, 2) }] }
+      }
+
+      case 'factory_review': {
+        const name = str(args.name)
+        if (!name) throw new Error('name is required')
+        const topic = str(args.topic)
+        const reviewerModel = str(args.reviewer_model)
+        const reviewRounds = num(args.review_rounds) ?? 3
+        if (!callerSessionId) throw new Error('factory_review requires a session context')
+        const callerInfo = registry.get(callerSessionId)
+        if (!callerInfo) throw new Error('session not found')
+
+        const target = registry.findByName(name)
+        if (!target) throw new Error(`session "${name}" not found`)
+        if (!target.threadId) throw new Error(`session "${name}" has no thread`)
+        if (target.sessionId === callerSessionId) throw new Error('cannot review yourself')
+
+        await factoryReview({
+          callerThreadId: callerInfo.threadId,
+          targetSessionId: target.sessionId,
+          targetThreadId: target.threadId,
+          targetName: name,
+          topic,
+          reviewerModel,
+          reviewRounds,
+        })
+
+        return { content: [{ type: 'text', text: `Review started on ${name} (${reviewRounds} rounds). Results will be delivered to your thread.` }] }
       }
 
       case 'watch_pr': {
@@ -455,6 +506,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const msg = err instanceof Error ? err.message : String(err)
           throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
         }
+
+        // Deliver to the target's Claude session so it actually receives the message
+        const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'
+        const replyInstruction = msgType === 'question'
+          ? `\nRespond via send_to_thread(target="${senderName}", type="result", text="...").`
+          : ''
+        transport.sendOrQueue(targetSession.sessionId, {
+          type: 'notification',
+          content: `[${msgType} from ${senderName}] ${text}${replyInstruction}`,
+          meta: {
+            chat_id: threadId,
+            message_id: sentIds[0] ?? '',
+            user: senderName,
+            user_id: 'session',
+            ts: new Date().toISOString(),
+          },
+        })
 
         const result = sentIds.length === 1
           ? `sent to ${target} (id: ${sentIds[0]})`

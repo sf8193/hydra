@@ -11,7 +11,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept, handleRecoverIntercept } from './commands/global.js'
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
-import { handleThreadKillIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
+import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
@@ -23,7 +23,7 @@ import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/d
 import { getDesignByThread, handleDesignAnswer } from './design.js'
 import { isThreadOccupied } from './protocol-registry.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept } from './commands/status.js'
+import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept, handleHistoryIntercept } from './commands/status.js'
 import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
@@ -48,6 +48,7 @@ const COMMAND_PREFIXES = [
   '/recover', 'recover',
   '/commands', 'commands', '/help', 'help',
   '/usage', 'usage',
+  '/history', 'history',
 ]
 const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
@@ -407,6 +408,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
+    const historyMatch = msg.content.match(/^(?:\/history|history)\s*$/i)
+    if (historyMatch) {
+      void handleHistoryIntercept(msg)
+      return
+    }
+
     const reconnectMatch = msg.content.match(/^(?:\/reconnect|reconnect)\s*$/i)
     if (reconnectMatch) {
       void handleReconnectIntercept(msg)
@@ -428,6 +435,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const threadKillMatch = msg.content.match(/^(?:kill|\/kill)\s*$/i)
     if (threadKillMatch && msg.isThread) {
       void handleThreadKillIntercept(msg)
+      return
+    }
+
+    const destroyMatch = msg.content.match(/^(?:destroy|\/destroy)\s*$/i)
+    if (destroyMatch && msg.isThread) {
+      void handleDestroyIntercept(msg)
       return
     }
 
@@ -495,6 +508,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const forkModelMatch = msg.content.match(FORK_MODEL_RE)
       if (forkModelMatch) {
         void handleForkIntercept(msg, forkModelMatch[2].trim(), resolveModelAlias(forkModelMatch[1]))
+        return
+      }
+
+      const forkEphMatch = msg.content.match(/^(?:fork-e|\/fork-e)(?::\s*([\s\S]+))?$/i)
+      if (forkEphMatch) {
+        void handleForkIntercept(msg, forkEphMatch[1]?.trim(), undefined, { ephemeral: true })
         return
       }
 

@@ -8,7 +8,8 @@
 // Injectable seams: capturePaneTail, getWindowActivity, sendKeys, readFile
 // are replaceable for testing.
 
-import { execSync } from 'child_process'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -17,6 +18,9 @@ import type { SessionInfo } from './sessions.js'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { loadAccess } from './access.js'
 import { safeSend } from './util.js'
+import { transport } from './bridge-transport.js'
+
+const execFileAsync = promisify(execFile)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,46 +59,53 @@ const MAX_NOTIFICATIONS = 3
 const PANE_TAIL_LINES = 8
 const MIN_IDLE_BEFORE_PROBE_S = 30
 const INTERCEPT_GRACE_MS = 5 * 60_000
+const BUILDER_IDLE_NUDGE_S = 90
+const BUILDER_MAX_NUDGES = 3
 
 // ---------------------------------------------------------------------------
 // Injectable seams (tests replace these)
 // ---------------------------------------------------------------------------
 
 export type PaneProbeIO = {
-  capturePaneTail: (tmuxName: string, lines: number) => string | null
-  getWindowActivity: (tmuxName: string) => number | null
-  sendKeys: (tmuxName: string, ...keys: string[]) => boolean
+  capturePaneTail: (tmuxName: string, lines: number) => Promise<string | null>
+  getWindowActivity: (tmuxName: string) => Promise<number | null>
+  sendKeys: (tmuxName: string, ...keys: string[]) => Promise<boolean>
   readFile: (path: string) => string | null
   now: () => number
+  safeSend: (channelId: string, text: string) => Promise<string[]>
+  react: (channelId: string, messageId: string, emoji: string) => Promise<void>
+  getSessions: () => Iterable<SessionInfo>
+  transportHas: (sessionId: string) => boolean
+  transportSendOrQueue: (sessionId: string, msg: any) => void
+  loadAccess: () => { allowFrom: string[] }
+  platform: string
+  defaultChannel: string
 }
 
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
-
 const defaultIO: PaneProbeIO = {
-  capturePaneTail(tmuxName, lines) {
+  async capturePaneTail(tmuxName, lines) {
     try {
-      return execSync(
-        `tmux capture-pane -t ${shq(tmuxName)} -p -S -${lines}`,
-        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
-      ).trimEnd()
+      const { stdout } = await execFileAsync(
+        'tmux', ['capture-pane', '-t', tmuxName, '-p', '-S', `-${lines}`],
+        { timeout: 5000 },
+      )
+      return stdout.trimEnd()
     } catch { return null }
   },
 
-  getWindowActivity(tmuxName) {
+  async getWindowActivity(tmuxName) {
     try {
-      const raw = execSync(
-        `tmux display -t ${shq(tmuxName)} -p '#{window_activity}'`,
-        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 },
-      ).trim()
-      return parseInt(raw, 10) || null
+      const { stdout } = await execFileAsync(
+        'tmux', ['display', '-t', tmuxName, '-p', '#{window_activity}'],
+        { timeout: 2000 },
+      )
+      return parseInt(stdout.trim(), 10) || null
     } catch { return null }
   },
 
-  sendKeys(tmuxName, ...keys) {
+  async sendKeys(tmuxName, ...keys) {
     try {
-      execSync(['tmux', 'send-keys', '-t', tmuxName, ...keys].map(shq).join(' '), {
-        stdio: 'pipe', timeout: 3000,
-      })
+      await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys], { timeout: 3000 })
       return true
     } catch { return false }
   },
@@ -104,6 +115,14 @@ const defaultIO: PaneProbeIO = {
   },
 
   now: () => Date.now(),
+  safeSend: (channelId, text) => safeSend(channelId, text),
+  react: (channelId, messageId, emoji) => gateway.react(channelId, messageId, emoji).catch(() => {}),
+  getSessions: () => registry.values(),
+  transportHas: (sessionId) => transport.has(sessionId),
+  transportSendOrQueue: (sessionId, msg) => transport.sendOrQueue(sessionId, msg),
+  loadAccess: () => loadAccess(),
+  platform: PLATFORM,
+  defaultChannel: DEFAULT_SESSION_CHANNEL,
 }
 
 let io: PaneProbeIO = defaultIO
@@ -259,14 +278,14 @@ function isPlanModeOnScreen(tail: string): boolean {
     .filter(re => re.test(tail)).length >= 2
 }
 
-function confirmAndApprovePlan(tmuxName: string): boolean {
-  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+async function confirmAndApprovePlan(tmuxName: string): Promise<boolean> {
+  const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail || !isPlanModeOnScreen(tail)) return false
   return io.sendKeys(tmuxName, 'Enter')
 }
 
-function confirmAndRejectPlan(tmuxName: string): boolean {
-  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+async function confirmAndRejectPlan(tmuxName: string): Promise<boolean> {
+  const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail || !isPlanModeOnScreen(tail)) return false
   return io.sendKeys(tmuxName, 'Down', 'Down', 'Enter')
 }
@@ -276,9 +295,9 @@ function autoLoginEnabled(): boolean {
   return v === '1' || v === 'true' || v === 'claude'
 }
 
-function confirmAndSendLogin(tmuxName: string): boolean {
+async function confirmAndSendLogin(tmuxName: string): Promise<boolean> {
   if (!autoLoginEnabled()) return false
-  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (isResumePromptOnScreen(tail)) return false
   const blocked = LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
@@ -288,9 +307,9 @@ function confirmAndSendLogin(tmuxName: string): boolean {
   return io.sendKeys(tmuxName, '/login', 'Enter')
 }
 
-function confirmAndDismissLoginSuccess(tmuxName: string): boolean {
+async function confirmAndDismissLoginSuccess(tmuxName: string): Promise<boolean> {
   if (!autoLoginEnabled()) return false
-  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (!LOGIN_SUCCESS_RE.test(tail)) return false
   return io.sendKeys(tmuxName, 'Enter')
@@ -301,16 +320,16 @@ function isResumePromptOnScreen(tail: string): boolean {
     .filter(re => re.test(tail)).length >= 2
 }
 
-function confirmAndDismissResumePrompt(tmuxName: string): boolean {
+async function confirmAndDismissResumePrompt(tmuxName: string): Promise<boolean> {
   if (!autoLoginEnabled()) return false
-  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+  const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail || !isResumePromptOnScreen(tail)) return false
   // CC pre-selects option 1 ("Resume from summary"). Enter confirms it.
   return io.sendKeys(tmuxName, 'Enter')
 }
 
-function extractOauthUrl(tmuxName: string): string | null {
-  const tail = io.capturePaneTail(tmuxName, PANE_TAIL_LINES * 4)
+async function extractOauthUrl(tmuxName: string): Promise<string | null> {
+  const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES * 4)
   if (!tail) return null
   const match = tail.match(OAUTH_URL_RE)
   return match?.[0] ?? null
@@ -342,7 +361,7 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
     }
     lines.push(`> Type **approve** to proceed or **reject** to cancel.`)
 
-    await safeSend(channelId, lines.join('\n'))
+    await io.safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now
     entry.notifyCount++
 
@@ -352,24 +371,24 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
       handler: async (content, replyChannelId, messageId) => {
         const lower = content.trim().toLowerCase()
         if (lower === 'approve') {
-          const ok = confirmAndApprovePlan(name)
-          void gateway.react(replyChannelId, messageId, ok ? '✅' : '❌').catch(() => {})
+          const ok = await confirmAndApprovePlan(name)
+          void io.react(replyChannelId, messageId, ok ? '✅' : '❌')
           if (ok) {
-            void safeSend(channelId, `> ▶️ **${name}** — plan approved, resuming.`)
+            void io.safeSend(channelId, `> ▶️ **${name}** — plan approved, resuming.`)
             threadIntercepts.delete(entry.threadId)
             probeEntries.delete(name)
           } else {
-            void safeSend(channelId, `> ❌ **${name}** — plan prompt no longer on screen. May have already resumed.`)
+            void io.safeSend(channelId, `> ❌ **${name}** — plan prompt no longer on screen. May have already resumed.`)
             threadIntercepts.delete(entry.threadId)
             // Keep probeEntry as a notifyCount tombstone — the intercept is gone so
             // no commands are swallowed, but the count survives so a re-detection
             // on the next probe cycle respects MAX_NOTIFICATIONS.
           }
         } else if (lower === 'reject') {
-          const ok = confirmAndRejectPlan(name)
-          void gateway.react(replyChannelId, messageId, ok ? '✅' : '❌').catch(() => {})
+          const ok = await confirmAndRejectPlan(name)
+          void io.react(replyChannelId, messageId, ok ? '✅' : '❌')
           if (ok) {
-            void safeSend(channelId, `> ⏹️ **${name}** — plan rejected.`)
+            void io.safeSend(channelId, `> ⏹️ **${name}** — plan rejected.`)
           }
           threadIntercepts.delete(entry.threadId)
           probeEntries.delete(name)
@@ -390,14 +409,14 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
   try {
     const name = entry.tmuxName
     const stage = entry.state.loginStage
-    const access = loadAccess()
+    const access = io.loadAccess()
     const adminUserId = access.allowFrom[0]
 
     let channelId: string
     let mention = ''
 
     if (entry.isMain) {
-      channelId = DEFAULT_SESSION_CHANNEL
+      channelId = io.defaultChannel
       if (adminUserId) mention = `<@${adminUserId}> `
     } else {
       channelId = entry.threadId
@@ -412,7 +431,7 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
 
     if (stage === 'success') {
       // Login succeeded — dismiss with Enter
-      const dismissed = confirmAndDismissLoginSuccess(name)
+      const dismissed = await confirmAndDismissLoginSuccess(name)
       lines = [
         `> ✅ **${name}** — login successful.`,
         dismissed
@@ -421,13 +440,13 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
       ]
     } else if (stage === 'oauth_url') {
       // OAuth URL is showing — extract and post it
-      const url = entry.state.oauthUrl ?? extractOauthUrl(name)
+      const url = entry.state.oauthUrl ?? await extractOauthUrl(name)
       lines = [
         `> 🔗 ${mention}**${name}** — authenticate here:`,
         url ? `> ${url}` : `> _Could not extract URL. Run: \`tmux attach -t ${name}\`_`,
       ]
     } else if (stage === 'expiring') {
-      const loginSent = confirmAndSendLogin(name)
+      const loginSent = await confirmAndSendLogin(name)
       lines = [
         `> 🔑 ${mention}**${name}** — login expiring soon.`,
         loginSent
@@ -436,7 +455,7 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
       ]
     } else {
       // blocked — "Select login method:" prompt
-      const loginSent = confirmAndSendLogin(name)
+      const loginSent = await confirmAndSendLogin(name)
       lines = [
         `> ⚠️ ${mention}**${name}** needs authentication${entry.isMain ? ' — all message processing is paused' : ''}.`,
         loginSent
@@ -445,7 +464,7 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
       ]
     }
 
-    await safeSend(channelId, lines.join('\n'))
+    await io.safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now
     entry.notifyCount++
 
@@ -461,14 +480,14 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
 
   try {
     const name = entry.tmuxName
-    const channelId = entry.isMain ? DEFAULT_SESSION_CHANNEL : entry.threadId
+    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
 
     if (!channelId) {
       process.stderr.write(`daemon: pane-probe: ${name} stuck on resume prompt but no channel\n`)
       return
     }
 
-    const dismissed = confirmAndDismissResumePrompt(name)
+    const dismissed = await confirmAndDismissResumePrompt(name)
 
     const lines = dismissed
       ? [
@@ -479,7 +498,7 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
           `> Run: \`tmux attach -t ${name}\` and choose a resume option.`,
         ]
 
-    await safeSend(channelId, lines.join('\n'))
+    await io.safeSend(channelId, lines.join('\n'))
     entry.notifiedAt = now
     entry.notifyCount++
 
@@ -494,16 +513,65 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
 // ---------------------------------------------------------------------------
 
 function byteTmuxName(): string {
-  return process.env.BYTE_SESSION_NAME ?? `${PLATFORM}-byte`
+  return process.env.BYTE_SESSION_NAME ?? `${io.platform}-byte`
+}
+
+// ---------------------------------------------------------------------------
+// Idle builder nudge — detect factory builders that go idle without calling
+// factory_done. Sends a bridge notification (not sendKeys) so CC processes
+// it as input on its next turn.
+// ---------------------------------------------------------------------------
+
+const builderNudges = new Map<string, { count: number; lastNudge: number }>()
+
+const BUILDER_BRIDGELESS_ABORT_S = 120
+
+function nudgeIdleBuilder(info: SessionInfo, idleSec: number, now: number): void {
+  const key = info.sessionId
+  const connected = io.transportHas(info.sessionId)
+
+  if (!connected && idleSec >= BUILDER_BRIDGELESS_ABORT_S) {
+    process.stderr.write(`daemon: pane-probe: builder ${info.tmuxName} idle ${idleSec}s with no bridge — notifying PM thread\n`)
+    void io.safeSend(info.factoryPmThreadId ?? info.threadId, [
+      `> ⚠️ **${info.tmuxName}** — factory builder lost its bridge connection (idle ${idleSec}s, no MCP tools).`,
+      `> The builder cannot work without tools. Use \`factory_abandon("${info.factoryTicket}")\` to abort, or wait for it to reconnect.`,
+    ].join('\n'))
+    builderNudges.set(key, { count: BUILDER_MAX_NUDGES, lastNudge: now })
+    return
+  }
+
+  const entry = builderNudges.get(key) ?? { count: 0, lastNudge: 0 }
+  if (entry.count >= BUILDER_MAX_NUDGES) return
+  if (now - entry.lastNudge < NOTIFY_COOLDOWN_MS) return
+
+  entry.count++
+  entry.lastNudge = now
+  builderNudges.set(key, entry)
+
+  io.transportSendOrQueue(info.sessionId, {
+    type: 'notification',
+    content: `[system] You appear idle (${idleSec}s). You are a factory builder — your task is not complete until you call factory_done with your results. Continue working on the spec and call factory_done when done.`,
+    meta: { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+
+  process.stderr.write(`daemon: pane-probe: nudged idle builder ${info.tmuxName} (${entry.count}/${BUILDER_MAX_NUDGES}, idle ${idleSec}s)\n`)
+}
+
+export function clearBuilderNudge(sessionId: string): void {
+  builderNudges.delete(sessionId)
 }
 
 // Heartbeat: periodic log so total silence is distinguishable from "nothing stuck"
 let _probeCount = 0
 let _detectCount = 0
 let _lastHeartbeat = 0
+let probeRunning = false
 const HEARTBEAT_INTERVAL_MS = 6 * 60 * 60_000 // 6 hours
 
-export function probeAllSessions(now?: number): void {
+export async function probeAllSessions(now?: number): Promise<void> {
+  if (probeRunning) return
+  probeRunning = true
+  try {
   const t = now ?? io.now()
   const nowSec = Math.floor(t / 1000)
   _probeCount++
@@ -517,9 +585,9 @@ export function probeAllSessions(now?: number): void {
   }
 
   const targets: Array<{ tmuxName: string; threadId: string; isMain: boolean }> = []
-  targets.push({ tmuxName: byteTmuxName(), threadId: DEFAULT_SESSION_CHANNEL, isMain: true })
+  targets.push({ tmuxName: byteTmuxName(), threadId: io.defaultChannel, isMain: true })
 
-  for (const info of registry.values()) {
+  for (const info of io.getSessions()) {
     if (info.deadAt) continue
     if (info.engine === 'codex') continue
     targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
@@ -531,7 +599,7 @@ export function probeAllSessions(now?: number): void {
     // Idle gate: only probe sessions that have been idle for MIN_IDLE_BEFORE_PROBE_S.
     // Active sessions aren't stuck on a prompt — the scrollback may contain
     // historical plan-mode text but the session has moved on.
-    const lastActivitySec = io.getWindowActivity(target.tmuxName)
+    const lastActivitySec = await io.getWindowActivity(target.tmuxName)
     if (lastActivitySec === null) {
       clearState(key, 0) // tmux gone — force-clear, no grace
       continue
@@ -543,7 +611,7 @@ export function probeAllSessions(now?: number): void {
     }
 
     // Capture only the tail — where the active prompt renders
-    const tailText = io.capturePaneTail(target.tmuxName, PANE_TAIL_LINES)
+    const tailText = await io.capturePaneTail(target.tmuxName, PANE_TAIL_LINES)
     if (!tailText) {
       clearState(key, 0) // capture failed — force-clear
       continue
@@ -553,6 +621,14 @@ export function probeAllSessions(now?: number): void {
 
     if (!detected) {
       clearState(key, t) // no detection — grace period for pending intercepts
+      // Idle builder nudge: session is idle, no blocking prompt, but it's a
+      // factory builder that hasn't completed. Nudge via bridge notification.
+      if (idleSec >= BUILDER_IDLE_NUDGE_S) {
+        const info = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
+        if (info?.isFactoryBuilder && info.factoryPhase === 'building') {
+          nudgeIdleBuilder(info, idleSec, t)
+        }
+      }
       continue
     }
     _detectCount++
@@ -564,7 +640,8 @@ export function probeAllSessions(now?: number): void {
         existing.state.loginStage !== detected.loginStage
       if (stageChanged) {
         existing.state = detected
-        existing.notifiedAt = null // reset cooldown for new stage
+        existing.notifiedAt = null
+        existing.notifyCount = 0
         void notifyLoginRequired(existing, t)
         continue
       }
@@ -573,7 +650,8 @@ export function probeAllSessions(now?: number): void {
 
       if (existing.consecutive >= CONFIRM_PROBES) {
         const cooldownElapsed = !existing.notifiedAt || (t - existing.notifiedAt) >= NOTIFY_COOLDOWN_MS
-        const underLimit = existing.notifyCount < MAX_NOTIFICATIONS
+        const effectiveMax = (detected.kind === 'login_required' && detected.loginStage === 'success') ? 1 : MAX_NOTIFICATIONS
+        const underLimit = existing.notifyCount < effectiveMax
 
         if (cooldownElapsed && underLimit) {
           if (detected.kind === 'plan_mode') {
@@ -583,9 +661,9 @@ export function probeAllSessions(now?: number): void {
           } else {
             void notifyLoginRequired(existing, t)
           }
-        } else if (!underLimit && existing.notifyCount === MAX_NOTIFICATIONS) {
+        } else if (!underLimit && existing.notifyCount === effectiveMax) {
           existing.notifyCount++
-          process.stderr.write(`daemon: pane-probe: ${key} still stuck after ${MAX_NOTIFICATIONS} notifications, giving up\n`)
+          process.stderr.write(`daemon: pane-probe: ${key} still stuck after ${effectiveMax} notifications, giving up\n`)
         }
       }
     } else {
@@ -601,6 +679,9 @@ export function probeAllSessions(now?: number): void {
         notifying: false,
       })
     }
+  }
+  } finally {
+    probeRunning = false
   }
 }
 
@@ -630,6 +711,7 @@ function clearState(key: string, now: number): void {
 export function _resetForTesting(): void {
   probeEntries.clear()
   threadIntercepts.clear()
+  builderNudges.clear()
 }
 
 export const _CONFIRM_PROBES = CONFIRM_PROBES

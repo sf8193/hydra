@@ -394,7 +394,7 @@ export class ThreadRegistry {
   get size(): number { return this.threads.size }
 
   recordSpawn(threadId: string, opts: {
-    anchorMessageId?: string, threadUrl?: string, topic: string,
+    anchorMessageId?: string, anchorChannelId?: string, threadUrl?: string, topic: string,
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
@@ -405,6 +405,7 @@ export class ThreadRegistry {
       thread = {
         threadId,
         anchorMessageId: opts.anchorMessageId,
+        anchorChannelId: opts.anchorChannelId,
         threadUrl: opts.threadUrl,
         topic: opts.topic,
         respawnCount: opts.respawnCount,
@@ -418,6 +419,7 @@ export class ThreadRegistry {
     } else {
       thread.lastActive = now
       thread.threadUrl = opts.threadUrl || thread.threadUrl
+      if (opts.anchorChannelId) thread.anchorChannelId = opts.anchorChannelId
       if (opts.respawnCount > 0) thread.respawnCount = opts.respawnCount
     }
     thread.sessionHistory.push({
@@ -478,6 +480,7 @@ export class ThreadRegistry {
         threadId: session.threadId,
         anchorMessageId: session.anchorMessageId,
         anchorChannelId: session.anchorChannelId,
+        parentChannelId: session.anchorChannelId,
         threadUrl: session.threadUrl,
         topic: session.topic ?? '',
         description: session.description,
@@ -498,8 +501,18 @@ export class ThreadRegistry {
       created++
     }
 
-    if (created > 0) {
-      process.stderr.write(`daemon: created ${created} thread(s) from sessions\n`)
+    // Backfill parentChannelId from anchorChannelId for threads missing it
+    let backfilled = 0
+    for (const thread of this.threads.values()) {
+      if (!thread.parentChannelId && thread.anchorChannelId) {
+        thread.parentChannelId = thread.anchorChannelId
+        backfilled++
+      }
+    }
+
+    if (created > 0 || backfilled > 0) {
+      if (created > 0) process.stderr.write(`daemon: created ${created} thread(s) from sessions\n`)
+      if (backfilled > 0) process.stderr.write(`daemon: backfilled parentChannelId on ${backfilled} thread(s)\n`)
       this.persist()
     }
   }

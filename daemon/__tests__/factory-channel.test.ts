@@ -1,9 +1,18 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { resolveBuilderChannel } from '../factory.js'
 import { resolveForkSpawnCwd, buildWorktreePromptAppend } from '../session-lifecycle.js'
 
-// Suppress stderr logging during tests
-process.stderr.write = (() => true) as any
+// Save and restore process.stderr.write so we suppress noise without leaking
+let originalStderrWrite: typeof process.stderr.write
+
+beforeEach(() => {
+  originalStderrWrite = process.stderr.write
+  process.stderr.write = (() => true) as any
+})
+
+afterEach(() => {
+  process.stderr.write = originalStderrWrite
+})
 
 describe('resolveBuilderChannel', () => {
   test('uses anchorChannelId from registry when available', () => {

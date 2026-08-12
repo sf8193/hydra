@@ -123,6 +123,22 @@ describe('kill command', () => {
   })
 })
 
+describe("destroy command", () => {
+  const DESTROY_RE = /^(?:destroy|\/destroy)\s*$/i
+
+  test("matches destroy and /destroy", () => {
+    expect("destroy".match(DESTROY_RE)).not.toBeNull()
+    expect("/destroy".match(DESTROY_RE)).not.toBeNull()
+    expect("DESTROY".match(DESTROY_RE)).not.toBeNull()
+  })
+
+  test("does not match partial words or arguments", () => {
+    expect("destroyer".match(DESTROY_RE)).toBeNull()
+    expect("destroy all".match(DESTROY_RE)).toBeNull()
+    expect("undestroy".match(DESTROY_RE)).toBeNull()
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Status commands
 // ---------------------------------------------------------------------------

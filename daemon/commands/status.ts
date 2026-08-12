@@ -34,7 +34,7 @@ function listTimeBucket(lastActiveMs: number, now: number): string {
   return `${daysDiff} days ago`
 }
 
-function formatSessionEntry(e: SessionEntry): string {
+function formatSessionEntry(e: SessionEntry, indent?: string): string {
   const s = e.session
   const thread = threadRegistry.get(s.threadId)
   const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
@@ -46,14 +46,46 @@ function formatSessionEntry(e: SessionEntry): string {
   const url = thread?.threadUrl
   const title = url ? `[**${desc}**](${url})` : `**${desc}**`
   const provenanceEmoji = s.originType === 'handoff' ? '🤝' : s.originType === 'resurrect' ? '🫀' : '🍴'
-  const provenance = s.originFrom ? ` ← ${provenanceEmoji} (${s.originFrom})` : ''
+  const provenance = s.originFrom && !indent ? ` ← ${provenanceEmoji} (${s.originFrom})` : ''
+  const prefix = indent ?? ''
   const lines = [
-    `${emoji} \`${s.tmuxName}\`${badge}${provenance}`,
-    `- ${title}`,
-    `- ${ctx} (${msgCount} msgs · ${duration})`,
+    `${prefix}${emoji} \`${s.tmuxName}\`${badge}${provenance}`,
+    `${prefix}- ${title}`,
+    `${prefix}- ${ctx} (${msgCount} msgs · ${duration})`,
   ]
-  if (e.latestLine) lines.push(`- ${e.latestLine}`)
+  if (e.latestLine) lines.push(`${prefix}- ${e.latestLine}`)
   return lines.join('\n')
+}
+
+/** Render a list of sessions with parent-child grouping using tree connectors. */
+function renderGrouped(items: SessionEntry[]): string {
+  // Build name→entry lookup for parent resolution
+  const byName = new Map<string, SessionEntry>(items.map(e => [e.session.tmuxName, e]))
+  // Identify roots (no parent in the list) and children
+  const children = new Map<string, SessionEntry[]>() // parent tmuxName → children
+  const roots: SessionEntry[] = []
+  for (const e of items) {
+    const parentName = e.session.originFrom
+    if (parentName && byName.has(parentName)) {
+      const arr = children.get(parentName) ?? []
+      arr.push(e)
+      children.set(parentName, arr)
+    } else {
+      roots.push(e)
+    }
+  }
+
+  const parts: string[] = []
+  for (const root of roots) {
+    parts.push(formatSessionEntry(root))
+    const kids = children.get(root.session.tmuxName) ?? []
+    for (let i = 0; i < kids.length; i++) {
+      const isLast = i === kids.length - 1
+      const connector = isLast ? '└─ ' : '├─ '
+      parts.push(formatSessionEntry(kids[i], connector))
+    }
+  }
+  return parts.join('\n\n')
 }
 
 function buildListOutput(list: SessionEntry[], now: number): string {
@@ -66,7 +98,7 @@ function buildListOutput(list: SessionEntry[], now: number): string {
   }
   const sections: string[] = []
   for (const [label, items] of buckets) {
-    sections.push(`### ${label}\n\n${items.map(formatSessionEntry).join('\n\n')}`)
+    sections.push(`### ${label}\n\n${renderGrouped(items)}`)
   }
   return sections.join('\n')
 }
@@ -282,6 +314,42 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
 // ---------------------------------------------------------------------------
 // Protocols — show active review/build/design sessions
 // ---------------------------------------------------------------------------
+
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+
+  const now = Date.now()
+  // Collect threads that have at least one completed session
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, 10)
+
+  if (threads.length === 0) {
+    await safeSend(msg.channelId, '_No completed sessions in history._', { replyTo: msg.id })
+    return
+  }
+
+  const lines: string[] = ['**Recent Sessions**', '']
+  for (const t of threads) {
+    // Find the most recent completed session in this thread
+    const completed = t.sessionHistory.filter(h => h.endedAt).sort((a, b) => b.startedAt - a.startedAt)
+    if (!completed.length) continue
+    const last = completed[0]
+    const duration = last.endedAt && last.startedAt
+      ? formatDuration(last.endedAt - last.startedAt)
+      : '?'
+    const msgs = last.messageCount ?? 0
+    const model = last.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') ?? '?'
+    const desc = t.description || t.topic?.slice(0, 60) || 'untitled'
+    const url = t.threadUrl
+    const sessionLink = url ? `<${url}|${last.tmuxName}>` : last.tmuxName
+    const age = formatDuration(now - (last.endedAt ?? last.startedAt))
+    lines.push(`• ${sessionLink} — ${desc} · ${duration} · ${msgs} msgs · \`${model}\` · _${age} ago_`)
+  }
+
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
+}
 
 export async function handleProtocolsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})

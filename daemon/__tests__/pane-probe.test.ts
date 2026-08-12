@@ -1,59 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 
 // ---------------------------------------------------------------------------
-// Mock daemon modules before importing pane-probe
+// Test state — injected via PaneProbeIO, no mock.module needed
 // ---------------------------------------------------------------------------
 
 const sentMessages: Array<{ channelId: string; text: string }> = []
 const reactions: Array<{ channelId: string; messageId: string; emoji: string }> = []
-
-mock.module('../config.js', () => ({
-  gateway: {
-    send: async (channelId: string, text: string) => {
-      sentMessages.push({ channelId, text })
-      return { id: `msg-${sentMessages.length}` }
-    },
-    react: async (channelId: string, messageId: string, emoji: string) => {
-      reactions.push({ channelId, messageId, emoji })
-    },
-    platform: 'discord',
-    maxMessageLength: 2000,
-  },
-  PLATFORM: 'discord',
-  DEFAULT_SESSION_CHANNEL: 'root-channel-123',
-}))
-
-mock.module('../access.js', () => ({
-  loadAccess: () => ({
-    allowFrom: ['user-123'],
-    groups: {},
-  }),
-}))
-
 const registryEntries = new Map<string, any>()
-mock.module('../sessions.js', () => ({
-  registry: {
-    values: () => registryEntries.values(),
-    get: (id: string) => registryEntries.get(id),
-    set: (id: string, info: any) => registryEntries.set(id, info),
-    has: (id: string) => registryEntries.has(id),
-    delete: (id: string) => registryEntries.delete(id),
-    get size() { return registryEntries.size },
-    persist: () => {},
-    debouncedPersist: () => {},
-  },
-}))
-
-mock.module('../util.js', () => ({
-  safeSend: async (channelId: string, text: string) => {
-    sentMessages.push({ channelId, text })
-    return [`msg-${sentMessages.length}`]
-  },
-}))
-
-mock.module('../../discord-table-format.js', () => ({
-  formatDiscordTables: (t: string) => t,
-}))
+const transportMessages: Array<{ sessionId: string; msg: any }> = []
+const connectedSessions = new Set<string>()
 
 import {
   detectBlockingState,
@@ -202,13 +157,13 @@ const fileContents = new Map<string, string>()
 
 function makeTestIO(): PaneProbeIO {
   return {
-    capturePaneTail(tmuxName, _lines) {
+    async capturePaneTail(tmuxName, _lines) {
       return paneTails.get(tmuxName) ?? null
     },
-    getWindowActivity(tmuxName) {
+    async getWindowActivity(tmuxName) {
       return windowActivity.get(tmuxName) ?? null
     },
-    sendKeys(tmuxName, ...keys) {
+    async sendKeys(tmuxName, ...keys) {
       keysSent.push({ tmuxName, keys: keys.join(' ') })
       return true
     },
@@ -216,6 +171,19 @@ function makeTestIO(): PaneProbeIO {
       return fileContents.get(path) ?? null
     },
     now: () => T0,
+    async safeSend(channelId: string, text: string) {
+      sentMessages.push({ channelId, text })
+      return [`msg-${sentMessages.length}`]
+    },
+    async react(channelId: string, messageId: string, emoji: string) {
+      reactions.push({ channelId, messageId, emoji })
+    },
+    getSessions: () => registryEntries.values(),
+    transportHas: (sessionId: string) => connectedSessions.has(sessionId),
+    transportSendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
+    loadAccess: () => ({ allowFrom: ['user-123'] }),
+    platform: 'discord',
+    defaultChannel: 'root-channel-123',
   }
 }
 
@@ -347,7 +315,7 @@ describe('probeAllSessions', () => {
     _resetIO()
   })
 
-  it('does not probe active sessions (idle gate)', () => {
+  it('does not probe active sessions (idle gate)', async () => {
     addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
     paneTails.set('bloom', PLAN_MODE_TAIL)
     // Session was active 5 seconds ago — below MIN_IDLE_BEFORE_PROBE_S
@@ -355,7 +323,7 @@ describe('probeAllSessions', () => {
     // Also set byte to avoid byte probing
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
+    await probeAllSessions(T0)
     expect(sentMessages).toHaveLength(0)
   })
 
@@ -366,11 +334,11 @@ describe('probeAllSessions', () => {
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     // First probe — sets consecutive=1, no notification yet
-    probeAllSessions(T0)
+    await probeAllSessions(T0)
     expect(sentMessages).toHaveLength(0)
 
     // Second probe — confirms, sends notification
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     expect(sentMessages.length).toBeGreaterThan(0)
     expect(sentMessages[0].channelId).toBe('thread-1')
@@ -383,8 +351,8 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const intercept = getThreadIntercept('thread-1')
@@ -399,18 +367,18 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000) // notification fires
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000) // notification fires
     await flush()
     expect(getThreadIntercept('thread-1')).not.toBeUndefined()
 
     // Session resumes — but intercept survives grace period
     paneTails.set('bloom', NORMAL_SESSION_TAIL)
-    probeAllSessions(T0 + 120_000)
+    await probeAllSessions(T0 + 120_000)
     expect(getThreadIntercept('thread-1')).not.toBeUndefined() // still alive
 
     // After grace period expires
-    probeAllSessions(T0 + 60_000 + _INTERCEPT_GRACE_MS + 1000)
+    await probeAllSessions(T0 + 60_000 + _INTERCEPT_GRACE_MS + 1000)
     expect(getThreadIntercept('thread-1')).toBeUndefined() // now cleared
   })
 
@@ -420,8 +388,8 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     expect(getThreadIntercept('thread-1')).not.toBeUndefined()
 
@@ -436,37 +404,37 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     expect(getThreadIntercept('thread-1')).not.toBeUndefined()
 
     // tmux dies — getWindowActivity returns null
     windowActivity.delete('bloom')
-    probeAllSessions(T0 + 120_000)
+    await probeAllSessions(T0 + 120_000)
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
-  it('skips codex sessions', () => {
+  it('skips codex sessions', async () => {
     addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1', engine: 'codex' })
     paneTails.set('cedar', PLAN_MODE_TAIL)
     windowActivity.set('cedar', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     // Only byte might trigger, not cedar
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
-  it('skips dead sessions', () => {
+  it('skips dead sessions', async () => {
     addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1', deadAt: T0 - 1000 })
     paneTails.set('cedar', PLAN_MODE_TAIL)
     windowActivity.set('cedar', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
@@ -479,8 +447,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const loginKey = keysSent.find(k => k.tmuxName === 'bloom')
@@ -505,8 +473,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const loginKey = keysSent.find(k => k.tmuxName === 'bloom' && k.keys.includes('/login'))
@@ -525,8 +493,8 @@ describe('probeAllSessions', () => {
     paneTails.set('discord-byte', LOGIN_SELECT_METHOD_TAIL)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const byteMsg = sentMessages.find(m => m.channelId === 'root-channel-123')
@@ -541,16 +509,16 @@ describe('probeAllSessions', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000) // first notification
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000) // first notification
     await flush()
     const firstCount = sentMessages.length
 
-    probeAllSessions(T0 + 120_000) // within cooldown
+    await probeAllSessions(T0 + 120_000) // within cooldown
     await flush()
     expect(sentMessages.length).toBe(firstCount) // no new message
 
-    probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 120_000) // after cooldown
+    await probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 120_000) // after cooldown
     await flush()
     expect(sentMessages.length).toBeGreaterThan(firstCount) // new notification
   })
@@ -562,14 +530,14 @@ describe('probeAllSessions', () => {
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     // First two probes to confirm
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
     const afterFirst = sentMessages.length
 
     // Send remaining notifications
     for (let i = 1; i < _MAX_NOTIFICATIONS; i++) {
-      probeAllSessions(T0 + (i + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
+      await probeAllSessions(T0 + (i + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
       await flush()
     }
     const afterAll = sentMessages.length
@@ -577,9 +545,92 @@ describe('probeAllSessions', () => {
 
     // One more — should not notify
     const afterMax = sentMessages.length
-    probeAllSessions(T0 + (_MAX_NOTIFICATIONS + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
+    await probeAllSessions(T0 + (_MAX_NOTIFICATIONS + 1) * _NOTIFY_COOLDOWN_MS + 60_000)
     await flush()
     expect(sentMessages.length).toBe(afterMax)
+  })
+
+  it('caps login-success notifications at 1', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+      paneTails.set('bloom', LOGIN_SUCCESS_TAIL)
+      windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+      const afterFirst = sentMessages.filter(m => m.channelId === 'thread-1').length
+      expect(afterFirst).toBe(1)
+
+      // After cooldown — should NOT notify again (cap is 1 for success)
+      await probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 120_000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1').length).toBe(afterFirst)
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
+  })
+
+  it('notifies success even after prior login stages', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+      windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      // Stage 1: expiring
+      paneTails.set('bloom', LOGIN_EXPIRING_TAIL)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+      const afterExpiring = sentMessages.filter(m => m.channelId === 'thread-1').length
+      expect(afterExpiring).toBe(1)
+
+      // Stage 2: success (stage change)
+      paneTails.set('bloom', LOGIN_SUCCESS_TAIL)
+      await probeAllSessions(T0 + 120_000)
+      await flush()
+      const afterSuccess = sentMessages.filter(m => m.channelId === 'thread-1').length
+      expect(afterSuccess).toBe(2) // must fire despite prior notifyCount
+
+      // No repeat of success after cooldown
+      await probeAllSessions(T0 + _NOTIFY_COOLDOWN_MS + 180_000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1').length).toBe(afterSuccess)
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
+  })
+
+  it('does not dismiss login-success when HYDRA_AUTO_LOGIN is unset', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+      paneTails.set('bloom', LOGIN_SUCCESS_TAIL)
+      windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+
+      const enterKey = keysSent.find(k => k.tmuxName === 'bloom' && k.keys === 'Enter')
+      expect(enterKey).toBeUndefined()
+
+      const msg = sentMessages.find(m => m.channelId === 'thread-1')
+      expect(msg).not.toBeUndefined()
+      expect(msg!.text).toContain('Press Enter in the session')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+      else delete process.env.HYDRA_AUTO_LOGIN
+    }
   })
 
   it('auto-dismisses resume prompt with Enter when HYDRA_AUTO_LOGIN=1', async () => {
@@ -591,8 +642,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
@@ -616,8 +667,8 @@ describe('probeAllSessions', () => {
       windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const enterKey = keysSent.find(k => k.tmuxName === 'ember' && k.keys === 'Enter')
@@ -641,11 +692,11 @@ describe('probeAllSessions', () => {
       windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
       const failIO = makeTestIO()
-      failIO.sendKeys = () => false
+      failIO.sendKeys = async () => false
       _setIO(failIO)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const msg = sentMessages.find(m => m.channelId === 'thread-1')
@@ -657,6 +708,68 @@ describe('probeAllSessions', () => {
     }
   })
 
+  it('nudges idle factory builders via bridge notification', async () => {
+    const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    const info = registryEntries.get('s1')!
+    info.isFactoryBuilder = true
+    info.factoryPhase = 'building'
+    info.sessionId = 's1'
+    connectedSessions.add('s1')
+
+    paneTails.set('vale', NORMAL)
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 120)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    transportMessages.length = 0
+    await probeAllSessions(T0)
+    await flush()
+
+    expect(transportMessages.length).toBe(1)
+    expect(transportMessages[0].sessionId).toBe('s1')
+    expect(transportMessages[0].msg.content).toContain('factory_done')
+    connectedSessions.delete('s1')
+  })
+
+  it('notifies PM when builder has no bridge', async () => {
+    const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    const info = registryEntries.get('s1')!
+    info.isFactoryBuilder = true
+    info.factoryPhase = 'building'
+    info.sessionId = 's1'
+    info.factoryPmThreadId = 'pm-thread'
+    info.factoryTicket = 'fb-99'
+    // NOT adding to connectedSessions — bridge is down
+
+    paneTails.set('vale', NORMAL)
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 130) // idle >120s bridgeless threshold
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    sentMessages.length = 0
+    await probeAllSessions(T0)
+    await flush()
+
+    const pmMsg = sentMessages.find(m => m.channelId === 'pm-thread')
+    expect(pmMsg).not.toBeUndefined()
+    expect(pmMsg!.text).toContain('lost its bridge')
+    expect(pmMsg!.text).toContain('factory_abandon')
+  })
+
+  it('does not nudge non-builder sessions', async () => {
+    const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+
+    paneTails.set('vale', NORMAL)
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 120)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    transportMessages.length = 0
+    probeAllSessions(T0)
+
+    expect(transportMessages.length).toBe(0)
+  })
+
   it('reads BYTE_SESSION_NAME from env', async () => {
     const origEnv = process.env.BYTE_SESSION_NAME
     const origLogin = process.env.HYDRA_AUTO_LOGIN
@@ -666,8 +779,8 @@ describe('probeAllSessions', () => {
       paneTails.set('custom-byte', LOGIN_SELECT_METHOD_TAIL)
       windowActivity.set('custom-byte', Math.floor(T0 / 1000) - 60)
 
-      probeAllSessions(T0)
-      probeAllSessions(T0 + 60_000)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
       await flush()
 
       const loginKey = keysSent.find(k => k.tmuxName === 'custom-byte')
@@ -704,8 +817,8 @@ describe('intercept handler', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const intercept = getThreadIntercept('thread-1')
@@ -726,8 +839,8 @@ describe('intercept handler', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     // Session has moved on
@@ -750,8 +863,8 @@ describe('intercept handler', () => {
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
-    probeAllSessions(T0)
-    probeAllSessions(T0 + 60_000)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
     await flush()
 
     const intercept = getThreadIntercept('thread-1')!

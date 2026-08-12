@@ -3,7 +3,7 @@
  */
 
 import { gateway, PLATFORM } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, threadRegistry, sessionEmoji } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration, tmuxHasSession } from './util.js'
 import { loadAccess } from './access.js'
@@ -13,8 +13,10 @@ import { assembleContextLines } from './artifacts.js'
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
 // Each session = up to 3 blocks (section + context + divider). Slack caps views at 100.
-// Fixed blocks: header, divider, spacer, input, timestamp, overflow msg = 6. (100-6)/3 = 31.
-const MAX_SESSION_BLOCKS = 31
+// Fixed blocks: header, dividers, spacer, input, timestamp, recent header = ~10.
+// Active: up to 25 sessions × 3 blocks = 75. Recent: up to 5 × 2 = 10. Total ≤ 100.
+const MAX_SESSION_BLOCKS = 25
+const MAX_RECENT_BLOCKS = 5
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 type SessionRow = {
@@ -29,6 +31,8 @@ type SessionRow = {
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
+  originType?: string
+  isFactoryBuilder?: boolean
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -57,23 +61,66 @@ function getActiveSessions(): SessionRow[] {
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
+      originType: s.originType,
+      isFactoryBuilder: s.isFactoryBuilder,
     })
   }
 
   return rows
 }
 
+type RecentRow = {
+  name: string
+  desc: string
+  duration: string
+  model: string
+  url: string
+}
+
+function getRecentCompleted(limit: number = MAX_RECENT_BLOCKS): RecentRow[] {
+  const now = Date.now()
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt != null))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, limit)
+
+  return threads.map(t => {
+    const last = t.sessionHistory[t.sessionHistory.length - 1]
+    const duration = last?.endedAt && last?.startedAt
+      ? formatDuration(last.endedAt - last.startedAt)
+      : last?.endedAt ? formatDuration(now - t.createdAt) : '?'
+    const model = last?.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') || ''
+    return {
+      name: last?.tmuxName ?? t.topic?.split('\n')[0].slice(0, 20) ?? '?',
+      desc: (t.description || t.topic || '').slice(0, 60),
+      duration,
+      model,
+      url: t.threadUrl ?? '',
+    }
+  })
+}
+
 function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*~`]/g, '')
 }
 
+function buildOriginBadge(s: SessionRow): string {
+  if (s.isFactoryBuilder) return 'factory'
+  if (s.originType === 'fork') return 'fork'
+  if (s.originType === 'handoff') return 'handoff'
+  if (s.originType === 'resurrect') return 'resurrect'
+  return ''
+}
+
 function buildSessionText(s: SessionRow): string {
   const link = s.url ? `<${s.url}|${s.name}>` : s.name
-  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_`
+  const origin = buildOriginBadge(s)
+  const originBadge = origin ? ` · ${origin}` : ''
+  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_${originBadge}`
 }
 
 
-function buildHomeBlocks(sessions: SessionRow[]): any[] {
+function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[] {
   const blocks: any[] = [
     {
       type: 'header',
@@ -115,6 +162,22 @@ function buildHomeBlocks(sessions: SessionRow[]): any[] {
     }
   }
 
+  if (recent.length > 0) {
+    blocks.push({ type: 'divider' })
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: `Recent (${recent.length})` },
+    })
+    for (const r of recent) {
+      const link = r.url ? `<${r.url}|${escapeMrkdwn(r.name)}>` : escapeMrkdwn(r.name)
+      const modelTag = r.model ? ` · \`${r.model}\`` : ''
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `${link} — ${escapeMrkdwn(r.desc)} · _${r.duration}_${modelTag}` },
+      })
+    }
+  }
+
   blocks.push({ type: 'divider' })
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ' ' } })
   blocks.push({
@@ -149,7 +212,8 @@ async function doUpdate(): Promise<void> {
 
   const userId = access.allowFrom[0]
   const sessions = getActiveSessions()
-  const blocks = buildHomeBlocks(sessions)
+  const recent = getRecentCompleted()
+  const blocks = buildHomeBlocks(sessions, recent)
 
   try {
     await (gateway as any).publishHomeTab(userId, blocks)

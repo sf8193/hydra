@@ -1,0 +1,55 @@
+%% Destroy — permanently delete a thread and its anchor message
+%% Discord-only. Requires no live session and no active protocol.
+
+sequenceDiagram
+    participant user as User
+    participant router as router.ts
+    participant handler as commands/<br/>thread.ts
+    participant registry as sessions.ts
+    participant protocol as protocol-<br/>registry.ts
+    participant gateway as discord-<br/>gateway.ts
+
+    user->>router: "destroy" (in thread)
+
+    alt not in a thread
+        Note over router: ignored — thread-scoped only
+    end
+
+    router->>handler: handleDestroyIntercept(msg)
+
+    handler->>handler: check gateway.deleteThread exists
+    alt gateway has no deleteThread (Slack)
+        handler->>user: "destroy is only available on Discord"
+    end
+
+    handler->>registry: resolve threadId + session
+    handler->>protocol: isThreadOccupied(threadId)
+
+    alt active protocol in thread
+        handler->>user: ❌ "A protocol is in progress"
+    else live session (no deadAt)
+        handler->>user: ❌ "Session is still alive. Kill it first."
+    else dead session or no session (happy path)
+        handler->>user: react 💀
+
+        handler->>gateway: deleteThread(threadId)
+        alt Discord API error
+            handler->>user: "Thread deletion failed: error"
+            Note over handler: log to stderr, abort
+        end
+
+        opt session exists in registry
+            handler->>registry: registry.delete(sessionId)
+            handler->>registry: registry.deleteThread(threadId)
+        end
+        handler->>registry: threadRegistry.delete(threadId)
+
+        alt parentChannelId + anchorMessageId known
+            handler->>gateway: delete(parentChannelId, anchorMessageId)
+            Note over handler: catch silently — thread already gone
+        else missing parentChannelId or anchorMessageId
+            Note over handler: skip anchor deletion, log warning
+        end
+
+        Note over handler: log "daemon: destroy: deleted thread"
+    end
