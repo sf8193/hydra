@@ -46,7 +46,7 @@ Factory:
   hydra factory list                   List all active factory builds
   hydra factory status <ticket>        Show a build's phase, spec, retries
   hydra factory accept <ticket>        Accept a build (--allow-unreviewed to bypass review gate)
-  hydra factory abandon <ticket>       Abandon a build
+  hydra factory abandon <ticket>       Abandon a build (--reason "why" to annotate)
 
 Platform: slack | discord (required for lifecycle commands)
 
@@ -267,8 +267,11 @@ async function main(): Promise<void> {
 
     case 'factory': {
       const sub = filtered[1]
+      // --reason takes the following arg as its value; exclude it from ticket detection.
+      const reasonIdx = filtered.indexOf('--reason')
+      const reason = reasonIdx >= 0 ? filtered[reasonIdx + 1] : undefined
       // First non-flag arg after the subcommand is the ticket (order-independent vs flags).
-      const ticket = filtered.slice(2).find(a => !a.startsWith('--'))
+      const ticket = filtered.slice(2).find((a, i) => !a.startsWith('--') && (2 + i) !== reasonIdx + 1)
       const validSubs = ['list', 'status', 'accept', 'abandon']
       if (!sub || !validSubs.includes(sub)) {
         console.error('error: usage: hydra factory <list|status|accept|abandon> [ticket]')
@@ -281,7 +284,7 @@ async function main(): Promise<void> {
       const allowUnreviewed = filtered.includes('--allow-unreviewed')
       const response = await sendRequest(socketPath, {
         type: 'cli', command: 'factory', id: randomUUID(),
-        params: { sub, ...(ticket && { ticket }), ...(allowUnreviewed && { allowUnreviewed }) },
+        params: { sub, ...(ticket && { ticket }), ...(allowUnreviewed && { allowUnreviewed }), ...(reason && { reason }) },
       })
       printResponse(response, json)
       break

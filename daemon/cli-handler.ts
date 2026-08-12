@@ -216,7 +216,7 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 }
 
 async function handleFactory(req: CLIRequest): Promise<CLIResponse> {
-  const { sub, ticket, allowUnreviewed } = req.params as { sub?: string; ticket?: string; allowUnreviewed?: boolean }
+  const { sub, ticket, allowUnreviewed, reason } = req.params as { sub?: string; ticket?: string; allowUnreviewed?: boolean; reason?: string }
   switch (sub) {
     case 'list':
       return respond(req, true, factoryListAll())
@@ -234,7 +234,7 @@ async function handleFactory(req: CLIRequest): Promise<CLIResponse> {
     }
     case 'abandon': {
       if (!ticket) return respond(req, false, 'ticket is required')
-      const r = factoryAbandonByTicket(ticket)
+      const r = factoryAbandonByTicket(ticket, reason)
       if ('error' in r) return respond(req, false, r.error)
       return respond(req, true, { abandoned: ticket })
     }

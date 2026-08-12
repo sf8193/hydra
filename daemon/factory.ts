@@ -717,16 +717,37 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
  */
 function cleanSpecTitle(spec: string): string {
   const firstLine = spec.split('\n').find(l => l.trim())?.trim() ?? 'factory build'
-  return firstLine.replace(/^#+\s*/, '').replace(/^[-*]\s*/, '').slice(0, 72)
+  // `_` is deliberately not stripped — it's an identifier char (factory_done), not just markdown.
+  return firstLine
+    .replace(/^#+\s*/, '')
+    .replace(/^[-*]\s*/, '')
+    .replace(/[*`]/g, '')
+    .trim()
+    .slice(0, 72)
 }
 
 /**
- * Squash all builder commits since main into a single commit and force-push.
+ * Resolve the repo's default branch ref (e.g. "origin/main"), falling back to "main".
+ * origin/HEAD is set by clone and reliably present in worktrees; a local "main" branch
+ * may be absent or stale, so the remote-tracking ref is the safer merge-base target.
+ */
+async function defaultBaseRef(cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execAsync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd, timeout: 5_000 })
+    const ref = stdout.trim()
+    if (ref) return ref
+  } catch {}
+  return 'main'
+}
+
+/**
+ * Squash all builder commits since the default branch into a single commit and force-push.
  * Called on accept so the merged PR carries one clean commit, not build +
  * review-fix noise. No-op when there is nothing to squash.
  */
 async function squashBuilderCommits(worktreePath: string, message: string): Promise<void> {
-  const { stdout: base } = await execAsync('git', ['merge-base', 'HEAD', 'main'], { cwd: worktreePath, timeout: 10_000 })
+  const baseRef = await defaultBaseRef(worktreePath)
+  const { stdout: base } = await execAsync('git', ['merge-base', 'HEAD', baseRef], { cwd: worktreePath, timeout: 10_000 })
   const baseSha = base.trim()
   if (!baseSha) return
   const { stdout: diffCheck } = await execAsync('git', ['diff', '--stat', baseSha + '..HEAD'], { cwd: worktreePath, timeout: 5_000 })
