@@ -166,3 +166,20 @@ Global options: `--daemon <name>` (target specific daemon), `--json` (raw JSON o
 | `shared/constants.ts` | Model aliases |
 
 See also: `README.md` (quick start), `CLAUDE.md` (build/test), `docs/ONBOARDING_TIPS.md` (first-time setup).
+
+## Factory Commands
+
+Manage factory builds from the terminal without Discord.
+
+| Command | What |
+|---------|------|
+| `hydra factory list` | All active factory builds across all PMs |
+| `hydra factory status <ticket>` | Detail for a specific build |
+| `hydra factory accept <ticket>` | Accept a build (admin — skips PM ownership check) |
+| `hydra factory abandon <ticket>` | Abandon a build (admin — skips PM ownership check) |
+
+### Spawn Options
+
+| Flag | What |
+|------|------|
+| `--read-thread [limit]` | Inject `fetch_messages` instruction so the spawned session reads a thread's history. Default limit: 50, max: 200. Thread defaults to `--channel` value. |

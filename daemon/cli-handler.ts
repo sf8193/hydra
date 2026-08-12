@@ -6,6 +6,7 @@ import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionI
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
+import { factoryListAll, factoryAcceptByTicket, factoryAbandonByTicket } from './factory.js'
 
 // ---------------------------------------------------------------------------
 // Idempotency completion on session death
@@ -214,6 +215,34 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
   return respond(req, true, { key, status: entry.status, sessionId: entry.sessionId })
 }
 
+function handleFactory(req: CLIRequest): CLIResponse {
+  const { sub, ticket, allowUnreviewed } = req.params as { sub?: string; ticket?: string; allowUnreviewed?: boolean }
+  switch (sub) {
+    case 'list':
+      return respond(req, true, factoryListAll())
+    case 'status': {
+      if (!ticket) return respond(req, false, 'ticket is required')
+      const result = factoryListAll(ticket)
+      if (result.builds.length === 0) return respond(req, false, `ticket "${ticket}" not found`)
+      return respond(req, true, result)
+    }
+    case 'accept': {
+      if (!ticket) return respond(req, false, 'ticket is required')
+      const r = factoryAcceptByTicket(ticket, allowUnreviewed ?? false)
+      if ('error' in r) return respond(req, false, r.error)
+      return respond(req, true, { accepted: ticket })
+    }
+    case 'abandon': {
+      if (!ticket) return respond(req, false, 'ticket is required')
+      const r = factoryAbandonByTicket(ticket)
+      if ('error' in r) return respond(req, false, r.error)
+      return respond(req, true, { abandoned: ticket })
+    }
+    default:
+      return respond(req, false, `unknown factory subcommand: "${sub ?? ''}" (expected list|status|accept|abandon)`)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -233,6 +262,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'health': response = handleHealth(req); break
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
+      case 'factory': response = handleFactory(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }

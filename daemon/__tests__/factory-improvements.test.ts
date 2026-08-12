@@ -82,3 +82,32 @@ describe('killBuilder thread deletion sequencing', () => {
     expect(callOrder).toEqual(['killSession', 'deleteThread'])
   })
 })
+
+describe('factory admin/CLI functions', () => {
+  test('factoryListAll returns empty when no builds', async () => {
+    const { factoryListAll } = await import('../factory.js')
+    const result = factoryListAll()
+    expect(Array.isArray(result.builds)).toBe(true)
+    // No builds registered in a fresh test process
+    expect(result.builds.length).toBe(0)
+  })
+
+  test('factoryListAll with unknown ticket returns empty', async () => {
+    const { factoryListAll } = await import('../factory.js')
+    expect(factoryListAll('fb-does-not-exist').builds).toEqual([])
+  })
+
+  test('factoryAcceptByTicket on unknown ticket returns error', async () => {
+    const { factoryAcceptByTicket } = await import('../factory.js')
+    const r = factoryAcceptByTicket('fb-nope')
+    expect('error' in r).toBe(true)
+    if ('error' in r) expect(r.error).toContain('Unknown ticket')
+  })
+
+  test('factoryAbandonByTicket on unknown ticket returns error', async () => {
+    const { factoryAbandonByTicket } = await import('../factory.js')
+    const r = factoryAbandonByTicket('fb-nope')
+    expect('error' in r).toBe(true)
+    if ('error' in r) expect(r.error).toContain('Unknown ticket')
+  })
+})
