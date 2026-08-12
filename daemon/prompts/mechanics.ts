@@ -48,6 +48,8 @@ export function mechanicsBlock(opts: MechanicsOpts): string {
     `**Orient:** fetch_messages(channel="${threadId}", limit=100) is your window into this thread. ${orientTail}`,
     ...(cutoffTs ? [`While forming your own questions and proposal: only read messages posted BEFORE ${cutoffTs} — later messages are other roles' work, and reading them contaminates your independence. This cutoff ends if you are later asked to critique a synthesized composite: that composite is posted after the cutoff and is your assigned reading.`] : []),
     ``,
+    `**If a tool call returns InputValidationError, that tool is *deferred* — its name is known but its schema is not loaded. Call ToolSearch(query="select:<tool_name>") to load it, then retry. Never abandon your protocol action because its tool errored — recover the tool and complete the action.**`,
+    ``,
     ...speakLines,
     ...(waits ? [``, `**Between rounds:** after posting, stay idle and wait for the next [system] notification — it will deliver the other party's response. Do not poll the thread or exit; the protocol needs you alive for subsequent rounds.`] : []),
   ].join('\n')
