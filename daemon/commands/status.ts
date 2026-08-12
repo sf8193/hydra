@@ -8,8 +8,6 @@ import { transport } from '../bridge-transport.js'
 import { fallbackDescription, formatDuration, getContextPercent, atomicWriteFileSync, isAlive, safeSend } from '../util.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveReviews } from '../adversarial.js'
-import { getActiveBuilds } from '../build.js'
-import { getActiveDesigns } from '../design.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export const daemonStartedAt = Date.now()
@@ -355,10 +353,8 @@ export async function handleProtocolsIntercept(msg: InboundMessage): Promise<voi
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})
 
   const reviews = getActiveReviews()
-  const builds = getActiveBuilds()
-  const designs = getActiveDesigns()
 
-  if (reviews.length === 0 && builds.length === 0 && designs.length === 0) {
+  if (reviews.length === 0) {
     try { await gateway.send(msg.channelId, `No active protocols.`, { replyTo: msg.id }) } catch {}
     return
   }
@@ -375,23 +371,7 @@ export async function handleProtocolsIntercept(msg: InboundMessage): Promise<voi
     lines.push(`  Owner: ${owner?.tmuxName ?? '?'} · Critic: ${critic?.tmuxName ?? 'pending'} · ${elapsed}`)
   }
 
-  for (const b of builds) {
-    const owner = registry.get(b.ownerSessionId)
-    const critic = b.criticSessionId ? registry.get(b.criticSessionId) : undefined
-    const startTime = owner?.createdAt ?? critic?.createdAt
-    const elapsed = startTime ? formatDuration(Date.now() - startTime) : '?'
-    lines.push(`• 🔨 **Build** (${b.currentRound}/${b.rounds}) ${b.phase}`)
-    lines.push(`  Owner: ${owner?.tmuxName ?? '?'} · Critic: ${critic?.tmuxName ?? 'pending'} · Task: ${b.task.slice(0, 60)} · ${elapsed}`)
-  }
 
-  for (const d of designs) {
-    const alivePersonas = d.personas.filter(p => registry.has(p.sessionId))
-    const ownerSession = registry.getByThread(d.ownerThreadId)
-    const ownerInfo = ownerSession ? registry.get(ownerSession) : undefined
-    const elapsed = ownerInfo ? formatDuration(Date.now() - ownerInfo.createdAt) : '?'
-    lines.push(`• 🎨 **Design** ${d.phase} — ${d.topic.slice(0, 60)}`)
-    lines.push(`  Personas: ${alivePersonas.length}/${d.personas.length} alive · ${elapsed}`)
-  }
 
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }

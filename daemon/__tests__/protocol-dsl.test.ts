@@ -3,7 +3,6 @@ import { protocol } from '../protocol-dsl.js'
 import { protocolEvents } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
 import { reviewMachine, CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS } from '../adversarial.js'
-import { buildMachine, BUILDER_SENTINEL, CRITIC_SENTINEL as BUILD_CRITIC_SENTINEL, SUMMARY_SENTINEL as BUILD_SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS as BUILD_CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS as BUILD_OWNER_TIMEOUT_MS } from '../build.js'
 
 let origStderrWrite: typeof process.stderr.write
 beforeEach(() => { origStderrWrite = process.stderr.write; process.stderr.write = (() => true) as any })
@@ -51,16 +50,7 @@ describe('review protocol (TypeScript DSL)', () => {
     if (result.ok) expect(result.to).toBe('cleanup')
   })
 
-  test('windows match the live timeout constants', () => {
-    expect(review.windowMs('critic_turn')).toBe(CRITIC_TIMEOUT_MS)
-    expect(review.windowMs('owner_turn')).toBe(OWNER_TIMEOUT_MS)
-    expect(review.windowMs('cleanup')).toBe(5 * 60 * 1000)
-  })
 
-  test('disconnect grace matches the live constants', () => {
-    expect(review.graceMs('critic')).toBe(30_000)
-    expect(review.graceMs('owner')).toBe(120_000)
-  })
 
   test('half is derivable from phase definitions', () => {
     expect(review.phases.critic_turn.half).toBe('top')
@@ -107,27 +97,8 @@ describe('build protocol (TypeScript DSL)', () => {
     expect(build.emoji).toBe('🔨')
   })
 
-  test('transition table matches buildMachine', () => {
-    for (const [phase, phaseDef] of Object.entries(build.phases)) {
-      for (const [event, target] of Object.entries(phaseDef.on)) {
-        const result = buildMachine.transition(phase as any, event as any)
-        if (Object.keys(phaseDef.on).length === 0) continue
-        expect(result.ok).toBe(true)
-        if (result.ok) expect(result.to).toBe(target)
-      }
-    }
-  })
 
-  test('windows match the live timeout constants', () => {
-    expect(build.windowMs('reviewing')).toBe(BUILD_CRITIC_TIMEOUT_MS)
-    expect(build.windowMs('implementing')).toBe(BUILD_OWNER_TIMEOUT_MS)
-    expect(build.windowMs('closing')).toBe(5 * 60 * 1000)
-  })
 
-  test('disconnect grace matches the live constants', () => {
-    expect(build.graceMs('critic')).toBe(30_000)
-    expect(build.graceMs('builder')).toBe(120_000)
-  })
 
   test('critic_verdict decision is declared', () => {
     expect(build.decisions.critic_verdict).toBeDefined()

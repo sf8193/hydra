@@ -16,12 +16,7 @@ describe('getTemplate', () => {
     expect(t!.action).toBe('review')
   })
 
-  test('returns builtin build template', () => {
-    const t = getTemplate('build')
-    expect(t).not.toBeNull()
-    expect(t!.prompt).toContain('build session')
-    expect(t!.action).toBe('build')
-  })
+
 
   test('returns builtin factory template', () => {
     const t = getTemplate('factory')
@@ -60,12 +55,11 @@ describe('getTemplate', () => {
 // ---------------------------------------------------------------------------
 
 describe('listTemplates', () => {
-  test('contains all 3 builtin templates', () => {
+  test('contains builtin templates', () => {
     const list = listTemplates()
     const names = list.map(t => t.name)
     expect(names).toContain('review')
-    expect(names).toContain('build')
-    expect(names).toContain('factory')
+            expect(names).toContain('factory')
   })
 
   test('is sorted alphabetically', () => {
@@ -91,11 +85,7 @@ describe('listTemplates', () => {
     expect(review?.action).toBe('review')
   })
 
-  test('build has action=build', () => {
-    const list = listTemplates()
-    const build = list.find(t => t.name === 'build')
-    expect(build?.action).toBe('build')
-  })
+
 
   test('factory has no action (uses disallowedTools instead)', () => {
     const list = listTemplates()
@@ -190,7 +180,7 @@ describe('buildTemplateSpawnOpts', () => {
   })
 
   test('trigger matches template name with colon', () => {
-    for (const name of ['review', 'build', 'factory']) {
+    for (const name of ['review', 'factory']) {
       const t = getTemplate(name)!
       const opts = buildTemplateSpawnOpts(name, t)
       expect(opts.trigger).toBe(`${name}:`)
