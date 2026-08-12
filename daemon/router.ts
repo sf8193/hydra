@@ -568,7 +568,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      // v2 commands checked BEFORE v1 — the v1 regex matches "review_v2" / "build_v2" otherwise
+      // _v2 suffix still accepted for backwards compat — plain names are primary
       const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewV2Match) {
         const preModel = resolveProtocolModel(reviewV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
@@ -634,8 +634,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-
-      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2|\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (buildV2Match) {
         const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
         if (preModel === false) return
@@ -646,7 +645,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
         void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
         return
       }
-
 
       const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
       if (cancelBuildMatch) {
@@ -677,8 +675,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
         }
         return
       }
-
-
 
       const watchMatch = msg.content.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
       if (watchMatch) {
