@@ -37,6 +37,7 @@ export type SessionInfo = {
   initiator?: string
   capabilities?: SessionCapabilities
   respawnCount?: number
+  resumeCount?: number
   threadUrl?: string
   lastReplyId?: string
   worktreeRepo?: string

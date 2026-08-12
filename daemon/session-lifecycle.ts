@@ -464,6 +464,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Join an existing thread as a member (skip thread creation entirely)
   const isJoin = !!opts?.joinThread
   let respawnCount = 0
+  let resumeCount = 0
+  if (isResume) {
+    const predecessor = [...registry.values()]
+      .filter(s => s.claudeSessionId === opts!.resumeFrom && s.deadAt)
+      .sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
+    if (predecessor) resumeCount = (predecessor.resumeCount ?? 0) + 1
+  }
   if (isJoin) {
     threadId = opts!.joinThread!
   }
@@ -679,6 +686,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       threadUrl: url || undefined, engine: 'codex', codexThreadId: codexThreadId!,
       ...(spawnLogPath ? { spawnLogPath } : {}),
       ...(respawnCount > 0 ? { respawnCount } : {}),
+      ...(resumeCount > 0 ? { resumeCount } : {}),
       ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
       ...(isJoin ? { isJoinMember: true } : {}),
       initiator: opts?.initiator,
@@ -829,6 +837,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     threadUrl: url || undefined,
     ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
+    ...(resumeCount > 0 ? { resumeCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
     ...(spawnLogPath ? { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog } : {}),

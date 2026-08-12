@@ -2,7 +2,7 @@
 // death report to the daemon log. A crashed spawn otherwise leaves no cause, no
 // stderr, and no link to its transcript.
 
-import { existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, fstatSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { execFileSync } from 'child_process'
@@ -55,6 +55,86 @@ export function transcriptPathFor(claudeSessionId: string): string | undefined {
     }
   } catch { /* projects dir absent */ }
   return undefined
+}
+
+export type ConversationForensics = {
+  tailTurns: number
+  lastStopReason: string | null
+  lastToolCalled: string | null
+  lastToolPending: boolean
+  pendingToolCount: number
+  tailApiCalls: number
+  lastAssistantText: string | null
+  isTail: boolean
+}
+
+export function readConversationForensics(transcriptPath: string): ConversationForensics | null {
+  let fd: number | undefined
+  try {
+    const TAIL_BYTES = 32 * 1024
+    fd = openSync(transcriptPath, 'r')
+    const stat = fstatSync(fd)
+    const isTail = stat.size > TAIL_BYTES
+    const offset = Math.max(0, stat.size - TAIL_BYTES)
+    const buf = Buffer.alloc(Math.min(stat.size, TAIL_BYTES))
+    readSync(fd, buf, 0, buf.length, offset)
+    closeSync(fd)
+    fd = undefined
+    const raw = buf.toString('utf8')
+    const lines = raw.split('\n').filter(l => l.trim())
+    if (isTail) lines.shift()
+    let tailTurns = 0
+    let lastStopReason: string | null = null
+    let lastToolCalled: string | null = null
+    let lastAssistantText: string | null = null
+    let tailApiCalls = 0
+    const lastTurnToolIds = new Set<string>()
+    const answeredToolIds = new Set<string>()
+
+    for (const line of lines) {
+      let entry: any
+      try { entry = JSON.parse(line) } catch { continue }
+
+      if (entry.type === 'assistant') {
+        tailTurns++
+        const msg = entry.message
+        if (!msg) continue
+        lastStopReason = msg.stop_reason ?? null
+        lastTurnToolIds.clear()
+        const content = msg.content
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_use') {
+              lastToolCalled = block.name ?? null
+              if (block.id) lastTurnToolIds.add(block.id)
+            }
+            if (block.type === 'text' && block.text) {
+              lastAssistantText = block.text.slice(0, 200)
+            }
+          }
+        }
+        if (msg.usage) tailApiCalls++
+      }
+
+      if (entry.type === 'user') {
+        const content = entry.message?.content
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result' && block.tool_use_id) {
+              answeredToolIds.add(block.tool_use_id)
+            }
+          }
+        }
+      }
+    }
+
+    const pendingIds = [...lastTurnToolIds].filter(id => !answeredToolIds.has(id))
+    const lastToolPending = pendingIds.length > 0
+    return { tailTurns, lastStopReason, lastToolCalled, lastToolPending, pendingToolCount: pendingIds.length, tailApiCalls, lastAssistantText, isTail }
+  } catch {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+    return null
+  }
 }
 
 export function logCorrelation(info: SessionInfo): void {
@@ -172,6 +252,8 @@ export type AutopsyExtras = {
   exitFileLines?: string[]
   stderrTail?: string[]
   debugTail?: string[]
+  protocolContext?: { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string }
+  resumeCount?: number
 }
 
 export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, extras?: AutopsyExtras): string {
@@ -229,6 +311,24 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   } else {
     lines.push(`  last output: none captured`)
   }
+  const pctx = extras?.protocolContext
+  if (pctx) {
+    lines.push(`  protocol: ${pctx.protocol} (${pctx.phase}, round ${pctx.round})`)
+    lines.push(`  role: ${pctx.role}, advance called: ${pctx.advanceCalled}`)
+  }
+  if (extras?.resumeCount && extras.resumeCount > 0) {
+    lines.push(`  resume #${extras.resumeCount} of conversation`)
+  }
+  if (transcript) {
+    const forensics = readConversationForensics(transcript)
+    if (forensics) {
+      const tailLabel = forensics.isTail ? 'recent ' : ''
+      lines.push(`  conversation: ${tailLabel}${forensics.tailTurns} turns, ${forensics.tailApiCalls} api calls${forensics.isTail ? ' (tail)' : ''}`)
+      lines.push(`  last stop_reason: ${forensics.lastStopReason ?? 'none'}`)
+      lines.push(`  last tool: ${forensics.lastToolCalled ?? 'none'}${forensics.lastToolPending ? ` (${forensics.pendingToolCount} PENDING — died mid-execution)` : ''}`)
+      if (forensics.lastAssistantText) lines.push(`  last text: ${forensics.lastAssistantText.slice(0, 120)}...`)
+    }
+  }
   lines.push(`  ═══ end autopsy ═══`)
   return lines.join('\n')
 }
@@ -243,7 +343,7 @@ export function tailSpawnLog(path: string, maxLines: number = CRASH_LOG_TAIL_LIN
   return lines
 }
 
-export function recordSessionDeath(info: SessionInfo, reason: string): void {
+export function recordSessionDeath(info: SessionInfo, reason: string, protocolContext?: AutopsyExtras['protocolContext']): void {
   let tail: string[] = []
   if (info.spawnLogPath) {
     try { tail = tailSpawnLog(info.spawnLogPath) } catch {}
@@ -260,7 +360,7 @@ export function recordSessionDeath(info: SessionInfo, reason: string): void {
   if (info.debugLogPath) {
     try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
   }
-  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail }) + '\n')
+  process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext, resumeCount: info.resumeCount }) + '\n')
   info.deadAt = Date.now()
 }
 

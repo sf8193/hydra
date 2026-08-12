@@ -40,6 +40,7 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   _extensions: number
   _phaseStartedAt: number
   _resumeAttempts?: number
+  _keepaliveTimer?: ReturnType<typeof setInterval>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
   strike: boolean
@@ -50,6 +51,8 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
 const MAX_EXTENSIONS_PER_PHASE = 2
 const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
+const KEEPALIVE_INTERVAL_MS = 30_000
+const KEEPALIVE_ENABLED = process.env.HYDRA_KEEPALIVE !== '0'
 
 const runs = new Map<string, ProtocolRun>()
 const threadToRun = new Map<string, string>()
@@ -191,7 +194,9 @@ function scopedToolOverridesForRun(run: ProtocolRun, sessionId: string): Record<
 
 function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
   const overrides = scopedToolOverridesForRun(run, sessionId) ?? undefined
-  const tools = computeToolsForSession(sessionId, overrides ? { scopedToolOverrides: overrides } : undefined)
+  const role = run.sessionToRole.get(sessionId)
+  const isGuest = role ? role !== run.protocol.ownerRole : false
+  const tools = computeToolsForSession(sessionId, overrides ? { scopedToolOverrides: overrides, isGuest } : undefined)
   transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
 }
 
@@ -384,7 +389,7 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
   const info = registry.get(deadSessionId)
-  if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`)
+  if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
 
   const result = await doSpawnSession(
     info?.topic ?? `${run.protocol.display} ${run.protocol.roles[role]}`,
@@ -438,6 +443,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   registerParticipant(run, role, result.sessionId)
 
   resetTimeout(run)
+  startKeepalive(run)
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resumed: ${deadSessionId} → ${result.sessionId}\n`)
 }
 
@@ -535,6 +541,29 @@ function clearPhaseTimers(run: ProtocolRun): void {
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
+  if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
+}
+
+export function sendKeepaliveNotification(run: ProtocolRun, sessionId: string, actor: string): void {
+  transport.sendOrQueue(sessionId, {
+    type: 'notification',
+    content: `[system] keepalive`,
+    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+}
+
+function startKeepalive(run: ProtocolRun): void {
+  if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
+  if (!KEEPALIVE_ENABLED) return
+  const actor = run.protocol.phases[run.phase]?.actor
+  if (!actor) return
+  run._keepaliveTimer = setInterval(() => {
+    if (isTerminal(run)) { clearInterval(run._keepaliveTimer!); run._keepaliveTimer = undefined; return }
+    const sid = run.participants.get(actor)
+    if (!sid) { clearInterval(run._keepaliveTimer!); run._keepaliveTimer = undefined; return }
+    sendKeepaliveNotification(run, sid, actor)
+    process.stderr.write(`daemon: ${run.protocol.name} run: keepalive sent to ${actor}\n`)
+  }, KEEPALIVE_INTERVAL_MS)
 }
 
 function clearTimers(run: ProtocolRun): void {
@@ -650,6 +679,8 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     await postStatusLine(run)
     resetTimeout(run)
   }
+
+  startKeepalive(run)
 }
 
 
@@ -890,7 +921,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
 export const __test = process.env.NODE_ENV === 'test'
   ? {
-      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR,
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
@@ -938,9 +969,34 @@ function runnerHooks(name: string, protoName: string) {
       if (!chatId || chatId !== run.threadId) return null
       return scopedToolOverridesForRun(run, sessionId)
     },
+    resolveIsGuest: (sessionId) => {
+      const runId = sessionToRun.get(sessionId)
+      const run = runId ? runs.get(runId) : undefined
+      if (!run) return false
+      const role = run.sessionToRole.get(sessionId)
+      return role ? role !== run.protocol.ownerRole : false
+    },
   })
 }
 
 runnerHooks('review_v2', 'review')
 runnerHooks('build_v2', 'build')
 runnerHooks('spike_v2', 'spike')
+
+// Protocol context for autopsy — joins session to protocol state
+export function getProtocolContext(sessionId: string): { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null {
+  const runId = sessionToRun.get(sessionId)
+  if (!runId) return null
+  const run = runs.get(runId)
+  if (!run) return null
+  const role = run.sessionToRole.get(sessionId)
+  if (!role) return null
+  const advanceCalled = run.decisions.some(d => d.role === role)
+  return {
+    protocol: run.protocol.name,
+    phase: run.phase,
+    round: `${run.currentRound}/${run.rounds}`,
+    advanceCalled,
+    role,
+  }
+}

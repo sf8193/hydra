@@ -15,6 +15,7 @@ type ProtocolHooks = {
   onReconnect: (sessionId: string) => void
   onAdvance?: (sessionId: string, content: string, verdict?: string) => Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }>
   resolveScopedToolOverrides?: (sessionId: string, chatId?: string) => Record<string, string> | null
+  resolveIsGuest?: (sessionId: string) => boolean
 }
 
 // Protocol names are plain strings — intentionally not a union type so new
@@ -91,9 +92,17 @@ export function resolveScopedToolOverrides(sessionId: string, chatId?: string): 
   return null
 }
 
+function resolveIsGuest(sessionId: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(sessionId)) return hooks.resolveIsGuest?.(sessionId) ?? false
+  }
+  return false
+}
+
 export function toolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; chatId?: string }): typeof UNIVERSAL_TOOLS {
   const overrides = resolveScopedToolOverrides(sessionId, opts?.chatId) ?? undefined
-  return computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: overrides })
+  const isGuest = overrides ? resolveIsGuest(sessionId) : undefined
+  return computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: overrides, isGuest })
 }
 
 export function _resetForTesting(): void { protocols.clear() }
