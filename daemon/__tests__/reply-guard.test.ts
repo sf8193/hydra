@@ -11,9 +11,9 @@ import {
   _pendingForTesting,
   _NUDGE_COOLDOWN_MS,
   _ACTIVITY_BACKSTOP_MS,
+  _setDeps,
+  _resetDeps,
 } from '../reply-guard.js'
-import { transport } from '../bridge-transport.js'
-import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 
 // Suppress stderr for this file only — restored after each test
@@ -23,15 +23,12 @@ afterEach(() => { process.stderr.write = realStderrWrite })
 
 const T0 = 1_000_000_000
 
-const TEST_SESSIONS = ['main', 'sess-1']
+const testSessions = new Map<string, SessionInfo>()
+const connectedBridges = new Map<string, string[]>()
 
 function fakeBridge(sessionId: string): string[] {
   const sent: string[] = []
-  transport.set(sessionId, {
-    sessionId,
-    buf: '',
-    socket: { write: (s: string) => { sent.push(s); return true } } as any,
-  })
+  connectedBridges.set(sessionId, sent)
   return sent
 }
 
@@ -50,23 +47,28 @@ function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): Sessio
     listening: false,
     ...over,
   }
-  registry.set(sessionId, info)
+  testSessions.set(sessionId, info)
   return info
 }
 
 beforeEach(() => {
   _resetReplyGuardForTesting()
-  // Clear persisted sessions loaded from disk — they pollute tmuxName lookups
-  for (const id of [...registry.sessions.keys()]) {
-    registry.delete(id)
-  }
+  testSessions.clear()
+  connectedBridges.clear()
+  _setDeps({
+    registryGet: (id) => testSessions.get(id),
+    registryValues: () => testSessions.values(),
+    transportHas: (id) => connectedBridges.has(id),
+    transportSendOrQueue: (id, msg) => {
+      const sent = connectedBridges.get(id)
+      if (sent) sent.push(JSON.stringify(msg))
+    },
+    gatewaySend: async () => ({ id: 'msg-1' }),
+  })
 })
 
 afterEach(() => {
-  for (const id of TEST_SESSIONS) {
-    transport.delete(id)
-    registry.delete(id)
-  }
+  _resetDeps()
 })
 
 describe('notePendingReply', () => {
