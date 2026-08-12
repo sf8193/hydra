@@ -215,7 +215,7 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
   return respond(req, true, { key, status: entry.status, sessionId: entry.sessionId })
 }
 
-function handleFactory(req: CLIRequest): CLIResponse {
+async function handleFactory(req: CLIRequest): Promise<CLIResponse> {
   const { sub, ticket, allowUnreviewed } = req.params as { sub?: string; ticket?: string; allowUnreviewed?: boolean }
   switch (sub) {
     case 'list':
@@ -228,7 +228,7 @@ function handleFactory(req: CLIRequest): CLIResponse {
     }
     case 'accept': {
       if (!ticket) return respond(req, false, 'ticket is required')
-      const r = factoryAcceptByTicket(ticket, allowUnreviewed ?? false)
+      const r = await factoryAcceptByTicket(ticket, allowUnreviewed ?? false)
       if ('error' in r) return respond(req, false, r.error)
       return respond(req, true, { accepted: ticket })
     }
@@ -262,7 +262,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'health': response = handleHealth(req); break
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
-      case 'factory': response = handleFactory(req); break
+      case 'factory': response = await handleFactory(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }
