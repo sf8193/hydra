@@ -315,6 +315,42 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
 // Protocols — show active review/build/design sessions
 // ---------------------------------------------------------------------------
 
+export async function handleHistoryIntercept(msg: InboundMessage): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, '📜').catch(() => {})
+
+  const now = Date.now()
+  // Collect threads that have at least one completed session
+  const threads = [...threadRegistry.values()]
+    .filter(t => t.sessionHistory.some(h => h.endedAt))
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, 10)
+
+  if (threads.length === 0) {
+    await safeSend(msg.channelId, '_No completed sessions in history._', { replyTo: msg.id })
+    return
+  }
+
+  const lines: string[] = ['**Recent Sessions**', '']
+  for (const t of threads) {
+    // Find the most recent completed session in this thread
+    const completed = t.sessionHistory.filter(h => h.endedAt).sort((a, b) => b.startedAt - a.startedAt)
+    if (!completed.length) continue
+    const last = completed[0]
+    const duration = last.endedAt && last.startedAt
+      ? formatDuration(last.endedAt - last.startedAt)
+      : '?'
+    const msgs = last.messageCount ?? 0
+    const model = last.model?.replace(/^claude-/, '').replace(/\[1m\]$/, '') ?? '?'
+    const desc = t.description || t.topic?.slice(0, 60) || 'untitled'
+    const url = t.threadUrl
+    const sessionLink = url ? `<${url}|${last.tmuxName}>` : last.tmuxName
+    const age = formatDuration(now - (last.endedAt ?? last.startedAt))
+    lines.push(`• ${sessionLink} — ${desc} · ${duration} · ${msgs} msgs · \`${model}\` · _${age} ago_`)
+  }
+
+  await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
+}
+
 export async function handleProtocolsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})
 

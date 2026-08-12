@@ -23,7 +23,7 @@ import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/d
 import { getDesignByThread, handleDesignAnswer } from './design.js'
 import { isThreadOccupied } from './protocol-registry.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept } from './commands/status.js'
+import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept, handleHistoryIntercept } from './commands/status.js'
 import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
@@ -48,6 +48,7 @@ const COMMAND_PREFIXES = [
   '/recover', 'recover',
   '/commands', 'commands', '/help', 'help',
   '/usage', 'usage',
+  '/history', 'history',
 ]
 const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
@@ -404,6 +405,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const protocolsMatch = msg.content.match(/^(?:\/protocols|protocols)\s*$/i)
     if (protocolsMatch) {
       void handleProtocolsIntercept(msg)
+      return
+    }
+
+    const historyMatch = msg.content.match(/^(?:\/history|history)\s*$/i)
+    if (historyMatch) {
+      void handleHistoryIntercept(msg)
       return
     }
 
