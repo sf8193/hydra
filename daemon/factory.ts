@@ -19,7 +19,7 @@ import { gateway } from './config.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
 import { registry, threadRegistry } from './sessions.js'
-import { safeSend } from './util.js'
+import { safeSend, formatDuration, getContextPercent } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on, once } from './event-bus.js'
@@ -50,6 +50,7 @@ type FactoryBuildState = {
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
   reviewSummary?: string // captured from builder's [summary] post at review completion
+  _progressTimer?: ReturnType<typeof setInterval> // periodic progress update timer
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +93,36 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
     appendFileSync(join(LOG_DIR, 'history.jsonl'), JSON.stringify(entry) + '\n')
   } catch (err) {
     process.stderr.write(`daemon: factory: log failed: ${err}\n`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Progress updates — periodic status messages during build and review
+// ---------------------------------------------------------------------------
+
+const PROGRESS_INTERVAL_MS = 3 * 60_000 // every 3 minutes
+
+function startProgressUpdates(state: FactoryBuildState): void {
+  if (state._progressTimer) return
+  state._progressTimer = setInterval(() => {
+    if (state.phase !== 'building' && state.phase !== 'reviewing') {
+      stopProgressUpdates(state)
+      return
+    }
+    const info = state.builderSessionId ? registry.get(state.builderSessionId) : undefined
+    if (!info) return
+    const elapsed = formatDuration(Date.now() - state.createdAt)
+    const ctx = getContextPercent(info.tmuxName)
+    const ctxStr = ctx !== '?' ? ` · ctx ${ctx}` : ''
+    const phase = state.phase === 'reviewing' ? 'under review' : 'building'
+    void safeSend(state.pmThreadId, `🏭 _${info.tmuxName} ${phase} · ${elapsed} elapsed${ctxStr} · ticket \`${state.ticket}\`_`).catch(() => {})
+  }, PROGRESS_INTERVAL_MS)
+}
+
+function stopProgressUpdates(state: FactoryBuildState): void {
+  if (state._progressTimer) {
+    clearInterval(state._progressTimer)
+    state._progressTimer = undefined
   }
 }
 
@@ -647,6 +678,9 @@ async function spawnBuilder(
   }
 
   process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) ${isFresh ? 'spawned' : 'forked'} for ticket ${state.ticket}\n`)
+
+  // Start periodic progress updates so PM gets status during long builds
+  startProgressUpdates(state)
 }
 
 export type FactoryDoneArgs = {
@@ -799,6 +833,7 @@ function onFactoryCriticRound(builderThreadId: string, round: number, totalRound
 function cleanupState(ticket: string): void {
   const state = builds.get(ticket)
   if (!state) return
+  stopProgressUpdates(state)
   if (state.builderSessionId) {
     builderSessionToTicket.delete(state.builderSessionId)
     clearBuilderNudge(state.builderSessionId)
