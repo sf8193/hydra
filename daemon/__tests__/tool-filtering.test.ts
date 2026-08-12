@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { computeToolsForSession, UNIVERSAL_TOOLS } from '../bridge-tools.js'
+import { computeToolsForSession, UNIVERSAL_TOOLS, PROTOCOL_GUEST_DISALLOWED_BUILTINS } from '../bridge-tools.js'
 import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../../shared/constants.js'
 
 // Suppress stderr
@@ -86,5 +86,27 @@ describe('computeToolsForSession', () => {
     expect(tool.inputSchema.required).toContain('name')
     expect(tool.inputSchema.properties).toHaveProperty('name')
     expect(tool.inputSchema.properties).toHaveProperty('lines')
+  })
+})
+
+describe('PROTOCOL_GUEST_DISALLOWED_BUILTINS', () => {
+  test('disallows the write/browse/subagent built-ins critics never need', () => {
+    for (const name of ['WebSearch', 'WebFetch', 'NotebookEdit', 'Agent', 'Write', 'Edit']) {
+      expect(PROTOCOL_GUEST_DISALLOWED_BUILTINS).toContain(name)
+    }
+  })
+
+  test('keeps review/verify built-ins available (not disallowed)', () => {
+    // Critics still read code and run tests — these must NOT be blocked.
+    for (const name of ['Read', 'Grep', 'Glob', 'Bash']) {
+      expect(PROTOCOL_GUEST_DISALLOWED_BUILTINS).not.toContain(name)
+    }
+  })
+
+  test('trimming this many built-ins is enough to clear CC deferral headroom', () => {
+    // The whole point: shrink the total tool count below CC's ~22 deferral
+    // threshold so advance/extend_phase stay callable. Guard the count so a
+    // future edit that guts the list is caught.
+    expect(PROTOCOL_GUEST_DISALLOWED_BUILTINS.length).toBeGreaterThanOrEqual(6)
   })
 })

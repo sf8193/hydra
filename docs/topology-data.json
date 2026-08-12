@@ -833,6 +833,10 @@
       "daemon_transcript-dump"
     ],
     [
+      "daemon_adversarial",
+      "daemon_bridge-tools"
+    ],
+    [
       "daemon_build",
       "daemon_config"
     ],
@@ -875,6 +879,10 @@
     [
       "daemon_build",
       "daemon_transcript-dump"
+    ],
+    [
+      "daemon_build",
+      "daemon_bridge-tools"
     ],
     [
       "daemon_design",

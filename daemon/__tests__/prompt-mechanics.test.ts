@@ -92,6 +92,17 @@ describe('shared mechanics — uniform across all protocol seeds', () => {
     }
   })
 
+  test('ToolSearch deferral-recovery instruction present in every seed', () => {
+    // Single derivation via mechanicsBlock — every protocol participant is told
+    // how to recover a deferred tool (InputValidationError → ToolSearch → retry)
+    // instead of abandoning its protocol action. Guards against the Population-A
+    // failure where critics dropped to reply() when advance() was deferred.
+    for (const p of allPrompts()) {
+      expect(p.text).toContain('InputValidationError')
+      expect(p.text).toContain('ToolSearch(query="select:<tool_name>")')
+    }
+  })
+
   test('cutoff line renders only when cutoffTs given', () => {
     const withCutoff = designPersonaPrompt({ ...base, persona: 'subtractor', cutoffTs: '2026-01-01T00:00:00Z' })
     const without = designPersonaPrompt({ ...base, persona: 'subtractor' })

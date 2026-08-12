@@ -40,6 +40,17 @@ export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
 export const FACTORY_ONLY_TOOLS = new Set(['factory_done'])
 const SCOPED_TOOLS = new Set([...PROTOCOL_ONLY_TOOLS, ...FACTORY_ONLY_TOOLS])
 
+// CC built-in tools a protocol guest (review/build critic) never needs. Disallowing
+// them at spawn (via `--disallowedTools`) shrinks the total tool count below CC's
+// deferral threshold (~22 tools), so the MCP `advance`/`extend_phase` tools stay
+// non-deferred and directly callable. This is the built-in-side complement to
+// `computeToolsForSession`'s MCP-side trim — both halves of protocol-guest tool
+// scoping live here. Critics still keep Read/Grep/Glob/Bash to review and verify;
+// they do not write files, spawn subagents, or browse the web.
+export const PROTOCOL_GUEST_DISALLOWED_BUILTINS = Object.freeze([
+  'WebSearch', 'WebFetch', 'NotebookEdit', 'Agent', 'Write', 'Edit',
+]) as readonly string[]
+
 export function defaultToolDescription(name: string): string {
   const tool = UNIVERSAL_TOOLS.find(t => t.name === name)
   if (!tool) throw new Error(`defaultToolDescription: unknown tool "${name}"`)
