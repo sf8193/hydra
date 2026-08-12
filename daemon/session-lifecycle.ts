@@ -91,6 +91,8 @@ export async function backfillAnchorChannelIds(): Promise<void> {
       const ch = await gateway.fetchChannel(info.threadId)
       if (ch.isThread && ch.parentId) {
         info.anchorChannelId = ch.parentId
+        const thread = threadRegistry.get(info.threadId)
+        if (thread && !thread.anchorChannelId) thread.anchorChannelId = ch.parentId
         filled++
       }
     } catch (err) {
@@ -101,7 +103,10 @@ export async function backfillAnchorChannelIds(): Promise<void> {
     if (missing.length > 1) await new Promise(r => setTimeout(r, 200))
   }
 
-  if (filled > 0) registry.persist()
+  if (filled > 0) {
+    registry.persist()
+    threadRegistry.persist()
+  }
   process.stderr.write(`daemon: backfill: ${filled} filled, ${failed} failed, ${missing.length - filled - failed} skipped\n`)
 }
 
@@ -166,7 +171,7 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 
 export function resolveListenState(threadId: string, channelId?: string): boolean {
   const thread = threadRegistry.get(threadId)
-  return resolveListenStatePure(channelId, loadAccess(), thread?.listenOverride, thread?.parentChannelId)
+  return resolveListenStatePure(channelId, loadAccess(), thread?.listenOverride, thread?.parentChannelId, thread?.anchorChannelId)
 }
 
 export function resolveListenStatePure(
@@ -174,9 +179,10 @@ export function resolveListenStatePure(
   access: { groups: Record<string, { defaultListen?: boolean }>; defaultListen?: boolean },
   listenOverride?: boolean,
   parentChannelId?: string,
+  anchorChannelId?: string,
 ): boolean {
   if (listenOverride !== undefined) return listenOverride
-  for (const id of [channelId, parentChannelId]) {
+  for (const id of [channelId, parentChannelId, anchorChannelId]) {
     if (id) {
       const group = access.groups[id]
       if (group?.defaultListen !== undefined) return group.defaultListen
@@ -686,7 +692,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
     if (!isJoin) {
       threadRegistry.recordSpawn(threadId!, {
-        anchorMessageId, threadUrl: url || undefined, topic, respawnCount,
+        anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
         sessionId, tmuxName, originType, originFrom, model: opts?.model ?? 'codex-default', parentChannelId,
       })
     }
@@ -851,6 +857,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (!isJoin && !isHeadless) {
     threadRegistry.recordSpawn(threadId!, {
       anchorMessageId,
+      anchorChannelId,
       threadUrl: url || undefined,
       topic,
       respawnCount,
