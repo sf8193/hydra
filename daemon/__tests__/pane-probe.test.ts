@@ -763,7 +763,7 @@ describe('probeAllSessions', () => {
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     transportMessages.length = 0
-    probeAllSessions(T0)
+    await probeAllSessions(T0)
 
     expect(transportMessages.length).toBe(1)
     expect(transportMessages[0].sessionId).toBe('s1')
@@ -787,7 +787,7 @@ describe('probeAllSessions', () => {
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     sentMessages.length = 0
-    probeAllSessions(T0)
+    await probeAllSessions(T0)
 
     const pmMsg = sentMessages.find(m => m.channelId === 'pm-thread')
     expect(pmMsg).not.toBeUndefined()
