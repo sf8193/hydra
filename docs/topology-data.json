@@ -1017,6 +1017,10 @@
       "daemon_pr-watch"
     ],
     [
+      "daemon_commands_thread",
+      "daemon_templates"
+    ],
+    [
       "daemon_commands_review",
       "daemon_config"
     ],
