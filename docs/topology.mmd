@@ -204,32 +204,12 @@ graph TD
   daemon_adversarial --> daemon_state-machine
   daemon_adversarial --> daemon_anchor-state
   daemon_adversarial --> daemon_transcript-dump
-  daemon_build --> daemon_config
-  daemon_build --> daemon_sessions
-  daemon_build --> daemon_session-lifecycle
-  daemon_build --> daemon_bridge-transport
-  daemon_build --> daemon_util
-  daemon_build --> daemon_protocol-registry
-  daemon_build --> daemon_anchor-state
-  daemon_build --> daemon_pr-watch
-  daemon_build --> daemon_state-machine
-  daemon_build --> shared_constants
-  daemon_build --> daemon_transcript-dump
-  daemon_design --> daemon_config
-  daemon_design --> daemon_sessions
-  daemon_design --> daemon_session-lifecycle
-  daemon_design --> daemon_bridge-transport
-  daemon_design --> daemon_protocol-registry
-  daemon_design --> daemon_state-machine
-  daemon_design --> daemon_anchor-state
-  daemon_design --> daemon_util
   daemon_commands_global --> daemon_config
   daemon_commands_global --> daemon_sessions
   daemon_commands_global --> daemon_bridge-transport
   daemon_commands_global --> daemon_session-lifecycle
   daemon_commands_global --> daemon_util
   daemon_commands_global --> daemon_commands_status
-  daemon_commands_global --> daemon_build
   daemon_commands_global --> daemon_adversarial
   daemon_commands_global --> daemon_templates
   daemon_commands_global --> daemon_access
@@ -239,8 +219,6 @@ graph TD
   daemon_commands_status --> daemon_util
   daemon_commands_status --> daemon_pr-watch
   daemon_commands_status --> daemon_adversarial
-  daemon_commands_status --> daemon_build
-  daemon_commands_status --> daemon_design
   daemon_commands_thread --> daemon_config
   daemon_commands_thread --> daemon_sessions
   daemon_commands_thread --> daemon_bridge-transport
@@ -254,12 +232,6 @@ graph TD
   daemon_commands_review --> daemon_config
   daemon_commands_review --> daemon_sessions
   daemon_commands_review --> daemon_adversarial
-  daemon_commands_build --> daemon_config
-  daemon_commands_build --> daemon_sessions
-  daemon_commands_build --> daemon_build
-  daemon_commands_design --> daemon_config
-  daemon_commands_design --> daemon_sessions
-  daemon_commands_design --> daemon_design
   daemon_commands_watch --> daemon_config
   daemon_commands_watch --> daemon_sessions
   daemon_commands_watch --> daemon_pr-watch

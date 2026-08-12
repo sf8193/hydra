@@ -9,7 +9,6 @@ import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession, tryResume, tryRespawn, discoverClaudeSessionId } from '../session-lifecycle.js'
 import { tmuxHasSession, isAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { getActiveBuilds, cancelBuild } from '../build.js'
 import { getActiveReviews, cancelReview } from '../adversarial.js'
 import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
@@ -166,22 +165,9 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
 
   // Cancel active builds/reviews before restart — critics are join members
   // that get killed on restart, so cancel cleanly first
-  const activeBuilds = getActiveBuilds()
   const activeReviews = getActiveReviews()
-  for (const build of activeBuilds) {
-    process.stderr.write(`daemon: restart: cancelling active build ${build.buildId.slice(0, 8)}\n`)
-    await cancelBuild(build.buildId).catch(err => {
-      process.stderr.write(`daemon: restart: cancelBuild failed: ${err}\n`)
-    })
-  }
-  for (const review of activeReviews) {
-    process.stderr.write(`daemon: restart: cancelling active review ${review.reviewId.slice(0, 8)}\n`)
-    await cancelReview(review.reviewId).catch(err => {
-      process.stderr.write(`daemon: restart: cancelReview failed: ${err}\n`)
-    })
-  }
 
-  const cancelled = activeBuilds.length + activeReviews.length
+  const cancelled = activeReviews.length
   const cancelNote = cancelled > 0 ? ` (cancelled ${cancelled} active build/review${cancelled > 1 ? 's' : ''})` : ''
 
   const hydraTs = join(import.meta.dir, '..', '..', 'cli', 'hydra.ts')
@@ -266,9 +252,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '',
     '**Multi-agent** (thread):',
     '• 🔨 `build [N] [model:] [task]` — implement + review cycle',
-    '• 🏗️ `build-wt: <repo> [N] [model:] [task]` — build in a worktree',
     '• ⚔️ `/review [N] [model:] [topic]` — adversarial review',
-    '• 🎨 `design: <topic>` — multi-persona design session',
     '• 🔬 `spike [topic]` — single-agent deep investigation (checkpoints → decide done → report)',
     '• ⚔️ `review_v2 [N] [+s] [topic]` · 🔨 `build_v2 [N] [task]` — v2 protocols',
     '• 🚫 `kill build` / `kill review` / `kill design` / `kill spike`',
