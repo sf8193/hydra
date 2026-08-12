@@ -22,6 +22,7 @@ import { registry, threadRegistry } from './sessions.js'
 import { safeSend, formatDuration, getContextPercent } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
+import { computeToolsForSession } from './bridge-tools.js'
 import { on, once } from './event-bus.js'
 import { registerProtocol } from './protocol-registry.js'
 import { clearBuilderNudge } from './pane-probe.js'
@@ -861,6 +862,12 @@ async function spawnBuilder(
   state.builderThreadId = result.threadId
   builderSessionToTicket.set(result.sessionId, state.ticket)
   builderThreadToTicket.set(result.threadId, state.ticket)
+
+  // Refresh builder's tool list so factory_done is available — fixes the race
+  // where fresh builders get their initial tools before the factory registers them.
+  const factoryOverrides = { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' }
+  const updatedTools = computeToolsForSession(result.sessionId, { scopedToolOverrides: factoryOverrides })
+  transport.sendOrQueue(result.sessionId, { type: 'tools_update', tools: updatedTools })
 
   // Stamp registry fields for sweep notifications + phase-aware restart messages.
   const builderInfo = registry.get(result.sessionId)
