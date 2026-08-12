@@ -42,6 +42,7 @@ export type SessionInfo = {
   lastReplyId?: string
   worktreeRepo?: string
   worktreePath?: string
+  worktreeBranch?: string
   isJoinMember?: boolean
   deadAt?: number
   contextLinks?: string[]
@@ -130,6 +131,7 @@ export type SpawnOpts = {
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   allowMainTools?: boolean    // grant access to spawn_session/kill_session (from template)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
+  worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
 }
 
 // ---------------------------------------------------------------------------

@@ -274,7 +274,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     clearInterceptsForSession(info.tmuxName)
 
     if (info.worktreePath && info.worktreeRepo) {
-      const branch = `wt/${info.tmuxName}`
+      const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
 
       // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort)
       void (async () => {
@@ -590,17 +590,19 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   let worktreeRepo: string | undefined
   let worktreePath: string | undefined
+  let worktreeBranch: string | undefined
   let effectiveCwd = spawnCwd
   if (worktreeTarget) {
     const wt = await createWorktree({
       repoName: worktreeTarget,
       spawnCwd,
-      branchName: `wt/${tmuxName}`,
+      branchName: opts?.worktreeBranchSuffix ? `wt/${tmuxName}-${opts.worktreeBranchSuffix}` : `wt/${tmuxName}`,
       dirSuffix: `${worktreeTarget}-${tmuxName}`,
     })
 
     worktreeRepo = wt.repoDir
     worktreePath = wt.worktreePath
+    worktreeBranch = wt.branch
     effectiveCwd = wt.worktreePath
 
     // Pre-approve Claude trust for the worktree paths (Claude-specific, not git)
@@ -687,7 +689,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       ...(spawnLogPath ? { spawnLogPath } : {}),
       ...(respawnCount > 0 ? { respawnCount } : {}),
       ...(resumeCount > 0 ? { resumeCount } : {}),
-      ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
+      ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
       ...(isJoin ? { isJoinMember: true } : {}),
       initiator: opts?.initiator,
       ephemeral: opts?.ephemeral,
@@ -838,7 +840,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(resumeCount > 0 ? { resumeCount } : {}),
-    ...(worktreeRepo ? { worktreeRepo, worktreePath } : {}),
+    ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
     ...(isJoin ? { isJoinMember: true } : {}),
     ...(spawnLogPath ? { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog } : {}),
     debugLogPath: debugLog,
