@@ -507,6 +507,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
         }
 
+        // Deliver to the target's Claude session so it actually receives the message
+        const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'
+        const replyInstruction = msgType === 'question'
+          ? `\nRespond via send_to_thread(target="${senderName}", type="result", text="...").`
+          : ''
+        transport.sendOrQueue(targetSession.sessionId, {
+          type: 'notification',
+          content: `[${msgType} from ${senderName}] ${text}${replyInstruction}`,
+          meta: {
+            chat_id: threadId,
+            message_id: sentIds[0] ?? '',
+            user: senderName,
+            user_id: 'session',
+            ts: new Date().toISOString(),
+          },
+        })
+
         const result = sentIds.length === 1
           ? `sent to ${target} (id: ${sentIds[0]})`
           : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})`

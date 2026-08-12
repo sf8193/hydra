@@ -586,7 +586,7 @@ async function spawnBuilder(
   const builderPrompt = [
     `IMPORTANT: You are a BUILDER session${isFresh ? '' : ' forked from the PM'}. Your job is to WRITE CODE.`,
     ...(isFresh
-      ? [`You were spawned fresh (no PM conversation history). Read CLAUDE.md and the files referenced in the spec before coding.`]
+      ? [`You were spawned fresh (no PM conversation history). Read CLAUDE.md and the files referenced in the spec before coding.${pmName ? ` If the spec is ambiguous or you need design guidance, ask the PM via send_to_thread(target="${pmName}", type="question", text="...").` : ''}`]
       : [`Ignore any prior instructions about "not writing code" or "using factory_build" — those apply to the PM, not to you.`]),
     `You have full file access. Write code, run tests, implement the spec.`,
     ``,
