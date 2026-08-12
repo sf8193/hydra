@@ -342,7 +342,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
       if (ignored.length > 0) {
-        void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — only a template modifier (\`+f\`/\`+factory\`) applies to a spawn._`, { replyTo: msg.id }).catch(() => {})
+        void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier (\`+f\`/\`+factory\`)._`, { replyTo: msg.id }).catch(() => {})
       }
       void handleTemplateSpawn(msg, templateMod.templateName, topic, template, access)
       return
@@ -480,7 +480,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
           return
         }
         if (ignored.length > 0) {
-          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — only a template modifier (\`+f\`/\`+factory\`) applies to a respawn._`, { replyTo: msg.id }).catch(() => {})
+          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier (\`+f\`/\`+factory\`)._`, { replyTo: msg.id }).catch(() => {})
         }
         void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName)
       } else {
