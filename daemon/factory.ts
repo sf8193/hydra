@@ -624,7 +624,7 @@ export async function factoryReview(opts: {
     if (event.outcome === 'cancelled') {
       void safeSend(callerThreadId, `🔍 Review of **${targetName}** cancelled`)
     } else {
-      const summary = event.decisions.find(d => d.phase === 'cleanup')?.because
+      const summary = event.summary
       const summaryBlock = summary
         ? '\n' + (summary.length > 1500 ? summary.slice(0, 1500) + '\n…(truncated)' : summary)
         : ''
@@ -633,11 +633,18 @@ export async function factoryReview(opts: {
   }
   protocolEvents.onComplete(handler)
 
-  await startProtocolRun(reviewProto, targetThreadId, targetSessionId, {
-    rounds: reviewRounds,
-    topic,
-    model: reviewerModel,
-  })
+  // If the run never starts (e.g. a review already owns this thread), the handler
+  // would leak forever — no completion event will ever fire to unsubscribe it.
+  try {
+    await startProtocolRun(reviewProto, targetThreadId, targetSessionId, {
+      rounds: reviewRounds,
+      topic,
+      model: reviewerModel,
+    })
+  } catch (err) {
+    protocolEvents.offComplete(handler)
+    throw err
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,8 +1095,7 @@ function factoryReviewCancelled({ threadId }: { threadId: string }): void {
 protocolEvents.onComplete((event: CompletionEvent) => {
   if (event.protocol !== 'review') return
   if (event.outcome === 'complete') {
-    const summary = event.decisions.find(d => d.phase === 'cleanup')?.because
-    factoryReviewComplete({ threadId: event.threadId, summary })
+    factoryReviewComplete({ threadId: event.threadId, summary: event.summary })
   } else {
     factoryReviewCancelled({ threadId: event.threadId })
   }

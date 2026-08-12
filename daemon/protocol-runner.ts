@@ -45,6 +45,7 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
   strike: boolean
   statusHistory: string[]
+  _cleanupSummary?: string
   ext: Ext
 }
 
@@ -288,7 +289,9 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // Post content to thread — after state advance so a safeSend failure
     // doesn't leave the agent thinking advance failed when state moved.
     const sentIds = await safeSend(run.threadId, content)
-    if (advancePhaseFrom !== run.protocol.cleanupPhase) {
+    if (advancePhaseFrom === run.protocol.cleanupPhase) {
+      run._cleanupSummary = content
+    } else {
       run.messageIds.push(...sentIds)
     }
 
@@ -899,6 +902,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
     durationMs: Date.now() - run.startedAt,
     transcriptPath,
+    summary: run._cleanupSummary,
   }
 
   protocolEvents.emitComplete(completionEvent)

@@ -13,8 +13,10 @@ afterEach(() => {
 })
 
 // Build a review CompletionEvent for a given thread/outcome. Mirrors what
-// protocol-runner emits at completeRun/cancelRun.
-function reviewEvent(threadId: string, outcome: 'complete' | 'cancelled'): CompletionEvent {
+// protocol-runner emits at completeRun/cancelRun — including the cleanup-phase
+// summary, which rides on `summary` (not `decisions`, which stay empty for
+// verdict-less protocols like review).
+function reviewEvent(threadId: string, outcome: 'complete' | 'cancelled', summary?: string): CompletionEvent {
   return {
     protocol: 'review',
     threadId,
@@ -22,6 +24,7 @@ function reviewEvent(threadId: string, outcome: 'complete' | 'cancelled'): Compl
     outcome,
     decisions: [],
     durationMs: 1000,
+    ...(summary ? { summary } : {}),
   }
 }
 
@@ -63,6 +66,26 @@ describe('factoryReview one-shot listeners', () => {
 
     // Cleanup — handler never matched, so it's still subscribed
     protocolEvents.offComplete(handler)
+  })
+
+  test('summary rides on event.summary, not decisions', () => {
+    // Regression guard: review runs record no decisions (all phases are
+    // verdict-less), so the cleanup summary must arrive via event.summary.
+    // Extracting from decisions would always yield empty.
+    let captured: string | undefined = 'unset'
+    const targetThread = 'thread-summary-target'
+
+    const handler = (event: CompletionEvent) => {
+      if (event.threadId !== targetThread) return
+      protocolEvents.offComplete(handler)
+      captured = event.summary
+      // The old (broken) path — always undefined for reviews.
+      expect(event.decisions.find(d => d.phase === 'cleanup')?.because).toBeUndefined()
+    }
+    protocolEvents.onComplete(handler)
+
+    protocolEvents.emitComplete(reviewEvent(targetThread, 'complete', 'the review synthesis'))
+    expect(captured).toBe('the review synthesis')
   })
 
   test('onComplete handler fires on cancelled outcome', () => {

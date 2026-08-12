@@ -39,4 +39,8 @@ export type CompletionEvent = {
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
   durationMs: number
   transcriptPath?: string
+  // Owner's closing summary posted in the cleanup phase (present on 'complete' only).
+  // Verdict-less advances aren't recorded as decisions, so this is the only channel
+  // for the cleanup content — consumers can't recover it from `decisions`.
+  summary?: string
 }
