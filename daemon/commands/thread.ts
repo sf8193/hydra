@@ -12,6 +12,7 @@ import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession,
 import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
+import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
@@ -268,9 +269,18 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   }
 }
 
-export async function handleRespawnIntercept(msg: InboundMessage, topic?: string): Promise<void> {
+export async function handleRespawnIntercept(msg: InboundMessage, topic?: string, templateName?: string): Promise<void> {
   if (!msg.isThread) {
     await reportError(msg.channelId, msg.id, 'respawn', 'must be used in a thread')
+    return
+  }
+
+  // `respawn +f:` / `respawn +factory:` — respawn applying a spawn template
+  // (e.g. factory). The template's prompt/tool settings are layered onto the
+  // resurrect spawn, which already instructs the session to reread the thread.
+  const template = templateName ? getTemplate(templateName) : undefined
+  if (templateName && !template) {
+    await reportError(msg.channelId, msg.id, 'respawn', `unknown template "${templateName}"`)
     return
   }
 
@@ -295,13 +305,19 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   const resurrectFrom = lastSession?.tmuxName
   const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.capabilities?.model
 
-  const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel)
+  // A template respawn layers the template's prompt/tool settings onto the
+  // resurrect spawn. `trigger` is kept so the session's origin still reads as the
+  // template (e.g. `factory:`) in the spawn announce + `list sessions`.
+  const extraOpts = template ? buildTemplateSpawnOpts(templateName!, template) : undefined
+
+  const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel, extraOpts)
   if (result) {
     const e = sessionEmoji(result.name)
     const count = thread?.respawnCount ?? 0
     const countLabel = count > 0 ? ` ${COUNT_EMOJI[Math.min(count - 1, COUNT_EMOJI.length - 1)]}` : ''
+    const tplLabel = templateName ? ` (${templateName})` : ''
     try {
-      const sent = await gateway.send(msg.channelId, `🔁 ${e} \`${result.name}\` respawned${countLabel} — reading thread history.\nView in any terminal: \`tmux attach -t ${result.name}\``, { replyTo: msg.id })
+      const sent = await gateway.send(msg.channelId, `🔁 ${e} \`${result.name}\`${tplLabel} respawned${countLabel} — reading thread history.\nView in any terminal: \`tmux attach -t ${result.name}\``, { replyTo: msg.id })
       if (count > 0) void gateway.react(msg.channelId, sent.id, '🧟').catch(() => {})
     } catch {}
     const mainBridge = transport.get('main')

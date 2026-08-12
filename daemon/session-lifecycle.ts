@@ -1018,12 +1018,16 @@ export async function tryRespawn(
   topic: string,
   resurrectFrom?: string,
   model?: string,
+  extraOpts?: Partial<SpawnOpts>,
 ): Promise<SpawnResult | null> {
   try {
     return await doSpawnSession(topic, undefined, undefined, {
+      ...extraOpts,
       existingThreadId: threadId,
       resurrectFrom,
-      model,
+      // Respawn continuity: keep the dead session's model if we have one,
+      // else fall back to the template's model (extraOpts), else the default.
+      model: model ?? extraOpts?.model,
     })
   } catch (err) {
     process.stderr.write(`daemon: tryRespawn: doSpawnSession failed for ${threadId}: ${err}\n`)
