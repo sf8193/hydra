@@ -17,12 +17,14 @@ import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync, readd
 import { join, resolve, relative } from 'path'
 import { gateway } from './config.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
+import { startProtocolRun, getRunByThread, cancelRun, protocolEvents } from './protocol-runner.js'
+import type { CompletionEvent } from './protocol-types.js'
+import reviewProto from '../protocols/review.js'
 import { registry, threadRegistry } from './sessions.js'
 import { safeSend, formatDuration, getContextPercent } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
-import { on, once } from './event-bus.js'
+import { on } from './event-bus.js'
 import { registerProtocol } from './protocol-registry.js'
 import { clearBuilderNudge } from './pane-probe.js'
 
@@ -540,9 +542,9 @@ function abandonCore(state: FactoryBuildState): { ok: true } | { error: string }
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
-    const review = getReviewByThread(state.builderThreadId)
-    if (review) {
-      void cancelReview(review.reviewId).catch(err => {
+    const run = getRunByThread(state.builderThreadId)
+    if (run) {
+      void cancelRun(run, 'factory abandoned').catch(err => {
         process.stderr.write(`daemon: factory: cancel review on abandon failed: ${err}\n`)
       })
     }
@@ -615,22 +617,27 @@ export async function factoryReview(opts: {
   const { callerThreadId, targetSessionId, targetThreadId, targetName, topic, reviewerModel } = opts
   const reviewRounds = opts.reviewRounds ?? 3
 
-  // One-shot listeners: when this review completes/cancels, notify the caller.
-  // Use wider type than EventMap (summary is passed at emit-time but not in the interface).
-  once('review:complete', (payload: { threadId: string; summary?: string }) => {
-    if (payload.threadId !== targetThreadId) return
-    const summaryBlock = payload.summary
-      ? '\n' + (payload.summary.length > 1500 ? payload.summary.slice(0, 1500) + '\n…(truncated)' : payload.summary)
-      : ''
-    void safeSend(callerThreadId, `🔍 Review of **${targetName}** complete${summaryBlock}`)
-  }, `factory-review:${targetThreadId}`)
+  // One-shot listener: when this review completes/cancels, notify the caller.
+  const handler = (event: CompletionEvent) => {
+    if (event.threadId !== targetThreadId) return
+    protocolEvents.offComplete(handler)
+    if (event.outcome === 'cancelled') {
+      void safeSend(callerThreadId, `🔍 Review of **${targetName}** cancelled`)
+    } else {
+      const summary = event.decisions.find(d => d.phase === 'cleanup')?.because
+      const summaryBlock = summary
+        ? '\n' + (summary.length > 1500 ? summary.slice(0, 1500) + '\n…(truncated)' : summary)
+        : ''
+      void safeSend(callerThreadId, `🔍 Review of **${targetName}** complete${summaryBlock}`)
+    }
+  }
+  protocolEvents.onComplete(handler)
 
-  once('review:cancelled', (payload) => {
-    if (payload.threadId !== targetThreadId) return
-    void safeSend(callerThreadId, `🔍 Review of **${targetName}** cancelled`)
-  }, `factory-review-cancel:${targetThreadId}`)
-
-  await startReview(targetThreadId, targetSessionId, reviewRounds, topic, reviewerModel)
+  await startProtocolRun(reviewProto, targetThreadId, targetSessionId, {
+    rounds: reviewRounds,
+    topic,
+    model: reviewerModel,
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -913,7 +920,11 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
   // During diff capture (up to 15s of GitHub API calls), the review protocol
   // owns the session so bridge disconnects are handled correctly.
   // Diff/PR URLs are only needed in onFactoryReviewComplete, not at review start.
-  startReview(state.builderThreadId!, state.builderSessionId!, state.reviewRounds, state.spec, state.reviewerModel)
+  startProtocolRun(reviewProto, state.builderThreadId!, state.builderSessionId!, {
+    rounds: state.reviewRounds,
+    topic: state.spec,
+    model: state.reviewerModel,
+  })
     .catch(err => {
       const errMsg = err instanceof Error ? err.message : String(err)
       process.stderr.write(`daemon: factory: review failed to start: ${errMsg}\n`)
@@ -958,9 +969,9 @@ export function onBuilderDeath(sessionId: string): void {
     state.phase = 'failed'
     logBuild(state, 'builder_died_reviewing')
     if (state.builderThreadId) {
-      const review = getReviewByThread(state.builderThreadId)
-      if (review) {
-        void cancelReview(review.reviewId).catch(err => {
+      const run = getRunByThread(state.builderThreadId)
+      if (run) {
+        void cancelRun(run, 'builder crashed during review').catch(err => {
           process.stderr.write(`daemon: factory: cancel review on builder death failed: ${err}\n`)
         })
       }
@@ -1019,17 +1030,6 @@ function onFactoryReviewCancelled(threadId: string): boolean {
   return true
 }
 
-function onFactoryCriticRound(builderThreadId: string, round: number, totalRounds: number, _criticText: string): void {
-  const ticket = builderThreadToTicket.get(builderThreadId)
-  if (!ticket) return
-  const state = builds.get(ticket)
-  if (!state) return
-
-  // Only log progress — full transcript stays in the builder's thread.
-  // PM gets the summary in the review-complete notification.
-  process.stderr.write(`daemon: factory: critic round ${round}/${totalRounds} for ticket ${state.ticket}\n`)
-}
-
 function cleanupState(ticket: string): void {
   const state = builds.get(ticket)
   if (!state) return
@@ -1063,9 +1063,9 @@ function factorySessionDeath({ sessionId }: { sessionId: string }): void {
     process.stderr.write(`daemon: factory: PM ${sessionId} died with active build ${state.ticket}, cleaning up\n`)
     // Cancel any in-flight review so the critic doesn't orphan
     if (state.phase === 'reviewing' && state.builderThreadId) {
-      const review = getReviewByThread(state.builderThreadId)
-      if (review) {
-        void cancelReview(review.reviewId).catch(err => {
+      const run = getRunByThread(state.builderThreadId)
+      if (run) {
+        void cancelRun(run, 'PM session died').catch(err => {
           process.stderr.write(`daemon: factory: cancel review on PM death failed: ${err}\n`)
         })
       }
@@ -1085,13 +1085,16 @@ function factoryReviewCancelled({ threadId }: { threadId: string }): void {
   onFactoryReviewCancelled(threadId)
 }
 
-function factoryReviewRound({ threadId, round, totalRounds, text }: { threadId: string; round: number; totalRounds: number; text: string }): void {
-  onFactoryCriticRound(threadId, round, totalRounds, text)
-}
+protocolEvents.onComplete((event: CompletionEvent) => {
+  if (event.protocol !== 'review') return
+  if (event.outcome === 'complete') {
+    const summary = event.decisions.find(d => d.phase === 'cleanup')?.because
+    factoryReviewComplete({ threadId: event.threadId, summary })
+  } else {
+    factoryReviewCancelled({ threadId: event.threadId })
+  }
+})
 
-on('review:complete', factoryReviewComplete, 'factory:review-complete')
-on('review:cancelled', factoryReviewCancelled, 'factory:review-cancelled')
-on('review:round', factoryReviewRound, 'factory:review-round')
 on('session:death', factorySessionDeath, 'factory:session-death')
 
 // Register factory hooks so builders get factory_done via scoped tool overrides.
