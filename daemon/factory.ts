@@ -11,10 +11,10 @@
 //      new instructions, re-enter build→review) / factory_abandon (kill, abort)
 
 import { randomBytes } from 'crypto'
-import { execFile } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
-import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'fs'
-import { join } from 'path'
+import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync, readdirSync, realpathSync } from 'fs'
+import { join, resolve, relative } from 'path'
 import { gateway } from './config.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { startReview, getReviewByThread, cancelReview } from './adversarial.js'
@@ -123,6 +123,125 @@ function stopProgressUpdates(state: FactoryBuildState): void {
   if (state._progressTimer) {
     clearInterval(state._progressTimer)
     state._progressTimer = undefined
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Worktree target validation — make "wrong repo" impossible to reach async
+// ---------------------------------------------------------------------------
+//
+// The `worktree` param is a path RELATIVE to SPAWN_CWD, resolved by
+// createWorktree() as `resolve(spawnCwd, repoName)`. Agents repeatedly pass a
+// bare repo name ("hydra") when the repo is nested ("Documents/hydra"), and the
+// only signal was an async spawn failure. These helpers validate synchronously
+// at factory_build time and hand back the exact string that would have worked.
+
+// Injectable git runner (DI, mirrors pane-probe's _setIO) — lets tests supply a
+// deterministic fake instead of shelling out, and keeps these functions testable
+// even when another test file globally mocks child_process.
+export type FactoryGitIO = {
+  // Run `git <args>` from `cwd`; return stdout, throw on non-zero exit (like execFileSync).
+  git(args: string[], cwd: string): string
+}
+const defaultGitIO: FactoryGitIO = {
+  git: (args, cwd) => execFileSync('git', args, { stdio: 'pipe', cwd }).toString(),
+}
+let gitIO: FactoryGitIO = defaultGitIO
+export function _setGitIO(io: FactoryGitIO): void { gitIO = io }
+export function _resetGitIO(): void { gitIO = defaultGitIO }
+
+// macOS home-dir noise + build artifacts we never want to descend into.
+const REPO_SCAN_SKIP = new Set([
+  'node_modules', 'Library', 'Applications', 'Music', 'Movies', 'Pictures',
+  'Downloads', '.Trash', '.cache', '.npm', '.cargo', '.rustup', 'go', 'Public',
+])
+
+/**
+ * Scan `dir` (depth-bounded) for git repositories, returning their paths
+ * relative to `dir` — exactly the strings a caller should pass as `worktree`.
+ * Bounded by depth, a directory budget, and a result cap so a scan of a home
+ * directory can't stall the daemon. Best-effort: unreadable dirs are skipped.
+ */
+export function listGitRepos(dir: string, maxDepth: number = 2): string[] {
+  const repos: string[] = []
+  let budget = 800  // max directories visited — guards against pathological trees
+
+  function scan(current: string, depth: number): void {
+    if (depth > maxDepth || budget <= 0 || repos.length >= 40) return
+    budget--
+
+    let entries: import('fs').Dirent[]
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    // A directory containing `.git` IS a repo — record it and don't descend
+    // (a repo's own subdirs are never separate worktree targets).
+    if (entries.some(e => e.name === '.git')) {
+      repos.push(relative(dir, current) || '.')
+      return
+    }
+
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.') || REPO_SCAN_SKIP.has(e.name)) continue
+      scan(join(current, e.name), depth + 1)
+    }
+  }
+
+  scan(dir, 0)
+  return repos.sort()
+}
+
+/**
+ * Given the PM's current working directory, return the `worktree` string that
+ * would target the repo the PM is actually in — or undefined if the PM isn't in
+ * a git repo under SPAWN_CWD. This is the "did you mean" suggestion.
+ */
+export function suggestWorktreeFromCwd(pmCwd: string, spawnCwd: string): string | undefined {
+  try {
+    const top = gitIO.git(['-C', pmCwd, 'rev-parse', '--show-toplevel'], pmCwd).trim()
+    if (!top) return undefined
+    // git returns a realpath; SPAWN_CWD may be spelled through a symlink
+    // (e.g. macOS /var → /private/var). Compare against its realpath so the
+    // prefix check holds — the relative result is identical either way.
+    let base = spawnCwd
+    try { base = realpathSync(spawnCwd) } catch {}
+    if (top === base || top.startsWith(base + '/')) {
+      const rel = relative(base, top)
+      return rel || undefined  // rel === '' means the repo IS spawnCwd — not a valid nested target
+    }
+  } catch {
+    // pmCwd not a repo, git missing, etc. — no suggestion
+  }
+  return undefined
+}
+
+/**
+ * Validate that `worktree` resolves to a git repo under `spawnCwd`, mirroring
+ * createWorktree()'s own resolution + git check so the two never disagree.
+ * On failure, the error lists every available repo so the caller can self-correct.
+ */
+export function validateWorktreeTarget(
+  worktree: string,
+  spawnCwd: string,
+): { ok: true } | { error: string } {
+  const targetRepo = resolve(spawnCwd, worktree)
+  try {
+    // Spawn from spawnCwd (a dir known to exist) rather than inheriting
+    // process.cwd() — the child spawn itself fails if the inherited cwd is gone.
+    gitIO.git(['-C', targetRepo, 'rev-parse', '--git-dir'], spawnCwd)
+    return { ok: true }
+  } catch {
+    const available = listGitRepos(spawnCwd)
+    const availStr = available.length ? available.join(', ') : 'none found'
+    return {
+      error: `Worktree target "${worktree}" is not a git repo at ${targetRepo}. `
+        + `worktree must be a path relative to SPAWN_CWD (${spawnCwd}). `
+        + `Available repos: ${availStr}`,
+    }
   }
 }
 
@@ -255,6 +374,22 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
   const fresh = opts.fresh ?? false
   if (!fresh && !pmInfo?.claudeSessionId) {
     return { error: 'Cannot fork — PM claude session ID not found. Use fresh=true to spawn without fork.' }
+  }
+
+  // Validate the worktree target NOW (sync) — not async at spawn time. A wrong
+  // repo name is the single most common factory failure; catch it before any
+  // state is created and hand back the string that would have worked.
+  if (worktree) {
+    const spawnCwd = process.env.SPAWN_CWD
+    if (!spawnCwd) return { error: 'SPAWN_CWD not set — cannot resolve worktree target.' }
+    const validation = validateWorktreeTarget(worktree, spawnCwd)
+    if ('error' in validation) {
+      const suggestion = pmInfo?.capabilities?.cwd
+        ? suggestWorktreeFromCwd(pmInfo.capabilities.cwd, spawnCwd)
+        : undefined
+      const suffix = suggestion && suggestion !== worktree ? ` Did you mean worktree="${suggestion}"?` : ''
+      return { error: validation.error + suffix }
+    }
   }
 
   const ticket = `fb-${++ticketCounter}-${randomBytes(2).toString('hex')}`
@@ -395,11 +530,12 @@ export function factoryAbandon(
 export function factoryStatus(
   pmThreadId: string,
   ticket?: string,
-): { builds: Array<{ ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; worktree?: string }> } {
+): { builds: Array<{ ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; worktree?: string }>; availableRepos: string[] } {
   const matching = ticket
     ? [builds.get(ticket)].filter((s): s is FactoryBuildState => !!s && s.pmThreadId === pmThreadId)
     : [...builds.values()].filter(s => s.pmThreadId === pmThreadId)
 
+  const spawnCwd = process.env.SPAWN_CWD
   return {
     builds: matching.map(s => ({
       ticket: s.ticket,
@@ -410,6 +546,9 @@ export function factoryStatus(
       builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
       ...(s.worktree ? { worktree: s.worktree } : {}),
     })),
+    // Valid `worktree` targets — lets an agent discover the correct string
+    // instead of guessing (the bare-name-vs-nested-path failure).
+    availableRepos: spawnCwd ? listGitRepos(spawnCwd) : [],
   }
 }
 
