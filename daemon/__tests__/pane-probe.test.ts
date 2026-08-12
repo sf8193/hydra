@@ -765,7 +765,7 @@ describe('probeAllSessions', () => {
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
     transportMessages.length = 0
-    probeAllSessions(T0)
+    await probeAllSessions(T0)
 
     expect(transportMessages.length).toBe(0)
   })

@@ -16,6 +16,7 @@ afterEach(() => {
   const { runs, threadToRun, sessionToRun } = __test
   for (const [, run] of runs) {
     if (run.timeout) clearTimeout(run.timeout)
+    if (run._keepaliveTimer) clearInterval(run._keepaliveTimer)
     for (const t of run.disconnectTimers.values()) clearTimeout(t)
   }
   runs.clear()
@@ -447,5 +448,61 @@ describe('extend_phase', () => {
     const result = onRunExtend('test-owner', 'I want more time', 5)
     expect(result.ok).toBe(false)
     expect(result.reason).toContain('only the active actor')
+  })
+})
+
+describe('protocol runner — keepalive', () => {
+  test('keepalive timer starts after phase transition', async () => {
+    const run = createTestRun()
+    await onRunAdvance('test-critic', 'Finding #1', 'approve')
+    expect(run.phase).toBe('owner_turn')
+    expect(run._keepaliveTimer).toBeDefined()
+  })
+
+  test('keepalive timer clears on next transition', async () => {
+    const run = createTestRun()
+    await onRunAdvance('test-critic', 'Finding #1', 'approve')
+    const firstTimer = run._keepaliveTimer
+    expect(firstTimer).toBeDefined()
+    await onRunAdvance('test-owner', 'Addressed.')
+    expect(run._keepaliveTimer).toBeDefined()
+    expect(run._keepaliveTimer).not.toBe(firstTimer)
+  })
+
+  test('keepalive timer clears on run cancellation', async () => {
+    const { cancelRun } = await import('../protocol-runner.js')
+    const run = createTestRun()
+    await onRunAdvance('test-critic', 'Finding #1', 'approve')
+    expect(run._keepaliveTimer).toBeDefined()
+    await cancelRun(run as any, 'test cancellation')
+    expect(run._keepaliveTimer).toBeUndefined()
+  })
+
+  test('keepalive timer clears on run completion', async () => {
+    const run = createTestRun({ currentRound: 3, rounds: 3 })
+    await onRunAdvance('test-critic', 'Final finding', 'approve')
+    expect(run.phase).toBe('owner_turn')
+    expect(run._keepaliveTimer).toBeDefined()
+    await onRunAdvance('test-owner', 'Final defense')
+    // closing phase should still have a keepalive
+    expect(run.phase).toBe('closing')
+    // complete the run by advancing through closing
+    await onRunAdvance('test-owner', 'Summary.')
+    // run is now terminal — timer cleared
+    expect(run._keepaliveTimer).toBeUndefined()
+  })
+
+  test('sendKeepaliveNotification queues inert system message', () => {
+    const { sendKeepaliveNotification } = __test!
+    const run = createTestRun()
+    sendKeepaliveNotification(run as any, 'test-critic', 'critic')
+    const queued = transport.messageQueues.get('test-critic') ?? []
+    const keepalives = queued.filter((m: any) => m.content === '[system] keepalive')
+    expect(keepalives.length).toBe(1)
+    expect(keepalives[0].meta.user).toBe('system')
+  })
+
+  test('KEEPALIVE_INTERVAL_MS is 30 seconds', () => {
+    expect(__test!.KEEPALIVE_INTERVAL_MS).toBe(30_000)
   })
 })
