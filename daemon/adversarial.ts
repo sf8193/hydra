@@ -16,6 +16,7 @@ import { safeSend, type StatusLineState } from './util.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { reviewSummaryFormat } from './prompts/review-summary.js'
 import { getLenses, getLensesSync, type LensDef } from './lens-loader.js'
+import { PROTOCOL_GUEST_DISALLOWED_BUILTINS } from './bridge-tools.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -367,6 +368,7 @@ export function onParticipantDisconnect(sessionId: string): void {
         try {
           const result = await doSpawnSession(currentInfo?.topic ?? `Review critic (${state.rounds} rounds)`, undefined, undefined, {
             joinThread: state.ownerThreadId, resumeFrom: claudeSessionId, model: state.model,
+            disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
           })
           // Pre-queue notification so it flushes on bridge connect — prevents
           // Claude Code from exiting before receiving new input.
@@ -723,6 +725,7 @@ async function spawnCritic(state: ReviewState): Promise<void> {
     const result = await doSpawnSession(`Adversarial review CRITIC (${state.rounds} rounds)`, undefined, undefined, {
       trigger: 'review',
       joinThread: state.ownerThreadId,
+      disallowedTools: [...PROTOCOL_GUEST_DISALLOWED_BUILTINS],
       ...(criticModel ? { model: criticModel } : {}),
       ...(state.engine ? { engine: state.engine } : {}),
       promptBuilder: (sessionId, tmuxName) =>

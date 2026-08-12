@@ -32,6 +32,24 @@ describe('getTemplate', () => {
     expect(t!.allowMainTools).toBe(true)
   })
 
+  test('factory prompt leads with the ToolSearch instruction (before OWNERSHIP)', () => {
+    const t = getTemplate('factory')!
+    const toolSearchIdx = t.prompt.indexOf('ToolSearch(query="select:factory_build')
+    const ownershipIdx = t.prompt.indexOf('OWNERSHIP:')
+    const workflowIdx = t.prompt.indexOf('WORKFLOW')
+    expect(toolSearchIdx).toBeGreaterThan(-1)
+    expect(ownershipIdx).toBeGreaterThan(-1)
+    // ToolSearch must come first so a deferred-tool agent loads its tools before acting.
+    expect(toolSearchIdx).toBeLessThan(ownershipIdx)
+    expect(t.prompt).toContain('READ THIS FIRST')
+    expect(t.prompt).toContain('InputValidationError')
+    // And the tool block is not duplicated (it was moved, not copied).
+    const firstToolSearch = t.prompt.indexOf('ToolSearch(query="select:factory_build')
+    const lastToolSearch = t.prompt.lastIndexOf('ToolSearch(query="select:factory_build')
+    expect(firstToolSearch).toBe(lastToolSearch)
+    expect(workflowIdx).toBeGreaterThan(toolSearchIdx)
+  })
+
   test('returns null for unknown template', () => {
     expect(getTemplate('nonexistent-template-xyz')).toBeNull()
   })
