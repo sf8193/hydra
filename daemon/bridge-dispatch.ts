@@ -398,10 +398,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!callerInfo) throw new Error('session not found')
 
         const result = factoryStatus(callerInfo.threadId, ticket)
+        const reposLine = result.availableRepos.length
+          ? `\n\nValid worktree targets: ${result.availableRepos.join(', ')}`
+          : ''
         if (result.builds.length === 0) {
-          return { content: [{ type: 'text', text: 'No active factory builds.' }] }
+          return { content: [{ type: 'text', text: `No active factory builds.${reposLine}` }] }
         }
-        return { content: [{ type: 'text', text: JSON.stringify(result.builds, null, 2) }] }
+        return { content: [{ type: 'text', text: `${JSON.stringify(result.builds, null, 2)}${reposLine}` }] }
       }
 
       case 'factory_review': {
