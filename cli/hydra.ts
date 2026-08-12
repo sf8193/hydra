@@ -56,7 +56,7 @@ Spawn options:
   --model <id|alias>                   Model ID or alias (see below)
   --channel <id>                       Target channel for the spawned thread
   --message <id>                       Create thread on this message (requires --channel)
-  --read-thread                        Tell the session to read --channel history first (requires --channel)
+  --read-thread [limit] [thread-id]    Read thread history first (default: 50 msgs from --channel, max 200)
   --quiet                              Suppress spawn announcement in chat
   --ephemeral                          Auto-kill on [done], skip death visuals
 
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
       let message: string | undefined
       let quiet = false
       let ephemeral = false
-      let readThread = false
+      let readThreadLimit = 0  // 0 = disabled
       let model: string | undefined
       const promptParts: string[] = []
 
@@ -151,7 +151,11 @@ async function main(): Promise<void> {
         } else if (filtered[i] === '--ephemeral') {
           ephemeral = true
         } else if (filtered[i] === '--read-thread') {
-          readThread = true
+          readThreadLimit = 50  // default
+          // peek at next arg — if it's a number, use it as the limit
+          if (i + 1 < filtered.length && /^\d+$/.test(filtered[i + 1])) {
+            readThreadLimit = Math.min(parseInt(filtered[++i], 10), 200)
+          }
         } else if (filtered[i] === '--model' && i + 1 < filtered.length) {
           model = filtered[++i]
         } else {
@@ -176,12 +180,12 @@ async function main(): Promise<void> {
         console.error('error: --message requires --channel')
         process.exit(1)
       }
-      if (readThread && !channel) {
+      if (readThreadLimit > 0 && !channel) {
         console.error('error: --read-thread requires --channel (the thread/channel to read)')
         process.exit(1)
       }
-      if (readThread && channel) {
-        prompt = `Read the recent history in this channel for context: fetch_messages(channel="${channel}", limit=50). Then continue with the task below.\n\n${prompt}`
+      if (readThreadLimit > 0 && channel) {
+        prompt = `Read the recent history in this channel for context: fetch_messages(channel="${channel}", limit=${readThreadLimit}). Then continue with the task below.\n\n${prompt}`
       }
       const response = await sendRequest(socketPath, {
         type: 'cli',
