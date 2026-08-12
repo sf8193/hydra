@@ -318,8 +318,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           if (!spawnCwd) throw new Error('worktree: true requires SPAWN_CWD to be set')
           if (!pmCwd) throw new Error('worktree: true could not read your CWD (bridge may not have connected yet). Pass an explicit path relative to SPAWN_CWD instead, e.g. worktree="Documents/hydra".')
           worktreeResolved = suggestWorktreeFromCwd(pmCwd, spawnCwd)
-          if (!worktreeResolved) throw new Error(`worktree: true but your CWD (${pmCwd}) is not inside a git repo under SPAWN_CWD (${spawnCwd}). Call factory_status to list valid repos, or pass an explicit path like worktree="Documents/hydra".`)
+          if (!worktreeResolved) throw new Error(`worktree: true but your CWD (${pmCwd}) is not inside a git repo nested under SPAWN_CWD (${spawnCwd}) — the root repo itself cannot be isolated. Call factory_status to list valid repos, or pass an explicit path like worktree="Documents/hydra".`)
         } else {
+          // worktreeRaw is a string path, false (explicit "no isolation"), or undefined
           worktreeResolved = str(worktreeRaw)
         }
 

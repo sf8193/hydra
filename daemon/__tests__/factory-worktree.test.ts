@@ -139,12 +139,16 @@ describe('suggestWorktreeFromCwd', () => {
     expect(suggestWorktreeFromCwd(nestedRepo, root)).toBe('Documents/hydra')
   })
 
-  test('returns "." when the repo IS SPAWN_CWD (createWorktree resolves "." fine)', () => {
+  test('returns undefined when the repo IS SPAWN_CWD — the root repo is not isolatable', () => {
+    // createWorktree places the worktree at resolve(repoDir, '..', '.worktrees').
+    // For a repo that IS spawnCwd, "." would put it ABOVE spawnCwd (e.g.
+    // /Users/.worktrees, SIP-protected) — so suggest nothing rather than a
+    // target that createWorktree can't build.
     _setGitIO(fakeGit)
     const repoRoot = mkdtempSync(join(tmpdir(), 'wt-selfroot-'))
     markRepo(repoRoot)
     try {
-      expect(suggestWorktreeFromCwd(repoRoot, repoRoot)).toBe('.')
+      expect(suggestWorktreeFromCwd(repoRoot, repoRoot)).toBeUndefined()
     } finally {
       rmSync(repoRoot, { recursive: true, force: true })
     }

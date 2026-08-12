@@ -211,7 +211,11 @@ export function suggestWorktreeFromCwd(pmCwd: string, spawnCwd: string): string 
     try { base = realpathSync(spawnCwd) } catch {}
     if (top === base || top.startsWith(base + '/')) {
       const rel = relative(base, top)
-      return rel || '.'  // rel === '' means the repo IS spawnCwd; '.' targets it (createWorktree resolves it fine)
+      // rel === '' means the repo IS spawnCwd. We can't target it: createWorktree
+      // puts the worktree at resolve(repoDir, '..', '.worktrees') — for a root repo
+      // that escapes above SPAWN_CWD (e.g. /Users/.worktrees, SIP-protected). Worktree
+      // targets must be repos NESTED under SPAWN_CWD; the root repo isn't isolatable.
+      return rel || undefined
     }
   } catch {
     // pmCwd not a repo, git missing, etc. — no suggestion
