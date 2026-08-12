@@ -12,7 +12,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
+import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -310,6 +310,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         const fresh = args.fresh === true
 
+        const worktreeRaw = args.worktree
+        let worktreeResolved: string | undefined
+        if (worktreeRaw === true) {
+          const spawnCwd = process.env.SPAWN_CWD
+          const pmCwd = callerInfo?.capabilities?.cwd
+          if (!spawnCwd) throw new Error('worktree: true requires SPAWN_CWD to be set')
+          if (!pmCwd) throw new Error('worktree: true requires PM CWD — bridge may not have connected yet')
+          worktreeResolved = suggestWorktreeFromCwd(pmCwd, spawnCwd)
+          if (!worktreeResolved) throw new Error(`worktree: true but PM CWD (${pmCwd}) is not inside a git repo under SPAWN_CWD (${spawnCwd})`)
+        } else {
+          worktreeResolved = str(worktreeRaw)
+        }
+
         const result = factoryBuild({
           pmThreadId: callerInfo.threadId,
           pmSessionId: callerSessionId,
@@ -318,7 +331,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           reviewerModel: str(args.reviewer_model),
           reviewRounds: num(args.review_rounds),
           difficulty: difficulty as Difficulty | undefined,
-          worktree: str(args.worktree),
+          worktree: worktreeResolved,
           fresh,
         })
 
