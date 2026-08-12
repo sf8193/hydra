@@ -17,7 +17,7 @@ import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './comman
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
 import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
 import { listPostPasses } from './adversarial.js'
-import { listModifierKeys } from './modifiers.js'
+import { listModifierKeys, resolveTemplateModifier } from './modifiers.js'
 import { handleBuildIntercept, handleCancelBuildIntercept } from './commands/build.js'
 import { handleDesignIntercept, handleCancelDesignIntercept } from './commands/design.js'
 import { getDesignByThread, handleDesignAnswer } from './design.js'
@@ -325,6 +325,24 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
+    // "spawn +f: topic" / "spawn +factory: topic" — spawn applying a template
+    // modifier. `+f` composes the factory template exactly like `factory: topic`.
+    const spawnModMatch = msg.content.match(/^(?:new session|spawn)\s+((?:\+\w+\s*)+):\s*([\s\S]+)/i)
+    if (spawnModMatch) {
+      const modNames = [...spawnModMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase())
+      const templateMod = resolveTemplateModifier(modNames)
+      const topic = spawnModMatch[2].trim()
+      if (templateMod) {
+        const template = getTemplate(templateMod.templateName)
+        if (template) {
+          void handleTemplateSpawn(msg, templateMod.templateName, topic, template, access)
+          return
+        }
+      }
+      void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. Available: \`+f\`/\`+factory\`._`, { replyTo: msg.id }).catch(() => {})
+      return
+    }
+
     const spawnMatch = msg.content.match(/^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i)
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
@@ -444,9 +462,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const respawnMatch = msg.content.match(/^(?:respawn|\/respawn)(?::\s*([\s\S]+))?$/i)
+    // "respawn" / "respawn: topic" / "respawn +f:" / "respawn +factory: topic"
+    // — the optional `+mods` group applies a template (e.g. factory) to the respawn.
+    const respawnMatch = msg.content.match(/^(?:respawn|\/respawn)(?:\s+((?:\+\w+\s*)+))?(?::\s*([\s\S]*))?$/i)
     if (respawnMatch) {
-      void handleRespawnIntercept(msg, respawnMatch[1]?.trim() || undefined)
+      const respawnModNames = respawnMatch[1] ? [...respawnMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase()) : []
+      const respawnTemplateMod = resolveTemplateModifier(respawnModNames)
+      void handleRespawnIntercept(msg, respawnMatch[2]?.trim() || undefined, respawnTemplateMod?.templateName)
       return
     }
 

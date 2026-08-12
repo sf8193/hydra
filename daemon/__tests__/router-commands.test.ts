@@ -11,6 +11,8 @@ process.stderr.write = (() => true) as any
 
 const SPAWN_RE = /^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i
 const SPAWN_WT_RE = /^(?:spawn-wt:|\/spawn-wt)\s*(\S+)\s+([\s\S]+)/i
+const SPAWN_MOD_RE = /^(?:new session|spawn)\s+((?:\+\w+\s*)+):\s*([\s\S]+)/i
+const RESPAWN_RE = /^(?:respawn|\/respawn)(?:\s+((?:\+\w+\s*)+))?(?::\s*([\s\S]*))?$/i
 const KILL_RE = /^(?:kill session:|kill:|\/kill)\s*(.+)/i
 const LIST_RE = /^(?:\/sessions|list sessions)\s*$/i
 const RESTART_RE = /^(?:\/restart|restart daemon|restart)\s*$/i
@@ -65,6 +67,79 @@ describe('spawn command', () => {
     const m = 'spawn: '.match(SPAWN_RE)
     expect(m).not.toBeNull() // regex matches but topic is whitespace
     expect(m![1].trim()).toBe('') // router checks this
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spawn / respawn with +modifier (factory-as-modifier)
+// ---------------------------------------------------------------------------
+
+const extractMods = (raw: string) => [...raw.matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase())
+
+describe('spawn +modifier command', () => {
+  test('spawn +f: topic', () => {
+    const m = 'spawn +f: build the thing'.match(SPAWN_MOD_RE)
+    expect(m).not.toBeNull()
+    expect(extractMods(m![1])).toEqual(['f'])
+    expect(m![2].trim()).toBe('build the thing')
+  })
+
+  test('spawn +factory: topic', () => {
+    const m = 'spawn +factory: ship it'.match(SPAWN_MOD_RE)
+    expect(m).not.toBeNull()
+    expect(extractMods(m![1])).toEqual(['factory'])
+    expect(m![2].trim()).toBe('ship it')
+  })
+
+  test('new session +f: topic', () => {
+    const m = 'new session +f: orchestrate'.match(SPAWN_MOD_RE)
+    expect(m).not.toBeNull()
+    expect(extractMods(m![1])).toEqual(['f'])
+  })
+
+  test('plain spawn: does NOT match the modifier pattern', () => {
+    // "spawn: +f do X" is a normal spawn with a topic that starts with +f,
+    // not a modifier spawn — the modifier pattern requires `spawn +f:` form.
+    expect('spawn: +f do X'.match(SPAWN_MOD_RE)).toBeNull()
+  })
+
+  test('spawn without a modifier does not match', () => {
+    expect('spawn: normal topic'.match(SPAWN_MOD_RE)).toBeNull()
+  })
+})
+
+describe('respawn +modifier command', () => {
+  test('bare respawn', () => {
+    const m = 'respawn'.match(RESPAWN_RE)
+    expect(m).not.toBeNull()
+    expect(m![1]).toBeUndefined()
+    expect(m![2]).toBeUndefined()
+  })
+
+  test('respawn: topic (no modifier)', () => {
+    const m = 'respawn: keep going'.match(RESPAWN_RE)
+    expect(m).not.toBeNull()
+    expect(m![1]).toBeUndefined()
+    expect(m![2]!.trim()).toBe('keep going')
+  })
+
+  test('respawn +f: (factory, no topic)', () => {
+    const m = 'respawn +f:'.match(RESPAWN_RE)
+    expect(m).not.toBeNull()
+    expect(extractMods(m![1])).toEqual(['f'])
+    expect((m![2] ?? '').trim()).toBe('')
+  })
+
+  test('respawn +factory: topic', () => {
+    const m = 'respawn +factory: resume the build'.match(RESPAWN_RE)
+    expect(m).not.toBeNull()
+    expect(extractMods(m![1])).toEqual(['factory'])
+    expect(m![2]!.trim()).toBe('resume the build')
+  })
+
+  test('/respawn variant', () => {
+    expect('/respawn'.match(RESPAWN_RE)).not.toBeNull()
+    expect('/respawn +f:'.match(RESPAWN_RE)).not.toBeNull()
   })
 })
 

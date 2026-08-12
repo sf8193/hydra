@@ -10,7 +10,17 @@ export type SeedModifier = {
   instructions: string
 }
 
-export type Modifier = SeedModifier
+// A template modifier applies a spawn template's settings (prompt, disallowed
+// tools, main-tool access) to a spawn or respawn — so `spawn +f: topic` composes
+// the factory template the same way `factory: topic` does.
+export type TemplateModifier = {
+  type: 'template'
+  name: string
+  aliases: string[]
+  templateName: string   // key in the templates registry (templates.ts)
+}
+
+export type Modifier = SeedModifier | TemplateModifier
 
 const registry = new Map<string, Modifier>()
 
@@ -44,6 +54,17 @@ export function listModifierKeys(): string[] {
   return [...registry.keys()]
 }
 
+// Return the first template modifier among the given names, or undefined.
+// Template modifiers are mutually exclusive (a spawn uses one template), so the
+// first match wins.
+export function resolveTemplateModifier(names: string[]): TemplateModifier | undefined {
+  for (const name of names) {
+    const mod = registry.get(name)
+    if (mod?.type === 'template') return mod
+  }
+  return undefined
+}
+
 // ---------------------------------------------------------------------------
 // Modifier definitions
 // ---------------------------------------------------------------------------
@@ -70,4 +91,13 @@ register({
   aliases: ['s'],
   target: 'critic',
   instructions: SECURITY_INSTRUCTIONS,
+})
+
+// Factory-as-modifier: `spawn +f: topic` / `respawn +f:` apply the factory
+// template. The template itself lives in templates.ts; this just names it.
+register({
+  type: 'template',
+  name: 'factory',
+  aliases: ['f'],
+  templateName: 'factory',
 })

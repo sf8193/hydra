@@ -1,14 +1,14 @@
 import { describe, test, expect } from 'bun:test'
-import { resolveModifier, resolveModifiers, listModifierKeys } from '../modifiers.js'
+import { resolveModifier, resolveModifiers, listModifierKeys, resolveTemplateModifier } from '../modifiers.js'
 
 describe('modifier registry', () => {
   test('security modifier resolves by name', () => {
     const mod = resolveModifier('security')
     expect(mod).toBeDefined()
-    expect(mod!.type).toBe('seed')
-    expect(mod!.name).toBe('security')
-    expect(mod!.target).toBe('critic')
-    expect(mod!.instructions).toContain('attack surface')
+    if (!mod || mod.type !== 'seed') throw new Error('expected seed modifier')
+    expect(mod.name).toBe('security')
+    expect(mod.target).toBe('critic')
+    expect(mod.instructions).toContain('attack surface')
   })
 
   test('security modifier resolves by alias', () => {
@@ -32,5 +32,27 @@ describe('modifier registry', () => {
     const keys = listModifierKeys()
     expect(keys).toContain('security')
     expect(keys).toContain('s')
+  })
+
+  test('factory template modifier resolves by name and alias', () => {
+    const byName = resolveModifier('factory')
+    expect(byName).toBeDefined()
+    expect(byName!.type).toBe('template')
+    expect((byName as { templateName: string }).templateName).toBe('factory')
+
+    const byAlias = resolveModifier('f')
+    expect(byAlias).toBeDefined()
+    expect(byAlias!.name).toBe('factory')
+  })
+
+  test('resolveTemplateModifier returns the first template modifier', () => {
+    expect(resolveTemplateModifier(['f'])?.templateName).toBe('factory')
+    expect(resolveTemplateModifier(['factory'])?.templateName).toBe('factory')
+    // seed modifiers are not template modifiers
+    expect(resolveTemplateModifier(['s'])).toBeUndefined()
+    // a seed modifier before a template modifier: the template one still wins
+    expect(resolveTemplateModifier(['s', 'f'])?.name).toBe('factory')
+    // unknown names are ignored
+    expect(resolveTemplateModifier(['nope'])).toBeUndefined()
   })
 })

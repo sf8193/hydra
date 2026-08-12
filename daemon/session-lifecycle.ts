@@ -1018,9 +1018,11 @@ export async function tryRespawn(
   topic: string,
   resurrectFrom?: string,
   model?: string,
+  extraOpts?: Record<string, unknown>,
 ): Promise<SpawnResult | null> {
   try {
     return await doSpawnSession(topic, undefined, undefined, {
+      ...extraOpts,
       existingThreadId: threadId,
       resurrectFrom,
       model,
