@@ -467,26 +467,26 @@ export function factoryRetry(
 /**
  * Accept a build — PM is satisfied. Kill builder, clean up.
  */
-export function factoryAccept(
+export async function factoryAccept(
   ticket: string,
   callerSessionId: string,
   allowUnreviewed: boolean = false,
 ): Promise<{ ok: true } | { error: string }> {
   const state = builds.get(ticket)
-  if (!state) return Promise.resolve({ error: `Unknown ticket: ${ticket}` })
-  if (state.pmSessionId !== callerSessionId) return Promise.resolve({ error: 'Only the PM that started this build can accept it.' })
+  if (!state) return { error: `Unknown ticket: ${ticket}` }
+  if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can accept it.' }
   return acceptCore(state, allowUnreviewed)
 }
 
 /**
  * Accept a build by ticket alone (admin/CLI path — skips PM ownership check).
  */
-export function factoryAcceptByTicket(
+export async function factoryAcceptByTicket(
   ticket: string,
   allowUnreviewed: boolean = false,
 ): Promise<{ ok: true } | { error: string }> {
   const state = builds.get(ticket)
-  if (!state) return Promise.resolve({ error: `Unknown ticket: ${ticket}` })
+  if (!state) return { error: `Unknown ticket: ${ticket}` }
   return acceptCore(state, allowUnreviewed)
 }
 
@@ -551,7 +551,8 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
   state.phase = 'failed'
   logBuild(state, 'abandoned')
 
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ` — ${reason}` : ''}`)
+  const reasonSuffix = reason ? ` — ${reason.length > 200 ? reason.slice(0, 200) + '…' : reason}` : ''
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reasonSuffix}`)
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
