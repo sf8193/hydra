@@ -27,6 +27,25 @@ export type WorktreeResult = {
 }
 
 // ---------------------------------------------------------------------------
+// Validation — shared by factory_build (sync pre-check) and createWorktree
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a worktree target to an absolute repo path and verify it contains a
+ * git repo. Single source of truth so factory_build's early check and
+ * createWorktree's actual creation can never disagree on resolution.
+ */
+export function resolveAndValidateRepo(repoName: string, spawnCwd: string): string {
+  const repoDir = resolve(spawnCwd, repoName)
+  try {
+    execFileSync('git', ['-C', repoDir, 'rev-parse', '--git-dir'], { stdio: 'pipe' })
+  } catch {
+    throw new Error(`worktree target "${repoName}" is not a git repo at ${repoDir}`)
+  }
+  return repoDir
+}
+
+// ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
 
@@ -37,14 +56,7 @@ export type WorktreeResult = {
  */
 export async function createWorktree(config: WorktreeConfig): Promise<WorktreeResult> {
   const { repoName, spawnCwd, branchName, dirSuffix } = config
-  const repoDir = resolve(spawnCwd, repoName)
-
-  // Verify target is a git repo (sync — fast, needed before any async work)
-  try {
-    execFileSync('git', ['-C', repoDir, 'rev-parse', '--git-dir'], { stdio: 'pipe' })
-  } catch {
-    throw new Error(`worktree target "${repoName}" is not a git repo at ${repoDir}`)
-  }
+  const repoDir = resolveAndValidateRepo(repoName, spawnCwd)
 
   const wtDir = resolve(repoDir, '..', '.worktrees', dirSuffix)
 
