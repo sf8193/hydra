@@ -67,6 +67,12 @@ export class SlackGateway implements ChatGateway {
   private buttonClickHandler: ((click: ButtonClick) => void) | null = null
   private reactionHandler: ((event: ReactionEvent) => Promise<void>) | null = null
   private recentSentIds = new Set<string>()
+  // Serial rate limiter for chat.postMessage and chat.update (Slack Tier 4: ~50/min).
+  // A promise chain ensures at most one outbound send per SEND_RATE_MS, preventing 429s
+  // when many sessions post simultaneously.
+  private _sendChain = Promise.resolve()
+  private _lastSendAt = 0
+  private static readonly SEND_RATE_MS = 1200 // 50 msg/min → 1.2s between calls
   private appToken: string
   private token: string | null = null
   private lastEventAt = Date.now()
@@ -447,7 +453,7 @@ export class SlackGateway implements ChatGateway {
       payload.unfurl_media = false
     }
 
-    const result = await this.app.client.chat.postMessage(payload as any)
+    const result = await this.throttledSend(() => this.app!.client.chat.postMessage(payload as any))
     const sentId = result.ts!
     this.noteSent(sentId)
     return { id: sentId, channelId }
@@ -458,8 +464,21 @@ export class SlackGateway implements ChatGateway {
     const { channel } = this.parseChannelId(channelId)
     const payload: Record<string, unknown> = { channel, ts: messageId }
     applyMessageBody(payload, text, false)
-    const result = await this.app.client.chat.update(payload as any)
+    const result = await this.throttledSend(() => this.app!.client.chat.update(payload as any))
     return result.ts!
+  }
+
+  /** Rate-limit chat.postMessage and chat.update to ~50/min (Slack Tier 4). */
+  private throttledSend<T>(fn: () => Promise<T>): Promise<T> {
+    const p = this._sendChain.then(async () => {
+      const wait = Math.max(0, this._lastSendAt + SlackGateway.SEND_RATE_MS - Date.now())
+      if (wait > 0) await new Promise<void>(r => setTimeout(r, wait))
+      this._lastSendAt = Date.now()
+      return fn()
+    })
+    // Advance the chain regardless of outcome so subsequent calls always proceed.
+    this._sendChain = p.then(() => {}, () => {})
+    return p
   }
 
   async delete(channelId: string, messageId: string): Promise<void> {
