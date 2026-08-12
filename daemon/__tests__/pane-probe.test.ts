@@ -1,68 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 
 // ---------------------------------------------------------------------------
-// Mock daemon modules before importing pane-probe
+// Test state — injected via PaneProbeIO, no mock.module needed
 // ---------------------------------------------------------------------------
 
 const sentMessages: Array<{ channelId: string; text: string }> = []
 const reactions: Array<{ channelId: string; messageId: string; emoji: string }> = []
-
-mock.module('../config.js', () => ({
-  gateway: {
-    send: async (channelId: string, text: string) => {
-      sentMessages.push({ channelId, text })
-      return { id: `msg-${sentMessages.length}` }
-    },
-    react: async (channelId: string, messageId: string, emoji: string) => {
-      reactions.push({ channelId, messageId, emoji })
-    },
-    platform: 'discord',
-    maxMessageLength: 2000,
-  },
-  PLATFORM: 'discord',
-  DEFAULT_SESSION_CHANNEL: 'root-channel-123',
-}))
-
-mock.module('../access.js', () => ({
-  loadAccess: () => ({
-    allowFrom: ['user-123'],
-    groups: {},
-  }),
-}))
-
 const registryEntries = new Map<string, any>()
-mock.module('../sessions.js', () => ({
-  registry: {
-    values: () => registryEntries.values(),
-    get: (id: string) => registryEntries.get(id),
-    set: (id: string, info: any) => registryEntries.set(id, info),
-    has: (id: string) => registryEntries.has(id),
-    delete: (id: string) => registryEntries.delete(id),
-    get size() { return registryEntries.size },
-    persist: () => {},
-    debouncedPersist: () => {},
-  },
-}))
-
 const transportMessages: Array<{ sessionId: string; msg: any }> = []
 const connectedSessions = new Set<string>()
-mock.module('../bridge-transport.js', () => ({
-  transport: {
-    sendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
-    has: (sessionId: string) => connectedSessions.has(sessionId),
-  },
-}))
-
-mock.module('../util.js', () => ({
-  safeSend: async (channelId: string, text: string) => {
-    sentMessages.push({ channelId, text })
-    return [`msg-${sentMessages.length}`]
-  },
-}))
-
-mock.module('../../discord-table-format.js', () => ({
-  formatDiscordTables: (t: string) => t,
-}))
 
 import {
   detectBlockingState,
@@ -225,6 +171,19 @@ function makeTestIO(): PaneProbeIO {
       return fileContents.get(path) ?? null
     },
     now: () => T0,
+    async safeSend(channelId: string, text: string) {
+      sentMessages.push({ channelId, text })
+      return [`msg-${sentMessages.length}`]
+    },
+    async react(channelId: string, messageId: string, emoji: string) {
+      reactions.push({ channelId, messageId, emoji })
+    },
+    getSessions: () => registryEntries.values(),
+    transportHas: (sessionId: string) => connectedSessions.has(sessionId),
+    transportSendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
+    loadAccess: () => ({ allowFrom: ['user-123'] }),
+    platform: 'discord',
+    defaultChannel: 'root-channel-123',
   }
 }
 
