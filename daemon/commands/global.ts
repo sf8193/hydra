@@ -37,6 +37,23 @@ async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
   return chatId
 }
 
+function friendlySpawnError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (msg.includes('not a git repo') || msg.includes('not a git repository'))
+    return `${msg}\n_Check that the target directory exists and is a git repository under \`$SPAWN_CWD\`._`
+  if (msg.includes('SPAWN_CWD') || msg.includes('no such file or directory') && msg.includes('cwd'))
+    return `${msg}\n_Set \`SPAWN_CWD\` in the daemon environment to the working directory for sessions._`
+  if (msg.includes('failed to spawn tmux') || msg.includes('tmux: command not found'))
+    return `${msg}\n_Is tmux installed? Try: \`brew install tmux\`_`
+  if (msg.includes('thread has a live session'))
+    return `${msg}\n_Kill the existing session first (\`kill\` in the thread), or \`spawn:\` in a different channel._`
+  if (msg.includes('worktree') && (msg.includes('already exists') || msg.includes('EEXIST')))
+    return `${msg}\n_A stale worktree may exist. Check with: \`git worktree list\`_`
+  if (msg.includes('Cannot fork') || msg.includes('PM claude session ID not found'))
+    return `${msg}\n_The PM session must be connected before forking. Try again after the PM bridge reconnects._`
+  return msg
+}
+
 async function spawnAndNotify(
   msg: InboundMessage,
   topic: string,
@@ -100,9 +117,10 @@ async function spawnAndNotify(
 
     debouncedRefreshListDisplay()
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`daemon: spawn failed: ${errMsg}\n`)
-    try { await gateway.send(msg.channelId, `Spawn failed: ${errMsg}`, { replyTo: msg.id }) } catch {}
+    const rawMsg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`daemon: spawn failed: ${rawMsg}\n`)
+    const friendlyMsg = friendlySpawnError(err)
+    try { await gateway.send(msg.channelId, `Spawn failed: ${friendlyMsg}`, { replyTo: msg.id }) } catch {}
   }
 }
 
