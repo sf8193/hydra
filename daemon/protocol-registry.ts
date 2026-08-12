@@ -106,3 +106,4 @@ export function toolsForSession(sessionId: string, opts?: { allowMainTools?: boo
 }
 
 export function _resetForTesting(): void { protocols.clear() }
+export { getProtocolContext } from './protocol-runner.js'
