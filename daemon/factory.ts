@@ -717,11 +717,13 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
  */
 function cleanSpecTitle(spec: string): string {
   const firstLine = spec.split('\n').find(l => l.trim())?.trim() ?? 'factory build'
-  // `_` is deliberately not stripped — it's an identifier char (factory_done), not just markdown.
+  // Strip **bold** and `code` (paired). A *doubled* star is unambiguous markdown;
+  // a single one is a glob or operator ("*.ts", "2*x"), so single * is left intact.
   return firstLine
+    .replace(/\*\*([^*]+?)\*\*/g, '$1')
+    .replace(/`([^`]+?)`/g, '$1')
     .replace(/^#+\s*/, '')
     .replace(/^[-*]\s*/, '')
-    .replace(/[*`]/g, '')
     .trim()
     .slice(0, 72)
 }
@@ -737,6 +739,14 @@ async function defaultBaseRef(cwd: string): Promise<string> {
     const ref = stdout.trim()
     if (ref) return ref
   } catch {}
+  // origin/HEAD is unset in repos built via init + remote add (not clone). Probe the
+  // common defaults locally — no network, unlike `git remote show` — before the literal.
+  for (const cand of ['origin/main', 'origin/master']) {
+    try {
+      await execAsync('git', ['rev-parse', '--verify', '--quiet', cand], { cwd, timeout: 5_000 })
+      return cand
+    } catch {}
+  }
   return 'main'
 }
 
