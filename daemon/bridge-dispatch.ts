@@ -390,8 +390,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
         const ticket = args.ticket
         if (!callerSessionId) throw new Error('factory_abandon requires a session context')
+        const reason = str(args.reason)
 
-        const result = factoryAbandon(ticket, callerSessionId)
+        const result = factoryAbandon(ticket, callerSessionId, reason)
         if ('error' in result) {
           return { content: [{ type: 'text', text: `Factory abandon failed: ${result.error}` }], isError: true }
         }
