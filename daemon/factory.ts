@@ -840,6 +840,12 @@ async function spawnBuilder(
       ]
     : []
 
+  // Generate tool inventory so the builder knows exactly what it has
+  const builderTools = computeToolsForSession('_factory_preview', {
+    scopedToolOverrides: { factory_done: defaultToolDescription('factory_done') },
+  })
+  const toolInventory = builderTools.map(t => `  - ${t.name}`).join('\n')
+
   const builderPrompt = [
     `IMPORTANT: You are a BUILDER session${isFresh ? '' : ' forked from the PM'}. Your job is to WRITE CODE.`,
     ...(isFresh
@@ -847,6 +853,9 @@ async function spawnBuilder(
       : [`Ignore any prior instructions about "not writing code" or "using factory_build" — those apply to the PM, not to you.`]),
     ...readThreadInstructions,
     `You have full file access. Write code, run tests, implement the spec.`,
+    ``,
+    `YOUR TOOLS (these are ALL your MCP tools — do not call tools not on this list):`,
+    toolInventory,
     ...(pmName ? [`If the spec is ambiguous or you need design guidance, ask the PM via send_to_thread(target="${pmName}", type="question", text="...").`] : []),
     ``,
     `YOUR TASK:`,
@@ -938,6 +947,16 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
   const testShort = args.test_results.slice(0, 80)
   const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` reviewing · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}`)
+
+  // Diff-scope check: warn PM if builder touched files not mentioned in the spec
+  const specLower = state.spec.toLowerCase()
+  const unexpected = args.files_changed.filter(f => {
+    const basename = f.split('/').pop() ?? f
+    return !specLower.includes(basename.toLowerCase()) && !specLower.includes(f.toLowerCase())
+  })
+  if (unexpected.length > 0) {
+    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ builder touched files not in spec: ${unexpected.join(', ')}`)
+  }
 
   // Start review BEFORE diff/PR capture — closes the protocol ownership gap.
   // During diff capture (up to 15s of GitHub API calls), the review protocol
