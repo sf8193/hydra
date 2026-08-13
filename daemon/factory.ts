@@ -32,13 +32,14 @@ import { clearBuilderNudge } from './pane-probe.js'
 // Types
 // ---------------------------------------------------------------------------
 
-type FactoryPhase = 'building' | 'reviewing' | 'awaiting_pm' | 'complete' | 'failed'
+type FactoryPhase = 'queued' | 'building' | 'reviewing' | 'awaiting_pm' | 'complete' | 'failed'
 
 type FactoryBuildState = {
   ticket: string
   pmThreadId: string
   pmSessionId: string
   spec: string
+  dependsOn?: string        // ticket this build waits on; while set + phase 'queued', no builder is spawned
   builderModel?: string
   builderSessionId?: string
   builderThreadId?: string
@@ -372,10 +373,11 @@ export type FactoryBuildOpts = {
   difficulty?: Difficulty
   worktree?: string
   fresh?: boolean  // spawn fresh builder (no fork from PM context)
+  dependsOn?: string  // queue until this ticket is accepted, then auto-start
 }
 
 export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?: string } | { error: string } {
-  const { pmThreadId, pmSessionId, spec, builderModel, reviewerModel, worktree } = opts
+  const { pmThreadId, pmSessionId, spec, builderModel, reviewerModel, worktree, dependsOn } = opts
   const reviewRounds = opts.reviewRounds ?? 3
   const difficulty = opts.difficulty ?? 'easy'
   const { builder, reviewer, warning: modelWarning } = resolveModels(difficulty, builderModel, reviewerModel)
@@ -409,22 +411,46 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     }
   }
 
+  // Dependency chaining: a build with depends_on holds in 'queued' until the
+  // dependency is accepted (see acceptCore), then auto-starts. Validate NOW so a
+  // typo'd/dead dependency fails synchronously rather than queuing forever.
+  // Note: accepted/failed builds are removed from `builds`, so an already-cleared
+  // dependency reads as "not found" — the PM should just build without depends_on.
+  if (dependsOn) {
+    const dep = builds.get(dependsOn)
+    if (!dep) {
+      return { error: `depends_on ticket "${dependsOn}" not found — it may have already finished, or the ID is wrong. Check factory_status.` }
+    }
+    if (dep.phase === 'complete' || dep.phase === 'failed') {
+      return { error: `depends_on ticket "${dependsOn}" is already ${dep.phase} — build without depends_on instead.` }
+    }
+  }
+
   const ticket = `fb-${++ticketCounter}-${randomBytes(2).toString('hex')}`
   const state: FactoryBuildState = {
     ticket,
     pmThreadId,
     pmSessionId,
     spec,
+    dependsOn,
     builderModel: builder,
     reviewerModel: reviewer,
     reviewRounds,
-    phase: 'building',
+    phase: dependsOn ? 'queued' : 'building',
     retryCount: 0,
     createdAt: Date.now(),
     reviewed: false,
     worktree,
   }
   builds.set(ticket, state)
+
+  // Queued build: no builder spawned yet. acceptCore starts it (fresh spawn) when
+  // the dependency is accepted; abandon/crash of the dependency fails it.
+  if (dependsOn) {
+    void safeSend(pmThreadId, `🏭 \`${ticket}\` queued — waiting on \`${dependsOn}\``)
+    process.stderr.write(`daemon: factory: ticket ${ticket} queued on dependency ${dependsOn}\n`)
+    return { ticket, warning }
+  }
 
   // Spawn builder async — don't await
   const forkInfo = fresh ? undefined : { claudeSessionId: pmInfo!.claudeSessionId!, tmuxName: pmInfo!.tmuxName }
@@ -519,6 +545,26 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}`)
 
   killBuilder(state, true)
+
+  // Unblock queued dependents — they auto-start now that their dependency merged.
+  // Dequeued builds spawn fresh (the PM's fork point is long gone), so their spec
+  // must be self-contained. A dependent's own dependents stay queued until IT is
+  // accepted in turn, giving the sequential merge order the PM wanted.
+  for (const [depTicket, depState] of builds) {
+    if (depState.dependsOn === state.ticket && depState.phase === 'queued') {
+      depState.phase = 'building'
+      void safeSend(depState.pmThreadId, `🏭 \`${depTicket}\` unblocked — dependency \`${state.ticket}\` accepted. Starting build.`)
+      void spawnBuilder(depState).catch(err => {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        process.stderr.write(`daemon: factory: dequeued build ${depTicket} failed to start: ${errMsg}\n`)
+        depState.phase = 'failed'
+        logBuild(depState, 'dequeue_spawn_failed')
+        cleanupState(depTicket)
+        void safeSend(depState.pmThreadId, `🏭 \`${depTicket}\` ❌ failed to start after unblock`)
+      })
+    }
+  }
+
   cleanupState(state.ticket)
   return { ok: true }
 }
@@ -556,6 +602,9 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
 
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ' — ' + reason.slice(0, 200) : ''}`)
 
+  // Fail queued dependents — their dependency will never be accepted now.
+  failQueuedDependents(state.ticket, 'dependency_abandoned', 'was abandoned')
+
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
     const run = getRunByThread(state.builderThreadId)
@@ -574,7 +623,7 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
 }
 
 /** Serialize a build to a summary row (shared by factoryStatus + factoryListAll). */
-type BuildSummary = { ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; pmThreadId?: string; worktree?: string }
+type BuildSummary = { ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; pmThreadId?: string; worktree?: string; dependsOn?: string }
 function summarizeBuild(s: FactoryBuildState, includePmThread = false): BuildSummary {
   return {
     ticket: s.ticket,
@@ -585,6 +634,7 @@ function summarizeBuild(s: FactoryBuildState, includePmThread = false): BuildSum
     builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
     ...(includePmThread ? { pmThreadId: s.pmThreadId } : {}),
     ...(s.worktree ? { worktree: s.worktree } : {}),
+    ...(s.dependsOn ? { dependsOn: s.dependsOn } : {}),
   }
 }
 
@@ -978,6 +1028,7 @@ export function onBuilderDeath(sessionId: string): void {
     state.phase = 'failed'
     logBuild(state, 'builder_crashed')
     void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed (no factory_done)`)
+    failQueuedDependents(state.ticket, 'dependency_failed', 'did not complete')
     cleanupState(ticket)
   } else if (state.phase === 'reviewing') {
     // Builder died during review — cancel the review defensively to avoid leaking state.
@@ -994,12 +1045,14 @@ export function onBuilderDeath(sessionId: string): void {
       }
     }
     void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed during review`)
+    failQueuedDependents(state.ticket, 'dependency_failed', 'did not complete')
     cleanupState(ticket)
   } else if (state.phase === 'awaiting_pm') {
     process.stderr.write(`daemon: factory: builder died while awaiting PM for ticket ${state.ticket}\n`)
     void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ builder exited (work on disk, ticket closed)`)
     state.phase = 'failed'
     logBuild(state, 'builder_died_awaiting')
+    failQueuedDependents(state.ticket, 'dependency_failed', 'did not complete')
     cleanupState(ticket)
   }
 }
@@ -1045,6 +1098,25 @@ function onFactoryReviewCancelled(threadId: string): boolean {
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled — builder still alive\n↳ factory_retry / factory_abandon`)
 
   return true
+}
+
+/**
+ * Release queued builds waiting on `dependencyTicket` when that dependency
+ * terminates WITHOUT being accepted (abandoned, crashed, review-failed). A
+ * queued dependent can never start now, so fail it — and recurse, since its own
+ * queued dependents are equally orphaned. Cycles are impossible (a dependency
+ * must already exist before a build can queue on it), so the recursion is finite.
+ */
+function failQueuedDependents(dependencyTicket: string, outcome: string, humanReason: string): void {
+  for (const [depTicket, depState] of builds) {
+    if (depState.dependsOn === dependencyTicket && depState.phase === 'queued') {
+      depState.phase = 'failed'
+      logBuild(depState, outcome)
+      void safeSend(depState.pmThreadId, `🏭 \`${depTicket}\` ❌ dependency \`${dependencyTicket}\` ${humanReason}`)
+      cleanupState(depTicket)
+      failQueuedDependents(depTicket, outcome, humanReason)
+    }
+  }
 }
 
 function cleanupState(ticket: string): void {
