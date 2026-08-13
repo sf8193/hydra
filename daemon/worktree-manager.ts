@@ -36,7 +36,15 @@ export type WorktreeResult = {
  * createWorktree's actual creation can never disagree on resolution.
  */
 export function resolveAndValidateRepo(repoName: string, spawnCwd: string): string {
-  const repoDir = resolve(spawnCwd, repoName)
+  const base = resolve(spawnCwd)
+  const repoDir = resolve(base, repoName)
+  // Mirror validateWorktreeTarget's bounds check: the target must be strictly
+  // nested under SPAWN_CWD, else createWorktree's resolve(repoDir, '..', '.worktrees')
+  // escapes above/outside the sandbox. This is the true sink — guard here protects
+  // every caller (factory_build, spawn_session), not just the factory pre-check.
+  if (repoDir === base || !repoDir.startsWith(base + '/')) {
+    throw new Error(`worktree target "${repoName}" resolves to ${repoDir}, not a repo nested under SPAWN_CWD (${base}) — the root repo cannot be isolated and out-of-bounds paths are refused`)
+  }
   try {
     execFileSync('git', ['-C', repoDir, 'rev-parse', '--git-dir'], { stdio: 'pipe' })
   } catch {
