@@ -1030,19 +1030,20 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   return true
 }
 
-function onFactoryReviewCancelled(threadId: string): boolean {
+function onFactoryReviewCancelled(threadId: string, reason?: string): boolean {
   const ticket = builderThreadToTicket.get(threadId)
   if (!ticket) return false
 
   const state = builds.get(ticket)
   if (!state || state.phase !== 'reviewing') return false
 
-  process.stderr.write(`daemon: factory: review cancelled for ticket ${state.ticket}\n`)
+  process.stderr.write(`daemon: factory: review cancelled for ticket ${state.ticket}${reason ? ` (${reason})` : ''}\n`)
 
   // Move to awaiting_pm so PM can retry
   state.phase = 'awaiting_pm'
   syncPhaseToRegistry(state)
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled — builder still alive\n↳ factory_retry / factory_abandon`)
+  const reasonStr = reason ? ` (${reason})` : ''
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
 
   return true
 }
@@ -1098,8 +1099,8 @@ function factoryReviewComplete({ threadId, summary }: { threadId: string; summar
   onFactoryReviewComplete(threadId, summary)
 }
 
-function factoryReviewCancelled({ threadId }: { threadId: string }): void {
-  onFactoryReviewCancelled(threadId)
+function factoryReviewCancelled({ threadId, reason }: { threadId: string; reason?: string }): void {
+  onFactoryReviewCancelled(threadId, reason)
 }
 
 protocolEvents.onComplete((event: CompletionEvent) => {
@@ -1107,7 +1108,7 @@ protocolEvents.onComplete((event: CompletionEvent) => {
   if (event.outcome === 'complete') {
     factoryReviewComplete({ threadId: event.threadId, summary: event.summary })
   } else {
-    factoryReviewCancelled({ threadId: event.threadId })
+    factoryReviewCancelled({ threadId: event.threadId, reason: event.reason })
   }
 })
 on('session:death', factorySessionDeath, 'factory:session-death')
