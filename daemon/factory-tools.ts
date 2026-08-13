@@ -14,13 +14,14 @@ export const FACTORY_TOOL_NAMES = new Set(FACTORY_TOOLS.map(t => t.name))
 
 // Terser description injected for active builders via scoped tool overrides.
 // Builders already get the full task framing in their builder prompt, so the
-// live tool description stays short.
-export const FACTORY_DONE_SCOPED_DESCRIPTION = 'Signal that your factory build is complete. Triggers mandatory adversarial review.'
+// live tool description stays short. Internal — only composes the record below.
+const FACTORY_DONE_SCOPED_DESCRIPTION = 'Signal that your factory build is complete. Triggers mandatory adversarial review.'
 
 // The scoped-override record injected for active builders. Both override sites
 // in factory.ts (spawn-time in spawnBuilder + runtime in resolveScopedToolOverrides)
 // reference this one object, so adding a second overridden factory tool is an
-// edit here, not in two call sites.
-export const FACTORY_SCOPED_OVERRIDES: Record<string, string> = {
+// edit here, not in two call sites. Frozen — it is returned by reference to
+// computeToolsForSession, matching the freeze discipline on the tool arrays.
+export const FACTORY_SCOPED_OVERRIDES: Record<string, string> = Object.freeze({
   factory_done: FACTORY_DONE_SCOPED_DESCRIPTION,
-}
+})
