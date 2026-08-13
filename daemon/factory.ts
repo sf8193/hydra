@@ -27,7 +27,7 @@ import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
 import { registerProtocol } from './protocol-registry.js'
 import { clearBuilderNudge } from './pane-probe.js'
-import { FACTORY_DONE_SCOPED_DESCRIPTION } from './factory-tools.js'
+import { FACTORY_SCOPED_OVERRIDES } from './factory-tools.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -880,7 +880,7 @@ async function spawnBuilder(
     promptPrefix: builderPrompt,
     ...(initiator ? { initiator } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
-    scopedToolOverrides: { factory_done: FACTORY_DONE_SCOPED_DESCRIPTION },
+    scopedToolOverrides: FACTORY_SCOPED_OVERRIDES,
   })
 
   state.builderSessionId = result.sessionId
@@ -1137,7 +1137,7 @@ registerProtocol('factory', {
     const ticket = builderSessionToTicket.get(sessionId)!
     const state = builds.get(ticket)
     if (!state || state.phase !== 'building') return null
-    return { factory_done: FACTORY_DONE_SCOPED_DESCRIPTION }
+    return FACTORY_SCOPED_OVERRIDES
   },
 })
 
