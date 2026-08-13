@@ -223,11 +223,24 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
         if (budgetRaw && !phaseBudgetMs) throw new Error(`invalid phase_budget "${budgetRaw}" — use e.g. "90s", "20m", "1h"`)
         const headless = args.headless as boolean | undefined
+        const readThreadRaw = args.read_thread as boolean | number | undefined
         const spawnerName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? 'main' : 'main'
+        let readThreadPrefix = ''
+        if (readThreadRaw) {
+          const limit = typeof readThreadRaw === 'number' ? Math.min(100, Math.max(10, Math.round(readThreadRaw))) : 50
+          const spawnerInfo = callerSessionId ? registry.get(callerSessionId) : undefined
+          const parentThread = spawnerInfo?.threadId
+          if (parentThread) {
+            readThreadPrefix = `Read the history of your parent thread for context before starting work:\n  fetch_messages(channel="${parentThread}", limit=${limit})\n\n`
+          } else {
+            process.stderr.write(`daemon: spawn_session read_thread requested by ${spawnerName} but spawner has no thread — ignoring\n`)
+          }
+        }
         const result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
           ...(model ? { model } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
           ...(headless ? { headless: true } : {}),
+          ...(readThreadPrefix ? { promptPrefix: readThreadPrefix } : {}),
           trigger: 'spawn_session',
           initiator: spawnerName,
         })
