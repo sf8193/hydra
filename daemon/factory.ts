@@ -516,7 +516,10 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
   logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
   const reviewWarning = state.reviewed ? '' : ' (unreviewed)'
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}`)
+  const summaryNote = state.reviewSummary
+    ? '\n' + (state.reviewSummary.length > 300 ? state.reviewSummary.slice(0, 300) + '…' : state.reviewSummary)
+    : ''
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}${summaryNote}`)
 
   killBuilder(state, true)
   cleanupState(state.ticket)
@@ -554,7 +557,10 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
   state.phase = 'failed'
   logBuild(state, 'abandoned')
 
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ' — ' + reason.slice(0, 200) : ''}`)
+  const reviewNote = state.reviewSummary
+    ? '\n↳ review had found: ' + (state.reviewSummary.length > 200 ? state.reviewSummary.slice(0, 200) + '…' : state.reviewSummary)
+    : ''
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ' — ' + reason.slice(0, 200) : ''}${reviewNote}`)
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
