@@ -460,6 +460,9 @@ export function factoryRetry(
 
   state.phase = 'building'
   state.retryCount++
+  // A retry produces a new artifact the prior review never saw — drop its
+  // summary so a later abandon can't surface a finding from the old cycle.
+  state.reviewSummary = undefined
   syncPhaseToRegistry(state)
 
   // Send new instructions to the builder via notification
@@ -507,6 +510,11 @@ export function factoryAcceptByTicket(
   return acceptCore(state, allowUnreviewed)
 }
 
+/** Clamp a review summary for inline display in a notification. */
+export function clampSummary(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max) + '…' : text
+}
+
 /** Shared accept logic — assumes caller authorization already checked. */
 function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: true } | { error: string } {
   if (state.phase !== 'awaiting_pm') return { error: `Cannot accept — build is in phase "${state.phase}", expected "awaiting_pm".` }
@@ -516,9 +524,7 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
   logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
   const reviewWarning = state.reviewed ? '' : ' (unreviewed)'
-  const summaryNote = state.reviewSummary
-    ? '\n' + (state.reviewSummary.length > 300 ? state.reviewSummary.slice(0, 300) + '…' : state.reviewSummary)
-    : ''
+  const summaryNote = state.reviewSummary ? '\n' + clampSummary(state.reviewSummary, 300) : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}${summaryNote}`)
 
   killBuilder(state, true)
@@ -557,9 +563,7 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
   state.phase = 'failed'
   logBuild(state, 'abandoned')
 
-  const reviewNote = state.reviewSummary
-    ? '\n↳ review had found: ' + (state.reviewSummary.length > 200 ? state.reviewSummary.slice(0, 200) + '…' : state.reviewSummary)
-    : ''
+  const reviewNote = state.reviewSummary ? '\n↳ review had found: ' + clampSummary(state.reviewSummary, 200) : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ' — ' + reason.slice(0, 200) : ''}${reviewNote}`)
 
   // Cancel any in-flight review so the critic doesn't orphan
