@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { emit, once, listenerCount } from '../event-bus.js'
+import { protocolEvents } from '../protocol-runner.js'
+import type { CompletionEvent } from '../protocol-types.js'
 
 // Suppress stderr noise
 let originalStderrWrite: typeof process.stderr.write
@@ -11,53 +12,82 @@ afterEach(() => {
   process.stderr.write = originalStderrWrite
 })
 
-describe('factoryReview one-shot listeners', () => {
-  test('review:complete one-shot fires once then unsubscribes', () => {
+// Build a review CompletionEvent for a given thread/outcome. Mirrors what
+// protocol-runner emits at completeRun/cancelRun — including the cleanup-phase
+// summary, which rides on `summary` (not `decisions`, which stay empty for
+// verdict-less protocols like review).
+function reviewEvent(threadId: string, outcome: 'complete' | 'cancelled', summary?: string): CompletionEvent {
+  return {
+    protocol: 'review',
+    threadId,
+    rounds: { completed: outcome === 'complete' ? 3 : 0, requested: 3 },
+    outcome,
+    decisions: [],
+    durationMs: 1000,
+    ...(summary ? { summary } : {}),
+  }
+}
+
+describe('protocolEvents.onceComplete', () => {
+  test('fires once then unsubscribes', () => {
     let fired = 0
     const targetThread = 'thread-review-target'
 
-    once('review:complete', (payload) => {
-      if (payload.threadId === targetThread) fired++
-    }, `test-review:${targetThread}`)
+    protocolEvents.onceComplete(targetThread, () => { fired++ })
 
-    const before = listenerCount('review:complete')
-    emit('review:complete', { threadId: targetThread })
+    protocolEvents.emitComplete(reviewEvent(targetThread, 'complete'))
     expect(fired).toBe(1)
 
-    // One-shot should have unsubscribed — listener count should decrease
-    const after = listenerCount('review:complete')
-    expect(after).toBeLessThan(before)
-
-    // Second emit should NOT fire the handler
-    emit('review:complete', { threadId: targetThread })
+    protocolEvents.emitComplete(reviewEvent(targetThread, 'complete'))
     expect(fired).toBe(1)
   })
 
-  test('review:complete one-shot ignores other threads', () => {
+  test('ignores other threads', () => {
     let fired = 0
     const targetThread = 'thread-target-2'
 
-    once('review:complete', (payload) => {
-      if (payload.threadId === targetThread) fired++
-    }, `test-review-filter:${targetThread}`)
+    const unsub = protocolEvents.onceComplete(targetThread, () => { fired++ })
 
-    emit('review:complete', { threadId: 'thread-other' })
+    protocolEvents.emitComplete(reviewEvent('thread-other', 'complete'))
     expect(fired).toBe(0)
 
-    // The listener is still alive (it didn't match, but once() fires on ANY event delivery)
-    // This tests that the threadId filter works correctly
+    unsub()
   })
 
-  test('review:cancelled one-shot fires', () => {
+  test('unsub prevents firing', () => {
     let fired = 0
+    const targetThread = 'thread-unsub-target'
+
+    const unsub = protocolEvents.onceComplete(targetThread, () => { fired++ })
+    unsub()
+
+    protocolEvents.emitComplete(reviewEvent(targetThread, 'complete'))
+    expect(fired).toBe(0)
+  })
+
+  test('summary rides on event.summary, not decisions', () => {
+    let captured: string | undefined = 'unset'
+    const targetThread = 'thread-summary-target'
+
+    protocolEvents.onceComplete(targetThread, (event) => {
+      captured = event.summary
+      expect(event.decisions.find(d => d.phase === 'cleanup')?.because).toBeUndefined()
+    })
+
+    protocolEvents.emitComplete(reviewEvent(targetThread, 'complete', 'the review synthesis'))
+    expect(captured).toBe('the review synthesis')
+  })
+
+  test('fires on cancelled outcome', () => {
+    let cancelled = 0
     const targetThread = 'thread-cancel-target'
 
-    once('review:cancelled', (payload) => {
-      if (payload.threadId === targetThread) fired++
-    }, `test-cancel:${targetThread}`)
+    protocolEvents.onceComplete(targetThread, (event) => {
+      if (event.outcome === 'cancelled') cancelled++
+    })
 
-    emit('review:cancelled', { threadId: targetThread })
-    expect(fired).toBe(1)
+    protocolEvents.emitComplete(reviewEvent(targetThread, 'cancelled'))
+    expect(cancelled).toBe(1)
   })
 })
 

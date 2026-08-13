@@ -45,6 +45,7 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
   strike: boolean
   statusHistory: string[]
+  summary?: string
   ext: Ext
 }
 
@@ -75,7 +76,15 @@ class ProtocolEventBus extends EventEmitter {
   /** Listeners must be synchronous — async rejections are unhandled. */
   onComplete(fn: (event: CompletionEvent) => void): void { this.on('complete', fn) }
   offComplete(fn: (event: CompletionEvent) => void): void { this.off('complete', fn) }
-}
+  onceComplete(threadId: string, fn: (event: CompletionEvent) => void): () => void {
+    const wrapper = (event: CompletionEvent) => {
+      if (event.threadId !== threadId) return
+      this.offComplete(wrapper)
+      fn(event)
+    }
+    this.onComplete(wrapper)
+    return () => this.offComplete(wrapper)
+  }}
 
 export const protocolEvents = new ProtocolEventBus()
 
@@ -288,7 +297,9 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // Post content to thread — after state advance so a safeSend failure
     // doesn't leave the agent thinking advance failed when state moved.
     const sentIds = await safeSend(run.threadId, content)
-    if (advancePhaseFrom !== run.protocol.cleanupPhase) {
+    if (advancePhaseFrom === run.protocol.cleanupPhase) {
+      run.summary = content
+    } else {
       run.messageIds.push(...sentIds)
     }
 
@@ -899,6 +910,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
     durationMs: Date.now() - run.startedAt,
     transcriptPath,
+    summary: run.summary,
   }
 
   protocolEvents.emitComplete(completionEvent)
