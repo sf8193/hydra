@@ -32,7 +32,7 @@ import { clearBuilderNudge } from './pane-probe.js'
 // Types
 // ---------------------------------------------------------------------------
 
-type FactoryPhase = 'building' | 'reviewing' | 'awaiting_pm' | 'complete' | 'failed'
+type FactoryPhase = 'queued' | 'building' | 'reviewing' | 'awaiting_pm' | 'complete' | 'failed'
 
 type FactoryBuildState = {
   ticket: string
@@ -49,6 +49,7 @@ type FactoryBuildState = {
   createdAt: number
   reviewed: boolean
   worktree?: string
+  dependsOn?: string    // ticket ID this build is queued behind
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
   reviewSummary?: string // captured from builder's [summary] post at review completion
@@ -372,10 +373,11 @@ export type FactoryBuildOpts = {
   difficulty?: Difficulty
   worktree?: string
   fresh?: boolean  // spawn fresh builder (no fork from PM context)
+  dependsOn?: string  // ticket ID — build queues until dependency is accepted
 }
 
 export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?: string } | { error: string } {
-  const { pmThreadId, pmSessionId, spec, builderModel, reviewerModel, worktree } = opts
+  const { pmThreadId, pmSessionId, spec, builderModel, reviewerModel, worktree, dependsOn } = opts
   const reviewRounds = opts.reviewRounds ?? 3
   const difficulty = opts.difficulty ?? 'easy'
   const { builder, reviewer, warning: modelWarning } = resolveModels(difficulty, builderModel, reviewerModel)
@@ -409,6 +411,15 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     }
   }
 
+  // Validate dependency if specified
+  if (dependsOn) {
+    const dep = builds.get(dependsOn)
+    if (!dep) return { error: `depends_on ticket "${dependsOn}" not found.` }
+    if (dep.phase === 'failed' || dep.phase === 'complete') {
+      return { error: `depends_on ticket "${dependsOn}" already terminated (${dep.phase}). Start without dependency or use a different ticket.` }
+    }
+  }
+
   const ticket = `fb-${++ticketCounter}-${randomBytes(2).toString('hex')}`
   const state: FactoryBuildState = {
     ticket,
@@ -418,13 +429,19 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     builderModel: builder,
     reviewerModel: reviewer,
     reviewRounds,
-    phase: 'building',
+    phase: dependsOn ? 'queued' : 'building',
     retryCount: 0,
     createdAt: Date.now(),
     reviewed: false,
     worktree,
+    ...(dependsOn ? { dependsOn } : {}),
   }
   builds.set(ticket, state)
+
+  if (dependsOn) {
+    void safeSend(pmThreadId, `🏭 \`${ticket}\` queued — waiting on \`${dependsOn}\``)
+    return { ticket, warning }
+  }
 
   // Spawn builder async — don't await
   const forkInfo = fresh ? undefined : { claudeSessionId: pmInfo!.claudeSessionId!, tmuxName: pmInfo!.tmuxName }
@@ -523,6 +540,27 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
 
   killBuilder(state, true)
   cleanupState(state.ticket)
+
+  // Unblock queued builds that depend on this ticket
+  for (const [depTicket, depState] of builds) {
+    if (depState.dependsOn === state.ticket && depState.phase === 'queued') {
+      depState.phase = 'building'
+      depState.dependsOn = undefined
+      syncPhaseToRegistry(depState)
+      void safeSend(depState.pmThreadId, `🏭 \`${depTicket}\` unblocked — dependency \`${state.ticket}\` accepted. Starting build.`)
+      const depPmInfo = registry.get(depState.pmSessionId)
+      const depForkInfo = depPmInfo?.claudeSessionId ? { claudeSessionId: depPmInfo.claudeSessionId, tmuxName: depPmInfo.tmuxName } : undefined
+      void spawnBuilder(depState, depForkInfo).catch(err => {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        process.stderr.write(`daemon: factory: dequeued build ${depTicket} failed to start: ${errMsg}\n`)
+        depState.phase = 'failed'
+        logBuild(depState, 'spawn_failed')
+        void safeSend(depState.pmThreadId, `🏭 \`${depTicket}\` ❌ failed to start after unblock — ${errMsg}`)
+        cleanupState(depTicket)
+      })
+    }
+  }
+
   return { ok: true }
 }
 
@@ -575,12 +613,22 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
   killBuilder(state, true)
   cleanupState(state.ticket)
 
+  // Fail queued builds that depend on this ticket
+  for (const [depTicket, depState] of builds) {
+    if (depState.dependsOn === state.ticket && depState.phase === 'queued') {
+      depState.phase = 'failed'
+      logBuild(depState, 'dependency_abandoned')
+      void safeSend(depState.pmThreadId, `🏭 \`${depTicket}\` ❌ dependency \`${state.ticket}\` was abandoned`)
+      cleanupState(depTicket)
+    }
+  }
+
   process.stderr.write(`daemon: factory: abandoned ${state.ticket} (was in phase ${wasPhase})\n`)
   return { ok: true }
 }
 
 /** Serialize a build to a summary row (shared by factoryStatus + factoryListAll). */
-type BuildSummary = { ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; pmThreadId?: string; worktree?: string }
+type BuildSummary = { ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; pmThreadId?: string; worktree?: string; dependsOn?: string }
 function summarizeBuild(s: FactoryBuildState, includePmThread = false): BuildSummary {
   return {
     ticket: s.ticket,
@@ -591,6 +639,7 @@ function summarizeBuild(s: FactoryBuildState, includePmThread = false): BuildSum
     builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
     ...(includePmThread ? { pmThreadId: s.pmThreadId } : {}),
     ...(s.worktree ? { worktree: s.worktree } : {}),
+    ...(s.dependsOn ? { dependsOn: s.dependsOn } : {}),
   }
 }
 

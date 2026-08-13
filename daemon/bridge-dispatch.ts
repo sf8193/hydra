@@ -347,6 +347,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           difficulty: difficulty as Difficulty | undefined,
           worktree: worktreeResolved,
           fresh,
+          dependsOn: str(args.depends_on),
         })
 
         if ('error' in result) {
