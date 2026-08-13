@@ -65,6 +65,8 @@ const builds = new Map<string, FactoryBuildState>()
 const builderSessionToTicket = new Map<string, string>()   // builderSessionId → ticket
 const builderThreadToTicket = new Map<string, string>()     // builderThreadId → ticket
 
+const pmReviewFailures = new Map<string, number>()  // pmThreadId → consecutive review failure count
+
 let ticketCounter = 0
 
 // Build history log
@@ -957,6 +959,8 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
       }
       state.phase = 'awaiting_pm'
       syncPhaseToRegistry(state)
+      const failCount = (pmReviewFailures.get(state.pmThreadId) ?? 0) + 1
+      pmReviewFailures.set(state.pmThreadId, failCount)
       void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review failed — ${errMsg}\n↳ factory_retry / factory_accept / factory_abandon`)
     })
 
@@ -1022,6 +1026,7 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   state.reviewed = true
   if (summaryText) state.reviewSummary = summaryText
   syncPhaseToRegistry(state)
+  pmReviewFailures.delete(state.pmThreadId)
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
 
   // prUrl/diffGistUrl were captured at factory_done time — use synchronously, no race.
@@ -1050,6 +1055,12 @@ function onFactoryReviewCancelled(threadId: string, reason?: string): boolean {
   syncPhaseToRegistry(state)
   const reasonStr = reason ? ` (${reason})` : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
+
+  const failCount = (pmReviewFailures.get(state.pmThreadId) ?? 0) + 1
+  pmReviewFailures.set(state.pmThreadId, failCount)
+  if (failCount >= 3) {
+    void safeSend(state.pmThreadId, `⚠️ Factory degraded: ${failCount} consecutive reviews have failed. Review system may be broken — consider accept_unreviewed or investigate critic health.`)
+  }
 
   return true
 }
