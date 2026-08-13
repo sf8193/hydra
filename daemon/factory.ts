@@ -22,6 +22,7 @@ import type { CompletionEvent } from './protocol-types.js'
 import reviewProto from '../protocols/review.js'
 import { registry, threadRegistry } from './sessions.js'
 import { safeSend, formatDuration, getContextPercent } from './util.js'
+import { defaultToolDescription } from './bridge-tools.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
@@ -885,7 +886,7 @@ async function spawnBuilder(
     promptPrefix: builderPrompt,
     ...(initiator ? { initiator } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
-    scopedToolOverrides: { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' },
+    scopedToolOverrides: { factory_done: defaultToolDescription('factory_done') },
   })
 
   state.builderSessionId = result.sessionId
@@ -1143,7 +1144,7 @@ registerProtocol('factory', {
     const ticket = builderSessionToTicket.get(sessionId)!
     const state = builds.get(ticket)
     if (!state || state.phase !== 'building') return null
-    return { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' }
+    return { factory_done: defaultToolDescription('factory_done') }
   },
 })
 
