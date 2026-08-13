@@ -720,6 +720,34 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
   }
 }
 
+const PR_TITLE_MAX = 72 // git subject-line convention
+
+/**
+ * Truncate to at most `max` chars on a word boundary, appending an ellipsis so
+ * readers can see the title was clipped. Falls back to a hard cut only when the
+ * first "word" alone exceeds the limit.
+ */
+function truncateAtWord(s: string, max: number): string {
+  if (s.length <= max) return s
+  const cut = s.slice(0, max - 1) // leave room for the ellipsis
+  const lastSpace = cut.lastIndexOf(' ')
+  const base = lastSpace > 0 ? cut.slice(0, lastSpace) : cut
+  return base.replace(/[\s—–,;:.\-]+$/, '') + '…'
+}
+
+/**
+ * Normalize any PR title (builder-supplied or spec-derived) into a single,
+ * git-log-legible subject line: first non-empty line, a leaked
+ * "Factory <ticket>:" prefix stripped, word-boundary truncated. Returns '' when
+ * nothing usable remains so callers can fall back.
+ */
+function normalizePrTitle(raw: string): string {
+  const oneLine = raw.split('\n').map(l => l.trim()).find(l => l.length > 0) ?? ''
+  const deprefixed = oneLine.replace(/^factory\s+\S+:\s*/i, '').trim()
+  if (!deprefixed) return ''
+  return truncateAtWord(deprefixed, PR_TITLE_MAX)
+}
+
 /**
  * Derive a PR title from the spec when the builder didn't supply one.
  * Takes the first non-empty line and strips common markdown so it reads
@@ -733,7 +761,7 @@ function derivePrTitleFromSpec(spec: string): string {
     .replace(/\*\*(.+?)\*\*/g, '$1') // bold
     .replace(/`([^`]+)`/g, '$1')   // inline code
     .trim()
-  return stripped.slice(0, 72)
+  return normalizePrTitle(stripped) || stripped.slice(0, PR_TITLE_MAX)
 }
 
 /**
@@ -833,8 +861,9 @@ async function spawnBuilder(
     ? [
         ``,
         `WORKTREE DONE OBLIGATIONS: Your changes will be destroyed when your session ends.`,
-        `Before calling factory_done, you MUST commit and push your changes from the worktree:`,
-        `  git add -A && git commit -m "factory: <summary>" && git push -u origin HEAD`,
+        `Before calling factory_done, you MUST commit and push your changes from the worktree.`,
+        `Write a real commit message — imperative, specific, git-log-legible; not "factory: done":`,
+        `  git add -A && git commit -m "<clear, specific subject line>" && git push -u origin HEAD`,
         `Include the branch name in your factory_done call so the PM can find your work.`,
       ]
     : []
@@ -855,11 +884,12 @@ async function spawnBuilder(
     ? [
         ``,
         `PR QUALITY:`,
-        `When you create a PR (via git push + gh pr create), write an impeccable title:`,
+        `A PR is opened automatically from your pushed branch — do NOT run gh pr create yourself.`,
+        `Give it an impeccable title and pass it to factory_done as pr_title:`,
         `- Short, specific, imperative (e.g. "fix: unique worktree branch names prevent builder collisions")`,
         `- No ticket IDs, no "Factory fb-X-XXXX:" prefix`,
         `- The title should make sense to someone reading a git log with no other context`,
-        `Pass this title to factory_done as pr_title so it becomes the PR title verbatim.`,
+        `Apply the same bar to your commit message — a real subject line, not "factory: done".`,
       ]
     : []
 
@@ -959,7 +989,10 @@ export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: t
 }
 
 async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArgs): Promise<void> {
-  if (args.pr_title) state.prTitle = args.pr_title
+  if (args.pr_title) {
+    const normalized = normalizePrTitle(args.pr_title)
+    if (normalized) state.prTitle = normalized // empty/garbage falls back to derivePrTitleFromSpec
+  }
   const fileCount = args.files_changed.length
   const testShort = args.test_results.slice(0, 80)
   const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''
