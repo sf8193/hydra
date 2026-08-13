@@ -725,6 +725,8 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
   }
 }
 
+
+
 /**
  * Create a GitHub PR from the builder's worktree branch.
  * Only runs for worktree builds (info.worktreePath + info.worktreeRepo set).
@@ -751,7 +753,7 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
       // No existing PR — fall through to create
     }
 
-    const title = `Factory ${state.ticket}: ${state.spec.slice(0, 60)}`
+    const title = state.spec.split('\n').find(l => l.trim())?.trim().replace(/^#+\s*/, '').slice(0, 72) || 'factory build'
     const body = `Factory build from ticket \`${state.ticket}\``
     const { stdout } = await execAsync(
       'gh', ['pr', 'create', '--head', branch, '--title', title, '--body', body],
@@ -822,8 +824,9 @@ async function spawnBuilder(
     ? [
         ``,
         `WORKTREE DONE OBLIGATIONS: Your changes will be destroyed when your session ends.`,
-        `Before calling factory_done, you MUST commit and push your changes from the worktree:`,
-        `  git add -A && git commit -m "factory: <summary>" && git push -u origin HEAD`,
+        `Before calling factory_done, you MUST commit and push your changes from the worktree.`,
+        `Write a real commit message — imperative, specific, git-log-legible; not "factory: done":`,
+        `  git add -A && git commit -m "<clear, specific subject line>" && git push -u origin HEAD`,
         `Include the branch name in your factory_done call so the PM can find your work.`,
       ]
     : []
@@ -840,6 +843,17 @@ async function spawnBuilder(
       ]
     : []
 
+  const prQualityInstructions = state.worktree
+    ? [
+        ``,
+        `COMMIT QUALITY:`,
+        `A PR is opened automatically from your pushed branch.`,
+        `Write a clear, specific commit message — it becomes the PR title.`,
+        `- Imperative, git-log-legible (e.g. "fix: unique worktree branch names prevent builder collisions")`,
+        `- No ticket IDs, no "Factory fb-X-XXXX:" prefix, not "factory: done"`,
+      ]
+    : []
+
   const builderPrompt = [
     `IMPORTANT: You are a BUILDER session${isFresh ? '' : ' forked from the PM'}. Your job is to WRITE CODE.`,
     ...(isFresh
@@ -852,6 +866,7 @@ async function spawnBuilder(
     `YOUR TASK:`,
     state.spec,
     ...worktreeInstructions,
+    ...prQualityInstructions,
     ``,
     `WHEN DONE:`,
     `Call the factory_done tool with your results:`,
