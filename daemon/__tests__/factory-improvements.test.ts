@@ -113,6 +113,39 @@ describe('killBuilder thread deletion sequencing', () => {
   })
 })
 
+describe('review-cancel reason surfacing', () => {
+  test('reason is included in parens when present', async () => {
+    const { formatReviewCancelledNotice } = await import('../factory.js')
+    const msg = formatReviewCancelledNotice('fb-1', 'timed out')
+    expect(msg).toContain('`fb-1`')
+    expect(msg).toContain('review cancelled (timed out) — builder still alive')
+    expect(msg).toContain('factory_retry / factory_abandon')
+  })
+
+  test('notice is clean (no empty parens) when reason absent', async () => {
+    const { formatReviewCancelledNotice } = await import('../factory.js')
+    const msg = formatReviewCancelledNotice('fb-2')
+    expect(msg).toContain('review cancelled — builder still alive')
+    expect(msg).not.toContain('(')
+  })
+
+  test('cancelled review event for an unregistered thread is a safe no-op', () => {
+    // Documents the intended scope: factory-initiated cancels clean up state
+    // synchronously, so the async emitComplete lands with no build to notify.
+    // The global onComplete handler must tolerate that without throwing.
+    const evt: CompletionEvent = {
+      protocol: 'review',
+      threadId: 'thread-no-build-registered',
+      rounds: { completed: 0, requested: 3 },
+      outcome: 'cancelled',
+      reason: 'critic did not reconnect',
+      decisions: [],
+      durationMs: 1000,
+    }
+    expect(() => protocolEvents.emitComplete(evt)).not.toThrow()
+  })
+})
+
 describe('factory admin/CLI functions', () => {
   test('factoryListAll returns empty when no builds', async () => {
     const { factoryListAll } = await import('../factory.js')

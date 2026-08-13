@@ -1030,6 +1030,23 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   return true
 }
 
+// PM notice for an autonomously-cancelled review. `reason` (CompletionEvent.reason,
+// from protocol-runner's cancelRun) is surfaced in parens so the PM sees *why*
+// without scraping the thread. Pure/exported so the reason-threading is regression-tested.
+export function formatReviewCancelledNotice(ticket: string, reason?: string): string {
+  const reasonStr = reason ? ` (${reason})` : ''
+  return `🏭 \`${ticket}\` ⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`
+}
+
+// NOTE ON SCOPE: this handler only fires for cancellations the protocol-runner
+// triggers autonomously (timeout, critic disconnect/reconnect-failure, behavior
+// error) — those are exactly the previously-unexplained "review cancelled" cases.
+// The three factory-initiated cancel sites (abandon @ ~563, builder-crash @ ~991,
+// PM-death @ ~1085) call `void cancelRun(...)` then `cleanupState()` SYNCHRONOUSLY,
+// deleting the build before cancelRun's async emitComplete lands here — so this
+// returns false (no state) for them, by design: each already emits its own
+// context-rich message. If those paths are ever refactored to route through here,
+// that synchronous cleanup must move into cancelRun's .then, or the reason is lost.
 function onFactoryReviewCancelled(threadId: string, reason?: string): boolean {
   const ticket = builderThreadToTicket.get(threadId)
   if (!ticket) return false
@@ -1042,8 +1059,7 @@ function onFactoryReviewCancelled(threadId: string, reason?: string): boolean {
   // Move to awaiting_pm so PM can retry
   state.phase = 'awaiting_pm'
   syncPhaseToRegistry(state)
-  const reasonStr = reason ? ` (${reason})` : ''
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
+  void safeSend(state.pmThreadId, formatReviewCancelledNotice(state.ticket, reason))
 
   return true
 }
