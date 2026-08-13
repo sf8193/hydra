@@ -527,31 +527,32 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
 export function factoryAbandon(
   ticket: string,
   callerSessionId: string,
+  reason?: string,
 ): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
   if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can abandon it.' }
-  return abandonCore(state)
+  return abandonCore(state, reason)
 }
 
 /**
  * Abandon a build by ticket alone (admin/CLI path — skips PM ownership check).
  */
-export function factoryAbandonByTicket(ticket: string): { ok: true } | { error: string } {
+export function factoryAbandonByTicket(ticket: string, reason?: string): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
-  return abandonCore(state)
+  return abandonCore(state, reason)
 }
 
 /** Shared abandon logic — assumes caller authorization already checked. */
-function abandonCore(state: FactoryBuildState): { ok: true } | { error: string } {
+function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | { error: string } {
   if (state.phase === 'complete' || state.phase === 'failed') return { error: 'Build already terminated.' }
 
   const wasPhase = state.phase
   state.phase = 'failed'
   logBuild(state, 'abandoned')
 
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned`)
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ' — ' + reason.slice(0, 200) : ''}`)
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
