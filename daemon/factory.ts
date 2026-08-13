@@ -51,6 +51,7 @@ type FactoryBuildState = {
   worktree?: string
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
+  prTitle?: string      // builder-supplied PR title (from factory_done), used verbatim by createBuilderPR
   reviewSummary?: string // captured from builder's [summary] post at review completion
   _progressTimer?: ReturnType<typeof setInterval> // periodic progress update timer
 }
@@ -720,6 +721,22 @@ async function captureBuilderDiff(state: FactoryBuildState): Promise<string | un
 }
 
 /**
+ * Derive a PR title from the spec when the builder didn't supply one.
+ * Takes the first non-empty line and strips common markdown so it reads
+ * cleanly in a git log — no leading heading/list markers, bold, or backticks.
+ */
+function derivePrTitleFromSpec(spec: string): string {
+  const firstLine = spec.split('\n').map(l => l.trim()).find(l => l.length > 0) ?? spec.trim()
+  const stripped = firstLine
+    .replace(/^#{1,6}\s+/, '')     // heading markers
+    .replace(/^[-*+]\s+/, '')      // list markers
+    .replace(/\*\*(.+?)\*\*/g, '$1') // bold
+    .replace(/`([^`]+)`/g, '$1')   // inline code
+    .trim()
+  return stripped.slice(0, 72)
+}
+
+/**
  * Create a GitHub PR from the builder's worktree branch.
  * Only runs for worktree builds (info.worktreePath + info.worktreeRepo set).
  * Best-effort — failure is silent.
@@ -745,7 +762,7 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
       // No existing PR — fall through to create
     }
 
-    const title = `Factory ${state.ticket}: ${state.spec.slice(0, 60)}`
+    const title = state.prTitle ?? derivePrTitleFromSpec(state.spec)
     const body = `Factory build from ticket \`${state.ticket}\``
     const { stdout } = await execAsync(
       'gh', ['pr', 'create', '--head', branch, '--title', title, '--body', body],
@@ -834,6 +851,18 @@ async function spawnBuilder(
       ]
     : []
 
+  const prQualityInstructions = state.worktree
+    ? [
+        ``,
+        `PR QUALITY:`,
+        `When you create a PR (via git push + gh pr create), write an impeccable title:`,
+        `- Short, specific, imperative (e.g. "fix: unique worktree branch names prevent builder collisions")`,
+        `- No ticket IDs, no "Factory fb-X-XXXX:" prefix`,
+        `- The title should make sense to someone reading a git log with no other context`,
+        `Pass this title to factory_done as pr_title so it becomes the PR title verbatim.`,
+      ]
+    : []
+
   const builderPrompt = [
     `IMPORTANT: You are a BUILDER session${isFresh ? '' : ' forked from the PM'}. Your job is to WRITE CODE.`,
     ...(isFresh
@@ -846,11 +875,12 @@ async function spawnBuilder(
     `YOUR TASK:`,
     state.spec,
     ...worktreeInstructions,
+    ...prQualityInstructions,
     ``,
     `WHEN DONE:`,
     `Call the factory_done tool with your results:`,
     `- files_changed: list of files you created or modified`,
-    ...(state.worktree ? [`- branch: the branch name you pushed to`] : []),
+    ...(state.worktree ? [`- branch: the branch name you pushed to`, `- pr_title: the impeccable PR title described above`] : []),
     `- test_results: test output summary (e.g. "1388 pass, 0 fail")`,
     `- rationale: key design decisions and why (optional)`,
     `- known_issues: anything you're unsure about (optional)`,
@@ -909,6 +939,7 @@ export type FactoryDoneArgs = {
   rationale?: string
   known_issues?: string
   branch?: string
+  pr_title?: string
 }
 
 export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: true } | { error: string } {
@@ -928,6 +959,7 @@ export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: t
 }
 
 async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArgs): Promise<void> {
+  if (args.pr_title) state.prTitle = args.pr_title
   const fileCount = args.files_changed.length
   const testShort = args.test_results.slice(0, 80)
   const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''

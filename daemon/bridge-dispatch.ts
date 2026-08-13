@@ -411,6 +411,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           rationale: typeof args.rationale === 'string' ? args.rationale : undefined,
           known_issues: typeof args.known_issues === 'string' ? args.known_issues : undefined,
           branch: typeof args.branch === 'string' ? args.branch : undefined,
+          pr_title: typeof args.pr_title === 'string' ? args.pr_title : undefined,
         }
         const result = onBuilderDone(callerSessionId, doneArgs)
         if ('error' in result) {
