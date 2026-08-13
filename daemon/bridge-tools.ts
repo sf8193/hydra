@@ -7,6 +7,9 @@
 //
 // MASTER_ORCHESTRATOR_ONLY_TOOLS lives in shared/constants.ts — import from there, not here.
 import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../shared/constants.js'
+// FACTORY_TOOLS is a leaf module (no daemon-internal deps) — safe to import here
+// without reintroducing the session-lifecycle ↔ bridge-dispatch cycle.
+import { FACTORY_TOOLS, FACTORY_TOOL_NAMES } from './factory-tools.js'
 
 export const UNIVERSAL_TOOLS = Object.freeze([
   { name: 'reply', description: 'Reply in chat. Pass chat_id from the inbound message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' }, reply_to: { type: 'string', description: 'Message ID to thread under.' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['chat_id', 'text'] } },
@@ -33,12 +36,11 @@ export const UNIVERSAL_TOOLS = Object.freeze([
   { name: 'list_watches', description: 'List all PRs being watched (your session or all).', inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Show all watches, not just yours' } } } },
   { name: 'advance', description: 'Post your protocol deliverable and advance the phase. Content is posted to the thread; the protocol transition fires atomically. For phases that require a structured choice (e.g. approve/request_changes), include verdict.', inputSchema: { type: 'object', properties: { content: { type: 'string', description: 'Your deliverable — posted to the thread verbatim.' }, verdict: { type: 'string', description: 'Structured choice (e.g. "approve", "request_changes", "done"). Required when the phase declares verdict: required; optional when verdict: optional; rejected when verdict: none.' } }, required: ['content'] } },
   { name: 'extend_phase', description: 'Request more time in the current protocol phase. Resets the idle timeout. Use when you need more time to complete your work (e.g. reading a large codebase). The daemon posts a status update to the thread.', inputSchema: { type: 'object', properties: { reason: { type: 'string', description: 'Why you need more time — shown in the thread status.' }, minutes: { type: 'number', description: 'Additional minutes requested (default: 5, max: 15).' } }, required: ['reason'] } },
-  { name: 'factory_done', description: 'Signal that your factory build is complete. Triggers mandatory adversarial review — you will defend your implementation as the review owner. Call this instead of posting [done] as text.', inputSchema: { type: 'object', properties: { files_changed: { type: 'array', items: { type: 'string' }, description: 'List of files created or modified.' }, test_results: { type: 'string', description: 'Test output summary (e.g. "1388 pass, 0 fail").' }, rationale: { type: 'string', description: 'Key design decisions and why.' }, known_issues: { type: 'string', description: 'Anything you are unsure about or that needs attention.' }, branch: { type: 'string', description: 'Branch name (for worktree builds).' } }, required: ['files_changed', 'test_results'] } },
+  ...FACTORY_TOOLS,
 ].map(t => Object.freeze(t)))
 
 export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
-export const FACTORY_ONLY_TOOLS = new Set(['factory_done'])
-const SCOPED_TOOLS = new Set([...PROTOCOL_ONLY_TOOLS, ...FACTORY_ONLY_TOOLS])
+const SCOPED_TOOLS = new Set([...PROTOCOL_ONLY_TOOLS, ...FACTORY_TOOL_NAMES])
 
 // Protocol guests get a minimal tool set to stay below CC's deferred-tool threshold.
 // With 25 tools, CC defers most of them — including advance, which the guest exists to call.
@@ -51,7 +53,7 @@ export function defaultToolDescription(name: string): string {
 }
 
 export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string>; isGuest?: boolean }): typeof UNIVERSAL_TOOLS {
-  if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS.filter(t => !FACTORY_ONLY_TOOLS.has(t.name))
+  if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS.filter(t => !FACTORY_TOOL_NAMES.has(t.name))
   const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
   if (!opts?.scopedToolOverrides) return filtered.filter(t => !SCOPED_TOOLS.has(t.name))
   const overrides = opts.scopedToolOverrides
