@@ -211,7 +211,11 @@ export function suggestWorktreeFromCwd(pmCwd: string, spawnCwd: string): string 
     try { base = realpathSync(spawnCwd) } catch {}
     if (top === base || top.startsWith(base + '/')) {
       const rel = relative(base, top)
-      return rel || undefined  // rel === '' means the repo IS spawnCwd — not a valid nested target
+      // rel === '' means the repo IS spawnCwd. We can't target it: createWorktree
+      // puts the worktree at resolve(repoDir, '..', '.worktrees') — for a root repo
+      // that escapes above SPAWN_CWD (e.g. /Users/.worktrees, SIP-protected). Worktree
+      // targets must be repos NESTED under SPAWN_CWD; the root repo isn't isolatable.
+      return rel || undefined
     }
   } catch {
     // pmCwd not a repo, git missing, etc. — no suggestion
@@ -228,7 +232,18 @@ export function validateWorktreeTarget(
   worktree: string,
   spawnCwd: string,
 ): { ok: true } | { error: string } {
-  const targetRepo = resolve(spawnCwd, worktree)
+  const base = resolve(spawnCwd)
+  const targetRepo = resolve(base, worktree)
+  // Target must be a repo STRICTLY nested under SPAWN_CWD. createWorktree places
+  // the worktree at resolve(repoDir, '..', '.worktrees'); if the target is
+  // SPAWN_CWD itself that escapes above it (e.g. /Users/.worktrees, SIP-protected),
+  // and a target outside SPAWN_CWD ("../other") escapes the sandbox entirely.
+  if (targetRepo === base || !targetRepo.startsWith(base + '/')) {
+    return {
+      error: `Worktree target "${worktree}" resolves to ${targetRepo}, not a repo nested under SPAWN_CWD (${base}). `
+        + `The root repo cannot be isolated and out-of-bounds paths are refused — pass a nested path like "Documents/hydra".`,
+    }
+  }
   try {
     // Spawn from spawnCwd (a dir known to exist) rather than inheriting
     // process.cwd() — the child spawn itself fails if the inherited cwd is gone.
@@ -705,7 +720,7 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
   const info = registry.get(state.builderSessionId)
   if (!info?.worktreePath || !info.worktreeRepo) return undefined
 
-  const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
+  const branch = `wt/${info.tmuxName}`
   try {
     // Check if PR already exists for this branch (idempotent).
     // gh pr view exits 1 when no PR exists — wrap in its own try so the throw
@@ -854,7 +869,7 @@ async function spawnBuilder(
     model: state.builderModel,
     promptPrefix: builderPrompt,
     ...(initiator ? { initiator } : {}),
-    ...(state.worktree ? { worktree: state.worktree, worktreeBranchSuffix: state.ticket } : {}),
+    ...(state.worktree ? { worktree: state.worktree } : {}),
     scopedToolOverrides: { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' },
   })
 
