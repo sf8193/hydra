@@ -36,13 +36,54 @@ export const UNIVERSAL_TOOLS = Object.freeze([
   { name: 'factory_done', description: 'Signal that your factory build is complete. Triggers mandatory adversarial review — you will defend your implementation as the review owner. Call this instead of posting [done] as text.', inputSchema: { type: 'object', properties: { files_changed: { type: 'array', items: { type: 'string' }, description: 'List of files created or modified.' }, test_results: { type: 'string', description: 'Test output summary (e.g. "1388 pass, 0 fail").' }, rationale: { type: 'string', description: 'Key design decisions and why.' }, known_issues: { type: 'string', description: 'Anything you are unsure about or that needs attention.' }, branch: { type: 'string', description: 'Branch name (for worktree builds).' } }, required: ['files_changed', 'test_results'] } },
 ].map(t => Object.freeze(t)))
 
-export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
 export const FACTORY_ONLY_TOOLS = new Set(['factory_done'])
-const SCOPED_TOOLS = new Set([...PROTOCOL_ONLY_TOOLS, ...FACTORY_ONLY_TOOLS])
+export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
 
-// Protocol guests get a minimal tool set to stay below CC's deferred-tool threshold.
-// With 25 tools, CC defers most of them — including advance, which the guest exists to call.
-const GUEST_TOOLS = new Set(['advance', 'extend_phase', 'reply', 'fetch_messages', 'react', 'edit_message', 'download_attachment', 'set_description'])
+// ---------------------------------------------------------------------------
+// Session identity model
+//
+// Role — what the session IS (exactly one):
+//   master_orchestrator  — the primary session (main) or a session with allowMainTools
+//   session_owner        — spawned session with its own thread, the work unit
+//   factory_builder      — restricted, born to build + report + defend
+//   protocol_guest       — restricted visitor in another session's thread
+//
+// Capability — additive grants that expand a session_owner's tools:
+//   protocol_context     — a protocol is running on your thread (adds advance, extend_phase)
+//   factory              — factory template granted (adds factory_build/retry/accept/abandon/status/review + fleet)
+// ---------------------------------------------------------------------------
+
+export type SessionRole = 'master_orchestrator' | 'session_owner' | 'factory_builder' | 'protocol_guest'
+export type SessionCapability = 'protocol_context' | 'factory'
+
+// Base tools for session_owner — chat + awareness
+const SESSION_OWNER_TOOLS = new Set([
+  'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages', 'download_attachment',
+  'send_to_thread', 'set_description', 'list_sessions', 'peek_session',
+  'watch_pr', 'unwatch_pr', 'list_watches',
+])
+
+// Capability: protocol_context — protocol running on your thread
+const PROTOCOL_CONTEXT_TOOLS = new Set(['advance', 'extend_phase'])
+
+// Capability: factory — factory template grants orchestration + fleet management
+const FACTORY_CAPABILITY_TOOLS = new Set([
+  'factory_build', 'factory_retry', 'factory_accept', 'factory_abandon',
+  'factory_status', 'factory_review',
+  'spawn_session', 'kill_session', 'create_thread',
+])
+
+// Restricted: factory_builder — minimal surface
+const FACTORY_BUILDER_TOOLS = new Set([
+  'reply', 'fetch_messages', 'send_to_thread', 'download_attachment',
+  'set_description', 'factory_done',
+])
+
+// Restricted: protocol_guest — visitor with protocol tools
+const PROTOCOL_GUEST_TOOLS = new Set([
+  'reply', 'fetch_messages', 'react', 'edit_message', 'download_attachment',
+  'set_description', 'advance', 'extend_phase',
+])
 
 export function defaultToolDescription(name: string): string {
   const tool = UNIVERSAL_TOOLS.find(t => t.name === name)
@@ -50,16 +91,68 @@ export function defaultToolDescription(name: string): string {
   return tool.description
 }
 
-export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string>; isGuest?: boolean }): typeof UNIVERSAL_TOOLS {
-  if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS.filter(t => !FACTORY_ONLY_TOOLS.has(t.name))
-  const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
-  if (!opts?.scopedToolOverrides) return filtered.filter(t => !SCOPED_TOOLS.has(t.name))
-  const overrides = opts.scopedToolOverrides
-  const base = opts.isGuest
-    ? filtered.filter(t => GUEST_TOOLS.has(t.name))
-    : filtered.filter(t => !SCOPED_TOOLS.has(t.name) || t.name in overrides)
+export function computeToolsForSession(
+  sessionId: string,
+  opts?: {
+    role?: SessionRole
+    capabilities?: Set<SessionCapability>
+    scopedToolOverrides?: Record<string, string>
+    // Legacy compat — infer role from these if role not explicit
+    allowMainTools?: boolean
+    isGuest?: boolean
+  },
+): typeof UNIVERSAL_TOOLS {
+  // Determine role — explicit > legacy inference
+  let role: SessionRole
+  if (opts?.role) {
+    role = opts.role
+  } else if (sessionId === 'main' || opts?.allowMainTools) {
+    role = 'master_orchestrator'
+  } else if (opts?.isGuest) {
+    role = 'protocol_guest'
+  } else if (opts?.scopedToolOverrides && 'factory_done' in opts.scopedToolOverrides) {
+    role = 'factory_builder'
+  } else {
+    role = 'session_owner'
+  }
+
+  // Determine capabilities
+  const caps = opts?.capabilities ?? new Set<SessionCapability>()
+  // Legacy inference: scopedToolOverrides with advance → protocol_context
+  if (!opts?.capabilities && opts?.scopedToolOverrides && 'advance' in opts.scopedToolOverrides) {
+    caps.add('protocol_context')
+  }
+  // master_orchestrator with factory template → factory capability
+  if (role === 'master_orchestrator') {
+    caps.add('factory')
+    caps.add('protocol_context')
+  }
+
+  // Build tool set from role + capabilities
+  let toolSet: Set<string>
+  if (role === 'master_orchestrator') {
+    // Everything except factory_done
+    return UNIVERSAL_TOOLS.filter(t => !FACTORY_ONLY_TOOLS.has(t.name))
+  } else if (role === 'factory_builder') {
+    toolSet = new Set(FACTORY_BUILDER_TOOLS)
+  } else if (role === 'protocol_guest') {
+    toolSet = new Set(PROTOCOL_GUEST_TOOLS)
+  } else {
+    // session_owner — base + capabilities
+    toolSet = new Set(SESSION_OWNER_TOOLS)
+    if (caps.has('protocol_context')) {
+      for (const t of PROTOCOL_CONTEXT_TOOLS) toolSet.add(t)
+    }
+    if (caps.has('factory')) {
+      for (const t of FACTORY_CAPABILITY_TOOLS) toolSet.add(t)
+    }
+  }
+
+  const base = UNIVERSAL_TOOLS.filter(t => toolSet.has(t.name))
+  const overrides = opts?.scopedToolOverrides
+  if (!overrides) return base
   return base.map(t => {
     const desc = overrides[t.name]
-    return desc ? { ...t, description: desc } : { ...t } // shallow-copy: source objects are frozen
+    return desc ? { ...t, description: desc } : { ...t }
   })
 }

@@ -765,11 +765,11 @@ describe('dynamic tool scoping', () => {
     expect(extendPhase!.description).toBe('extend...')
   })
 
-  test('scopedToolOverrides can grant a subset of scoped tools', () => {
+  test('protocol_context grants advance + extend_phase as a unit', () => {
     const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' } })
     const names = tools.map(t => t.name)
     expect(names).toContain('advance')
-    expect(names).not.toContain('extend_phase') // owner only gets tools in overrides
+    expect(names).toContain('extend_phase') // protocol_context is atomic — both or neither
   })
 
   test('isGuest restricts to GUEST_TOOLS set', () => {
@@ -782,14 +782,14 @@ describe('dynamic tool scoping', () => {
     expect(names).not.toContain('factory_build')
   })
 
-  test('owner keeps full tool set with advance override', () => {
+  test('session_owner + protocol_context gets owner tools but not factory tools', () => {
     const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' }, isGuest: false })
     const names = tools.map(t => t.name)
     expect(names).toContain('advance')
     expect(names).toContain('reply')
-    expect(names).toContain('factory_build')
     expect(names).toContain('fetch_messages')
-    expect(names).not.toContain('spawn_session') // master-orchestrator-only
+    expect(names).not.toContain('factory_build')  // needs factory capability
+    expect(names).not.toContain('spawn_session')  // needs factory capability
   })
 
   test('main session always includes advance and extend_phase', () => {
