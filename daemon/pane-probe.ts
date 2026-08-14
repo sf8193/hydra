@@ -512,7 +512,7 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
 // Main probe loop — called from daemon.ts setInterval
 // ---------------------------------------------------------------------------
 
-function byteTmuxName(): string {
+export function byteTmuxName(): string {
   return process.env.BYTE_SESSION_NAME ?? `${io.platform}-byte`
 }
 

@@ -68,7 +68,6 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
-
 // Reconnect persisted codex sessions to their app-server sockets
 import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
 reconnectCodexSessions().then(() => {
@@ -204,7 +203,7 @@ import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { handleSilenceEvent, handleActivityEvent, sessionsWithPendingReplies } from './daemon/reply-guard.js'
-import { probeAllSessions } from './daemon/pane-probe.js'
+import { probeAllSessions, byteTmuxName } from './daemon/pane-probe.js'
 import { tmuxHasSession } from './daemon/util.js'
 
 // ---------------------------------------------------------------------------
@@ -458,10 +457,13 @@ setInterval(() => {
   const nowSec = Math.floor(Date.now() / 1000)
   for (const tmuxName of pendingNames) {
     const info = tmuxName === 'main' ? undefined : registry.findByName(tmuxName)
+    // 'main' is a logical name — its real tmux window is byteTmuxName() (e.g. slack-byte).
+    // Query the real window, but keep passing logical 'main' to the guard so its mapping is unchanged.
+    const queryTarget = tmuxName === 'main' ? byteTmuxName() : tmuxName
     let lastActivitySec = 0
     try {
       lastActivitySec = parseInt(
-        execSync(`tmux display -t '${tmuxName}' -p '#{window_activity}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim(),
+        execSync(`tmux display -t '${queryTarget}' -p '#{window_activity}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim(),
       ) || 0
     } catch { continue }
     const secSinceActivity = nowSec - lastActivitySec
