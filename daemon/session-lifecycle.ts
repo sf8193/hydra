@@ -439,7 +439,12 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const phaseBudgetMs = opts?.phaseBudgetMs ?? budgetExtract.budgetMs
 
   const sessionId = randomUUID()
-  const tmuxName = registry.pickSessionName()
+  // preferredName (protocol resume): reuse the dying participant's name so the
+  // human sees the same agent name across a resume — but only if no live tmux
+  // session already holds it, else fall back to a fresh name.
+  const tmuxName = (opts?.preferredName && !tmuxHasSession(opts.preferredName))
+    ? opts.preferredName
+    : registry.pickSessionName()
   const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
   const threadName = `${sessionEmoji(tmuxName)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
   const isFork = !!opts?.forkFrom

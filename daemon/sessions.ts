@@ -133,6 +133,7 @@ export type SpawnOpts = {
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   scopedToolOverrides?: Record<string, string>
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
+  preferredName?: string        // reuse this tmux name if it's free (protocol resume: keep the same participant name across resume)
 }
 
 // ---------------------------------------------------------------------------

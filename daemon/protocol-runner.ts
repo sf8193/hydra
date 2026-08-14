@@ -1,5 +1,5 @@
 import { gateway } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, sessionEmoji, type SpawnResult } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
@@ -398,51 +398,76 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
   }, graceMs))
 }
 
+// Bridge timeout for protocol resume. 45s (vs the 30s recover default) gives CC
+// room to boot + connect the MCP bridge before we give up on an attempt.
+const RESUME_BRIDGE_TIMEOUT_MS = 45_000
+// Total resume attempts per disconnect before giving up and cancelling the run.
+const RESUME_MAX_ATTEMPTS = 3
+
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
   const info = registry.get(deadSessionId)
-  if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
-
-  const result = await doSpawnSession(
-    info?.topic ?? `${run.protocol.display} ${run.protocol.roles[role]}`,
-    undefined, undefined, {
-      joinThread: run.threadId,
-      resumeFrom: claudeSessionId,
-      model: run.params.model as string | undefined,
-    },
-  )
-  if (isTerminal(run)) {
-    const spawnedInfo = registry.get(result.sessionId)
-    if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
-    return
+  if (info) {
+    recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
+    // Expected resume cycle — don't spam the parent thread with a "child died" line.
+    info.suppressDeathMessage = true
   }
 
-  // Pre-register before waitForBridge so toolsForSession's resolveScopedToolOverrides
-  // resolves — otherwise computeToolsForSession filters out protocol-only tools
-  // and the resumed session can't advance the protocol.
-  run.sessionToRole.set(result.sessionId, role)
-  sessionToRun.set(result.sessionId, run.id)
-  transport.sendOrQueue(result.sessionId, {
-    type: 'notification',
-    content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
-    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
+  // Retry the spawn + bridge handshake on timeout. CC exiting after its turn is a
+  // recoverable event: a single bridge miss shouldn't end a multi-round review.
+  let result: SpawnResult | undefined
+  for (let attempt = 1; attempt <= RESUME_MAX_ATTEMPTS; attempt++) {
+    process.stderr.write(`daemon: ${run.protocol.name} run: ${role} resume attempt ${attempt}/${RESUME_MAX_ATTEMPTS}\n`)
 
-  const ok = await waitForBridge(result.sessionId, 30_000)
-  if (!ok) {
+    result = await doSpawnSession(
+      info?.topic ?? `${run.protocol.display} ${run.protocol.roles[role]}`,
+      undefined, undefined, {
+        joinThread: run.threadId,
+        resumeFrom: claudeSessionId,
+        model: run.params.model as string | undefined,
+        preferredName: info?.tmuxName, // keep the same participant name across resume
+      },
+    )
+    if (isTerminal(run)) {
+      const spawnedInfo = registry.get(result.sessionId)
+      if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
+      return
+    }
+
+    // Pre-register before waitForBridge so toolsForSession's resolveScopedToolOverrides
+    // resolves — otherwise computeToolsForSession filters out protocol-only tools
+    // and the resumed session can't advance the protocol.
+    run.sessionToRole.set(result.sessionId, role)
+    sessionToRun.set(result.sessionId, run.id)
+    transport.sendOrQueue(result.sessionId, {
+      type: 'notification',
+      content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
+      meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
+
+    const ok = await waitForBridge(result.sessionId, RESUME_BRIDGE_TIMEOUT_MS)
+    if (ok) break
+
+    // Bridge timeout — tear down this failed attempt before retrying (or throwing).
     const t = run.disconnectTimers.get(result.sessionId)
     if (t) { clearTimeout(t); run.disconnectTimers.delete(result.sessionId) }
     sessionToRun.delete(result.sessionId)
     run.sessionToRole.delete(result.sessionId)
     const newInfo = registry.get(result.sessionId)
     if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
-    throw new Error('resumed session did not connect')
+
+    if (attempt === RESUME_MAX_ATTEMPTS) {
+      throw new Error(`resumed session did not connect after ${RESUME_MAX_ATTEMPTS} attempts`)
+    }
   }
+
+  // result is defined here — the loop either broke on success or threw.
+  const spawned = result!
   if (isTerminal(run)) {
-    const t = run.disconnectTimers.get(result.sessionId)
-    if (t) { clearTimeout(t); run.disconnectTimers.delete(result.sessionId) }
-    sessionToRun.delete(result.sessionId)
-    run.sessionToRole.delete(result.sessionId)
-    const spawnedInfo = registry.get(result.sessionId)
+    const t = run.disconnectTimers.get(spawned.sessionId)
+    if (t) { clearTimeout(t); run.disconnectTimers.delete(spawned.sessionId) }
+    sessionToRun.delete(spawned.sessionId)
+    run.sessionToRole.delete(spawned.sessionId)
+    const spawnedInfo = registry.get(spawned.sessionId)
     if (spawnedInfo) await killSession(spawnedInfo, 'run cancelled during resume').catch(() => {})
     return
   }
@@ -451,11 +476,11 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   sessionToRun.delete(deadSessionId)
   run.sessionToRole.delete(deadSessionId)
   run.disconnectTimers.delete(deadSessionId)
-  registerParticipant(run, role, result.sessionId)
+  registerParticipant(run, role, spawned.sessionId)
 
   resetTimeout(run)
   startKeepalive(run)
-  process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resumed: ${deadSessionId} → ${result.sessionId}\n`)
+  process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resumed: ${deadSessionId} → ${spawned.sessionId}\n`)
 }
 
 export function onRunReconnect(sessionId: string): void {
@@ -934,6 +959,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification,
+      resumeParticipant, RESUME_MAX_ATTEMPTS, RESUME_BRIDGE_TIMEOUT_MS,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge

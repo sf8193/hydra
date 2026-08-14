@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
 import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
+import { registry } from '../sessions.js'
 
 let origStderrWrite: typeof process.stderr.write
 
@@ -504,5 +505,152 @@ describe('protocol runner — keepalive', () => {
 
   test('KEEPALIVE_INTERVAL_MS is 30 seconds', () => {
     expect(__test!.KEEPALIVE_INTERVAL_MS).toBe(30_000)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Resume retry — the reliability path for protocol participants
+// ---------------------------------------------------------------------------
+
+function makeLifecycleMocks(bridgeResults: boolean[]) {
+  const spawned: string[] = []
+  const killed: Array<{ sessionId: string; reason: string }> = []
+  const preferredNames: Array<string | undefined> = []
+  let bridgeCall = 0
+
+  const doSpawnSession = (async (topic: string, _chatId: any, _messageId: any, opts: any) => {
+    const sessionId = `resumed-${spawned.length + 1}`
+    spawned.push(sessionId)
+    preferredNames.push(opts?.preferredName)
+    // Register so resumeParticipant's `registry.get(result.sessionId)` (for the
+    // kill-on-failure path) resolves, mirroring a real spawn.
+    registry.set(sessionId, {
+      sessionId,
+      topic: String(topic),
+      threadId: opts?.joinThread ?? 'test-thread',
+      tmuxName: opts?.preferredName ?? `name-${spawned.length}`,
+      createdAt: Date.now(),
+      lastActive: Date.now(),
+      listening: false,
+      isJoinMember: true,
+    } as any)
+    return { name: opts?.preferredName ?? 'zinc', sessionId, threadId: opts?.joinThread ?? 'test-thread', url: '' }
+  }) as any
+
+  const waitForBridge = (async (_sessionId: string, _timeoutMs: number) => {
+    const r = bridgeResults[bridgeCall] ?? false
+    bridgeCall++
+    return r
+  }) as any
+
+  const killSession = (async (info: any, reason: string) => {
+    killed.push({ sessionId: info.sessionId, reason })
+    registry.delete(info.sessionId)
+  }) as any
+
+  return {
+    overrides: { doSpawnSession, waitForBridge, killSession },
+    spawned,
+    killed,
+    preferredNames,
+    get bridgeCalls() { return bridgeCall },
+  }
+}
+
+describe('protocol runner — resume retry', () => {
+  afterEach(() => {
+    __test!.resetLifecycle()
+    registry.delete('dead-critic')
+    for (let i = 1; i <= 5; i++) registry.delete(`resumed-${i}`)
+  })
+
+  function seedDeadCritic() {
+    registry.set('dead-critic', {
+      sessionId: 'dead-critic',
+      tmuxName: 'zinc',
+      topic: 'reviewing the diff',
+      threadId: 'test-thread',
+      createdAt: Date.now(),
+      lastActive: Date.now(),
+      listening: false,
+      isJoinMember: true,
+    } as any)
+  }
+
+  test('retries on bridge timeout, up to 3 attempts, then succeeds', async () => {
+    const run = createTestRun()
+    seedDeadCritic()
+    const mocks = makeLifecycleMocks([false, false, true]) // fail, fail, succeed
+    __test!.setLifecycle(mocks.overrides)
+
+    await __test!.resumeParticipant(run as any, 'critic', 'dead-critic', 'claude-abc')
+
+    expect(mocks.spawned.length).toBe(3)
+    expect(mocks.bridgeCalls).toBe(3)
+    // Two failed attempts are killed before the successful third.
+    expect(mocks.killed.length).toBe(2)
+    expect(mocks.killed.every(k => k.reason === 'auto-resume health check failed')).toBe(true)
+    // The surviving session is registered as the critic.
+    const survivor = mocks.spawned[2]
+    expect(run.sessionToRole.get(survivor)).toBe('critic')
+    expect(run.participants.get('critic')).toBe(survivor)
+    // Dead session mappings are cleared.
+    expect(run.sessionToRole.has('dead-critic')).toBe(false)
+  })
+
+  test('succeeds on first attempt without killing anything', async () => {
+    const run = createTestRun()
+    seedDeadCritic()
+    const mocks = makeLifecycleMocks([true])
+    __test!.setLifecycle(mocks.overrides)
+
+    await __test!.resumeParticipant(run as any, 'critic', 'dead-critic', 'claude-abc')
+
+    expect(mocks.spawned.length).toBe(1)
+    expect(mocks.killed.length).toBe(0)
+    expect(run.participants.get('critic')).toBe(mocks.spawned[0])
+  })
+
+  test('throws after all 3 attempts fail (triggers cancelRun upstream)', async () => {
+    const run = createTestRun()
+    seedDeadCritic()
+    const mocks = makeLifecycleMocks([false, false, false])
+    __test!.setLifecycle(mocks.overrides)
+
+    await expect(
+      __test!.resumeParticipant(run as any, 'critic', 'dead-critic', 'claude-abc'),
+    ).rejects.toThrow(/did not connect after 3 attempts/)
+
+    expect(mocks.spawned.length).toBe(3)
+    expect(mocks.killed.length).toBe(3) // every failed attempt is torn down
+    // No survivor registered.
+    expect(run.participants.get('critic')).toBe('test-critic') // unchanged from original
+  })
+
+  test('passes preferredName = dead participant tmuxName on every attempt', async () => {
+    const run = createTestRun()
+    seedDeadCritic()
+    const mocks = makeLifecycleMocks([false, true])
+    __test!.setLifecycle(mocks.overrides)
+
+    await __test!.resumeParticipant(run as any, 'critic', 'dead-critic', 'claude-abc')
+
+    expect(mocks.preferredNames).toEqual(['zinc', 'zinc'])
+  })
+
+  test('sets suppressDeathMessage on the dying session', async () => {
+    const run = createTestRun()
+    seedDeadCritic()
+    const mocks = makeLifecycleMocks([true])
+    __test!.setLifecycle(mocks.overrides)
+
+    await __test!.resumeParticipant(run as any, 'critic', 'dead-critic', 'claude-abc')
+
+    expect(registry.get('dead-critic')?.suppressDeathMessage).toBe(true)
+  })
+
+  test('RESUME constants: 3 attempts, 45s bridge timeout', () => {
+    expect(__test!.RESUME_MAX_ATTEMPTS).toBe(3)
+    expect(__test!.RESUME_BRIDGE_TIMEOUT_MS).toBe(45_000)
   })
 })
