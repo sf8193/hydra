@@ -99,10 +99,10 @@ function resolveIsGuest(sessionId: string): boolean {
   return false
 }
 
-export function toolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; chatId?: string }): typeof UNIVERSAL_TOOLS {
+export function toolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; chatId?: string; toolWhitelist?: string[] }): typeof UNIVERSAL_TOOLS {
   const overrides = resolveScopedToolOverrides(sessionId, opts?.chatId) ?? undefined
   const isGuest = overrides ? resolveIsGuest(sessionId) : undefined
-  return computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: overrides, isGuest })
+  return computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: overrides, isGuest, toolWhitelist: opts?.toolWhitelist })
 }
 
 export function _resetForTesting(): void { protocols.clear() }

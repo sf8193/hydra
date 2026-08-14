@@ -798,6 +798,44 @@ describe('dynamic tool scoping', () => {
     expect(names).toContain('advance')
     expect(names).toContain('extend_phase')
   })
+
+  test('toolWhitelist narrows a factory builder to exactly its whitelist plus scoped-override tools', () => {
+    const whitelist = ['reply', 'fetch_messages', 'send_to_thread', 'download_attachment', 'set_description']
+    const tools = computeToolsForSession('builder-id', {
+      scopedToolOverrides: { factory_done: 'Signal build complete.' },
+      toolWhitelist: whitelist,
+    })
+    const names = tools.map(t => t.name).sort()
+    // factory_done is granted via scopedToolOverrides, not the whitelist
+    expect(names).toEqual([...whitelist, 'factory_done'].sort())
+    // Non-whitelisted universal tools are gone
+    expect(names).not.toContain('react')
+    expect(names).not.toContain('list_sessions')
+    expect(names).not.toContain('factory_build')
+    expect(names).not.toContain('watch_pr')
+  })
+
+  test('toolWhitelist without scopedToolOverrides filters a plain worker to the whitelist', () => {
+    const tools = computeToolsForSession('some-worker', { toolWhitelist: ['reply', 'set_description'] })
+    const names = tools.map(t => t.name).sort()
+    expect(names).toEqual(['reply', 'set_description'])
+  })
+
+  test('toolWhitelist never resurrects master-orchestrator-only tools', () => {
+    const tools = computeToolsForSession('some-worker', { toolWhitelist: ['reply', 'spawn_session', 'kill_session'] })
+    const names = tools.map(t => t.name)
+    expect(names).toContain('reply')
+    expect(names).not.toContain('spawn_session')
+    expect(names).not.toContain('kill_session')
+  })
+
+  test('toolWhitelist leaves the guest tool set untouched', () => {
+    const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' }, isGuest: true, toolWhitelist: ['reply'] })
+    const names = tools.map(t => t.name)
+    expect(names).toContain('advance')
+    expect(names).toContain('extend_phase')
+    expect(names).toContain('fetch_messages')
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@ export type SessionInfo = {
   ephemeral?: boolean
   headless?: boolean       // no Discord thread — worker communicates via send_to_thread
   allowMainTools?: boolean // template granted access to spawn_session/kill_session
+  toolWhitelist?: string[] // explicit MCP tool filter — session sees only these (plus scoped-override tools); persisted for bridge reconnect
   isFactoryBuilder?: boolean    // session is a factory builder — persisted for startup sweep
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
@@ -132,6 +133,7 @@ export type SpawnOpts = {
   allowMainTools?: boolean    // grant access to spawn_session/kill_session (from template)
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   scopedToolOverrides?: Record<string, string>
+  toolWhitelist?: string[]    // explicit MCP tool filter — session sees only these tools (plus any granted via scopedToolOverrides)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
 }
 

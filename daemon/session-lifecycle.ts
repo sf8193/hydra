@@ -826,7 +826,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const now = Date.now()
   const capabilities: SessionCapabilities = {
     role: 'worker',
-    tools: computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: opts?.scopedToolOverrides }).map(t => t.name),
+    tools: computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: opts?.scopedToolOverrides, toolWhitelist: opts?.toolWhitelist }).map(t => t.name),
     model,
     cwd: effectiveCwd,
     platform: PLATFORM,
@@ -848,6 +848,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ephemeral: opts?.ephemeral,
     ...(isHeadless ? { headless: true } : {}),
     ...(opts?.allowMainTools ? { allowMainTools: true } : {}),
+    ...(opts?.toolWhitelist ? { toolWhitelist: opts.toolWhitelist } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)

@@ -232,7 +232,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       transport.set(sessionId, conn)
-      const tools = toolsForSession(sessionId, { allowMainTools: info?.allowMainTools, chatId: info?.threadId })
+      const tools = toolsForSession(sessionId, { allowMainTools: info?.allowMainTools, chatId: info?.threadId, toolWhitelist: info?.toolWhitelist })
       transport.sendToBridge(conn, {
         type: 'registered',
         sessionId,

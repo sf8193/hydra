@@ -886,6 +886,9 @@ async function spawnBuilder(
     ...(initiator ? { initiator } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
     scopedToolOverrides: { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' },
+    // Builders need only chat + status tools; factory_done arrives via scopedToolOverrides.
+    // Trimming to 6 MCP tools keeps the session below CC's deferred-tool threshold.
+    toolWhitelist: ['reply', 'fetch_messages', 'send_to_thread', 'download_attachment', 'set_description'],
   })
 
   state.builderSessionId = result.sessionId

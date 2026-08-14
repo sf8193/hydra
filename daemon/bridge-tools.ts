@@ -50,14 +50,25 @@ export function defaultToolDescription(name: string): string {
   return tool.description
 }
 
-export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string>; isGuest?: boolean }): typeof UNIVERSAL_TOOLS {
+// toolWhitelist narrows a session to an explicit set of tools (e.g. factory
+// builders, which only need a handful). It is applied on top of the normal
+// gating: master-orchestrator-only tools are still stripped, and scoped tools
+// granted via scopedToolOverrides (e.g. factory_done) survive even when absent
+// from the whitelist — so the whitelist need not list override-granted tools.
+// The guest path is left untouched; guests are scoped by GUEST_TOOLS, not this.
+export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string>; isGuest?: boolean; toolWhitelist?: string[] }): typeof UNIVERSAL_TOOLS {
   if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS.filter(t => !FACTORY_ONLY_TOOLS.has(t.name))
   const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
-  if (!opts?.scopedToolOverrides) return filtered.filter(t => !SCOPED_TOOLS.has(t.name))
+  const whitelist = opts?.toolWhitelist
+  if (!opts?.scopedToolOverrides) {
+    const base = filtered.filter(t => !SCOPED_TOOLS.has(t.name))
+    return whitelist ? base.filter(t => whitelist.includes(t.name)) : base
+  }
   const overrides = opts.scopedToolOverrides
   const base = opts.isGuest
     ? filtered.filter(t => GUEST_TOOLS.has(t.name))
-    : filtered.filter(t => !SCOPED_TOOLS.has(t.name) || t.name in overrides)
+    : filtered.filter(t => (!SCOPED_TOOLS.has(t.name) || t.name in overrides)
+        && (!whitelist || whitelist.includes(t.name) || t.name in overrides))
   return base.map(t => {
     const desc = overrides[t.name]
     return desc ? { ...t, description: desc } : { ...t } // shallow-copy: source objects are frozen
