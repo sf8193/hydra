@@ -414,6 +414,10 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
       joinThread: run.threadId,
       resumeFrom: claudeSessionId,
       model: run.params.model as string | undefined,
+      // Carry the dead session's tool whitelist onto its replacement — otherwise
+      // registerParticipant → refreshSessionTools reads an undefined whitelist and
+      // the resumed session (e.g. a factory builder) regains the full tool set.
+      ...(info?.toolWhitelist ? { toolWhitelist: info.toolWhitelist } : {}),
     },
   )
   if (isTerminal(run)) {

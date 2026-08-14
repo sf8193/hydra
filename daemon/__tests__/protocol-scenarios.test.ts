@@ -2,6 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
 import { computeToolsForSession, PROTOCOL_ONLY_TOOLS, UNIVERSAL_TOOLS } from '../bridge-tools.js'
 import { registry } from '../sessions.js'
+import { FACTORY_BUILDER_TOOL_WHITELIST } from '../../shared/constants.js'
 import { protocol } from '../protocol-dsl.js'
 
 // Real protocol definitions — the harness exercises them as-is
@@ -833,10 +834,9 @@ describe('dynamic tool scoping', () => {
   test('factory builder whitelist entries are all real tool names', () => {
     // Guards against silent capability loss if a tool is renamed/removed:
     // a mistyped or stale whitelist entry would yield a session missing that tool
-    // with no error. Assert the exact literal used by factory.ts:spawnBuilder.
-    const FACTORY_BUILDER_WHITELIST = ['reply', 'fetch_messages', 'send_to_thread', 'download_attachment', 'set_description']
+    // with no error. Imports the production constant so it tests the real value.
     const knownNames = new Set(UNIVERSAL_TOOLS.map(t => t.name))
-    for (const name of FACTORY_BUILDER_WHITELIST) expect(knownNames.has(name)).toBe(true)
+    for (const name of FACTORY_BUILDER_TOOL_WHITELIST) expect(knownNames.has(name)).toBe(true)
   })
 
   test('toolWhitelist leaves the guest tool set untouched', () => {
@@ -923,6 +923,28 @@ describe('tools_update on phase transition', () => {
     expect(names).not.toContain('factory_build')
     expect(names).not.toContain('list_sessions')
     expect(names).not.toContain('watch_pr')
+  })
+
+  test('auto-resume carries a participant toolWhitelist onto the replacement session', async () => {
+    // resumeParticipant fires only for non-owner roles (onRunDisconnect routes the
+    // owner to grace/cancel), so a whitelisted participant is exercised via the
+    // critic here. The dead session's whitelist must be forwarded to doSpawnSession
+    // and persisted, so the follow-on refreshSessionTools reads it back rather than
+    // restoring the full tool set.
+    h = createHarness(review, { rounds: 3 })
+    const criticInfo = registry.get(h.sessionId('critic'))!
+    criticInfo.toolWhitelist = [...FACTORY_BUILDER_TOOL_WHITELIST]
+
+    h.mockResume()
+    h.setSessionDead('critic', 'claude-critic-xyz')
+    h.disconnect('critic')
+    await h.tick(3_500)
+
+    // The whitelist was forwarded to the spawn and persisted on the new session.
+    expect(h.lastResumeSpawnOpts?.toolWhitelist).toEqual(FACTORY_BUILDER_TOOL_WHITELIST)
+    const resumedSid = h.run.participants.get('critic')!
+    expect(resumedSid).not.toBe(h.sessionId('critic'))
+    expect(registry.get(resumedSid)?.toolWhitelist).toEqual(FACTORY_BUILDER_TOOL_WHITELIST)
   })
 
   test('same-actor phase transition updates tool description', async () => {

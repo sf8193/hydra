@@ -5,6 +5,11 @@ export const TRANSCRIBE_TMUX = 'hydra-transcribe'
  *  and daemon so the two sets cannot diverge. */
 export const MASTER_ORCHESTRATOR_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
 
+/** MCP tools a factory builder is spawned with. `factory_done` is granted
+ *  separately via scopedToolOverrides, so it is intentionally absent here.
+ *  Shared so the spawn site and its validation test assert the same value. */
+export const FACTORY_BUILDER_TOOL_WHITELIST = ['reply', 'fetch_messages', 'send_to_thread', 'download_attachment', 'set_description']
+
 export const KNOWN_MODELS = new Set([
   'claude-opus-5',
   'claude-sonnet-5',

@@ -35,6 +35,7 @@ export class TestHarness {
   readonly threadMessages: Array<{ text: string; opts?: Record<string, unknown> }> = []
   readonly completionEvents: CompletionEvent[] = []
   readonly killedSessions: string[] = []
+  lastResumeSpawnOpts: Record<string, unknown> | undefined
   private lifecycleOverridden = false
 
   constructor(proto: Protocol, opts: HarnessOpts = {}) {
@@ -210,6 +211,7 @@ export class TestHarness {
 
     setLifecycle({
       doSpawnSession: async (topic: string, _a: any, _b: any, spawnOpts: any) => {
+        harness.lastResumeSpawnOpts = spawnOpts
         if (spawnMs > 0) await new Promise<void>(r => setTimeout(r, spawnMs))
         const sid = `test-resumed-${crypto.randomUUID().slice(0, 8)}`
         const info: SessionInfo = {
@@ -221,6 +223,8 @@ export class TestHarness {
           tmuxName: `resumed-${sid.slice(14)}`,
           listening: false,
           turnState: 'idle',
+          // Mirror production doSpawnSession, which persists these opts on SessionInfo.
+          ...(spawnOpts?.toolWhitelist ? { toolWhitelist: spawnOpts.toolWhitelist } : {}),
         }
         registry.set(sid, info)
         return { sessionId: sid }

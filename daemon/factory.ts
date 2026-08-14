@@ -22,7 +22,7 @@ import type { CompletionEvent } from './protocol-types.js'
 import reviewProto from '../protocols/review.js'
 import { registry, threadRegistry } from './sessions.js'
 import { safeSend, formatDuration, getContextPercent } from './util.js'
-import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
+import { resolveModelAlias, isKnownModel, FACTORY_BUILDER_TOOL_WHITELIST } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
 import { registerProtocol } from './protocol-registry.js'
@@ -888,7 +888,7 @@ async function spawnBuilder(
     scopedToolOverrides: { factory_done: 'Signal that your factory build is complete. Triggers mandatory adversarial review.' },
     // Builders need only chat + status tools; factory_done arrives via scopedToolOverrides.
     // Trimming to 6 MCP tools keeps the session below CC's deferred-tool threshold.
-    toolWhitelist: ['reply', 'fetch_messages', 'send_to_thread', 'download_attachment', 'set_description'],
+    toolWhitelist: FACTORY_BUILDER_TOOL_WHITELIST,
   })
 
   state.builderSessionId = result.sessionId
