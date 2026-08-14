@@ -596,6 +596,12 @@ describe('protocol runner — resume retry', () => {
     expect(run.participants.get('critic')).toBe(survivor)
     // Dead session mappings are cleared.
     expect(run.sessionToRole.has('dead-critic')).toBe(false)
+    // Each failed attempt queued a resume notification (no bridge in tests) that
+    // never flushed — the teardown must drop it, else it orphans a persisted
+    // queue entry. Guards against regressing the C3 cleanup (afterEach would
+    // otherwise mask the leak).
+    expect(transport.messageQueues.has(mocks.spawned[0])).toBe(false)
+    expect(transport.messageQueues.has(mocks.spawned[1])).toBe(false)
   })
 
   test('succeeds on first attempt without killing anything', async () => {
@@ -678,7 +684,9 @@ describe('protocol runner — resume retry', () => {
     // Attempt 1 killed on bridge timeout; attempt 2 killed on terminal abort.
     expect(mocks.killed.length).toBe(2)
     expect(mocks.killed[1].reason).toBe('run cancelled during resume')
-    // The aborted spawn left no dangling role mapping.
+    // The aborted spawn left no dangling mappings in either direction
+    // (terminal fires before pre-registration, so neither should ever be set).
     expect(run.sessionToRole.get(mocks.spawned[1])).toBeUndefined()
+    expect(sessionToRun.has(mocks.spawned[1])).toBe(false)
   })
 })
