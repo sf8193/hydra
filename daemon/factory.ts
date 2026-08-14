@@ -585,7 +585,7 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
     : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}${summaryNote}`)
 
-  killBuilder(state, true)
+  killBuilder(state, false)
   cleanupState(state.ticket)
   return { ok: true }
 }
@@ -636,7 +636,7 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
     }
   }
 
-  killBuilder(state, true)
+  killBuilder(state, false)
   cleanupState(state.ticket)
 
   process.stderr.write(`daemon: factory: abandoned ${state.ticket} (was in phase ${wasPhase})\n`)
@@ -1164,7 +1164,7 @@ function factorySessionDeath({ sessionId }: { sessionId: string }): void {
         })
       }
     }
-    killBuilder(state, true)
+    killBuilder(state, false)
     state.phase = 'failed'
     logBuild(state, 'pm_died')
     cleanupState(ticket)
