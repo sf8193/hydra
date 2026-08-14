@@ -25,7 +25,7 @@ import { safeSend, formatDuration, getContextPercent } from './util.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
-import { registerProtocol } from './protocol-registry.js'
+import { registerProtocol, toolsForSession } from './protocol-registry.js'
 import { clearBuilderNudge } from './pane-probe.js'
 
 // ---------------------------------------------------------------------------
@@ -128,6 +128,21 @@ function stopProgressUpdates(state: FactoryBuildState): void {
   }
 }
 
+/**
+ * Push an action-required notification directly into the PM's CC session so it
+ * wakes up, in addition to the Discord-facing safeSend. Without this the PM sits
+ * idle until it happens to poll. Informational-only updates (progress ticks,
+ * "building"/"reviewing") deliberately skip this — only events that need a PM
+ * decision or signal a terminal state get pushed.
+ */
+function pushPmNotification(state: FactoryBuildState, message: string): void {
+  transport.sendOrQueue(state.pmSessionId, {
+    type: 'notification',
+    content: `[system] Factory ticket ${state.ticket}: ${message}`,
+    meta: { chat_id: state.pmThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+}
+
 
 // ---------------------------------------------------------------------------
 // Worktree target validation — make "wrong repo" impossible to reach async
@@ -152,6 +167,46 @@ const defaultGitIO: FactoryGitIO = {
 let gitIO: FactoryGitIO = defaultGitIO
 export function _setGitIO(io: FactoryGitIO): void { gitIO = io }
 export function _resetGitIO(): void { gitIO = defaultGitIO }
+
+// Test-only: seed a build directly into the internal maps so unit tests can
+// exercise retry/death/review-completion paths without a live spawn. Returns
+// the constructed state so tests can mutate it further.
+export function _seedBuildForTesting(partial: {
+  ticket: string
+  pmThreadId: string
+  pmSessionId: string
+  phase: FactoryPhase
+  builderSessionId?: string
+  builderThreadId?: string
+  reviewRounds?: number
+  reviewSummary?: string
+}): FactoryBuildState {
+  const state: FactoryBuildState = {
+    ticket: partial.ticket,
+    pmThreadId: partial.pmThreadId,
+    pmSessionId: partial.pmSessionId,
+    spec: 'test spec',
+    reviewRounds: partial.reviewRounds ?? 3,
+    phase: partial.phase,
+    retryCount: 0,
+    createdAt: Date.now(),
+    reviewed: false,
+    builderSessionId: partial.builderSessionId,
+    builderThreadId: partial.builderThreadId,
+    reviewSummary: partial.reviewSummary,
+  }
+  builds.set(state.ticket, state)
+  if (state.builderSessionId) builderSessionToTicket.set(state.builderSessionId, state.ticket)
+  if (state.builderThreadId) builderThreadToTicket.set(state.builderThreadId, state.ticket)
+  return state
+}
+
+// Test-only: drop all seeded builds and reverse lookups.
+export function _clearBuildsForTesting(): void {
+  builds.clear()
+  builderSessionToTicket.clear()
+  builderThreadToTicket.clear()
+}
 
 // macOS home-dir noise + build artifacts we never want to descend into.
 const REPO_SCAN_SKIP = new Set([
@@ -461,6 +516,15 @@ export function factoryRetry(
   state.phase = 'building'
   state.retryCount++
   syncPhaseToRegistry(state)
+
+  // Re-push the builder's tool set now that phase is back to 'building'. The
+  // factory protocol gates factory_done on phase === 'building'; without this
+  // the builder's MCP set is missing factory_done and it can't signal the next
+  // round's completion.
+  if (state.builderSessionId) {
+    const tools = toolsForSession(state.builderSessionId, { chatId: state.builderThreadId })
+    transport.sendOrQueue(state.builderSessionId, { type: 'tools_update', tools })
+  }
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
@@ -958,6 +1022,7 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
       state.phase = 'awaiting_pm'
       syncPhaseToRegistry(state)
       void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review failed — ${errMsg}\n↳ factory_retry / factory_accept / factory_abandon`)
+      pushPmNotification(state, `⚠️ review failed — ${errMsg}\n↳ factory_retry / factory_accept / factory_abandon`)
     })
 
   // Capture diff/PR concurrently — not blocking the review start.
@@ -984,6 +1049,7 @@ export function onBuilderDeath(sessionId: string): void {
     state.phase = 'failed'
     logBuild(state, 'builder_crashed')
     void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed (no factory_done)`)
+    pushPmNotification(state, `❌ builder crashed (no factory_done)`)
     cleanupState(ticket)
   } else if (state.phase === 'reviewing') {
     // Builder died during review — cancel the review defensively to avoid leaking state.
@@ -1000,10 +1066,12 @@ export function onBuilderDeath(sessionId: string): void {
       }
     }
     void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed during review`)
+    pushPmNotification(state, `❌ builder crashed during review`)
     cleanupState(ticket)
   } else if (state.phase === 'awaiting_pm') {
     process.stderr.write(`daemon: factory: builder died while awaiting PM for ticket ${state.ticket}\n`)
     void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ builder exited (work on disk, ticket closed)`)
+    pushPmNotification(state, `⚠️ builder exited (work on disk, ticket closed)`)
     state.phase = 'failed'
     logBuild(state, 'builder_died_awaiting')
     cleanupState(ticket)
@@ -1032,6 +1100,7 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
     ? '\n' + (state.reviewSummary.length > 1500 ? state.reviewSummary.slice(0, 1500) + '\n…(truncated)' : state.reviewSummary)
     : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` review complete${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
+  pushPmNotification(state, `review complete${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
 
   return true
 }
@@ -1050,6 +1119,7 @@ function onFactoryReviewCancelled(threadId: string, reason?: string): boolean {
   syncPhaseToRegistry(state)
   const reasonStr = reason ? ` (${reason})` : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
+  pushPmNotification(state, `⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
 
   return true
 }
