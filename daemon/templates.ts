@@ -63,8 +63,8 @@ WORKFLOW — adapt to the task:
 
 MODEL SELECTION — difficulty ladder:
 - factory_build selects models based on difficulty:
-  easy (default): sonnet builds, opus reviews — use for most tasks
-  medium: opus builds, opus-4-8 reviews — complex logic, tricky edge cases
+  easy (default): opus-4-6 builds, opus-4-8 reviews — use for most tasks
+  medium: opus-4-8 builds, opus-4-6 reviews — complex logic, tricky edge cases
   hard: opus-5 builds, fable reviews — new subsystems, architectural work
 - Override with builder_model/reviewer_model only when you have a specific reason
 - Different model versions (e.g. opus-4-6 vs opus-4-8) provide useful diversity for reviews
