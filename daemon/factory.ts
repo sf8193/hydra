@@ -77,9 +77,10 @@ function ensureLogDir(): void {
   logDirReady = true
 }
 
-function logBuild(state: FactoryBuildState, outcome: string): void {
+function logBuild(state: FactoryBuildState, outcome: string, reason?: string): void {
   try {
     ensureLogDir()
+    const builderInfo = state.builderSessionId ? registry.get(state.builderSessionId) : undefined
     const entry = {
       ticket: state.ticket,
       spec: state.spec.slice(0, 500),
@@ -89,8 +90,10 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
       reviewed: state.reviewed,
       builderModel: state.builderModel ?? 'default',
       reviewerModel: state.reviewerModel ?? 'default',
+      builderName: builderInfo?.tmuxName,
       elapsed: Date.now() - state.createdAt,
       ts: new Date().toISOString(),
+      ...(reason ? { reason: reason.slice(0, 200) } : {}),
     }
     appendFileSync(join(LOG_DIR, 'history.jsonl'), JSON.stringify(entry) + '\n')
   } catch (err) {
@@ -619,7 +622,7 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
 
   const wasPhase = state.phase
   state.phase = 'failed'
-  logBuild(state, 'abandoned')
+  logBuild(state, 'abandoned', reason)
 
   const reviewNote = state.reviewSummary
     ? '\n↳ review had found: ' + (state.reviewSummary.length > 200 ? state.reviewSummary.slice(0, 200) + '…' : state.reviewSummary)
