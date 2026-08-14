@@ -1001,13 +1001,26 @@ export function onBuilderDone(sessionId: string, args: FactoryDoneArgs): { ok: t
 }
 
 async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArgs): Promise<void> {
+  // Quick diff stat for the PM notification — helps judge builder scope.
+  let diffStat = ''
+  if (state.builderSessionId) {
+    const builderInfo = registry.get(state.builderSessionId)
+    const cwd = builderInfo?.worktreePath ?? builderInfo?.capabilities?.cwd
+    if (cwd) {
+      try {
+        const { stdout } = await execAsync('git', ['diff', '--shortstat', 'HEAD~1..HEAD'], { cwd, timeout: 5_000 })
+        diffStat = stdout.trim() ? ` · ${stdout.trim()}` : ''
+      } catch {}
+    }
+  }
+
   const fileCount = args.files_changed.length
   const testShort = args.test_results.slice(0, 80)
   const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''
   const fileList = args.files_changed.length <= 8
     ? '\n' + args.files_changed.map(f => `  ${f}`).join('\n')
     : '\n' + args.files_changed.slice(0, 7).map(f => `  ${f}`).join('\n') + `\n  ... and ${args.files_changed.length - 7} more`
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` reviewing · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}${fileList}`)
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` reviewing · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}${diffStat}${fileList}`)
 
   // Start review BEFORE diff/PR capture — closes the protocol ownership gap.
   // During diff capture (up to 15s of GitHub API calls), the review protocol
