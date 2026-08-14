@@ -408,7 +408,11 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   const info = registry.get(deadSessionId)
   if (info) {
     recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
-    // Expected resume cycle — don't spam the parent thread with a "child died" line.
+    // Expected resume cycle — don't let any later killSession on this info emit a
+    // "child died" line to the parent. isJoinMember already gates that path today
+    // (protocol participants join via joinThread), so this is defensive belt-and-
+    // suspenders: it keeps the intent explicit and survives a future non-join
+    // participant resume without reintroducing the noise.
     info.suppressDeathMessage = true
   }
 
@@ -454,6 +458,12 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     run.sessionToRole.delete(result.sessionId)
     const newInfo = registry.get(result.sessionId)
     if (newInfo) await killSession(newInfo, 'auto-resume health check failed').catch(() => {})
+    // killSession → transport.disconnect() drops the bridge but not the queue.
+    // The resume notification we sendOrQueue'd above never flushed (bridge never
+    // connected), so drop it here — otherwise each failed attempt orphans a
+    // persisted queue entry for a session ID that will never exist again.
+    transport.messageQueues.delete(result.sessionId)
+    transport.persistQueues()
 
     if (attempt === RESUME_MAX_ATTEMPTS) {
       throw new Error(`resumed session did not connect after ${RESUME_MAX_ATTEMPTS} attempts`)

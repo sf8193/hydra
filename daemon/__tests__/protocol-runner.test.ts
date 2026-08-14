@@ -653,4 +653,32 @@ describe('protocol runner — resume retry', () => {
     expect(__test!.RESUME_MAX_ATTEMPTS).toBe(3)
     expect(__test!.RESUME_BRIDGE_TIMEOUT_MS).toBe(45_000)
   })
+
+  test('run cancelled mid-retry: aborts, kills the in-flight spawn, does not throw', async () => {
+    const run = createTestRun()
+    seedDeadCritic()
+    // First attempt: bridge times out → loop tears it down and retries.
+    // Second spawn: the run goes terminal (owner cancelled) before the bridge
+    // check, so the in-loop isTerminal guard must kill the fresh spawn and return.
+    const mocks = makeLifecycleMocks([false, false])
+    const wrapped = {
+      ...mocks.overrides,
+      doSpawnSession: (async (topic: any, c: any, m: any, opts: any) => {
+        const r = await (mocks.overrides.doSpawnSession as any)(topic, c, m, opts)
+        if (mocks.spawned.length === 2) run.phase = 'complete' // terminal
+        return r
+      }) as any,
+    }
+    __test!.setLifecycle(wrapped)
+
+    // Must resolve (return), not reject — a cancel is not a resume failure.
+    await __test!.resumeParticipant(run as any, 'critic', 'dead-critic', 'claude-abc')
+
+    expect(mocks.spawned.length).toBe(2)
+    // Attempt 1 killed on bridge timeout; attempt 2 killed on terminal abort.
+    expect(mocks.killed.length).toBe(2)
+    expect(mocks.killed[1].reason).toBe('run cancelled during resume')
+    // The aborted spawn left no dangling role mapping.
+    expect(run.sessionToRole.get(mocks.spawned[1])).toBeUndefined()
+  })
 })
