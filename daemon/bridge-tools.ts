@@ -59,16 +59,16 @@ export function defaultToolDescription(name: string): string {
 export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string>; isGuest?: boolean; toolWhitelist?: string[] }): typeof UNIVERSAL_TOOLS {
   if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS.filter(t => !FACTORY_ONLY_TOOLS.has(t.name))
   const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
-  const whitelist = opts?.toolWhitelist
+  const whitelist = opts?.toolWhitelist ? new Set(opts.toolWhitelist) : undefined
   if (!opts?.scopedToolOverrides) {
     const base = filtered.filter(t => !SCOPED_TOOLS.has(t.name))
-    return whitelist ? base.filter(t => whitelist.includes(t.name)) : base
+    return whitelist ? base.filter(t => whitelist.has(t.name)) : base
   }
   const overrides = opts.scopedToolOverrides
   const base = opts.isGuest
     ? filtered.filter(t => GUEST_TOOLS.has(t.name))
     : filtered.filter(t => (!SCOPED_TOOLS.has(t.name) || t.name in overrides)
-        && (!whitelist || whitelist.includes(t.name) || t.name in overrides))
+        && (!whitelist || whitelist.has(t.name) || t.name in overrides))
   return base.map(t => {
     const desc = overrides[t.name]
     return desc ? { ...t, description: desc } : { ...t } // shallow-copy: source objects are frozen

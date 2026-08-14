@@ -1,6 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
-import { computeToolsForSession, PROTOCOL_ONLY_TOOLS } from '../bridge-tools.js'
+import { computeToolsForSession, PROTOCOL_ONLY_TOOLS, UNIVERSAL_TOOLS } from '../bridge-tools.js'
+import { registry } from '../sessions.js'
 import { protocol } from '../protocol-dsl.js'
 
 // Real protocol definitions — the harness exercises them as-is
@@ -829,6 +830,15 @@ describe('dynamic tool scoping', () => {
     expect(names).not.toContain('kill_session')
   })
 
+  test('factory builder whitelist entries are all real tool names', () => {
+    // Guards against silent capability loss if a tool is renamed/removed:
+    // a mistyped or stale whitelist entry would yield a session missing that tool
+    // with no error. Assert the exact literal used by factory.ts:spawnBuilder.
+    const FACTORY_BUILDER_WHITELIST = ['reply', 'fetch_messages', 'send_to_thread', 'download_attachment', 'set_description']
+    const knownNames = new Set(UNIVERSAL_TOOLS.map(t => t.name))
+    for (const name of FACTORY_BUILDER_WHITELIST) expect(knownNames.has(name)).toBe(true)
+  })
+
   test('toolWhitelist leaves the guest tool set untouched', () => {
     const tools = computeToolsForSession('worker', { scopedToolOverrides: { advance: 'advance(...)' }, isGuest: true, toolWhitelist: ['reply'] })
     const names = tools.map(t => t.name)
@@ -890,6 +900,29 @@ describe('tools_update on phase transition', () => {
     const tools = toolsUpdate.tools as Array<{ name: string; description: string }>
     const advance = tools.find(t => t.name === 'advance')!
     expect(advance.description).toBe('advance({ content: "..." })')
+  })
+
+  test('phase-transition tools_update preserves a session toolWhitelist', async () => {
+    // Regression: a factory builder becomes the review protocol owner. Its
+    // persisted whitelist must survive refreshSessionTools — otherwise entering
+    // the protocol as owner restores the full tool set the whitelist excludes.
+    h = createHarness(review, { rounds: 3 })
+    const ownerInfo = registry.get(h.sessionId('owner'))!
+    ownerInfo.toolWhitelist = ['reply', 'fetch_messages', 'send_to_thread', 'download_attachment', 'set_description']
+
+    await h.advance('critic', 'Critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    const ownerMsgs = h.actorMessages('owner')
+    const toolsUpdate = ownerMsgs.filter(m => m.type === 'tools_update').at(-1)!
+    const names = (toolsUpdate.tools as Array<{ name: string }>).map(t => t.name)
+    // Whitelisted tools + the protocol actor tools (advance/extend_phase) survive.
+    expect(names).toContain('reply')
+    expect(names).toContain('advance')
+    // Non-whitelisted universal tools do NOT come back.
+    expect(names).not.toContain('factory_build')
+    expect(names).not.toContain('list_sessions')
+    expect(names).not.toContain('watch_pr')
   })
 
   test('same-actor phase transition updates tool description', async () => {

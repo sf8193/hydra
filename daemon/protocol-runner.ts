@@ -205,7 +205,13 @@ function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
   const overrides = scopedToolOverridesForRun(run, sessionId) ?? undefined
   const role = run.sessionToRole.get(sessionId)
   const isGuest = role ? role !== run.protocol.ownerRole : false
-  const tools = computeToolsForSession(sessionId, overrides ? { scopedToolOverrides: overrides, isGuest } : undefined)
+  // A session's persisted whitelist (e.g. a factory builder's 6-tool set) must
+  // survive protocol tool refreshes — otherwise entering the review protocol as
+  // owner would restore the full tool set the whitelist exists to exclude.
+  const toolWhitelist = registry.get(sessionId)?.toolWhitelist
+  const tools = (overrides || toolWhitelist)
+    ? computeToolsForSession(sessionId, { scopedToolOverrides: overrides, isGuest, toolWhitelist })
+    : computeToolsForSession(sessionId)
   transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
 }
 
