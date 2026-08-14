@@ -220,9 +220,9 @@ describe('Bug 2: action-required notifications push to the PM session', () => {
     expect(content).toContain('factory_accept')
   })
 
-  test('review cancelled wakes the PM', () => {
+  test('review cancelled (auto-retry exhausted) wakes the PM', () => {
     const builderThreadId = 'builder-thread-cancelled'
-    _seedBuildForTesting({
+    const state = _seedBuildForTesting({
       ticket: 'fb-review-2',
       pmThreadId: 'pm-thread',
       pmSessionId: 'pm-sess-cancel',
@@ -230,6 +230,7 @@ describe('Bug 2: action-required notifications push to the PM session', () => {
       builderSessionId: 'test-builder-cancel',
       builderThreadId,
     })
+    state.reviewRetries = 1 // auto-retry already used
 
     protocolEvents.emitComplete(reviewEvent(builderThreadId, 'cancelled', 'timeout'))
 
@@ -238,5 +239,24 @@ describe('Bug 2: action-required notifications push to the PM session', () => {
     const content = String(pushes[0].msg.content)
     expect(content).toContain('review cancelled')
     expect(content).toContain('timeout')
+  })
+
+  test('first review cancellation auto-retries without waking PM', () => {
+    const builderThreadId = 'builder-thread-autoretry'
+    _seedBuildForTesting({
+      ticket: 'fb-review-3',
+      pmThreadId: 'pm-thread',
+      pmSessionId: 'pm-sess-autoretry',
+      phase: 'reviewing',
+      builderSessionId: 'test-builder-autoretry',
+      builderThreadId,
+      reviewRounds: 3,
+    })
+
+    protocolEvents.emitComplete(reviewEvent(builderThreadId, 'cancelled', 'critic died'))
+
+    // No PM bridge push on auto-retry — seamless
+    const pushes = pmPushes('pm-sess-autoretry')
+    expect(pushes.length).toBe(0)
   })
 })

@@ -48,6 +48,7 @@ type FactoryBuildState = {
   retryCount: number
   createdAt: number
   reviewed: boolean
+  reviewRetries: number
   worktree?: string
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
@@ -194,6 +195,7 @@ export function _seedBuildForTesting(partial: {
     retryCount: 0,
     createdAt: Date.now(),
     reviewed: false,
+    reviewRetries: 0,
     builderSessionId: partial.builderSessionId,
     builderThreadId: partial.builderThreadId,
     reviewSummary: partial.reviewSummary,
@@ -1137,18 +1139,37 @@ function onFactoryReviewCancelled(threadId: string, reason?: string): boolean {
   const state = builds.get(ticket)
   if (!state || state.phase !== 'reviewing') return false
 
-  process.stderr.write(`daemon: factory: review cancelled for ticket ${state.ticket}\n`)
+  const reasonStr = reason ? ` (${reason})` : ''
 
-  // Move to awaiting_pm so PM can retry
+  // Auto-retry the review once before bothering the PM. Seamless: the PM never
+  // knows the first review failed — it just takes longer. Second failure escalates.
+  if (state.reviewRetries === 0 && state.builderThreadId && state.builderSessionId) {
+    state.reviewRetries++
+    process.stderr.write(`daemon: factory: review cancelled for ticket ${state.ticket}, auto-retrying (attempt ${state.reviewRetries})\n`)
+    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` review cancelled${reasonStr} — auto-retrying`)
+    startProtocolRun(reviewProto, state.builderThreadId, state.builderSessionId, {
+      rounds: state.reviewRounds,
+      topic: state.spec,
+      model: state.reviewerModel,
+    }).catch(err => {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`daemon: factory: auto-retry review failed: ${errMsg}\n`)
+      state.phase = 'awaiting_pm'
+      syncPhaseToRegistry(state)
+      void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ auto-retry failed — ${errMsg}\n↳ factory_retry / factory_abandon`)
+      pushPmNotification(state, `⚠️ review auto-retry failed — ${errMsg}\n↳ factory_retry / factory_abandon`)
+    })
+    return true
+  }
+
+  process.stderr.write(`daemon: factory: review cancelled for ticket ${state.ticket} (auto-retry exhausted)\n`)
   state.phase = 'awaiting_pm'
   syncPhaseToRegistry(state)
-  const reasonStr = reason ? ` (${reason})` : ''
   void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
   pushPmNotification(state, `⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
 
   return true
 }
-
 function cleanupState(ticket: string): void {
   const state = builds.get(ticket)
   if (!state) return
