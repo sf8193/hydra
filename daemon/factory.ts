@@ -1004,7 +1004,10 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
   const fileCount = args.files_changed.length
   const testShort = args.test_results.slice(0, 80)
   const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` reviewing · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}`)
+  const fileList = args.files_changed.length <= 8
+    ? '\n' + args.files_changed.map(f => `  ${f}`).join('\n')
+    : '\n' + args.files_changed.slice(0, 7).map(f => `  ${f}`).join('\n') + `\n  ... and ${args.files_changed.length - 7} more`
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` reviewing · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}${fileList}`)
 
   // Start review BEFORE diff/PR capture — closes the protocol ownership gap.
   // During diff capture (up to 15s of GitHub API calls), the review protocol
