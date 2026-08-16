@@ -783,11 +783,27 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const text = keysMatch[1].replace(/\n/g, ' ').trim()
             if (text) {
               try {
-                // -l sends literal text (no tmux key-table lookup); Enter sent after
-                await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, '-l', text], { timeout: 3000 })
-                await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, 'Enter'], { timeout: 3000 })
+                const TMUX_KEYS = new Set([
+                  'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace', 'Delete', 'DC',
+                  'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown',
+                  'PPage', 'NPage', 'IC',
+                  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+                  'C-a', 'C-b', 'C-c', 'C-d', 'C-e', 'C-f', 'C-g', 'C-h', 'C-i', 'C-j',
+                  'C-k', 'C-l', 'C-m', 'C-n', 'C-o', 'C-p', 'C-q', 'C-r', 'C-s', 'C-t',
+                  'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
+                ])
+                const tokens = text.split(/\s+/)
+                const allKeyNames = tokens.every(t => TMUX_KEYS.has(t))
+                if (allKeyNames) {
+                  // Raw key mode: send each token as a tmux key name
+                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, ...tokens], { timeout: 3000 })
+                } else {
+                  // Literal text mode: send text + Enter
+                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, '-l', text], { timeout: 3000 })
+                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, 'Enter'], { timeout: 3000 })
+                }
                 void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
-                process.stderr.write(`daemon: sent keys to ${info.tmuxName}: ${text.slice(0, 100)}\n`)
+                process.stderr.write(`daemon: sent keys to ${info.tmuxName} (${allKeyNames ? 'raw' : 'literal'}): ${text.slice(0, 100)}\n`)
               } catch (err) {
                 void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
                 process.stderr.write(`daemon: send-keys failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
