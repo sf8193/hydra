@@ -862,18 +862,19 @@ function notifyKickoff(run: ProtocolRun): void {
   const activeSid = activeActor ? run.participants.get(activeActor) : undefined
   const activeName = activeSid ? registry.get(activeSid)?.tmuxName : undefined
 
+  let ownerNotified = false
   if (run.protocol.ownerKickoff) {
+    notifyParticipant(run, run.ownerSessionId, run.protocol.ownerKickoff(run.params))
+    ownerNotified = true
     const ownerIsActor = activeActor && run.participants.get(activeActor) === run.ownerSessionId
-    if (ownerIsActor) {
-      notifyParticipant(run, run.ownerSessionId, run.protocol.ownerKickoff(run.params))
-      return
-    }
+    if (ownerIsActor) return
   }
 
   if (run.protocol.notifications.onKickoff) {
     const content = run.protocol.notifications.onKickoff(run)
     for (const [role, sid] of run.participants) {
       if (role === activeActor) continue
+      if (ownerNotified && sid === run.ownerSessionId) continue
       notifyParticipant(run, sid, content)
     }
     return
@@ -904,6 +905,7 @@ function notifyKickoff(run: ProtocolRun): void {
 
   for (const [role, sid] of run.participants) {
     if (role === activeActor) continue
+    if (ownerNotified && sid === run.ownerSessionId) continue
     notifyParticipant(run, sid, lines.join('\n'))
   }
 }
