@@ -157,18 +157,7 @@ export async function startProtocolRun(
 
   await postStatusLine(run)
   resetTimeout(run)
-
-  // Notify the initial phase's actor if the protocol declares an owner kickoff
-  if (proto.ownerKickoff) {
-    const initialActor = proto.phases[proto.initialPhase]?.actor
-    if (initialActor && run.participants.get(initialActor) === ownerSessionId) {
-      transport.sendOrQueue(ownerSessionId, {
-        type: 'notification',
-        content: proto.ownerKickoff(params),
-        meta: { chat_id: threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-      })
-    }
-  }
+  notifyKickoff(run)
 
   return run
 }
@@ -416,9 +405,11 @@ export function onRunDisconnect(sessionId: string): void {
         run._resumeAttempts = attempts + 1
         void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
+          notifyDisconnect(run, role, 'auto-resume failed')
           void cancelRun(run, `${role} auto-resume failed`)
         })
       } else {
+        notifyDisconnect(run, role, 'session disconnected')
         startGraceTimer(run, role, sessionId)
       }
     }, 3_000))
@@ -538,6 +529,8 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
   clearProtocolTools(run)
 
   try {
+    notifyExit(run, 'cancelled', reason)
+
     for (const [role, sid] of run.participants) {
       if (sid === run.ownerSessionId) continue
       const info = registry.get(sid)
@@ -730,6 +723,7 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
 
   if (!handled) {
     notifyNextActor(run, content)
+    notifyPhaseChange(run, prevPhase, run.phase)
     await postStatusLine(run)
     resetTimeout(run)
   }
@@ -830,6 +824,59 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   })
 }
 
+function notifyParticipant(run: ProtocolRun, sessionId: string, content: string): void {
+  transport.sendOrQueue(sessionId, {
+    type: 'notification',
+    content,
+    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+}
+
+function notifyKickoff(run: ProtocolRun): void {
+  const activeActor = run.protocol.phases[run.phase]?.actor
+  const activeRole = activeActor ? run.protocol.roles[activeActor] : 'unknown'
+
+  if (run.protocol.ownerKickoff) {
+    const ownerIsActor = activeActor && run.participants.get(activeActor) === run.ownerSessionId
+    if (ownerIsActor) {
+      notifyParticipant(run, run.ownerSessionId, run.protocol.ownerKickoff(run.params))
+    }
+  }
+
+  const content = run.protocol.notifications.onKickoff?.(run)
+    ?? `[system] ${run.protocol.display} started — ${run.rounds} round${run.rounds > 1 ? 's' : ''}. ${activeRole} goes first.`
+  for (const [role, sid] of run.participants) {
+    if (role === activeActor) continue
+    notifyParticipant(run, sid, content)
+  }
+}
+
+function notifyPhaseChange(run: ProtocolRun, from: string, to: string): void {
+  const activeActor = run.protocol.phases[to]?.actor
+  const content = run.protocol.notifications.onPhaseChange?.(run, from, to)
+    ?? `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}] ${activeActor ? `${run.protocol.roles[activeActor]} is working.` : `Phase: ${to}.`}`
+  for (const [role, sid] of run.participants) {
+    if (role === activeActor) continue
+    notifyParticipant(run, sid, content)
+  }
+}
+
+function notifyDisconnect(run: ProtocolRun, lostRole: string, reason: string): void {
+  const content = run.protocol.notifications.onDisconnect?.(run, lostRole, reason)
+    ?? `[system] ${run.protocol.roles[lostRole] ?? lostRole} disconnected: ${reason}`
+  notifyParticipant(run, run.ownerSessionId, content)
+}
+
+function notifyExit(run: ProtocolRun, outcome: 'complete' | 'cancelled', reason?: string): void {
+  const content = run.protocol.notifications.onExit?.(run, outcome, reason)
+    ?? (outcome === 'complete'
+      ? `[system] ${run.protocol.display} complete — ${run.currentRound} round${run.currentRound > 1 ? 's' : ''}.`
+      : `[system] ${run.protocol.display} cancelled: ${reason}`)
+  for (const [, sid] of run.participants) {
+    notifyParticipant(run, sid, content)
+  }
+}
+
 async function fireTransition(run: ProtocolRun, event: string, content: string, reason: string): Promise<void> {
   const result = run.protocol.machine.transition(run.phase as any, event as any)
   if (!result.ok) {
@@ -918,6 +965,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
   clearTimers(run)
   clearProtocolTools(run)
+  notifyExit(run, 'complete')
 
   let transcriptPath: string | undefined
   try {

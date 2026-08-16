@@ -87,6 +87,12 @@ export type ProtocolSpec<
   ownerKickoff?: (params: Record<string, unknown>) => string
   decisionContext?: (run: RunState) => string | undefined
   turnNotification?: (run: RunState, prevContent: string) => string
+  notifications?: {
+    onKickoff?: (run: RunState) => string
+    onPhaseChange?: (run: RunState, from: string, to: string) => string
+    onDisconnect?: (run: RunState, role: string, reason: string) => string
+    onExit?: (run: RunState, outcome: 'complete' | 'cancelled', reason?: string) => string
+  }
 }
 
 export type Protocol<
@@ -114,6 +120,12 @@ export type Protocol<
   ownerKickoff: ((params: Record<string, unknown>) => string) | undefined
   decisionContext: ((run: RunState) => string | undefined) | undefined
   turnNotification: ((run: RunState, prevContent: string) => string) | undefined
+  notifications: {
+    onKickoff?: (run: RunState) => string
+    onPhaseChange?: (run: RunState, from: string, to: string) => string
+    onDisconnect?: (run: RunState, role: string, reason: string) => string
+    onExit?: (run: RunState, outcome: 'complete' | 'cancelled', reason?: string) => string
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +301,7 @@ export function protocol<
     ownerKickoff: spec.ownerKickoff ?? undefined,
     decisionContext: spec.decisionContext ?? undefined,
     turnNotification: spec.turnNotification ?? undefined,
+    notifications: spec.notifications ?? {},
   }
   return Object.freeze(built)
 }
