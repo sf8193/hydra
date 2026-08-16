@@ -395,4 +395,31 @@ describe('/keys command', () => {
   test('does not match /keys in the middle of text', () => {
     expect('please run /keys /goal test'.match(KEYS_RE)).toBeNull()
   })
+
+  // Smart mode detection: all tokens are tmux key names → raw mode
+  const TMUX_KEYS = new Set([
+    'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace', 'Delete', 'DC',
+    'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown',
+    'PPage', 'NPage', 'IC',
+    'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+    'C-a', 'C-b', 'C-c', 'C-d', 'C-e', 'C-f', 'C-g', 'C-h', 'C-i', 'C-j',
+    'C-k', 'C-l', 'C-m', 'C-n', 'C-o', 'C-p', 'C-q', 'C-r', 'C-s', 'C-t',
+    'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
+  ])
+  const isRawMode = (text: string) => text.split(/\s+/).every(t => TMUX_KEYS.has(t))
+
+  test('raw mode: all tmux key names', () => {
+    expect(isRawMode('Up Up Enter')).toBe(true)
+    expect(isRawMode('Escape')).toBe(true)
+    expect(isRawMode('Down Down Down Enter')).toBe(true)
+    expect(isRawMode('Tab')).toBe(true)
+    expect(isRawMode('C-c')).toBe(true)
+  })
+
+  test('literal mode: mixed text and key names', () => {
+    expect(isRawMode('/goal fix the bug')).toBe(false)
+    expect(isRawMode('/compact')).toBe(false)
+    expect(isRawMode('/model sonnet')).toBe(false)
+    expect(isRawMode('hello Enter')).toBe(false)
+  })
 })
