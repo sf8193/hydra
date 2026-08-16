@@ -496,7 +496,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          try { execFileSync('tmux', ['has-session', '-t', existing.tmuxName], { stdio: 'pipe' }) } catch {
+          if (!sessionProcessAlive(existing.tmuxName)) {
             respawnCount = (existing.respawnCount ?? 0) + 1
             await killSession(existing, 'replaced by new spawn')
           }

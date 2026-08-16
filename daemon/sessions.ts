@@ -418,16 +418,21 @@ export class SessionRegistry {
           continue
         }
 
-        let tmuxAlive = false
+        let processAlive = false
         try {
-          execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
-          tmuxAlive = true
+          const pd = execFileSync('tmux', ['display-message', '-t', info.tmuxName, '-p', '#{pane_dead}'], {
+            encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000,
+          }).trim()
+          processAlive = pd === '0'
         } catch {}
 
-        if (tmuxAlive) {
+        if (processAlive) {
           delete info.deadAt
           restored++
         } else {
+          // Clean up retained corpses (remain-on-exit keeps the tmux session alive
+          // after the pane process dies — kill it so the name returns to the pool)
+          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
           info.deadAt = info.deadAt ?? Date.now()
           dead++
         }

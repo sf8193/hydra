@@ -418,10 +418,15 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
   const info = registry.get(sessionId)
   if (!info) return
 
-  let tmuxAlive = false
-  try { execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' }); tmuxAlive = true } catch {}
+  let processAlive = false
+  try {
+    const pd = execFileSync('tmux', ['display-message', '-t', info.tmuxName, '-p', '#{pane_dead}'], {
+      encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000,
+    }).trim()
+    processAlive = pd === '0'
+  } catch {}
 
-  if (!tmuxAlive) {
+  if (!processAlive) {
     // Read the pane tail once, for the autopsy — which goes to the daemon log
     // (PRESERVE, hardware-only). The channel gets a LINK to the log, never the bytes.
     let tail: string[] = []
