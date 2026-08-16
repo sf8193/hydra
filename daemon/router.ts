@@ -783,7 +783,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const text = keysMatch[1].replace(/\n/g, ' ').trim()
             if (text) {
               try {
-                const TMUX_KEYS = new Set([
+                // Map lowercase → canonical tmux key name (tmux is case-sensitive)
+                const TMUX_KEY_MAP = new Map<string, string>()
+                for (const k of [
                   'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace', 'Delete', 'DC',
                   'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown',
                   'PPage', 'NPage', 'IC',
@@ -791,14 +793,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
                   'C-a', 'C-b', 'C-c', 'C-d', 'C-e', 'C-f', 'C-g', 'C-h', 'C-i', 'C-j',
                   'C-k', 'C-l', 'C-m', 'C-n', 'C-o', 'C-p', 'C-q', 'C-r', 'C-s', 'C-t',
                   'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
-                ])
+                ]) TMUX_KEY_MAP.set(k.toLowerCase(), k)
                 const tokens = text.split(/\s+/)
-                // Single characters (letters, digits, punctuation) are valid raw tmux keys
-                const isRawKey = (t: string) => TMUX_KEYS.has(t) || t.length === 1
-                const allKeyNames = tokens.every(isRawKey)
+                // Single characters or recognized key names → raw mode
+                const resolveKey = (t: string): string | null => {
+                  if (t.length === 1) return t
+                  return TMUX_KEY_MAP.get(t.toLowerCase()) ?? null
+                }
+                const resolved = tokens.map(resolveKey)
+                const allKeyNames = resolved.every((r): r is string => r !== null)
                 if (allKeyNames) {
                   // Raw key mode: send each token as a tmux key name
-                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, ...tokens], { timeout: 3000 })
+                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, ...resolved], { timeout: 3000 })
                 } else {
                   // Literal text mode: send text + Enter
                   await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, '-l', text], { timeout: 3000 })

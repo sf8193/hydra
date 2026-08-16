@@ -406,8 +406,13 @@ describe('/keys command', () => {
     'C-k', 'C-l', 'C-m', 'C-n', 'C-o', 'C-p', 'C-q', 'C-r', 'C-s', 'C-t',
     'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
   ])
-  const isRawKey = (t: string) => TMUX_KEYS.has(t) || t.length === 1
-  const isRawMode = (text: string) => text.split(/\s+/).every(isRawKey)
+  const TMUX_KEY_MAP = new Map<string, string>()
+  for (const k of [...TMUX_KEYS]) TMUX_KEY_MAP.set(k.toLowerCase(), k)
+  const resolveKey = (t: string): string | null => {
+    if (t.length === 1) return t
+    return TMUX_KEY_MAP.get(t.toLowerCase()) ?? null
+  }
+  const isRawMode = (text: string) => text.split(/\s+/).every(t => resolveKey(t) !== null)
 
   test('raw mode: all tmux key names', () => {
     expect(isRawMode('Up Up Enter')).toBe(true)
@@ -415,6 +420,21 @@ describe('/keys command', () => {
     expect(isRawMode('Down Down Down Enter')).toBe(true)
     expect(isRawMode('Tab')).toBe(true)
     expect(isRawMode('C-c')).toBe(true)
+  })
+
+  test('raw mode: case insensitive key names', () => {
+    expect(isRawMode('up up enter')).toBe(true)
+    expect(isRawMode('escape')).toBe(true)
+    expect(isRawMode('down down enter')).toBe(true)
+    expect(isRawMode('UP DOWN ENTER')).toBe(true)
+  })
+
+  test('raw mode: resolves to canonical tmux names', () => {
+    expect(resolveKey('up')).toBe('Up')
+    expect(resolveKey('enter')).toBe('Enter')
+    expect(resolveKey('escape')).toBe('Escape')
+    expect(resolveKey('pageup')).toBe('PageUp')
+    expect(resolveKey('c-c')).toBe('C-c')
   })
 
   test('raw mode: single characters as keys', () => {
