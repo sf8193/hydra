@@ -21,7 +21,7 @@ export function startSessionHealthPoll(): void {
       // Crash detection — both tmux AND bridge must be gone. Bridge-only disconnects are handled
       // by the bridge-server disconnect handler (3s delay + tmux check). Skip sessions in spawn
       // grace period (bridge needs time to connect).
-      if (!crashAlerted.has(info.sessionId) && !info.isJoinMember && !info.deadAt && (now - info.createdAt > SPAWN_GRACE_MS) && !tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
+      if (!crashAlerted.has(info.sessionId) && info.sessionType !== 'thread_guest' && !info.deadAt && (now - info.createdAt > SPAWN_GRACE_MS) && !tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
         crashAlerted.add(info.sessionId)
         info.deadAt = now
         registry.persist()
@@ -46,7 +46,7 @@ export function startSessionHealthPoll(): void {
       // the same condition at bridge-timeout time. Both paths must preserve.
       // Discovery retries every poll (claudeSessionId may become available later).
       // Alert fires once per orphan episode; clears when bridge reconnects.
-      if (!info.isJoinMember && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
+      if (info.sessionType !== 'thread_guest' && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
         if (!info.claudeSessionId && info.engine !== 'codex') {
           const discovered = discoverClaudeSessionId(info.tmuxName)
           if (discovered) {

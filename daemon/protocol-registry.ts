@@ -5,7 +5,7 @@
 // For lifecycle events (review complete, session death, etc.) use event-bus.ts.
 
 import { emit } from './event-bus.js'
-import { computeToolsForSession, UNIVERSAL_TOOLS } from './bridge-tools.js'
+import { registry } from './sessions.js'
 
 type ProtocolHooks = {
   getByThread: (threadId: string) => boolean
@@ -14,8 +14,6 @@ type ProtocolHooks = {
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
   onAdvance?: (sessionId: string, content: string, verdict?: string) => Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }>
-  resolveScopedToolOverrides?: (sessionId: string, chatId?: string) => Record<string, string> | null
-  resolveIsGuest?: (sessionId: string) => boolean
 }
 
 // Protocol names are plain strings — intentionally not a union type so new
@@ -80,29 +78,9 @@ export async function dispatchAdvance(sessionId: string, content: string, verdic
   return { ok: false, reason: 'no active protocol for this session' }
 }
 
-export function isActiveActor(sessionId: string, chatId?: string): boolean {
-  const overrides = resolveScopedToolOverrides(sessionId, chatId)
-  return overrides !== null && 'advance' in overrides
-}
-
-export function resolveScopedToolOverrides(sessionId: string, chatId?: string): Record<string, string> | null {
-  for (const hooks of protocols.values()) {
-    if (hooks.isParticipant(sessionId)) return hooks.resolveScopedToolOverrides?.(sessionId, chatId) ?? null
-  }
-  return null
-}
-
-function resolveIsGuest(sessionId: string): boolean {
-  for (const hooks of protocols.values()) {
-    if (hooks.isParticipant(sessionId)) return hooks.resolveIsGuest?.(sessionId) ?? false
-  }
-  return false
-}
-
-export function toolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; chatId?: string }): typeof UNIVERSAL_TOOLS {
-  const overrides = resolveScopedToolOverrides(sessionId, opts?.chatId) ?? undefined
-  const isGuest = overrides ? resolveIsGuest(sessionId) : undefined
-  return computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: overrides, isGuest })
+export function hasProtocolContext(sessionId: string): boolean {
+  const info = registry.get(sessionId)
+  return !!info?.capabilities?.includes('protocol_context')
 }
 
 export function _resetForTesting(): void { protocols.clear() }

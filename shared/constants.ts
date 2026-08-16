@@ -1,10 +1,6 @@
 export const DEFAULT_MODEL = 'claude-opus-4-6[1m]'
 export const TRANSCRIBE_TMUX = 'hydra-transcribe'
 
-/** Tools restricted to the main (control-plane) session. Shared across bridge
- *  and daemon so the two sets cannot diverge. */
-export const MASTER_ORCHESTRATOR_ONLY_TOOLS = new Set(['spawn_session', 'kill_session'])
-
 export const KNOWN_MODELS = new Set([
   'claude-opus-5',
   'claude-sonnet-5',
@@ -76,4 +72,47 @@ export function reviewModel(): string {
 
 export function buildModel(): string {
   return process.env.HYDRA_BUILD_MODEL?.trim() || spawnModel()
+}
+
+// ---------------------------------------------------------------------------
+// Session identity — session type + capability-based tool access
+// ---------------------------------------------------------------------------
+
+import type { ToolName } from './tool-definitions.js'
+export type { ToolName }
+
+export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest' | 'factory_builder'
+
+export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = {
+  master_orchestrator: new Set([
+    'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
+    'download_attachment', 'send_to_thread', 'set_description',
+    'list_sessions', 'peek_session', 'create_thread',
+    'watch_pr', 'unwatch_pr', 'list_watches',
+    'spawn_session', 'kill_session',
+    'factory_build', 'factory_retry', 'factory_accept', 'factory_abandon',
+    'factory_status', 'factory_review',
+  ]),
+  thread_owner: new Set([
+    'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
+    'download_attachment', 'send_to_thread', 'set_description',
+    'list_sessions', 'peek_session',
+    'watch_pr', 'unwatch_pr', 'list_watches',
+  ]),
+  thread_guest: new Set([
+    'reply', 'fetch_messages', 'react', 'edit_message',
+    'download_attachment', 'set_description',
+    'advance', 'extend_phase',
+  ]),
+  factory_builder: new Set([
+    'reply', 'fetch_messages', 'send_to_thread',
+    'download_attachment', 'set_description',
+    'factory_done',
+  ]),
+}
+
+export type Capability = 'protocol_context'
+
+export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>>> = {
+  protocol_context: new Set<ToolName>(['advance', 'extend_phase']),
 }

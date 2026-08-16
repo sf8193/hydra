@@ -118,12 +118,8 @@ const rl = createInterface({ input: process.stdin })
 
 // Import tools from the canonical source — keeps codex and claude tool sets in sync.
 // Codex sessions get advance/extend_phase statically (no dynamic tools_update path).
-import { computeToolsForSession, PROTOCOL_ONLY_TOOLS, defaultToolDescription } from './bridge-tools.js'
-const defaultOverrides: Record<string, string> = {}
-for (const name of PROTOCOL_ONLY_TOOLS) {
-  defaultOverrides[name] = defaultToolDescription(name)
-}
-const TOOLS = computeToolsForSession('worker', { scopedToolOverrides: defaultOverrides }).map(t => ({
+import { computeToolsForSession } from './bridge-tools.js'
+const TOOLS = computeToolsForSession('thread_owner', new Set(['protocol_context'])).map(t => ({
   name: t.name, description: t.description, inputSchema: t.inputSchema,
 }))
 

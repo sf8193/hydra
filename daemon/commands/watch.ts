@@ -21,7 +21,7 @@ export async function handleWatchIntercept(msg: InboundMessage, url?: string): P
       await reportError(msg.channelId, msg.id, 'watch', WATCH_ERRORS.NO_SESSION)
       return
     }
-    const cwd = info?.capabilities?.cwd
+    const cwd = info?.sessionMetadata?.cwd
     if (!cwd) {
       await reportError(msg.channelId, msg.id, 'watch', WATCH_ERRORS.NO_CWD)
       return

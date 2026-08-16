@@ -6,12 +6,13 @@ import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
-import type { SessionInfo, SessionCapabilities, SpawnOpts, SpawnResult } from './sessions.js'
+import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
 import { extractPhaseBudget } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
+import type { SessionType } from '../shared/constants.js'
 import { withRaisedFdLimit } from '../shared/tmux-env.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -207,7 +208,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
 
   try {
     // Join members, ephemeral, and headless sessions don't own a real thread
-    if (!info.isJoinMember && !info.ephemeral && !info.headless) {
+    if (info.sessionType !== 'thread_guest' && !info.ephemeral && !info.headless) {
       try {
         await gateway.send(info.threadId, `_${reason}_`)
       } catch (err) {
@@ -218,7 +219,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
 
     // Notify parent session when a child dies (createdAt guard prevents name-recycling mismatch)
-    if (info.originFrom && !info.isJoinMember && !info.suppressDeathMessage) {
+    if (info.originFrom && info.sessionType !== 'thread_guest' && !info.suppressDeathMessage) {
       const parent = [...registry.values()].find(s => s.tmuxName === info.originFrom && s.createdAt < info.createdAt)
       if (parent) {
         const msgs = info.messageCount ?? 0
@@ -230,13 +231,13 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
 
     // Edit spawn announce to show completion
-    if (info.spawnAnnounceId && info.isJoinMember) {
+    if (info.spawnAnnounceId && info.sessionType === 'thread_guest') {
       const elapsed = Math.round((Date.now() - info.createdAt) / 60_000)
       const spawnLine = formatSpawnLine({
         roleLabel: undefined,
         emoji: sessionEmoji(info.tmuxName),
         name: info.tmuxName,
-        model: info.capabilities?.model ?? 'unknown',
+        model: info.sessionMetadata?.model ?? 'unknown',
         trigger: info.originType ?? 'spawn',
         initiator: info.initiator,
       })
@@ -290,7 +291,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     }
 
     // Update thread metadata before deleting session
-    if (!info.isJoinMember) {
+    if (info.sessionType !== 'thread_guest') {
       threadRegistry.recordKill(info.threadId, info.sessionId, info.messageCount ?? 0, info.claudeSessionId)
       registry.deleteThread(info.threadId)
     }
@@ -302,14 +303,14 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
     }
 
-    if (info.isJoinMember) {
+    if (info.sessionType === 'thread_guest') {
       registry.removeMember(info.threadId, info.sessionId)
     }
 
     emit('session:death', {
       sessionId: info.sessionId,
       threadId: info.threadId,
-      wasOwner: !info.isJoinMember,
+      wasOwner: info.sessionType !== 'thread_guest',
       tmuxName: info.tmuxName,
     })
 
@@ -680,17 +681,17 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
     // SYNC: keep in sync with Claude registration block (~line 655+)
     const now = Date.now()
-    const capabilities: SessionCapabilities = { role: 'worker', tools: [], model: opts?.model ?? 'codex-default', cwd: effectiveCwd, platform: PLATFORM }
+    const sessionMetadata: SessionMetadata = { role: 'worker', tools: [], model: opts?.model ?? 'codex-default', cwd: effectiveCwd, platform: PLATFORM }
     const url = await gateway.getThreadUrl(threadId!)
     registry.set(sessionId, {
       sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
-      tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
+      tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
       threadUrl: url || undefined, engine: 'codex', codexThreadId: codexThreadId!,
       ...(spawnLogPath ? { spawnLogPath } : {}),
       ...(respawnCount > 0 ? { respawnCount } : {}),
       ...(resumeCount > 0 ? { resumeCount } : {}),
       ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
-      ...(isJoin ? { isJoinMember: true } : {}),
+      sessionType: opts?.sessionType ?? (isJoin ? 'thread_guest' as const : 'thread_owner' as const),
       initiator: opts?.initiator,
       ephemeral: opts?.ephemeral,
       ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
@@ -824,9 +825,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   const now = Date.now()
-  const capabilities: SessionCapabilities = {
+  const spawnType: SessionType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
+  const sessionMetadata: SessionMetadata = {
     role: 'worker',
-    tools: computeToolsForSession(sessionId, { allowMainTools: opts?.allowMainTools, scopedToolOverrides: opts?.scopedToolOverrides }).map(t => t.name),
+    tools: computeToolsForSession(spawnType, new Set()).map(t => t.name),
     model,
     cwd: effectiveCwd,
     platform: PLATFORM,
@@ -835,19 +837,18 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   registry.set(sessionId, {
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
-    tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
+    tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
+    sessionType: spawnType,
     threadUrl: url || undefined,
     ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(resumeCount > 0 ? { resumeCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
-    ...(isJoin ? { isJoinMember: true } : {}),
     ...(spawnLogPath ? { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog } : {}),
     debugLogPath: debugLog,
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
     ...(isHeadless ? { headless: true } : {}),
-    ...(opts?.allowMainTools ? { allowMainTools: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)

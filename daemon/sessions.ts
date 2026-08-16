@@ -4,12 +4,14 @@ import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
+import { CAPABILITY_TOOLS } from '../shared/constants.js'
+import type { SessionType, Capability, ToolName } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type SessionCapabilities = {
+export type SessionMetadata = {
   role: 'main' | 'worker'
   tools: string[]
   model: string
@@ -35,7 +37,7 @@ export type SessionInfo = {
   originType?: 'spawn' | 'fork' | 'handoff' | 'resurrect'
   originFrom?: string
   initiator?: string
-  capabilities?: SessionCapabilities
+  sessionMetadata?: SessionMetadata
   respawnCount?: number
   resumeCount?: number
   threadUrl?: string
@@ -43,15 +45,12 @@ export type SessionInfo = {
   worktreeRepo?: string
   worktreePath?: string
   worktreeBranch?: string
-  isJoinMember?: boolean
   deadAt?: number
   contextLinks?: string[]
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
   artifactsBackfilled?: boolean  // one-time history scan done (skips the fetch on later restarts)
   ephemeral?: boolean
   headless?: boolean       // no Discord thread — worker communicates via send_to_thread
-  allowMainTools?: boolean // template granted access to spawn_session/kill_session
-  isFactoryBuilder?: boolean    // session is a factory builder — persisted for startup sweep
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
   factoryTicket?: string       // factory ticket ID — for restart recovery info
@@ -65,6 +64,50 @@ export type SessionInfo = {
   engine?: 'claude' | 'codex'  // which backend runs this session (default: claude)
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
+  sessionType: SessionType
+  capabilities?: Capability[]
+  // Keys are subsystem-owned: factory owns 'factory_done', protocol owns 'advance'/'extend_phase'.
+  // clearFactoryIdentity and clearProtocolOverrides are the canonical cleanup paths.
+  toolDescriptions?: Partial<Record<ToolName, string>>
+  toolInputSchemas?: Partial<Record<ToolName, object>>
+}
+
+export function addCapability(info: SessionInfo, cap: Capability): void {
+  const caps = new Set(info.capabilities ?? [])
+  caps.add(cap)
+  info.capabilities = [...caps]
+}
+
+export function removeCapability(info: SessionInfo, cap: Capability): void {
+  const caps = new Set(info.capabilities ?? [])
+  caps.delete(cap)
+  info.capabilities = caps.size > 0 ? [...caps] : undefined
+}
+
+export function setToolDescription(info: SessionInfo, name: ToolName, description: string): void {
+  info.toolDescriptions = { ...(info.toolDescriptions ?? {}), [name]: description }
+}
+
+export function removeToolDescriptions(info: SessionInfo, ...names: ToolName[]): void {
+  if (!info.toolDescriptions) return
+  for (const name of names) delete info.toolDescriptions[name]
+  if (Object.keys(info.toolDescriptions).length === 0) delete info.toolDescriptions
+}
+
+export function setToolInputSchema(info: SessionInfo, name: ToolName, schema: object): void {
+  info.toolInputSchemas = { ...(info.toolInputSchemas ?? {}), [name]: schema }
+}
+
+export function removeToolInputSchemas(info: SessionInfo, ...names: ToolName[]): void {
+  if (!info.toolInputSchemas) return
+  for (const name of names) delete info.toolInputSchemas[name]
+  if (Object.keys(info.toolInputSchemas).length === 0) delete info.toolInputSchemas
+}
+
+export function ensureSessionType(info: SessionInfo): void {
+  if (!info.sessionType) {
+    info.sessionType = 'thread_owner'
+  }
 }
 
 export type ThreadMember = {
@@ -129,9 +172,8 @@ export type SpawnOpts = {
   headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
-  allowMainTools?: boolean    // grant access to spawn_session/kill_session (from template)
+  sessionType?: SessionType  // declared at spawn — determines base tool set
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
-  scopedToolOverrides?: Record<string, string>
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
 }
 
@@ -323,9 +365,54 @@ export class SessionRegistry {
       let dead = 0
       let pruned = 0
       for (const info of data) {
-        // Orphaned join members can't be re-associated with their review state
+        // Migrate renamed fields from pre-rename persisted sessions
+        const raw = info as any
+        if (raw.capabilities && !Array.isArray(raw.capabilities) && !raw.sessionMetadata) {
+          raw.sessionMetadata = raw.capabilities
+          delete raw.capabilities
+        }
+        if (raw.sessionMeta && !raw.sessionMetadata) {
+          raw.sessionMetadata = raw.sessionMeta
+          delete raw.sessionMeta
+        }
+        if (raw.activeCapabilities && !raw.capabilities) {
+          raw.capabilities = raw.activeCapabilities
+          delete raw.activeCapabilities
+        }
+        if (raw.toolDescriptionOverrides && !raw.toolDescriptions) {
+          raw.toolDescriptions = raw.toolDescriptionOverrides
+          delete raw.toolDescriptionOverrides
+        }
+
+        // Migrate legacy booleans → new identity fields
+        if (raw.allowMainTools && !raw.sessionType) {
+          raw.sessionType = 'master_orchestrator'
+        }
+        if (raw.isJoinMember && !raw.sessionType) {
+          raw.sessionType = 'thread_guest'
+        }
+        if ((raw.factorySupervised || raw.supervised || raw.isFactoryBuilder) && !raw.sessionType) {
+          raw.sessionType = 'factory_builder'
+        }
+        delete raw.allowMainTools
+        delete raw.isJoinMember
+        delete raw.isFactoryBuilder
+        delete raw.factorySupervised
+        delete raw.supervised
+
+        // Strip invalid capabilities from intermediate persisted states
+        if (info.capabilities) {
+          const valid = new Set<string>(Object.keys(CAPABILITY_TOOLS))
+          info.capabilities = info.capabilities.filter(c => valid.has(c)) as Capability[]
+          if (info.capabilities.length === 0) delete info.capabilities
+        }
+
+        // Derive sessionType early — needed for the guest check below
+        ensureSessionType(info)
+
+        // Orphaned guests can't be re-associated with their review state
         // after restart — kill them and discard
-        if (info.isJoinMember) {
+        if (info.sessionType === 'thread_guest') {
           try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
           pruned++
           continue
@@ -478,7 +565,7 @@ export class ThreadRegistry {
 
     let created = 0
     for (const session of sessionRegistry.values()) {
-      if (session.isJoinMember) continue
+      if (session.sessionType === 'thread_guest') continue
       if (this.threads.has(session.threadId)) continue
       this.threads.set(session.threadId, {
         threadId: session.threadId,
