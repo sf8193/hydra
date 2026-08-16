@@ -12,7 +12,7 @@ import { registry } from './sessions.js'
 import { dispatchDisconnect } from './protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
 import { appendFileSync } from 'fs'
-import { tmuxHasSession, safeSend } from './util.js'
+import { sessionProcessAlive, safeSend } from './util.js'
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -65,7 +65,7 @@ codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
 
 codexEngine.on('disconnected', (sessionId: string) => {
   const info = registry.get(sessionId)
-  if (info && !info.deadAt && !tmuxHasSession(info.tmuxName)) {
+  if (info && !info.deadAt && !sessionProcessAlive(info.tmuxName)) {
     info.deadAt = Date.now()
     registry.persist()
   }
@@ -82,7 +82,7 @@ export async function reconnectCodexSessions(): Promise<void> {
 
   let reconnected = 0
   for (const info of codexSessions) {
-    if (!tmuxHasSession(info.tmuxName)) {
+    if (!sessionProcessAlive(info.tmuxName)) {
       info.deadAt = Date.now()
       continue
     }

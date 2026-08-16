@@ -5,7 +5,7 @@
 import { gateway, PLATFORM } from './config.js'
 import { registry, threadRegistry, sessionEmoji } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { formatDuration, tmuxHasSession } from './util.js'
+import { formatDuration, tmuxHasSession, sessionProcessAlive } from './util.js'
 import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
