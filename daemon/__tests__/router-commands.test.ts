@@ -406,7 +406,8 @@ describe('/keys command', () => {
     'C-k', 'C-l', 'C-m', 'C-n', 'C-o', 'C-p', 'C-q', 'C-r', 'C-s', 'C-t',
     'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
   ])
-  const isRawMode = (text: string) => text.split(/\s+/).every(t => TMUX_KEYS.has(t))
+  const isRawKey = (t: string) => TMUX_KEYS.has(t) || t.length === 1
+  const isRawMode = (text: string) => text.split(/\s+/).every(isRawKey)
 
   test('raw mode: all tmux key names', () => {
     expect(isRawMode('Up Up Enter')).toBe(true)
@@ -416,7 +417,14 @@ describe('/keys command', () => {
     expect(isRawMode('C-c')).toBe(true)
   })
 
-  test('literal mode: mixed text and key names', () => {
+  test('raw mode: single characters as keys', () => {
+    expect(isRawMode('3 Enter')).toBe(true)
+    expect(isRawMode('y')).toBe(true)
+    expect(isRawMode('n Enter')).toBe(true)
+    expect(isRawMode('1')).toBe(true)
+  })
+
+  test('literal mode: multi-char tokens that are not key names', () => {
     expect(isRawMode('/goal fix the bug')).toBe(false)
     expect(isRawMode('/compact')).toBe(false)
     expect(isRawMode('/model sonnet')).toBe(false)
