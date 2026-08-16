@@ -812,6 +812,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 }
                 void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
                 process.stderr.write(`daemon: sent keys to ${info.tmuxName} (${allKeyNames ? 'raw' : 'literal'}): ${text.slice(0, 100)}\n`)
+                // Auto-peek after 1s so the user sees the result
+                setTimeout(() => { void handlePeekIntercept(msg) }, 1000)
               } catch (err) {
                 void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
                 process.stderr.write(`daemon: send-keys failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
