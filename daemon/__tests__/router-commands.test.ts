@@ -339,3 +339,60 @@ describe('interrupt prefix', () => {
     expect('hey! stop'.match(INTERRUPT_RE)).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// /keys command
+// ---------------------------------------------------------------------------
+
+const KEYS_RE = /^(?:\/keys|keys)\s+([\s\S]+)/i
+
+describe('/keys command', () => {
+  test('/keys with CC slash command', () => {
+    const m = '/keys /goal fix the bug'.match(KEYS_RE)
+    expect(m).not.toBeNull()
+    expect(m![1].trim()).toBe('/goal fix the bug')
+  })
+
+  test('/keys with /loop', () => {
+    const m = '/keys /loop 5m /check-status'.match(KEYS_RE)
+    expect(m).not.toBeNull()
+    expect(m![1].trim()).toBe('/loop 5m /check-status')
+  })
+
+  test('/keys with /compact', () => {
+    const m = '/keys /compact'.match(KEYS_RE)
+    expect(m).not.toBeNull()
+    expect(m![1].trim()).toBe('/compact')
+  })
+
+  test('bare keys without slash', () => {
+    const m = 'keys /goal fix the bug'.match(KEYS_RE)
+    expect(m).not.toBeNull()
+    expect(m![1].trim()).toBe('/goal fix the bug')
+  })
+
+  test('case insensitive', () => {
+    const m = '/Keys /goal test'.match(KEYS_RE)
+    expect(m).not.toBeNull()
+  })
+
+  test('does not match with only whitespace', () => {
+    expect('/keys '.match(KEYS_RE)).toBeNull()
+  })
+
+  test('does not match bare /keys', () => {
+    expect('/keys'.match(KEYS_RE)).toBeNull()
+  })
+
+  test('multiline collapses to single line', () => {
+    const m = '/keys /goal fix\nthe bug'.match(KEYS_RE)
+    expect(m).not.toBeNull()
+    // Router collapses newlines to spaces
+    const text = m![1].replace(/\n/g, ' ').trim()
+    expect(text).toBe('/goal fix the bug')
+  })
+
+  test('does not match /keys in the middle of text', () => {
+    expect('please run /keys /goal test'.match(KEYS_RE)).toBeNull()
+  })
+})

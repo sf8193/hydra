@@ -1,4 +1,8 @@
+import { execFile as execFileCb } from 'child_process'
+import { promisify } from 'util'
 import { gateway, PERMISSION_REPLY_RE, INBOX_DIR } from './config.js'
+
+const execFileAsync = promisify(execFileCb)
 import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
@@ -767,6 +771,29 @@ gateway.onMessage(async (msg: InboundMessage) => {
             void gateway.react(msg.channelId, msg.id, info.paused ? '⏸' : '▶️').catch(() => {})
             refreshSessionVisual(resolvedThreadId)
             return
+          }
+
+          const keysMatch = msg.content.match(/^(?:\/keys|keys)\s+([\s\S]+)/i)
+          if (keysMatch) {
+            if (info.paused) {
+              void gateway.react(msg.channelId, msg.id, '⏸').catch(() => {})
+              return
+            }
+            // Collapse multiline to single line — CC slash commands are single-line
+            const text = keysMatch[1].replace(/\n/g, ' ').trim()
+            if (text) {
+              try {
+                // -l sends literal text (no tmux key-table lookup); Enter sent after
+                await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, '-l', text], { timeout: 3000 })
+                await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, 'Enter'], { timeout: 3000 })
+                void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
+                process.stderr.write(`daemon: sent keys to ${info.tmuxName}: ${text.slice(0, 100)}\n`)
+              } catch (err) {
+                void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+                process.stderr.write(`daemon: send-keys failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+              }
+              return
+            }
           }
 
           if (msg.content.startsWith('!') && msg.content.length > 1) {
