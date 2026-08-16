@@ -81,6 +81,7 @@ export class TestHarness {
         tmuxName: role,
         listening: false,
         turnState: 'idle',
+        sessionType: role === ownerRole ? 'thread_owner' : 'thread_guest',
       }
       registry.set(sid, info)
     }

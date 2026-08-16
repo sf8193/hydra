@@ -286,7 +286,7 @@ function findDeadSessions(): Array<{ thread: ThreadMetadata; claudeSessionId?: s
 
   // Check all sessions in registry for dead ones
   for (const info of registry.values()) {
-    if (info.isJoinMember) continue
+    if (info.sessionType === 'thread_guest') continue
     if (isAlive(info)) continue
 
     const thread = threadRegistry.get(info.threadId)
@@ -295,7 +295,7 @@ function findDeadSessions(): Array<{ thread: ThreadMetadata; claudeSessionId?: s
       thread,
       claudeSessionId: info.claudeSessionId,
       lastTmuxName: info.tmuxName,
-      model: info.capabilities?.model,
+      model: info.sessionMetadata?.model,
     })
   }
 

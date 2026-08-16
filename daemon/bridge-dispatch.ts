@@ -319,7 +319,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!callerSessionId) throw new Error('factory_build requires a session context')
         const callerInfo = registry.get(callerSessionId)
         if (!callerInfo) throw new Error('session not found')
-        if (callerInfo.isFactoryBuilder) throw new Error('factory builders cannot call factory_build (recursion guard)')
+        if (callerInfo.sessionType === 'factory_builder') throw new Error('factory builders cannot call factory_build (recursion guard)')
 
         const fresh = args.fresh === true
 
@@ -327,7 +327,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         let worktreeResolved: string | undefined
         if (worktreeRaw === true) {
           const spawnCwd = process.env.SPAWN_CWD
-          const pmCwd = callerInfo?.capabilities?.cwd
+          const pmCwd = callerInfo?.sessionMetadata?.cwd
           if (!spawnCwd) throw new Error('worktree: true requires SPAWN_CWD to be set')
           if (!pmCwd) throw new Error('worktree: true could not read your CWD (bridge may not have connected yet). Pass an explicit path relative to SPAWN_CWD instead, e.g. worktree="Documents/hydra".')
           worktreeResolved = suggestWorktreeFromCwd(pmCwd, spawnCwd)
@@ -402,7 +402,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       case 'factory_done': {
         if (!callerSessionId) throw new Error('factory_done requires a session context')
         const callerInfo = registry.get(callerSessionId)
-        if (!callerInfo?.isFactoryBuilder) throw new Error('factory_done can only be called by factory builders')
+        if (callerInfo?.sessionType !== 'factory_builder') throw new Error('factory_done can only be called by factory builders')
         if (!Array.isArray(args.files_changed)) throw new Error('files_changed must be an array of strings')
         if (typeof args.test_results !== 'string') throw new Error('test_results must be a string')
         const doneArgs: FactoryDoneArgs = {
@@ -468,7 +468,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const sessionId = callerSessionId ?? 'main'
         const info = registry.get(sessionId)
         if (!prUrl) {
-          const cwd = info?.capabilities?.cwd
+          const cwd = info?.sessionMetadata?.cwd
           if (!cwd) throw new Error(WATCH_ERRORS.NO_CWD)
           const detected = await detectPrUrl(cwd)
           if (!detected.ok) throw new Error(detected.reason)

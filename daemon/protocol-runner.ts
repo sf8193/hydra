@@ -1,5 +1,5 @@
 import { gateway } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
@@ -8,7 +8,8 @@ import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
 import { dumpTranscript } from './transcript-dump.js'
-import { computeToolsForSession, defaultToolDescription } from './bridge-tools.js'
+import { defaultToolDescription } from './bridge-tools.js'
+import { pushToolSurface } from './tool-surface.js'
 import type { Protocol } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
@@ -186,40 +187,82 @@ function getRunAndRole(sessionId: string): { run: ProtocolRun; role: string } | 
   return { run, role }
 }
 
-function scopedToolOverridesForRun(run: ProtocolRun, sessionId: string): Record<string, string> | null {
+function describePhaseTools(run: ProtocolRun, sessionId: string): { descriptions: Record<string, string>; schemas: Record<string, object> } | null {
   const role = run.sessionToRole.get(sessionId)
   if (!role) return null
   if (run.protocol.phases[run.phase]?.actor !== role) return null
-  if (!run.protocol.phaseInteraction(run.phase)) return null
-  const overrides: Record<string, string> = {
+  const ia = run.protocol.phaseInteraction(run.phase)
+  if (!ia) return null
+  const descriptions: Record<string, string> = {
     advance: formatAdvanceUsagePattern(run.protocol, run.phase),
+  }
+  const schemas: Record<string, object> = {
+    advance: buildAdvanceSchema(ia),
   }
   const remaining = MAX_EXTENSIONS_PER_PHASE - run._extensions
   if (remaining > 0) {
-    overrides.extend_phase = `Request more time in the current protocol phase (${remaining} remaining). Resets the idle timeout.`
+    descriptions.extend_phase = `Request more time in the current protocol phase (${remaining} remaining). Resets the idle timeout.`
+  } else {
+    descriptions.extend_phase = `All extensions used (${MAX_EXTENSIONS_PER_PHASE}/${MAX_EXTENSIONS_PER_PHASE}). No more extensions available this phase.`
   }
-  return overrides
+  return { descriptions, schemas }
 }
 
-function refreshSessionTools(run: ProtocolRun, sessionId: string): void {
-  const overrides = scopedToolOverridesForRun(run, sessionId) ?? undefined
-  const role = run.sessionToRole.get(sessionId)
-  const isGuest = role ? role !== run.protocol.ownerRole : false
-  const tools = computeToolsForSession(sessionId, overrides ? { scopedToolOverrides: overrides, isGuest } : undefined)
-  transport.sendOrQueue(sessionId, { type: 'tools_update', tools })
+function buildAdvanceSchema(ia: { verdict: 'none' | 'required' | 'optional'; options?: readonly string[] }): object {
+  const contentProp = { type: 'string', description: 'Your deliverable — posted to the thread verbatim.' }
+  if (ia.verdict === 'none') {
+    return { type: 'object', properties: { content: contentProp }, required: ['content'] }
+  }
+  const optionsList = ia.options?.length ? ia.options.join(', ') : 'see protocol'
+  const verdictProp = { type: 'string', description: `Structured choice: ${optionsList}.` }
+  if (ia.verdict === 'required') {
+    return { type: 'object', properties: { content: contentProp, verdict: verdictProp }, required: ['content', 'verdict'] }
+  }
+  return { type: 'object', properties: { content: contentProp, verdict: verdictProp }, required: ['content'] }
 }
 
-function refreshRunTools(run: ProtocolRun): void {
-  for (const [, sid] of run.participants) refreshSessionTools(run, sid)
+function clearProtocolOverrides(info: SessionInfo): void {
+  removeCapability(info, 'protocol_context')
+  removeToolDescriptions(info, 'advance', 'extend_phase')
+  removeToolInputSchemas(info, 'advance')
+}
+
+function setProtocolTools(run: ProtocolRun, sessionId: string): void {
+  const info = registry.get(sessionId)
+  if (!info) return
+
+  clearProtocolOverrides(info)
+
+  const overrides = describePhaseTools(run, sessionId)
+  if (overrides) {
+    addCapability(info, 'protocol_context')
+    for (const [name, desc] of Object.entries(overrides.descriptions)) setToolDescription(info, name, desc)
+    for (const [name, schema] of Object.entries(overrides.schemas)) setToolInputSchema(info, name, schema)
+  }
+
+  pushToolSurface(sessionId)
+}
+
+function setRunTools(run: ProtocolRun): void {
+  for (const [, sid] of run.participants) setProtocolTools(run, sid)
+  registry.persist()
+}
+
+function clearProtocolTools(run: ProtocolRun): void {
+  for (const [, sid] of run.participants) {
+    const info = registry.get(sid)
+    if (!info) continue
+    clearProtocolOverrides(info)
+    pushToolSurface(sid)
+  }
+  registry.persist()
 }
 
 function registerParticipant(run: ProtocolRun, role: string, sessionId: string): void {
   run.participants.set(role, sessionId)
   run.sessionToRole.set(sessionId, role)
   sessionToRun.set(sessionId, run.id)
-  if (run.protocol.phases[run.phase]?.actor === role) {
-    refreshSessionTools(run, sessionId)
-  }
+  setProtocolTools(run, sessionId)
 }
 
 // ---------------------------------------------------------------------------
@@ -331,7 +374,7 @@ export function onRunExtend(sessionId: string, reason: string, minutes: number):
   run._extensions++
   run.decisions.push({ phase: run.phase, role, value: 'extend', because: reason, context: `+${minutes}m` })
   resetTimeout(run)
-  refreshSessionTools(run, sessionId)
+  setProtocolTools(run, sessionId)
 
   const info = registry.get(sessionId)
   const name = info?.tmuxName ?? sessionId.slice(0, 8)
@@ -406,6 +449,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     info?.topic ?? `${run.protocol.display} ${run.protocol.roles[role]}`,
     undefined, undefined, {
       joinThread: run.threadId,
+      sessionType: 'thread_guest',
       resumeFrom: claudeSessionId,
       model: run.params.model as string | undefined,
     },
@@ -416,9 +460,8 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     return
   }
 
-  // Pre-register before waitForBridge so toolsForSession's resolveScopedToolOverrides
-  // resolves — otherwise computeToolsForSession filters out protocol-only tools
-  // and the resumed session can't advance the protocol.
+  // Pre-register before waitForBridge so the session's capabilities are set
+  // when the bridge pushes tools on connect.
   run.sessionToRole.set(result.sessionId, role)
   sessionToRun.set(result.sessionId, run.id)
   transport.sendOrQueue(result.sessionId, {
@@ -472,7 +515,6 @@ export function onRunReconnect(sessionId: string): void {
     process.stderr.write(`daemon: ${run.protocol.name} run: ${sessionId} reconnected\n`)
   }
 
-  refreshSessionTools(run, sessionId)
 }
 
 // ---------------------------------------------------------------------------
@@ -493,6 +535,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
   }
 
   clearTimers(run)
+  clearProtocolTools(run)
 
   try {
     for (const [role, sid] of run.participants) {
@@ -539,7 +582,7 @@ function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   run._phaseStartedAt = Date.now()
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
-  if (!isTerminal(run)) refreshRunTools(run)
+  if (!isTerminal(run)) setRunTools(run)
   return true
 }
 
@@ -738,6 +781,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,
+    sessionType: 'thread_guest',
     model,
     promptBuilder: (sessionId, tmuxName) => {
       let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
@@ -873,6 +917,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
   process.stderr.write(`daemon: ${run.protocol.name} run: complete (phase=${run.phase}, rounds=${run.currentRound}/${run.rounds})\n`)
 
   clearTimers(run)
+  clearProtocolTools(run)
 
   let transcriptPath: string | undefined
   try {
@@ -974,20 +1019,6 @@ function runnerHooks(name: string, protoName: string) {
     onDisconnect: onRunDisconnect,
     onReconnect: onRunReconnect,
     onAdvance: onRunAdvance,
-    resolveScopedToolOverrides: (sessionId, chatId?) => {
-      const runId = sessionToRun.get(sessionId)
-      const run = runId ? runs.get(runId) : undefined
-      if (!run) return null
-      if (!chatId || chatId !== run.threadId) return null
-      return scopedToolOverridesForRun(run, sessionId)
-    },
-    resolveIsGuest: (sessionId) => {
-      const runId = sessionToRun.get(sessionId)
-      const run = runId ? runs.get(runId) : undefined
-      if (!run) return false
-      const role = run.sessionToRole.get(sessionId)
-      return role ? role !== run.protocol.ownerRole : false
-    },
   })
 }
 

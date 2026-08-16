@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { maybeNudgeMissingAdvance, _resetNudgesForTesting } from '../advance-nudge.js'
-import { registerProtocol, _resetForTesting as resetRegistry } from '../protocol-registry.js'
+import { _resetForTesting as resetRegistry } from '../protocol-registry.js'
 import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
@@ -25,6 +25,7 @@ beforeEach(() => {
     sessionId: 's1', topic: 'test', threadId: 'thread-1',
     createdAt: Date.now(), lastActive: Date.now(), tmuxName: 'critic',
     listening: false, turnState: 'idle',
+    sessionType: 'thread_guest',
   } as SessionInfo)
 })
 
@@ -34,22 +35,18 @@ afterEach(() => {
   registry.delete('s1')
 })
 
-function registerTestProtocol(opts?: { advanceUsagePattern?: string }) {
-  registerProtocol('test', {
-    getByThread: (id) => id === 'thread-1',
-    isParticipant: (id) => id === 's1',
-    onReply: () => {},
-    onDisconnect: () => {},
-    onReconnect: () => {},
-    resolveScopedToolOverrides: opts?.advanceUsagePattern
-      ? (_sid: string, chatId?: string) => chatId === 'thread-1' ? { advance: opts.advanceUsagePattern!, extend_phase: 'extend...' } : null
-      : undefined,
-  })
+function makeActive(advanceDescription?: string) {
+  const info = registry.get('s1')
+  if (!info) return
+  info.capabilities = ['protocol_context']
+  if (advanceDescription) {
+    info.toolDescriptions = { advance: advanceDescription }
+  }
 }
 
 describe('advance nudge', () => {
   test('nudges active actor on substantial reply', () => {
-    registerTestProtocol({ advanceUsagePattern: 'advance({ content: "..." })' })
+    makeActive('advance({ content: "..." })')
     const longText = 'x'.repeat(250)
     const result = maybeNudgeMissingAdvance('s1', longText, 'thread-1')
     expect(result).toBe(true)
@@ -60,41 +57,26 @@ describe('advance nudge', () => {
   })
 
   test('does not nudge non-active participant', () => {
-    registerTestProtocol()
-    const longText = 'x'.repeat(250)
-    const result = maybeNudgeMissingAdvance('s1', longText, 'thread-1')
-    expect(result).toBe(false)
-  })
-
-  test('does not nudge when overrides exist but lack advance', () => {
-    registerProtocol('test', {
-      getByThread: (id) => id === 'thread-1',
-      isParticipant: (id) => id === 's1',
-      onReply: () => {},
-      onDisconnect: () => {},
-      onReconnect: () => {},
-      resolveScopedToolOverrides: () => ({ extend_phase: 'extend...' }),
-    })
     const longText = 'x'.repeat(250)
     const result = maybeNudgeMissingAdvance('s1', longText, 'thread-1')
     expect(result).toBe(false)
   })
 
   test('does not nudge on short reply', () => {
-    registerTestProtocol({ advanceUsagePattern: 'advance({ content: "..." })' })
+    makeActive('advance({ content: "..." })')
     const result = maybeNudgeMissingAdvance('s1', 'quick status update', 'thread-1')
     expect(result).toBe(false)
   })
 
   test('does not nudge for non-protocol posts', () => {
-    registerTestProtocol({ advanceUsagePattern: 'advance({ content: "..." })' })
+    makeActive('advance({ content: "..." })')
     const longText = 'x'.repeat(250)
     const result = maybeNudgeMissingAdvance('s1', longText, 'other-thread')
     expect(result).toBe(false)
   })
 
   test('cooldown prevents repeated nudges', () => {
-    registerTestProtocol({ advanceUsagePattern: 'advance({ content: "..." })' })
+    makeActive('advance({ content: "..." })')
     const longText = 'x'.repeat(250)
     const now = Date.now()
 
@@ -104,7 +86,7 @@ describe('advance nudge', () => {
   })
 
   test('includes phase-specific advance pattern when available', () => {
-    registerTestProtocol({ advanceUsagePattern: 'advance({ content: "...", verdict: "approve | request_changes" })' })
+    makeActive('advance({ content: "...", verdict: "approve | request_changes" })')
     const longText = 'x'.repeat(250)
     maybeNudgeMissingAdvance('s1', longText, 'thread-1')
 
@@ -114,8 +96,8 @@ describe('advance nudge', () => {
     expect((nudge!.content as string)).toContain('verdict: "approve | request_changes"')
   })
 
-  test('uses generic pattern when advance override has no custom description', () => {
-    registerTestProtocol({ advanceUsagePattern: 'advance({ content: "..." })' })
+  test('uses generic pattern when no description override set', () => {
+    makeActive()
     const longText = 'x'.repeat(250)
     maybeNudgeMissingAdvance('s1', longText, 'thread-1')
 
@@ -123,25 +105,5 @@ describe('advance nudge', () => {
     const nudge = msgs.find(m => (m.content as string).includes('protocol did NOT advance'))
     expect(nudge).toBeDefined()
     expect((nudge!.content as string)).toContain('advance({ content: "..." })')
-  })
-
-  test('passes chatId to resolveScopedToolOverrides hook', () => {
-    let receivedChatId: string | undefined
-    registerProtocol('test', {
-      getByThread: (id) => id === 'thread-1',
-      isParticipant: (id) => id === 's1',
-      onReply: () => {},
-      onDisconnect: () => {},
-      onReconnect: () => {},
-      resolveScopedToolOverrides: (_sessionId, chatId?) => {
-        receivedChatId = chatId
-        return { advance: 'advance({ content: "..." })', extend_phase: 'extend...' }
-      },
-    })
-
-    const longText = 'x'.repeat(250)
-    maybeNudgeMissingAdvance('s1', longText, 'thread-1')
-
-    expect(receivedChatId).toBe('thread-1')
   })
 })

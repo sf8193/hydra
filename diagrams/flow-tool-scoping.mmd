@@ -1,41 +1,75 @@
-%% Tool Scoping — two code branches, dynamic overrides per phase
-%% Why "advance" appears and disappears between protocol phases.
-%% The tool list mutates at runtime and is re-pushed over MCP.
+%% Tool Scoping — session type + capabilities + write-through to SessionInfo
+%% How tools are computed, delivered, and updated across all contexts.
 
 sequenceDiagram
-    participant daemon as daemon.ts
-    participant runner as protocol-<br/>runner.ts
-    participant tools as bridge-<br/>tools.ts
+    participant info as SessionInfo
+    participant compute as computeTools<br/>ForSession
+    participant surface as tool-surface.ts
     participant transport as bridge-<br/>transport.ts
     participant bridge as bridge.ts
     participant cc as Claude Code<br/>session
 
-    Note over tools: computeToolsForSession has two branches:
-    Note over tools: sessionId === 'main' → all UNIVERSAL_TOOLS<br/>everyone else → minus MASTER_ORCHESTRATOR_ONLY<br/>(spawn_session, kill_session) and minus<br/>PROTOCOL_ONLY (advance, extend_phase)<br/>unless scopedToolOverrides provided
+    Note over info: Identity fields:<br/>sessionType: master_orchestrator / thread_owner / thread_guest / factory_builder<br/>capabilities: Capability[] (additive grants: protocol_context, factory)<br/>toolDescriptions: Record (phase-specific)<br/>toolInputSchemas: Record (phase-specific)
 
-    Note over daemon: On spawn / bridge registration
-    daemon->>tools: computeToolsForSession(sessionId)
-    tools->>tools: filter: main gets all,<br/>others lose fleet tools + protocol tools
-    daemon->>transport: send tools in "registered" msg
-    transport->>bridge: {type: registered, tools: [...]}
-    bridge->>cc: notifications/tools/list_changed
+    Note over compute: Pure function:<br/>BASE_TOOLS[sessionType] ∪ CAPABILITY_TOOLS[each capability]<br/>→ filter UNIVERSAL_TOOLS<br/>→ apply description + schema overrides
 
-    Note over runner: On protocol phase transition
-    runner->>runner: refreshRunTools(run)
-    loop for each participant
-        runner->>runner: scopedToolOverridesForRun(sessionId)
-        Note over runner: returns {advance: "phase-specific description"}<br/>only for the ACTIVE actor in this phase.<br/>Non-active actors get no overrides →<br/>advance filtered out by computeToolsForSession
-        runner->>tools: computeToolsForSession(sid, {scopedToolOverrides})
-        tools->>tools: include advance + extend_phase<br/>with override descriptions
-        runner->>transport: {type: tools_update, tools: [...]}
-        transport->>bridge: tools_update
-        bridge->>bridge: dynamicTools = tools
+    rect rgb(240, 248, 255)
+        Note over info,cc: SPAWN — session created
+        info->>info: sessionType set at spawn (determines base tools)
+        Note over surface: getToolsForSession reads SessionInfo
+        surface->>compute: (type, caps, overrides?)
+        compute-->>surface: tool list
+        surface->>transport: registered msg with tools
+        transport->>bridge: {type: registered, tools, sessionMetadata}
         bridge->>cc: notifications/tools/list_changed
     end
 
-    Note over cc: Claude calls ListTools
-    cc->>bridge: ListToolsRequest
-    bridge->>cc: dynamicTools (current set)
-    Note over cc: advance is present only during<br/>the session's active phase turn
+    rect rgb(255, 248, 240)
+        Note over info,cc: PROTOCOL PHASE TRANSITION — actor changes
+        Note over info: setProtocolTools(run, sessionId)
+        info->>info: Clear protocol keys (advance, extend_phase)
+        info->>info: Active actor: addCapability('protocol_context')<br/>+ descriptions + schema (verdict stripped/required per phase)
+        info->>info: Previous actor: removeCapability('protocol_context')<br/>+ removeToolDescriptions + removeToolInputSchemas
+        loop for each participant
+            surface->>compute: (type, caps, overrides?)
+            compute-->>surface: tool list
+            surface->>transport: {type: tools_update, tools}
+            transport->>bridge: tools_update
+            bridge->>cc: notifications/tools/list_changed
+        end
+    end
 
-    Note over tools: Codex sessions: STATIC tools.<br/>codex-mcp-server.ts computes once at<br/>startup with advance always included.<br/>No tools_update, no list_changed.
+    rect rgb(240, 255, 240)
+        Note over info,cc: FACTORY PHASE TRANSITION
+        Note over info: transitionFactoryPhase → setFactoryTools
+        info->>info: Description-only: factory_done description<br/>changes per phase (building / reviewing / awaiting_pm)
+        surface->>compute: (type, caps, overrides?)
+        compute-->>surface: tool list
+        surface->>transport: {type: tools_update, tools}
+        transport->>bridge: tools_update
+        bridge->>cc: notifications/tools/list_changed
+    end
+
+    rect rgb(248, 240, 255)
+        Note over info,cc: BRIDGE RECONNECT — no derivation
+        Note over info: SessionInfo already correct<br/>(written at last transition, persisted)
+        surface->>compute: (type, caps, overrides?)
+        compute-->>surface: tool list
+        surface->>transport: registered msg with tools
+        transport->>bridge: {type: registered, tools, sessionMetadata}
+        bridge->>cc: notifications/tools/list_changed
+    end
+
+    rect rgb(255, 240, 240)
+        Note over info,cc: PROTOCOL COMPLETE / CANCEL
+        Note over info: clearProtocolOverrides(info)
+        info->>info: removeCapability('protocol_context')<br/>+ removeToolDescriptions('advance', 'extend_phase')<br/>+ removeToolInputSchemas('advance')
+        surface->>transport: tools_update (restored to base set)
+    end
+
+    rect rgb(245, 245, 245)
+        Note over info,cc: FACTORY CLEANUP
+        Note over info: clearFactoryIdentity(info)
+        info->>info: sessionType → thread_owner<br/>+ removeToolDescriptions('factory_done')
+        surface->>transport: tools_update (session restored to thread_owner base)
+    end

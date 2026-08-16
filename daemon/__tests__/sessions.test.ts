@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { SessionRegistry, ThreadRegistry, sessionEmoji, type SessionInfo, type ThreadMetadata } from '../sessions.js'
+import { SessionRegistry, ThreadRegistry, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -130,7 +130,7 @@ describe('ThreadRegistry', () => {
   test('boot skips join members', () => {
     const tr = new ThreadRegistry()
     const reg = new SessionRegistry()
-    reg.set('sid-join', makeInfo({ sessionId: 'sid-join', threadId: 'thread-join', isJoinMember: true }))
+    reg.set('sid-join', makeInfo({ sessionId: 'sid-join', threadId: 'thread-join', sessionType: 'thread_guest' }))
     tr.boot(reg)
     expect(tr.has('thread-join')).toBe(false)
   })
@@ -171,6 +171,27 @@ describe('ThreadRegistry', () => {
     tr.boot(reg)
     expect(tr.get('thread-existing')!.topic).toBe('original topic')
     expect(tr.get('thread-existing')!.respawnCount).toBe(3)
+  })
+})
+
+describe('ensureSessionType', () => {
+  test('session without sessionType gets thread_owner by default', () => {
+    const info = makeInfo({ sessionId: 'test-type-owner' })
+    delete info.sessionType
+    ensureSessionType(info)
+    expect(info.sessionType).toBe('thread_owner')
+  })
+
+  test('session with existing sessionType is not overwritten', () => {
+    const info = makeInfo({ sessionId: 'test-type-keep', sessionType: 'thread_guest' })
+    ensureSessionType(info)
+    expect(info.sessionType).toBe('thread_guest')
+  })
+
+  test('session with master_orchestrator is preserved', () => {
+    const info = makeInfo({ sessionId: 'test-type-orch', sessionType: 'master_orchestrator' })
+    ensureSessionType(info)
+    expect(info.sessionType).toBe('master_orchestrator')
   })
 })
 
