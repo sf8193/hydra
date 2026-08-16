@@ -42,6 +42,7 @@ const DEFAULT_ROLE_CONFIG: Readonly<RoleConfig> = Object.freeze({ cadence: 'per-
 export type PhaseInteraction = {
   verdict: 'none' | 'required' | 'optional'
   options?: readonly string[]
+  descriptions?: Partial<Record<string, string>>
 }
 
 export type SeedContext = {
@@ -82,10 +83,8 @@ export type ProtocolSpec<
   }>
   roleConfig?: Partial<Record<keyof Roles & string, Partial<RoleConfig>>>
   seed?: Partial<Record<keyof Roles, SeedFn>>
-  initState?: (params: Record<string, unknown>) => Record<string, unknown>
   summaryFormat?: (run: RunState) => string[]
   ownerKickoff?: (params: Record<string, unknown>) => string
-  decisionContext?: (run: RunState) => string | undefined
   turnNotification?: (run: RunState, prevContent: string) => string
   notifications?: {
     onKickoff?: (run: RunState) => string
@@ -115,10 +114,8 @@ export type Protocol<
   phaseInteraction: (phase: string) => PhaseInteraction | undefined
   roleConfig: (role: string) => RoleConfig
   seed: (role: string, ctx: Omit<SeedContext, 'protocol'> & { protocol?: Protocol }) => string | undefined
-  initState: (params: Record<string, unknown>) => Record<string, unknown>
   summaryFormat: (run: RunState) => string[]
   ownerKickoff: ((params: Record<string, unknown>) => string) | undefined
-  decisionContext: ((run: RunState) => string | undefined) | undefined
   turnNotification: ((run: RunState, prevContent: string) => string) | undefined
   notifications: {
     onKickoff?: (run: RunState) => string
@@ -292,14 +289,12 @@ export function protocol<
       }
       return undefined
     },
-    initState: spec.initState ?? (() => ({})),
     summaryFormat: spec.summaryFormat ?? ((run) => [
       `**${spec.emoji} ${spec.display} Summary** (${run.rounds} round${run.rounds > 1 ? 's' : ''})`,
       ``,
       `Post your closing summary.`,
     ]),
     ownerKickoff: spec.ownerKickoff ?? undefined,
-    decisionContext: spec.decisionContext ?? undefined,
     turnNotification: spec.turnNotification ?? undefined,
     notifications: spec.notifications ?? {},
   }
