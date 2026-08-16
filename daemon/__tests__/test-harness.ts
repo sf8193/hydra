@@ -110,7 +110,6 @@ export class TestHarness {
       messageIds: [],
       statusHistory: [],
       strike: opts.strike ?? false,
-      ext: proto.initState({ rounds, topic: opts.topic, ...opts.params }),
     }
 
     runs.set(run.id, run)

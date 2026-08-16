@@ -23,7 +23,7 @@ let killSession = _killSession
 // Run state
 // ---------------------------------------------------------------------------
 
-export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unknown>> = StatusLineState & {
+export type ProtocolRun = StatusLineState & {
   id: string
   protocol: Protocol
   threadId: string
@@ -43,11 +43,10 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   _resumeAttempts?: number
   _keepaliveTimer?: ReturnType<typeof setInterval>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
-  decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
+  decisions: Array<{ phase: string; role: string; value: string; because: string }>
   strike: boolean
   statusHistory: string[]
   summary?: string
-  ext: Ext
 }
 
 const MAX_EXTENSIONS_PER_PHASE = 2
@@ -124,7 +123,6 @@ export async function startProtocolRun(
     messageIds: [],
     statusHistory: [],
     strike: !!(params.strike ?? false),
-    ext: proto.initState(params),
   }
 
   runs.set(id, run)
@@ -312,17 +310,10 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     }
 
     if (verdict) {
-      const context = run.protocol.decisionContext?.(run)
-      run.decisions.push({ phase: advancePhaseFrom, role, value: verdict, because: content, context })
+      run.decisions.push({ phase: advancePhaseFrom, role, value: verdict, because: content })
     }
 
-    const prevPhaseDef = run.protocol.phases[advancePhaseFrom]
-    if (verdict) {
-      const decision = Object.values(run.protocol.decisions).find(d => d.phase === advancePhaseFrom)
-      if (result.to === run.protocol.initialPhase && event !== decision?.finalEvent) {
-        run.currentRound++
-      }
-    } else if (prevPhaseDef?.finalAdvanceEvent && event !== prevPhaseDef.finalAdvanceEvent) {
+    if (result.to === run.protocol.initialPhase && advancePhaseFrom !== run.protocol.initialPhase) {
       run.currentRound++
     }
 
@@ -664,7 +655,9 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
       `concluded — ${run.currentRound} round${run.currentRound > 1 ? 's' : ''}`))
     run.messageIds.push(...concludedIds)
     const formatLines = run.protocol.summaryFormat(run)
-    transport.sendOrQueue(run.ownerSessionId, {
+    const closingActor = run.protocol.phases[run.phase]?.actor
+    const closingSid = closingActor ? run.participants.get(closingActor) : run.ownerSessionId
+    transport.sendOrQueue(closingSid ?? run.ownerSessionId, {
       type: 'notification',
       content: [
         `[system] ${run.protocol.display} complete (${run.currentRound} round${run.currentRound > 1 ? 's' : ''}).`,
