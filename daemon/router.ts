@@ -793,7 +793,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
                   'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
                 ])
                 const tokens = text.split(/\s+/)
-                const allKeyNames = tokens.every(t => TMUX_KEYS.has(t))
+                // Single characters (letters, digits, punctuation) are valid raw tmux keys
+                const isRawKey = (t: string) => TMUX_KEYS.has(t) || t.length === 1
+                const allKeyNames = tokens.every(isRawKey)
                 if (allKeyNames) {
                   // Raw key mode: send each token as a tmux key name
                   await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, ...tokens], { timeout: 3000 })
