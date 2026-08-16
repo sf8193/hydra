@@ -11,8 +11,7 @@ export type RunState = {
   readonly params: Record<string, unknown>
   readonly participants: Map<string, string>
   readonly sessionToRole: Map<string, string>
-  readonly decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
-  ext: Record<string, unknown>
+  readonly decisions: Array<{ phase: string; role: string; value: string; because: string }>
   readonly messageIds: string[]
   readonly statusHistory: string[]
 }
