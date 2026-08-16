@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { safeSend, formatSpawnLine, tmuxHasSession, sessionProcessAlive } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionCapabilities, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -266,7 +266,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       }
     }
     try {
-      execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
+      execFileSync('tmux', ['kill-session', '-t', tmuxName], { stdio: 'pipe', timeout: 5000 })
     } catch {}
 
     transport.disconnect(info.sessionId)
@@ -313,13 +313,13 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
       tmuxName: info.tmuxName,
     })
 
+    const killedAt = Date.now()
     setTimeout(() => {
       try {
-        // Only kill if the tmux session isn't owned by a new session (name recycling)
-        const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName)
+        const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName && s.createdAt >= killedAt)
         if (!currentOwner) {
           execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
-          execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
+          execFileSync('tmux', ['kill-session', '-t', tmuxName], { stdio: 'pipe' })
           process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
         }
       } catch {}
@@ -757,29 +757,37 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
   const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)
+  const debugLogBase = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}`)
   const exitFile = join(SPAWN_LOGS_DIR, `exit-${tmuxName}-${sessionId}.log`)
-  const writeExitMarker = [
-    `_HYDRA_EXIT_CODE=$?`,
-    `_HYDRA_EXIT_TS=$(date +%s)`,
-    `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
-    `echo "wall_clock=\${SECONDS}s"`,
-    `echo "exit_ts=$_HYDRA_EXIT_TS"`,
-    `echo "session_id=${sessionId}"`,
-    `echo "tmux_name=${tmuxName}"`,
-    `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
-    `} > ${shq(exitFile)}`,
-  ].join('; ')
-  claudeArgs += ` --debug-file ${shq(debugLog)}`
+  const restartLog = join(SPAWN_LOGS_DIR, `restart-${tmuxName}-${sessionId}.log`)
+  const writeExitMarker = buildExitMarkerScript(sessionId, tmuxName, exitFile, debugLog)
   const spawnCd = resolveForkSpawnCwd(isFork, !!worktreeTarget, spawnCwd, effectiveCwd)
   if (isFork && worktreeTarget) {
     process.stderr.write(`daemon: spawn ${tmuxName}: fork+worktree — using PM CWD ${spawnCwd} for fork (worktree ${effectiveCwd} in prompt)\n`)
   }
-  const inner = [
-    `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
-    `cd ${shq(spawnCd)}`,
-    ...buildSpawnEnv(sessionId, tmuxName),
-    `${claudeArgs} 2>>${shq(stderrLog)}`,
-  ].join(' && ')
+
+  const useRestartLoop = !isFork
+  let inner: string
+  if (useRestartLoop) {
+    const resumeId = isResume ? opts!.resumeFrom! : assignedClaudeSessionId
+    const disallowedRestart = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
+    const toolsRestart = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
+    const resumeCmd = resumeId ? `claude --resume ${shq(resumeId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions${disallowedRestart}${toolsRestart}` : undefined
+    const restartCmd = buildSelfRestartLoop(claudeArgs, resumeCmd, exitFile, restartLog, debugLogBase, sessionId, tmuxName, stderrLog)
+    inner = [
+      `cd ${shq(spawnCd)}`,
+      ...buildSpawnEnv(sessionId, tmuxName),
+      restartCmd,
+    ].join(' && ')
+  } else {
+    claudeArgs += ` --debug-file ${shq(debugLog)}`
+    inner = [
+      `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
+      `cd ${shq(spawnCd)}`,
+      ...buildSpawnEnv(sessionId, tmuxName),
+      `${claudeArgs} 2>>${shq(stderrLog)}`,
+    ].join(' && ')
+  }
 
   process.stderr.write(`daemon: spawn ${tmuxName}: running tmux new-session\n`)
   process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
@@ -802,6 +810,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } catch {
     process.stderr.write(`daemon: spawn ${tmuxName}: WARNING -- tmux session died immediately after creation\n`)
   }
+
+
 
 
   // Best-effort: any failure is logged, never fatal to the spawn.
@@ -837,7 +847,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, capabilities,
     threadUrl: url || undefined,
-    ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
+    ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : isResume && opts?.resumeFrom ? { claudeSessionId: opts.resumeFrom } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(resumeCount > 0 ? { resumeCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
@@ -997,7 +1007,7 @@ export async function tryResume(dead: {
         const s = registry.get(recheckSessionId)
         if (!s || s.deadAt) return
         if (transport.has(recheckSessionId)) return
-        if (!tmuxHasSession(s.tmuxName)) {
+        if (!sessionProcessAlive(s.tmuxName)) {
           process.stderr.write(`daemon: resume recheck: ${s.tmuxName} died after orphan classification — marking dead\n`)
           s.deadAt = Date.now()
           registry.persist()
@@ -1036,6 +1046,51 @@ export async function tryRespawn(
     return null
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shell-level restart loop — CC restarts inside the same tmux session
+// ---------------------------------------------------------------------------
+
+function buildExitMarkerScript(sessionId: string, tmuxName: string, exitFile: string, debugLog: string): string {
+  return [
+    `_HYDRA_EXIT_CODE=$?`,
+    `_HYDRA_EXIT_TS=$(date +%s)`,
+    `_HYDRA_SELF_EXIT=false`,
+    `sync 2>/dev/null`,
+    `if grep -q '\\[uds-messaging\\] Shutting down' ${shq(debugLog)} 2>/dev/null; then _HYDRA_SELF_EXIT=true; fi`,
+    `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
+    `echo "wall_clock=\${SECONDS}s"`,
+    `echo "exit_ts=$_HYDRA_EXIT_TS"`,
+    `echo "session_id=${sessionId}"`,
+    `echo "tmux_name=${tmuxName}"`,
+    `echo "self_exit=$_HYDRA_SELF_EXIT"`,
+    `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
+    `} > ${shq(exitFile)}`,
+  ].join('; ')
+}
+
+function buildSelfRestartLoop(claudeCmd: string, resumeCmd: string | undefined, exitFile: string, restartLog: string, debugLogBase: string, sessionId: string, tmuxName: string, stderrLog?: string): string {
+  const stderrPart = stderrLog ? ` 2>>"${stderrLog}"` : ''
+  const restartClaudeCmd = resumeCmd ?? claudeCmd
+  return [
+    `_HYDRA_RESTART_N=0`,
+    `while true`,
+    `do`,
+    `_HYDRA_DEBUG_LOG="${debugLogBase}$( [ $_HYDRA_RESTART_N -gt 0 ] && echo "-r$_HYDRA_RESTART_N" || echo "" ).log"`,
+    `if [ $_HYDRA_RESTART_N -eq 0 ]; then ${claudeCmd} --debug-file "$_HYDRA_DEBUG_LOG"${stderrPart}; else ${restartClaudeCmd} --debug-file "$_HYDRA_DEBUG_LOG"${stderrPart}; fi`,
+    `_HYDRA_EXIT_CODE=$?`,
+    `_HYDRA_SELF_EXIT=false`,
+    `sync 2>/dev/null`,
+    `if grep -q '\\[uds-messaging\\] Shutting down' "$_HYDRA_DEBUG_LOG" 2>/dev/null; then _HYDRA_SELF_EXIT=true; fi`,
+    `{ echo "exit_code=$_HYDRA_EXIT_CODE"; echo "exit_ts=$(date +%s)"; echo "wall_clock=\${SECONDS}s"; echo "session_id=${sessionId}"; echo "tmux_name=${tmuxName}"; echo "self_exit=$_HYDRA_SELF_EXIT"; echo "restart_n=$_HYDRA_RESTART_N"; } > "${exitFile}"`,
+    `_HYDRA_RESTART_N=$((_HYDRA_RESTART_N + 1))`,
+    `echo "shell-loop: ${tmuxName} CC exited (code=$_HYDRA_EXIT_CODE self_exit=$_HYDRA_SELF_EXIT) — restarting (attempt $_HYDRA_RESTART_N)" >&2`,
+    `echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) restart=$_HYDRA_RESTART_N exit_code=$_HYDRA_EXIT_CODE self_exit=$_HYDRA_SELF_EXIT debug=$_HYDRA_DEBUG_LOG" >> "${restartLog}"`,
+    `sleep 2`,
+    `done`,
+  ].join('\n')
+}
+
 
 // ---------------------------------------------------------------------------
 // Claude session ID discovery

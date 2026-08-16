@@ -31,6 +31,17 @@ export function isAlive(info: { tmuxName: string; deadAt?: number }): boolean {
   return tmuxHasSession(info.tmuxName)
 }
 
+export function sessionProcessAlive(name: string): boolean {
+  try {
+    const result = execFileSync('tmux', ['display-message', '-t', name, '-p', '#{pane_dead}'], {
+      encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000,
+    }).trim()
+    return result === '0'
+  } catch {
+    return false
+  }
+}
+
 export function tmuxHasSession(name: string): boolean {
   try {
     execFileSync('tmux', ['has-session', '-t', name], { stdio: 'pipe' })

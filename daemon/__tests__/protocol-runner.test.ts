@@ -69,6 +69,7 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
     sessionToRole: new Map([['test-critic', 'critic'], ['test-owner', 'owner']]),
     timeout: undefined,
     disconnectTimers: new Map(),
+    _disconnectGen: new Map(),
     decisions: [],
     messageIds: [],
     statusHistory: [],
@@ -452,6 +453,8 @@ describe('extend_phase', () => {
 })
 
 describe('protocol runner — keepalive', () => {
+  beforeAll(() => { process.env.HYDRA_KEEPALIVE = '1' })
+  afterAll(() => { delete process.env.HYDRA_KEEPALIVE })
   test('keepalive timer starts after phase transition', async () => {
     const run = createTestRun()
     await onRunAdvance('test-critic', 'Finding #1', 'approve')
