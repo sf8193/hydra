@@ -446,9 +446,26 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   // when the bridge pushes tools on connect.
   run.sessionToRole.set(result.sessionId, role)
   sessionToRun.set(result.sessionId, run.id)
+  const phaseDef = run.protocol.phases[run.phase]
+  const isMyTurn = phaseDef?.actor === role
+  const roleLabel = run.protocol.roles[role] ?? role
+  const advancePattern = isMyTurn ? formatAdvanceUsagePattern(run.protocol, run.phase) : null
+
+  const resumeLines: string[] = [
+    `[system] Your session was resumed. You are **${roleLabel}** in a **${run.protocol.display}** (round ${run.currentRound}/${run.rounds}).`,
+  ]
+  if (isMyTurn && advancePattern) {
+    resumeLines.push(`It is your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only.`)
+  } else {
+    const activeActor = phaseDef?.actor
+    const activeLabel = activeActor ? run.protocol.roles[activeActor] : undefined
+    resumeLines.push(`${activeLabel ?? 'The other participant'} is currently working. Wait for a [system] notification with their response.`)
+  }
+  resumeLines.push(`Check the thread for any messages you may have missed.`)
+
   transport.sendOrQueue(result.sessionId, {
     type: 'notification',
-    content: `[system] Your session was resumed. Check your thread for any messages you may have missed, and continue where you left off.`,
+    content: resumeLines.join('\n'),
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 
@@ -646,7 +663,7 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
       process.stderr.write(`daemon: ${run.protocol.name} run: backstop timeout in "${phase}"\n`)
       await fireTransition(run, 'timeout', '', 'backstop timed out')
     }, ms)
-    return true
+    return false
   },
 
   notifyOwnerSummary: async (run, prevPhase) => {
@@ -657,11 +674,14 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
     const formatLines = run.protocol.summaryFormat(run)
     const closingActor = run.protocol.phases[run.phase]?.actor
     const closingSid = closingActor ? run.participants.get(closingActor) : run.ownerSessionId
+    const closingInfo = registry.get(closingSid ?? run.ownerSessionId)
+    const closingName = closingInfo?.tmuxName
+    const namePrefix = closingName ? `**${closingName}**, post` : `Post`
     transport.sendOrQueue(closingSid ?? run.ownerSessionId, {
       type: 'notification',
       content: [
         `[system] ${run.protocol.display} complete (${run.currentRound} round${run.currentRound > 1 ? 's' : ''}).`,
-        `Post a closing summary using \`advance({ content: "..." })\`:`,
+        `${namePrefix} a closing summary using \`advance({ content: "..." })\`:`,
         ``,
         ...formatLines,
       ].join('\n'),
@@ -807,9 +827,20 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   const sid = run.participants.get(actor)
   if (!sid) return
 
+  const actorName = registry.get(sid)?.tmuxName
+  const actorLabel = actorName ? `**${actorName}**` : 'You'
+  const advancePattern = formatAdvanceUsagePattern(run.protocol, run.phase)
+
   const notification = run.protocol.turnNotification
     ? run.protocol.turnNotification(run, prevContent)
-    : `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}]\n\n${prevContent}\n\n---\nYour turn. Respond according to your instructions.`
+    : [
+        `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}]`,
+        ``,
+        prevContent,
+        ``,
+        `---`,
+        `${actorLabel}, your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol. Use \`extend_phase()\` if you need more time.`,
+      ].join('\n')
   transport.sendOrQueue(sid, {
     type: 'notification',
     content: notification,
@@ -827,27 +858,68 @@ function notifyParticipant(run: ProtocolRun, sessionId: string, content: string)
 
 function notifyKickoff(run: ProtocolRun): void {
   const activeActor = run.protocol.phases[run.phase]?.actor
-  const activeRole = activeActor ? run.protocol.roles[activeActor] : 'unknown'
+  const activeRole = activeActor ? run.protocol.roles[activeActor] : undefined
+  const activeSid = activeActor ? run.participants.get(activeActor) : undefined
+  const activeName = activeSid ? registry.get(activeSid)?.tmuxName : undefined
 
   if (run.protocol.ownerKickoff) {
     const ownerIsActor = activeActor && run.participants.get(activeActor) === run.ownerSessionId
     if (ownerIsActor) {
       notifyParticipant(run, run.ownerSessionId, run.protocol.ownerKickoff(run.params))
+      return
     }
   }
 
-  const content = run.protocol.notifications.onKickoff?.(run)
-    ?? `[system] ${run.protocol.display} started — ${run.rounds} round${run.rounds > 1 ? 's' : ''}. ${activeRole} goes first.`
+  if (run.protocol.notifications.onKickoff) {
+    const content = run.protocol.notifications.onKickoff(run)
+    for (const [role, sid] of run.participants) {
+      if (role === activeActor) continue
+      notifyParticipant(run, sid, content)
+    }
+    return
+  }
+
+  const topic = run.params.topic as string | undefined
+  const ownerName = registry.get(run.ownerSessionId)?.tmuxName
+  const ownerRole = run.protocol.ownerRole
+  const ownerRoleLabel = ownerRole ? run.protocol.roles[ownerRole] : undefined
+
+  const lines: string[] = [
+    `[system] **${run.protocol.display}** — ${run.rounds} round${run.rounds > 1 ? 's' : ''}`,
+    ``,
+    `You are ${ownerRoleLabel ? `**${ownerRoleLabel}**` : 'the owner'}${ownerName ? ` (**${ownerName}**)` : ''}.`,
+  ]
+
+  if (activeName && activeRole) {
+    lines.push(`**${activeName}** was spawned as ${activeRole} and is reading the thread to orient.`)
+    if (topic) {
+      lines.push(`${activeRole} was given the following prompt: '${topic}'`)
+    }
+  }
+
+  lines.push(
+    ``,
+    `When their response is ready, you'll be notified with the full post and instructions on how to respond.`,
+  )
+
   for (const [role, sid] of run.participants) {
     if (role === activeActor) continue
-    notifyParticipant(run, sid, content)
+    notifyParticipant(run, sid, lines.join('\n'))
   }
 }
 
 function notifyPhaseChange(run: ProtocolRun, from: string, to: string): void {
   const activeActor = run.protocol.phases[to]?.actor
+  const activeSid = activeActor ? run.participants.get(activeActor) : undefined
+  const activeName = activeSid ? registry.get(activeSid)?.tmuxName : undefined
+  const roleLabel = activeActor ? run.protocol.roles[activeActor] : undefined
+
+  const actorDesc = activeName && roleLabel
+    ? `${activeName} (${roleLabel})`
+    : roleLabel ?? `Phase: ${to}`
+
   const content = run.protocol.notifications.onPhaseChange?.(run, from, to)
-    ?? `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}] ${activeActor ? `${run.protocol.roles[activeActor]} is working.` : `Phase: ${to}.`}`
+    ?? `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}] ${actorDesc} is working.`
   for (const [role, sid] of run.participants) {
     if (role === activeActor) continue
     notifyParticipant(run, sid, content)
@@ -935,6 +1007,16 @@ function resetTimeout(run: ProtocolRun): void {
       return
     }
     process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
+    if (actorSessionId) {
+      const actorInfo = registry.get(actorSessionId)
+      const actorName = actorInfo?.tmuxName
+      const namePrefix = actorName ? `**${actorName}**, phase` : `Phase`
+      transport.sendOrQueue(actorSessionId, {
+        type: 'notification',
+        content: `[system] ⏰ ${namePrefix} "${phase}" timed out. The protocol is advancing.`,
+        meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+      })
+    }
     await fireTransition(run, 'timeout', '', 'timed out')
   }, ms)
 

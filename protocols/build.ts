@@ -54,7 +54,7 @@ export default protocol('build', {
 
   ownerKickoff: (params) => {
     const task = params.task ?? params.topic ?? 'Begin implementing.'
-    return `[Build — starting]\n\n**Task:** ${task}\n\nYou are the builder. Implement the task, then call \`advance({ content: "your implementation summary" })\` when ready for review.`
+    return `[system] **Build** — starting\n\n**Task:** ${task}\n\nYou are the builder. Implement the task. When you're ready for review, you'll use \`advance()\` — you'll get full instructions when the time comes.`
   },
 
   summaryFormat: (run) => {
