@@ -28,7 +28,18 @@ export function formatDuration(ms: number): string {
 
 export function isAlive(info: { tmuxName: string; deadAt?: number }): boolean {
   if (info.deadAt) return false
-  return tmuxHasSession(info.tmuxName)
+  return sessionProcessAlive(info.tmuxName)
+}
+
+export function sessionProcessAlive(name: string): boolean {
+  try {
+    const result = execFileSync('tmux', ['display-message', '-t', name, '-p', '#{pane_dead}'], {
+      encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000,
+    }).trim()
+    return result === '0'
+  } catch {
+    return false
+  }
 }
 
 export function tmuxHasSession(name: string): boolean {
