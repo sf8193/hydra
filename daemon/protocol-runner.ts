@@ -807,9 +807,18 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   const sid = run.participants.get(actor)
   if (!sid) return
 
+  const actorName = registry.get(sid)?.tmuxName
+  const actorLabel = actorName ? `**${actorName}**` : 'You'
   const notification = run.protocol.turnNotification
     ? run.protocol.turnNotification(run, prevContent)
-    : `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}]\n\n${prevContent}\n\n---\nYour turn. Respond according to your instructions.`
+    : [
+        `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}]`,
+        ``,
+        prevContent,
+        ``,
+        `---`,
+        `${actorLabel}, your turn. Use \`advance({ content: "..." })\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol. Use \`extend_phase()\` if you need more time.`,
+      ].join('\n')
   transport.sendOrQueue(sid, {
     type: 'notification',
     content: notification,
@@ -827,20 +836,53 @@ function notifyParticipant(run: ProtocolRun, sessionId: string, content: string)
 
 function notifyKickoff(run: ProtocolRun): void {
   const activeActor = run.protocol.phases[run.phase]?.actor
-  const activeRole = activeActor ? run.protocol.roles[activeActor] : 'unknown'
+  const activeRole = activeActor ? run.protocol.roles[activeActor] : undefined
+  const activeSid = activeActor ? run.participants.get(activeActor) : undefined
+  const activeName = activeSid ? registry.get(activeSid)?.tmuxName : undefined
 
   if (run.protocol.ownerKickoff) {
     const ownerIsActor = activeActor && run.participants.get(activeActor) === run.ownerSessionId
     if (ownerIsActor) {
       notifyParticipant(run, run.ownerSessionId, run.protocol.ownerKickoff(run.params))
+      return
     }
   }
 
-  const content = run.protocol.notifications.onKickoff?.(run)
-    ?? `[system] ${run.protocol.display} started — ${run.rounds} round${run.rounds > 1 ? 's' : ''}. ${activeRole} goes first.`
+  if (run.protocol.notifications.onKickoff) {
+    const content = run.protocol.notifications.onKickoff(run)
+    for (const [role, sid] of run.participants) {
+      if (role === activeActor) continue
+      notifyParticipant(run, sid, content)
+    }
+    return
+  }
+
+  const topic = run.params.topic as string | undefined
+  const ownerName = registry.get(run.ownerSessionId)?.tmuxName
+  const ownerRole = run.protocol.ownerRole
+  const ownerRoleLabel = ownerRole ? run.protocol.roles[ownerRole] : undefined
+
+  const lines: string[] = [
+    `[system] **${run.protocol.display}** — ${run.rounds} round${run.rounds > 1 ? 's' : ''}`,
+    ``,
+    `You are ${ownerRoleLabel ? `**${ownerRoleLabel}**` : 'the owner'}${ownerName ? ` (**${ownerName}**)` : ''}.`,
+  ]
+
+  if (activeName && activeRole) {
+    lines.push(`**${activeName}** was spawned as ${activeRole} and is reading the thread to orient.`)
+    if (topic) {
+      lines.push(`${activeRole} was given the following prompt: '${topic}'`)
+    }
+  }
+
+  lines.push(
+    ``,
+    `When their response is ready, you'll be notified with the full post and instructions on how to respond.`,
+  )
+
   for (const [role, sid] of run.participants) {
     if (role === activeActor) continue
-    notifyParticipant(run, sid, content)
+    notifyParticipant(run, sid, lines.join('\n'))
   }
 }
 
