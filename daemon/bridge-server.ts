@@ -7,7 +7,7 @@ import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
 import { spawnModel } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
-import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
+import { discoverClaudeSessionId, killSession, tryRespawnPane } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import { getToolsForSession, isToolAllowed } from './tool-surface.js'
@@ -419,6 +419,8 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
   if (!info) return
 
   if (!sessionProcessAlive(info.tmuxName)) {
+    if (await tryRespawnPane(info)) return
+
     // Read the pane tail once, for the autopsy — which goes to the daemon log
     // (PRESERVE, hardware-only). The channel gets a LINK to the log, never the bytes.
     let tail: string[] = []

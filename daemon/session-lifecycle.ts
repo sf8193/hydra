@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { safeSend, formatSpawnLine, tmuxHasSession, sessionProcessAlive } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -936,6 +936,36 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 // ---------------------------------------------------------------------------
 
 export const HEALTH_TIMEOUT_MS = 30_000
+const RESPAWN_PANE_TIMEOUT_MS = 10_000
+
+export async function tryRespawnPane(info: SessionInfo): Promise<boolean> {
+  if (!info.claudeSessionId) return false
+  if (sessionProcessAlive(info.tmuxName)) return false
+  if (!tmuxHasSession(info.tmuxName)) return false
+
+  const model = info.sessionMetadata?.model ?? 'claude-opus-4-6[1m]'
+  const channelFlag = `plugin:discord:${SOCK_PATH}`
+  const cmd = [
+    ...buildSpawnEnv(info.sessionId, info.tmuxName),
+    `claude --resume ${shq(info.claudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions`,
+  ].join(' && ')
+
+  process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: attempting in-place recovery\n`)
+  try {
+    execSync(`tmux respawn-pane -k -t ${shq(info.tmuxName)} ${shq(cmd)}`, { stdio: 'pipe', timeout: 5000 })
+  } catch (err) {
+    process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: failed: ${err instanceof Error ? err.message : String(err)}\n`)
+    return false
+  }
+
+  const ok = await waitForBridge(info.sessionId, RESPAWN_PANE_TIMEOUT_MS)
+  if (ok) {
+    process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: bridge reconnected — recovery successful\n`)
+    return true
+  }
+  process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: bridge did not reconnect within ${RESPAWN_PANE_TIMEOUT_MS / 1000}s — falling through\n`)
+  return false
+}
 
 export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boolean> {
   return new Promise(resolve => {
