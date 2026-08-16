@@ -24,7 +24,7 @@ describe('getTemplate', () => {
     expect(t!.prompt).toContain('senior tech lead')
     expect(t!.disallowedTools).toContain('Edit')
     expect(t!.disallowedTools).toContain('Write')
-    expect(t!.allowMainTools).toBe(true)
+    expect(t!.sessionType).toBe('master_orchestrator')
   })
 
   test('returns null for unknown template', () => {
@@ -46,7 +46,7 @@ describe('getTemplate', () => {
   test('is case-insensitive — "FACTORY" finds factory', () => {
     const t = getTemplate('FACTORY')
     expect(t).not.toBeNull()
-    expect(t!.allowMainTools).toBe(true)
+    expect(t!.sessionType).toBe('master_orchestrator')
   })
 })
 
@@ -213,10 +213,10 @@ describe('buildTemplateSpawnOpts', () => {
     expect((opts.disallowedTools as string[])).toContain('Write')
   })
 
-  test('factory template includes allowMainTools=true', () => {
+  test('factory template includes sessionType=master_orchestrator', () => {
     const t = getTemplate('factory')!
     const opts = buildTemplateSpawnOpts('factory', t)
-    expect(opts.allowMainTools).toBe(true)
+    expect(opts.sessionType).toBe('master_orchestrator')
   })
 
   test('non-factory template does not include disallowedTools', () => {
@@ -225,10 +225,10 @@ describe('buildTemplateSpawnOpts', () => {
     expect(opts.disallowedTools).toBeUndefined()
   })
 
-  test('non-factory template does not include allowMainTools', () => {
+  test('non-factory template does not include sessionType', () => {
     const t = getTemplate('review')!
     const opts = buildTemplateSpawnOpts('review', t)
-    expect(opts.allowMainTools).toBeUndefined()
+    expect(opts.sessionType).toBeUndefined()
   })
 
   test('promptPrefix matches template prompt', () => {

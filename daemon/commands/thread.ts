@@ -47,7 +47,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     return
   }
 
-  const forkModel = model ?? info.capabilities?.model
+  const forkModel = model ?? info.sessionMetadata?.model
 
   // No claudeSessionId → skip fork, spawn session that reads the parent thread
   if (!info.claudeSessionId) {
@@ -223,7 +223,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   const lastSession = thread.sessionHistory[thread.sessionHistory.length - 1]
   const claudeSessionId = lastSession?.claudeSessionId
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
-  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.capabilities?.model
+  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.sessionMetadata?.model
 
   void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
 
@@ -303,7 +303,7 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   const lastSession = thread?.sessionHistory[thread.sessionHistory.length - 1]
   const resolvedTopic = topic || thread?.topic || 'respawned session'
   const resurrectFrom = lastSession?.tmuxName
-  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.capabilities?.model
+  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.sessionMetadata?.model
 
   // A template respawn layers the template's prompt/tool settings onto the
   // resurrect spawn. `trigger` is kept so the session's origin still reads as the
@@ -411,7 +411,7 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
     emit('session:death', {
       sessionId,
       threadId,
-      wasOwner: !info.isJoinMember,
+      wasOwner: info.sessionType !== 'thread_guest',
       tmuxName: info.tmuxName,
     })
   }

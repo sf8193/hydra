@@ -1,48 +1,17 @@
 // No daemon-internal imports — this module breaks the session-lifecycle ↔ bridge-dispatch cycle.
 //
-// Session tiers and tool access:
-//   master orchestrator — the primary session (reads channel, spawns workers, fleet tools)
-//   thread owner        — a session with its own thread (does the work)
-//   thread participant  — a session joined to another's thread (protocol critic, builder)
-//
-// MASTER_ORCHESTRATOR_ONLY_TOOLS lives in shared/constants.ts — import from there, not here.
-import { MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../shared/constants.js'
+// Tool access is determined by session type (base set) + capabilities (dynamic addons).
+// Definitions live in shared/tool-definitions.ts. Name sets live in shared/constants.ts.
+import { BASE_TOOLS, CAPABILITY_TOOLS } from '../shared/constants.js'
+import type { SessionType, Capability, ToolName } from '../shared/constants.js'
+import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 
-export const UNIVERSAL_TOOLS = Object.freeze([
-  { name: 'reply', description: 'Reply in chat. Pass chat_id from the inbound message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, text: { type: 'string' }, reply_to: { type: 'string', description: 'Message ID to thread under.' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['chat_id', 'text'] } },
-  { name: 'react', description: 'Add an emoji reaction to a message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, emoji: { type: 'string' } }, required: ['chat_id', 'message_id', 'emoji'] } },
-  { name: 'edit_message', description: 'Edit a message the bot previously sent.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, text: { type: 'string' } }, required: ['chat_id', 'message_id', 'text'] } },
-  { name: 'delete_message', description: 'Delete a message. Bot can delete its own messages; in DMs the bot can also delete user messages.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' } }, required: ['chat_id', 'message_id'] } },
-  { name: 'download_attachment', description: 'Download attachments from a message.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' } }, required: ['chat_id', 'message_id'] } },
-  { name: 'create_thread', description: 'Create a thread in a channel.', inputSchema: { type: 'object', properties: { chat_id: { type: 'string' }, message_id: { type: 'string' }, name: { type: 'string' }, text: { type: 'string' }, auto_archive_minutes: { type: 'number' }, files: { type: 'array', items: { type: 'string' } } }, required: ['chat_id', 'name'] } },
-  { name: 'fetch_messages', description: 'Fetch recent messages from a channel.', inputSchema: { type: 'object', properties: { channel: { type: 'string' }, limit: { type: 'number' } }, required: ['channel'] } },
-  { name: 'spawn_session', description: 'Spawn a new Claude session. Pass worktree with a repo directory name (e.g. "options_bot") to spawn in an isolated git worktree. Set headless=true to skip thread creation (worker reports back via send_to_thread).', inputSchema: { type: 'object', properties: { topic: { type: 'string' }, chat_id: { type: 'string' }, message_id: { type: 'string' }, worktree: { type: 'string', description: 'Git repo subdirectory to create a worktree from (e.g. "options_bot", "anytester"). Session gets an isolated copy.' }, model: { type: 'string', description: 'Model ID for this spawn (overrides HYDRA_MODEL).' }, phase_budget: { type: 'string', description: 'Max session lifetime, e.g. "90s", "20m", "1h". At the deadline the session is told to checkpoint; 5 minutes later it is reaped.' }, headless: { type: 'boolean', description: 'Skip thread creation. Worker communicates via send_to_thread to parent.' }, read_thread: { type: ['boolean', 'number'], description: 'Inject fetch_messages on the parent thread before the worker starts. Pass true for default limit (50) or a number (10-100) for a custom limit. No-op if the spawner has no thread.' } }, required: ['topic'] } },
-  { name: 'list_sessions', description: 'List all active sessions with name, context %, messages, and status.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'send_to_thread', description: 'Send a typed message to another session\'s thread. Every message must declare its type: progress (status update), question (needs input), or result (final deliverable).', inputSchema: { type: 'object', properties: { target: { type: 'string', description: 'Session name (e.g. "cedar"). Use list_sessions to discover names.' }, type: { type: 'string', enum: ['progress', 'question', 'result'], description: 'Message type: progress (status update), question (needs input from recipient), result (final deliverable).' }, text: { type: 'string' }, files: { type: 'array', items: { type: 'string' }, description: 'Absolute file paths to attach.' } }, required: ['target', 'type', 'text'] } },
-  { name: 'peek_session', description: 'Read the last N lines of a child session\'s terminal output. Restricted to sessions you spawned (or all sessions for main). Non-intrusive — the target is not notified.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'Session name (tmux session name, e.g. "cedar").' }, lines: { type: 'number', description: 'Lines to capture (default 50, max 500).' } }, required: ['name'] } },
-  { name: 'kill_session', description: 'Kill a session by ID or thread ID. Main session only.', inputSchema: { type: 'object', properties: { session_id: { type: 'string' }, thread_id: { type: 'string' } } } },
-  { name: 'factory_build', description: 'Async build→review cycle. Returns a ticket immediately. By default forks your session (builder inherits context). Pass fresh=true to spawn without fork (saves context when PM is near limit). After review, use factory_accept/retry/abandon.', inputSchema: { type: 'object', properties: { spec: { type: 'string', description: 'What to build — precise spec with files, types, acceptance criteria.' }, difficulty: { type: 'string', enum: ['easy', 'medium', 'hard'], description: 'Model ladder. easy: sonnet→opus. medium: opus→opus-4-8. hard: opus-5→fable.' }, builder_model: { type: 'string', description: 'Override builder model.' }, reviewer_model: { type: 'string', description: 'Override reviewer model.' }, review_rounds: { type: 'number', description: 'Adversarial review rounds (default 3).' }, worktree: { type: ['string', 'boolean'], description: 'Worktree isolation. Pass true to auto-detect the repo from your CWD, a path relative to SPAWN_CWD (e.g. "Documents/hydra"), or false/omit for no isolation. Call factory_status to see valid targets.' }, fresh: { type: 'boolean', description: 'Spawn fresh builder without forking PM context. Builder has no conversation history — write a detailed spec with file paths and context. Use when PM context is large.' } }, required: ['spec'] } },
-  { name: 'factory_retry', description: 'Send new instructions to an existing builder after review completes. Builder stays alive with full context and re-enters build→review. Only works in "awaiting_pm" phase.', inputSchema: { type: 'object', properties: { ticket: { type: 'string', description: 'Factory ticket ID (e.g. "fb-3-a1b2").' }, instructions: { type: 'string', description: 'What to fix — the builder already has full context from the prior build + review.' } }, required: ['ticket', 'instructions'] } },
-  { name: 'factory_accept', description: 'Accept a completed build. Kills the builder. Only works in "awaiting_pm" phase. Requires allow_unreviewed=true if the build was not adversarially reviewed.', inputSchema: { type: 'object', properties: { ticket: { type: 'string', description: 'Factory ticket ID.' }, allow_unreviewed: { type: 'boolean', description: 'Required if the build was not adversarially reviewed (review failed or cancelled).' } }, required: ['ticket'] } },
-  { name: 'factory_abandon', description: 'Abandon a build. Kills the builder. Works in any phase.', inputSchema: { type: 'object', properties: { ticket: { type: 'string', description: 'Factory ticket ID.' }, reason: { type: 'string', description: 'Why this build is being abandoned.' } }, required: ['ticket', 'reason'] } },
-  { name: 'factory_status', description: 'Get status of your factory builds — ticket, phase, elapsed, builder name.', inputSchema: { type: 'object', properties: { ticket: { type: 'string', description: 'Specific ticket (optional — omit for all builds).' } } } },
-  { name: 'factory_review', description: 'Run adversarial review on an existing session without a full build cycle. Use to re-review work or review non-factory sessions.', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'Session name to review (e.g. "cedar").' }, topic: { type: 'string', description: 'What to review — focus area for the critic.' }, reviewer_model: { type: 'string', description: 'Override reviewer model.' }, review_rounds: { type: 'number', description: 'Number of review rounds (default 3).' } }, required: ['name'] } },
-  { name: 'set_description', description: 'Set a brief description for your session.', inputSchema: { type: 'object', properties: { session_id: { type: 'string' }, description: { type: 'string' } }, required: ['session_id', 'description'] } },
-  { name: 'watch_pr', description: 'Watch a GitHub PR for new comments/reviews. The daemon polls every 3 min and delivers new feedback to your thread for triage. Omit pr_url to auto-detect from the current branch.', inputSchema: { type: 'object', properties: { pr_url: { type: 'string', description: 'Full GitHub PR URL. Omit to auto-detect from current branch via gh pr view.' }, chat_id: { type: 'string', description: 'Thread to deliver feedback to (defaults to your session thread)' } } } },
-  { name: 'unwatch_pr', description: 'Stop watching a GitHub PR.', inputSchema: { type: 'object', properties: { pr_url: { type: 'string' } }, required: ['pr_url'] } },
-  { name: 'list_watches', description: 'List all PRs being watched (your session or all).', inputSchema: { type: 'object', properties: { all: { type: 'boolean', description: 'Show all watches, not just yours' } } } },
-  { name: 'advance', description: 'Post your protocol deliverable and advance the phase. Content is posted to the thread; the protocol transition fires atomically. For phases that require a structured choice (e.g. approve/request_changes), include verdict.', inputSchema: { type: 'object', properties: { content: { type: 'string', description: 'Your deliverable — posted to the thread verbatim.' }, verdict: { type: 'string', description: 'Structured choice (e.g. "approve", "request_changes", "done"). Required when the phase declares verdict: required; optional when verdict: optional; rejected when verdict: none.' } }, required: ['content'] } },
-  { name: 'extend_phase', description: 'Request more time in the current protocol phase. Resets the idle timeout. Use when you need more time to complete your work (e.g. reading a large codebase). The daemon posts a status update to the thread.', inputSchema: { type: 'object', properties: { reason: { type: 'string', description: 'Why you need more time — shown in the thread status.' }, minutes: { type: 'number', description: 'Additional minutes requested (default: 5, max: 15).' } }, required: ['reason'] } },
-  { name: 'factory_done', description: 'Signal that your factory build is complete. Triggers mandatory adversarial review — you will defend your implementation as the review owner. Call this instead of posting [done] as text.', inputSchema: { type: 'object', properties: { files_changed: { type: 'array', items: { type: 'string' }, description: 'List of files created or modified.' }, test_results: { type: 'string', description: 'Test output summary (e.g. "1388 pass, 0 fail").' }, rationale: { type: 'string', description: 'Key design decisions and why.' }, known_issues: { type: 'string', description: 'Anything you are unsure about or that needs attention.' }, branch: { type: 'string', description: 'Branch name (for worktree builds).' } }, required: ['files_changed', 'test_results'] } },
-].map(t => Object.freeze(t)))
+export { UNIVERSAL_TOOLS }
 
-export const PROTOCOL_ONLY_TOOLS = new Set(['advance', 'extend_phase'])
-export const FACTORY_ONLY_TOOLS = new Set(['factory_done'])
-const SCOPED_TOOLS = new Set([...PROTOCOL_ONLY_TOOLS, ...FACTORY_ONLY_TOOLS])
-
-// Protocol guests get a minimal tool set to stay below CC's deferred-tool threshold.
-// With 25 tools, CC defers most of them — including advance, which the guest exists to call.
-const GUEST_TOOLS = new Set(['advance', 'extend_phase', 'reply', 'fetch_messages', 'react', 'edit_message', 'download_attachment', 'set_description'])
+export type ToolOverrides = {
+  descriptions?: Partial<Record<ToolName, string>>
+  inputSchemas?: Partial<Record<ToolName, object>>
+}
 
 export function defaultToolDescription(name: string): string {
   const tool = UNIVERSAL_TOOLS.find(t => t.name === name)
@@ -50,16 +19,18 @@ export function defaultToolDescription(name: string): string {
   return tool.description
 }
 
-export function computeToolsForSession(sessionId: string, opts?: { allowMainTools?: boolean; scopedToolOverrides?: Record<string, string>; isGuest?: boolean }): typeof UNIVERSAL_TOOLS {
-  if (sessionId === 'main' || opts?.allowMainTools) return UNIVERSAL_TOOLS.filter(t => !FACTORY_ONLY_TOOLS.has(t.name))
-  const filtered = UNIVERSAL_TOOLS.filter(t => !MASTER_ORCHESTRATOR_ONLY_TOOLS.has(t.name))
-  if (!opts?.scopedToolOverrides) return filtered.filter(t => !SCOPED_TOOLS.has(t.name))
-  const overrides = opts.scopedToolOverrides
-  const base = opts.isGuest
-    ? filtered.filter(t => GUEST_TOOLS.has(t.name))
-    : filtered.filter(t => !SCOPED_TOOLS.has(t.name) || t.name in overrides)
-  return base.map(t => {
-    const desc = overrides[t.name]
-    return desc ? { ...t, description: desc } : { ...t } // shallow-copy: source objects are frozen
+export function computeToolsForSession(type: SessionType, capabilities: Set<Capability>, overrides?: ToolOverrides): typeof UNIVERSAL_TOOLS {
+  const allowed = new Set(BASE_TOOLS[type])
+  for (const cap of capabilities) {
+    const extra = CAPABILITY_TOOLS[cap]
+    if (extra) for (const t of extra) allowed.add(t)
+  }
+  const tools = UNIVERSAL_TOOLS.filter(t => allowed.has(t.name))
+  if (!overrides?.descriptions && !overrides?.inputSchemas) return tools
+  return tools.map(t => {
+    const desc = overrides.descriptions?.[t.name]
+    const schema = overrides.inputSchemas?.[t.name]
+    if (!desc && !schema) return t
+    return { ...t, ...(desc ? { description: desc } : {}), ...(schema ? { inputSchema: schema } : {}) }
   })
 }

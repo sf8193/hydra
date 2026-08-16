@@ -712,7 +712,7 @@ describe('probeAllSessions', () => {
     const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
     addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
     const info = registryEntries.get('s1')!
-    info.isFactoryBuilder = true
+    info.sessionType = 'factory_builder'
     info.factoryPhase = 'building'
     info.sessionId = 's1'
     connectedSessions.add('s1')
@@ -735,7 +735,7 @@ describe('probeAllSessions', () => {
     const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
     addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
     const info = registryEntries.get('s1')!
-    info.isFactoryBuilder = true
+    info.sessionType = 'factory_builder'
     info.factoryPhase = 'building'
     info.sessionId = 's1'
     info.factoryPmThreadId = 'pm-thread'

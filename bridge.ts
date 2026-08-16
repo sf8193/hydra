@@ -119,7 +119,7 @@ let socketReady = false
 // ── Dynamic tool list (updated on daemon registration) ────────────────
 
 let dynamicTools: Array<Record<string, unknown>> | null = null
-let sessionCapabilities: Record<string, unknown> | null = null
+let sessionMetadata: Record<string, unknown> | null = null
 
 // ── Socket connection ──────────────────────────────────────────────────
 
@@ -145,10 +145,10 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       process.stderr.write(`bridge: registered as session ${msg.sessionId}\n`)
       socketReady = true
 
-      const caps = msg.capabilities as Record<string, unknown> | undefined
-      if (caps) {
-        sessionCapabilities = caps
-        process.stderr.write(`bridge: capabilities received: role=${caps.role}\n`)
+      const meta = msg.sessionMetadata as Record<string, unknown> | undefined
+      if (meta) {
+        sessionMetadata = meta
+        process.stderr.write(`bridge: session metadata received: role=${meta.role}\n`)
       }
 
       // Update tool list if daemon sent one (dynamic tool refresh)
@@ -354,7 +354,7 @@ mcp.setNotificationHandler(
 
 const SESSION_INFO_TOOL = {
   name: 'get_session_info',
-  description: 'Get information about this session: role, available tools, model, working directory, platform. Use this to understand your own capabilities.',
+  description: 'Get session metadata: role, available tools, model, working directory, platform.',
   inputSchema: { type: 'object' as const, properties: {} },
 }
 
@@ -384,7 +384,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         type: 'text',
         text: JSON.stringify({
           session_id: SESSION_ID,
-          capabilities: sessionCapabilities ?? {
+          sessionMetadata: sessionMetadata ?? {
             role: IS_MAIN ? 'main' : 'worker',
             tools: [],
             model: 'unknown',

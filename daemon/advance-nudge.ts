@@ -4,7 +4,7 @@
 // signal: tool choice instead of first-line tag.
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
-import { isActiveActor, resolveScopedToolOverrides } from './protocol-registry.js'
+import { hasProtocolContext } from './protocol-registry.js'
 
 const SUBSTANTIAL_LENGTH = 200
 const NUDGE_COOLDOWN_MS = 60_000
@@ -17,20 +17,21 @@ export function maybeNudgeMissingAdvance(
   now: number = Date.now(),
 ): boolean {
   if (text.length < SUBSTANTIAL_LENGTH) return false
-  if (!isActiveActor(sessionId, chatId)) return false
+  if (!hasProtocolContext(sessionId)) return false
+  const info = registry.get(sessionId)
+  if (!info || chatId !== info.threadId) return false
 
   const cooldownKey = `${sessionId}:${chatId}`
   const last = lastNudgeAt.get(cooldownKey) ?? 0
   if (now - last < NUDGE_COOLDOWN_MS) return false
   lastNudgeAt.set(cooldownKey, now)
 
-  const overrides = resolveScopedToolOverrides(sessionId, chatId)
-  const advancePattern = overrides?.advance
+  const advancePattern = info.toolDescriptions?.advance
   const descLine = advancePattern
     ? `If that was your deliverable, repost using \`${advancePattern}\`.`
     : `If that was your deliverable, repost using \`advance({ content: "..." })\`.`
 
-  const name = registry.get(sessionId)?.tmuxName ?? sessionId
+  const name = info.tmuxName ?? sessionId
   process.stderr.write(`daemon: liveness: ${name} posted ${text.length} chars via reply() without advance(), nudging\n`)
   transport.sendOrQueue(sessionId, {
     type: 'notification',

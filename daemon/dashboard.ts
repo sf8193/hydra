@@ -32,7 +32,7 @@ type SessionRow = {
   contextLinks: string[]
   artifacts: string[]
   originType?: string
-  isFactoryBuilder?: boolean
+  sessionType: string
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -62,7 +62,7 @@ function getActiveSessions(): SessionRow[] {
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
       originType: s.originType,
-      isFactoryBuilder: s.isFactoryBuilder,
+      sessionType: s.sessionType,
     })
   }
 
@@ -105,7 +105,7 @@ function escapeMrkdwn(text: string): string {
 }
 
 function buildOriginBadge(s: SessionRow): string {
-  if (s.isFactoryBuilder) return 'factory'
+  if (s.sessionType === 'factory_builder') return 'factory'
   if (s.originType === 'fork') return 'fork'
   if (s.originType === 'handoff') return 'handoff'
   if (s.originType === 'resurrect') return 'resurrect'

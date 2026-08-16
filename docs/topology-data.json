@@ -81,6 +81,12 @@
       "desc": "DEFAULT_MODEL, isKnownModel, spawnModel(), MODEL_ALIASES"
     },
     {
+      "id": "shared_tool-definitions",
+      "label": "shared/tool-definitions.ts",
+      "layer": "shared",
+      "desc": "UNIVERSAL_TOOLS — frozen tool objects (name, description, inputSchema)"
+    },
+    {
       "id": "daemon_config",
       "label": "daemon/config.ts",
       "layer": "core",
@@ -108,7 +114,13 @@
       "id": "daemon_bridge-tools",
       "label": "daemon/bridge-tools.ts",
       "layer": "tools",
-      "desc": "UNIVERSAL_TOOLS, MASTER_ORCHESTRATOR_ONLY_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
+      "desc": "UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)"
+    },
+    {
+      "id": "daemon_tool-surface",
+      "label": "daemon/tool-surface.ts",
+      "layer": "tools",
+      "desc": "getToolsForSession, pushToolSurface — reads SessionInfo, bridges to bridge-tools"
     },
     {
       "id": "daemon_bridge-dispatch",
@@ -361,12 +373,20 @@
       "shared_constants"
     ],
     [
+      "shared_constants",
+      "shared_tool-definitions"
+    ],
+    [
       "daemon_sessions",
       "daemon_config"
     ],
     [
       "daemon_sessions",
       "daemon_util"
+    ],
+    [
+      "daemon_sessions",
+      "shared_constants"
     ],
     [
       "daemon_bridge-transport",
@@ -386,6 +406,26 @@
     ],
     [
       "daemon_bridge-tools",
+      "shared_constants"
+    ],
+    [
+      "daemon_bridge-tools",
+      "shared_tool-definitions"
+    ],
+    [
+      "daemon_tool-surface",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_tool-surface",
+      "daemon_bridge-transport"
+    ],
+    [
+      "daemon_tool-surface",
+      "daemon_bridge-tools"
+    ],
+    [
+      "daemon_tool-surface",
       "shared_constants"
     ],
     [
@@ -466,6 +506,10 @@
     ],
     [
       "daemon_bridge-server",
+      "daemon_tool-surface"
+    ],
+    [
+      "daemon_bridge-server",
       "daemon_advance-nudge"
     ],
     [
@@ -494,7 +538,7 @@
     ],
     [
       "daemon_protocol-registry",
-      "daemon_bridge-tools"
+      "daemon_sessions"
     ],
     [
       "daemon_permission",

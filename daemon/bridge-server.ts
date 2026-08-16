@@ -5,11 +5,12 @@ import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
-import { spawnModel, MASTER_ORCHESTRATOR_ONLY_TOOLS } from '../shared/constants.js'
+import { spawnModel } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
-import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect, toolsForSession } from './protocol-registry.js'
+import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
+import { getToolsForSession, isToolAllowed } from './tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { maybeNudgeMissingAdvance } from './advance-nudge.js'
 import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from './reply-guard.js'
@@ -232,13 +233,13 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       }
 
       transport.set(sessionId, conn)
-      const tools = toolsForSession(sessionId, { allowMainTools: info?.allowMainTools, chatId: info?.threadId })
+      const tools = getToolsForSession(sessionId)
       transport.sendToBridge(conn, {
         type: 'registered',
         sessionId,
         tools,
         platform: PLATFORM,
-        capabilities: info?.capabilities ?? {
+        sessionMetadata: info?.sessionMetadata ?? {
           role: sessionId === 'main' ? 'main' : 'worker',
           tools: tools.map(t => t.name),
           model: spawnModel(),
@@ -251,7 +252,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       notePendingFromQueue(sessionId, transport.messageQueues.get(sessionId))
       transport.flushQueue(sessionId)
       dispatchReconnect(sessionId)
-      if (info && !info.isJoinMember) refreshSessionVisual(info.threadId)
+      if (info && info.sessionType !== 'thread_guest') refreshSessionVisual(info.threadId)
       if (sessionId === 'main') {
         const r = mainBridge.connect(mainHadOtherIncumbent, Date.now())
         if (r.kind === 'first') process.stderr.write('daemon: main bridge connected\n')
@@ -268,11 +269,11 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     case 'tool_call': {
       const { id, name, args } = msg as { id: string; name: string; args: Record<string, unknown> }
 
-      if (MASTER_ORCHESTRATOR_ONLY_TOOLS.has(name) && conn.sessionId !== 'main') {
+      if (!isToolAllowed(conn.sessionId ?? '', name)) {
         transport.sendToBridge(conn, {
           type: 'tool_result',
           id,
-          content: [{ type: 'text', text: `${name} is only available to the main session` }],
+          content: [{ type: 'text', text: `${name} is not available to this session` }],
           isError: true,
         })
         return

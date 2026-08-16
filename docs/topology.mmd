@@ -11,6 +11,7 @@ graph TD
 
   subgraph shared["Shared"]
     shared_constants["constants.ts"]
+    shared_tool-definitions["tool-definitions.ts"]
   end
 
   subgraph core["Core"]
@@ -22,6 +23,7 @@ graph TD
 
   subgraph tools["Tools"]
     daemon_bridge-tools["bridge-tools.ts"]
+    daemon_tool-surface["tool-surface.ts"]
     daemon_bridge-dispatch["bridge-dispatch.ts"]
   end
 
@@ -86,13 +88,20 @@ graph TD
   daemon --> daemon_util
   daemon --> daemon_session-health
   cli_hydra --> shared_constants
+  shared_constants --> shared_tool-definitions
   daemon_sessions --> daemon_config
   daemon_sessions --> daemon_util
+  daemon_sessions --> shared_constants
   daemon_bridge-transport --> daemon_config
   daemon_bridge-transport --> daemon_sessions
   daemon_bridge-transport --> daemon_util
   daemon_util --> daemon_config
   daemon_bridge-tools --> shared_constants
+  daemon_bridge-tools --> shared_tool-definitions
+  daemon_tool-surface --> daemon_sessions
+  daemon_tool-surface --> daemon_bridge-transport
+  daemon_tool-surface --> daemon_bridge-tools
+  daemon_tool-surface --> shared_constants
   daemon_bridge-dispatch --> daemon_config
   daemon_bridge-dispatch --> daemon_sessions
   daemon_bridge-dispatch --> daemon_bridge-transport
@@ -112,6 +121,7 @@ graph TD
   daemon_bridge-server --> daemon_session-lifecycle
   daemon_bridge-server --> daemon_access
   daemon_bridge-server --> daemon_protocol-registry
+  daemon_bridge-server --> daemon_tool-surface
   daemon_bridge-server --> daemon_advance-nudge
   daemon_bridge-server --> daemon_reply-guard
   daemon_bridge-server --> daemon_anchor-state
@@ -119,7 +129,7 @@ graph TD
   daemon_bridge-server --> daemon_pr-watch
   daemon_bridge-server --> daemon_main-guard
   daemon_bridge-server --> daemon_util
-  daemon_protocol-registry --> daemon_bridge-tools
+  daemon_protocol-registry --> daemon_sessions
   daemon_permission --> daemon_bridge-transport
   daemon_permission --> daemon_access
   daemon_cli-handler --> daemon_sessions

@@ -263,7 +263,7 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
   const lines = [
     `daemon: ═══ AUTOPSY ${info.tmuxName} ═══`,
     `  reason: ${reason}`,
-    `  hydra=${info.sessionId} claude=${info.claudeSessionId ?? '?'} model=${info.capabilities?.model ?? '?'}`,
+    `  hydra=${info.sessionId} claude=${info.claudeSessionId ?? '?'} model=${info.sessionMetadata?.model ?? '?'}`,
     `  context: ${info.topic}`,
     `  transcript: ${transcript ?? 'not found'}`,
     `  pane-log: ${info.spawnLogPath ?? 'none'}`,

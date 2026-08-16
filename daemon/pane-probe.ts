@@ -625,7 +625,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
       // factory builder that hasn't completed. Nudge via bridge notification.
       if (idleSec >= BUILDER_IDLE_NUDGE_S) {
         const info = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
-        if (info?.isFactoryBuilder && info.factoryPhase === 'building') {
+        if (info?.sessionType === 'factory_builder' && info.factoryPhase === 'building') {
           nudgeIdleBuilder(info, idleSec, t)
         }
       }
