@@ -240,6 +240,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• ☠️ `kill session: <name>` — terminate a named session',
     '',
     '**Thread** (inside a session thread):',
+    '• ⌨️ `keys <text>` — type text + Enter into the session (CC slash commands, etc.)',
     '• ⚡ `! <message>` — interrupt current work, then deliver',
     '• 🍴 `fork` / `fork: <focus>` / `fork <model>: <focus>` — fork with optional model override',
     '• 🍽️ `forks` — list forks from this thread',
