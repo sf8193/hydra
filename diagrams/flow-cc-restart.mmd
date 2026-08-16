@@ -1,0 +1,65 @@
+sequenceDiagram
+    participant cc as CC process
+    participant shell as Shell loop<br/>(while true)
+    participant tmux as tmux session<br/>(remain-on-exit on)
+    participant bridge as Bridge (UDS)
+    participant daemon as Daemon<br/>(onRunDisconnect)
+
+    Note over shell,tmux: Non-fork spawn wraps CC in a while-true loop.<br/>remain-on-exit keeps tmux alive after pane death.<br/>isAlive uses sessionProcessAlive (pane_dead), not tmuxHasSession.
+
+    rect rgb(40, 60, 40)
+        Note over cc,bridge: Normal operation
+        cc->>bridge: connected
+        bridge->>daemon: bridge registered
+    end
+
+    rect rgb(60, 40, 40)
+        Note over cc,daemon: CC self-exit — pane survives (shell loop catches)
+        cc->>cc: [uds-messaging] Shutting down
+        cc->>shell: exit code 1
+        cc-->>bridge: socket closes
+        bridge->>daemon: bridge disconnected
+        daemon->>daemon: start 15s timer
+        shell->>shell: write exit marker + restart log
+        shell->>shell: sleep 2
+        shell->>cc: exec claude --resume (with tool flags)
+        cc->>bridge: reconnects
+        bridge->>daemon: bridge registered
+        daemon->>daemon: onRunReconnect → re-prompt active actor
+    end
+
+    rect rgb(80, 40, 40)
+        Note over cc,daemon: CC self-exit — pane destroyed (EIO teardown)
+        cc->>cc: [uds-messaging] Shutting down
+        cc->>tmux: EIO: terminal destroyed
+        Note over tmux: Pane dead, session retained (remain-on-exit)
+        cc-->>bridge: socket closes
+        bridge->>daemon: bridge disconnected
+        daemon->>daemon: start 15s timer
+        Note over daemon: 15s timer fires
+        daemon->>daemon: isAlive? → sessionProcessAlive → pane_dead=1 → false
+        daemon->>daemon: resumeParticipant (with tool flags + re-prompt)
+        Note over tmux: Dead pane cleaned up by new spawn
+    end
+
+    rect rgb(40, 40, 60)
+        Note over bridge,daemon: Transient bridge disconnect (CC alive)
+        bridge->>daemon: bridge disconnected
+        daemon->>daemon: start 15s timer
+        Note over daemon: 15s timer fires
+        daemon->>daemon: isAlive? → sessionProcessAlive → pane_dead=0 → true
+        daemon->>daemon: "tmux alive, rechecking in 15s"
+        Note over daemon: recheck timer fires
+        alt bridge reconnected
+            daemon->>daemon: transport.has → true → cancel timer
+        else still disconnected
+            daemon->>daemon: startGraceTimer → cancelRun after grace
+        end
+    end
+
+    rect rgb(60, 60, 40)
+        Note over daemon: Daemon kills session
+        daemon->>tmux: tmux kill-session
+        tmux->>shell: SIGHUP
+        Note over shell: Shell dies immediately<br/>(no trap, no restart)
+    end

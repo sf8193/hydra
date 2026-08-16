@@ -1,8 +1,8 @@
+import { execFileSync } from 'child_process'
 import { gateway } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
@@ -39,9 +39,10 @@ export type ProtocolRun<Ext extends Record<string, unknown> = Record<string, unk
   _totalTimeout?: ReturnType<typeof setTimeout>
   _extensions: number
   _phaseStartedAt: number
-  _resumeAttempts?: number
+  _resumeAttempts: Map<string, number>  // keyed by role, not sessionId
   _keepaliveTimer?: ReturnType<typeof setInterval>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
+  _disconnectGen: Map<string, number>
   decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
   strike: boolean
   statusHistory: string[]
@@ -53,7 +54,9 @@ const MAX_EXTENSIONS_PER_PHASE = 2
 const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
 const KEEPALIVE_INTERVAL_MS = 30_000
-const KEEPALIVE_ENABLED = process.env.HYDRA_KEEPALIVE !== '0'
+const MAX_RESUME_ATTEMPTS = 5
+const DISCONNECT_WAIT_MS = 15_000
+function keepaliveEnabled(): boolean { return process.env.HYDRA_KEEPALIVE === '1' }
 
 const runs = new Map<string, ProtocolRun>()
 const threadToRun = new Map<string, string>()
@@ -118,7 +121,9 @@ export async function startProtocolRun(
     timeout: undefined,
     _extensions: 0,
     _phaseStartedAt: Date.now(),
+    _resumeAttempts: new Map(),
     disconnectTimers: new Map(),
+    _disconnectGen: new Map(),
     decisions: [],
     messageIds: [],
     statusHistory: [],
@@ -358,27 +363,62 @@ export function onRunDisconnect(sessionId: string): void {
   if (role !== run.protocol.ownerRole) {
     const info = registry.get(sessionId)
     const claudeSessionId = info?.claudeSessionId
+    const existingTimer = run.disconnectTimers.get(sessionId)
+    if (existingTimer) clearTimeout(existingTimer)
+    const gen = (run._disconnectGen.get(sessionId) ?? 0) + 1
+    run._disconnectGen.set(sessionId, gen)
     run.disconnectTimers.set(sessionId, setTimeout(async () => {
       if (isTerminal(run)) return
+      if (transport.has(sessionId)) { run.disconnectTimers.delete(sessionId); return }
+      if (run._disconnectGen.get(sessionId) !== gen) return
+
       const currentInfo = registry.get(sessionId)
-      const attempts = run._resumeAttempts ?? 0
-      const decision = decideResume(
-        transport.has(sessionId),
-        currentInfo ? !isAlive(currentInfo) : true,
-        !!claudeSessionId,
-        attempts,
-      )
-      if (decision === 'reconnected') { run.disconnectTimers.delete(sessionId); return }
-      if (decision === 'resume') {
-        run._resumeAttempts = attempts + 1
-        void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
+      if (!currentInfo) { startGraceTimer(run, role, sessionId); return }
+
+      if (isAlive(currentInfo)) {
+        process.stderr.write(`daemon: ${run.protocol.name} run: ${role} bridge disconnected but tmux alive — rechecking in ${DISCONNECT_WAIT_MS / 1000}s\n`)
+        const recheck = (run._disconnectGen.get(sessionId) ?? 0) + 1
+        run._disconnectGen.set(sessionId, recheck)
+        run.disconnectTimers.set(sessionId, setTimeout(() => {
+          if (isTerminal(run)) return
+          if (transport.has(sessionId)) { run.disconnectTimers.delete(sessionId); return }
+          if (run._disconnectGen.get(sessionId) !== recheck) return
+          const recheckInfo = registry.get(sessionId)
+          if (recheckInfo && isAlive(recheckInfo)) {
+            process.stderr.write(`daemon: ${run.protocol.name} run: ${role} tmux still alive but bridge gone — starting grace timer\n`)
+            startGraceTimer(run, role, sessionId)
+          } else {
+            process.stderr.write(`daemon: ${run.protocol.name} run: ${role} tmux died during recheck — resuming\n`)
+            const ra = run._resumeAttempts.get(role) ?? 0
+            if (claudeSessionId && ra < MAX_RESUME_ATTEMPTS) {
+              run._resumeAttempts.set(role, ra + 1)
+              void resumeParticipant(run, role, sessionId, claudeSessionId).catch(err => {
+                process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
+                void cancelRun(run, `${role} auto-resume failed`)
+              })
+            } else {
+              startGraceTimer(run, role, sessionId)
+            }
+          }
+        }, DISCONNECT_WAIT_MS))
+        return
+      }
+
+      resetTimeout(run)
+      const roleAttempts = run._resumeAttempts.get(role) ?? 0
+      if (claudeSessionId && roleAttempts < MAX_RESUME_ATTEMPTS) {
+        run._resumeAttempts.set(role, roleAttempts + 1)
+        void resumeParticipant(run, role, sessionId, claudeSessionId).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           void cancelRun(run, `${role} auto-resume failed`)
         })
       } else {
+        if (roleAttempts >= MAX_RESUME_ATTEMPTS) {
+          process.stderr.write(`daemon: ${run.protocol.name} run: ${role} resume budget exhausted (${roleAttempts}/${MAX_RESUME_ATTEMPTS})\n`)
+        }
         startGraceTimer(run, role, sessionId)
       }
-    }, 3_000))
+    }, DISCONNECT_WAIT_MS))
     return
   }
 
@@ -400,7 +440,11 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
   const info = registry.get(deadSessionId)
-  if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
+  if (info) {
+    recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
+    // Kill old tmux session before spawning replacement
+    try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 5000 }) } catch {}
+  }
 
   const result = await doSpawnSession(
     info?.topic ?? `${run.protocol.display} ${run.protocol.roles[role]}`,
@@ -408,6 +452,8 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
       joinThread: run.threadId,
       resumeFrom: claudeSessionId,
       model: run.params.model as string | undefined,
+      ...(info?.capabilities?.disallowedTools?.length ? { disallowedTools: info.capabilities.disallowedTools } : {}),
+      ...(info?.capabilities?.tools?.length ? { tools: info.capabilities.tools } : {}),
     },
   )
   if (isTerminal(run)) {
@@ -473,6 +519,18 @@ export function onRunReconnect(sessionId: string): void {
   }
 
   refreshSessionTools(run, sessionId)
+
+  const role = run.sessionToRole.get(sessionId)
+  const activeActor = run.protocol.phases[run.phase]?.actor
+  if (role && role === activeActor) {
+    const notification = `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}]\n\nYour session was reconnected. Check your thread for any messages you may have missed, and continue where you left off.\n\n---\nYour turn. Respond according to your instructions.`
+    transport.sendOrQueue(sessionId, {
+      type: 'notification',
+      content: notification,
+      meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
+    process.stderr.write(`daemon: ${run.protocol.name} run: ${role} re-prompted after reconnect\n`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +623,7 @@ export function sendKeepaliveNotification(run: ProtocolRun, sessionId: string, a
 
 function startKeepalive(run: ProtocolRun): void {
   if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
-  if (!KEEPALIVE_ENABLED) return
+  if (!keepaliveEnabled()) return
   const actor = run.protocol.phases[run.phase]?.actor
   if (!actor) return
   run._keepaliveTimer = setInterval(() => {

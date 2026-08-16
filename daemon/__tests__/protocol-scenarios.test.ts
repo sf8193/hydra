@@ -180,7 +180,7 @@ describe('review: disconnect and grace', () => {
     h.disconnect('critic')
 
     const graceMs = h.run.protocol.graceMs('critic')!
-    await h.tick(3_000 + graceMs + 1_000)
+    await h.tick(15_000 + graceMs + 1_000)
 
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
@@ -499,15 +499,13 @@ describe('review: disconnect timer fires and triggers grace', () => {
     h.disconnect('critic')
     expect(h.run.disconnectTimers.size).toBe(1)
 
-    // Grace timer hasn't started yet — still in 3s disconnect window
-    await h.tick(2_000)
+    // Grace timer hasn't started yet — still in 15s disconnect window
+    await h.tick(5_000)
     expect(h.isTerminated).toBe(false)
 
-    // 3s disconnect timer fires → decideResume → grace (no claudeSessionId)
-    await h.tick(1_500)
+    // 15s disconnect timer fires → grace (no claudeSessionId)
+    await h.tick(11_000)
 
-    // Grace timer should now be set (decideResume returns 'grace' since
-    // tmux is alive, transport not connected, no claudeSessionId for resume)
     const graceMs = h.run.protocol.graceMs('critic')!
     expect(graceMs).toBeGreaterThan(0)
 
