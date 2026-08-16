@@ -1,7 +1,8 @@
+import { execFileSync } from 'child_process'
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { gateway } from './config.js'
-import { sessionProcessAlive, getContextPercent } from './util.js'
+import { sessionProcessAlive, tmuxHasSession, getContextPercent } from './util.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { discoverClaudeSessionId } from './session-lifecycle.js'
 
@@ -24,6 +25,9 @@ export function startSessionHealthPoll(): void {
       if (!crashAlerted.has(info.sessionId) && info.sessionType !== 'thread_guest' && !info.deadAt && (now - info.createdAt > SPAWN_GRACE_MS) && !sessionProcessAlive(info.tmuxName) && !transport.has(info.sessionId)) {
         crashAlerted.add(info.sessionId)
         info.deadAt = now
+        if (tmuxHasSession(info.tmuxName)) {
+          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 2000 }) } catch {}
+        }
         registry.persist()
         const thread = threadRegistry.get(info.threadId)
         if (thread) {

@@ -987,13 +987,13 @@ export async function tryResume(dead: {
       const tmuxExists = tmuxHasSession(info.tmuxName)
       const processAlive = sessionProcessAlive(info.tmuxName)
       const verdict = classifyResumeFailure({
-        tmuxAlive: processAlive,
+        processAlive,
         hasExitMarker: !!(info.exitFilePath && existsSync(info.exitFilePath)),
         hasExitFilePath: !!info.exitFilePath,
       })
       if (tmuxExists && !processAlive) {
         process.stderr.write(`daemon: resume ${info.tmuxName}: tmux session retained (remain-on-exit) but process dead — cleaning up\n`)
-        try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+        try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 2000 }) } catch {}
       }
 
       if (verdict === 'kill') {

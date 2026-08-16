@@ -24,14 +24,14 @@
  * Pure so it can be unit-tested without the process layer.
  */
 export function classifyResumeFailure(opts: {
-  /** tmux session for this spawn is still alive. */
-  tmuxAlive: boolean
+  /** CC process inside the pane is alive (pane_dead=0). */
+  processAlive: boolean
   /** The spawn wrapper's exit-marker file exists on disk. */
   hasExitMarker: boolean
   /** Whether an exit-marker path was configured for this session. */
   hasExitFilePath: boolean
 }): 'kill' | 'orphan' {
-  if (opts.hasExitMarker || !opts.tmuxAlive) return 'kill'
+  if (opts.hasExitMarker || !opts.processAlive) return 'kill'
   if (!opts.hasExitFilePath) return 'kill'
   return 'orphan'
 }

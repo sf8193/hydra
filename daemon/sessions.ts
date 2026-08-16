@@ -3,6 +3,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
+import { sessionProcessAlive } from './util.js'
 import { atomicWriteFileSync } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName } from '../shared/constants.js'
@@ -418,21 +419,11 @@ export class SessionRegistry {
           continue
         }
 
-        let processAlive = false
-        try {
-          const pd = execFileSync('tmux', ['display-message', '-t', info.tmuxName, '-p', '#{pane_dead}'], {
-            encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000,
-          }).trim()
-          processAlive = pd === '0'
-        } catch {}
-
-        if (processAlive) {
+        if (sessionProcessAlive(info.tmuxName)) {
           delete info.deadAt
           restored++
         } else {
-          // Clean up retained corpses (remain-on-exit keeps the tmux session alive
-          // after the pane process dies — kill it so the name returns to the pool)
-          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 2000 }) } catch {}
           info.deadAt = info.deadAt ?? Date.now()
           dead++
         }
