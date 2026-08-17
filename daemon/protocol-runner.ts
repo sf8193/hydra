@@ -831,6 +831,13 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   const actorLabel = actorName ? `**${actorName}**` : 'You'
   const advancePattern = formatAdvanceUsagePattern(run.protocol, run.phase)
 
+  const windowMs = run.protocol.windowMs(run.phase)
+  const windowMin = windowMs ? Math.round(windowMs / 60_000) : undefined
+  const warningMin = windowMs && windowMs > WARNING_BEFORE_TIMEOUT_MS ? 2 : undefined
+  const timeLine = windowMin
+    ? ` You have ${windowMin} minutes${warningMin ? ` (warned at ${windowMin - warningMin})` : ''}. Use \`extend_phase()\` if you need more time.`
+    : ''
+
   const notification = run.protocol.notifications.onTurn
     ? run.protocol.notifications.onTurn(run, prevContent)
     : [
@@ -839,7 +846,7 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
         prevContent,
         ``,
         `---`,
-        `${actorLabel}, your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol. Use \`extend_phase()\` if you need more time.`,
+        `${actorLabel}, your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol.${timeLine}`,
       ].join('\n')
   transport.sendOrQueue(sid, {
     type: 'notification',
