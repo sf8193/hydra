@@ -663,7 +663,7 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
       process.stderr.write(`daemon: ${run.protocol.name} run: backstop timeout in "${phase}"\n`)
       await fireTransition(run, 'timeout', '', 'backstop timed out')
     }, ms)
-    return false
+    return true
   },
 
   notifyOwnerSummary: async (run, prevPhase) => {
@@ -885,27 +885,27 @@ function notifyKickoff(run: ProtocolRun): void {
   const ownerRole = run.protocol.ownerRole
   const ownerRoleLabel = ownerRole ? run.protocol.roles[ownerRole] : undefined
 
-  const lines: string[] = [
-    `[system] **${run.protocol.display}** — ${run.rounds} round${run.rounds > 1 ? 's' : ''}`,
-    ``,
-    `You are ${ownerRoleLabel ? `**${ownerRoleLabel}**` : 'the owner'}${ownerName ? ` (**${ownerName}**)` : ''}.`,
-  ]
-
-  if (activeName && activeRole) {
-    lines.push(`**${activeName}** was spawned as ${activeRole} and is reading the thread to orient.`)
-    if (topic) {
-      lines.push(`${activeRole} was given the following prompt: '${topic}'`)
-    }
-  }
-
-  lines.push(
-    ``,
-    `When their response is ready, you'll be notified with the full post and instructions on how to respond.`,
-  )
-
   for (const [role, sid] of run.participants) {
     if (role === activeActor) continue
     if (ownerNotified && sid === run.ownerSessionId) continue
+
+    const lines: string[] = [
+      `[system] **${run.protocol.display}** — ${run.rounds} round${run.rounds > 1 ? 's' : ''}`,
+    ]
+
+    if (sid === run.ownerSessionId) {
+      lines.push(``, `You are ${ownerRoleLabel ? `**${ownerRoleLabel}**` : 'the owner'}${ownerName ? ` (**${ownerName}**)` : ''}.`)
+      if (activeName && activeRole) {
+        lines.push(`**${activeName}** was spawned as ${activeRole} and is reading the thread to orient.`)
+        if (topic) {
+          lines.push(`${activeRole} was given the following prompt: '${topic}'`)
+        }
+      }
+      lines.push(``, `When their response is ready, you'll be notified with the full post and instructions on how to respond.`)
+    } else {
+      lines.push(``, `${activeRole ?? 'The first actor'} is reading the thread to orient. You'll be notified when it's your turn.`)
+    }
+
     notifyParticipant(run, sid, lines.join('\n'))
   }
 }

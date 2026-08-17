@@ -23,7 +23,7 @@ export default protocol('spike', {
       actor: 'explorer', half: 'bottom',
       on: { report_posted: 'complete', timeout: 'complete' },
       advanceEvent: 'report_posted',
-      onEnter: ['backstopTimer'],
+      onEnter: [],
     },
     complete:  { actor: 'explorer', half: 'top', on: {} },
     cancelled: { actor: 'explorer', half: 'top', on: {} },

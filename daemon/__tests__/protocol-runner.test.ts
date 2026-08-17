@@ -340,8 +340,8 @@ describe('spike protocol structure', () => {
     expect(spike.phases.exploring.onEnter).toBeUndefined()
   })
 
-  test('reporting phase has backstop timer (explorer stays alive to post report)', () => {
-    expect(spike.phases.reporting.onEnter).toContain('backstopTimer')
+  test('reporting phase has empty onEnter (explorer stays alive, standard timeout)', () => {
+    expect(spike.phases.reporting.onEnter).toEqual([])
     expect(spike.phases.reporting.onEnter).not.toContain('killNonOwner')
   })
 })
