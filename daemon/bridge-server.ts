@@ -20,7 +20,7 @@ import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
 import { clearInterceptsForSession } from './pane-probe.js'
-import { safeSend } from './util.js'
+import { safeSend, sessionProcessAlive } from './util.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import type { ButtonDef } from '../gateway.js'
 
@@ -418,10 +418,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
   const info = registry.get(sessionId)
   if (!info) return
 
-  let tmuxAlive = false
-  try { execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' }); tmuxAlive = true } catch {}
-
-  if (!tmuxAlive) {
+  if (!sessionProcessAlive(info.tmuxName)) {
     // Read the pane tail once, for the autopsy — which goes to the daemon log
     // (PRESERVE, hardware-only). The channel gets a LINK to the log, never the bytes.
     let tail: string[] = []
@@ -471,6 +468,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     info.deadAt = Date.now()
     registry.persist()
     clearInterceptsForSession(info.tmuxName)
+    try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 2000 }) } catch {}
 
     // Ephemeral sessions die silently — no crash message or skull visual
     if (!info.ephemeral) {

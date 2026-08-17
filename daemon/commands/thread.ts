@@ -8,7 +8,7 @@ import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn } from '../session-lifecycle.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError, safeSend } from '../util.js'
+import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, sessionProcessAlive, reportError, safeSend } from '../util.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
@@ -41,7 +41,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     }
   }
 
-  if (!tmuxHasSession(info.tmuxName)) {
+  if (!sessionProcessAlive(info.tmuxName)) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
     return
@@ -211,7 +211,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   if (liveSessionId) {
     const liveInfo = registry.get(liveSessionId)
     if (liveInfo) {
-      if (tmuxHasSession(liveInfo.tmuxName)) {
+      if (sessionProcessAlive(liveInfo.tmuxName)) {
         void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
         try { await gateway.send(msg.channelId, `Session **${liveInfo.tmuxName}** is already running.`, { replyTo: msg.id }) } catch {}
         return
@@ -291,7 +291,7 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   if (respawnLiveId) {
     const liveInfo = registry.get(respawnLiveId)
     if (liveInfo) {
-      if (tmuxHasSession(liveInfo.tmuxName)) {
+      if (sessionProcessAlive(liveInfo.tmuxName)) {
         await reportError(msg.channelId, msg.id, 'respawn', `thread has a live session (**${liveInfo.tmuxName}**)`, 'Use `kill` first, or `spawn:` for a new thread.')
         return
       }

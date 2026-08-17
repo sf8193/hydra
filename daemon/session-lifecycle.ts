@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { safeSend, formatSpawnLine, tmuxHasSession, sessionProcessAlive } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -403,7 +403,7 @@ async function spawnCodexSession(p: {
     } catch (err: any) {
       lastErr = err?.message || String(err)
       try { codexEngine.disconnect(p.sessionId) } catch {}
-      if (!tmuxHasSession(p.tmuxName)) throw new Error(`codex tmux ${p.tmuxName} died during startup`)
+      if (!sessionProcessAlive(p.tmuxName)) throw new Error(`codex tmux ${p.tmuxName} died during startup`)
       await new Promise(r => setTimeout(r, 500))
     }
   }
@@ -496,7 +496,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          try { execFileSync('tmux', ['has-session', '-t', existing.tmuxName], { stdio: 'pipe' }) } catch {
+          if (!sessionProcessAlive(existing.tmuxName)) {
             respawnCount = (existing.respawnCount ?? 0) + 1
             await killSession(existing, 'replaced by new spawn')
           }
@@ -552,7 +552,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (existingId) {
       const existing = registry.get(existingId)
       if (existing) {
-        if (tmuxHasSession(existing.tmuxName)) {
+        if (sessionProcessAlive(existing.tmuxName)) {
           throw new Error(`thread has a live session (${existing.tmuxName}) — kill it first or spawn in a new thread`)
         }
         respawnCount = (existing.respawnCount ?? 0) + 1
@@ -805,6 +805,18 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
 
+  // Retain the pane after CC exits so the daemon can detect death via #{pane_dead}
+  // rather than losing the session entirely. Without this, CC's EIO teardown destroys
+  // the pane and tmuxHasSession flips to false before the daemon can react.
+  if (tmuxConfirmedAlive) {
+    try {
+      execFileSync('tmux', ['set-option', '-w', '-t', tmuxName, 'remain-on-exit', 'on'], { stdio: 'pipe' })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`daemon: spawn ${tmuxName}: remain-on-exit setup FAILED (non-fatal): ${msg}\n`)
+    }
+  }
+
   // Best-effort: any failure is logged, never fatal to the spawn.
   let spawnLogPath: string | undefined
   if (tmuxConfirmedAlive) {
@@ -924,7 +936,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 // ---------------------------------------------------------------------------
 
 export const HEALTH_TIMEOUT_MS = 30_000
-
 export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boolean> {
   return new Promise(resolve => {
     if (transport.has(sessionId)) { resolve(true); return }
@@ -972,11 +983,17 @@ export async function tryResume(dead: {
       const info = registry.get(result.sessionId)
       if (!info) return null
 
+      const tmuxExists = tmuxHasSession(info.tmuxName)
+      const processAlive = sessionProcessAlive(info.tmuxName)
       const verdict = classifyResumeFailure({
-        tmuxAlive: tmuxHasSession(info.tmuxName),
+        processAlive,
         hasExitMarker: !!(info.exitFilePath && existsSync(info.exitFilePath)),
         hasExitFilePath: !!info.exitFilePath,
       })
+      if (tmuxExists && !processAlive) {
+        process.stderr.write(`daemon: resume ${info.tmuxName}: tmux session retained (remain-on-exit) but process dead — cleaning up\n`)
+        try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 2000 }) } catch {}
+      }
 
       if (verdict === 'kill') {
         if (!info.exitFilePath) process.stderr.write(`daemon: resume ${info.tmuxName}: exit file path not configured (pipe-pane failed at spawn) — cannot distinguish orphan from dead, defaulting to kill\n`)
@@ -998,7 +1015,7 @@ export async function tryResume(dead: {
         const s = registry.get(recheckSessionId)
         if (!s || s.deadAt) return
         if (transport.has(recheckSessionId)) return
-        if (!tmuxHasSession(s.tmuxName)) {
+        if (!sessionProcessAlive(s.tmuxName)) {
           process.stderr.write(`daemon: resume recheck: ${s.tmuxName} died after orphan classification — marking dead\n`)
           s.deadAt = Date.now()
           registry.persist()

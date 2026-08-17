@@ -3,6 +3,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
+import { sessionProcessAlive } from './util.js'
 import { atomicWriteFileSync } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName } from '../shared/constants.js'
@@ -418,16 +419,11 @@ export class SessionRegistry {
           continue
         }
 
-        let tmuxAlive = false
-        try {
-          execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
-          tmuxAlive = true
-        } catch {}
-
-        if (tmuxAlive) {
+        if (sessionProcessAlive(info.tmuxName)) {
           delete info.deadAt
           restored++
         } else {
+          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 2000 }) } catch {}
           info.deadAt = info.deadAt ?? Date.now()
           dead++
         }

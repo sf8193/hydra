@@ -7,7 +7,7 @@ import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { ThreadMetadata } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession, tryResume, tryRespawn, discoverClaudeSessionId } from '../session-lifecycle.js'
-import { tmuxHasSession, isAlive, safeSend } from '../util.js'
+import { sessionProcessAlive, isAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { getActiveReviews, cancelReview } from '../adversarial.js'
 import type { SpawnTemplate } from '../templates.js'
@@ -24,7 +24,7 @@ async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
     const staleId = registry.getByThread(resolvedThreadId)
     if (staleId && registry.has(staleId)) {
       const staleInfo = registry.get(staleId)!
-      if (tmuxHasSession(staleInfo.tmuxName)) {
+      if (sessionProcessAlive(staleInfo.tmuxName)) {
         try { await gateway.send(msg.channelId, `Thread already has a live session (**${staleInfo.tmuxName}**). Spawning in a new thread instead.`, { replyTo: msg.id }) } catch {}
       } else {
         chatId = resolvedThreadId
