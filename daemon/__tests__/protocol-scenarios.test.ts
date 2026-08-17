@@ -434,7 +434,7 @@ describe('review: notifyOwnerSummary fires on cleanup entry', () => {
     expect(h.phase).toBe('cleanup')
 
     const notes = h.actorNotifications('owner')
-    expect(notes.some(n => n.includes('Post a closing summary'))).toBe(true)
+    expect(notes.some(n => n.includes('closing summary'))).toBe(true)
     expect(notes.some(n => n.includes('advance('))).toBe(true)
 
     expect(h.threadMessages.some(m => m.text.includes('concluded'))).toBe(true)

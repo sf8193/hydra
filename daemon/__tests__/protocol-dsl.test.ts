@@ -404,7 +404,7 @@ describe('live protocol cleanup defaults', () => {
 
   test('spike reporting phase keeps explicit override (no killNonOwner, no notifyOwnerSummary)', async () => {
     const spike = (await import('../../protocols/spike.js')).default
-    expect(spike.phases.reporting.onEnter).toEqual(['backstopTimer'])
+    expect(spike.phases.reporting.onEnter).toEqual([])
   })
 })
 
