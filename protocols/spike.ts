@@ -58,15 +58,19 @@ export default protocol('spike', {
       + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nUse \`advance({ content: "your report" })\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
   },
 
-  ownerKickoff: (params) => {
-    const topic = params.topic ?? 'the topic discussed in the thread'
-    return `[system] **Spike** — starting\n\n**Question:** ${topic}\n\nYou are the guide. The Explorer will investigate and post checkpoints to the thread. You'll see their progress — no action needed from you until the final report arrives.`
-  },
-
-  turnNotification: (run, prevContent) => {
-    if (run.phase === 'reporting') {
-      return `[Spike — reporting]\n\nYour investigation is complete. Post your final report.\n\n---\nUse \`advance({ content: "your report" })\` to submit. Structure it as:\n- **Finding** — what you found\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`
-    }
-    return `[Spike — investigation]\n\n${prevContent}\n\n---\nContinue your investigation. Call \`advance({ content: "progress" })\` for checkpoints, or \`advance({ content: "summary", verdict: "done" })\` when complete.`
+  notifications: {
+    onKickoff: {
+      guide: (run) => {
+        const topic = (run.params.topic ?? 'the topic discussed in the thread') as string
+        return `[system] **Spike** — starting\n\n**Question:** ${topic}\n\nYou are the guide. The Explorer will investigate and post checkpoints to the thread. You'll see their progress — no action needed from you until the final report arrives.`
+      },
+      explorer: () => null,
+    },
+    onTurn: (run, prevContent) => {
+      if (run.phase === 'reporting') {
+        return `[Spike — reporting]\n\nYour investigation is complete. Post your final report.\n\n---\nUse \`advance({ content: "your report" })\` to submit. Structure it as:\n- **Finding** — what you found\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`
+      }
+      return `[Spike — investigation]\n\n${prevContent}\n\n---\nContinue your investigation. Call \`advance({ content: "progress" })\` for checkpoints, or \`advance({ content: "summary", verdict: "done" })\` when complete.`
+    },
   },
 })

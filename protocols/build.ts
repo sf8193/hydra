@@ -52,9 +52,14 @@ export default protocol('build', {
       + `\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
   },
 
-  ownerKickoff: (params) => {
-    const task = params.task ?? params.topic ?? 'Begin implementing.'
-    return `[system] **Build** — starting\n\n**Task:** ${task}\n\nYou are the builder. Implement the task, then call \`advance({ content: "your implementation summary" })\` when ready for review. Use \`reply()\` for conversation only — it does not advance the protocol.`
+  notifications: {
+    onKickoff: {
+      builder: (run) => {
+        const task = (run.params.task ?? run.params.topic ?? 'Begin implementing.') as string
+        return `[system] **Build** — starting\n\n**Task:** ${task}\n\nYou are the builder. Implement the task, then call \`advance({ content: "your implementation summary" })\` when ready for review. Use \`reply()\` for conversation only — it does not advance the protocol.`
+      },
+      critic: () => null,
+    },
   },
 
   summaryFormat: (run) => {

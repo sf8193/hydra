@@ -831,8 +831,8 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   const actorLabel = actorName ? `**${actorName}**` : 'You'
   const advancePattern = formatAdvanceUsagePattern(run.protocol, run.phase)
 
-  const notification = run.protocol.turnNotification
-    ? run.protocol.turnNotification(run, prevContent)
+  const notification = run.protocol.notifications.onTurn
+    ? run.protocol.notifications.onTurn(run, prevContent)
     : [
         `[${run.protocol.display} — Round ${run.currentRound}/${run.rounds}]`,
         ``,
@@ -861,33 +861,21 @@ function notifyKickoff(run: ProtocolRun): void {
   const activeRole = activeActor ? run.protocol.roles[activeActor] : undefined
   const activeSid = activeActor ? run.participants.get(activeActor) : undefined
   const activeName = activeSid ? registry.get(activeSid)?.tmuxName : undefined
-
-  let ownerNotified = false
-  if (run.protocol.ownerKickoff) {
-    notifyParticipant(run, run.ownerSessionId, run.protocol.ownerKickoff(run.params))
-    ownerNotified = true
-    const ownerIsActor = activeActor && run.participants.get(activeActor) === run.ownerSessionId
-    if (ownerIsActor) return
-  }
-
-  if (run.protocol.notifications.onKickoff) {
-    const content = run.protocol.notifications.onKickoff(run)
-    for (const [role, sid] of run.participants) {
-      if (role === activeActor) continue
-      if (ownerNotified && sid === run.ownerSessionId) continue
-      notifyParticipant(run, sid, content)
-    }
-    return
-  }
-
-  const topic = run.params.topic as string | undefined
-  const ownerName = registry.get(run.ownerSessionId)?.tmuxName
-  const ownerRole = run.protocol.ownerRole
-  const ownerRoleLabel = ownerRole ? run.protocol.roles[ownerRole] : undefined
+  const kickoffHooks = run.protocol.notifications.onKickoff
 
   for (const [role, sid] of run.participants) {
+    const hook = kickoffHooks?.[role]
+    if (hook) {
+      const content = hook(run)
+      if (content) notifyParticipant(run, sid, content)
+      continue
+    }
     if (role === activeActor) continue
-    if (ownerNotified && sid === run.ownerSessionId) continue
+
+    const ownerName = registry.get(run.ownerSessionId)?.tmuxName
+    const ownerRole = run.protocol.ownerRole
+    const ownerRoleLabel = ownerRole ? run.protocol.roles[ownerRole] : undefined
+    const topic = run.params.topic as string | undefined
 
     const lines: string[] = [
       `[system] **${run.protocol.display}** — ${run.rounds} round${run.rounds > 1 ? 's' : ''}`,
