@@ -84,10 +84,9 @@ export type ProtocolSpec<
   roleConfig?: Partial<Record<keyof Roles & string, Partial<RoleConfig>>>
   seed?: Partial<Record<keyof Roles, SeedFn>>
   summaryFormat?: (run: RunState) => string[]
-  ownerKickoff?: (params: Record<string, unknown>) => string
-  turnNotification?: (run: RunState, prevContent: string) => string
   notifications?: {
-    onKickoff?: (run: RunState) => string
+    onKickoff?: Partial<Record<keyof Roles & string, (run: RunState) => string | null>>
+    onTurn?: (run: RunState, prevContent: string) => string
     onPhaseChange?: (run: RunState, from: string, to: string) => string
     onDisconnect?: (run: RunState, role: string, reason: string) => string
     onExit?: (run: RunState, outcome: 'complete' | 'cancelled', reason?: string) => string
@@ -115,10 +114,9 @@ export type Protocol<
   roleConfig: (role: string) => RoleConfig
   seed: (role: string, ctx: Omit<SeedContext, 'protocol'> & { protocol?: Protocol }) => string | undefined
   summaryFormat: (run: RunState) => string[]
-  ownerKickoff: ((params: Record<string, unknown>) => string) | undefined
-  turnNotification: ((run: RunState, prevContent: string) => string) | undefined
   notifications: {
-    onKickoff?: (run: RunState) => string
+    onKickoff?: Partial<Record<string, (run: RunState) => string | null>>
+    onTurn?: (run: RunState, prevContent: string) => string
     onPhaseChange?: (run: RunState, from: string, to: string) => string
     onDisconnect?: (run: RunState, role: string, reason: string) => string
     onExit?: (run: RunState, outcome: 'complete' | 'cancelled', reason?: string) => string
@@ -294,8 +292,6 @@ export function protocol<
       ``,
       `Post your closing summary.`,
     ]),
-    ownerKickoff: spec.ownerKickoff ?? undefined,
-    turnNotification: spec.turnNotification ?? undefined,
     notifications: spec.notifications ?? {},
   }
   return Object.freeze(built)

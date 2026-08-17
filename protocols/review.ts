@@ -36,6 +36,23 @@ export default protocol('review', {
     critic: { cadence: 'per-round', waits: true },
   },
 
+  notifications: {
+    onKickoff: {
+      owner: (run) => {
+        const topic = run.params.topic as string | undefined
+        const lines = [
+          `[system] **Adversarial Review** — ${run.rounds} round${run.rounds > 1 ? 's' : ''}`,
+          ``,
+          `You are **The Owner**. The Critic was spawned and is reading the thread to orient.`,
+        ]
+        if (topic) lines.push(`The Critic was given the following prompt: '${topic}'`)
+        lines.push(``, `When their critique is ready, you'll be notified with the full post and instructions on how to respond.`)
+        return lines.join('\n')
+      },
+      critic: () => null,
+    },
+  },
+
   seed: {
     critic: (ctx) => protocolSeed(ctx.protocol, 'critic', ctx)
       + '\n\n' + (ctx.topic

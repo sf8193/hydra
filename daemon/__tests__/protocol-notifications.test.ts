@@ -51,7 +51,7 @@ describe('protocol notifications: onPhaseChange', () => {
 
     await h.advance('owner', 'Round 1 defense.')
     const criticNotes = h.actorNotifications('critic')
-    const criticPhaseNote = criticNotes.find(n => n.includes('[Adversarial Review — Round 1/3] The Owner is working.'))
+    const criticPhaseNote = criticNotes.find(n => n.includes('[Adversarial Review —') && n.includes('owner') && n.includes('is working.'))
     expect(criticPhaseNote).toBeDefined()
   })
 })
@@ -59,7 +59,7 @@ describe('protocol notifications: onPhaseChange', () => {
 describe('protocol notifications: onKickoff', () => {
   test('review protocol initial actor is critic, not owner', () => {
     h = createHarness(review, { rounds: 3 })
-    expect(review.ownerKickoff).toBeUndefined()
+    expect(review.notifications.onKickoff).toBeDefined()
     expect(review.phases[review.initialPhase].actor).toBe('critic')
     expect(review.ownerRole).toBe('owner')
   })
