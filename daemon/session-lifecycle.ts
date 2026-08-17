@@ -936,42 +936,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 // ---------------------------------------------------------------------------
 
 export const HEALTH_TIMEOUT_MS = 30_000
-const RESPAWN_PANE_TIMEOUT_MS = 10_000
-
-export async function tryRespawnPane(info: SessionInfo): Promise<boolean> {
-  if (!info.claudeSessionId) return false
-  if (sessionProcessAlive(info.tmuxName)) return false
-  if (!tmuxHasSession(info.tmuxName)) return false
-
-  const model = info.sessionMetadata?.model ?? spawnModel()
-  const channelFlag = `plugin:discord:${SOCK_PATH}`
-  const cmd = [
-    ...buildSpawnEnv(info.sessionId, info.tmuxName),
-    `claude --resume ${shq(info.claudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions`,
-  ].join(' && ')
-
-  process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: attempting in-place recovery\n`)
-  try {
-    // respawn-pane takes a shell command string as its final arg, so execSync
-    // with shell interpolation is required (execFileSync can't pass it).
-    execSync(`tmux respawn-pane -k -t ${shq(info.tmuxName)} ${shq(cmd)}`, { stdio: 'pipe', timeout: 5000 })
-  } catch (err) {
-    process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: failed: ${err instanceof Error ? err.message : String(err)}\n`)
-    return false
-  }
-
-  const ok = await waitForBridge(info.sessionId, RESPAWN_PANE_TIMEOUT_MS)
-  if (ok) {
-    process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: bridge reconnected — recovery successful\n`)
-    if (info.deadAt) { delete info.deadAt; registry.persist() }
-    return true
-  }
-
-  process.stderr.write(`daemon: respawn-pane ${info.tmuxName}: bridge did not reconnect within ${RESPAWN_PANE_TIMEOUT_MS / 1000}s — killing pane, falling through\n`)
-  try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe', timeout: 2000 }) } catch {}
-  return false
-}
-
 export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boolean> {
   return new Promise(resolve => {
     if (transport.has(sessionId)) { resolve(true); return }

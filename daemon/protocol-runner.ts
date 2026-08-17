@@ -1,6 +1,6 @@
 import { gateway } from './config.js'
 import { registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas } from './sessions.js'
-import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge, tryRespawnPane } from './session-lifecycle.js'
+import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
@@ -393,11 +393,6 @@ export function onRunDisconnect(sessionId: string): void {
       )
       if (decision === 'reconnected') { run.disconnectTimers.delete(sessionId); return }
       if (decision === 'resume') {
-        const info = registry.get(sessionId)
-        if (info && await tryRespawnPane(info)) {
-          run.disconnectTimers.delete(sessionId)
-          return
-        }
         run._resumeAttempts = attempts + 1
         void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
