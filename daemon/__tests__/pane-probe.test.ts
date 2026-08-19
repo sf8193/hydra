@@ -143,6 +143,39 @@ const HISTORICAL_PLAN_MODE = `⏺ Entered plan mode
 ❯
   ctx: 22%`
 
+// The reported flap: "Login successful. Press Enter to continue…" lingers in
+// scrollback ABOVE a resumed, working `❯` prompt. NOT a live blocking screen.
+const STALE_SUCCESS_ABOVE_PROMPT = `  Login successful. Press Enter to continue…
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ctx: 12%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`
+
+// Same failure mode for a past-tense "Login expired" banner above a live prompt.
+const STALE_EXPIRED_ABOVE_PROMPT = `● Login expired · Please run /login
+✱ Churned for 0s
+
+✻ Wandering… (2m 3s · ↓ 1.2k tokens)
+❯
+  ctx: 22%`
+
+// Banner above a live prompt where only ONE live-REPL marker survives the
+// 8-line tail — the cases requiring BOTH markers would miss. The caret carries
+// a typed draft (so it is not bare), leaving only the ctx footer.
+const STALE_SUCCESS_TYPED_DRAFT = `  Login successful. Press Enter to continue…
+────────────────────────────────────────────────────────────────────────────────
+❯ draft reply I'm still composing
+────────────────────────────────────────────────────────────────────────────────
+  ctx: 12%`
+
+// ...and the mirror: a bare caret but the ctx footer scrolled out of the tail.
+const STALE_SUCCESS_NO_CTX = `  Login successful. Press Enter to continue…
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`
+
 // ---------------------------------------------------------------------------
 // Test IO — injectable seam
 // ---------------------------------------------------------------------------
@@ -245,6 +278,26 @@ describe('detectBlockingState (pure)', () => {
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
     expect(result!.loginStage).toBe('success')
+  })
+
+  it('does NOT match "Login successful" left in scrollback above a live prompt', () => {
+    // Regression: the banner persists after the session resumes to a working
+    // `❯` prompt — it must not be classified as an active blocking screen.
+    expect(detectBlockingState(STALE_SUCCESS_ABOVE_PROMPT)).toBeNull()
+  })
+
+  it('does NOT match stale "Login expired" above a live prompt', () => {
+    expect(detectBlockingState(STALE_EXPIRED_ABOVE_PROMPT)).toBeNull()
+  })
+
+  it('gates on a live prompt when only the ctx footer survives the tail', () => {
+    // Caret carries a typed draft (non-bare) — ctx alone must still gate.
+    expect(detectBlockingState(STALE_SUCCESS_TYPED_DRAFT)).toBeNull()
+  })
+
+  it('gates on a live prompt when only the bare caret survives the tail', () => {
+    // ctx footer scrolled off — the bare `❯` alone must still gate.
+    expect(detectBlockingState(STALE_SUCCESS_NO_CTX)).toBeNull()
   })
 
   it('detects login expired (past tense)', () => {
@@ -605,6 +658,109 @@ describe('probeAllSessions', () => {
     } finally {
       if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
       else delete process.env.HYDRA_AUTO_LOGIN
+    }
+  })
+
+  it('never notifies for "Login successful" sitting above a working prompt (regression)', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'nova', threadId: 'thread-1' })
+      paneTails.set('nova', STALE_SUCCESS_ABOVE_PROMPT)
+      windowActivity.set('nova', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      // Many probe cycles — the flap would have posted once per cycle.
+      for (let i = 0; i < 5; i++) {
+        await probeAllSessions(T0 + i * 60_000)
+        await flush()
+      }
+      expect(sentMessages.filter(m => m.channelId === 'thread-1')).toHaveLength(0)
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
+  it('does not re-notify a persistent expiring warning across active⇄idle churn (latch)', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'comet', threadId: 'thread-1' })
+      paneTails.set('comet', LOGIN_EXPIRING_TAIL)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      // Idle → confirm → notify once.
+      windowActivity.set('comet', Math.floor(T0 / 1000) - 60)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1')).toHaveLength(1)
+
+      // Session goes ACTIVE (idle 5s) — pane not captured; latch must survive.
+      windowActivity.set('comet', Math.floor((T0 + 120_000) / 1000) - 5)
+      await probeAllSessions(T0 + 120_000)
+      await flush()
+
+      // Idle again, warning still present, within cooldown → no re-notify.
+      windowActivity.set('comet', Math.floor((T0 + 180_000) / 1000) - 60)
+      await probeAllSessions(T0 + 180_000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1')).toHaveLength(1)
+
+      // Even past the cooldown — expiring is one-shot per state-entry.
+      const late = T0 + _NOTIFY_COOLDOWN_MS + 240_000
+      windowActivity.set('comet', Math.floor(late / 1000) - 60)
+      await probeAllSessions(late)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1')).toHaveLength(1)
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
+  it('holds the success latch across active churn, then re-notifies after a genuine leave', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'flint', threadId: 'thread-1' })
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+      paneTails.set('flint', LOGIN_SUCCESS_TAIL)
+
+      // Enter success → notify once.
+      windowActivity.set('flint', Math.floor(T0 / 1000) - 60)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 1000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1')).toHaveLength(1)
+
+      // Session goes ACTIVE with the banner still notified. Pre-fix the active
+      // clear deleted the (intercept-less) entry, so the two idle cycles below
+      // re-confirmed and re-notified → length 2. The latch must keep it at 1.
+      windowActivity.set('flint', Math.floor((T0 + 2000) / 1000) - 5)
+      await probeAllSessions(T0 + 2000)
+      await flush()
+      windowActivity.set('flint', Math.floor((T0 + 3000) / 1000) - 60)
+      await probeAllSessions(T0 + 3000)
+      windowActivity.set('flint', Math.floor((T0 + 4000) / 1000) - 60)
+      await probeAllSessions(T0 + 4000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1')).toHaveLength(1)
+
+      // Genuine leave — a working prompt resets the latch.
+      paneTails.set('flint', NORMAL_SESSION_TAIL)
+      windowActivity.set('flint', Math.floor((T0 + 5000) / 1000) - 60)
+      await probeAllSessions(T0 + 5000)
+      await flush()
+
+      // Re-enter success → notifies again.
+      paneTails.set('flint', LOGIN_SUCCESS_TAIL)
+      windowActivity.set('flint', Math.floor((T0 + 6000) / 1000) - 60)
+      await probeAllSessions(T0 + 6000)
+      await probeAllSessions(T0 + 7000)
+      await flush()
+      expect(sentMessages.filter(m => m.channelId === 'thread-1')).toHaveLength(2)
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
     }
   })
 
