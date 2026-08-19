@@ -173,10 +173,26 @@ const LOGIN_URL_RE = /Browser didn't open/
 const OAUTH_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\S+/
 // Stage 4 — success, needs Enter to dismiss:
 //   "Login successful. Press Enter to continue…"
-const LOGIN_SUCCESS_RE = /Login successful/
+// Require the full prompt, not bare "Login successful" — the short phrase
+// lingers in scrollback after the session resumes and matched forever.
+const LOGIN_SUCCESS_RE = /Login successful\.? Press Enter to continue/
 // Stage 5 — expired (past tense, session was resumed after expiry):
 //   "● Login expired · Please run /login"
 const LOGIN_EXPIRED_RE = /Login expired/
+
+// A live CC REPL renders a bare prompt caret alone on a line and a "ctx: N%"
+// footer line. Either alone means the session is at a working input prompt, so a
+// login banner in the tail is stale scrollback ABOVE it — not the active screen.
+// Both markers are line-anchored and REPL-specific; no login/blocking screen
+// renders either. OR (not AND) on purpose: the tail is only PANE_TAIL_LINES and
+// a multi-line draft makes the caret line non-bare, so requiring both would miss
+// a truncated-but-live tail and let the flap back in.
+const WORKING_PROMPT_RE = /^\s*❯\s*$/m
+const CTX_FOOTER_RE = /^\s*ctx:\s*\d+%/m
+
+function hasLiveReplPrompt(tail: string): boolean {
+  return WORKING_PROMPT_RE.test(tail) || CTX_FOOTER_RE.test(tail)
+}
 
 // Resume prompt: CC shows this when a session is resumed and the conversation
 // is large enough to warrant a choice. The three-option menu is unique.
@@ -200,22 +216,30 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   if (isResumePromptOnScreen(tailText)) {
     return { kind: 'resume_prompt', planPath: null, loginStage: null, oauthUrl: null }
   }
+  // Full-screen login stages fill the pane — a live REPL prompt in the tail
+  // means the banner is stale scrollback, not the active screen. Gate them so
+  // a resumed session at a working `❯` prompt doesn't re-trigger every cycle.
+  const liveRepl = hasLiveReplPrompt(tailText)
   // Login stages in priority order — later stages take precedence (the flow progresses)
-  if (LOGIN_SUCCESS_RE.test(tailText)) {
+  if (!liveRepl && LOGIN_SUCCESS_RE.test(tailText)) {
     return { kind: 'login_required', planPath: null, loginStage: 'success', oauthUrl: null }
   }
-  if (LOGIN_URL_RE.test(tailText)) {
+  if (!liveRepl && LOGIN_URL_RE.test(tailText)) {
     const urlMatch = tailText.match(OAUTH_URL_RE)
     return { kind: 'login_required', planPath: null, loginStage: 'oauth_url', oauthUrl: urlMatch?.[0] ?? null }
   }
-  if (LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
+  if (!liveRepl && LOGIN_BLOCKED_PATTERNS.some(p => p.test(tailText))) {
     return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
   }
   // "Login expired" is functionally identical to "blocked" — session can't proceed.
   // No separate LoginStage variant needed; the remediation path is the same.
-  if (LOGIN_EXPIRED_RE.test(tailText)) {
+  // Gated on liveRepl too: a genuine expiry freezes the pane (no working prompt);
+  // the banner above a live `❯` is stale scrollback from a resumed session.
+  if (!liveRepl && LOGIN_EXPIRED_RE.test(tailText)) {
     return { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
   }
+  // Expiring is a footer warning that co-renders WITH the working prompt, so it
+  // is intentionally not gated on liveRepl — the latch below bounds its spam.
   if (LOGIN_EXPIRING_PATTERNS.some(p => p.test(tailText))) {
     return { kind: 'login_required', planPath: null, loginStage: 'expiring', oauthUrl: null }
   }
@@ -300,8 +324,12 @@ async function confirmAndSendLogin(tmuxName: string): Promise<boolean> {
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (isResumePromptOnScreen(tail)) return false
-  const blocked = LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
-  const expired = LOGIN_EXPIRED_RE.test(tail)
+  // Mirror detectBlockingState: a live prompt means blocked/expired banners are
+  // stale scrollback, so don't fire /login into a working REPL. expiring is a
+  // footer that co-renders with the prompt, so it stays ungated.
+  const live = hasLiveReplPrompt(tail)
+  const blocked = !live && LOGIN_BLOCKED_PATTERNS.some(p => p.test(tail))
+  const expired = !live && LOGIN_EXPIRED_RE.test(tail)
   const expiring = LOGIN_EXPIRING_PATTERNS.some(p => p.test(tail))
   if (!blocked && !expired && !expiring) return false
   return io.sendKeys(tmuxName, '/login', 'Enter')
@@ -311,7 +339,7 @@ async function confirmAndDismissLoginSuccess(tmuxName: string): Promise<boolean>
   if (!autoLoginEnabled()) return false
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
-  if (!LOGIN_SUCCESS_RE.test(tail)) return false
+  if (hasLiveReplPrompt(tail) || !LOGIN_SUCCESS_RE.test(tail)) return false
   return io.sendKeys(tmuxName, 'Enter')
 }
 
@@ -601,26 +629,26 @@ export async function probeAllSessions(now?: number): Promise<void> {
     // historical plan-mode text but the session has moved on.
     const lastActivitySec = await io.getWindowActivity(target.tmuxName)
     if (lastActivitySec === null) {
-      clearState(key, 0) // tmux gone — force-clear, no grace
+      clearState(key, 0, 'gone') // tmux gone — force-clear, no grace
       continue
     }
     const idleSec = nowSec - lastActivitySec
     if (idleSec < MIN_IDLE_BEFORE_PROBE_S) {
-      clearState(key, t) // active — grace period for pending intercepts
+      clearState(key, t, 'active') // active — pane not captured; preserve latch
       continue
     }
 
     // Capture only the tail — where the active prompt renders
     const tailText = await io.capturePaneTail(target.tmuxName, PANE_TAIL_LINES)
     if (!tailText) {
-      clearState(key, 0) // capture failed — force-clear
+      clearState(key, 0, 'gone') // capture failed — force-clear
       continue
     }
 
     const detected = detectBlockingState(tailText)
 
     if (!detected) {
-      clearState(key, t) // no detection — grace period for pending intercepts
+      clearState(key, t, 'cleared') // no detection — genuine leave; reset latch
       // Idle builder nudge: session is idle, no blocking prompt, but it's a
       // factory builder that hasn't completed. Nudge via bridge notification.
       if (idleSec >= BUILDER_IDLE_NUDGE_S) {
@@ -650,7 +678,12 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
       if (existing.consecutive >= CONFIRM_PROBES) {
         const cooldownElapsed = !existing.notifiedAt || (t - existing.notifiedAt) >= NOTIFY_COOLDOWN_MS
-        const effectiveMax = (detected.kind === 'login_required' && detected.loginStage === 'success') ? 1 : MAX_NOTIFICATIONS
+        // success + expiring are one-shot per state-entry: the screen isn't a
+        // hard block, so nagging it (up to MAX) is just spam. Genuinely stuck
+        // states (plan/resume/blocked/oauth) keep the MAX re-notify budget.
+        const oneShotStage = detected.kind === 'login_required' &&
+          (detected.loginStage === 'success' || detected.loginStage === 'expiring')
+        const effectiveMax = oneShotStage ? 1 : MAX_NOTIFICATIONS
         const underLimit = existing.notifyCount < effectiveMax
 
         if (cooldownElapsed && underLimit) {
@@ -685,9 +718,20 @@ export async function probeAllSessions(now?: number): Promise<void> {
   }
 }
 
-function clearState(key: string, now: number): void {
+type ClearReason = 'gone' | 'active' | 'cleared'
+
+function clearState(key: string, now: number, reason: ClearReason = 'cleared'): void {
   const existing = probeEntries.get(key)
   if (!existing) return
+
+  // Active idle-gate clear: the pane was NOT captured, so we can't conclude a
+  // persistent state (a "login expiring" footer, an undismissed success screen)
+  // actually ended. Preserve a notified login/resume entry as a latch so its
+  // notifyCount survives active⇄idle churn — otherwise the state re-notifies
+  // every time the session briefly goes active. Only a confirmed no-detection
+  // probe ('cleared') or death ('gone') resets the latch. Intercept-bearing
+  // entries (plan mode) fall through to the existing grace logic below.
+  if (reason === 'active' && existing.notifiedAt && !threadIntercepts.has(existing.threadId)) return
 
   // If we notified the user and registered an intercept, keep it alive for
   // INTERCEPT_GRACE_MS after detection clears — the user may not have typed
