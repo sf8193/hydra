@@ -112,6 +112,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             info.lastReplyId = sentIds[sentIds.length - 1]
             // lastReplyId drives the session's dashboard/list link — refresh (debounced) so it tracks the latest reply.
             refreshDashboard()
+            // A live reply means the session is working. If the factory sweep parked it as an
+            // awaiting_pm builder (suppressAutoRecover + clearFactoryIdentity, left alive) and a
+            // user then adopted it, clear the now-stale flag so a later reboot auto-recovers it.
+            // Only live sessions reach here — dead branch-gone / mid-build-preserved records
+            // (also suppressAutoRecover) never reply, so their suppression stays intact.
+            if (info.suppressAutoRecover) delete info.suppressAutoRecover
             // Capture artifact links the session produced in its own thread, so
             // they surface under its Home item (chat_id === threadId scopes this
             // to the session's own workspace, not cross-posts to other channels;

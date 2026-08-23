@@ -22,7 +22,10 @@ const timers = new Map<string, { nudge?: ReturnType<typeof setTimeout>; reap?: R
 
 export function startPhaseBudget(sessionId: string): void {
   const info = registry.get(sessionId)
-  if (!info?.budgetDeadline) return
+  // Never arm for a dead record: there's no running agent to reap, so arming would only
+  // schedule a killSession that destroys the (recovery-preserved) worktree branch. At boot,
+  // initPhaseBudgets re-arms every persisted budgetDeadline — a dead worker's must be skipped.
+  if (!info?.budgetDeadline || info.deadAt) return
   clearPhaseBudget(sessionId)
 
   const untilNudge = Math.max(0, info.budgetDeadline - Date.now())
@@ -30,7 +33,7 @@ export function startPhaseBudget(sessionId: string): void {
 
   entry.nudge = setTimeout(() => {
     const live = registry.get(sessionId)
-    if (!live?.budgetDeadline) return
+    if (!live?.budgetDeadline || live.deadAt) return
     process.stderr.write(`daemon: phase-budget: ${live.tmuxName} hit its budget, nudging (reap in ${PHASE_BUDGET_GRACE_MS / 60000}m)\n`)
     transport.sendOrQueue(sessionId, {
       type: 'notification',
@@ -45,7 +48,10 @@ export function startPhaseBudget(sessionId: string): void {
     entry.reap = setTimeout(() => {
       const target = registry.get(sessionId)
       timers.delete(sessionId)
-      if (!target) return
+      // Skip a target that died after the timer was armed: a dead session is already ended,
+      // and reaping it here would run killSession without skipWorktreeDestroy, deleting a
+      // worktree branch that recovery is preserving. Its lifecycle is handled elsewhere.
+      if (!target || target.deadAt) return
       if (!reaper) {
         process.stderr.write(`daemon: phase-budget: no reaper installed, cannot reap ${target.tmuxName}\n`)
         return

@@ -17,6 +17,8 @@ import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync, readd
 import { join, resolve, relative } from 'path'
 import { gateway } from './config.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
+import { checkUnpushedCommits } from './worktree-manager.js'
+import { getWatchesBySession, restoreWatches } from './pr-watch.js'
 import { startProtocolRun, getRunByThread, cancelRun, protocolEvents } from './protocol-runner.js'
 import type { CompletionEvent } from './protocol-types.js'
 import reviewProto from '../protocols/review.js'
@@ -1177,6 +1179,11 @@ export async function sweepOrphanedBuilders(): Promise<void> {
       // No pushToolSurface here: bridges aren't connected at startup; the
       // reconnect path reads the updated SessionInfo.
       clearFactoryIdentity(info)
+      // Preserve as-is for the PM to peek/kill — the automatic boot recovery batch
+      // must NOT revive it (would re-run completed-but-unaccepted work). Manual
+      // `recover` is unaffected. clearFactoryIdentity left it a plain thread_owner,
+      // so this marker is the only signal auto-recovery has to skip it.
+      info.suppressAutoRecover = true
       registry.persist()
       if (pmThreadId) {
         void safeSend(pmThreadId, `🏭 \`${info.tmuxName}\` survived restart${ticketInfo} — peek/kill when ready`).catch(() => {})
@@ -1185,8 +1192,35 @@ export async function sweepOrphanedBuilders(): Promise<void> {
     }
 
     process.stderr.write(`daemon: factory: sweeping orphaned builder ${info.tmuxName} (${info.sessionId})\n`)
+    // A builder swept mid-build (building/reviewing) may hold locally-committed but unpushed
+    // work on its worktree branch — the "commit and push before factory_done" step hasn't run
+    // yet. Preserve the branch instead of letting killSession's `branch -D` delete it, and
+    // surface it to the PM for manual recovery. (Same worktree-losslessness the worker recovery
+    // path guarantees — factory builders are build sessions with worktrees too.)
+    let skipWorktreeDestroy = false
+    let savedWatches: ReturnType<typeof getWatchesBySession> = []
+    let preserved: SessionInfo | undefined  // pre-kill snapshot to re-persist (decoupled from killSession's mutations)
+    if (info.worktreeRepo && info.worktreePath) {
+      const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
+      const unpushed = await checkUnpushedCommits(info.worktreeRepo, branch)
+      if (unpushed !== 0) {
+        skipWorktreeDestroy = true
+        // Snapshot the record + its PR watches (with seen-cursors) BEFORE the kill: killSession
+        // deletes the record and unwatchBySession drops the watches. Re-persisting from this
+        // pristine copy (not the live `info`) means a future killSession that mutates fields
+        // before deletion can't corrupt the preserved record. Restoring the watches matches
+        // recoverOne so a manual `recover` resumes them without re-notifying / missing a CI change.
+        preserved = { ...info }
+        savedWatches = getWatchesBySession(info.sessionId)
+        const note = unpushed > 0 ? `${unpushed} unpushed commit(s)` : `possibly-unpushed commits (couldn't verify)`
+        process.stderr.write(`daemon: factory: preserving worktree branch ${branch} for orphaned ${info.tmuxName} — ${note}\n`)
+        if (pmThreadId) {
+          void safeSend(pmThreadId, `🏭 \`${info.tmuxName}\` orphaned by restart${ticketInfo} — branch \`${branch}\` preserved (${note}); recover it manually before deleting.`).catch(() => {})
+        }
+      }
+    }
     try {
-      await killSession(info, 'orphaned factory builder (daemon restarted)')
+      await killSession(info, 'orphaned factory builder (daemon restarted)', skipWorktreeDestroy ? { skipWorktreeDestroy: true } : undefined)
     } catch (err) {
       process.stderr.write(`daemon: factory: sweep kill failed for ${info.tmuxName}: ${err}\n`)
     }
@@ -1205,7 +1239,24 @@ export async function sweepOrphanedBuilders(): Promise<void> {
     }
     logBuild(orphanState, 'orphaned')
 
-    if (pmThreadId) {
+    if (skipWorktreeDestroy && preserved) {
+      // killSession deleted the record, which drops pickSessionName's reservation of the
+      // preserved branch's name — a later same-repo spawn could then draw that freed name and
+      // branch -D it, destroying the commits we just saved. Re-persist a dead, non-auto-
+      // recoverable thread_owner (from the pre-kill snapshot) so the reservation holds and the
+      // branch stays salvageable via manual `recover` (mirrors the awaiting_pm identity release).
+      clearFactoryIdentity(preserved)
+      preserved.deadAt = preserved.deadAt ?? Date.now()
+      preserved.suppressAutoRecover = true
+      // killSession may have discovered+assigned claudeSessionId from the still-alive pane
+      // (its one pre-delete mutation). Carry just that field forward so a later `recover` can
+      // still do a full-context tier-1 resume; the pre-kill snapshot protects every other field.
+      preserved.claudeSessionId ??= info.claudeSessionId
+      registry.set(preserved.sessionId, preserved)
+      registry.setThread(preserved.threadId, preserved.sessionId)
+      if (savedWatches.length > 0) restoreWatches(savedWatches, preserved.sessionId, preserved.threadId)
+      registry.persist()
+    } else if (pmThreadId) {
       void safeSend(pmThreadId, `🏭 \`${info.tmuxName}\`${ticketInfo} orphaned — killed on restart`).catch(() => {})
     }
     swept++

@@ -44,6 +44,7 @@ import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
 import { socketServer, startBridgeServer, initEphemeralTimers } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
+import { autoRecoverAfterBoot } from './daemon/recovery.js'
 
 threadRegistry.boot(registry)
 
@@ -78,7 +79,15 @@ reconnectCodexSessions().then(() => {
 
 // Sweep orphaned factory builders left by previous daemon instance
 import { sweepOrphanedBuilders } from './daemon/factory.js'
-sweepOrphanedBuilders().catch(err => {
+// Retain the promise: auto-recovery must run AFTER the sweep so it sees factory
+// builders in their post-sweep state (awaiting_pm ones marked suppressAutoRecover,
+// others killed) rather than racing it.
+// The .catch swallows a sweep failure so `await factorySweep` never blocks auto-recovery.
+// A partial sweep is safe: auto-recover targets only thread_owner workers that are neither
+// factory_builder (un-swept builders keep that type → excluded) nor suppressAutoRecover
+// (swept ones → excluded), so sweep completeness never changes what auto-recover acts on.
+// Re-throwing would be worse — it would skip recovery of healthy, unrelated workers.
+const factorySweep = sweepOrphanedBuilders().catch(err => {
   process.stderr.write(`daemon: factory sweep failed: ${err}\n`)
 })
 
@@ -339,6 +348,13 @@ void startGateway().then(async () => {
     }
   }
   await backfillArtifacts()
+  // Opt-in (HYDRA_AUTO_RECOVER=1): revive dead workers after a reboot. Runs after
+  // the gateway is up (respawns post to their threads) AND after the factory sweep
+  // settled (so it doesn't race sweepOrphanedBuilders over factory records). No-op otherwise.
+  await factorySweep
+  await autoRecoverAfterBoot().catch(err =>
+    process.stderr.write(`daemon: auto-recovery failed: ${err instanceof Error ? err.message : err}\n`),
+  )
 })
 
 // Backfill artifacts from each live session's own recent thread posts, so

@@ -4,7 +4,7 @@ import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { atomicWriteFileSync, formatDuration } from './util.js'
+import { atomicWriteFileSync, formatDuration, tmuxHasSession } from './util.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -321,6 +321,16 @@ async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckR
 async function pollPr(entry: WatchEntry): Promise<void> {
   const pollTime = new Date().toISOString()
 
+  // Freeze a watch whose owner record is present but DEAD (crashed / recovery-preserved):
+  // no live agent can consume a notification, and advancing the seen-cursors here would mark
+  // PR feedback seen without delivering it — so a later recovery would resume from the
+  // advanced cursor and never surface the comments/CI changes that arrived while dead. Hold
+  // until the owner is revived (recovery's restoreWatches re-points the watch to the live
+  // successor, and polling resumes from the as-of-death cursors). A truly-absent owner still
+  // falls through to the prune path below; 'main' has no dead record so it's unaffected.
+  const owner = registry.get(entry.sessionId)
+  if (owner?.deadAt) return
+
   // Fetch PR state once — reused for merge check and check status
   let prData: any = null
   try {
@@ -609,6 +619,31 @@ export function unwatchBySession(sessionId: string): number {
   }
   if (removed > 0) persist()
   return removed
+}
+
+// Re-establish a dead session's watches onto its recovered replacement, preserving
+// the seen-cursors (lastReviewCommentId/lastHeadSha/lastCheckStatus/…) — a naive
+// re-watch would reset them and re-notify old comments or miss a CI change. Snapshot
+// via getWatchesBySession BEFORE the dead session is killed, restore AFTER the
+// replacement exists. Idempotent by prUrl.
+export function restoreWatches(entries: WatchEntry[], newSessionId: string, newThreadId: string): number {
+  let restored = 0
+  for (const entry of entries) {
+    // Never downgrade a watch a DIFFERENT, still-live session holds — its cursors are
+    // fresher/authoritative. (In practice the map is one-owner-per-prUrl so the sets are
+    // disjoint; this guard makes that safety explicit and survives future changes.)
+    // Overwriting an entry held by a dead record IS intended: re-pointing a stranded
+    // watch to the survivor.
+    const existing = watches.get(entry.prUrl)
+    if (existing && existing.sessionId !== newSessionId) {
+      const owner = registry.get(existing.sessionId)
+      if (owner && tmuxHasSession(owner.tmuxName)) continue
+    }
+    watches.set(entry.prUrl, { ...entry, sessionId: newSessionId, threadId: newThreadId })
+    restored++
+  }
+  if (restored > 0) persist()
+  return restored
 }
 
 export function listWatches(): WatchEntry[] {

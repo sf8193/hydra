@@ -665,6 +665,23 @@ export async function lifecycleInstall(platform: string, opts?: InstallOpts): Pr
     console.log(`unloaded existing ${label}`)
   }
 
+  // Supersede the legacy unlabeled watchdog (com.hydra.watchdog → deprecated
+  // watchdog.sh). Left loaded, it runs a SECOND watchdog alongside this one,
+  // double-starting the daemon/byte on reboot. Remove it so this job is the
+  // single source of truth.
+  const legacyPlist = join(homedir(), 'Library', 'LaunchAgents', 'com.hydra.watchdog.plist')
+  if (existsSync(legacyPlist) && legacyPlist !== dest) {
+    try { execSync(`launchctl unload ${shq(legacyPlist)} 2>/dev/null`, { stdio: 'pipe' }) } catch {}
+    try {
+      unlinkSync(legacyPlist)
+      console.log(`removed legacy watchdog (com.hydra.watchdog) — superseded by ${label}`)
+    } catch (err) {
+      // Don't claim "removed" if the unlink failed (e.g. permissions) — the file remains
+      // and would keep double-starting the daemon; tell the operator to remove it by hand.
+      console.log(`⚠ could not remove legacy watchdog ${legacyPlist}: ${err instanceof Error ? err.message : err} — remove it manually so two watchdogs don't run`)
+    }
+  }
+
   // Check for .env
   const envFile = join(cfg.stateDir, '.env')
   if (!existsSync(envFile)) {

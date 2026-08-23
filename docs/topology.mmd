@@ -19,6 +19,7 @@ graph TD
     daemon_sessions["sessions.ts"]
     daemon_bridge-transport["bridge-transport.ts"]
     daemon_util["util.ts"]
+    daemon_worktree-manager["worktree-manager.ts"]
   end
 
   subgraph tools["Tools"]
@@ -37,6 +38,7 @@ graph TD
 
   subgraph lifecycle["Lifecycle"]
     daemon_session-lifecycle["session-lifecycle.ts"]
+    daemon_recovery["recovery.ts"]
     daemon_anchor-state["anchor-state.ts"]
   end
 
@@ -78,6 +80,7 @@ graph TD
   daemon --> daemon_permission
   daemon --> daemon_bridge-server
   daemon --> daemon_commands_global
+  daemon --> daemon_recovery
   daemon --> daemon_phase-budget
   daemon --> daemon_session-lifecycle
   daemon --> daemon_dashboard
@@ -149,6 +152,14 @@ graph TD
   daemon_session-lifecycle --> daemon_anchor-state
   daemon_session-lifecycle --> daemon_pr-watch
   daemon_session-lifecycle --> daemon_access
+  daemon_session-lifecycle --> daemon_worktree-manager
+  daemon_recovery --> daemon_config
+  daemon_recovery --> daemon_sessions
+  daemon_recovery --> daemon_session-lifecycle
+  daemon_recovery --> daemon_util
+  daemon_recovery --> daemon_pr-watch
+  daemon_recovery --> daemon_worktree-manager
+  daemon_recovery --> daemon_access
   daemon_anchor-state --> daemon_config
   daemon_anchor-state --> daemon_sessions
   daemon_router --> daemon_config
@@ -157,6 +168,7 @@ graph TD
   daemon_router --> daemon_bridge-transport
   daemon_router --> daemon_access
   daemon_router --> daemon_commands_global
+  daemon_router --> daemon_recovery
   daemon_router --> shared_constants
   daemon_router --> daemon_commands_thread
   daemon_router --> daemon_commands_review
