@@ -108,7 +108,13 @@
       "id": "daemon_util",
       "label": "daemon/util.ts",
       "layer": "core",
-      "desc": "safeSend, chunk, getContextPercent, formatDuration"
+      "desc": "safeSend, chunk, getContextPercent, formatDuration, baseNameFromBranch"
+    },
+    {
+      "id": "daemon_worktree-manager",
+      "label": "daemon/worktree-manager.ts",
+      "layer": "core",
+      "desc": "Git worktree create/reattach/destroy, unpushed-commit check"
     },
     {
       "id": "daemon_bridge-tools",
@@ -163,6 +169,12 @@
       "label": "daemon/session-lifecycle.ts",
       "layer": "lifecycle",
       "desc": "doSpawnSession, killSession, tryResume, tryRespawn"
+    },
+    {
+      "id": "daemon_recovery",
+      "label": "daemon/recovery.ts",
+      "layer": "lifecycle",
+      "desc": "Post-reboot/crash recovery: recoverOne cascade, work-key dedup, autoRecoverAfterBoot"
     },
     {
       "id": "daemon_anchor-state",
@@ -331,6 +343,10 @@
     [
       "daemon",
       "daemon_commands_global"
+    ],
+    [
+      "daemon",
+      "daemon_recovery"
     ],
     [
       "daemon",
@@ -617,6 +633,38 @@
       "daemon_access"
     ],
     [
+      "daemon_session-lifecycle",
+      "daemon_worktree-manager"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_config"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_session-lifecycle"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_util"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_pr-watch"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_worktree-manager"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_access"
+    ],
+    [
       "daemon_anchor-state",
       "daemon_config"
     ],
@@ -647,6 +695,10 @@
     [
       "daemon_router",
       "daemon_commands_global"
+    ],
+    [
+      "daemon_router",
+      "daemon_recovery"
     ],
     [
       "daemon_router",
