@@ -121,6 +121,9 @@ let socketReady = false
 let dynamicTools: Array<Record<string, unknown>> | null = null
 let sessionMetadata: Record<string, unknown> | null = null
 
+// Pending tools_request callbacks — resolved by tools_update or tools_response
+let pendingToolsResolve: ((tools: Array<Record<string, unknown>>) => void) | null = null
+
 // ── Tool refresh fallback ────────────────────────────────────────────
 // Notifications from the daemon often coincide with phase transitions that
 // change the tool surface. If a tools_update was lost in transit, the bridge
@@ -242,6 +245,10 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       process.stderr.write(`bridge: ← daemon tools_update received: ${tools?.length ?? 0} tools (was ${prevCount}) ts=${new Date().toISOString()}\n`)
       if (tools) {
         dynamicTools = tools
+        if (pendingToolsResolve) {
+          pendingToolsResolve(tools)
+          pendingToolsResolve = null
+        }
         mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {
           process.stderr.write(`bridge: → CC notifications/tools/list_changed delivered ts=${new Date().toISOString()} tools=${tools.length}\n`)
         }).catch(err => {
@@ -379,9 +386,31 @@ const SESSION_INFO_TOOL = {
 }
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => {
-  // Wait up to 5s for daemon registration to deliver the full tool list.
-  // Without this, the first ListTools call races the socket connect and
-  // returns only the hardcoded fallback (no factory_build, spawn_session, etc.)
+  // Pull-authoritative: always query the daemon for the current tool list.
+  // This ensures tools/list never returns stale data — the daemon computes
+  // tools from live session state (type + capabilities) on every call.
+  // Falls back to cached dynamicTools if the daemon is unreachable.
+  if (socketReady) {
+    try {
+      const fresh = await new Promise<Array<Record<string, unknown>> | null>(resolve => {
+        pendingToolsResolve = resolve
+        sendToSocket({ type: 'request_tools' })
+        setTimeout(() => {
+          if (pendingToolsResolve === resolve) {
+            pendingToolsResolve = null
+            resolve(null)
+          }
+        }, 2_000)
+      })
+      if (fresh) {
+        dynamicTools = fresh
+        return { tools: [SESSION_INFO_TOOL, ...dynamicTools] }
+      }
+    } catch {
+      process.stderr.write(`bridge: request_tools failed, using cache ts=${new Date().toISOString()}\n`)
+    }
+  }
+  // Fallback: wait for initial registration or use cache
   if (!dynamicTools) {
     for (let i = 0; i < 50 && !dynamicTools; i++) {
       await new Promise(r => setTimeout(r, 100))
