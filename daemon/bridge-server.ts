@@ -389,6 +389,17 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       break
     }
 
+    case 'request_tools': {
+      // Pull-based fallback: bridge requests a tool refresh when it suspects
+      // a tools_update was lost (e.g., after receiving a notification that
+      // may indicate a phase transition). Responds with a tools_update.
+      if (conn.sessionId) {
+        const tools = getToolsForSession(conn.sessionId)
+        transport.sendToBridge(conn, { type: 'tools_update', tools })
+      }
+      break
+    }
+
     case 'cli': {
       void handleCLIRequest(msg as CLIRequest).then(response => {
         conn.socket.write(JSON.stringify(response) + '\n')
