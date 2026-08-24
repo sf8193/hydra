@@ -302,16 +302,34 @@ describe('spike protocol structure', () => {
     expect(spike.ownerRole).toBe('guide')
   })
 
-  test('exploring loops on checkpoint', () => {
+  test('checkpoint transitions to steering', () => {
     const r = spike.machine.transition('exploring' as any, 'checkpoint' as any)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.to).toBe('steering')
+  })
+
+  test('continue returns to exploring', () => {
+    const r = spike.machine.transition('steering' as any, 'continue' as any)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.to).toBe('exploring')
+  })
+
+  test('redirect returns to exploring', () => {
+    const r = spike.machine.transition('steering' as any, 'redirect' as any)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.to).toBe('exploring')
   })
 
   test('wrap_up transitions to reporting', () => {
-    const r = spike.machine.transition('exploring' as any, 'wrap_up' as any)
+    const r = spike.machine.transition('steering' as any, 'wrap_up' as any)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.to).toBe('reporting')
+  })
+
+  test('steering timeout defaults to exploring', () => {
+    const r = spike.machine.transition('steering' as any, 'timeout' as any)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.to).toBe('exploring')
   })
 
   test('report_posted completes', () => {
@@ -324,8 +342,9 @@ describe('spike protocol structure', () => {
     expect(spike.windowMs('exploring')).toBe(60 * 60 * 1000)
   })
 
-  test('phaseInteraction classifies advance and both modes', () => {
-    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional', options: ['done'], descriptions: { done: 'your summary' } })
+  test('phaseInteraction classifies steering as required and exploring as none', () => {
+    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'none' })
+    expect(spike.phaseInteraction('steering')).toEqual({ verdict: 'required', options: ['continue', 'redirect', 'wrap_up'], descriptions: { continue: 'keep investigating the current line', redirect: 'change focus — your content becomes the new direction', wrap_up: 'enough investigation, move to final report' } })
     expect(spike.phaseInteraction('reporting')).toEqual({ verdict: 'none' })
   })
 
@@ -334,10 +353,20 @@ describe('spike protocol structure', () => {
     expect(seed).toContain('cedar')
     expect(seed).toContain('Why does qubit keep crashing?')
     expect(seed).toContain('advance(')
+    expect(seed).toContain('Checkpoint format')
+    expect(seed).toContain('Report format')
   })
 
-  test('exploring phase has no onEnter behaviors (rounds advance on reply)', () => {
+  test('exploring phase has no onEnter behaviors', () => {
     expect(spike.phases.exploring.onEnter).toBeUndefined()
+  })
+
+  test('steering phase has no onEnter behaviors', () => {
+    expect(spike.phases.steering.onEnter).toBeUndefined()
+  })
+
+  test('steering window is 5m', () => {
+    expect(spike.windowMs('steering')).toBe(5 * 60 * 1000)
   })
 
   test('reporting phase has empty onEnter (explorer stays alive, standard timeout)', () => {

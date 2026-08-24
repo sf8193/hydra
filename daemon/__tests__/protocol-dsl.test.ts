@@ -253,9 +253,14 @@ describe('phaseInteraction', () => {
     expect(build.phaseInteraction('reviewing')).toEqual({ verdict: 'required', options: ['approve', 'request_changes'], descriptions: { approve: 'why it ships', request_changes: 'what to fix' } })
   })
 
-  test('both advance and decide returns both mode', async () => {
+  test('decide-only phase in spike returns required mode', async () => {
     const spike = (await import('../../protocols/spike.js')).default
-    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional', options: ['done'], descriptions: { done: 'your summary' } })
+    expect(spike.phaseInteraction('steering')).toEqual({ verdict: 'required', options: ['continue', 'redirect', 'wrap_up'], descriptions: { continue: 'keep investigating the current line', redirect: 'change focus — your content becomes the new direction', wrap_up: 'enough investigation, move to final report' } })
+  })
+
+  test('advance-only phase in spike returns none mode', async () => {
+    const spike = (await import('../../protocols/spike.js')).default
+    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'none' })
   })
 
   test('terminal phase returns undefined', () => {
@@ -329,11 +334,11 @@ describe('protocolSeed', () => {
     expect(seed).toContain('advance')
   })
 
-  test('generates both-mode instructions for advance+decide phases', async () => {
+  test('generates advance instructions for spike explorer', async () => {
     const spike = (await import('../../protocols/spike.js')).default
     const seed = spike.seed('explorer', { name: 'drift', sessionId: 'a', threadId: 't', rounds: 1 })!
-    expect(seed).toContain('verdict: "done"')
-    expect(seed).toContain('checkpoints')
+    expect(seed).toContain('Checkpoint format')
+    expect(seed).toContain('Report format')
     expect(seed).toContain('advance(')
   })
 
