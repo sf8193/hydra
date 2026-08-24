@@ -121,6 +121,14 @@ let socketReady = false
 let dynamicTools: Array<Record<string, unknown>> | null = null
 let sessionMetadata: Record<string, unknown> | null = null
 
+// ── Tool refresh fallback ────────────────────────────────────────────
+// Notifications from the daemon often coincide with phase transitions that
+// change the tool surface. If a tools_update was lost in transit, the bridge
+// requests a fresh tool list after receiving a notification. Debounced so
+// rapid-fire notifications don't flood the daemon.
+let lastToolRefreshRequestAt = 0
+const TOOL_REFRESH_DEBOUNCE_MS = 2_000
+
 // ── Socket connection ──────────────────────────────────────────────────
 
 let sock: Socket | null = null
@@ -200,6 +208,16 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       }).catch(err => {
         process.stderr.write(`bridge: → CC notifications/claude/channel FAILED: ${err} ts=${new Date().toISOString()}\n`)
       })
+
+      // Pull-based tool refresh fallback: notifications from the daemon often
+      // coincide with protocol phase transitions that change the tool surface.
+      // If the push-path tools_update was lost (socket race, backpressure, etc.),
+      // requesting a refresh here provides a second chance at delivery.
+      const now = Date.now()
+      if (socketReady && now - lastToolRefreshRequestAt > TOOL_REFRESH_DEBOUNCE_MS) {
+        lastToolRefreshRequestAt = now
+        sendToSocket({ type: 'request_tools' })
+      }
       break
     }
 
@@ -220,6 +238,8 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
 
     case 'tools_update': {
       const tools = msg.tools as Array<Record<string, unknown>> | undefined
+      const prevCount = dynamicTools?.length ?? 0
+      process.stderr.write(`bridge: ← daemon tools_update received: ${tools?.length ?? 0} tools (was ${prevCount}) ts=${new Date().toISOString()}\n`)
       if (tools) {
         dynamicTools = tools
         mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {

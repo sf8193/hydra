@@ -61,11 +61,37 @@ export class BridgeTransport {
     this.bridges.clear()
   }
 
-  sendToBridge(bridge: BridgeConn, msg: Record<string, unknown>): void {
+  sendToBridge(bridge: BridgeConn, msg: Record<string, unknown>): boolean {
+    if (bridge.socket.destroyed) {
+      process.stderr.write(`daemon: bridge ${bridge.sessionId} socket destroyed, queueing type=${msg.type ?? 'unknown'}\n`)
+      this.enqueue(bridge.sessionId, msg)
+      return false
+    }
     try {
-      bridge.socket.write(JSON.stringify(msg) + '\n')
+      const flushed = bridge.socket.write(JSON.stringify(msg) + '\n')
+      if (!flushed) {
+        process.stderr.write(`daemon: bridge ${bridge.sessionId} backpressure on type=${msg.type ?? 'unknown'}\n`)
+      }
+      return true
     } catch (err) {
-      process.stderr.write(`daemon: failed to write to bridge ${bridge.sessionId}: ${err}\n`)
+      process.stderr.write(`daemon: failed to write to bridge ${bridge.sessionId}, queueing: ${err}\n`)
+      this.enqueue(bridge.sessionId, msg)
+      return false
+    }
+  }
+
+  private enqueue(sessionId: string, msg: Record<string, unknown>): void {
+    let queue = this.messageQueues.get(sessionId)
+    if (!queue) {
+      queue = []
+      this.messageQueues.set(sessionId, queue)
+    }
+    if (queue.length < this.maxQueueSize) {
+      queue.push(msg)
+      this.persistQueues()
+    } else if (!this.queueFullLogged.has(sessionId)) {
+      this.queueFullLogged.add(sessionId)
+      process.stderr.write(`daemon: message queue full for ${sessionId} (${this.maxQueueSize}), dropping type=${msg.type ?? 'unknown'}\n`)
     }
   }
 
@@ -93,20 +119,10 @@ export class BridgeTransport {
     if (bridge) {
       this.sendToBridge(bridge, msg)
     } else {
-      let queue = this.messageQueues.get(sessionId)
-      if (!queue) {
-        queue = []
-        this.messageQueues.set(sessionId, queue)
+      if (msg.type === 'tools_update') {
+        process.stderr.write(`daemon: no bridge for ${sessionId}, queueing tools_update\n`)
       }
-      if (queue.length < this.maxQueueSize) {
-        queue.push(msg)
-        this.persistQueues()
-      } else {
-        if (!this.queueFullLogged.has(sessionId)) {
-          this.queueFullLogged.add(sessionId)
-          process.stderr.write(`daemon: message queue full for ${sessionId} (${this.maxQueueSize}), dropping type=${msg.type ?? 'unknown'}\n`)
-        }
-      }
+      this.enqueue(sessionId, msg)
     }
   }
 
