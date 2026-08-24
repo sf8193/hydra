@@ -357,17 +357,25 @@ describe('build: invalid verdict rejected', () => {
 // Spike protocol scenarios
 // ---------------------------------------------------------------------------
 
-describe('spike: checkpoint self-loop + done verdict', () => {
-  test('explorer checkpoints then decides done', async () => {
+describe('spike: steering loop', () => {
+  test('explorer checkpoints, guide steers, then wraps up', async () => {
     h = createHarness(spike, { rounds: 1, topic: 'investigate caching' })
     expect(h.phase).toBe('exploring')
 
-    // Checkpoint — self-loop via advanceEvent
+    // Checkpoint — transitions to steering for guide review
     await h.advance('explorer', 'Found the cache layer in src/cache.ts.')
+    expect(h.phase).toBe('steering')
+
+    // Guide continues — back to exploring
+    await h.advance('guide', 'Keep going, check eviction policy.', 'continue')
     expect(h.phase).toBe('exploring')
 
-    // Done — verdict routes to reporting
-    await h.advance('explorer', 'Investigation complete.', 'done')
+    // Second checkpoint
+    await h.advance('explorer', 'Eviction uses LRU with 1000 entry cap.')
+    expect(h.phase).toBe('steering')
+
+    // Guide wraps up — transitions to reporting
+    await h.advance('guide', 'Enough, write the report.', 'wrap_up')
     expect(h.phase).toBe('reporting')
 
     // Post report
@@ -375,16 +383,49 @@ describe('spike: checkpoint self-loop + done verdict', () => {
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents[0].outcome).toBe('complete')
   })
+
+  test('guide redirect changes explorer focus', async () => {
+    h = createHarness(spike, { rounds: 1, topic: 'investigate caching' })
+    expect(h.phase).toBe('exploring')
+
+    await h.advance('explorer', 'Found basic caching in src/cache.ts.')
+    expect(h.phase).toBe('steering')
+
+    // Guide redirects
+    await h.advance('guide', 'Look at the invalidation logic instead.', 'redirect')
+    expect(h.phase).toBe('exploring')
+    expect(h.decisions.some(d => d.value === 'redirect')).toBe(true)
+
+    // Explorer's onTurn notification should mention redirect
+    const notes = h.actorNotifications('explorer')
+    expect(notes.some(n => n.includes('redirected'))).toBe(true)
+  })
+
+  test('steering timeout defaults to continue', async () => {
+    h = createHarness(spike, { rounds: 1 })
+    expect(h.phase).toBe('exploring')
+
+    await h.advance('explorer', 'Progress update.')
+    expect(h.phase).toBe('steering')
+
+    // Guide doesn't respond — timeout transitions back to exploring
+    await h.tickToTimeout()
+    expect(h.phase).toBe('exploring')
+    expect(h.isTerminated).toBe(false)
+  })
 })
 
 describe('spike: advance-only phase does not accept verdict', () => {
   test('verdict in reporting phase is rejected', async () => {
     h = createHarness(spike, { rounds: 1 })
 
-    await h.advance('explorer', 'Done.', 'done')
+    // Navigate to reporting via steering wrap_up
+    await h.advance('explorer', 'Done investigating.')
+    expect(h.phase).toBe('steering')
+    await h.advance('guide', 'Wrap it up.', 'wrap_up')
     expect(h.phase).toBe('reporting')
 
-    const result = await h.advance('explorer', 'Report.', 'done')
+    const result = await h.advance('explorer', 'Report.', 'continue')
     expect(result.ok).toBe(false)
     expect(result.reason).toContain('does not accept a verdict')
     expect(h.phase).toBe('reporting')
@@ -539,7 +580,7 @@ describe('review: reconnect clears disconnect timer', () => {
 })
 
 describe('spike: backstopTimer preserves disconnect timers', () => {
-  test('phase transition with backstopTimer does not clear disconnect timers', async () => {
+  test('phase transition does not clear disconnect timers', async () => {
     h = createHarness(spike, { rounds: 1, topic: 'test' })
     expect(h.phase).toBe('exploring')
 
@@ -547,11 +588,9 @@ describe('spike: backstopTimer preserves disconnect timers', () => {
     h.disconnect('explorer')
     expect(h.run.disconnectTimers.size).toBe(1)
 
-    // Transition to reporting — has backstopTimer in onEnter
-    await h.advance('explorer', 'Done investigating.', 'done')
-    expect(h.phase).toBe('reporting')
-
-    // Disconnect timer should survive the backstopTimer behavior
+    // Transition to steering — disconnect timer should survive
+    await h.advance('explorer', 'Found something.')
+    expect(h.phase).toBe('steering')
     expect(h.run.disconnectTimers.size).toBe(1)
   })
 })
@@ -681,10 +720,16 @@ describe('PhaseInteraction.options', () => {
     expect(ia?.options).toEqual(['approve', 'request_changes'])
   })
 
-  test('spike exploring carries verdict options from decision', () => {
+  test('spike steering carries verdict options from decision', () => {
+    const ia = spike.phaseInteraction('steering')
+    expect(ia?.verdict).toBe('required')
+    expect(ia?.options).toEqual(['continue', 'redirect', 'wrap_up'])
+  })
+
+  test('spike exploring has no options (verdict: none)', () => {
     const ia = spike.phaseInteraction('exploring')
-    expect(ia?.verdict).toBe('optional')
-    expect(ia?.options).toEqual(['done'])
+    expect(ia?.verdict).toBe('none')
+    expect(ia?.options).toBeUndefined()
   })
 
   test('review critic_turn has no options (verdict: none)', () => {
@@ -866,12 +911,12 @@ describe('tools_update on phase transition', () => {
     h = createHarness(spike, { rounds: 1 })
     expect(h.phase).toBe('exploring')
 
-    // Checkpoint — self-loop, same actor
+    // Checkpoint — transitions to steering (different actor: guide)
     await h.advance('explorer', 'Found the cache layer.')
-    expect(h.phase).toBe('exploring')
+    expect(h.phase).toBe('steering')
 
-    // Done — transitions to reporting, same actor
-    await h.advance('explorer', 'Investigation complete.', 'done')
+    // Guide wraps up — transitions to reporting (back to explorer)
+    await h.advance('guide', 'Write the report.', 'wrap_up')
     expect(h.phase).toBe('reporting')
 
     const msgs = h.actorMessages('explorer')
