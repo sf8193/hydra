@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { classifyBridgeStart, BRIDGE_MCP_SERVER, BRIDGE_CHANNEL_FLAG, describeBridgeAbsence } from '../bridge-preflight.js'
+import { classifyBridgeStart, BRIDGE_MCP_SERVER, BRIDGE_CHANNEL_FLAG, describeBridgeAbsence, claimBridgeAbsenceReport, clearBridgeAbsenceReport } from '../bridge-preflight.js'
 
 const STARTUP = '[DEBUG] [STARTUP] Loading MCP configs...'
 
@@ -52,5 +52,26 @@ describe('describeBridgeAbsence', () => {
     expect(describeBridgeAbsence('never_started')).toContain('cannot recover')
     expect(describeBridgeAbsence('started')).toContain('retries')
     expect(describeBridgeAbsence('unknown')).toContain('Could not determine')
+  })
+})
+
+describe('claimBridgeAbsenceReport', () => {
+  test('first caller claims, later callers do not — the thread hears it once', () => {
+    const id = 'session-claim-once'
+    expect(claimBridgeAbsenceReport(id)).toBe(true)
+    expect(claimBridgeAbsenceReport(id)).toBe(false)
+    expect(claimBridgeAbsenceReport(id)).toBe(false)
+  })
+
+  test('clearing lets a later loss be reported again', () => {
+    const id = 'session-claim-reset'
+    expect(claimBridgeAbsenceReport(id)).toBe(true)
+    clearBridgeAbsenceReport(id)
+    expect(claimBridgeAbsenceReport(id)).toBe(true)
+  })
+
+  test('claims are per session', () => {
+    expect(claimBridgeAbsenceReport('session-a')).toBe(true)
+    expect(claimBridgeAbsenceReport('session-b')).toBe(true)
   })
 })

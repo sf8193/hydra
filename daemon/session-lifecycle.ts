@@ -24,7 +24,7 @@ import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 import { syncPluginCache } from './plugin-cache.js'
-import { BRIDGE_CHANNEL_FLAG, readBridgeStartVerdict, describeBridgeAbsence } from './bridge-preflight.js'
+import { BRIDGE_CHANNEL_FLAG, readBridgeStartVerdict, describeBridgeAbsence, claimBridgeAbsenceReport } from './bridge-preflight.js'
 import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -986,12 +986,18 @@ async function verifyBridgeAfterSpawn(sessionId: string): Promise<void> {
   // 'started' means a bridge process exists and is still retrying — the orphan
   // detector owns that case, and announcing here would cry wolf on a slow boot.
   if (verdict !== 'never_started') return
+  if (!claimBridgeAbsenceReport(sessionId)) return
 
+  // Deliberately does not promise that a respawn will fare better. The plugin
+  // cache was re-asserted moments before this very spawn, so a stale cache is
+  // the one cause already excluded — saying "re-synced, try again" would be
+  // both hollow and misleading. Report what is known: the session is inert,
+  // respawn is the only recovery, and the usual explanation does not apply.
   void safeSend(
     info.threadId,
     `⚠️ **${info.tmuxName}** spawned without a bridge — it cannot see or answer this thread.\n` +
     `_${describeBridgeAbsence(verdict)}_\n` +
-    `The plugin cache has been re-synced, so \`respawn\` should come up clean.`,
+    `The plugin cache was re-synced immediately before this spawn, so a stale cache isn't the cause. \`respawn\` is the only recovery.`,
   )
 }
 

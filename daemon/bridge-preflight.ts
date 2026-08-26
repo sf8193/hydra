@@ -95,6 +95,30 @@ export function readBridgeStartVerdict(debugLogPath: string | undefined): Bridge
   return classifyBridgeStart(readHead(debugLogPath, STARTUP_SCAN_BYTES))
 }
 
+// ---------------------------------------------------------------------------
+// Report-once guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Two detectors reach the same finding by different routes: the post-spawn
+ * check at 45s and the periodic orphan poll at 90s. Both are worth keeping —
+ * one is prompt, the other catches bridges lost long after spawn — but the
+ * thread should hear about a given session's missing bridge once.
+ */
+const absenceReported = new Set<string>()
+
+/** True for the first caller on this session, false for every caller after. */
+export function claimBridgeAbsenceReport(sessionId: string): boolean {
+  if (absenceReported.has(sessionId)) return false
+  absenceReported.add(sessionId)
+  return true
+}
+
+/** Release the claim once the bridge is back, so a later loss is reported again. */
+export function clearBridgeAbsenceReport(sessionId: string): void {
+  absenceReported.delete(sessionId)
+}
+
 /** One line naming the cause, for the human who has to decide what to do next. */
 export function describeBridgeAbsence(verdict: BridgeStartVerdict): string {
   switch (verdict) {
