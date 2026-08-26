@@ -4,6 +4,7 @@ import { gateway } from './config.js'
 import { tmuxHasSession, getContextPercent } from './util.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { discoverClaudeSessionId } from './session-lifecycle.js'
+import { readBridgeStartVerdict, describeBridgeAbsence } from './bridge-preflight.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
@@ -63,8 +64,12 @@ export function startSessionHealthPoll(): void {
         }
         if (!orphanAlerted.has(info.sessionId)) {
           orphanAlerted.add(info.sessionId)
-          process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)\n`)
-          void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread. Use \`respawn\` to start fresh.`).catch(() => {})
+          // Name which of the two causes this is. They read identically from here
+          // — tmux alive, no socket — but only one of them can still resolve on
+          // its own, and the human's next move depends on which.
+          const verdict = readBridgeStartVerdict(info.debugLogPath)
+          process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s, verdict=${verdict})\n`)
+          void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread.\n_${describeBridgeAbsence(verdict)}_\nUse \`respawn\` to start fresh.`).catch(() => {})
         }
       } else {
         orphanAlerted.delete(info.sessionId)
