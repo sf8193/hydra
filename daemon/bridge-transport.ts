@@ -15,6 +15,8 @@ export type BridgeConn = {
   socket: Socket
   buf: string
   mainCloseRecorded?: boolean // guards double 'error'+'end' from recording twice
+  lastToolsPushAt?: number // request_tools throttle; held on the conn so it dies with it
+  backpressureLogged?: boolean // first stall per connection is news, the rest is volume
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +72,17 @@ export class BridgeTransport {
     try {
       const flushed = bridge.socket.write(JSON.stringify(msg) + '\n')
       if (!flushed) {
-        process.stderr.write(`daemon: bridge ${bridge.sessionId} backpressure on type=${msg.type ?? 'unknown'}\n`)
+        // Report the first stall on a connection and then go quiet. A socket that
+        // stops draining stops draining for every subsequent write, so logging each
+        // one turns a single fault into log volume proportional to the send rate —
+        // which is exactly how one runaway loop wrote a 2.3GB daemon log. The stall
+        // is a property of the connection; it deserves one line per connection.
+        if (!bridge.backpressureLogged) {
+          bridge.backpressureLogged = true
+          process.stderr.write(`daemon: bridge ${bridge.sessionId} backpressure on type=${msg.type ?? 'unknown'} (further stalls on this connection suppressed)\n`)
+        }
+      } else {
+        bridge.backpressureLogged = false
       }
       return true
     } catch (err) {

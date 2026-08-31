@@ -73,3 +73,28 @@ sequenceDiagram
         info->>info: sessionType → thread_owner<br/>+ removeToolDescriptions('factory_done')
         surface->>transport: tools_update (session restored to thread_owner base)
     end
+
+    rect rgb(255, 250, 230)
+        Note over info,cc: PULL — tools/list, and why it must not announce itself
+        Note over bridge,cc: Every section above is a PUSH: the daemon has news,<br/>and list_changed is how the client hears it.<br/>This one runs the other way, and that reverses the rule.
+        cc->>bridge: tools/list
+        bridge->>transport: {type: request_tools}
+        Note over transport: floor: a second ask inside 1s goes unanswered,<br/>so a looping client times out and falls back to cache
+        transport->>surface: getToolsForSession(sessionId)
+        surface->>compute: (type, caps, overrides?)
+        compute-->>surface: tool list
+        surface->>transport: {type: tools_update, tools}
+        transport->>bridge: tools_update
+        bridge-->>cc: tools/list result (resolves the pending pull)
+        Note over bridge,cc: NO list_changed here. The answer is not news to<br/>whoever asked for it — announcing it makes the client<br/>ask again, which is a closed cycle with nothing to damp it.
+    end
+
+    rect rgb(255, 245, 250)
+        Note over info,cc: PULL — second-chance refresh after a notification
+        Note over bridge: A daemon notification often rides a phase transition.<br/>If that transition's push was lost, this recovers it.
+        transport->>bridge: notification
+        bridge->>transport: {type: request_tools} (debounced 2s)
+        transport->>bridge: tools_update
+        bridge->>cc: notifications/tools/list_changed
+        Note over bridge,cc: This pull DOES announce — it sets no pending resolve,<br/>so the client never asked and the update is genuinely news.<br/>The client's answering tools/list lands in the section above,<br/>which stays silent. The exchange terminates.
+    end

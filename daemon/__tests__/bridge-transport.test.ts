@@ -109,3 +109,68 @@ describe('BridgeTransport', () => {
     expect(bt.bridges.size).toBe(0)
   })
 })
+
+// A socket that stops draining stops draining for every later write. Logging each
+// one makes log volume track the send rate rather than the number of faults, which
+// is how a single stalled bridge produced a multi-gigabyte daemon log.
+describe('BridgeTransport backpressure reporting', () => {
+  let bt: BridgeTransport
+  let logged: string[]
+
+  beforeEach(() => {
+    bt = new BridgeTransport()
+    logged = []
+    process.stderr.write = ((line: string) => { logged.push(line); return true }) as any
+  })
+
+  function stallingSocket(): any {
+    return { write: () => false, end() {}, destroyed: false }
+  }
+
+  test('reports the first stall on a connection and stays quiet after', () => {
+    const conn = { sessionId: 'stalled', socket: stallingSocket(), buf: '' }
+    for (let i = 0; i < 100; i++) {
+      bt.sendToBridge(conn, { type: 'tools_update', tools: [] })
+    }
+    const stallLines = logged.filter(l => l.includes('backpressure'))
+    expect(stallLines).toHaveLength(1)
+    expect(stallLines[0]).toContain('stalled')
+    expect(stallLines[0]).toContain('suppressed')
+  })
+
+  test('a stalled write still counts as sent, so callers do not queue behind it', () => {
+    const conn = { sessionId: 'stalled', socket: stallingSocket(), buf: '' }
+    expect(bt.sendToBridge(conn, { type: 'tools_update', tools: [] })).toBe(true)
+    expect(bt.messageQueues.has('stalled')).toBe(false)
+  })
+
+  test('a connection that drains again may report a later stall', () => {
+    let draining = false
+    const socket = { write: () => draining, end() {}, destroyed: false }
+    const conn = { sessionId: 'flappy', socket, buf: '' }
+
+    bt.sendToBridge(conn, { type: 'tools_update' })
+    bt.sendToBridge(conn, { type: 'tools_update' })
+    expect(logged.filter(l => l.includes('backpressure'))).toHaveLength(1)
+
+    draining = true
+    bt.sendToBridge(conn, { type: 'tools_update' })
+
+    draining = false
+    bt.sendToBridge(conn, { type: 'tools_update' })
+    expect(logged.filter(l => l.includes('backpressure'))).toHaveLength(2)
+  })
+
+  test('each connection reports its own first stall', () => {
+    const a = { sessionId: 'a', socket: stallingSocket(), buf: '' }
+    const b = { sessionId: 'b', socket: stallingSocket(), buf: '' }
+    bt.sendToBridge(a, { type: 'tools_update' })
+    bt.sendToBridge(a, { type: 'tools_update' })
+    bt.sendToBridge(b, { type: 'tools_update' })
+    bt.sendToBridge(b, { type: 'tools_update' })
+    const stallLines = logged.filter(l => l.includes('backpressure'))
+    expect(stallLines).toHaveLength(2)
+    expect(stallLines.some(l => l.includes('bridge a'))).toBe(true)
+    expect(stallLines.some(l => l.includes('bridge b'))).toBe(true)
+  })
+})

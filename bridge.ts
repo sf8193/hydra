@@ -246,8 +246,14 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       if (tools) {
         dynamicTools = tools
         if (pendingToolsResolve) {
+          // This update answers a `request_tools` we sent — almost always on
+          // behalf of a `tools/list` the client just made. Resolving the pending
+          // promise IS the delivery; announcing `list_changed` on top of it tells
+          // the client its own answer is news, and it asks again. That is a closed
+          // cycle with nothing to damp it. Only an unsolicited push below is news.
           pendingToolsResolve(tools)
           pendingToolsResolve = null
+          break
         }
         mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {
           process.stderr.write(`bridge: → CC notifications/tools/list_changed delivered ts=${new Date().toISOString()} tools=${tools.length}\n`)
