@@ -249,7 +249,17 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       process.stderr.write(`bridge: ← daemon tools_update received: ${tools?.length ?? 0} tools (was ${prevCount}) ts=${new Date().toISOString()}\n`)
       if (tools) {
         dynamicTools = tools
+        // This update answers a `request_tools` we sent — almost always on behalf
+        // of a `tools/list` the client just made. Settling the waiters IS the
+        // delivery; announcing `list_changed` on top of it tells the client its
+        // own answer is news, and it asks again. That is a closed cycle with
+        // nothing to damp it. Only an unsolicited push below is news.
+        //
+        // Asked before settling, because settleAll empties the set — afterwards
+        // there is no way to tell a pull answer from an unsolicited push.
+        const answeredPull = pendingToolsWaiters.size > 0
         pendingToolsWaiters.settleAll(tools)
+        if (answeredPull) break
         mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {
           process.stderr.write(`bridge: → CC notifications/tools/list_changed delivered ts=${new Date().toISOString()} tools=${tools.length}\n`)
         }).catch(err => {
