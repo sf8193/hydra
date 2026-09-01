@@ -202,7 +202,7 @@ export const killsInProgress = new Set<string>()
 // Kill session
 // ---------------------------------------------------------------------------
 
-export async function killSession(info: SessionInfo, reason: string): Promise<void> {
+export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
 
@@ -274,7 +274,7 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     clearPhaseBudget(info.sessionId)
     clearInterceptsForSession(info.tmuxName)
 
-    if (info.worktreePath && info.worktreeRepo) {
+    if (info.worktreePath && info.worktreeRepo && !opts?.skipWorktreeDestroy) {
       const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
 
       // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort)
@@ -283,6 +283,9 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
         if (unpushed > 0) {
           process.stderr.write(`daemon: worktree ${info.tmuxName} has ${unpushed} unpushed commit(s) on ${branch}\n`)
           void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` has ${unpushed} unpushed commit(s). Verify changes were pushed before cleanup.`).catch(() => {})
+        } else if (unpushed < 0) {
+          process.stderr.write(`daemon: worktree ${info.tmuxName}: couldn't verify unpushed commits on ${branch} before cleanup\n`)
+          void safeSend(info.threadId, `⚠️ Couldn't verify unpushed commits on worktree branch \`${branch}\` before cleanup (transient git error). Check the branch if it held unmerged work.`).catch(() => {})
         }
         await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch)
       })().catch(err => {
@@ -298,6 +301,9 @@ export async function killSession(info: SessionInfo, reason: string): Promise<vo
     registry.delete(info.sessionId)
     registry.persist()
 
+    // Recovery re-establishes watches on the replacement via restoreWatches (snapshot
+    // taken before this kill) — so deleting here is safe and avoids orphaning entries
+    // on the now-deleted sessionId (which pollPr would prune mid-recovery).
     const removedWatches = unwatchBySession(info.sessionId)
     if (removedWatches > 0) {
       process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
@@ -422,6 +428,22 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let anchorMessageId: string | undefined
   let anchorChannelId: string | undefined
 
+  // Lossless respawn: deliverables/description re-applied after the new record is
+  // created (killSession discards the dead record). Seeded from an explicit
+  // opts.carryOver (fallback tiers, where the record is gone), else snapshotted off
+  // the replaced record in the existing-thread branch below.
+  let carriedArtifacts: string[] | undefined = opts?.carryOver?.artifacts
+  let carriedContextLinks: string[] | undefined = opts?.carryOver?.contextLinks
+  let carriedDescription: string | undefined = opts?.carryOver?.description
+  // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
+  // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
+  // even after the record it came from was deleted.
+  let reuseWorktree: { repo: string; path: string; branch: string } | undefined = opts?.reuseWorktree
+  // The recovery orchestrator (recoverOne) reserves the predecessor's name in
+  // registry.reservedNames across the whole cascade — protecting the preserved worktree
+  // branch from a concurrent spawn's `branch -D` during the kill→persist window — so
+  // doSpawnSession doesn't manage the reservation itself.
+
   // Parse worktree:repo_name prefix early so it doesn't leak into thread names/prompts
   let worktreeTarget: string | undefined = opts?.worktree
   topic = topic || 'session'
@@ -441,6 +463,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   const sessionId = randomUUID()
   const tmuxName = registry.pickSessionName()
+  // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
+  // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
+  // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
+  // recoveries don't collide; and a genuine collision is self-healing — `tmux new-session`
+  // fails cleanly on a duplicate name, the tier returns null, and recovery retries. Reserving
+  // it here would instead leak the name on any throw before registry.set (no try/finally on
+  // this large function), which is worse than the self-healing collision it would prevent.
   const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
   const threadName = `${sessionEmoji(tmuxName)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
   const isFork = !!opts?.forkFrom
@@ -498,6 +527,12 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         if (existing) {
           try { execFileSync('tmux', ['has-session', '-t', existing.tmuxName], { stdio: 'pipe' }) } catch {
             respawnCount = (existing.respawnCount ?? 0) + 1
+            // Lossless respawn (mirror the existingThreadId branch): carry the dead
+            // record's deliverables/description to the replacement. Worktree destruction
+            // stays — a fresh non-recovery spawn onto a dead thread is a real replacement.
+            carriedArtifacts ??= existing.artifacts
+            carriedContextLinks ??= existing.contextLinks
+            carriedDescription ??= existing.description
             await killSession(existing, 'replaced by new spawn')
           }
         }
@@ -560,7 +595,24 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           anchorMessageId = existing.anchorMessageId
           anchorChannelId = existing.anchorChannelId
         }
-        await killSession(existing, 'replaced by new spawn')
+        // Carry the dead record's deliverables/description to the replacement — killSession
+        // deletes the record, so snapshot before it runs (fixes lost PR/artifact links).
+        // Explicit opts.carryOver (fallback tiers, where the record is already gone) wins.
+        carriedArtifacts ??= existing.artifacts
+        carriedContextLinks ??= existing.contextLinks
+        carriedDescription ??= existing.description
+        // Recovery reuses the existing worktree in place; skip destruction so unpushed
+        // work survives and --resume can find the transcript under the same CWD.
+        // An explicit opts.reuseWorktree (fallback tiers) already covers this — only
+        // derive from the record when one wasn't passed.
+        if (!reuseWorktree && opts?.preserveWorktree && existing.worktreeRepo && existing.worktreePath && !worktreeTarget) {
+          reuseWorktree = {
+            repo: existing.worktreeRepo,
+            path: existing.worktreePath,
+            branch: existing.worktreeBranch ?? `wt/${existing.tmuxName}`,
+          }
+        }
+        await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree })
       }
     }
     if (!anchorMessageId) {
@@ -593,7 +645,23 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let worktreePath: string | undefined
   let worktreeBranch: string | undefined
   let effectiveCwd = spawnCwd
-  if (worktreeTarget) {
+  if (reuseWorktree) {
+    // Recovery adopts the dead session's worktree in place. recoverOne has already resolved
+    // availability (reattached the dir, or deferred/skipped) BEFORE this cascade — so the
+    // dir is expected to exist here. If it doesn't (sub-second race: removed between that
+    // check and now), throw rather than fall back to spawnCwd: a recovered autonomous agent
+    // must never run in the shared main checkout, and a live record whose worktree isn't
+    // there would let a later non-recovery kill `branch -D` the branch. The throw fails this
+    // tier; the cascade's total-failure path re-persists the dead record to retry next boot.
+    if (!existsSync(reuseWorktree.path)) {
+      throw new Error(`worktree ${reuseWorktree.path} unavailable at spawn (branch ${reuseWorktree.branch} preserved) — deferring recovery`)
+    }
+    worktreeRepo = reuseWorktree.repo
+    worktreePath = reuseWorktree.path
+    worktreeBranch = reuseWorktree.branch
+    effectiveCwd = reuseWorktree.path
+    process.stderr.write(`daemon: spawn ${tmuxName}: reusing worktree ${worktreePath} (branch ${worktreeBranch})\n`)
+  } else if (worktreeTarget) {
     const wt = await createWorktree({
       repoName: worktreeTarget,
       spawnCwd,
@@ -863,6 +931,21 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   } else if (isJoin) {
     registry.addMember(threadId!, sessionId, opts?.memberLabel)
   }
+
+  // Lossless respawn: re-apply the replaced record's deliverables/description so the
+  // dashboard row keeps its PR/artifact links. Reset artifactsBackfilled so a LATER
+  // boot's history-rescan re-derives links (the snapshot is the complete array, so
+  // nothing is lost now; this only re-arms the self-heal for links captured after).
+  if (carriedArtifacts?.length || carriedContextLinks?.length || carriedDescription) {
+    const created = registry.get(sessionId)
+    if (created) {
+      if (carriedArtifacts?.length) created.artifacts = carriedArtifacts
+      if (carriedContextLinks?.length) created.contextLinks = carriedContextLinks
+      if (carriedDescription && !created.description) created.description = carriedDescription
+      delete created.artifactsBackfilled
+    }
+  }
+
   registry.persist()
 
   // Co-update thread metadata (observational — not load-bearing for message routing)
@@ -925,6 +1008,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
 export const HEALTH_TIMEOUT_MS = 30_000
 
+// Injected into every recovered session (resume notification + respawn/fork prompt).
+// Post-crash the session must assume nothing about what completed before it died.
+export const RECOVERY_REVERIFY_GUARD =
+  '⚠️ SAFETY: You were recovered after a crash/reboot — mid-task state is unknown. Before ANY write, commit, push, deploy, migration, or other state-changing/prod operation, re-verify current repo/PR/system state first (git status, gh pr view, etc.). Assume nothing about what finished before the crash.'
+
 export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boolean> {
   return new Promise(resolve => {
     if (transport.has(sessionId)) { resolve(true); return }
@@ -948,6 +1036,12 @@ export async function tryResume(dead: {
   claudeSessionId?: string
   threadUrl?: string
   model?: string
+  worktree?: { repo: string; path: string; branch: string }
+  // Only recoverOne sets this: it pre-resolves the worktree dir (reattach) before the
+  // cascade, so adopting the branch is safe. The manual `resume` path has no such
+  // pre-flight — leaving it off keeps resume's prior destroy-and-respawn semantics
+  // (a gone dir would otherwise make doSpawnSession throw and orphan the branch).
+  preserveWorktree?: boolean
 }): Promise<(SpawnResult & { bridgeOrphan?: boolean }) | null> {
   if (!dead.claudeSessionId) return null
   try {
@@ -955,6 +1049,8 @@ export async function tryResume(dead: {
       existingThreadId: dead.threadId,
       resumeFrom: dead.claudeSessionId,
       model: dead.model,
+      preserveWorktree: dead.preserveWorktree,
+      reuseWorktree: dead.preserveWorktree ? dead.worktree : undefined,
     })
 
     // Queue the recovery notification before checking bridge health — sendOrQueue
@@ -963,7 +1059,7 @@ export async function tryResume(dead: {
     // was recovered.
     transport.sendOrQueue(result.sessionId, {
       type: 'notification',
-      content: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off.`,
+      content: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off. ${RECOVERY_REVERIFY_GUARD}`,
       meta: { chat_id: dead.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
 
@@ -980,7 +1076,11 @@ export async function tryResume(dead: {
 
       if (verdict === 'kill') {
         if (!info.exitFilePath) process.stderr.write(`daemon: resume ${info.tmuxName}: exit file path not configured (pipe-pane failed at spawn) — cannot distinguish orphan from dead, defaulting to kill\n`)
-        await killSession(info, 'resume health check failed').catch(() => {})
+        // Preserve the reused worktree on failure so the caller's fork/respawn
+        // fallback tiers can still adopt it (they pass the same descriptor
+        // explicitly, since this kill deletes the record). Watches unwatch normally —
+        // keeping them here would only orphan them on the now-deleted record.
+        await killSession(info, 'resume health check failed', { skipWorktreeDestroy: true }).catch(() => {})
         return null
       }
 

@@ -3,7 +3,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
-import { atomicWriteFileSync } from './util.js'
+import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName } from '../shared/constants.js'
 
@@ -55,6 +55,7 @@ export type SessionInfo = {
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
   factoryTicket?: string       // factory ticket ID — for restart recovery info
   factoryPhase?: string        // last known factory phase — for restart recovery info
+  suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. awaiting_pm factory builder preserved for PM peek/kill); manual `recover` still works
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash
@@ -175,6 +176,9 @@ export type SpawnOpts = {
   sessionType?: SessionType  // declared at spawn — determines base tool set
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
+  preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
+  reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
+  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string }  // recovery: deliverables/description to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +220,7 @@ const SESSION_CATALOG: Array<{ name: string; emoji: string }> = [
   { name: 'crisp', emoji: '❄️' },
 ]
 
-const SESSION_NAMES = SESSION_CATALOG.map(s => s.name)
+export const SESSION_NAMES = SESSION_CATALOG.map(s => s.name)
 
 export function sessionEmoji(name: string): string {
   return SESSION_CATALOG.find(s => s.name === name)?.emoji ?? '🔹'
@@ -229,6 +233,7 @@ export function sessionEmoji(name: string): string {
 export class SessionRegistry {
   readonly sessions = new Map<string, SessionInfo>()
   readonly threadToSession = new Map<string, string>()
+  readonly reservedNames = new Set<string>() // in-flight session names pickSessionName must avoid (recovery kill→persist window); in-memory only
   private readonly threadMembers = new Map<string, ThreadMember[]>() // in-memory only — not persisted across daemon restarts
   private readonly sessionsFile: string
 
@@ -324,6 +329,17 @@ export class SessionRegistry {
 
   pickSessionName(): string {
     const used = new Set([...this.sessions.values()].map(s => s.tmuxName))
+    // Also reserve names still referenced by a record's worktree branch (`wt/<name>`).
+    // A recovered session keeps its predecessor's branch (its tmuxName differs), so the
+    // old name looks free — but handing it to a new spawn would make createWorktree's
+    // stale-cleanup `git branch -D wt/<name>` destroy that preserved branch and any
+    // unpushed commits on it.
+    for (const s of this.sessions.values()) {
+      if (s.worktreeBranch?.startsWith('wt/')) used.add(baseNameFromBranch(s.worktreeBranch))
+    }
+    // In-flight reservations cover the recovery window between deleting a dead record and
+    // persisting its replacement, when the record-based reservation above doesn't yet apply.
+    for (const n of this.reservedNames) used.add(n)
     try {
       const tmuxOut = execSync('tmux ls -F "#{session_name}" 2>/dev/null', { encoding: 'utf8' })
       for (const line of tmuxOut.split('\n')) {

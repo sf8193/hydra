@@ -10,6 +10,18 @@ export function atomicWriteFileSync(filePath: string, data: string, mode?: numbe
   renameSync(tmp, filePath)
 }
 
+// Base session name embedded in a worktree branch: `wt/<name>` or `wt/<name>-<suffix>` → `<name>`.
+// Load-bearing: pickSessionName reserves this token and createWorktree's stale
+// `branch -D wt/<name>` targets it, so recoverOne's name reservation must derive it identically.
+// INVARIANT: session names must be hyphen-free (they come from SESSION_CATALOG, all single
+// words). The `split('-')[0]` peels only the `-<suffix>` — a hyphenated name (e.g. `my-feature`)
+// would be truncated to `my`, reserving the wrong token and exposing the preserved branch to a
+// stray `branch -D`. A unit test asserts the catalog stays hyphen-free so this can't regress.
+// Callers must first confirm the branch starts with `wt/`.
+export function baseNameFromBranch(branch: string): string {
+  return branch.slice(3).split('-')[0]
+}
+
 export function fallbackDescription(topic: string): string {
   const firstLine = topic.split('\n')[0].replace(/^\/\S+\s*/, '').trim()
   return firstLine.length > 100 ? firstLine.slice(0, 97) + '...' : firstLine
