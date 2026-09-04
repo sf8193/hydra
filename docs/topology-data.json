@@ -718,18 +718,6 @@
     ],
     [
       "daemon_router",
-      "daemon_commands_build"
-    ],
-    [
-      "daemon_router",
-      "daemon_commands_design"
-    ],
-    [
-      "daemon_router",
-      "daemon_design"
-    ],
-    [
-      "daemon_router",
       "daemon_protocol-registry"
     ],
     [
