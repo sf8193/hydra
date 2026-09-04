@@ -16,13 +16,29 @@ import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 
-export async function handleThreadKillIntercept(msg: InboundMessage, opts?: { cascade?: boolean }): Promise<void> {
+export async function handleThreadKillIntercept(
+  msg: InboundMessage,
+  opts?: { cascade?: boolean; destroy?: boolean },
+): Promise<void> {
+  const cascade = opts?.cascade ?? false
+  const destroy = opts?.destroy ?? false
   const info = registry.resolveThreadSessionFromMsg(msg)
+
+  // `+destroy` is scoped to the thread, not the session, so it stays meaningful
+  // once there is nothing left to kill — which is the whole point of offering it
+  // as one command. Two shapes of "already dead" land here: a killed session is
+  // gone from the registry (info is null), and one that died across a daemon
+  // restart is still in it with `deadAt` set. Both skip straight to the destroy
+  // rather than reporting a failed kill.
+  if (destroy && (!info || info.deadAt)) {
+    await handleDestroyIntercept(msg)
+    return
+  }
+
   if (!info) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     return
   }
-  const cascade = opts?.cascade ?? false
   void gateway.react(msg.channelId, msg.id, cascade ? '🧨' : '☠️').catch(() => {})
 
   // Cascade BEFORE the kill: killSession emits session:death, whose gentle
@@ -37,6 +53,14 @@ export async function handleThreadKillIntercept(msg: InboundMessage, opts?: { ca
 
   await killSession(info, cascade ? 'session ended (cascade)' : 'session ended')
   debouncedRefreshListDisplay()
+
+  // Sequential, not atomic: destroy re-applies its own guards (Discord-only, no
+  // protocol in flight, creator-only) against the state the kill just produced.
+  // If it declines, the session stays dead and the thread survives — destroy
+  // says why, and running `destroy` again once the blocker clears finishes the
+  // job. Deliberate: a pre-flight check here would make `kill +d` refuse to
+  // kill in cases where a plain `kill` succeeds.
+  if (destroy) await handleDestroyIntercept(msg)
 }
 
 export async function handleForkIntercept(msg: InboundMessage, description?: string, model?: string, opts?: { ephemeral?: boolean }): Promise<void> {
