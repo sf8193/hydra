@@ -1,7 +1,7 @@
 import { statSync } from 'fs'
 import { execSync } from 'child_process'
 import { gateway, INBOX_DIR } from './config.js'
-import { registry, sessionEmoji } from './sessions.js'
+import { registry, resolveSendTarget } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
@@ -511,12 +511,19 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         process.stderr.write(`daemon: send_to_thread [${msgType}] → ${target}\n`)
 
         // Resolve by session name only — no raw thread IDs (use reply for those)
-        const targetSession = [...registry.values()].find(s => s.tmuxName === target)
-        if (!targetSession) {
-          const known = [...registry.values()].map(s => s.tmuxName).join(', ')
+        const resolved = resolveSendTarget(target)
+        if (!resolved) {
+          const known = [...registry.values()].filter(s => !s.deadAt).map(s => s.tmuxName).join(', ')
           throw new Error(`no session named "${target}". Known sessions: ${known || '(none)'}`)
         }
+        const targetSession = resolved.session
         const threadId = targetSession.threadId
+        const redirectNote = resolved.replaced
+          ? ` (delivered to ${targetSession.tmuxName}, which replaced ${resolved.replaced} in that thread)`
+          : ''
+        if (resolved.replaced) {
+          process.stderr.write(`daemon: send_to_thread: ${resolved.replaced} is gone — redirected to ${targetSession.tmuxName}\n`)
+        }
 
         for (const f of files) {
           assertSendable(f)
@@ -562,8 +569,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         })
 
         const result = sentIds.length === 1
-          ? `sent to ${target} (id: ${sentIds[0]})`
-          : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})`
+          ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}`
+          : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}`
         return { content: [{ type: 'text', text: result }], sentIds }
       }
 

@@ -49,4 +49,8 @@ sequenceDiagram
         factory->>review: cancelReview (if active)
         factory->>lifecycle: killSession(builder)
         factory-->>PM: 🏭 abandoned 🗑️
+    else nobody decides — 24h TTL
+        factory->>factory: expireAwaitingPm —<br/>transition failed, cleanupState
+        factory-->>PM: 🏭 expired — no PM action after 24h
+        Note over builder: builder is NOT killed: it holds completed<br/>work nobody said to discard. Identity released,<br/>so it reverts to a plain thread_owner.
     end
