@@ -63,6 +63,8 @@ export type FactoryBuildState = {
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
   reviewSummary?: string // captured from builder's [summary] post at review completion
   _progressTimer?: ReturnType<typeof setInterval> // periodic progress update timer
+  _awaitingPmTimer?: ReturnType<typeof setTimeout>  // TTL on the awaiting_pm phase (see AWAITING_PM_TTL_MS)
+  _awaitingPmSince?: number  // when that TTL was armed — the only way to report time remaining
 }
 
 // ---------------------------------------------------------------------------
@@ -79,13 +81,23 @@ const pmReviewFailures = new Map<string, number>()  // pmThreadId → consecutiv
 
 let ticketCounter = 0
 
-// Build history log
-const LOG_DIR = join(process.env.HOME ?? '/tmp', '.hydra', 'factory')
+// Build history log.
+//
+// Late-bound: an explicit state-dir override takes the log with it, which is
+// what stops `bun test` appending to the operator's real build history —
+// test-setup.ts points that var at a throwaway dir. A default-configured daemon
+// sets neither var and keeps ~/.hydra/factory.
+function logDir(): string {
+  const override = process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR
+  return override
+    ? join(override, 'factory')
+    : join(process.env.HOME ?? '/tmp', '.hydra', 'factory')
+}
 let logDirReady = false
 
 function ensureLogDir(): void {
   if (logDirReady) return
-  if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true })
+  if (!existsSync(logDir())) mkdirSync(logDir(), { recursive: true })
   logDirReady = true
 }
 
@@ -104,7 +116,7 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
       elapsed: Date.now() - state.createdAt,
       ts: new Date().toISOString(),
     }
-    appendFileSync(join(LOG_DIR, 'history.jsonl'), JSON.stringify(entry) + '\n')
+    appendFileSync(join(logDir(), 'history.jsonl'), JSON.stringify(entry) + '\n')
   } catch (err) {
     process.stderr.write(`daemon: factory: log failed: ${err}\n`)
   }
@@ -184,6 +196,80 @@ function stopProgressUpdates(state: FactoryBuildState): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// awaiting_pm TTL — a build nobody decides on must not wait forever
+// ---------------------------------------------------------------------------
+//
+// In awaiting_pm the builder is idle, the review is done, and the state sits in
+// the builds map until a PM calls accept/retry/abandon. A PM that never comes
+// back — killed mid-decision, or simply distracted — leaks that entry, its
+// reverse lookups and its builder's factory identity for the life of the daemon.
+// The TTL closes the ticket and reports it instead. Armed and disarmed by
+// transitionFactoryPhase, so every entry into and exit from the phase is covered
+// by construction.
+//
+// Not the only unbounded phase: `building` has no timeout either. pane-probe's
+// nudgeIdleBuilder stops after BUILDER_MAX_NUDGES and never transitions, so a
+// builder whose pane wedges without crashing leaks the same way. Out of scope
+// here; noted so this comment isn't read as a completeness claim.
+
+const AWAITING_PM_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
+
+// Late-bound so a test can shrink the window and drive the real setTimeout.
+// Asserting only on state._awaitingPmTimer let a wrong delay, a dead callback
+// and a missing clearTimeout all pass — the mechanism has to actually fire.
+let awaitingPmTtlMs = (): number => AWAITING_PM_TTL_MS
+
+function startAwaitingPmTtl(state: FactoryBuildState): void {
+  clearAwaitingPmTtl(state)
+  state._awaitingPmSince = Date.now()
+  state._awaitingPmTimer = setTimeout(() => expireAwaitingPm(state), awaitingPmTtlMs())
+}
+
+/**
+ * Time left on the awaiting_pm TTL, or undefined if none is armed.
+ *
+ * Adoption deliberately does NOT restart the clock — the window measures how
+ * long completed work may sit undecided, not how long any one PM has been
+ * looking at it. Resetting on adopt would let a thread that rotates PMs faster
+ * than the window keep a build alive forever, which is the leak the TTL exists
+ * to close. So the successor inherits whatever is left, and is told what that is.
+ */
+function awaitingPmRemainingMs(state: FactoryBuildState): number | undefined {
+  if (!state._awaitingPmTimer || state._awaitingPmSince === undefined) return undefined
+  return Math.max(0, awaitingPmTtlMs() - (Date.now() - state._awaitingPmSince))
+}
+
+function expireAwaitingPm(state: FactoryBuildState): void {
+  // clearAwaitingPmTtl, not a bare field reset: the field alone leaves a live
+  // ref'd handle behind on the direct-invocation path used by tests.
+  clearAwaitingPmTtl(state)
+  // Precondition, like every sibling terminal path. Reachable if a lost
+  // clearTimeout ever leaves a stale timer armed: without this, an accepted
+  // build gets a spurious "expired" post 24h after the PM merged it.
+  if (state.phase !== 'awaiting_pm' || builds.get(state.ticket) !== state) return
+  process.stderr.write(`daemon: factory: ${state.ticket} expired in awaiting_pm after 24h — closing ticket\n`)
+  // Transition before logging, as every other terminal path does — history.jsonl
+  // records the phase the build ended in, and `outcome` already names the cause.
+  transitionFactoryPhase(state, 'failed')
+  logBuild(state, 'awaiting_pm_expired')
+  // The builder is left alive: it holds completed work, and the PM never said to
+  // throw it away. cleanupState releases its factory identity, so it reverts to
+  // a plain thread_owner the operator can peek at or kill.
+  void safeSend(
+    state.pmThreadId,
+    `🏭 \`${state.ticket}\` expired — no PM action after 24h\n↳ builder left alive; its work is still on disk`,
+  ).catch(() => {})
+  cleanupState(state.ticket)
+}
+
+function clearAwaitingPmTtl(state: FactoryBuildState): void {
+  if (state._awaitingPmTimer) {
+    clearTimeout(state._awaitingPmTimer)
+    state._awaitingPmTimer = undefined
+  }
+  state._awaitingPmSince = undefined
+}
 
 // ---------------------------------------------------------------------------
 // Worktree target validation — make "wrong repo" impossible to reach async
@@ -759,6 +845,14 @@ function setFactoryTools(info: SessionInfo, phase: FactoryPhase): void {
 
 function transitionFactoryPhase(state: FactoryBuildState, newPhase: FactoryPhase): void {
   state.phase = newPhase
+
+  // The TTL is armed here rather than at each awaiting_pm call site so that
+  // accept, retry, abandon and the death paths all disarm it just by moving the
+  // phase — no caller has to remember. Re-entering awaiting_pm (a retry that
+  // completes again) restarts the clock: it is a fresh decision point.
+  if (newPhase === 'awaiting_pm') startAwaitingPmTtl(state)
+  else clearAwaitingPmTtl(state)
+
   if (!state.builderSessionId) return
   const info = registry.get(state.builderSessionId)
   if (!info) return
@@ -1149,10 +1243,24 @@ function clearFactoryIdentity(info: SessionInfo): void {
   removeToolDescriptions(info, 'factory_done')
 }
 
+/**
+ * Retire a build: stop its timers, drop both reverse lookups, release the
+ * builder's factory identity, and remove it from the builds map.
+ *
+ * Dropping builderSessionToTicket is also what makes a deliberate teardown safe.
+ * Every terminal path (accept, abandon, cascade, TTL expiry) kills the builder
+ * and then calls this, and killSession is async — it awaits a gateway.send
+ * before emitting session:death — so by the time that death lands, onBuilderDeath
+ * can no longer resolve a ticket for the session and exits at its `if (!ticket)`.
+ * A deliberate kill therefore cannot be reported as a crash, structurally,
+ * without any need for an "is this kill intentional?" flag. Keep the kill-then-
+ * cleanup order in that frame and the property holds.
+ */
 function cleanupState(ticket: string): void {
   const state = builds.get(ticket)
   if (!state) return
   stopProgressUpdates(state)
+  clearAwaitingPmTtl(state)
   if (state.builderSessionId) {
     builderSessionToTicket.delete(state.builderSessionId)
     clearBuilderNudge(state.builderSessionId)
@@ -1236,9 +1344,11 @@ export function factoryCascadeKill(sessionId: string): number {
     process.stderr.write(`daemon: factory: cascade kill of build ${state.ticket} (PM ${sessionId})\n`)
     const wasPhase = state.phase
 
-    // Terminal phase FIRST. killSession emits session:death synchronously, and
-    // onBuilderDeath reads this phase — leave it live and the builder we just
-    // asked to exit gets reported as a crash. Same ordering as abandonCore.
+    // Terminal phase before the kill. Two independent things then keep this
+    // deliberate teardown from being reported as a crash: onBuilderDeath's
+    // if/else chain covers only building|reviewing|awaiting_pm, so `failed`
+    // falls through; and cleanupState below drops the reverse lookup the handler
+    // needs, before any real session:death can land. See cleanupState.
     transitionFactoryPhase(state, 'failed')
     logBuild(state, 'pm_cascade_kill')
 
@@ -1295,7 +1405,13 @@ function factoryAdopt({ sessionId, threadId }: { sessionId: string; threadId: st
     })
   }
 
-  const lines = orphaned.map(s => `  ${formatBuildLine(s)}`).join('\n')
+  // Builds already awaiting a decision carry an inherited deadline the successor
+  // had no way to know about — a PM adopting at hour 23 has an hour, not a day.
+  const lines = orphaned.map(s => {
+    const remaining = awaitingPmRemainingMs(s)
+    const deadline = remaining !== undefined ? ` · decide within ${formatDuration(remaining)}` : ''
+    return `  ${formatBuildLine(s)}${deadline}`
+  }).join('\n')
   void safeSend(threadId, `🤝 Adopted ${orphaned.length} build${orphaned.length > 1 ? 's' : ''}\n${lines}`).catch(() => {})
 
   process.stderr.write(`daemon: factory: adopted ${orphaned.length} build(s) for new PM ${newPmName} in thread ${threadId}\n`)
@@ -1348,6 +1464,12 @@ registerProtocol('factory', {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       builds, builderSessionToTicket, builderThreadToTicket,
+      // transitionFactoryPhase is the only door into awaiting_pm that arms the
+      // TTL; seedBuild sets the field without going through it.
+      AWAITING_PM_TTL_MS, expireAwaitingPm, transitionFactoryPhase,
+      /** Shrink the TTL so a case can drive the real setTimeout end to end. */
+      setAwaitingPmTtl(ms: number): void { awaitingPmTtlMs = () => ms },
+      resetAwaitingPmTtl(): void { awaitingPmTtlMs = () => AWAITING_PM_TTL_MS },
       // The event-bus handlers, so a test can restore the subscriptions another
       // test file's _resetForTesting() wiped.
       factorySessionDeath, factoryAdopt,
@@ -1370,11 +1492,16 @@ export const __test = process.env.NODE_ENV === 'test'
         return state
       },
       reset(): void {
-        for (const state of builds.values()) stopProgressUpdates(state)
+        for (const state of builds.values()) {
+          stopProgressUpdates(state)
+          // A live 24h timer would hold the test runner's event loop open.
+          clearAwaitingPmTtl(state)
+        }
         builds.clear()
         builderSessionToTicket.clear()
         builderThreadToTicket.clear()
         pmReviewFailures.clear()
+        awaitingPmTtlMs = () => AWAITING_PM_TTL_MS
       },
       setLifecycle(overrides: { killSession?: typeof _killSession }) {
         if (overrides.killSession) killSession = overrides.killSession

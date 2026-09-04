@@ -1,5 +1,6 @@
 %% Factory resilience — PM sessions rotate through the PM thread; builds do not die with them.
 %% The PM thread is the unit of ownership. A PM session is only its current occupant.
+%% Section 6 is the same idea applied to addressing: a session *name* is a seat too.
 %% Companion to flow-factory (the build→review cycle itself).
 
 sequenceDiagram
@@ -11,6 +12,8 @@ sequenceDiagram
     participant bus as event-bus.ts
     participant factory as factory.ts
     participant builder as Builder<br/>(own thread)
+    participant dispatch as bridge-<br/>dispatch.ts
+    participant sessions as sessions.ts
 
     Note over PM1,builder: build fb-N in flight (building or reviewing)
 
@@ -50,15 +53,30 @@ sequenceDiagram
     PM2->>factory: factory_accept / retry / abandon
     factory->>factory: authorizePmThread —<br/>registry.get(caller).threadId === state.pmThreadId
     Note over factory: passes whether or not adoption ran:<br/>membership authorizes, adoption only routes
+    Note over factory,builder: if no session ever decides, a 24h TTL on awaiting_pm<br/>closes the ticket and says so. The builder stays alive.<br/>Adoption inherits the clock — it does not restart it.
     end
 
     rect rgb(252, 238, 238)
     Note over PM2,builder: 5. Explicit destruction — `kill!` or `kill --cascade`
     PM2->>router: kill!
     router->>factory: factoryCascadeKill(sessionId)
+    factory->>factory: transition failed · logBuild
     factory->>factory: cancelRun (if reviewing)
     factory->>lifecycle: killSession(builder) per build
-    factory->>factory: transition failed → cleanupState
+    factory->>factory: cleanupState — drops builderSessionToTicket<br/>(same synchronous frame)
     router->>lifecycle: killSession(successor PM)
-    Note over router,factory: cascade runs BEFORE the kill, so the gentle<br/>handler has nothing left to report
+    lifecycle-->>bus: emit session:death — LATER: killSession<br/>awaits a gateway.send before emitting
+    bus->>factory: factorySessionDeath → onBuilderDeath
+    factory->>factory: exits at `if (!ticket)` — the reverse lookup<br/>is already gone, so nothing is reported as a crash
+    Note over router,factory: no "is this kill intentional?" flag exists, or is needed:<br/>a retired build is unreachable to the death handler by construction
+    end
+
+    rect rgb(240, 246, 250)
+    Note over PM2,sessions: 6. Addressing follows the seat — send_to_thread redirect
+    builder->>dispatch: send_to_thread(target: "glyph")<br/>the name of the PM that died
+    dispatch->>sessions: resolveSendTarget("glyph")
+    sessions->>sessions: no live session by that name →<br/>rank threads by when "glyph" last sat there<br/>(registry deadAt, then thread sessionHistory)
+    sessions-->>dispatch: { session: successor, replaced: "glyph" }
+    dispatch->>PM2: delivered to the seat's current occupant<br/>(sender told it was redirected)
+    Note over dispatch,sessions: undefined only when no thread "glyph" held<br/>has a live occupant — then the send fails as before
     end

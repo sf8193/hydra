@@ -14,10 +14,11 @@ import {
   factoryRetry,
   factoryAbandon,
   factoryCascadeKill,
+  factoryStatus,
+  onBuilderDeath,
 } from '../factory.js'
-import { resolveSendTarget } from '../bridge-dispatch.js'
 import { registry, threadRegistry } from '../sessions.js'
-import type { SessionInfo, ThreadMetadata } from '../sessions.js'
+import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
 import { emit, on, getSubscriptions } from '../event-bus.js'
@@ -496,9 +497,10 @@ describe('factoryCascadeKill', () => {
   })
 
   test('does not report the builder it just retired as a crash', () => {
-    // killSession emits session:death synchronously, and the gentle handler runs
-    // onBuilderDeath on the way through. If cascade killed before moving the
-    // build to a terminal phase, that read a live phase and cried "crashed".
+    // A death delivered INSIDE the cascade frame — stricter than production,
+    // where killSession awaits a gateway.send before emitting. Pins the
+    // phase-before-kill ordering: move the transition after killBuilder and the
+    // handler sees a live phase and cries "crashed".
     const pm = mkSession({ tmuxName: 'glyph', threadId: pmThreadId })
     const state = mkBuild({ ticket: 'fb-56-7777', pmThreadId, pmSessionId: pm.sessionId, builderName: 'drift', phase: 'reviewing' })
     factory.setLifecycle({
@@ -527,146 +529,273 @@ describe('factoryCascadeKill', () => {
 
     expect(sent.filter(s => s.text.includes('PM session ended'))).toEqual([])
   })
+
+  test('drops the reverse lookup before the kill can report back', () => {
+    // The actual mechanism. cleanupState must have removed builderSessionToTicket
+    // by the time the cascade frame closes, because that is what a later
+    // session:death fails to resolve. Observed mid-kill so a cleanupState moved
+    // after the emit would be caught.
+    const pm = mkSession({ tmuxName: 'glyph', threadId: pmThreadId })
+    const state = mkBuild({ ticket: 'fb-58-9999', pmThreadId, pmSessionId: pm.sessionId, builderName: 'drift' })
+    const builderSessionId = state.builderSessionId!
+
+    factoryCascadeKill(pm.sessionId)
+
+    expect(factory.builderSessionToTicket.has(builderSessionId)).toBe(false)
+    expect(factory.builderThreadToTicket.has(state.builderThreadId!)).toBe(false)
+    expect(factory.builds.has(state.ticket)).toBe(false)
+  })
+
+  test('a crash in an unrelated build is still reported during a cascade', () => {
+    // No "a cascade is running" suppression may leak across tickets: a genuine
+    // builder crash elsewhere has to keep reporting while this one tears down.
+    const pm = mkSession({ tmuxName: 'glyph', threadId: pmThreadId })
+    mkBuild({ ticket: 'fb-71-cccc', pmThreadId, pmSessionId: pm.sessionId, builderName: 'drift' })
+    const bystander = mkBuild({ ticket: 'fb-72-dddd', pmThreadId: 'thread-other-pm', pmSessionId: 'pm-other', builderName: 'flint', phase: 'building' })
+
+    factoryCascadeKill(pm.sessionId)
+    sent = []
+    onBuilderDeath(bystander.builderSessionId!)
+
+    expect(bystander.phase).toBe('failed')
+    expect(textOf()).toContain('crashed')
+    expect(factory.builds.has(bystander.ticket)).toBe(false)
+  })
+
+  test('a death event that arrives after the cascade loop is still not a crash', () => {
+    // Production's actual shape: the real killSession awaits before emitting, so
+    // the death lands after the cascade frame closed. cleanupState has already
+    // cleared builderSessionToTicket, so the handler cannot resolve a ticket —
+    // the assertion below records that this is what makes it safe.
+    const pm = mkSession({ tmuxName: 'glyph', threadId: pmThreadId })
+    const state = mkBuild({ ticket: 'fb-59-aaaa', pmThreadId, pmSessionId: pm.sessionId, builderName: 'drift', phase: 'building' })
+    const builderSessionId = state.builderSessionId!
+    let fireDeath: (() => void) | undefined
+    factory.setLifecycle({
+      killSession: async (info: SessionInfo) => {
+        killed.push(info.tmuxName)
+        registry.delete(info.sessionId)
+        fireDeath = () => emit('session:death', { sessionId: info.sessionId, threadId: info.threadId, wasOwner: true, tmuxName: info.tmuxName })
+      },
+    })
+
+    factoryCascadeKill(pm.sessionId)
+    sent = []
+    fireDeath!()
+
+    expect(killed).toEqual(['drift'])
+    expect(textOf()).not.toContain('crashed')
+    expect(factory.builderSessionToTicket.has(builderSessionId)).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
-// 5. send_to_thread redirect
+// 5. awaiting_pm TTL
 // ---------------------------------------------------------------------------
+//
+// awaiting_pm is the phase with no clock of its own: the builder is idle and
+// the entry lives until a PM decides. A PM that never returns used to leak it
+// for the life of the daemon.
 
-// Injected rather than driven through the global registry: the daemon under
-// test shares its state file with the operator's live daemon, whose real
-// sessions carry the very catalog names these cases need to resolve by.
+describe('awaiting_pm TTL', () => {
+  const pmThreadId = 'thread-pm-ttl'
 
-type FakeSession = { sessionId: string; tmuxName: string; threadId: string; deadAt?: number }
-
-function fakeRegistry(sessions: FakeSession[]) {
-  const byId = new Map(sessions.map(s => [s.sessionId, s as unknown as SessionInfo]))
-  // Mirrors the real registry: every entry claims its thread as it loads or
-  // spawns, so later entries overwrite earlier ones. A restart leaves a dead
-  // session still holding the mapping until a successor takes the thread.
-  const byThread = new Map(sessions.map(s => [s.threadId, s.sessionId]))
-  return {
-    values: () => byId.values(),
-    get: (id: string) => byId.get(id),
-    getByThread: (threadId: string) => byThread.get(threadId),
+  function awaiting(ticket: string, builderName = 'drift') {
+    const pm = mkSession({ tmuxName: 'glyph', threadId: pmThreadId })
+    const state = mkBuild({ ticket, pmThreadId, pmSessionId: pm.sessionId, builderName, phase: 'building' })
+    factory.transitionFactoryPhase(state, 'awaiting_pm')
+    state.reviewed = true
+    return { pm, state }
   }
-}
 
-// Entries are `name` or `name@<startedAt>` — the timestamp matters only where a
-// test needs to pin which occupancy is the most recent.
-function fakeThreads(history: Record<string, string[]>) {
-  const threads = new Map<string, ThreadMetadata>(
-    Object.entries(history).map(([threadId, names]) => [threadId, {
-      threadId,
-      topic: 'fake',
-      respawnCount: 0,
-      createdAt: 0,
-      lastActive: 0,
-      totalMessages: 0,
-      sessionHistory: names.map((entry, i) => {
-        const [tmuxName, at] = entry.split('@')
-        return {
-          sessionId: `h-${threadId}-${i}`, tmuxName, originType: 'spawn' as const,
-          startedAt: at ? Number(at) : i, messageCount: 0,
-        }
-      }),
-    }]),
-  )
-  return { threads }
-}
-
-describe('resolveSendTarget', () => {
-  test('resolves a live session by name', () => {
-    const reg = fakeRegistry([{ sessionId: 's-drift', tmuxName: 'drift', threadId: 'thread-live' }])
-    const resolved = resolveSendTarget('drift', reg, fakeThreads({}))
-    expect(resolved?.session.sessionId).toBe('s-drift')
-    expect(resolved?.replaced).toBeUndefined()
+  test('the window is 24 hours', () => {
+    expect(factory.AWAITING_PM_TTL_MS).toBe(24 * 60 * 60 * 1000)
   })
 
-  test('redirects to the live occupant when the named session was killed off the registry', () => {
-    // killSession removes the entry outright — the thread's history is the only
-    // record that "spark" ever sat in this thread.
-    const reg = fakeRegistry([{ sessionId: 's-glyph', tmuxName: 'glyph', threadId: 'thread-rotated' }])
-    const resolved = resolveSendTarget('spark', reg, fakeThreads({ 'thread-rotated': ['spark', 'glyph'] }))
-    expect(resolved?.session.sessionId).toBe('s-glyph')
-    expect(resolved?.replaced).toBe('spark')
+  // The three cases below drive the REAL setTimeout through a shrunken window.
+  // Asserting on state._awaitingPmTimer alone was not enough: a hardcoded wrong
+  // delay, a dead callback, and a clearAwaitingPmTtl that never called
+  // clearTimeout each left the whole suite green.
+  const TICK = 12
+
+  test('the armed timer actually fires and expires the build', async () => {
+    factory.setAwaitingPmTtl(TICK)
+    const { state } = awaiting('fb-80-1111')
+    expect(factory.builds.has('fb-80-1111')).toBe(true)
+    sent = []
+
+    await new Promise(r => setTimeout(r, TICK * 6))
+
+    expect(textOf()).toContain('`fb-80-1111` expired — no PM action after 24h')
+    expect(state.phase).toBe('failed')
+    expect(factory.builds.has('fb-80-1111')).toBe(false)
   })
 
-  test('redirects when the named session is still registered but flagged dead', () => {
-    // The daemon-restart case: tmux was gone at load, so deadAt is set and the
-    // entry survives in the registry.
-    const reg = fakeRegistry([
-      { sessionId: 's-spark', tmuxName: 'spark', threadId: 'thread-restarted', deadAt: 1 },
-      { sessionId: 's-glyph', tmuxName: 'glyph', threadId: 'thread-restarted' },
-    ])
-    const resolved = resolveSendTarget('spark', reg, fakeThreads({}))
-    expect(resolved?.session.sessionId).toBe('s-glyph')
-    expect(resolved?.replaced).toBe('spark')
+  test('the configured window is the delay actually passed to setTimeout', async () => {
+    // A hardcoded delay ignores the override: either it fires early with the
+    // real 24h constant replaced, or not at all. Pin that the override governs.
+    factory.setAwaitingPmTtl(60_000)
+    const { state } = awaiting('fb-81-2222')
+    sent = []
+
+    await new Promise(r => setTimeout(r, TICK * 6))
+
+    expect(state.phase).toBe('awaiting_pm')
+    expect(textOf()).not.toContain('expired')
+    expect(factory.builds.has('fb-81-2222')).toBe(true)
   })
 
-  test('prefers the live session of that exact name over any redirect', () => {
-    const reg = fakeRegistry([
-      { sessionId: 's-glyph', tmuxName: 'glyph', threadId: 'thread-recycled' },
-      { sessionId: 's-drift-new', tmuxName: 'drift', threadId: 'thread-drift-new' },
-    ])
-    const resolved = resolveSendTarget('drift', reg, fakeThreads({ 'thread-recycled': ['drift', 'glyph'] }))
-    expect(resolved?.session.sessionId).toBe('s-drift-new')
-    expect(resolved?.replaced).toBeUndefined()
+  test('accept genuinely cancels the timer — no expiry post lands later', async () => {
+    // Catches a disarm that nulls the field without calling clearTimeout: the
+    // handle stays live and posts "expired" on a build the PM already accepted.
+    factory.setAwaitingPmTtl(TICK)
+    const { pm, state } = awaiting('fb-82-3333')
+    expect(factoryAccept(state.ticket, pm.sessionId)).toEqual({ ok: true })
+    sent = []
+
+    await new Promise(r => setTimeout(r, TICK * 6))
+
+    expect(textOf()).not.toContain('expired')
+    expect(state.phase).toBe('complete')
   })
 
-  test('returns undefined when the thread has no live occupant', () => {
-    const reg = fakeRegistry([])
-    expect(resolveSendTarget('spark', reg, fakeThreads({ 'thread-empty': ['spark'] }))).toBeUndefined()
+  test('adoption inherits the clock and tells the successor what is left', () => {
+    // The window measures how long work may sit undecided, not how long any one
+    // PM has looked at it — so adopting must NOT restart it (a thread rotating
+    // PMs faster than the window would keep a build alive forever). The
+    // successor is told the inherited deadline instead of silently getting it.
+    const { state } = awaiting('fb-86-7777')
+    const armedAt = state._awaitingPmSince
+    const timer = state._awaitingPmTimer
+    registry.delete(state.pmSessionId)   // PM gone, build orphaned
+    sent = []
+
+    const successor = mkSession({ tmuxName: 'flint', threadId: pmThreadId })
+    emit('session:bridge-registered', { sessionId: successor.sessionId, threadId: pmThreadId })
+
+    expect(state.pmSessionId).toBe(successor.sessionId)
+    expect(state._awaitingPmSince).toBe(armedAt)     // clock not restarted
+    expect(state._awaitingPmTimer).toBe(timer)       // same handle, not re-armed
+    expect(textOf()).toContain('Adopted 1 build')
+    expect(textOf()).toMatch(/decide within \d+[dhms]/)
   })
 
-  test('picks the most recent occupancy when a recycled name spans threads', () => {
-    // "spark" sat in an old thread and later in a newer one, and both threads
-    // still have live occupants. The newer seat is the one the sender means.
-    const reg = fakeRegistry([
-      { sessionId: 's-old-seat', tmuxName: 'moss', threadId: 'thread-old' },
-      { sessionId: 's-new-seat', tmuxName: 'glyph', threadId: 'thread-new' },
-    ])
-    const threads = fakeThreads({
-      'thread-old': ['spark@1000', 'moss@2000'],
-      'thread-new': ['spark@8000', 'glyph@9000'],
-    })
-    expect(resolveSendTarget('spark', reg, threads)?.session.sessionId).toBe('s-new-seat')
+  test('disarming calls clearTimeout, not just a field reset', () => {
+    // The field going undefined proves nothing about the handle. A disarm that
+    // only nulls the field leaves a live ref'd timer for up to 24h — invisible,
+    // because expireAwaitingPm's precondition then refuses to act on it. Assert
+    // the handle itself is cancelled.
+    const { pm, state } = awaiting('fb-84-5555')
+    const handle = state._awaitingPmTimer as unknown as { hasRef(): boolean; _destroyed: boolean }
+    expect(handle.hasRef()).toBe(true)
 
-    // ...and the same holds when map insertion order puts the newer one first,
-    // so the result comes from the ranking rather than iteration order.
-    const reversed = fakeThreads({
-      'thread-new': ['spark@8000', 'glyph@9000'],
-      'thread-old': ['spark@1000', 'moss@2000'],
-    })
-    expect(resolveSendTarget('spark', reg, reversed)?.session.sessionId).toBe('s-new-seat')
+    factoryAccept(state.ticket, pm.sessionId)
+
+    expect(state._awaitingPmTimer).toBeUndefined()
+    expect(handle._destroyed).toBe(true)
+    expect(handle.hasRef()).toBe(false)
   })
 
-  test('falls through to an older thread when the newest has no live occupant', () => {
-    const reg = fakeRegistry([{ sessionId: 's-old-seat', tmuxName: 'moss', threadId: 'thread-old' }])
-    const threads = fakeThreads({
-      'thread-old': ['spark@1000', 'moss@2000'],
-      'thread-new': ['spark@8000'],
-    })
-    expect(resolveSendTarget('spark', reg, threads)?.session.sessionId).toBe('s-old-seat')
+  test('expiry cancels its own handle rather than dropping the reference', () => {
+    // expireAwaitingPm is reachable directly via the __test seam, so the handle
+    // it was armed with has to be cancelled, not merely forgotten.
+    const { state } = awaiting('fb-85-6666')
+    const handle = state._awaitingPmTimer as unknown as { hasRef(): boolean; _destroyed: boolean }
+
+    factory.expireAwaitingPm(state)
+
+    expect(handle._destroyed).toBe(true)
+    expect(handle.hasRef()).toBe(false)
   })
 
-  test('does not redirect to the corpse still holding its own thread mapping', () => {
-    const reg = fakeRegistry([{ sessionId: 's-spark', tmuxName: 'spark', threadId: 'thread-vacant', deadAt: 1 }])
-    expect(resolveSendTarget('spark', reg, fakeThreads({ 'thread-vacant': ['spark'] }))).toBeUndefined()
+  test('a stale timer that survives cancellation cannot fail an accepted build', () => {
+    // The precondition guard, direct. Even given a leaked handle, the body must
+    // refuse to act on a build that is no longer awaiting a PM decision.
+    const { pm, state } = awaiting('fb-83-4444')
+    factoryAccept(state.ticket, pm.sessionId)
+    sent = []
+
+    factory.expireAwaitingPm(state)
+
+    expect(textOf()).not.toContain('expired')
+    expect(state.phase).toBe('complete')
   })
 
-  test('never reports a redirect when the successor carries the same name', () => {
-    // A dead entry and its live replacement share a name after tmux recycling.
-    const reg = fakeRegistry([
-      { sessionId: 's-old', tmuxName: 'spark', threadId: 'thread-same', deadAt: 1 },
-      { sessionId: 's-new', tmuxName: 'spark', threadId: 'thread-same' },
-    ])
-    const resolved = resolveSendTarget('spark', reg, fakeThreads({}))
-    expect(resolved?.session.sessionId).toBe('s-new')
-    expect(resolved?.replaced).toBeUndefined()
+  test('entering the phase arms a timer', () => {
+    const { state } = awaiting('fb-60-1111')
+    expect(state._awaitingPmTimer).toBeDefined()
   })
 
-  test('returns undefined for a name nobody ever had', () => {
-    expect(resolveSendTarget('never-existed-xyz', fakeRegistry([]), fakeThreads({}))).toBeUndefined()
+  test('accept disarms it', () => {
+    const { pm, state } = awaiting('fb-61-2222')
+    expect(factoryAccept(state.ticket, pm.sessionId)).toEqual({ ok: true })
+    expect(state._awaitingPmTimer).toBeUndefined()
+  })
+
+  test('retry disarms it', () => {
+    const { pm, state } = awaiting('fb-62-3333')
+    expect(factoryRetry(state.ticket, 'try again', pm.sessionId)).toEqual({ ok: true })
+    expect(state.phase).toBe('building')
+    expect(state._awaitingPmTimer).toBeUndefined()
+  })
+
+  test('abandon disarms it', () => {
+    const { pm, state } = awaiting('fb-63-4444')
+    expect(factoryAbandon(state.ticket, pm.sessionId)).toEqual({ ok: true })
+    expect(state._awaitingPmTimer).toBeUndefined()
+  })
+
+  test('a retry that completes again restarts the clock rather than reusing it', () => {
+    const { state } = awaiting('fb-64-5555')
+    const first = state._awaitingPmTimer
+    factory.transitionFactoryPhase(state, 'building')
+    factory.transitionFactoryPhase(state, 'awaiting_pm')
+    expect(state._awaitingPmTimer).toBeDefined()
+    expect(state._awaitingPmTimer).not.toBe(first)
+  })
+
+  test('expiry reports to the PM thread, fails the build, and clears the state', () => {
+    const { state } = awaiting('fb-65-6666')
+    sent = []
+
+    factory.expireAwaitingPm(state)
+
+    expect(textOf()).toContain('`fb-65-6666` expired — no PM action after 24h')
+    expect(state.phase).toBe('failed')
+    expect(state._awaitingPmTimer).toBeUndefined()
+    expect(factory.builds.has('fb-65-6666')).toBe(false)
+    expect(factory.builderSessionToTicket.size).toBe(0)
+    expect(sent.every(s => s.channelId === pmThreadId)).toBe(true)
+  })
+
+  test('expiry leaves the builder session alive — the work is not the PM decision', () => {
+    const { state } = awaiting('fb-66-7777')
+    const builderSessionId = state.builderSessionId!
+
+    factory.expireAwaitingPm(state)
+
+    expect(killed).toEqual([])
+    expect(registry.get(builderSessionId)).toBeDefined()
+    // Factory identity released: a plain thread_owner the operator can peek at.
+    expect(registry.get(builderSessionId)!.sessionType).toBe('thread_owner')
+    expect(registry.get(builderSessionId)!.factoryTicket).toBeUndefined()
+  })
+
+  test('an expired build no longer answers to accept', () => {
+    const { pm, state } = awaiting('fb-67-8888')
+    factory.expireAwaitingPm(state)
+    expect(factoryAccept('fb-67-8888', pm.sessionId)).toEqual({ error: 'Unknown ticket: fb-67-8888' })
+  })
+
+  // The leak was only invisible because nothing listed it. factoryStatus filters
+  // by PM thread and nothing else, so an orphan awaiting a decision still shows.
+  test('factoryStatus surfaces an awaiting_pm build whose PM session is gone', () => {
+    const { pm, state } = awaiting('fb-68-9999')
+    registry.delete(pm.sessionId)
+
+    const rows = factoryStatus(pmThreadId).builds
+    expect(rows.map(b => b.ticket)).toContain('fb-68-9999')
+    expect(rows.find(b => b.ticket === 'fb-68-9999')!.phase).toBe('awaiting_pm')
+    expect(state.phase).toBe('awaiting_pm')
   })
 })
