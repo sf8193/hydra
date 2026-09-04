@@ -1,0 +1,79 @@
+%% Factory progress board — one edited message per PM thread.
+%% Emphasis is on what crosses module boundaries: who is allowed to repaint the
+%% board, why a name has to be snapshotted before a kill, and where the
+%% edit-failure classification is shared with the list display.
+%% The guard chain inside factory.ts is summarised, not enumerated — read
+%% refreshProgress for that.
+%% Companion to flow-factory (the build→review cycle the board reports on).
+
+flowchart TD
+    subgraph sources["Who repaints the board"]
+        direction LR
+        tick["factory.ts · tick / 3 min<br/><b>may create</b>"]
+        phase["factory.ts · transitionFactoryPhase"]
+        round["protocol-runner.ts<br/>protocolEvents phase-change<br/><i>review runs only</i>"]
+        drain["factory.ts · cleanupState"]
+    end
+
+    guard["<b>refreshProgress</b><br/>1 · a board exists, or the caller may create one<br/>2 · render — a tmux capture-pane per <i>advancing</i> build<br/>3 · the text actually changed"]
+    tick --> guard
+    phase --> guard
+    round --> guard
+    drain --> guard
+
+    note_nudge["Only the tick may create a board.<br/>A nudge sharpens one that exists, so a build<br/>that starts and finishes between ticks is silent."]
+    note_nudge -.- guard
+
+    subgraph writing["Writing · ordered per thread"]
+        direction TB
+        queue["enqueueBoardWrite<br/>chained on this board's writeTail"]
+        edit["<b>util.ts · safeEdit</b><br/>truncates to maxMessageLength,<br/>then classifies the failure"]
+        queue --> edit
+    end
+    guard --> queue
+
+    ok["board.content = content"]
+    msgGone["message-gone →<br/>re-post if the caller may create"]
+    chanGone["channel-gone →<br/>retire · nowhere to re-post"]
+    failed["failed →<br/>keep the board, next tick edits again"]
+    edit --> ok
+    edit --> msgGone
+    edit --> chanGone
+    edit --> failed
+
+    subgraph shared["The same classification, one module over"]
+        status["commands/status.ts<br/>auto-refreshing /list"]
+        note_status["Collapsing every failure into 'gone' retires<br/>the display permanently — it is persisted,<br/>so it never returns on its own."]
+        status -.- note_status
+    end
+    edit -.->|"also used by"| status
+
+    subgraph closing["Closing out · finalizeProgress"]
+        direction TB
+        drained["no build left unfinished"]
+        posted{"was a board<br/>ever posted?"}
+        quiet["say nothing"]
+        summary["🏭 Factory · complete<br/>+ the finished lines"]
+        drained --> posted
+        posted -->|no| quiet
+        posted -->|yes| summary
+    end
+    drain --> drained
+
+    subgraph trap["Why the closing lines are snapshotted"]
+        note_kill["session-lifecycle.ts · killSession<br/>registry.delete(session) <b>before</b> emit session:death"]
+        note_snap["so factory.ts snapshots builderName at spawn —<br/>a post-mortem line renders after the session is gone"]
+        note_kill --> note_snap
+    end
+    note_snap -.->|"feeds noteBuildFinished"| summary
+
+    classDef entry fill:#eef2fb,stroke:#5a7fc4
+    classDef decide fill:#eef6ee,stroke:#4a7
+    classDef bad fill:#fcecec,stroke:#c66
+    classDef quiet fill:#f4f4f4,stroke:#999,color:#555
+    classDef note fill:#fffdf0,stroke:#c9b458,color:#463
+    class tick,phase,round,drain entry
+    class guard,posted decide
+    class chanGone bad
+    class quiet,failed quiet
+    class note_nudge,note_status,note_kill,note_snap note
