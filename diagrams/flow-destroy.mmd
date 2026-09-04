@@ -1,5 +1,8 @@
 %% Destroy — permanently delete a thread and its anchor message
 %% Discord-only. Requires no live session and no active protocol.
+%% Two entry points: `destroy` on an already-dead thread, and `kill +d` /
+%% `kill +destroy`, which performs the kill the live-session guard demands and
+%% then runs this same body. The guards are re-applied either way.
 
 sequenceDiagram
     participant user as User
@@ -9,13 +12,20 @@ sequenceDiagram
     participant protocol as protocol-<br/>registry.ts
     participant gateway as discord-<br/>gateway.ts
 
-    user->>router: "destroy" (in thread)
-
-    alt not in a thread
-        Note over router: ignored — thread-scoped only
+    alt "kill +d" / "kill +destroy" — one command, two steps
+        user->>router: "kill +d" (in thread)
+        router->>handler: handleThreadKillIntercept(msg, { destroy: true })
+        opt session still alive
+            handler->>gateway: killSession — clears the live-session guard below
+        end
+        Note over handler: nothing left to kill (already killed, or deadAt from a<br/>restart) → skips the kill, goes straight to destroy
+        handler->>handler: handleDestroyIntercept(msg)
+    else "destroy" — thread already dead
+        user->>router: "destroy" (in thread)
+        router->>handler: handleDestroyIntercept(msg)
     end
 
-    router->>handler: handleDestroyIntercept(msg)
+    Note over user,router: both forms are thread-scoped —<br/>outside a thread neither matches
 
     handler->>handler: check gateway.deleteThread exists
     alt gateway has no deleteThread (Slack)

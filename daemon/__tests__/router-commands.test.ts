@@ -11,13 +11,13 @@ process.stderr.write = (() => true) as any
 
 const SPAWN_RE = /^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i
 const SPAWN_WT_RE = /^(?:spawn-wt:|\/spawn-wt)\s*(\S+)\s+([\s\S]+)/i
-const KILL_RE = /^(?:kill session:|kill:|\/kill)(?!\s*(?:!|--cascade)\s*$)\s*(.+)/i
+const KILL_RE = /^(?:kill session:|kill:|\/kill)(?!\s*(?:!|--cascade)?(?:\s*\+(?:d|destroy))?\s*$)\s*(.+)/i
 const LIST_RE = /^(?:\/sessions|list sessions)\s*$/i
 const RESTART_RE = /^(?:\/restart|restart daemon|restart)\s*$/i
 const HEALTH_RE = /^(?:\/health|health|status)\s*$/i
 const RECONNECT_RE = /^(?:\/reconnect|reconnect)\s*$/i
 const COMMANDS_RE = /^(?:\/commands|commands|list commands|show commands|\/help|help)\s*$/i
-const THREAD_KILL_RE = /^(?:kill|\/kill)(!|\s+--cascade)?\s*$/i
+const THREAD_KILL_RE = /^(?:kill|\/kill)(!|\s+--cascade)?(?:\s*\+(d|destroy))?\s*$/i
 const USAGE_RE = /^(?:\/usage|usage)\s*$/i
 const LISTEN_RE = /^(listen|pause)\s*$/i
 const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
@@ -137,6 +137,40 @@ describe('kill command', () => {
   test('bare kill carries no cascade flag', () => {
     expect('kill'.match(THREAD_KILL_RE)![1]).toBeUndefined()
     expect('/kill'.match(THREAD_KILL_RE)![1]).toBeUndefined()
+  })
+
+  // `+d` / `+destroy` appends the destroy step. KILL_RE runs first in the
+  // router, so a modifier must never be read as the name of a session to kill.
+  test('destroy modifier routes to thread kill, never to kill-by-name', () => {
+    for (const text of ['kill +d', 'kill +destroy', '/kill +d', '/kill +destroy', 'KILL +D']) {
+      expect(text.match(KILL_RE)).toBeNull()
+      const m = text.match(THREAD_KILL_RE)
+      expect(m).not.toBeNull()
+      expect(m![2]).toBeTruthy()
+    }
+  })
+
+  test('destroy modifier composes with the cascade flag', () => {
+    const both = 'kill! +d'.match(THREAD_KILL_RE)
+    expect(both![1]).toBe('!')
+    expect(both![2]).toBe('d')
+
+    const long = 'kill --cascade +destroy'.match(THREAD_KILL_RE)
+    expect(long![1]!.trim()).toBe('--cascade')
+    expect(long![2]).toBe('destroy')
+  })
+
+  test('bare kill and the cascade forms carry no destroy flag', () => {
+    for (const text of ['kill', '/kill', 'kill!', 'kill --cascade']) {
+      expect(text.match(THREAD_KILL_RE)![2]).toBeUndefined()
+    }
+  })
+
+  test('a session named d is still killable by name', () => {
+    // Only the `+`-prefixed form is a modifier — the bare name must survive.
+    expect('kill: d'.match(KILL_RE)![1].trim()).toBe('d')
+    expect('/kill d'.match(KILL_RE)![1].trim()).toBe('d')
+    expect('kill: destroy'.match(KILL_RE)![1].trim()).toBe('destroy')
   })
 
   test('kill-by-name still resolves real names, including flag-shaped ones', () => {

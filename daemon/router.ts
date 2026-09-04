@@ -390,10 +390,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
-    // The negative lookahead keeps `/kill!` and `/kill --cascade` out of the
-    // kill-by-name path — they are the thread cascade variants matched further
+    // The negative lookahead keeps the thread variants — `/kill!`,
+    // `/kill --cascade`, `/kill +d` — out of the kill-by-name path, so `+d` is
+    // read as a modifier rather than as the name of a session to kill. They are
+    // matched further
     // down, not sessions named "!" or "--cascade".
-    const killMatch = msg.content.match(/^(?:kill session:|kill:|\/kill)(?!\s*(?:!|--cascade)\s*$)\s*(.+)/i)
+    const killMatch = msg.content.match(/^(?:kill session:|kill:|\/kill)(?!\s*(?:!|--cascade)?(?:\s*\+(?:d|destroy))?\s*$)\s*(.+)/i)
     if (killMatch) {
       void handleKillIntercept(msg, killMatch[1].trim())
       return
@@ -466,9 +468,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
     // `kill` is gentle — factory builders in this thread survive it.
     // `kill!` / `kill --cascade` is the destructive variant: it tears down
     // every build this thread owns before killing the session.
-    const threadKillMatch = msg.content.match(/^(?:kill|\/kill)(!|\s+--cascade)?\s*$/i)
+    // `+d` / `+destroy` appends the `destroy` step, collapsing the two-command
+    // sequence `destroy` itself demands (it refuses while a session is alive).
+    // The modifiers compose: `kill! +d` cascades, kills, then deletes the thread.
+    const threadKillMatch = msg.content.match(/^(?:kill|\/kill)(!|\s+--cascade)?(?:\s*\+(d|destroy))?\s*$/i)
     if (threadKillMatch && msg.isThread) {
-      void handleThreadKillIntercept(msg, { cascade: !!threadKillMatch[1] })
+      void handleThreadKillIntercept(msg, { cascade: !!threadKillMatch[1], destroy: !!threadKillMatch[2] })
       return
     }
 
