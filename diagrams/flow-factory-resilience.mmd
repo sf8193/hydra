@@ -26,7 +26,7 @@ sequenceDiagram
     bus->>factory: factorySessionDeath
     factory->>factory: onBuilderDeath(sessionId)<br/>(separate concern — no-op for a PM)
     factory-->>PM1: 🏭 PM session ended · N builds in-flight<br/>formatBuildLine per build
-    Note over factory,builder: builds map, reverse lookups and progress<br/>timers all stay. No kill, no review cancel.
+    Note over factory,builder: builds map, reverse lookups and the PM thread's<br/>progress board all stay. No kill, no review cancel.
     end
 
     rect rgb(240, 243, 250)

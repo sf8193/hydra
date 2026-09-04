@@ -24,7 +24,7 @@ import type { CompletionEvent } from './protocol-types.js'
 import reviewProto from '../protocols/review.js'
 import { registry, threadRegistry, sessionEmoji, setToolDescription, removeToolDescriptions } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
-import { safeSend, formatDuration, getContextPercent } from './util.js'
+import { safeSend, safeEdit, formatDuration, getContextPercent } from './util.js'
 import { defaultToolDescription } from './bridge-tools.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
@@ -62,7 +62,8 @@ export type FactoryBuildState = {
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
   reviewSummary?: string // captured from builder's [summary] post at review completion
-  _progressTimer?: ReturnType<typeof setInterval> // periodic progress update timer
+  reviewMessageId?: string // ID of the review-complete message — accept links back to it
+  builderName?: string  // snapshot of the builder's session name — outlives the registry entry
   _awaitingPmTimer?: ReturnType<typeof setTimeout>  // TTL on the awaiting_pm phase (see AWAITING_PM_TTL_MS)
   _awaitingPmSince?: number  // when that TTL was armed — the only way to report time remaining
 }
@@ -146,16 +147,45 @@ function shortTicket(ticket: string): string {
   return ticket.replace(/-[0-9a-f]+$/, '')
 }
 
+function specTagOf(state: FactoryBuildState): string {
+  return state.specTag ?? deriveSpecTag(state.spec)
+}
+
+/**
+ * Which review round a build is in, read live from the protocol run.
+ *
+ * Pulled rather than mirrored onto the build: the run owns the counter, so
+ * there is no second copy to fall behind when a round advances.
+ */
+function currentReviewRound(state: FactoryBuildState): { round: number; rounds: number } | undefined {
+  if (state.phase !== 'reviewing' || !state.builderThreadId) return undefined
+  const run = getRunByThread(state.builderThreadId)
+  if (run?.protocol.name !== 'review') return undefined
+  return { round: run.currentRound, rounds: run.rounds }
+}
+
 export function formatBuildLine(
   state: FactoryBuildState,
-  opts?: { includeElapsed?: boolean; includeCtx?: boolean },
+  opts?: { includeElapsed?: boolean; includeCtx?: boolean; includeRound?: boolean; omitPhase?: boolean },
 ): string {
+  // killSession deletes the registry entry BEFORE emitting session:death, so
+  // every post-mortem line (crash, cascade kill, the closing board) renders
+  // after the live lookup has gone. Fall back to the name snapshotted at spawn
+  // rather than reporting the corpse as "unknown".
   const info = state.builderSessionId ? registry.get(state.builderSessionId) : undefined
-  const emoji = info ? (info.contentEmoji || sessionEmoji(info.tmuxName)) : '🏗️'
-  const name = info?.tmuxName ?? 'unknown'
-  const specTag = state.specTag ?? deriveSpecTag(state.spec)
+  const name = info?.tmuxName ?? state.builderName ?? 'unknown'
+  const emoji = info
+    ? (info.contentEmoji || sessionEmoji(info.tmuxName))
+    : (state.builderName ? sessionEmoji(state.builderName) : '🏗️')
+  const specTag = specTagOf(state)
 
-  let line = `${emoji} ${name} · ${specTag} · ${state.phase}`
+  // omitPhase is for lines that already state the outcome some other way — a
+  // "✅ … · complete" or "… · failed — abandoned" reads as a stutter.
+  let line = opts?.omitPhase ? `${emoji} ${name} · ${specTag}` : `${emoji} ${name} · ${specTag} · ${state.phase}`
+  if (opts?.includeRound) {
+    const round = currentReviewRound(state)
+    if (round) line += ` · round ${round.round}/${round.rounds}`
+  }
   if (opts?.includeElapsed) {
     line += ` · ${formatDuration(Date.now() - state.createdAt)}`
   }
@@ -166,33 +196,284 @@ export function formatBuildLine(
   return `${line} (${shortTicket(state.ticket)})`
 }
 
+/**
+ * A build's identity for an event message.
+ *
+ * Event messages name what happened in their own trailing clause, so the phase
+ * segment would only stutter ("✅ … · complete — accepted"). Status board lines
+ * have no such clause, and keep it.
+ */
+function eventLine(state: FactoryBuildState): string {
+  return formatBuildLine(state, { omitPhase: true })
+}
+
 // ---------------------------------------------------------------------------
-// Progress updates — periodic status messages during build and review
+// Progress board — one message per PM thread, edited in place
 // ---------------------------------------------------------------------------
+//
+// A tick used to post a fresh message per builder, so two builders over half an
+// hour buried the PM thread under twenty status lines. Instead each PM thread
+// owns a single board that every active build shares; ticks and phase changes
+// rewrite it. The board is created lazily by the first tick, so builds that
+// finish inside the interval leave no trace at all.
 
 const PROGRESS_INTERVAL_MS = 3 * 60_000 // every 3 minutes
 
-function startProgressUpdates(state: FactoryBuildState): void {
-  if (state._progressTimer) return
-  state._progressTimer = setInterval(() => {
-    if (state.phase !== 'building' && state.phase !== 'reviewing') {
-      stopProgressUpdates(state)
+// A PM thread that never fully drains accumulates one finished line per build
+// forever, so the history is bounded and the oldest entries are dropped first.
+const BOARD_HISTORY_CAP = 25
+
+/**
+ * Everything one PM thread's board owns.
+ *
+ * Held as a single record rather than four maps keyed the same way: the message,
+ * its text, the ticker and the history all share one lifetime, and splitting
+ * them meant creating and retiring that lifetime in four places, where the next
+ * field added would be forgotten in one of them.
+ */
+type BoardState = {
+  messageId?: string                          // set once a board has actually been posted
+  content?: string                            // what that message currently says
+  timer?: ReturnType<typeof setInterval>      // live only while some build advances on its own
+  finished: string[]                          // closing lines, held for the summary
+  writeTail?: Promise<void>                   // serializes this board's writes
+}
+
+const boards = new Map<string, BoardState>()
+
+function boardFor(pmThreadId: string): BoardState {
+  let board = boards.get(pmThreadId)
+  if (!board) {
+    board = { finished: [] }
+    boards.set(pmThreadId, board)
+  }
+  return board
+}
+
+/** Stop ticking and forget the board entirely. */
+function retireBoard(pmThreadId: string): void {
+  stopProgressUpdates(pmThreadId)
+  boards.delete(pmThreadId)
+}
+
+/**
+ * Assemble a board, keeping it inside one message.
+ *
+ * The board IS a single message — that is the whole point of editing in place —
+ * so its render has to fit in one. safeEdit will truncate anything over the
+ * limit rather than let the platform reject the edit, but a board cut mid-line
+ * is a worse answer than a board that says what it left out: dropping whole
+ * lines with a count keeps every line that survives readable.
+ */
+function composeBoard(header: string, lines: string[]): string {
+  const limit = gateway.maxMessageLength - 64 // headroom for the overflow note
+  let used = header.length
+  const kept: string[] = []
+  // Newest last, so fill from the end — dropping what just happened in favour
+  // of what happened an hour ago would be the wrong half to keep.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (used + lines[i].length + 1 > limit) break
+    used += lines[i].length + 1
+    kept.unshift(lines[i])
+  }
+  const dropped = lines.length - kept.length
+  if (dropped > 0) kept.unshift(`  …and ${dropped} earlier`)
+  return [header, ...kept].join('\n')
+}
+
+function isTerminalPhase(phase: FactoryPhase): boolean {
+  return phase === 'complete' || phase === 'failed'
+}
+
+/** Builds the board should show — anything not yet finished. */
+function activeBuildsInThread(pmThreadId: string): FactoryBuildState[] {
+  return [...builds.values()].filter(s => s.pmThreadId === pmThreadId && !isTerminalPhase(s.phase))
+}
+
+/**
+ * Whether a build's line will say something new without anyone acting.
+ *
+ * Work in flight moves: elapsed, context and review round all advance. A build
+ * in `awaiting_pm` does not — except that it now carries a decision deadline
+ * (see AWAITING_PM_TTL_MS), and that counts down. So it qualifies while the TTL
+ * is armed, and stops qualifying the moment the phase is left.
+ *
+ * This is the only reason to hold a ticker. Without the distinction, a finished
+ * build waiting on a human kept a 3-minute interval alive for as long as it
+ * waited, spending a `tmux capture-pane` per build to re-render a line that
+ * had not changed.
+ */
+function lineAdvances(state: FactoryBuildState): boolean {
+  if (state.phase === 'building' || state.phase === 'reviewing') return true
+  return state.phase === 'awaiting_pm' && awaitingPmRemainingMs(state) !== undefined
+}
+
+function advancingBuildsInThread(pmThreadId: string): FactoryBuildState[] {
+  return [...builds.values()].filter(s => s.pmThreadId === pmThreadId && lineAdvances(s))
+}
+
+function startProgressUpdates(pmThreadId: string): void {
+  const board = boardFor(pmThreadId)
+  if (board.timer) return
+  board.timer = setInterval(() => {
+    if (activeBuildsInThread(pmThreadId).length === 0) {
+      finalizeProgress(pmThreadId)
       return
     }
-    const info = state.builderSessionId ? registry.get(state.builderSessionId) : undefined
-    if (!info) return
-    const elapsed = formatDuration(Date.now() - state.createdAt)
-    const ctx = getContextPercent(info.tmuxName)
-    const ctxStr = ctx !== '?' ? ` · ctx ${ctx}` : ''
-    const phase = state.phase === 'reviewing' ? 'under review' : 'building'
-    void safeSend(state.pmThreadId, `🏭 _${info.tmuxName} ${phase} · ${elapsed} elapsed${ctxStr} · ticket \`${state.ticket}\`_`).catch(() => {})
+    // Nothing left that moves by itself: the board already reads correctly, so
+    // stop rather than reprinting it forever.
+    if (advancingBuildsInThread(pmThreadId).length === 0) {
+      stopProgressUpdates(pmThreadId)
+      return
+    }
+    refreshProgress(pmThreadId, true)
   }, PROGRESS_INTERVAL_MS)
 }
 
-function stopProgressUpdates(state: FactoryBuildState): void {
-  if (state._progressTimer) {
-    clearInterval(state._progressTimer)
-    state._progressTimer = undefined
+function stopProgressUpdates(pmThreadId: string): void {
+  const board = boards.get(pmThreadId)
+  if (!board?.timer) return
+  clearInterval(board.timer)
+  board.timer = undefined
+}
+
+/** The board as it should read right now, or undefined when nothing is active. */
+function renderProgress(pmThreadId: string): string | undefined {
+  const active = activeBuildsInThread(pmThreadId)
+  if (active.length === 0) return undefined
+  // Elapsed and context only while the build is working. Those are minute- and
+  // percent-granular, so on a line that has stopped being repainted they read
+  // as current when they are not — and a stale context reading is the one a
+  // manager would weigh when choosing between retry and abandon. The decision
+  // deadline is safe to show by contrast: it is coarse enough that a few
+  // minutes of drift cannot mislead, and its own countdown is what keeps the
+  // ticker alive to refresh it. It trails the ticket, matching how adoption
+  // notices render the same value.
+  const lines = active.map(s => {
+    const working = s.phase === 'building' || s.phase === 'reviewing'
+    let line = formatBuildLine(s, { includeRound: true, includeElapsed: working, includeCtx: working })
+    const remaining = awaitingPmRemainingMs(s)
+    if (remaining !== undefined) line += ` · decide within ${formatDuration(remaining)}`
+    return `  ${line}`
+  })
+  return composeBoard(`🏭 Factory · ${active.length} active`, lines)
+}
+
+/**
+ * Apply this board's writes in the order they were dispatched.
+ *
+ * Every write is fire-and-forget, so two of them racing (a round advance and a
+ * tick, or a refresh and the closing summary) could otherwise land out of
+ * order and strand the board showing state that has already passed — with no
+ * timer left to correct it once the thread has drained.
+ */
+function enqueueBoardWrite(pmThreadId: string, write: () => Promise<void>): void {
+  const board = boardFor(pmThreadId)
+  const next = (board.writeTail ?? Promise.resolve()).then(write).catch(() => {})
+  board.writeTail = next
+  void next.then(() => {
+    const current = boards.get(pmThreadId)
+    if (current?.writeTail !== next) return
+    current.writeTail = undefined
+    // finalizeProgress retires the board and *then* dispatches the closing
+    // write, which has to borrow an entry to queue on. Once it has drained
+    // there is nothing left to hold, so don't leave the husk behind.
+    if (!current.messageId && !current.timer && current.finished.length === 0) {
+      boards.delete(pmThreadId)
+    }
+  })
+}
+
+/**
+ * Rewrite the board for a PM thread.
+ *
+ * `allowCreate` is the tick's privilege alone. Phase changes and round advances
+ * only sharpen a board that already exists — they must not conjure one, or a
+ * build that starts and finishes between ticks would post a board and then
+ * immediately have to retract it.
+ */
+function refreshProgress(pmThreadId: string, allowCreate: boolean): void {
+  // Decide whether to render BEFORE rendering. Every line costs a synchronous
+  // `tmux capture-pane` for its context percentage, and this runs on the
+  // phase-change path — rendering first meant paying one subprocess per active
+  // build only to throw the result away whenever no board existed yet.
+  const board = boards.get(pmThreadId)
+  if (!board?.messageId && !allowCreate) return
+  const content = renderProgress(pmThreadId)
+  if (!content) return
+  if (board?.content === content) return // nothing moved; an identical edit is a wasted call
+  enqueueBoardWrite(pmThreadId, () => writeBoard(pmThreadId, content, allowCreate))
+}
+
+/**
+ * Close out a PM thread's board: stop ticking, and if a board was ever posted,
+ * leave it showing what finished. A thread that never posted one stays silent.
+ */
+function finalizeProgress(pmThreadId: string): void {
+  const board = boards.get(pmThreadId)
+  if (!board) return
+  stopProgressUpdates(pmThreadId)
+  if (!board.messageId) {
+    // A first post may still be in flight; it re-finalizes when it lands, so
+    // the history has to survive for that pass. Nothing in flight means no
+    // board is coming and the history has nowhere to go.
+    if (!board.writeTail) boards.delete(pmThreadId)
+    return
+  }
+  const messageId = board.messageId
+  const summary = composeBoard('🏭 Factory · complete', board.finished)
+  // Retire first, then write: nothing may resurrect this board afterwards.
+  boards.delete(pmThreadId)
+  enqueueBoardWrite(pmThreadId, () => writeBoard(pmThreadId, summary, false, messageId))
+}
+
+/**
+ * Edit the board, or post one when permitted.
+ *
+ * safeEdit classifies the failure; the three shapes want three answers — the
+ * message is gone (re-post it), the channel is gone (give up on the board),
+ * anything else is transient (keep the board for the next tick).
+ */
+async function writeBoard(
+  pmThreadId: string,
+  content: string,
+  allowCreate: boolean,
+  explicitMessageId?: string,
+): Promise<void> {
+  const messageId = explicitMessageId ?? boards.get(pmThreadId)?.messageId
+  if (messageId) {
+    const outcome = await safeEdit(pmThreadId, messageId, content)
+    if (outcome === 'ok') {
+      const board = boards.get(pmThreadId)
+      if (board?.messageId === messageId) board.content = content
+      return
+    }
+    // Nowhere to re-post into.
+    if (outcome === 'channel-gone') { retireBoard(pmThreadId); return }
+    // Transient — keep the board so the next tick edits it again.
+    if (outcome === 'failed') return
+    const board = boards.get(pmThreadId)
+    if (board?.messageId === messageId) { board.messageId = undefined; board.content = undefined }
+    if (!allowCreate) return
+  }
+  const ids = await safeSend(pmThreadId, content)
+  if (!ids[0]) return
+  const board = boardFor(pmThreadId)
+  board.messageId = ids[0]
+  board.content = content
+  // The last build can finish while this post is in flight. Close the board out
+  // rather than leaving a fresh message advertising work that is already over.
+  if (activeBuildsInThread(pmThreadId).length === 0) finalizeProgress(pmThreadId)
+}
+
+/** Remember a build's closing line so the final board can show it. */
+function noteBuildFinished(state: FactoryBuildState): void {
+  const board = boards.get(state.pmThreadId)
+  if (!board) return
+  const mark = state.phase === 'complete' ? '✅' : '❌'
+  board.finished.push(`  ${mark} ${formatBuildLine(state, { omitPhase: true, includeElapsed: true })}`)
+  if (board.finished.length > BOARD_HISTORY_CAP) {
+    board.finished = board.finished.slice(-BOARD_HISTORY_CAP)
   }
 }
 
@@ -577,7 +858,7 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     transitionFactoryPhase(state, 'failed')
     logBuild(state, 'spawn_failed')
     cleanupState(ticket)
-    void safeSend(pmThreadId, `🏭 \`${ticket}\` ❌ spawn failed — ${errMsg}`)
+    void safeSend(pmThreadId, `🏭 ❌ ${eventLine(state)} — spawn failed: ${errMsg}`)
   })
 
   return { ticket, warning }
@@ -637,7 +918,7 @@ export function factoryRetry(
     meta: { chat_id: state.builderThreadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 
-  void safeSend(state.pmThreadId, `🏭 \`${ticket}\` retrying (attempt ${state.retryCount + 1})`)
+  void safeSend(state.pmThreadId, `🏭 🔄 ${eventLine(state)} — retry ${state.retryCount}`)
 
   process.stderr.write(`daemon: factory: retry ${ticket} (attempt ${state.retryCount + 1})\n`)
   return { ok: true }
@@ -679,10 +960,13 @@ function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: t
   logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
   const reviewWarning = state.reviewed ? '' : ' (unreviewed)'
-  const summaryNote = state.reviewSummary
-    ? '\n' + (state.reviewSummary.length > 300 ? state.reviewSummary.slice(0, 300) + '…' : state.reviewSummary)
+  // Link to the review summary rather than reprinting it — the PM already read
+  // it once, and a second copy is the noisiest message in the thread.
+  const reviewUrl = state.reviewMessageId
+    ? gateway.getMessageUrl(state.pmThreadId, state.reviewMessageId)
     : ''
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ✅ accepted${reviewWarning}${summaryNote}`)
+  const reviewLabel = reviewUrl ? ` · [review](${reviewUrl})` : ''
+  void safeSend(state.pmThreadId, `🏭 ✅ ${eventLine(state)} — accepted${reviewLabel}${reviewWarning}`)
 
   killBuilder(state, true)
   cleanupState(state.ticket)
@@ -724,7 +1008,7 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
   const reviewNote = state.reviewSummary
     ? '\n↳ review had found: ' + (state.reviewSummary.length > 200 ? state.reviewSummary.slice(0, 200) + '…' : state.reviewSummary)
     : ''
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` abandoned${reason ? ' — ' + reason.slice(0, 200) : ''}${reviewNote}`)
+  void safeSend(state.pmThreadId, `🏭 🗑️ ${eventLine(state)} — abandoned${reason ? ': ' + reason.slice(0, 200) : ''}${reviewNote}`)
 
   // Cancel any in-flight review so the critic doesn't orphan
   if (wasPhase === 'reviewing' && state.builderThreadId) {
@@ -844,6 +1128,7 @@ function setFactoryTools(info: SessionInfo, phase: FactoryPhase): void {
 }
 
 function transitionFactoryPhase(state: FactoryBuildState, newPhase: FactoryPhase): void {
+  const wasTerminal = isTerminalPhase(state.phase)
   state.phase = newPhase
 
   // The TTL is armed here rather than at each awaiting_pm call site so that
@@ -852,6 +1137,19 @@ function transitionFactoryPhase(state: FactoryBuildState, newPhase: FactoryPhase
   // completes again) restarts the clock: it is a fresh decision point.
   if (newPhase === 'awaiting_pm') startAwaitingPmTtl(state)
   else clearAwaitingPmTtl(state)
+
+  // Terminal builds are captured for the closing board; cleanupState finalizes
+  // it a moment later, so refreshing here would only post an interim edit.
+  if (isTerminalPhase(newPhase)) {
+    if (!wasTerminal) noteBuildFinished(state)
+  } else {
+    // Re-arm the ticker whenever the new phase has a line that moves on its
+    // own — work resuming after a retry, or a decision deadline starting to
+    // count down. Must follow the TTL arm above, which is what makes
+    // awaiting_pm qualify.
+    if (lineAdvances(state)) startProgressUpdates(state.pmThreadId)
+    refreshProgress(state.pmThreadId, false)
+  }
 
   if (!state.builderSessionId) return
   const info = registry.get(state.builderSessionId)
@@ -947,9 +1245,91 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
   }
 }
 
+/**
+ * Where a builder thread's spawn announcement lives, resolved from the
+ * registries while they still hold the builder.
+ *
+ * Captured *before* the kill: killSession drops the session entry, and the
+ * anchor is only reachable from that entry on platforms whose thread metadata
+ * lacks a parent channel.
+ */
+function resolveBuilderAnchor(
+  threadId: string,
+  builderSessionId?: string,
+): { channelId?: string; messageId?: string } {
+  const thread = threadRegistry.get(threadId)
+  const info = builderSessionId ? registry.get(builderSessionId) : undefined
+  // Take both fields from the same record. Mixing them — a channel from the
+  // thread record, a message ID from the session — can name a message that
+  // exists in that channel but is not this builder's anchor, and on Slack,
+  // where a ts is only unique within its channel, that is a live message.
+  const candidates: Array<{ channelId?: string; messageId?: string }> = [
+    { channelId: thread?.parentChannelId ?? thread?.anchorChannelId, messageId: thread?.anchorMessageId },
+    { channelId: info?.anchorChannelId, messageId: info?.anchorMessageId },
+  ]
+  return candidates.find(c => c.channelId && c.messageId) ?? {}
+}
+
+/**
+ * Delete the builder thread and the spawn announcement it hangs from.
+ *
+ * Deleting only the thread leaves a dangling "⚡ spawned" line in the parent
+ * channel for work that no longer exists, so accepting a build accumulated one
+ * orphan per build. Best-effort throughout — a builder that cannot be swept up
+ * must never block the accept that asked for it.
+ */
+async function destroyBuilderThread(
+  threadId: string,
+  anchor: { channelId?: string; messageId?: string },
+): Promise<void> {
+  // Ask the platform BEFORE deleting the thread. Both of these read the thread
+  // itself, so after the delete they can only ever fail — the fallback would be
+  // dead code exactly when the registries could not supply the anchor.
+  let { channelId, messageId } = anchor
+  if (!channelId || !messageId) {
+    try {
+      if (!channelId) {
+        const channelInfo = await gateway.fetchChannel(threadId)
+        if (channelInfo.isThread && channelInfo.parentId) channelId = channelInfo.parentId
+      }
+      if (!messageId) {
+        const starter = await gateway.getThreadStarterInfo(threadId)
+        if (starter) messageId = starter.starterId
+      }
+    } catch {
+      // Nothing more to learn from the thread; fall through to what we have.
+    }
+  }
+
+  try {
+    await gateway.deleteThread!(threadId)
+  } catch (err) {
+    process.stderr.write(`daemon: factory: thread cleanup failed: ${err instanceof Error ? err.message : err}\n`)
+    return
+  }
+
+  // The thread is gone, so its metadata record is a remnant too — it would
+  // otherwise outlive the build in `history` and the dashboard, linking
+  // somewhere that no longer resolves.
+  threadRegistry.delete(threadId)
+
+  if (!channelId || !messageId) {
+    process.stderr.write(`daemon: factory: skipped anchor deletion for ${threadId} (channel=${channelId ?? 'unknown'}, message=${messageId ?? 'unknown'})\n`)
+    return
+  }
+  try {
+    await gateway.delete(channelId, messageId)
+  } catch (err) {
+    process.stderr.write(`daemon: factory: anchor deletion failed: ${err instanceof Error ? err.message : err}\n`)
+  }
+}
+
 function killBuilder(state: FactoryBuildState, deleteThread: boolean = false): void {
   const threadToDelete = deleteThread && state.builderThreadId && gateway.deleteThread
     ? state.builderThreadId : undefined
+  const anchor = threadToDelete
+    ? resolveBuilderAnchor(threadToDelete, state.builderSessionId)
+    : undefined
 
   if (state.builderSessionId) {
     const builderInfo = registry.get(state.builderSessionId)
@@ -959,20 +1339,14 @@ function killBuilder(state: FactoryBuildState, deleteThread: boolean = false): v
       // Delete thread AFTER killSession completes — killSession may post
       // unpushed-commit warnings to the thread that would be swallowed otherwise
       if (threadToDelete) {
-        void killPromise.finally(() => {
-          gateway.deleteThread!(threadToDelete).catch(err => {
-            process.stderr.write(`daemon: factory: thread cleanup failed: ${err instanceof Error ? err.message : err}\n`)
-          })
-        })
+        void killPromise.finally(() => destroyBuilderThread(threadToDelete, anchor!).catch(() => {}))
       }
       return
     }
   }
   // No builder session to kill — delete thread directly
   if (threadToDelete) {
-    void gateway.deleteThread!(threadToDelete).catch(err => {
-      process.stderr.write(`daemon: factory: thread cleanup failed: ${err instanceof Error ? err.message : err}\n`)
-    })
+    void destroyBuilderThread(threadToDelete, anchor!).catch(() => {})
   }
 }
 
@@ -1057,7 +1431,8 @@ async function spawnBuilder(
   const worktreeLabel = state.worktree ? ` · wt:\`${state.worktree}\`` : ''
   const spawnLabel = isFresh ? ' · fresh' : ' · fork'
   const specPreview = state.spec.slice(0, 140) + (state.spec.length > 140 ? '…' : '')
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` building · ${builderShort}→${reviewerShort}${worktreeLabel}${spawnLabel}\n${specPreview}`)
+  // The only place the full ticket appears — every later message shortens it.
+  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ${specTagOf(state)} · building · ${builderShort}→${reviewerShort}${worktreeLabel}${spawnLabel}\n${specPreview}`)
 
   const chatId = resolveBuilderChannel(state.pmSessionId, state.pmThreadId)
   const initiator = pmName
@@ -1073,6 +1448,7 @@ async function spawnBuilder(
 
   state.builderSessionId = result.sessionId
   state.builderThreadId = result.threadId
+  state.builderName = result.name
   builderSessionToTicket.set(result.sessionId, state.ticket)
   builderThreadToTicket.set(result.threadId, state.ticket)
 
@@ -1085,8 +1461,8 @@ async function spawnBuilder(
 
   process.stderr.write(`daemon: factory: builder ${result.name} (${result.sessionId}) ${isFresh ? 'spawned' : 'forked'} for ticket ${state.ticket}\n`)
 
-  // Start periodic progress updates so PM gets status during long builds
-  startProgressUpdates(state)
+  // Start the PM thread's progress board so the PM gets status during long builds
+  startProgressUpdates(state.pmThreadId)
 }
 
 export type FactoryDoneArgs = {
@@ -1116,7 +1492,7 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
   const fileCount = args.files_changed.length
   const testShort = args.test_results.slice(0, 80)
   const branchLabel = args.branch ? ` · \`${args.branch}\`` : ''
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` reviewing · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}`)
+  void safeSend(state.pmThreadId, `🏭 🔍 ${eventLine(state)} — review starting · ${fileCount} file${fileCount !== 1 ? 's' : ''}${branchLabel} · ${testShort}`)
 
   // Start review BEFORE diff/PR capture — closes the protocol ownership gap.
   // During diff capture (up to 15s of GitHub API calls), the review protocol
@@ -1137,7 +1513,7 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
       transitionFactoryPhase(state, 'awaiting_pm')
       const failCount = (pmReviewFailures.get(state.pmThreadId) ?? 0) + 1
       pmReviewFailures.set(state.pmThreadId, failCount)
-      void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review failed — ${errMsg}\n↳ factory_retry / factory_accept / factory_abandon`)
+      void safeSend(state.pmThreadId, `🏭 ⚠️ ${eventLine(state)} — review failed: ${errMsg}\n↳ factory_retry / factory_accept / factory_abandon`)
     })
 
   // Capture diff/PR concurrently — not blocking the review start.
@@ -1163,7 +1539,7 @@ export function onBuilderDeath(sessionId: string): void {
     process.stderr.write(`daemon: factory: builder died without calling factory_done for ticket ${state.ticket}\n`)
     transitionFactoryPhase(state, 'failed')
     logBuild(state, 'builder_crashed')
-    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed (no factory_done)`)
+    void safeSend(state.pmThreadId, `🏭 ❌ ${eventLine(state)} — builder crashed (no factory_done)`)
     cleanupState(ticket)
   } else if (state.phase === 'reviewing') {
     process.stderr.write(`daemon: factory: builder died during review for ticket ${state.ticket}, cancelling review\n`)
@@ -1177,11 +1553,11 @@ export function onBuilderDeath(sessionId: string): void {
         })
       }
     }
-    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ❌ builder crashed during review`)
+    void safeSend(state.pmThreadId, `🏭 ❌ ${eventLine(state)} — builder crashed during review`)
     cleanupState(ticket)
   } else if (state.phase === 'awaiting_pm') {
     process.stderr.write(`daemon: factory: builder died while awaiting PM for ticket ${state.ticket}\n`)
-    void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ builder exited (work on disk, ticket closed)`)
+    void safeSend(state.pmThreadId, `🏭 ⚠️ ${eventLine(state)} — builder exited (work on disk, ticket closed)`)
     transitionFactoryPhase(state, 'failed')
     logBuild(state, 'builder_died_awaiting')
     cleanupState(ticket)
@@ -1208,7 +1584,9 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   const summaryBlock = state.reviewSummary
     ? '\n' + (state.reviewSummary.length > 1500 ? state.reviewSummary.slice(0, 1500) + '\n…(truncated)' : state.reviewSummary)
     : ''
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` review complete${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
+  void safeSend(state.pmThreadId, `🏭 🏁 ${eventLine(state)} — review complete${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
+    .then(ids => { if (ids[0]) state.reviewMessageId = ids[0] })
+    .catch(() => {})
 
   return true
 }
@@ -1224,7 +1602,7 @@ function onFactoryReviewCancelled(threadId: string, reason?: string): boolean {
 
   transitionFactoryPhase(state, 'awaiting_pm')
   const reasonStr = reason ? ` (${reason})` : ''
-  void safeSend(state.pmThreadId, `🏭 \`${state.ticket}\` ⚠️ review cancelled${reasonStr} — builder still alive\n↳ factory_retry / factory_abandon`)
+  void safeSend(state.pmThreadId, `🏭 ⚠️ ${eventLine(state)} — review cancelled${reasonStr}, builder still alive\n↳ factory_retry / factory_abandon`)
 
   const failCount = (pmReviewFailures.get(state.pmThreadId) ?? 0) + 1
   pmReviewFailures.set(state.pmThreadId, failCount)
@@ -1259,7 +1637,6 @@ function clearFactoryIdentity(info: SessionInfo): void {
 function cleanupState(ticket: string): void {
   const state = builds.get(ticket)
   if (!state) return
-  stopProgressUpdates(state)
   clearAwaitingPmTtl(state)
   if (state.builderSessionId) {
     builderSessionToTicket.delete(state.builderSessionId)
@@ -1273,6 +1650,11 @@ function cleanupState(ticket: string): void {
   }
   if (state.builderThreadId) builderThreadToTicket.delete(state.builderThreadId)
   builds.delete(ticket)
+
+  // The board outlives any single build — retire it only once the PM thread has
+  // nothing left in flight.
+  if (activeBuildsInThread(state.pmThreadId).length === 0) finalizeProgress(state.pmThreadId)
+  else refreshProgress(state.pmThreadId, false)
 }
 
 // ---------------------------------------------------------------------------
@@ -1436,6 +1818,17 @@ protocolEvents.onComplete((event: CompletionEvent) => {
 on('session:death', factorySessionDeath, 'factory:session-death')
 on('session:bridge-registered', factoryAdopt, 'factory:adopt')
 
+// A review round advancing is the only thing that moves a build's status line
+// between ticks — repaint the board so a 20-minute review isn't three minutes
+// stale on every round.
+protocolEvents.onPhaseChange((event) => {
+  if (event.protocol !== 'review') return
+  const ticket = builderThreadToTicket.get(event.threadId)
+  if (!ticket) return
+  const state = builds.get(ticket)
+  if (state) refreshProgress(state.pmThreadId, false)
+})
+
 // Register factory hooks so builders get factory_done via scoped tool overrides.
 // getByThread returns false — factory does NOT occupy threads for mutual exclusion.
 // The builder's thread must remain free for the nested review to start.
@@ -1491,12 +1884,19 @@ export const __test = process.env.NODE_ENV === 'test'
         if (state.builderThreadId) builderThreadToTicket.set(state.builderThreadId, state.ticket)
         return state
       },
+      boards, BOARD_HISTORY_CAP,
+      /** Drive one board tick without waiting out PROGRESS_INTERVAL_MS. */
+      tickProgress(pmThreadId: string): void {
+        if (activeBuildsInThread(pmThreadId).length === 0) finalizeProgress(pmThreadId)
+        else if (advancingBuildsInThread(pmThreadId).length === 0) stopProgressUpdates(pmThreadId)
+        else refreshProgress(pmThreadId, true)
+      },
+      startProgressUpdates,
       reset(): void {
-        for (const state of builds.values()) {
-          stopProgressUpdates(state)
-          // A live 24h timer would hold the test runner's event loop open.
-          clearAwaitingPmTtl(state)
-        }
+        // A live 24h timer would hold the test runner's event loop open.
+        for (const state of builds.values()) clearAwaitingPmTtl(state)
+        for (const pmThreadId of [...boards.keys()]) stopProgressUpdates(pmThreadId)
+        boards.clear()
         builds.clear()
         builderSessionToTicket.clear()
         builderThreadToTicket.clear()

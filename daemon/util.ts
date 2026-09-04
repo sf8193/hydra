@@ -269,6 +269,56 @@ export async function reportError(
   try { await gateway.send(channelId, lines.join('\n'), { replyTo: messageId }) } catch {}
 }
 
+/**
+ * How an edit ended. `failed` is the one worth keeping a message for.
+ *
+ * A vanished message and a vanished channel want opposite responses — re-post
+ * versus give up — and both differ from a rate-limit or a dropped connection,
+ * which want another attempt at the same message. Callers that collapse these
+ * into "the message is gone" drop a live message on the first blip.
+ */
+export type EditOutcome = 'ok' | 'message-gone' | 'channel-gone' | 'failed'
+
+function editErrorOutcome(err: unknown): EditOutcome {
+  const code = (err as { code?: unknown })?.code
+  const slack = (err as { data?: { error?: unknown } })?.data?.error
+  const text = err instanceof Error ? err.message : String(err)
+  if (code === 10008 || slack === 'message_not_found' || /unknown message|message_not_found/i.test(text)) {
+    return 'message-gone'
+  }
+  if (code === 10003 || slack === 'channel_not_found' || /unknown channel|channel_not_found/i.test(text)) {
+    return 'channel-gone'
+  }
+  return 'failed'
+}
+
+/**
+ * The edit counterpart to safeSend: bounded, formatted, and classified.
+ *
+ * safeSend chunks over-length text across several messages; an edit has only
+ * the one message, so it truncates instead. Without that bound the platform
+ * rejects the whole edit (Discord 50035) and the message simply stops updating
+ * — silently, because the rejection reads like any other failure.
+ */
+export async function safeEdit(
+  channelId: string, messageId: string, text: string,
+): Promise<EditOutcome> {
+  const formatted = gateway.platform === 'discord' ? formatDiscordTables(text) : text
+  let bounded = formatted
+  if (bounded.length > gateway.maxMessageLength) {
+    const marker = '\n_…truncated_'
+    bounded = chunk(formatted, gateway.maxMessageLength - marker.length, 'markdown')[0] + marker
+  }
+  try {
+    await gateway.edit(channelId, messageId, bounded)
+    return 'ok'
+  } catch (err) {
+    const outcome = editErrorOutcome(err)
+    process.stderr.write(`daemon: safeEdit ${outcome} for message ${messageId}: ${String(err)}\n`)
+    return outcome
+  }
+}
+
 export async function safeSend(
   channelId: string, text: string, opts?: { replyTo?: string },
 ): Promise<string[]> {

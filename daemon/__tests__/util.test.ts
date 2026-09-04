@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget } from '../util.js'
+import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, safeEdit } from '../util.js'
+import { gateway } from '../config.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -349,5 +350,72 @@ describe('transformProtocolTag', () => {
 
   test('free-form posts are untouched', () => {
     expect(transformProtocolTag('just chatting here')).toBe('just chatting here')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// safeEdit()
+// ---------------------------------------------------------------------------
+//
+// The failure classification is the point. Collapsing every failure into "the
+// message is gone" is what retires a live auto-refreshing display on the first
+// rate-limit, and an unbounded edit is what makes the platform reject it.
+
+describe('safeEdit', () => {
+  const origEdit = gateway.edit
+
+  function stubEdit(impl: (channelId: string, messageId: string, text: string) => Promise<string>): void {
+    ;(gateway as any).edit = impl
+  }
+  function restore(): void {
+    ;(gateway as any).edit = origEdit
+  }
+
+  test('passes text through untouched when it fits', async () => {
+    let seen = ''
+    stubEdit(async (_c, _m, text) => { seen = text; return 'm1' })
+    expect(await safeEdit('c', 'm1', 'still here')).toBe('ok')
+    expect(seen).toBe('still here')
+    restore()
+  })
+
+  test('truncates rather than letting the platform reject the whole edit', async () => {
+    let seen = ''
+    stubEdit(async (_c, _m, text) => { seen = text; return 'm1' })
+    expect(await safeEdit('c', 'm1', 'x'.repeat(gateway.maxMessageLength + 500))).toBe('ok')
+    expect(seen.length).toBeLessThanOrEqual(gateway.maxMessageLength)
+    expect(seen).toEndWith('_…truncated_')
+    restore()
+  })
+
+  test('a missing message is distinguished from a failed call', async () => {
+    stubEdit(async () => { throw Object.assign(new Error('Unknown Message'), { code: 10008 }) })
+    expect(await safeEdit('c', 'm1', 'hi')).toBe('message-gone')
+
+    stubEdit(async () => { throw { data: { error: 'message_not_found' } } })
+    expect(await safeEdit('c', 'm1', 'hi')).toBe('message-gone')
+    restore()
+  })
+
+  test('a missing channel is its own answer — there is nowhere to re-post', async () => {
+    stubEdit(async () => { throw Object.assign(new Error('Unknown Channel'), { code: 10003 }) })
+    expect(await safeEdit('c', 'm1', 'hi')).toBe('channel-gone')
+
+    stubEdit(async () => { throw { data: { error: 'channel_not_found' } } })
+    expect(await safeEdit('c', 'm1', 'hi')).toBe('channel-gone')
+    restore()
+  })
+
+  test('everything else is transient, so the caller keeps its message', async () => {
+    for (const err of [
+      Object.assign(new Error('rate limited'), { code: 429 }),
+      Object.assign(new Error('Missing Permissions'), { code: 50013 }),
+      Object.assign(new Error('Invalid Form Body'), { code: 50035 }),
+      new Error('socket hang up'),
+    ]) {
+      stubEdit(async () => { throw err })
+      expect(await safeEdit('c', 'm1', 'hi')).toBe('failed')
+    }
+    restore()
   })
 })

@@ -28,6 +28,20 @@ export type BehaviorContext = {
 /** Return true to suppress the default notify/reset after this phase entry. All behaviors in the chain still run regardless — true does not halt the chain. */
 export type PhaseBehaviorFn = (run: RunState, prevPhase: string, content: string, ctx: BehaviorContext) => boolean | Promise<boolean>
 
+/**
+ * Emitted on every non-terminal phase transition of a live run.
+ *
+ * Carries no authority — only enough to decide whether the event is yours, and
+ * a "run state moved" nudge. Anything about the run's position, the round
+ * counter included, is read from the run itself: a copy here would be a second
+ * source of truth with nobody keeping it honest.
+ */
+export type PhaseChangeEvent = {
+  protocol: string
+  threadId: string
+  phase: string
+}
+
 export type CompletionEvent = {
   protocol: string
   threadId: string
