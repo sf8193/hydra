@@ -13,16 +13,29 @@ import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
+import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 
-export async function handleThreadKillIntercept(msg: InboundMessage): Promise<void> {
+export async function handleThreadKillIntercept(msg: InboundMessage, opts?: { cascade?: boolean }): Promise<void> {
   const info = registry.resolveThreadSessionFromMsg(msg)
   if (!info) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     return
   }
-  void gateway.react(msg.channelId, msg.id, '☠️').catch(() => {})
-  await killSession(info, 'session ended')
+  const cascade = opts?.cascade ?? false
+  void gateway.react(msg.channelId, msg.id, cascade ? '🧨' : '☠️').catch(() => {})
+
+  // Cascade BEFORE the kill: killSession emits session:death, whose gentle
+  // factory handler would otherwise post an orphan notice for builds this
+  // command is about to destroy.
+  if (cascade) {
+    const torn = factoryCascadeKill(info.sessionId)
+    if (torn > 0) {
+      void safeSend(msg.channelId, `🏭 cascade — tore down ${torn} build${torn > 1 ? 's' : ''}`).catch(() => {})
+    }
+  }
+
+  await killSession(info, cascade ? 'session ended (cascade)' : 'session ended')
   debouncedRefreshListDisplay()
 }
 

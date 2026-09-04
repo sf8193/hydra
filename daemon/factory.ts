@@ -16,13 +16,13 @@ import { promisify } from 'util'
 import { appendFileSync, mkdirSync, existsSync, writeFileSync, unlinkSync, readdirSync, realpathSync } from 'fs'
 import { join, resolve, relative } from 'path'
 import { gateway } from './config.js'
-import { doSpawnSession, killSession } from './session-lifecycle.js'
+import { doSpawnSession, killSession as _killSession } from './session-lifecycle.js'
 import { checkUnpushedCommits } from './worktree-manager.js'
 import { getWatchesBySession, restoreWatches } from './pr-watch.js'
 import { startProtocolRun, getRunByThread, cancelRun, protocolEvents } from './protocol-runner.js'
 import type { CompletionEvent } from './protocol-types.js'
 import reviewProto from '../protocols/review.js'
-import { registry, threadRegistry, setToolDescription, removeToolDescriptions } from './sessions.js'
+import { registry, threadRegistry, sessionEmoji, setToolDescription, removeToolDescriptions } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { safeSend, formatDuration, getContextPercent } from './util.js'
 import { defaultToolDescription } from './bridge-tools.js'
@@ -33,17 +33,22 @@ import { pushToolSurface } from './tool-surface.js'
 import { registerProtocol } from './protocol-registry.js'
 import { clearBuilderNudge } from './pane-probe.js'
 
+// Late-bound so tests can substitute a recording fake (mirrors
+// protocol-runner's setLifecycle). Production always uses the real kill.
+let killSession = _killSession
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type FactoryPhase = 'building' | 'reviewing' | 'awaiting_pm' | 'complete' | 'failed'
+export type FactoryPhase = 'building' | 'reviewing' | 'awaiting_pm' | 'complete' | 'failed'
 
-type FactoryBuildState = {
+export type FactoryBuildState = {
   ticket: string
   pmThreadId: string
   pmSessionId: string
   spec: string
+  specTag?: string      // short semantic label derived from spec at creation — display identity
   builderModel?: string
   builderSessionId?: string
   builderThreadId?: string
@@ -103,6 +108,50 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
   } catch (err) {
     process.stderr.write(`daemon: factory: log failed: ${err}\n`)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Display grammar — one line per build, shared by every factory message
+// ---------------------------------------------------------------------------
+//
+//   {emoji} {sessionName} · {specTag} · {phase} [· {elapsed}] [· ctx {pct}] ({shortTicket})
+//
+// A ticket ID says nothing about what is being built. The spec tag does, so it
+// leads every status line and the raw counter trails in parentheses.
+
+const SPEC_TAG_MAX = 40
+
+/** Collapse a spec to a single-line label, truncated at a word boundary. */
+export function deriveSpecTag(spec: string): string {
+  const flat = spec.replace(/\s+/g, ' ').trim()
+  if (flat.length <= SPEC_TAG_MAX) return flat
+  const cut = flat.slice(0, SPEC_TAG_MAX).replace(/\s+\S*$/, '')
+  return (cut || flat.slice(0, SPEC_TAG_MAX)) + '…'
+}
+
+/** Strip the random suffix from a ticket: `fb-10-381f` → `fb-10`. */
+function shortTicket(ticket: string): string {
+  return ticket.replace(/-[0-9a-f]+$/, '')
+}
+
+export function formatBuildLine(
+  state: FactoryBuildState,
+  opts?: { includeElapsed?: boolean; includeCtx?: boolean },
+): string {
+  const info = state.builderSessionId ? registry.get(state.builderSessionId) : undefined
+  const emoji = info ? (info.contentEmoji || sessionEmoji(info.tmuxName)) : '🏗️'
+  const name = info?.tmuxName ?? 'unknown'
+  const specTag = state.specTag ?? deriveSpecTag(state.spec)
+
+  let line = `${emoji} ${name} · ${specTag} · ${state.phase}`
+  if (opts?.includeElapsed) {
+    line += ` · ${formatDuration(Date.now() - state.createdAt)}`
+  }
+  if (opts?.includeCtx && info) {
+    const ctx = getContextPercent(info.tmuxName)
+    if (ctx !== '?') line += ` · ctx ${ctx}`
+  }
+  return `${line} (${shortTicket(state.ticket)})`
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +471,7 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
     pmThreadId,
     pmSessionId,
     spec,
+    specTag: deriveSpecTag(spec),
     builderModel: builder,
     reviewerModel: reviewer,
     reviewRounds,
@@ -448,6 +498,25 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
 }
 
 /**
+ * Authorize a caller against a build's PM *thread*, not its PM session.
+ *
+ * The thread is the PM's seat; sessions rotate through it. A PM at 90% context
+ * dies and its successor respawns in the same thread — session-scoped checks
+ * would strand every in-flight build with no one able to accept it.
+ */
+function authorizePmThread(
+  state: FactoryBuildState,
+  callerSessionId: string,
+  verb: string,
+): { error: string } | undefined {
+  const callerInfo = registry.get(callerSessionId)
+  if (callerInfo?.threadId !== state.pmThreadId) {
+    return { error: `Only a session in the PM thread can ${verb} this build.` }
+  }
+  return undefined
+}
+
+/**
  * Retry a build that's awaiting PM decision. Sends new instructions to the
  * still-alive builder and re-enters the build→review cycle.
  */
@@ -458,7 +527,8 @@ export function factoryRetry(
 ): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
-  if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can retry it.' }
+  const denied = authorizePmThread(state, callerSessionId, 'retry')
+  if (denied) return denied
   if (state.phase !== 'awaiting_pm') return { error: `Cannot retry — build is in phase "${state.phase}", expected "awaiting_pm".` }
 
   if (!state.builderSessionId || !state.builderThreadId) return { error: 'Builder session not found — use factory_build to start a new build.' }
@@ -497,7 +567,8 @@ export function factoryAccept(
 ): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
-  if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can accept it.' }
+  const denied = authorizePmThread(state, callerSessionId, 'accept')
+  if (denied) return denied
   return acceptCore(state, allowUnreviewed)
 }
 
@@ -542,7 +613,8 @@ export function factoryAbandon(
 ): { ok: true } | { error: string } {
   const state = builds.get(ticket)
   if (!state) return { error: `Unknown ticket: ${ticket}` }
-  if (state.pmSessionId !== callerSessionId) return { error: 'Only the PM that started this build can abandon it.' }
+  const denied = authorizePmThread(state, callerSessionId, 'abandon')
+  if (denied) return denied
   return abandonCore(state, reason)
 }
 
@@ -1099,27 +1171,134 @@ function cleanupState(ticket: string): void {
 // Event bus subscriptions
 // ---------------------------------------------------------------------------
 
+/** Builds a PM still owns — anything not yet terminal. */
+function activePmBuilds(sessionId: string): FactoryBuildState[] {
+  return [...builds.values()].filter(s =>
+    s.pmSessionId === sessionId && s.phase !== 'complete' && s.phase !== 'failed'
+  )
+}
+
+/**
+ * PM death is gentle: the builders live on.
+ *
+ * A dying PM used to take every in-flight build with it — the handler treated
+ * its own death as "nobody will ever come back." But the PM *thread* survives,
+ * factory state lives in daemon memory, and each builder is self-sufficient in
+ * its own thread. So the handler now only reports: builders keep building,
+ * reviews keep running, and the next session to register in the PM thread
+ * adopts them (see factoryAdopt). Destruction is opt-in via factoryCascadeKill.
+ */
 function factorySessionDeath({ sessionId }: { sessionId: string }): void {
   onBuilderDeath(sessionId)
 
-  // PM death: clean up all pending builds, cancel reviews, kill orphaned builders
-  const pmBuilds = [...builds.entries()].filter(([_, s]) => s.pmSessionId === sessionId)
-  for (const [ticket, state] of pmBuilds) {
-    process.stderr.write(`daemon: factory: PM ${sessionId} died with active build ${state.ticket}, cleaning up\n`)
+  const orphaned = activePmBuilds(sessionId)
+  if (orphaned.length === 0) return
+
+  process.stderr.write(`daemon: factory: PM ${sessionId} died with ${orphaned.length} in-flight build(s) — leaving them running\n`)
+
+  // Grouped by thread: one notice per thread, addressed to the seat that will
+  // inherit those builds. A PM session normally holds a single thread, but the
+  // notice has to land where the successor will read it either way.
+  const byThread = new Map<string, FactoryBuildState[]>()
+  for (const state of orphaned) {
+    const group = byThread.get(state.pmThreadId)
+    if (group) group.push(state)
+    else byThread.set(state.pmThreadId, [state])
+  }
+
+  for (const [pmThreadId, group] of byThread) {
+    const lines = group.map(s => `  ${formatBuildLine(s)}`).join('\n')
+    void safeSend(
+      pmThreadId,
+      `🏭 PM session ended · ${group.length} build${group.length > 1 ? 's' : ''} in-flight\n${lines}\n↳ respawn to resume management`,
+    ).catch(() => {})
+  }
+}
+
+/**
+ * The old destructive PM-death path, now reachable only by explicit intent
+ * (`kill!` / `kill --cascade`). Kills every builder this PM owns, cancels
+ * in-flight reviews, and clears the state.
+ *
+ * Scoped by thread as well as session: after a gentle death that no successor
+ * has adopted yet, `pmSessionId` still points at the corpse, and a cascade
+ * from the seat's current occupant must still reach those builds.
+ *
+ * Returns the number of builds torn down.
+ */
+export function factoryCascadeKill(sessionId: string): number {
+  const pmThreadId = registry.get(sessionId)?.threadId
+  const doomed = [...builds.entries()].filter(([_, s]) =>
+    s.pmSessionId === sessionId || (pmThreadId !== undefined && s.pmThreadId === pmThreadId)
+  )
+
+  for (const [ticket, state] of doomed) {
+    process.stderr.write(`daemon: factory: cascade kill of build ${state.ticket} (PM ${sessionId})\n`)
+    const wasPhase = state.phase
+
+    // Terminal phase FIRST. killSession emits session:death synchronously, and
+    // onBuilderDeath reads this phase — leave it live and the builder we just
+    // asked to exit gets reported as a crash. Same ordering as abandonCore.
+    transitionFactoryPhase(state, 'failed')
+    logBuild(state, 'pm_cascade_kill')
+
     // Cancel any in-flight review so the critic doesn't orphan
-    if (state.phase === 'reviewing' && state.builderThreadId) {
+    if (wasPhase === 'reviewing' && state.builderThreadId) {
       const run = getRunByThread(state.builderThreadId)
       if (run) {
-        void cancelRun(run, 'PM session died').catch(err => {
-          process.stderr.write(`daemon: factory: cancel review on PM death failed: ${err}\n`)
+        void cancelRun(run, 'PM cascade kill').catch(err => {
+          process.stderr.write(`daemon: factory: cancel review on cascade kill failed: ${err}\n`)
         })
       }
     }
+
     killBuilder(state, true)
-    transitionFactoryPhase(state, 'failed')
-    logBuild(state, 'pm_died')
     cleanupState(ticket)
   }
+
+  return doomed.length
+}
+
+/**
+ * A session registered in a thread that holds builds whose PM is gone — take
+ * over as PM.
+ *
+ * Adoption is about routing, not authority: authorizePmThread already lets any
+ * session in the PM thread act on these builds. What adoption fixes is where
+ * notifications land and who the builder is told to ask questions of.
+ *
+ * Fires on every bridge registration (reconnects included), so it must stay
+ * idempotent — once `pmSessionId` points at a live session the filter is empty.
+ */
+function factoryAdopt({ sessionId, threadId }: { sessionId: string; threadId: string }): void {
+  const newPmInfo = registry.get(sessionId)
+  // Guests (critics, judges) pass through a thread without taking its seat.
+  if (!newPmInfo || newPmInfo.sessionType === 'thread_guest') return
+
+  const orphaned = [...builds.values()].filter(s =>
+    s.pmThreadId === threadId &&
+    s.pmSessionId !== sessionId &&
+    s.phase !== 'complete' && s.phase !== 'failed' &&
+    !registry.get(s.pmSessionId)
+  )
+  if (orphaned.length === 0) return
+
+  const newPmName = newPmInfo.tmuxName
+
+  for (const state of orphaned) {
+    state.pmSessionId = sessionId
+    if (!state.builderSessionId) continue
+    transport.sendOrQueue(state.builderSessionId, {
+      type: 'notification',
+      content: `[system] PM session replaced. New PM: ${newPmName}. Use send_to_thread(target="${newPmName}") for questions.`,
+      meta: { chat_id: state.builderThreadId ?? '', message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
+  }
+
+  const lines = orphaned.map(s => `  ${formatBuildLine(s)}`).join('\n')
+  void safeSend(threadId, `🤝 Adopted ${orphaned.length} build${orphaned.length > 1 ? 's' : ''}\n${lines}`).catch(() => {})
+
+  process.stderr.write(`daemon: factory: adopted ${orphaned.length} build(s) for new PM ${newPmName} in thread ${threadId}\n`)
 }
 
 function factoryReviewComplete({ threadId, summary }: { threadId: string; summary?: string }): void {
@@ -1139,6 +1318,7 @@ protocolEvents.onComplete((event: CompletionEvent) => {
   }
 })
 on('session:death', factorySessionDeath, 'factory:session-death')
+on('session:bridge-registered', factoryAdopt, 'factory:adopt')
 
 // Register factory hooks so builders get factory_done via scoped tool overrides.
 // getByThread returns false — factory does NOT occupy threads for mutual exclusion.
@@ -1160,6 +1340,50 @@ registerProtocol('factory', {
     if (builderSessionToTicket.has(sessionId)) clearBuilderNudge(sessionId)
   },
 })
+
+// ---------------------------------------------------------------------------
+// Test seam — mirrors protocol-runner's __test
+// ---------------------------------------------------------------------------
+
+export const __test = process.env.NODE_ENV === 'test'
+  ? {
+      builds, builderSessionToTicket, builderThreadToTicket,
+      // The event-bus handlers, so a test can restore the subscriptions another
+      // test file's _resetForTesting() wiped.
+      factorySessionDeath, factoryAdopt,
+      /** Register a build directly, bypassing the spawn path. */
+      seedBuild(partial: Partial<FactoryBuildState> & Pick<FactoryBuildState, 'ticket' | 'pmThreadId' | 'pmSessionId'>): FactoryBuildState {
+        const spec = partial.spec ?? 'test spec'
+        const state: FactoryBuildState = {
+          spec,
+          specTag: deriveSpecTag(spec),
+          reviewRounds: 3,
+          phase: 'building',
+          retryCount: 0,
+          createdAt: Date.now(),
+          reviewed: false,
+          ...partial,
+        }
+        builds.set(state.ticket, state)
+        if (state.builderSessionId) builderSessionToTicket.set(state.builderSessionId, state.ticket)
+        if (state.builderThreadId) builderThreadToTicket.set(state.builderThreadId, state.ticket)
+        return state
+      },
+      reset(): void {
+        for (const state of builds.values()) stopProgressUpdates(state)
+        builds.clear()
+        builderSessionToTicket.clear()
+        builderThreadToTicket.clear()
+        pmReviewFailures.clear()
+      },
+      setLifecycle(overrides: { killSession?: typeof _killSession }) {
+        if (overrides.killSession) killSession = overrides.killSession
+      },
+      resetLifecycle() {
+        killSession = _killSession
+      },
+    } as const
+  : undefined
 
 /**
  * Startup sweep: kill orphaned factory builders left by a daemon restart.

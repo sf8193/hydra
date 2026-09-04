@@ -1,0 +1,64 @@
+%% Factory resilience — PM sessions rotate through the PM thread; builds do not die with them.
+%% The PM thread is the unit of ownership. A PM session is only its current occupant.
+%% Companion to flow-factory (the build→review cycle itself).
+
+sequenceDiagram
+    participant PM1 as PM · outgoing<br/>(context exhausted)
+    participant PM2 as PM · successor<br/>(same thread)
+    participant router as router.ts
+    participant lifecycle as session-<br/>lifecycle.ts
+    participant server as bridge-<br/>server.ts
+    participant bus as event-bus.ts
+    participant factory as factory.ts
+    participant builder as Builder<br/>(own thread)
+
+    Note over PM1,builder: build fb-N in flight (building or reviewing)
+
+    rect rgb(238, 246, 238)
+    Note over PM1,factory: 1. Gentle death — `kill` or crash
+    PM1->>router: kill
+    router->>lifecycle: killSession(outgoing PM)
+    lifecycle->>lifecycle: registry.delete(session)<br/>registry.deleteThread(pmThread)
+    lifecycle->>bus: emit session:death
+    bus->>factory: factorySessionDeath
+    factory->>factory: onBuilderDeath(sessionId)<br/>(separate concern — no-op for a PM)
+    factory-->>PM1: 🏭 PM session ended · N builds in-flight<br/>formatBuildLine per build
+    Note over factory,builder: builds map, reverse lookups and progress<br/>timers all stay. No kill, no review cancel.
+    end
+
+    rect rgb(240, 243, 250)
+    Note over factory,builder: 2. The gap — builders are self-sufficient
+    builder->>factory: factory_done → review starts
+    factory-->>PM1: 🏭 notifications keep landing in the PM thread<br/>(read by whoever occupies it next)
+    end
+
+    rect rgb(245, 240, 248)
+    Note over PM2,builder: 3. Adoption — a successor takes the seat
+    PM2->>lifecycle: respawn in pmThread
+    PM2->>server: bridge registers (also on every reconnect)
+    server->>bus: emit session:bridge-registered
+    bus->>factory: factoryAdopt(sessionId, threadId)
+    factory->>factory: builds where pmThreadId matches<br/>AND pmSessionId no longer in registry
+    factory->>factory: state.pmSessionId = successor
+    factory->>builder: [system] PM session replaced.<br/>New PM: name
+    factory-->>PM2: 🤝 Adopted N builds
+    Note over factory: idempotent — fires on every reconnect,<br/>finds nothing once pmSessionId is live
+    end
+
+    rect rgb(250, 244, 240)
+    Note over PM2,factory: 4. Thread-scoped authorization
+    PM2->>factory: factory_accept / retry / abandon
+    factory->>factory: authorizePmThread —<br/>registry.get(caller).threadId === state.pmThreadId
+    Note over factory: passes whether or not adoption ran:<br/>membership authorizes, adoption only routes
+    end
+
+    rect rgb(252, 238, 238)
+    Note over PM2,builder: 5. Explicit destruction — `kill!` or `kill --cascade`
+    PM2->>router: kill!
+    router->>factory: factoryCascadeKill(sessionId)
+    factory->>factory: cancelRun (if reviewing)
+    factory->>lifecycle: killSession(builder) per build
+    factory->>factory: transition failed → cleanupState
+    router->>lifecycle: killSession(successor PM)
+    Note over router,factory: cascade runs BEFORE the kill, so the gentle<br/>handler has nothing left to report
+    end
