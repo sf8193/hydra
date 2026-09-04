@@ -246,6 +246,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• ☠️ `kill` — kill this session (factory builders keep running)',
     '• 🧨 `kill!` / `kill --cascade` — kill this session **and** its factory builds',
     '• 💀 `destroy` — permanently delete this thread + anchor (Discord only)',
+    '• 💀 `kill +d` / `kill +destroy` — kill this session, then delete the thread',
     '• 👂 `listen` / 🔇 `unlisten` — mute/unmute message delivery',
     '• ⏸️ `pause` / ▶️ `unpause` — mark as paused (visual only)',
     '• 📸 `peek` / `peek <name>` — screenshot the tmux pane',
