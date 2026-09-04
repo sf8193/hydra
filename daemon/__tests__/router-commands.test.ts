@@ -11,13 +11,13 @@ process.stderr.write = (() => true) as any
 
 const SPAWN_RE = /^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i
 const SPAWN_WT_RE = /^(?:spawn-wt:|\/spawn-wt)\s*(\S+)\s+([\s\S]+)/i
-const KILL_RE = /^(?:kill session:|kill:|\/kill)\s*(.+)/i
+const KILL_RE = /^(?:kill session:|kill:|\/kill)(?!\s*(?:!|--cascade)\s*$)\s*(.+)/i
 const LIST_RE = /^(?:\/sessions|list sessions)\s*$/i
 const RESTART_RE = /^(?:\/restart|restart daemon|restart)\s*$/i
 const HEALTH_RE = /^(?:\/health|health|status)\s*$/i
 const RECONNECT_RE = /^(?:\/reconnect|reconnect)\s*$/i
 const COMMANDS_RE = /^(?:\/commands|commands|list commands|show commands|\/help|help)\s*$/i
-const THREAD_KILL_RE = /^(?:kill|\/kill)\s*$/i
+const THREAD_KILL_RE = /^(?:kill|\/kill)(!|\s+--cascade)?\s*$/i
 const USAGE_RE = /^(?:\/usage|usage)\s*$/i
 const LISTEN_RE = /^(listen|pause)\s*$/i
 const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
@@ -120,6 +120,30 @@ describe('kill command', () => {
     // "kill" alone should match THREAD_KILL_RE, not KILL_RE (which needs an argument)
     expect('kill'.match(KILL_RE)).toBeNull()
     expect('kill'.match(THREAD_KILL_RE)).not.toBeNull()
+  })
+
+  // `kill` is gentle (factory builders survive); the cascade variants are the
+  // destructive ones. KILL_RE is matched first in the router, so it must not
+  // read a cascade flag as a session name.
+  test('cascade variants route to thread kill, never to kill-by-name', () => {
+    for (const text of ['kill!', '/kill!', 'kill --cascade', '/kill --cascade', 'KILL!']) {
+      expect(text.match(KILL_RE)).toBeNull()
+      const m = text.match(THREAD_KILL_RE)
+      expect(m).not.toBeNull()
+      expect(m![1]).toBeTruthy()
+    }
+  })
+
+  test('bare kill carries no cascade flag', () => {
+    expect('kill'.match(THREAD_KILL_RE)![1]).toBeUndefined()
+    expect('/kill'.match(THREAD_KILL_RE)![1]).toBeUndefined()
+  })
+
+  test('kill-by-name still resolves real names, including flag-shaped ones', () => {
+    expect('/kill nova'.match(KILL_RE)![1].trim()).toBe('nova')
+    expect('kill: nova'.match(KILL_RE)![1].trim()).toBe('nova')
+    // A name that merely starts like a flag is not the cascade form
+    expect('/kill --cascade extra'.match(KILL_RE)![1].trim()).toBe('--cascade extra')
   })
 })
 

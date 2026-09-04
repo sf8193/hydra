@@ -626,3 +626,58 @@ export class ThreadRegistry {
 }
 
 export const threadRegistry = new ThreadRegistry()
+
+// ---------------------------------------------------------------------------
+// send_to_thread target resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a session name to the session that should receive the message.
+ *
+ * A session name identifies a seat in a thread, not an immortal process. When
+ * the named session is gone but its thread has a new occupant, that occupant is
+ * who the sender meant — so deliver there and say so, rather than failing with
+ * "no session named" and leaving the sender to rediscover names by hand.
+ *
+ * A killed session is removed from the registry outright, so its thread comes
+ * from threadRegistry's session history; the registry's own `deadAt` entries
+ * (sessions whose tmux vanished across a daemon restart) are checked first.
+ *
+ * Lives here rather than in the tools layer because it is registry traversal —
+ * the same walk over sessions and thread history the registries themselves do.
+ * Both registries are injectable so callers can test the walk without state.
+ */
+export function resolveSendTarget(
+  targetName: string,
+  reg: Pick<SessionRegistry, 'values' | 'get' | 'getByThread'> = registry,
+  threads: Pick<ThreadRegistry, 'threads'> = threadRegistry,
+): { session: SessionInfo; replaced?: string } | undefined {
+  const live = [...reg.values()].find(s => s.tmuxName === targetName && !s.deadAt)
+  if (live) return { session: live }
+
+  // Session names are recycled, so one name can appear in several threads'
+  // history. Rank candidate threads by when the name last sat there and take
+  // the most recent — that occupancy is the one the sender is thinking of.
+  const lastSeen = new Map<string, number>()
+  const note = (threadId: string, at: number) => {
+    lastSeen.set(threadId, Math.max(lastSeen.get(threadId) ?? 0, at))
+  }
+  for (const s of reg.values()) {
+    if (s.tmuxName === targetName && s.deadAt) note(s.threadId, s.deadAt)
+  }
+  for (const thread of threads.threads.values()) {
+    for (const h of thread.sessionHistory) {
+      if (h.tmuxName === targetName) note(thread.threadId, h.endedAt ?? h.startedAt)
+    }
+  }
+
+  const ranked = [...lastSeen.entries()].sort((a, b) => b[1] - a[1])
+  for (const [threadId] of ranked) {
+    const successorId = reg.getByThread(threadId)
+    const successor = successorId ? reg.get(successorId) : undefined
+    if (successor && !successor.deadAt && successor.tmuxName !== targetName) {
+      return { session: successor, replaced: targetName }
+    }
+  }
+  return undefined
+}

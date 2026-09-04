@@ -22,6 +22,7 @@ import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitals
 import { clearInterceptsForSession } from './pane-probe.js'
 import { safeSend } from './util.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
+import { emit } from './event-bus.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
@@ -260,6 +261,10 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       } else if (info) {
         process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
         if (info.ephemeral) startEphemeralTtl(sessionId)
+        // A session is only reachable once its bridge is up, so this — not
+        // spawn — is the moment thread-scoped work can be handed to it
+        // (e.g. factory adopting builds orphaned by the previous occupant).
+        emit('session:bridge-registered', { sessionId, threadId: info.threadId })
       } else {
         process.stderr.write(`daemon: stray bridge registered as ${sessionId} (no registry entry, no main tools)\n`)
       }

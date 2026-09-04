@@ -62,6 +62,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `protocol-engines` | **v1/v2 engine split** — dispatch ordering, phase sets, shared infrastructure. The most important structural diagram for protocol work. |
 | `flow-protocol-robustness` | Protocol phases with loops, mutual exclusion, disconnect/auto-resume handling, grace periods |
 | `flow-factory` | Factory build→review cycle: PM dispatches, builder forks, daemon enforces review, PM decides |
+| `flow-factory-resilience` | **PM rotation** — gentle death, the PM-less gap, auto-adopt on bridge registration, thread-scoped authorization, `kill --cascade`, the 24h `awaiting_pm` TTL, and the `send_to_thread` name redirect. Why the PM thread, not the PM session, owns a build. |
 
 ### Daemon Internals
 | Diagram | What it shows |
