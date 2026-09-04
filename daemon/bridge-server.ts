@@ -39,6 +39,18 @@ const PR_URL_RE = /https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/g
 const EPHEMERAL_TTL_MS = 30 * 60 * 1000 // 30 minutes
 const ephemeralTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+// ---------------------------------------------------------------------------
+// request_tools floor — the daemon's own guard against a client that won't stop
+// ---------------------------------------------------------------------------
+
+// A bridge asks for tools when it suspects an update was lost, so a healthy
+// session asks rarely. Anything faster is a client stuck in a cycle, and the
+// daemon should not be the half that sustains it: declining to answer lets the
+// bridge's request time out and fall back to its cache, which ends the exchange.
+// This is a floor on a pathological rate, not a debounce on a normal one — no
+// legitimate caller comes back inside a second.
+const TOOLS_PUSH_FLOOR_MS = 1_000
+
 export function startEphemeralTtl(sessionId: string): void {
   clearEphemeralTtl(sessionId)
   ephemeralTimers.set(sessionId, setTimeout(() => {
@@ -394,6 +406,14 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // a tools_update was lost (e.g., after receiving a notification that
       // may indicate a phase transition). Responds with a tools_update.
       if (conn.sessionId) {
+        const now = Date.now()
+        if (conn.lastToolsPushAt && now - conn.lastToolsPushAt < TOOLS_PUSH_FLOOR_MS) {
+          // Bridges older than this guard emit `list_changed` on every answer,
+          // including this one, and ask again the moment they get it. Staying
+          // silent is what breaks that cycle for a session already running.
+          break
+        }
+        conn.lastToolsPushAt = now
         const tools = getToolsForSession(conn.sessionId)
         transport.sendToBridge(conn, { type: 'tools_update', tools })
       }

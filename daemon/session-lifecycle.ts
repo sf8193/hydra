@@ -23,6 +23,8 @@ import { codexSocketPath } from './codex-engine.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
+import { syncPluginCache } from './plugin-cache.js'
+import { BRIDGE_CHANNEL_FLAG, readBridgeStartVerdict, describeBridgeAbsence, claimBridgeAbsenceReport } from './bridge-preflight.js'
 import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -637,7 +639,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
-  const channelFlag = `plugin:discord@claude-plugins-official`
+  const channelFlag = BRIDGE_CHANNEL_FLAG
   const spawnCwd = process.env.SPAWN_CWD
   if (!spawnCwd) throw new Error('SPAWN_CWD env var is required -- set it to the working directory for spawned sessions')
 
@@ -850,6 +852,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     `${claudeArgs} 2>>${shq(stderrLog)}`,
   ].join(' && ')
 
+  // The plugin cache is Claude Code's to rewrite, and a session spawned against
+  // a refreshed one has no bridge for its whole life. Re-assert it per spawn,
+  // not once per daemon boot.
+  syncPluginCache('spawn')
+
   process.stderr.write(`daemon: spawn ${tmuxName}: running tmux new-session\n`)
   process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
 
@@ -999,6 +1006,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
+  void verifyBridgeAfterSpawn(sessionId)
+
   return { name: tmuxName, sessionId, threadId: threadId!, url }
 }
 
@@ -1028,6 +1037,56 @@ export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boo
       resolve(false)
     }, timeoutMs)
   })
+}
+
+// ---------------------------------------------------------------------------
+// Post-spawn bridge verification
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a healthy bridge takes to register, with room for a loaded machine.
+ * Observed: ~1s from process start to `registered` on an idle box.
+ */
+const BRIDGE_START_GRACE_MS = 45_000
+
+/**
+ * A spawn reports success when tmux is alive, which says nothing about whether
+ * the session can reach the thread. When Claude Code doesn't load the bridge
+ * plugin, the result is a session that looks live, burns a slot, and silently
+ * cannot answer — the human finds out from a periodic detector minutes later,
+ * with a message that names no cause.
+ *
+ * This asserts the outcome the spawn is for: a bridge that registered. When it
+ * didn't, it says which of the two causes applies, because they need different
+ * responses from the human — see bridge-preflight.ts.
+ */
+async function verifyBridgeAfterSpawn(sessionId: string): Promise<void> {
+  if (await waitForBridge(sessionId, BRIDGE_START_GRACE_MS)) return
+
+  const info = registry.get(sessionId)
+  if (!info || info.deadAt || info.headless) return
+  // A dead tmux session is the crash detector's to report, not ours.
+  if (!tmuxHasSession(info.tmuxName)) return
+
+  const verdict = readBridgeStartVerdict(info.debugLogPath)
+  process.stderr.write(`daemon: bridge check ${info.tmuxName}: no bridge after ${BRIDGE_START_GRACE_MS / 1_000}s (verdict=${verdict})\n`)
+
+  // 'started' means a bridge process exists and is still retrying — the orphan
+  // detector owns that case, and announcing here would cry wolf on a slow boot.
+  if (verdict !== 'never_started') return
+  if (!claimBridgeAbsenceReport(sessionId)) return
+
+  // Deliberately does not promise that a respawn will fare better. The plugin
+  // cache was re-asserted moments before this very spawn, so a stale cache is
+  // the one cause already excluded — saying "re-synced, try again" would be
+  // both hollow and misleading. Report what is known: the session is inert,
+  // respawn is the only recovery, and the usual explanation does not apply.
+  void safeSend(
+    info.threadId,
+    `⚠️ **${info.tmuxName}** spawned without a bridge — it cannot see or answer this thread.\n` +
+    `_${describeBridgeAbsence(verdict)}_\n` +
+    `The plugin cache was re-synced immediately before this spawn, so a stale cache isn't the cause. \`respawn\` is the only recovery.`,
+  )
 }
 
 export async function tryResume(dead: {
