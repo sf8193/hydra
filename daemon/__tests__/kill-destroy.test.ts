@@ -196,4 +196,28 @@ describe('kill +destroy', () => {
     expect(deletedThreads).toEqual([])
     expect(sent.join('\n')).toContain('Only the session creator')
   })
+
+  test('kill +d on a live session with a different initiator kills but does not destroy', async () => {
+    // The bug: killSession deletes the registry entry, so handleDestroyIntercept
+    // could not look up the initiator and skipped the creator guard. The fix
+    // captures initiator before the kill and passes it through.
+    seedSession({ initiator: 'someone-else' })
+
+    await handleThreadKillIntercept(msg('kill +d'), { destroy: true })
+
+    expect(reactions).toContain('☠️')              // the kill ran
+    expect(registry.getByThread(THREAD)).toBeUndefined() // session is gone
+    expect(deletedThreads).toEqual([])             // but destroy was refused
+    expect(sent.join('\n')).toContain('Only the session creator')
+  })
+
+  test('kill +d on a live session with the same initiator kills and destroys', async () => {
+    seedSession({ initiator: 'operator' })
+
+    await handleThreadKillIntercept(msg('kill +d'), { destroy: true })
+
+    expect(reactions).toContain('☠️')              // the kill ran
+    expect(deletedThreads).toEqual([THREAD])       // and then the destroy did
+    expect(sent.join('\n')).not.toContain('Only the session creator')
+  })
 })
