@@ -5,7 +5,7 @@ import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { fallbackDescription, formatDuration, getContextPercent, atomicWriteFileSync, isAlive, safeSend } from '../util.js'
+import { fallbackDescription, formatDuration, getContextPercent, atomicWriteFileSync, isAlive, safeSend, safeEdit } from '../util.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveReviews } from '../adversarial.js'
 import type { InboundMessage } from '../../gateway.js'
@@ -110,13 +110,17 @@ const LIST_MSGS_FILE = join(STATE_DIR, 'list-messages.json')
 const MAX_LIST_MSGS = 5
 let lastListMsgs: Array<{ channelId: string; messageId: string }> = []
 
-function persistListMsgs(): void {
+function persistListMsgsToDisk(): void {
   try {
     atomicWriteFileSync(LIST_MSGS_FILE, JSON.stringify(lastListMsgs) + '\n')
   } catch (err) {
     process.stderr.write(`daemon: failed to persist list-messages: ${err}\n`)
   }
 }
+
+// Late-bound so a test can drive refreshListDisplay without writing into the
+// operator's live daemon state (mirrors factory.ts's killSession seam).
+let persistListMsgs = persistListMsgsToDisk
 
 function loadPersistedListMsgs(): void {
   try {
@@ -174,9 +178,11 @@ async function refreshListDisplay(): Promise<void> {
   let changed = false
   for (let i = lastListMsgs.length - 1; i >= 0; i--) {
     const lm = lastListMsgs[i]
-    try {
-      await gateway.edit(lm.channelId, lm.messageId, output)
-    } catch {
+    // Forget a message only when it is really gone. Dropping it on a
+    // rate-limit or a dropped connection retires the auto-refreshing display
+    // permanently — it is persisted, so it never comes back on its own.
+    const outcome = await safeEdit(lm.channelId, lm.messageId, output)
+    if (outcome === 'message-gone' || outcome === 'channel-gone') {
       lastListMsgs.splice(i, 1)
       changed = true
     }
@@ -229,7 +235,7 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   const enriched = entries.map((e, i) => ({ ...e, latestLine: latestInfos[i] }))
   const richText = buildListOutput(enriched, now)
   if (sentMsg) {
-    try { await gateway.edit(msg.channelId, sentMsg.id, richText) } catch {}
+    await safeEdit(msg.channelId, sentMsg.id, richText)
   }
 }
 
@@ -375,3 +381,20 @@ export async function handleProtocolsIntercept(msg: InboundMessage): Promise<voi
 
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }
+
+// ---------------------------------------------------------------------------
+// Test seam
+// ---------------------------------------------------------------------------
+
+export const __test = process.env.NODE_ENV === 'test'
+  ? {
+      refreshListDisplay,
+      trackedListMsgs: () => lastListMsgs,
+      setTrackedListMsgs(msgs: Array<{ channelId: string; messageId: string }>): void {
+        lastListMsgs = msgs
+      },
+      /** Keep persistence off the real STATE_DIR for the duration of a test. */
+      setPersist(fn: () => void): void { persistListMsgs = fn },
+      resetPersist(): void { persistListMsgs = persistListMsgsToDisk },
+    } as const
+  : undefined

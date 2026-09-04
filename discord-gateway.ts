@@ -556,8 +556,20 @@ export class DiscordGateway implements ChatGateway {
     return null
   }
 
-  getMessageUrl(_threadId: string, _messageTs: string): string {
-    return ''
+  // Sync by contract, so the guild comes from cache rather than a fetch.
+  // Discord thread IDs *are* channel IDs, so threadId slots straight into the URL.
+  //
+  // An uncached channel yields '' rather than a guess: every caller falls back
+  // to the thread URL on empty, and picking an arbitrary guild would hand them
+  // a confidently wrong deep link instead — which they cannot detect. Matches
+  // getThreadUrl above, which declines the same guess.
+  getMessageUrl(threadId: string, messageId: string): string {
+    if (!threadId || !messageId) return ''
+    const cached = this.client.channels.cache.get(threadId)
+    if (!cached) return ''
+    // A DM channel has no guildId; its messages live under the /@me pseudo-guild.
+    const guildId = 'guildId' in cached ? (cached as { guildId?: string | null }).guildId : null
+    return `https://discord.com/channels/${guildId ?? '@me'}/${threadId}/${messageId}`
   }
 
   // Discord enforces a shared-scope rate limit on thread name changes

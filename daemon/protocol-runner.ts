@@ -11,7 +11,7 @@ import { dumpTranscript } from './transcript-dump.js'
 import { defaultToolDescription } from './bridge-tools.js'
 import { pushToolSurface } from './tool-surface.js'
 import type { Protocol } from './protocol-dsl.js'
-import type { RunState, BehaviorContext, CompletionEvent } from './protocol-types.js'
+import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
 
@@ -73,6 +73,15 @@ class ProtocolEventBus extends EventEmitter {
       catch (err) { process.stderr.write(`daemon: completion event listener error: ${err}\n`) }
     }
   }
+  emitPhaseChange(event: PhaseChangeEvent): void {
+    for (const fn of this.listeners('phase-change')) {
+      try { (fn as (e: PhaseChangeEvent) => void)(event) }
+      catch (err) { process.stderr.write(`daemon: phase-change event listener error: ${err}\n`) }
+    }
+  }
+  /** Listeners must be synchronous — async rejections are unhandled. */
+  onPhaseChange(fn: (event: PhaseChangeEvent) => void): void { this.on('phase-change', fn) }
+  offPhaseChange(fn: (event: PhaseChangeEvent) => void): void { this.off('phase-change', fn) }
   /** Listeners must be synchronous — async rejections are unhandled. */
   onComplete(fn: (event: CompletionEvent) => void): void { this.on('complete', fn) }
   offComplete(fn: (event: CompletionEvent) => void): void { this.off('complete', fn) }
@@ -717,6 +726,15 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     await completeRun(run)
     return
   }
+
+  // Announce the move before running onEnter behaviors. The round counter has
+  // already advanced by this point, so an observer that repaints on this event
+  // and reads the round off the run sees the new one.
+  protocolEvents.emitPhaseChange({
+    protocol: run.protocol.name,
+    threadId: run.threadId,
+    phase: run.phase,
+  })
 
   const ctx = makeBehaviorCtx(run)
   const phase = run.protocol.phases[run.phase]

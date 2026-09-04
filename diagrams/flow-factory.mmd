@@ -1,54 +1,62 @@
 %% Factory — async build→review cycle with PM notification loop
 %% PM stays in their thread. Builder works in a new thread.
 %% Daemon enforces the lifecycle.
+%% Companion diagrams: flow-factory-board (the PM's status board),
+%% flow-factory-resilience (PM rotation).
 
 sequenceDiagram
     participant PM as PM Session
-    participant daemon as daemon.ts
     participant factory as factory.ts
     participant lifecycle as session-<br/>lifecycle.ts
     participant builder as Builder<br/>(forked from PM)
-    participant review as adversarial.ts
+    participant runner as protocol-<br/>runner.ts
 
     PM->>factory: factory_build(spec, difficulty)
-    factory->>factory: resolveModels(difficulty)
+    factory->>factory: resolveModels(difficulty)<br/>specTag = deriveSpecTag(spec)
     factory-->>PM: ticket fb-N-xxxx (immediate)
 
-    factory->>factory: resolve chatId from<br/>PM anchorChannelId or threadId
+    factory->>factory: resolveBuilderChannel —<br/>parent channel, never the PM thread
     factory->>lifecycle: doSpawnSession(forkFrom: PM)
     lifecycle->>builder: spawn tmux<br/>(--resume --fork-session)
-    Note over builder: inherits PM context +<br/>write access
+    Note over builder: inherits PM context + write access
+    factory-->>PM: 🏭 `fb-N-xxxx` specTag · building · models
+    Note over factory: startProgressUpdates(pmThreadId)<br/>→ see flow-factory-board
 
     builder->>builder: implements spec
-    builder->>factory: [done] + structured artifact
-    Note over factory: event bus: reply → done detection
+    builder->>factory: factory_done(files, tests, branch)
+    Note over factory: the tool, not [done] text —<br/>onBuilderDone gates on phase
+    factory-->>PM: 🏭 🔍 eventLine — review starting · N files
 
-    factory-->>PM: 🏭 build complete, starting review
-    factory->>review: startReview(builderThread,<br/>builderSession, rounds)
+    factory->>runner: startProtocolRun(reviewProto,<br/>builderThread, builderSession)
     Note over builder: builder becomes review OWNER
 
     loop review rounds
-        review->>builder: critic challenges
-        builder->>review: owner defends
-        factory-->>PM: 🏭 critic round N/M
+        runner->>builder: critic challenges
+        builder->>runner: owner defends
+        runner->>factory: protocolEvents phase-change
+        Note over factory: repaints the board —<br/>round read live off the run
     end
 
-    review->>factory: event bus: review:complete
-    factory-->>PM: 🏭 awaiting your decision
+    runner->>factory: protocolEvents complete
+    factory->>factory: reviewMessageId = posted summary
+    factory-->>PM: 🏭 🏁 eventLine — review complete<br/>↳ accept / retry / abandon
 
     alt accept
         PM->>factory: factory_accept(ticket)
         factory->>lifecycle: killSession(builder)
-        factory-->>PM: 🏭 accepted ✅
+        factory->>factory: destroyBuilderThread —<br/>thread + anchor + metadata
+        factory-->>PM: 🏭 ✅ eventLine — accepted · [review](url)
     else retry
         PM->>factory: factory_retry(ticket, instructions)
         factory->>builder: notification with new instructions
+        factory-->>PM: 🏭 🔄 eventLine — retry N
         Note over builder: re-enters build→review
     else abandon
         PM->>factory: factory_abandon(ticket)
-        factory->>review: cancelReview (if active)
+        factory->>runner: cancelRun (if reviewing)
         factory->>lifecycle: killSession(builder)
-        factory-->>PM: 🏭 abandoned 🗑️
+        factory->>factory: destroyBuilderThread
+        factory-->>PM: 🏭 🗑️ eventLine — abandoned
     else nobody decides — 24h TTL
         factory->>factory: expireAwaitingPm —<br/>transition failed, cleanupState
         factory-->>PM: 🏭 expired — no PM action after 24h
