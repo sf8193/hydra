@@ -28,6 +28,26 @@ jobs:
       - name: Build CLI
         run: bun build cli/hydra.ts --target bun --outdir /tmp/hb
 
+      # Ratchet, not a zero-gate: fail only if the tsc error count rises above
+      # the committed baseline. bun's bundler elides unused imports and erases
+      # types, so it never sees the errors tsc does — this is the only gate that
+      # does, and it fires on the PR, before merge (unlike the advisory
+      # post-merge hook). On a decrease it nudges rather than auto-committing,
+      # so the ceiling only moves under human intent.
+      - name: Typecheck (ratchet)
+        run: |
+          COUNT=$(bunx tsc --noEmit 2>&1 | grep -c 'error TS' || true)
+          MAX=$(cat .tsc-baseline)
+          echo "tsc errors: $COUNT (ceiling $MAX)"
+          if [ "$COUNT" -gt "$MAX" ]; then
+            echo "::error::tsc errors rose from $MAX to $COUNT"
+            bunx tsc --noEmit 2>&1 | grep 'error TS'
+            exit 1
+          fi
+          if [ "$COUNT" -lt "$MAX" ]; then
+            echo "::notice::ceiling can drop to $COUNT — update .tsc-baseline"
+          fi
+
       - name: Run tests
         env:
           DISCORD_BOT_TOKEN: test-token

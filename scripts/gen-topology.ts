@@ -4,12 +4,24 @@
  *   docs/topology-data.json  — nodes, edges, layers (consumed by topology.html)
  *   docs/topology.mmd        — Mermaid diagram
  *
- * Usage: bun scripts/gen-topology.ts
+ * Usage: bun scripts/gen-topology.ts [--out <dir>]
+ *
+ * --out <dir>  Write generated files into <dir> instead of docs/. The HTML
+ *              template is still read from docs/topology.html. Used by the
+ *              freshness test to generate into a temp dir and diff, without
+ *              mutating the tree it audits.
  */
 import { readFileSync, writeFileSync } from 'fs'
 import { join, basename } from 'path'
 
 const ROOT = join(import.meta.dir, '..')
+
+// Output directory — defaults to docs/. `--out <dir>` redirects the three
+// generated files (topology-data.json, topology.mmd, topology.html) elsewhere.
+const outFlagIdx = process.argv.indexOf('--out')
+const OUT = outFlagIdx !== -1 && process.argv[outFlagIdx + 1]
+  ? process.argv[outFlagIdx + 1]
+  : join(ROOT, 'docs')
 
 // Layer assignments — the only manual configuration.
 // Modules not listed here are excluded from the topology.
@@ -129,7 +141,7 @@ const dedupedEdges = [...edgeSet].map(e => e.split('→') as [string, string])
 
 // Write JSON
 const data = { layers: LAYERS, nodes, edges: dedupedEdges }
-writeFileSync(join(ROOT, 'docs', 'topology-data.json'), JSON.stringify(data, null, 2) + '\n')
+writeFileSync(join(OUT, 'topology-data.json'), JSON.stringify(data, null, 2) + '\n')
 
 // Write Mermaid
 const layerOrder = Object.fromEntries(LAYERS.map((l, i) => [l.id, i]))
@@ -150,16 +162,16 @@ for (const [s, t] of dedupedEdges) {
   mmd += `  ${s} --> ${t}\n`
 }
 
-writeFileSync(join(ROOT, 'docs', 'topology.mmd'), mmd)
+writeFileSync(join(OUT, 'topology.mmd'), mmd)
 
-// Inject data into HTML — replaces either the placeholder or a previous injection
-const htmlPath = join(ROOT, 'docs', 'topology.html')
-let html = readFileSync(htmlPath, 'utf8')
+// Inject data into HTML — replaces either the placeholder or a previous injection.
+// The template is always read from docs/; only the write target follows --out.
+const html = readFileSync(join(ROOT, 'docs', 'topology.html'), 'utf8')
 const dataScript = `const DATA = ${JSON.stringify(data)};`
-html = html.replace(/\/\* __TOPOLOGY_DATA__ \*\/|const DATA = .+;/, dataScript)
-writeFileSync(htmlPath, html)
+const injected = html.replace(/\/\* __TOPOLOGY_DATA__ \*\/|const DATA = .+;/, dataScript)
+writeFileSync(join(OUT, 'topology.html'), injected)
 
 console.log(`Generated: ${nodes.length} nodes, ${dedupedEdges.length} edges`)
-console.log(`  docs/topology-data.json`)
-console.log(`  docs/topology.mmd`)
-console.log(`  docs/topology.html (data injected)`)
+console.log(`  ${join(OUT, 'topology-data.json')}`)
+console.log(`  ${join(OUT, 'topology.mmd')}`)
+console.log(`  ${join(OUT, 'topology.html')} (data injected)`)
