@@ -41,6 +41,7 @@ export type ProtocolRun = StatusLineState & {
   _extensions: number
   _phaseStartedAt: number
   _resumeAttempts?: number
+  _pendingFallback?: string
   _keepaliveTimer?: ReturnType<typeof setInterval>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
@@ -341,6 +342,20 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     }
 
     await afterTransition(run, advancePhaseFrom, content)
+
+    // Deferred fallback: a non-owner died during a phase without on.fallback
+    // (e.g. owner_turn). Now that the owner has advanced to a new phase, check
+    // if that phase has on.fallback and fire it.
+    if (run._pendingFallback && !isTerminal(run)) {
+      const pending = run._pendingFallback
+      run._pendingFallback = undefined
+      if (run.protocol.phases[run.phase]?.on?.fallback) {
+        void enterFallbackPhase(run, pending)
+      }
+      // If new phase also lacks on.fallback (e.g. cleanup), clear silently —
+      // the review is completing normally.
+    }
+
     return { ok: true, sentIds }
   } finally {
     transitioningRuns.delete(run.id)
@@ -412,6 +427,7 @@ export function onRunDisconnect(sessionId: string): void {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           notifyDisconnect(run, role, 'auto-resume failed')
           if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
+          else if (canDeferFallback(run, role)) { run._pendingFallback = role }
           else void cancelRun(run, `${role} auto-resume failed`)
         })
       } else {
@@ -429,6 +445,7 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
   const graceMs = run.protocol.graceMs(role)
   if (!graceMs) {
     if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
+    else if (canDeferFallback(run, role)) { run._pendingFallback = role }
     else void cancelRun(run, `${role} disconnected (no grace period)`)
     return
   }
@@ -436,6 +453,7 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} — ${graceMs / 1000}s grace\n`)
   run.disconnectTimers.set(sessionId, setTimeout(() => {
     if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
+    else if (canDeferFallback(run, role)) { run._pendingFallback = role }
     else void cancelRun(run, `${role} did not reconnect`)
   }, graceMs))
 }
@@ -455,6 +473,20 @@ function canFallbackOnDeath(run: ProtocolRun, deadRole: string): boolean {
     && !isTerminal(run)
     && !!run.protocol.phases[run.phase]?.on?.fallback
     && !!run.protocol.notifications.onFallback
+}
+
+// Deferred fallback: the current phase has no on.fallback (e.g. owner_turn, where
+// firing fallback mid-composition would let the owner's pending advance() land on
+// fallback_review and turn the defense into the review summary), but the protocol
+// does support fallback from some other phase. Rather than cancel, remember the
+// dead role and re-check once the owner advances into a fallback-eligible phase
+// (see the _pendingFallback handling in onRunAdvance).
+function canDeferFallback(run: ProtocolRun, deadRole: string): boolean {
+  if (deadRole === run.protocol.ownerRole) return false
+  if (isTerminal(run)) return false
+  if (!run.protocol.notifications.onFallback) return false
+  // The current phase doesn't have on.fallback, but some phase does
+  return Object.values(run.protocol.phases).some(p => !!p.on?.fallback)
 }
 
 async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<void> {
@@ -633,6 +665,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 
   clearTimers(run)
   clearProtocolTools(run)
+  run._pendingFallback = undefined
 
   try {
     notifyExit(run, 'cancelled', reason)

@@ -15,7 +15,7 @@ export default protocol('review', {
 
   phases: {
     critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled', fallback: 'fallback_review' }, advanceEvent: 'critic_posted' },
-    owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled', fallback: 'fallback_review' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
+    owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
     cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
     // Critic-death fallback: when auto-resume is exhausted, the owner runs the
     // review itself (via fresh subagents) instead of the run being cancelled.
@@ -73,7 +73,7 @@ export default protocol('review', {
         `[system] **${deadLabel} died** after ${resumeAttempts} resume attempt${resumeAttempts === 1 ? '' : 's'}. Falling back to subagent review — you run it yourself.`,
         ``,
         completedRounds > 0
-          ? `${completedRounds} round${completedRounds === 1 ? '' : 's'} completed before it died — read the thread for the findings so far.`
+          ? `The critic posted findings for ${completedRounds} of ${run.rounds} round${run.rounds === 1 ? '' : 's'} — read them before choosing your lenses. Focus your subagents on what the critic *didn't* cover.`
           : `No rounds completed before it died.`,
         ``,
         `**Your task:** review the work with fresh Claude Code subagents.`,

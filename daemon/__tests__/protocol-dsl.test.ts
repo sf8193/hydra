@@ -45,14 +45,16 @@ describe('review protocol (TypeScript DSL)', () => {
     if (result.ok) expect(result.to).toBe('cleanup')
   })
 
-  test('fallback event transitions critic_turn and owner_turn to fallback_review', () => {
+  test('fallback event transitions critic_turn to fallback_review', () => {
     const fromCritic = review.machine.transition('critic_turn' as any, 'fallback' as any)
     expect(fromCritic.ok).toBe(true)
     if (fromCritic.ok) expect(fromCritic.to).toBe('fallback_review')
+  })
 
+  test('owner_turn does NOT have on.fallback (fallback is deferred until the owner advances)', () => {
+    expect(review.phases.owner_turn.on.fallback).toBeUndefined()
     const fromOwner = review.machine.transition('owner_turn' as any, 'fallback' as any)
-    expect(fromOwner.ok).toBe(true)
-    if (fromOwner.ok) expect(fromOwner.to).toBe('fallback_review')
+    expect(fromOwner.ok).toBe(false)
   })
 
   test('fallback_review advances to complete on summary_posted', () => {
@@ -80,12 +82,16 @@ describe('review protocol (TypeScript DSL)', () => {
 
   test('onFallback frames lenses as suggestions and uses fresh subagents, not forks', () => {
     const msg = review.notifications.onFallback!(
-      { params: { topic: 'auth flow' }, currentRound: 2 } as any,
+      { params: { topic: 'auth flow' }, currentRound: 2, rounds: 3 } as any,
       { deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 5, completedRounds: 1 },
     )
     expect(msg).toContain('The Critic')
     expect(msg).toContain('5 resume attempts')
-    expect(msg).toContain('1 round completed')
+    // Gap-filling wording: reference the completed/total rounds and steer subagents
+    // toward what the dead critic didn't get to.
+    expect(msg).toContain('1 of')
+    expect(msg).toContain("didn't")
+    expect(msg).toContain('cover')
     // Dan's design: lenses are suggestions the material drives, reviewers are
     // fresh + independent, not forks of the owner's context.
     expect(msg).toContain('suggestions, not a checklist')
@@ -96,7 +102,6 @@ describe('review protocol (TypeScript DSL)', () => {
 
   test('review opts into fallback via a declared on.fallback transition + onFallback hook', () => {
     expect(review.phases.critic_turn.on.fallback).toBe('fallback_review')
-    expect(review.phases.owner_turn.on.fallback).toBe('fallback_review')
     expect(typeof review.notifications.onFallback).toBe('function')
   })
 

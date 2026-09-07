@@ -234,6 +234,30 @@ describe('review: subagent review fallback', () => {
     expect(h.completionEvents[0].summary).toContain('subagent review complete')
   })
 
+  test('critic dies during owner_turn: owner finishes defense, then fallback fires from critic_turn', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    // Move to owner_turn
+    await h.advance('critic', 'Opening critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    // Critic dies during owner_turn
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+
+    // Should NOT be in fallback yet — deferred
+    expect(h.phase).toBe('owner_turn')
+    expect(h.run._pendingFallback).toBe('critic')
+
+    // Owner posts defense — transitions to critic_turn, then fallback fires
+    await h.advance('owner', 'Here is my defense.')
+
+    // Should now be in fallback_review (fired from critic_turn)
+    expect(h.phase).toBe('fallback_review')
+    expect(h.run._pendingFallback).toBeUndefined()
+  })
+
   test('a failing resume attempt (site 1) falls back instead of cancelling', async () => {
     h = createHarness(review, { rounds: 3 })
 
