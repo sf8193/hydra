@@ -1218,19 +1218,12 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
 
   const branch = `wt/${info.tmuxName}`
   try {
-    // Check if PR already exists for this branch (idempotent).
-    // gh pr view exits 1 when no PR exists — wrap in its own try so the throw
-    // doesn't prevent creation (the common path for a fresh factory build).
-    try {
-      const { stdout } = await execAsync(
-        'gh', ['pr', 'view', branch, '--json', 'url', '--jq', '.url'],
-        { cwd: info.worktreeRepo, timeout: 10_000 },
-      )
-      const existing = stdout.trim()
-      if (existing) return existing
-    } catch {
-      // No existing PR — fall through to create
-    }
+    const { stdout: existing } = await execAsync(
+      'gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--jq', '.[0].url'],
+      { cwd: info.worktreeRepo, timeout: 10_000 },
+    )
+    const url = existing.trim()
+    if (url) return url
 
     const title = `Factory ${state.ticket}: ${state.spec.slice(0, 60)}`
     const body = `Factory build from ticket \`${state.ticket}\``
