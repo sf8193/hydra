@@ -559,6 +559,12 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
     completedRounds: Math.max(0, run.currentRound - 1),
   }) ?? `[system] ${run.protocol.roles[deadRole] ?? deadRole} died. Post your closing summary via advance({ content: "..." }).`
 
+  // Log the entry breadcrumb here — the transition has committed and run.phase is
+  // reliably the fallback phase — rather than after the awaits below, where the
+  // deferred-path terminal guard could skip it (and where run.phase may already
+  // have moved to `complete`, making the message wrong).
+  process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${deadRole} died (${attempts} resume attempts)\n`)
+
   // Thread post is the human-visible record; the direct notification is what
   // actually wakes the idle owner session to start working (a safeSend to the
   // thread does not — every actor hand-off in this runner pushes via transport).
@@ -573,7 +579,6 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
   if (isTerminal(run)) return
   resetTimeout(run) // give the owner the full fallback window to work
   startKeepalive(run)
-  process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${deadRole} died (${attempts} resume attempts)\n`)
 }
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
