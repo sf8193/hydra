@@ -61,10 +61,10 @@ describe('review protocol (TypeScript DSL)', () => {
     if (result.ok) expect(result.to).toBe('complete')
   })
 
-  test('fallback_review times out to complete', () => {
+  test('fallback_review times out to cancelled (a timed-out fallback is a failure, not a success)', () => {
     const result = review.machine.transition('fallback_review' as any, 'timeout' as any)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.to).toBe('complete')
+    if (result.ok) expect(result.to).toBe('cancelled')
   })
 
   test('fallback_review is an owner advance phase', () => {

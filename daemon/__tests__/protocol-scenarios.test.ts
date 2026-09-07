@@ -251,6 +251,22 @@ describe('review: subagent review fallback', () => {
     expect(h.actorNotifications('owner').some(n => n.includes('Falling back to subagent review'))).toBe(true)
   })
 
+  test('a timed-out fallback_review cancels, it does not fake-complete', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.phase).toBe('fallback_review')
+
+    // Owner never posts a summary; the fallback window elapses.
+    const windowMs = h.run.protocol.windowMs('fallback_review')!
+    await h.tick(windowMs + 1_000)
+
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
+  })
+
   test('owner death does not fall back — the run cancels', async () => {
     h = createHarness(review, { rounds: 3 })
 

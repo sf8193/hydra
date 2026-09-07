@@ -21,7 +21,9 @@ export default protocol('review', {
     // review itself (via fresh subagents) instead of the run being cancelled.
     // Not the cleanupPhase, so the runner drives entry manually and sends the
     // onFallback instructions below — see enterFallbackPhase in protocol-runner.
-    fallback_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
+    // timeout → cancelled (not complete): unlike cleanup, hitting the window here
+    // means the review never produced a result, so it's a failure, not a success.
+    fallback_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },
@@ -30,7 +32,10 @@ export default protocol('review', {
     critic_turn: '10m',
     owner_turn: '30m',
     cleanup: '5m',
-    fallback_review: '30m',
+    // Heavier than a single owner turn — spawn N subagents, wait, synthesize —
+    // so the default fits the work rather than forcing extend_phase. The
+    // unconditional backstop is 3x this (135m).
+    fallback_review: '45m',
   },
 
   grace: {
