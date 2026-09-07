@@ -258,6 +258,47 @@ describe('review: subagent review fallback', () => {
     expect(h.run._pendingFallback).toBeUndefined()
   })
 
+  test('critic reconnects after grace during owner_turn: deferred fallback is cancelled, live critic survives', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.advance('critic', 'Opening critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    // Critic dies during owner_turn → deferred
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.run._pendingFallback).toBe('critic')
+
+    // Critic comes back AFTER grace expired — the deferral does not retire the
+    // participant, so the flag must clear rather than retiring a live session.
+    h.reconnect('critic')
+    expect(h.run._pendingFallback).toBeUndefined()
+
+    // Owner advances → normal critic_turn, NOT fallback_review (critic is alive)
+    await h.advance('owner', 'Here is my defense.')
+    expect(h.phase).toBe('critic_turn')
+    expect(h.isTerminated).toBe(false)
+  })
+
+  test('critic dies during final owner_turn: pending fallback clears on cleanup (no fallback needed)', async () => {
+    h = createHarness(review, { rounds: 1 })
+
+    await h.advance('critic', 'Only critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.run._pendingFallback).toBe('critic')
+
+    // Final round: owner advances to cleanup, not critic_turn. cleanup has no
+    // on.fallback, so the flag clears silently and the review finishes normally.
+    await h.advance('owner', 'Final defense.')
+    expect(h.phase).toBe('cleanup')
+    expect(h.run._pendingFallback).toBeUndefined()
+  })
+
   test('a failing resume attempt (site 1) falls back instead of cancelling', async () => {
     h = createHarness(review, { rounds: 3 })
 

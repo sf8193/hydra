@@ -350,6 +350,12 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
       const pending = run._pendingFallback
       run._pendingFallback = undefined
       if (run.protocol.phases[run.phase]?.on?.fallback) {
+        // enterFallbackPhase commits the phase transition in its synchronous
+        // prefix (before its only await, the kill) — see the "no await before the
+        // transition" invariant in that function. All four call sites, including
+        // this one, `void` it and rely on that: the fallback_review transition is
+        // in effect the moment control returns here. Do not add an early await to
+        // enterFallbackPhase without revisiting these call sites.
         void enterFallbackPhase(run, pending)
       }
       // If new phase also lacks on.fallback (e.g. cleanup), clear silently —
@@ -644,6 +650,16 @@ export function onRunReconnect(sessionId: string): void {
     process.stderr.write(`daemon: ${run.protocol.name} run: ${sessionId} reconnected\n`)
   }
 
+  // A deferred fallback may have been armed for this role while its session was
+  // gone (grace expired in a phase without on.fallback, e.g. owner_turn). The
+  // deferral does NOT retire the participant, so a late reconnect brings the same
+  // session back alive — clear the pending flag, or the next owner advance() would
+  // fire enterFallbackPhase and kill a healthy critic. Only the pending role clears.
+  const role = run.sessionToRole.get(sessionId)
+  if (role && run._pendingFallback === role) {
+    run._pendingFallback = undefined
+    process.stderr.write(`daemon: ${run.protocol.name} run: ${role} reconnected — deferred fallback cancelled\n`)
+  }
 }
 
 // ---------------------------------------------------------------------------
