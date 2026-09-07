@@ -1,0 +1,36 @@
+%% Review critic-death fallback — when auto-resume is exhausted, the owner runs
+%% the review itself via fresh subagents instead of the run being cancelled.
+%% Engine path lives in protocol-runner.ts; the opt-in (on.fallback transition +
+%% notifications.onFallback) is declared in protocols/review.ts. The engine names
+%% no protocol — build/spike simply don't opt in.
+%% For the full phase map and grace periods, see flow-protocol-robustness.mmd.
+
+flowchart TD
+    death["critic session dies<br/>(crash / context limit)"] --> disc["onRunDisconnect<br/><i>protocol-runner.ts</i>"]
+    disc -- "3s debounce" --> decide["decideResume<br/><i>auto-resume.ts</i>"]
+
+    decide -- "resume<br/>(tmux dead, has claudeSessionId,<br/>under 5 attempts)" --> resume["resumeParticipant"]
+    resume -- "spawn / connect OK" --> live["critic back<br/>run continues"]
+    resume -- "attempt throws" --> gate
+    decide -- "grace<br/>(attempts exhausted)" --> grace["startGraceTimer<br/>(critic grace: 30s)"]
+    grace -- "reconnect" --> live
+    grace -- "grace expires" --> gate
+
+    gate{"canFallbackOnDeath<br/>dead role is not owner, run live,<br/>phase declares on.fallback,<br/>protocol has onFallback hook"}
+    gate -- "no<br/>(build / spike, or owner died)" --> cancel["cancelRun<br/>cancelled"]
+    gate -- "yes<br/>(review critic)" --> enter["enterFallbackPhase"]
+
+    subgraph crit["enterFallbackPhase — synchronous section (no await), then kill"]
+        direction TB
+        enter --> retire["retire critic from run maps<br/>(before the transition, so setRunTools<br/>skips it and no disconnect re-enters)"]
+        retire --> trans["machine.transition(from, 'fallback')<br/>then advancePhase"]
+        trans --> phase["phase = fallback_review"]
+        phase --> kill["killSession(critic)"]
+        kill --> notify["onFallback instructions:<br/>safeSend (thread record) +<br/>transport notify (wakes owner)"]
+    end
+
+    notify --> work["owner spawns fresh, independent<br/>subagents per chosen lens, synthesizes"]
+    work --> adv["owner advance({ content })"]
+    adv -- "summary_posted" --> complete["complete<br/>summary reaches CompletionEvent.summary"]
+    phase -. "30m timeout" .-> complete
+    phase -. "owner dies then cancel" .-> cancelled["cancelled"]

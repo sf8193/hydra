@@ -61,6 +61,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 |---------|--------------|
 | `protocol-engines` | **v1/v2 engine split** — dispatch ordering, phase sets, shared infrastructure. The most important structural diagram for protocol work. |
 | `flow-protocol-robustness` | Protocol phases with loops, mutual exclusion, disconnect/auto-resume handling, grace periods |
+| `flow-review-fallback` | **Critic-death fallback** — when auto-resume is exhausted, the owner runs the review itself via fresh subagents (`fallback_review`) instead of the run cancelling. Generic DSL opt-in (`on.fallback` + `onFallback` hook), the synchronous transition-before-kill critical section, and the summary reaching `CompletionEvent.summary`. |
 | `flow-factory` | Factory build→review cycle: PM dispatches, builder forks, daemon enforces review, PM decides |
 | `flow-factory-resilience` | **PM rotation** — gentle death, the PM-less gap, auto-adopt on bridge registration, thread-scoped authorization, `kill --cascade`, the 24h `awaiting_pm` TTL, and the `send_to_thread` name redirect. Why the PM thread, not the PM session, owns a build. |
 | `flow-factory-board` | **The PM's status board** — one edited message per PM thread. What arms the ticker and what stops it, why a nudge may sharpen a board but never create one, and the three answers to a failed edit. |
