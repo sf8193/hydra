@@ -54,6 +54,7 @@ const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
 const KEEPALIVE_INTERVAL_MS = 30_000
 const KEEPALIVE_ENABLED = process.env.HYDRA_KEEPALIVE !== '0'
+const RESUME_KEEPALIVE = true  // Experiment: background sleep loop on resumed sessions
 
 const runs = new Map<string, ProtocolRun>()
 const threadToRun = new Map<string, string>()
@@ -471,6 +472,14 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     resumeLines.push(`${activeLabel ?? 'The other participant'} is currently working. Wait for a [system] notification with their response.`)
   }
   resumeLines.push(`Check the thread for any messages you may have missed.`)
+
+  if (RESUME_KEEPALIVE && (run._resumeAttempts ?? 0) > 0) {
+    resumeLines.push(
+      `\nIMPORTANT: As your first action, run this exact command in the background to keep your session alive:\n` +
+      'Bash("while true; do sleep 300; done", run_in_background=true)\n' +
+      `Then continue with the review.`,
+    )
+  }
 
   transport.sendOrQueue(result.sessionId, {
     type: 'notification',
