@@ -10,6 +10,9 @@ flowchart LR
         r_pp --> r_cl["cleanup"]
         r_ot -- "final_round<br/>(v2)" --> r_cl
         r_cl --> r_done["complete"]
+        r_ct -- "fallback<br/>(critic death)" --> r_fb["fallback_review<br/><i>owner runs subagent review</i>"]
+        r_ot -- "fallback<br/>(critic death)" --> r_fb
+        r_fb --> r_done
     end
 
     subgraph build_phases["Build Phases"]
@@ -47,8 +50,11 @@ flowchart LR
         disc["disconnect"] --> resume_check["auto-resume<br/>decision (3s)"]
         resume_check -- retryable --> auto_resume["auto-resume<br/>(up to 5 attempts)"]
         resume_check -- not retryable --> grace["grace timer"]
-        grace -- timeout --> cancel["cancel"]
         grace -- reconnect --> continue["continue"]
+        grace -- timeout --> exhausted{"canFallbackOnDeath?<br/>(non-owner death +<br/>on.fallback + onFallback)"}
+        auto_resume -- "attempt fails" --> exhausted
+        exhausted -- "yes (review critic)" --> fbr["fallback_review<br/>see flow-review-fallback"]
+        exhausted -- "no" --> cancel["cancel"]
     end
 
     subgraph roles["Grace Periods (v1 roles / v2 per-spec)"]

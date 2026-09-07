@@ -45,6 +45,77 @@ describe('review protocol (TypeScript DSL)', () => {
     if (result.ok) expect(result.to).toBe('cleanup')
   })
 
+  test('fallback event transitions critic_turn to fallback_review', () => {
+    const fromCritic = review.machine.transition('critic_turn' as any, 'fallback' as any)
+    expect(fromCritic.ok).toBe(true)
+    if (fromCritic.ok) expect(fromCritic.to).toBe('fallback_review')
+  })
+
+  test('owner_turn does NOT have on.fallback (fallback is deferred until the owner advances)', () => {
+    expect(review.phases.owner_turn.on.fallback).toBeUndefined()
+    const fromOwner = review.machine.transition('owner_turn' as any, 'fallback' as any)
+    expect(fromOwner.ok).toBe(false)
+  })
+
+  test('fallback_review advances to complete on summary_posted', () => {
+    const result = review.machine.transition('fallback_review' as any, 'summary_posted' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('complete')
+  })
+
+  test('fallback_review times out to cancelled (a timed-out fallback is a failure, not a success)', () => {
+    const result = review.machine.transition('fallback_review' as any, 'timeout' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('cancelled')
+  })
+
+  test('fallback_review is an owner advance phase', () => {
+    expect(review.phases.fallback_review.actor).toBe('owner')
+    expect(review.phaseInteraction('fallback_review')).toEqual({ verdict: 'none' })
+  })
+
+  test('fallback_review is cancellable (owner death mid-fallback transitions cleanly)', () => {
+    const result = review.machine.transition('fallback_review' as any, 'cancel' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('cancelled')
+  })
+
+  test('onFallback frames lenses as suggestions and uses fresh subagents, not forks', () => {
+    const msg = review.notifications.onFallback!(
+      { params: { topic: 'auth flow' }, currentRound: 2, rounds: 3 } as any,
+      { deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 5, completedRounds: 1 },
+    )
+    expect(msg).toContain('The Critic')
+    expect(msg).toContain('5 resume attempts')
+    // Gap-filling wording: reference the completed/total rounds and steer subagents
+    // toward what the dead critic didn't get to.
+    expect(msg).toContain('1 of')
+    expect(msg).toContain("didn't")
+    expect(msg).toContain('cover')
+    // Dan's design: lenses are suggestions the material drives, reviewers are
+    // fresh + independent, not forks of the owner's context.
+    expect(msg).toContain('suggestions, not a checklist')
+    expect(msg.toLowerCase()).toContain('fresh')
+    expect(msg).toContain('do not fork')
+    expect(msg).toContain('auth flow')
+  })
+
+  test('review opts into fallback via a declared on.fallback transition + onFallback hook', () => {
+    expect(review.phases.critic_turn.on.fallback).toBe('fallback_review')
+    expect(typeof review.notifications.onFallback).toBe('function')
+  })
+
+  test('build and spike do NOT opt into fallback (generic gate excludes them)', async () => {
+    const spike = (await import('../../protocols/spike.js')).default
+    for (const proto of [build, spike]) {
+      expect(proto.phases['fallback_review']).toBeUndefined()
+      expect(proto.notifications.onFallback).toBeUndefined()
+      for (const phaseDef of Object.values(proto.phases)) {
+        expect(phaseDef.on.fallback).toBeUndefined()
+      }
+    }
+  })
+
 
 
   test('half is derivable from phase definitions', () => {

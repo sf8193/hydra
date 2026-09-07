@@ -41,6 +41,7 @@ export type ProtocolRun = StatusLineState & {
   _extensions: number
   _phaseStartedAt: number
   _resumeAttempts?: number
+  _pendingFallback?: string
   _keepaliveTimer?: ReturnType<typeof setInterval>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
@@ -329,13 +330,38 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // Post content to thread — after state advance so a safeSend failure
     // doesn't leave the agent thinking advance failed when state moved.
     const sentIds = await safeSend(run.threadId, content)
-    if (advancePhaseFrom === run.protocol.cleanupPhase) {
+    // Capture the closing summary whenever the owner advances INTO terminal
+    // completion, not only from the cleanup phase — the fallback_review phase
+    // also ends at `complete` and its summary must reach CompletionEvent.summary
+    // (the factory PM notification reads it). A non-terminal advance is a
+    // mid-run post and joins messageIds.
+    if (isTerminal(run) && result.to !== run.protocol.cancelPhase) {
       run.summary = content
     } else {
       run.messageIds.push(...sentIds)
     }
 
     await afterTransition(run, advancePhaseFrom, content)
+
+    // Deferred fallback: a non-owner died during a phase without on.fallback
+    // (e.g. owner_turn). Now that the owner has advanced to a new phase, check
+    // if that phase has on.fallback and fire it.
+    if (run._pendingFallback && !isTerminal(run)) {
+      const pending = run._pendingFallback
+      run._pendingFallback = undefined
+      if (run.protocol.phases[run.phase]?.on?.fallback) {
+        // enterFallbackPhase commits the phase transition in its synchronous
+        // prefix (before its only await, the kill) — see the "no await before the
+        // transition" invariant in that function. All four call sites, including
+        // this one, `void` it and rely on that: the fallback_review transition is
+        // in effect the moment control returns here. Do not add an early await to
+        // enterFallbackPhase without revisiting these call sites.
+        void enterFallbackPhase(run, pending)
+      }
+      // If new phase also lacks on.fallback (e.g. cleanup), clear silently —
+      // the review is completing normally.
+    }
+
     return { ok: true, sentIds }
   } finally {
     transitioningRuns.delete(run.id)
@@ -406,7 +432,9 @@ export function onRunDisconnect(sessionId: string): void {
         void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           notifyDisconnect(run, role, 'auto-resume failed')
-          void cancelRun(run, `${role} auto-resume failed`)
+          if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
+          else if (canDeferFallback(run, role)) armDeferredFallback(run, role)
+          else void cancelRun(run, `${role} auto-resume failed`)
         })
       } else {
         notifyDisconnect(run, role, 'session disconnected')
@@ -422,14 +450,135 @@ export function onRunDisconnect(sessionId: string): void {
 function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): void {
   const graceMs = run.protocol.graceMs(role)
   if (!graceMs) {
-    void cancelRun(run, `${role} disconnected (no grace period)`)
+    if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
+    else if (canDeferFallback(run, role)) armDeferredFallback(run, role)
+    else void cancelRun(run, `${role} disconnected (no grace period)`)
     return
   }
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} — ${graceMs / 1000}s grace\n`)
   run.disconnectTimers.set(sessionId, setTimeout(() => {
-    void cancelRun(run, `${role} did not reconnect`)
+    if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
+    else if (canDeferFallback(run, role)) armDeferredFallback(run, role)
+    else void cancelRun(run, `${role} did not reconnect`)
   }, graceMs))
+}
+
+// ---------------------------------------------------------------------------
+// Participant-death fallback — when a non-owner dies and auto-resume is
+// exhausted, a protocol can hand the work to the owner instead of cancelling.
+// Fully DSL-driven: a protocol opts in by declaring an `on.fallback` transition
+// out of the actor phases plus a `notifications.onFallback` hook for the owner
+// instructions. The engine names no protocol (review is currently the only one
+// that opts in). Never fires for a dead owner — the fallback asks the owner to
+// work, which is meaningless when the owner is the one who vanished.
+// ---------------------------------------------------------------------------
+
+function canFallbackOnDeath(run: ProtocolRun, deadRole: string): boolean {
+  return deadRole !== run.protocol.ownerRole
+    && !isTerminal(run)
+    && !!run.protocol.phases[run.phase]?.on?.fallback
+    && !!run.protocol.notifications.onFallback
+}
+
+// Deferred fallback: the current phase has no on.fallback (e.g. owner_turn, where
+// firing fallback mid-composition would let the owner's pending advance() land on
+// fallback_review and turn the defense into the review summary), but the protocol
+// does support fallback from some other phase. Rather than cancel, remember the
+// dead role and re-check once the owner advances into a fallback-eligible phase
+// (see the _pendingFallback handling in onRunAdvance).
+function canDeferFallback(run: ProtocolRun, deadRole: string): boolean {
+  if (deadRole === run.protocol.ownerRole) return false
+  if (isTerminal(run)) return false
+  if (!run.protocol.notifications.onFallback) return false
+  // The current phase doesn't have on.fallback, but some phase does
+  return Object.values(run.protocol.phases).some(p => !!p.on?.fallback)
+}
+
+// Arm a deferred fallback. A fallback hands the ENTIRE review to the owner
+// regardless of which role died, so a single marker covers every dead non-owner
+// role: first write wins, and a second non-owner death in the same fallback-less
+// phase is subsumed by the same deferred fallback rather than clobbering the
+// first (which would drop a dead participant silently). Whichever role armed it
+// gets named in the notification; the rest are retired at completion like any
+// non-owner participant. Only relevant to a future multi-non-owner protocol —
+// review has a single critic — but the engine is generic, so guard it here.
+function armDeferredFallback(run: ProtocolRun, deadRole: string): void {
+  if (!run._pendingFallback) run._pendingFallback = deadRole
+}
+
+async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<void> {
+  if (isTerminal(run)) return
+
+  // Everything from here to the kill is synchronous — no await before the
+  // transition — so a concurrent owner advance() cannot interleave and strand
+  // us mid-fallback. If the phase has already moved past a fallback-eligible
+  // turn (the owner finished the round, or we already entered fallback),
+  // `on.fallback` is absent: yield rather than cancel, and let normal flow end.
+  const from = run.phase
+  if (!run.protocol.phases[from]?.on?.fallback) return
+
+  // Retire the dead participant from the run maps BEFORE transitioning, so the
+  // transition's setRunTools doesn't touch the doomed session and any late
+  // disconnect it fires can't re-enter the disconnect path. Capture its id to
+  // kill after the phase has committed (the kill is the only await).
+  const deadSessionId = run.participants.get(deadRole)
+  if (deadSessionId) {
+    const timer = run.disconnectTimers.get(deadSessionId)
+    if (timer) { clearTimeout(timer); run.disconnectTimers.delete(deadSessionId) }
+    run.participants.delete(deadRole)
+    run.sessionToRole.delete(deadSessionId)
+    sessionToRun.delete(deadSessionId)
+  }
+
+  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
+  if (!result.ok || !advancePhase(run, result.to, from)) return
+
+  if (deadSessionId) {
+    const info = registry.get(deadSessionId)
+    if (info && !killsInProgress.has(deadSessionId)) {
+      await killSession(info, `fallback after ${deadRole} died`).catch(() => {})
+    }
+  }
+
+  if (isTerminal(run)) return // defensive: a cancel/complete slipped in during the kill
+
+  // Manual entry rather than afterTransition(): the owner needs the protocol's
+  // custom onFallback instructions, not the generic "your turn" hand-off. The
+  // fallback phase declares no onEnter behaviors, and once the dead participant
+  // is retired the owner is the only participant — so afterTransition's
+  // notifyPhaseChange (which targets non-active participants) would be a no-op.
+  // The calls below therefore cover every responsibility that applies here.
+  protocolEvents.emitPhaseChange({ protocol: run.protocol.name, threadId: run.threadId, phase: run.phase })
+
+  const attempts = run._resumeAttempts ?? 0
+  const instructions = run.protocol.notifications.onFallback?.(run, {
+    deadRole,
+    deadLabel: run.protocol.roles[deadRole] ?? deadRole,
+    resumeAttempts: attempts,
+    completedRounds: Math.max(0, run.currentRound - 1),
+  }) ?? `[system] ${run.protocol.roles[deadRole] ?? deadRole} died. Post your closing summary via advance({ content: "..." }).`
+
+  // Log the entry breadcrumb here — the transition has committed and run.phase is
+  // reliably the fallback phase — rather than after the awaits below, where the
+  // deferred-path terminal guard could skip it (and where run.phase may already
+  // have moved to `complete`, making the message wrong).
+  process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${deadRole} died (${attempts} resume attempts)\n`)
+
+  // Thread post is the human-visible record; the direct notification is what
+  // actually wakes the idle owner session to start working (a safeSend to the
+  // thread does not — every actor hand-off in this runner pushes via transport).
+  const ids = await safeSend(run.threadId, instructions)
+  run.messageIds.push(...ids)
+  notifyParticipant(run, run.ownerSessionId, instructions)
+  await postStatusLine(run)
+  // Deferred path only: this runs inside the owner's own advance() rather than
+  // from an idle timer, so the owner can post its fallback summary and complete
+  // the run during the awaits above. Arming timers on a terminal/cleaned-up run
+  // would leak setTimeout/setInterval handles past cleanupRun — bail instead.
+  if (isTerminal(run)) return
+  resetTimeout(run) // give the owner the full fallback window to work
+  startKeepalive(run)
 }
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
@@ -523,6 +672,16 @@ export function onRunReconnect(sessionId: string): void {
     process.stderr.write(`daemon: ${run.protocol.name} run: ${sessionId} reconnected\n`)
   }
 
+  // A deferred fallback may have been armed for this role while its session was
+  // gone (grace expired in a phase without on.fallback, e.g. owner_turn). The
+  // deferral does NOT retire the participant, so a late reconnect brings the same
+  // session back alive — clear the pending flag, or the next owner advance() would
+  // fire enterFallbackPhase and kill a healthy critic. Only the pending role clears.
+  const role = run.sessionToRole.get(sessionId)
+  if (role && run._pendingFallback === role) {
+    run._pendingFallback = undefined
+    process.stderr.write(`daemon: ${run.protocol.name} run: ${role} reconnected — deferred fallback cancelled\n`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +703,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 
   clearTimers(run)
   clearProtocolTools(run)
+  run._pendingFallback = undefined
 
   try {
     notifyExit(run, 'cancelled', reason)

@@ -1,0 +1,41 @@
+%% Owner-driven subagent review — what the critic-death fallback actually does:
+%% the owner fans out to fresh, independent subagents (one per material-driven
+%% lens, NOT forks of its own context), runs them in parallel, and synthesizes
+%% their findings into the closing summary.
+%%
+%% This diagram is scoped to the subagent dynamics. The engine-side TRIGGER that
+%% gets here — critic death, 3s debounce, auto-resume (up to 5), grace timer,
+%% canFallbackOnDeath — is in flow-protocol-robustness.mmd. enterFallbackPhase in
+%% protocol-runner.ts is the seam between the two.
+
+sequenceDiagram
+    autonumber
+    participant PR as protocol-runner.ts
+    participant Owner as Owner session
+    participant LA as subagent lens A
+    participant LB as subagent lens B
+    participant LN as subagent lens N
+
+    Note over PR: critic dead, auto-resume exhausted<br/>canFallbackOnDeath passes → enterFallbackPhase
+    PR->>PR: transition to fallback_review, then kill critic
+    PR->>Owner: onFallback instructions via transport<br/>(a thread post alone would not wake it)
+
+    Note over Owner: pick the lenses the MATERIAL calls for.<br/>code → correctness, layering, tests.<br/>design doc → assumptions, alternatives, failure modes
+
+    par one FRESH subagent per chosen lens (independent, not forks)
+        Owner->>LA: spawn: "re-read this thread + the diff/spec,<br/>orient yourself, review for lens A"
+        LA->>LA: orient from source, review
+        LA-->>Owner: findings (lens A)
+    and
+        Owner->>LB: spawn: review for lens B
+        LB->>LB: orient from source, review
+        LB-->>Owner: findings (lens B)
+    and
+        Owner->>LN: spawn: review for lens N
+        LN->>LN: orient from source, review
+        LN-->>Owner: findings (lens N)
+    end
+
+    Note over Owner: synthesize — resolve conflicts across lenses,<br/>drop the noise, keep what is real
+    Owner->>PR: advance({ content: summary })
+    Note over PR: summary_posted → complete<br/>summary → CompletionEvent.summary (factory PM reads it)
