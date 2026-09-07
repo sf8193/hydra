@@ -8,7 +8,7 @@ import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession } from '../session-lifecycle.js'
 import { tmuxHasSession, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { getActiveReviews, cancelReview } from '../adversarial.js'
+import { getActiveRuns } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
@@ -162,12 +162,16 @@ export async function handleKillIntercept(msg: InboundMessage, name: string): Pr
 export async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
 
-  // Cancel active builds/reviews before restart — critics are join members
-  // that get killed on restart, so cancel cleanly first
-  const activeReviews = getActiveReviews()
+  // Active protocol runs live only in memory — a restart tears down the daemon
+  // and they do not survive it, so report how many are being interrupted.
+  // (These are NOT gracefully cancelled first: cancelRun() is async and the
+  // daemon exits before its cleanup — killing critics, striking messages —
+  // could finish. Wiring a clean pre-restart cancel is a separate, pre-existing
+  // gap, not something this migration introduced.)
+  const activeReviews = getActiveRuns()
 
   const cancelled = activeReviews.length
-  const cancelNote = cancelled > 0 ? ` (cancelled ${cancelled} active build/review${cancelled > 1 ? 's' : ''})` : ''
+  const cancelNote = cancelled > 0 ? ` (${cancelled} active protocol run${cancelled > 1 ? 's' : ''} interrupted)` : ''
 
   const hydraTs = join(import.meta.dir, '..', '..', 'cli', 'hydra.ts')
   const fast = /\+fast\b/.test(msg.content)
@@ -254,9 +258,9 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '',
     '**Multi-agent** (thread):',
     '• 🔨 `build [N] [model:] [task]` — implement + review cycle',
-    '• ⚔️ `/review [N] [model:] [topic]` — adversarial review',
+    '• ⚔️ `review [N] [model:] [+s] [topic]` — adversarial review (`+s` = security lens)',
     '• 🔬 `spike [topic]` — single-agent deep investigation (checkpoints → decide done → report)',
-    '• ⚔️ `review_v2 [N] [+s] [topic]` · 🔨 `build_v2 [N] [task]` — v2 protocols',
+    '• 🔨 `build_v2 [N] [task]` — v2 build protocol',
     '• 🚫 `kill build` / `kill review` / `kill spike`',
     '',
     '**Recovery** (thread, or channel for `recover`):',

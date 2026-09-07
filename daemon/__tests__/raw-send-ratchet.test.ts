@@ -17,7 +17,9 @@ import { join } from 'path'
 // bump the count in the same commit.
 
 const SANCTIONED_RAW_SENDS: Record<string, number> = {
-  'adversarial.ts': 5,
+  // The v2 protocol engine routes every content-bearing send through safeSend —
+  // baseline 0 makes this a hard floor: no raw gateway.send may enter it.
+  'protocol-runner.ts': 0,
 }
 
 describe('raw gateway.send ratchet (protocol files)', () => {

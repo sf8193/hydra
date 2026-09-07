@@ -220,8 +220,9 @@ export async function runTemplateAction(
 ): Promise<boolean> {
   switch (action) {
     case 'review': {
-      const { startReview } = await import('./adversarial.js')
-      await startReview(threadId, sessionId, 3, topic)
+      const { default: reviewProto } = await import('../protocols/review.js')
+      const { startProtocolRun } = await import('./protocol-runner.js')
+      await startProtocolRun(reviewProto, threadId, sessionId, { rounds: 3, topic, strike: true })
       return true
     }
     default:

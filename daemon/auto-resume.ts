@@ -1,5 +1,5 @@
 // Pure decision function for auto-resume — testable without timers or I/O.
-// Used by both v1 (adversarial.ts, build.ts) and v2 (protocol-runner.ts).
+// Used by v2 protocol runs (protocol-runner.ts).
 
 export type ResumeDecision = 'resume' | 'grace' | 'reconnected'
 
