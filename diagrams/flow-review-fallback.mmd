@@ -1,36 +1,41 @@
-%% Review critic-death fallback — when auto-resume is exhausted, the owner runs
-%% the review itself via fresh subagents instead of the run being cancelled.
-%% Engine path lives in protocol-runner.ts; the opt-in (on.fallback transition +
-%% notifications.onFallback) is declared in protocols/review.ts. The engine names
-%% no protocol — build/spike simply don't opt in.
-%% For the full phase map and grace periods, see flow-protocol-robustness.mmd.
+%% Owner-driven subagent review — what the critic-death fallback actually does:
+%% the owner fans out to fresh, independent subagents (one per material-driven
+%% lens, NOT forks of its own context), runs them in parallel, and synthesizes
+%% their findings into the closing summary.
+%%
+%% This diagram is scoped to the subagent dynamics. The engine-side TRIGGER that
+%% gets here — critic death, 3s debounce, auto-resume (up to 5), grace timer,
+%% canFallbackOnDeath — is in flow-protocol-robustness.mmd. enterFallbackPhase in
+%% protocol-runner.ts is the seam between the two.
 
-flowchart TD
-    death["critic session dies<br/>(crash / context limit)"] --> disc["onRunDisconnect<br/><i>protocol-runner.ts</i>"]
-    disc -- "3s debounce" --> decide["decideResume<br/><i>auto-resume.ts</i>"]
+sequenceDiagram
+    autonumber
+    participant PR as protocol-runner.ts
+    participant Owner as Owner session
+    participant LA as subagent lens A
+    participant LB as subagent lens B
+    participant LN as subagent lens N
 
-    decide -- "resume<br/>(tmux dead, has claudeSessionId,<br/>under 5 attempts)" --> resume["resumeParticipant"]
-    resume -- "spawn / connect OK" --> live["critic back<br/>run continues"]
-    resume -- "attempt throws" --> gate
-    decide -- "grace<br/>(attempts exhausted)" --> grace["startGraceTimer<br/>(critic grace: 30s)"]
-    grace -- "reconnect" --> live
-    grace -- "grace expires" --> gate
+    Note over PR: critic dead, auto-resume exhausted<br/>canFallbackOnDeath passes → enterFallbackPhase
+    PR->>PR: transition to fallback_review, then kill critic
+    PR->>Owner: onFallback instructions via transport<br/>(a thread post alone would not wake it)
 
-    gate{"canFallbackOnDeath<br/>dead role is not owner, run live,<br/>phase declares on.fallback,<br/>protocol has onFallback hook"}
-    gate -- "no<br/>(build / spike, or owner died)" --> cancel["cancelRun<br/>cancelled"]
-    gate -- "yes<br/>(review critic)" --> enter["enterFallbackPhase"]
+    Note over Owner: pick the lenses the MATERIAL calls for.<br/>code → correctness, layering, tests.<br/>design doc → assumptions, alternatives, failure modes
 
-    subgraph crit["enterFallbackPhase — synchronous section (no await), then kill"]
-        direction TB
-        enter --> retire["retire critic from run maps<br/>(before the transition, so setRunTools<br/>skips it and no disconnect re-enters)"]
-        retire --> trans["machine.transition(from, 'fallback')<br/>then advancePhase"]
-        trans --> phase["phase = fallback_review"]
-        phase --> kill["killSession(critic)"]
-        kill --> notify["onFallback instructions:<br/>safeSend (thread record) +<br/>transport notify (wakes owner)"]
+    par one FRESH subagent per chosen lens (independent, not forks)
+        Owner->>LA: spawn: "re-read this thread + the diff/spec,<br/>orient yourself, review for lens A"
+        LA->>LA: orient from source, review
+        LA-->>Owner: findings (lens A)
+    and
+        Owner->>LB: spawn: review for lens B
+        LB->>LB: orient from source, review
+        LB-->>Owner: findings (lens B)
+    and
+        Owner->>LN: spawn: review for lens N
+        LN->>LN: orient from source, review
+        LN-->>Owner: findings (lens N)
     end
 
-    notify --> work["owner spawns fresh, independent<br/>subagents per chosen lens, synthesizes"]
-    work --> adv["owner advance({ content })"]
-    adv -- "summary_posted" --> complete["complete<br/>summary reaches CompletionEvent.summary"]
-    phase -. "30m timeout" .-> complete
-    phase -. "owner dies then cancel" .-> cancelled["cancelled"]
+    Note over Owner: synthesize — resolve conflicts across lenses,<br/>drop the noise, keep what is real
+    Owner->>PR: advance({ content: summary })
+    Note over PR: summary_posted → complete<br/>summary → CompletionEvent.summary (factory PM reads it)
