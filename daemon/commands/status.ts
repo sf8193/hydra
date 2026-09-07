@@ -7,7 +7,7 @@ import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { fallbackDescription, formatDuration, getContextPercent, atomicWriteFileSync, isAlive, safeSend, safeEdit } from '../util.js'
 import { getWatchesBySession } from '../pr-watch.js'
-import { getActiveReviews } from '../adversarial.js'
+import { getActiveRuns } from '../protocol-runner.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export const daemonStartedAt = Date.now()
@@ -358,26 +358,25 @@ export async function handleHistoryIntercept(msg: InboundMessage): Promise<void>
 export async function handleProtocolsIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🧩').catch(() => {})
 
-  const reviews = getActiveReviews()
+  const runs = getActiveRuns()
 
-  if (reviews.length === 0) {
+  if (runs.length === 0) {
     try { await gateway.send(msg.channelId, `No active protocols.`, { replyTo: msg.id }) } catch {}
     return
   }
 
   const lines: string[] = ['**Active Protocols**']
 
-  for (const r of reviews) {
-    const owner = registry.get(r.ownerSessionId)
-    const critic = r.criticSessionId ? registry.get(r.criticSessionId) : undefined
-    const startTime = owner?.createdAt ?? critic?.createdAt
-    const elapsed = startTime ? formatDuration(Date.now() - startTime) : '?'
-    const topicLine = r.topic ? ` — ${r.topic}` : ''
-    lines.push(`• ⚔️ **Review** (${r.currentRound}/${r.rounds}) ${r.phase}${topicLine}`)
-    lines.push(`  Owner: ${owner?.tmuxName ?? '?'} · Critic: ${critic?.tmuxName ?? 'pending'} · ${elapsed}`)
+  for (const r of runs) {
+    const elapsed = formatDuration(Date.now() - r.startedAt)
+    const topic = r.params.topic as string | undefined
+    const topicLine = topic ? ` — ${topic}` : ''
+    lines.push(`• ${r.protocol.emoji} **${r.protocol.display}** (${r.currentRound}/${r.rounds}) ${r.phase}${topicLine}`)
+    const roster = [...r.participants]
+      .map(([role, sid]) => `${role}: ${registry.get(sid)?.tmuxName ?? '?'}`)
+      .join(' · ')
+    lines.push(`  ${roster} · ${elapsed}`)
   }
-
-
 
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
 }

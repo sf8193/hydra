@@ -18,10 +18,8 @@ import { handleRecoverIntercept } from './recovery.js'
 import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
-import { handleReviewV2Intercept, handleCancelReviewV2Intercept } from './commands/review-v2.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
 import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
-import { listPostPasses } from './adversarial.js'
 import { listModifierKeys, partitionSpawnModifiers } from './modifiers.js'
 import { isThreadOccupied } from './protocol-registry.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -581,36 +579,14 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      // _v2 suffix still accepted for backwards compat — plain names are primary
-      const reviewV2Match = msg.content.match(/^(?:\/review_v2|review_v2)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
-      if (reviewV2Match) {
-        const preModel = resolveProtocolModel(reviewV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
-        if (preModel === false) return
-        const postModel = resolveProtocolModel(reviewV2Match[3]?.toLowerCase(), msg.channelId, msg.id)
-        if (postModel === false) return
-        const v2Rounds = parseInt(reviewV2Match[2] ?? '3')
-        let v2Topic = reviewV2Match[4]?.trim()
-        const v2ModKeys = listModifierKeys()
-        let v2Mods: string[] = []
-        if (v2ModKeys.length > 0 && v2Topic) {
-          const v2ModRe = new RegExp(`\\+(${v2ModKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
-          v2Mods = [...v2Topic.matchAll(v2ModRe)].map(m => m[1])
-          if (v2Mods.length > 0) {
-            v2Topic = v2Topic.replace(v2ModRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
-          }
-        }
-        void handleReviewV2Intercept(msg, v2Rounds, v2Topic, preModel ?? postModel, v2Mods.length > 0 ? v2Mods : undefined)
-        return
-      }
-
-      const reviewMatch = msg.content.match(/^(?:\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      // One review command — `review` / `/review` (with the `review_v2` suffix
+      // still accepted for backwards compat). Parses an optional model alias,
+      // round count, topic, and `+modifier` lenses (e.g. `+s` for security).
+      const reviewMatch = msg.content.match(/^(?:\/review_v2|review_v2|\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (reviewMatch) {
-        const preAlias = reviewMatch[1]?.toLowerCase()
-        const postAlias = reviewMatch[3]?.toLowerCase()
-        const isCodex = preAlias === 'codex' || postAlias === 'codex'
-        const preModel = preAlias === 'codex' ? undefined : resolveProtocolModel(preAlias, msg.channelId, msg.id)
+        const preModel = resolveProtocolModel(reviewMatch[1]?.toLowerCase(), msg.channelId, msg.id)
         if (preModel === false) return
-        const postModel = postAlias === 'codex' ? undefined : resolveProtocolModel(postAlias, msg.channelId, msg.id)
+        const postModel = resolveProtocolModel(reviewMatch[3]?.toLowerCase(), msg.channelId, msg.id)
         if (postModel === false) return
         const modelId = preModel ?? postModel
         const rounds = parseInt(reviewMatch[2] ?? '3')
@@ -622,28 +598,22 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
         }
-        const knownPasses = listPostPasses()
-        let postPasses: string[] = []
-        if (knownPasses.length > 0) {
-          const passRe = new RegExp(`\\+(${knownPasses.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
-          postPasses = [...(topic ?? '').matchAll(passRe)].map(m => m[1])
-          if (postPasses.length > 0) {
-            topic = topic!.replace(passRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
+        const modKeys = listModifierKeys()
+        let modifiers: string[] = []
+        if (modKeys.length > 0 && topic) {
+          const modRe = new RegExp(`\\+(${modKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
+          modifiers = [...topic.matchAll(modRe)].map(m => m[1])
+          if (modifiers.length > 0) {
+            topic = topic.replace(modRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
           }
         }
-        void handleReviewIntercept(msg, rounds, topic, modelId, postPasses.length > 0 ? postPasses : undefined, isCodex ? 'codex' : undefined)
+        void handleReviewIntercept(msg, rounds, topic, modelId, modifiers.length > 0 ? modifiers : undefined)
         return
       }
 
       const cancelReviewMatch = msg.content.match(/^(?:kill review|kill review_v2)\s*$/i)
       if (cancelReviewMatch) {
-        const threadId = registry.resolveThreadId(msg)
-        const occupied = isThreadOccupied(threadId)
-        if (occupied === 'review_v2') {
-          void handleCancelReviewV2Intercept(msg)
-        } else {
-          void handleCancelReviewIntercept(msg)
-        }
+        void handleCancelReviewIntercept(msg)
         return
       }
 

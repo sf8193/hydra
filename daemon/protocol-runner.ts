@@ -1139,6 +1139,10 @@ export function getRunByThread(threadId: string): ProtocolRun | undefined {
   return id ? runs.get(id) : undefined
 }
 
+export function getActiveRuns(): ProtocolRun[] {
+  return [...runs.values()].filter(r => !isTerminal(r))
+}
+
 // ---------------------------------------------------------------------------
 // Protocol registry integration — register v2 protocols
 // ---------------------------------------------------------------------------
@@ -1160,7 +1164,10 @@ function runnerHooks(name: string, protoName: string) {
   })
 }
 
-runnerHooks('review_v2', 'review')
+// Review has no V1 anymore, so its registry name drops the _v2 suffix — this is
+// what isThreadOccupied() surfaces to users ("A review is already in progress").
+// build/spike keep _v2 until their own V1s are removed.
+runnerHooks('review', 'review')
 runnerHooks('build_v2', 'build')
 runnerHooks('spike_v2', 'spike')
 

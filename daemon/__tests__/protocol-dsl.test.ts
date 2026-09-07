@@ -2,7 +2,6 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
 import { protocolEvents } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
-import { reviewMachine, CRITIC_SENTINEL, OWNER_SENTINEL, SUMMARY_SENTINEL, CRITIC_TIMEOUT_MS, OWNER_TIMEOUT_MS } from '../adversarial.js'
 
 let origStderrWrite: typeof process.stderr.write
 beforeEach(() => { origStderrWrite = process.stderr.write; process.stderr.write = (() => true) as any })
@@ -16,7 +15,7 @@ const review = (await import('../../protocols/review.js')).default
 const build = (await import('../../protocols/build.js')).default
 
 // ---------------------------------------------------------------------------
-// Review protocol — parity with adversarial.ts
+// Review protocol — the DSL definition is the source of truth (v1 removed)
 // ---------------------------------------------------------------------------
 
 describe('review protocol (TypeScript DSL)', () => {
@@ -30,16 +29,12 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(Object.keys(review.roles)).toEqual(['critic', 'owner'])
   })
 
-  test('transition table matches reviewMachine (shared transitions)', () => {
-    // v2 removed post_pass — final_round goes to cleanup directly.
-    // Only check transitions where both machines agree on the target.
-    const v2Removed = new Set(['final_round'])
+  test('transition table is internally consistent with declared phase targets', () => {
     for (const [phase, phaseDef] of Object.entries(review.phases)) {
       for (const [event, target] of Object.entries(phaseDef.on)) {
-        if (v2Removed.has(event)) continue
-        const result = reviewMachine.transition(phase as any, event as any)
-        if (!result.ok) continue
-        expect(result.to).toBe(target)
+        const result = review.machine.transition(phase, event)
+        expect(result.ok).toBe(true)
+        if (result.ok) expect(result.to).toBe(target)
       }
     }
   })
