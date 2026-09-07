@@ -229,6 +229,9 @@ describe('review: subagent review fallback', () => {
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
     expect(h.completionEvents[0].outcome).toBe('complete')
+    // The fallback summary must reach the structured completion event, not just
+    // the thread — the factory PM notification reads CompletionEvent.summary.
+    expect(h.completionEvents[0].summary).toContain('subagent review complete')
   })
 
   test('a failing resume attempt (site 1) falls back instead of cancelling', async () => {

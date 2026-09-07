@@ -90,7 +90,18 @@ export type ProtocolSpec<
     onPhaseChange?: (run: RunState, from: string, to: string) => string
     onDisconnect?: (run: RunState, role: string, reason: string) => string
     onExit?: (run: RunState, outcome: 'complete' | 'cancelled', reason?: string) => string
+    onFallback?: (run: RunState, ctx: FallbackContext) => string
   }
+}
+
+// Passed to notifications.onFallback — the runner-computed context a protocol
+// needs to compose its fallback instructions without reaching into RunState
+// internals it can't see (the dead participant's label, resume attempts).
+export type FallbackContext = {
+  deadRole: string
+  deadLabel: string
+  resumeAttempts: number
+  completedRounds: number
 }
 
 export type Protocol<
@@ -120,6 +131,7 @@ export type Protocol<
     onPhaseChange?: (run: RunState, from: string, to: string) => string
     onDisconnect?: (run: RunState, role: string, reason: string) => string
     onExit?: (run: RunState, outcome: 'complete' | 'cancelled', reason?: string) => string
+    onFallback?: (run: RunState, ctx: FallbackContext) => string
   }
 }
 

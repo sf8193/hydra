@@ -78,9 +78,37 @@ describe('review protocol (TypeScript DSL)', () => {
     if (result.ok) expect(result.to).toBe('cancelled')
   })
 
-  test('fallback is review-only — build has no fallback_review phase', () => {
-    expect(build.phases['fallback_review']).toBeUndefined()
-    expect(build.machine.transition('reviewing' as any, 'fallback' as any).ok).toBe(false)
+  test('onFallback frames lenses as suggestions and uses fresh subagents, not forks', () => {
+    const msg = review.notifications.onFallback!(
+      { params: { topic: 'auth flow' }, currentRound: 2 } as any,
+      { deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 5, completedRounds: 1 },
+    )
+    expect(msg).toContain('The Critic')
+    expect(msg).toContain('5 resume attempts')
+    expect(msg).toContain('1 round completed')
+    // Dan's design: lenses are suggestions the material drives, reviewers are
+    // fresh + independent, not forks of the owner's context.
+    expect(msg).toContain('suggestions, not a checklist')
+    expect(msg.toLowerCase()).toContain('fresh')
+    expect(msg).toContain('do not fork')
+    expect(msg).toContain('auth flow')
+  })
+
+  test('review opts into fallback via a declared on.fallback transition + onFallback hook', () => {
+    expect(review.phases.critic_turn.on.fallback).toBe('fallback_review')
+    expect(review.phases.owner_turn.on.fallback).toBe('fallback_review')
+    expect(typeof review.notifications.onFallback).toBe('function')
+  })
+
+  test('build and spike do NOT opt into fallback (generic gate excludes them)', async () => {
+    const spike = (await import('../../protocols/spike.js')).default
+    for (const proto of [build, spike]) {
+      expect(proto.phases['fallback_review']).toBeUndefined()
+      expect(proto.notifications.onFallback).toBeUndefined()
+      for (const phaseDef of Object.values(proto.phases)) {
+        expect(phaseDef.on.fallback).toBeUndefined()
+      }
+    }
   })
 
 

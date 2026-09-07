@@ -329,7 +329,12 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // Post content to thread — after state advance so a safeSend failure
     // doesn't leave the agent thinking advance failed when state moved.
     const sentIds = await safeSend(run.threadId, content)
-    if (advancePhaseFrom === run.protocol.cleanupPhase) {
+    // Capture the closing summary whenever the owner advances INTO terminal
+    // completion, not only from the cleanup phase — the fallback_review phase
+    // also ends at `complete` and its summary must reach CompletionEvent.summary
+    // (the factory PM notification reads it). A non-terminal advance is a
+    // mid-run post and joins messageIds.
+    if (isTerminal(run) && result.to !== run.protocol.cancelPhase) {
       run.summary = content
     } else {
       run.messageIds.push(...sentIds)
@@ -406,7 +411,7 @@ export function onRunDisconnect(sessionId: string): void {
         void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           notifyDisconnect(run, role, 'auto-resume failed')
-          if (shouldFallbackToSubagentReview(run, role)) void fallbackToSubagentReview(run, role)
+          if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
           else void cancelRun(run, `${role} auto-resume failed`)
         })
       } else {
@@ -423,38 +428,51 @@ export function onRunDisconnect(sessionId: string): void {
 function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): void {
   const graceMs = run.protocol.graceMs(role)
   if (!graceMs) {
-    if (shouldFallbackToSubagentReview(run, role)) void fallbackToSubagentReview(run, role)
+    if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
     else void cancelRun(run, `${role} disconnected (no grace period)`)
     return
   }
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} — ${graceMs / 1000}s grace\n`)
   run.disconnectTimers.set(sessionId, setTimeout(() => {
-    if (shouldFallbackToSubagentReview(run, role)) void fallbackToSubagentReview(run, role)
+    if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
     else void cancelRun(run, `${role} did not reconnect`)
   }, graceMs))
 }
 
 // ---------------------------------------------------------------------------
-// Subagent review fallback — when a review critic dies and auto-resume is
-// exhausted, the owner runs the review itself via Agent forks rather than the
-// run being cancelled. Only applies to the review protocol, only for a dead
-// non-owner (the critic): the fallback asks the owner to work, so it makes no
-// sense when the owner is the one who vanished.
+// Participant-death fallback — when a non-owner dies and auto-resume is
+// exhausted, a protocol can hand the work to the owner instead of cancelling.
+// Fully DSL-driven: a protocol opts in by declaring an `on.fallback` transition
+// out of the actor phases plus a `notifications.onFallback` hook for the owner
+// instructions. The engine names no protocol (review is currently the only one
+// that opts in). Never fires for a dead owner — the fallback asks the owner to
+// work, which is meaningless when the owner is the one who vanished.
 // ---------------------------------------------------------------------------
 
-function shouldFallbackToSubagentReview(run: ProtocolRun, deadRole: string): boolean {
-  return run.protocol.name === 'review'
-    && !!run.protocol.phases['fallback_review']
-    && deadRole !== run.protocol.ownerRole
+function canFallbackOnDeath(run: ProtocolRun, deadRole: string): boolean {
+  return deadRole !== run.protocol.ownerRole
     && !isTerminal(run)
+    && !!run.protocol.phases[run.phase]?.on?.fallback
+    && !!run.protocol.notifications.onFallback
 }
 
-async function fallbackToSubagentReview(run: ProtocolRun, deadRole: string): Promise<void> {
+async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<void> {
   if (isTerminal(run)) return
 
-  // Retire the dead critic: drop it from the run maps first (so killing it, or
-  // any late disconnect it fires, can't re-enter this path), then kill it.
+  // Transition FIRST, synchronously — there is no await before this point, so a
+  // concurrent owner advance() cannot interleave and strand us mid-fallback. If
+  // the phase has already moved past a fallback-eligible turn (the owner
+  // finished the round, or we already entered fallback), `on.fallback` is
+  // absent: yield rather than cancel, and let the normal flow run to its end.
+  const from = run.phase
+  if (!run.protocol.phases[from]?.on?.fallback) return
+  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
+  if (!result.ok || !advancePhase(run, result.to, from)) return
+
+  // Retire the dead participant: drop it from the run maps first (so the kill,
+  // or any late disconnect it fires, can't re-enter the disconnect path), then
+  // kill it. The transition above already committed, so this await is safe.
   const deadSessionId = run.participants.get(deadRole)
   if (deadSessionId) {
     const timer = run.disconnectTimers.get(deadSessionId)
@@ -464,55 +482,27 @@ async function fallbackToSubagentReview(run: ProtocolRun, deadRole: string): Pro
     sessionToRun.delete(deadSessionId)
     const info = registry.get(deadSessionId)
     if (info && !killsInProgress.has(deadSessionId)) {
-      await killSession(info, 'fallback to subagent review').catch(() => {})
+      await killSession(info, `fallback after ${deadRole} died`).catch(() => {})
     }
   }
 
-  // Re-check after the await — the run may have been cancelled/completed while
-  // the kill was in flight. From here down is synchronous, so `from` and the
-  // machine transition stay atomic.
-  if (isTerminal(run)) return
+  if (isTerminal(run)) return // defensive: a cancel/complete slipped in during the kill
 
-  const from = run.phase
-  if (!run.protocol.phases[from]?.on?.fallback) {
-    void cancelRun(run, `${deadRole} died, no fallback transition from "${from}"`)
-    return
-  }
-  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
-  if (!result.ok || !advancePhase(run, result.to, from)) {
-    void cancelRun(run, `${deadRole} died, fallback transition failed`)
-    return
-  }
-
-  // We drive the entry manually rather than through afterTransition() because
-  // the owner needs the custom subagent-review instructions below, not the
-  // generic "your turn" hand-off afterTransition would send. fallback_review
-  // declares no onEnter behaviors, so the manual path below covers every
-  // afterTransition responsibility that applies: emitPhaseChange, actor
-  // notification, status line, timeout, keepalive.
+  // Manual entry rather than afterTransition(): the owner needs the protocol's
+  // custom onFallback instructions, not the generic "your turn" hand-off. The
+  // fallback phase declares no onEnter behaviors, and once the dead participant
+  // is retired the owner is the only participant — so afterTransition's
+  // notifyPhaseChange (which targets non-active participants) would be a no-op.
+  // The calls below therefore cover every responsibility that applies here.
   protocolEvents.emitPhaseChange({ protocol: run.protocol.name, threadId: run.threadId, phase: run.phase })
 
-  const topic = run.params.topic as string | undefined
   const attempts = run._resumeAttempts ?? 0
-  const completedRounds = Math.max(0, run.currentRound - 1)
-  const deadLabel = run.protocol.roles[deadRole] ?? deadRole
-
-  const instructions = [
-    `[system] **${deadLabel} died** after ${attempts} resume attempt${attempts === 1 ? '' : 's'}. Falling back to subagent review.`,
-    ``,
-    completedRounds > 0
-      ? `${completedRounds} round${completedRounds === 1 ? '' : 's'} completed before the critic died — review the thread for findings so far.`
-      : `No rounds completed before the critic died.`,
-    ``,
-    `**Your task:** Run a subagent-driven review. Spawn Claude Code Agent forks to review the code from multiple angles:`,
-    `- Topology / import correctness`,
-    `- Code quality / golden patterns`,
-    `- Correctness / edge cases`,
-    `- Feature parity / spec compliance`,
-    topic ? `\n**Focus:** ${topic}` : '',
-    ``,
-    `When done, synthesize the findings and post your closing \`advance({ content: "..." })\` using the review summary format.`,
-  ].filter(Boolean).join('\n')
+  const instructions = run.protocol.notifications.onFallback?.(run, {
+    deadRole,
+    deadLabel: run.protocol.roles[deadRole] ?? deadRole,
+    resumeAttempts: attempts,
+    completedRounds: Math.max(0, run.currentRound - 1),
+  }) ?? `[system] ${run.protocol.roles[deadRole] ?? deadRole} died. Post your closing summary via advance({ content: "..." }).`
 
   // Thread post is the human-visible record; the direct notification is what
   // actually wakes the idle owner session to start working (a safeSend to the
@@ -521,9 +511,9 @@ async function fallbackToSubagentReview(run: ProtocolRun, deadRole: string): Pro
   run.messageIds.push(...ids)
   notifyParticipant(run, run.ownerSessionId, instructions)
   await postStatusLine(run)
-  resetTimeout(run) // give the owner the full fallback_review window to work
+  resetTimeout(run) // give the owner the full fallback window to work
   startKeepalive(run)
-  process.stderr.write(`daemon: ${run.protocol.name} run: fell back to subagent review after ${deadRole} died (${attempts} resume attempts)\n`)
+  process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${deadRole} died (${attempts} resume attempts)\n`)
 }
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {

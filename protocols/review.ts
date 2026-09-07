@@ -18,8 +18,9 @@ export default protocol('review', {
     owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled', fallback: 'fallback_review' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
     cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
     // Critic-death fallback: when auto-resume is exhausted, the owner runs the
-    // review itself via subagent forks instead of the run being cancelled.
-    // Owner-driven, so no killNonOwner/notifyOwnerSummary cleanup behaviors.
+    // review itself (via fresh subagents) instead of the run being cancelled.
+    // Not the cleanupPhase, so the runner drives entry manually and sends the
+    // onFallback instructions below — see enterFallbackPhase in protocol-runner.
     fallback_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
@@ -55,6 +56,30 @@ export default protocol('review', {
         return lines.join('\n')
       },
       critic: () => null,
+    },
+
+    // Critic died and auto-resume is exhausted — the owner runs the review
+    // itself with fresh subagents. Lenses are suggestions, not a checklist:
+    // what's being reviewed drives the choice, and the subagents orient
+    // independently rather than inheriting the owner's context.
+    onFallback: (run, { deadLabel, resumeAttempts, completedRounds }) => {
+      const topic = run.params.topic as string | undefined
+      return [
+        `[system] **${deadLabel} died** after ${resumeAttempts} resume attempt${resumeAttempts === 1 ? '' : 's'}. Falling back to subagent review — you run it yourself.`,
+        ``,
+        completedRounds > 0
+          ? `${completedRounds} round${completedRounds === 1 ? '' : 's'} completed before it died — read the thread for the findings so far.`
+          : `No rounds completed before it died.`,
+        ``,
+        `**Your task:** review the work with fresh Claude Code subagents.`,
+        ``,
+        `1. **Pick the lenses that fit what you're reviewing.** These are suggestions, not a checklist — the material drives the choice. Code? Maybe correctness/edge cases, import & layering boundaries, conventions/golden patterns, test quality, security, resource lifecycle. A design doc or plan? More likely hidden assumptions, alternatives not considered, failure modes, second-order effects. Add lenses the material calls for; drop ones that don't apply.`,
+        `2. **Spawn one fresh subagent per chosen lens.** Tell each to re-read this thread and the specifics (the diff / doc / spec) and orient on its own — do not fork your own context into them; independence is the point. Run them in parallel.`,
+        `3. **Synthesize** their findings yourself — resolve conflicts, drop the noise, keep what's real.`,
+        topic ? `\n**Focus:** ${topic} — weight your lens choices toward this.` : '',
+        ``,
+        `When done, post your closing \`advance({ content: "..." })\` using the review summary format.`,
+      ].filter(Boolean).join('\n')
     },
   },
 
