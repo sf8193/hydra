@@ -221,12 +221,31 @@ describe('review: subagent review fallback', () => {
     // Owner received subagent-review instructions, carrying the topic focus
     expect(h.threadMessages.some(m => m.text.includes('Falling back to subagent review'))).toBe(true)
     expect(h.threadMessages.some(m => m.text.includes('auth flow'))).toBe(true)
+    // ...and — critically — a direct notification that wakes the idle owner session
+    expect(h.actorNotifications('owner').some(n => n.includes('Falling back to subagent review'))).toBe(true)
 
     // Owner synthesizes findings and posts the summary → run completes
     await h.advance('owner', '**Review Summary** — subagent review complete.')
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
     expect(h.completionEvents[0].outcome).toBe('complete')
+  })
+
+  test('a failing resume attempt (site 1) falls back instead of cancelling', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    // Make decideResume choose 'resume' (dead tmux + a claude session to resume
+    // from), then make the resume attempt itself throw.
+    h.setSessionDead('critic', 'claude-abc')
+    h.mockResume({ spawnThrows: true })
+
+    h.disconnect('critic')
+    await h.tick(3_000 + 500) // 3s debounce → resume attempt → throws → fallback
+
+    expect(h.phase).toBe('fallback_review')
+    expect(h.isTerminated).toBe(false)
+    expect(h.run._resumeAttempts).toBe(1)
+    expect(h.actorNotifications('owner').some(n => n.includes('Falling back to subagent review'))).toBe(true)
   })
 
   test('owner death does not fall back — the run cancels', async () => {

@@ -20,7 +20,7 @@ export default protocol('review', {
     // Critic-death fallback: when auto-resume is exhausted, the owner runs the
     // review itself via subagent forks instead of the run being cancelled.
     // Owner-driven, so no killNonOwner/notifyOwnerSummary cleanup behaviors.
-    fallback_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
+    fallback_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },

@@ -72,6 +72,12 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(review.phaseInteraction('fallback_review')).toEqual({ verdict: 'none' })
   })
 
+  test('fallback_review is cancellable (owner death mid-fallback transitions cleanly)', () => {
+    const result = review.machine.transition('fallback_review' as any, 'cancel' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('cancelled')
+  })
+
   test('fallback is review-only — build has no fallback_review phase', () => {
     expect(build.phases['fallback_review']).toBeUndefined()
     expect(build.machine.transition('reviewing' as any, 'fallback' as any).ok).toBe(false)

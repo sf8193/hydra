@@ -484,7 +484,12 @@ async function fallbackToSubagentReview(run: ProtocolRun, deadRole: string): Pro
     return
   }
 
-  // Announce the move so observers repaint with the new phase.
+  // We drive the entry manually rather than through afterTransition() because
+  // the owner needs the custom subagent-review instructions below, not the
+  // generic "your turn" hand-off afterTransition would send. fallback_review
+  // declares no onEnter behaviors, so the manual path below covers every
+  // afterTransition responsibility that applies: emitPhaseChange, actor
+  // notification, status line, timeout, keepalive.
   protocolEvents.emitPhaseChange({ protocol: run.protocol.name, threadId: run.threadId, phase: run.phase })
 
   const topic = run.params.topic as string | undefined
@@ -509,8 +514,12 @@ async function fallbackToSubagentReview(run: ProtocolRun, deadRole: string): Pro
     `When done, synthesize the findings and post your closing \`advance({ content: "..." })\` using the review summary format.`,
   ].filter(Boolean).join('\n')
 
+  // Thread post is the human-visible record; the direct notification is what
+  // actually wakes the idle owner session to start working (a safeSend to the
+  // thread does not — every actor hand-off in this runner pushes via transport).
   const ids = await safeSend(run.threadId, instructions)
   run.messageIds.push(...ids)
+  notifyParticipant(run, run.ownerSessionId, instructions)
   await postStatusLine(run)
   resetTimeout(run) // give the owner the full fallback_review window to work
   startKeepalive(run)
