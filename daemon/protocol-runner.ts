@@ -460,19 +460,18 @@ function canFallbackOnDeath(run: ProtocolRun, deadRole: string): boolean {
 async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<void> {
   if (isTerminal(run)) return
 
-  // Transition FIRST, synchronously — there is no await before this point, so a
-  // concurrent owner advance() cannot interleave and strand us mid-fallback. If
-  // the phase has already moved past a fallback-eligible turn (the owner
-  // finished the round, or we already entered fallback), `on.fallback` is
-  // absent: yield rather than cancel, and let the normal flow run to its end.
+  // Everything from here to the kill is synchronous — no await before the
+  // transition — so a concurrent owner advance() cannot interleave and strand
+  // us mid-fallback. If the phase has already moved past a fallback-eligible
+  // turn (the owner finished the round, or we already entered fallback),
+  // `on.fallback` is absent: yield rather than cancel, and let normal flow end.
   const from = run.phase
   if (!run.protocol.phases[from]?.on?.fallback) return
-  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
-  if (!result.ok || !advancePhase(run, result.to, from)) return
 
-  // Retire the dead participant: drop it from the run maps first (so the kill,
-  // or any late disconnect it fires, can't re-enter the disconnect path), then
-  // kill it. The transition above already committed, so this await is safe.
+  // Retire the dead participant from the run maps BEFORE transitioning, so the
+  // transition's setRunTools doesn't touch the doomed session and any late
+  // disconnect it fires can't re-enter the disconnect path. Capture its id to
+  // kill after the phase has committed (the kill is the only await).
   const deadSessionId = run.participants.get(deadRole)
   if (deadSessionId) {
     const timer = run.disconnectTimers.get(deadSessionId)
@@ -480,6 +479,12 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
     run.participants.delete(deadRole)
     run.sessionToRole.delete(deadSessionId)
     sessionToRun.delete(deadSessionId)
+  }
+
+  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
+  if (!result.ok || !advancePhase(run, result.to, from)) return
+
+  if (deadSessionId) {
     const info = registry.get(deadSessionId)
     if (info && !killsInProgress.has(deadSessionId)) {
       await killSession(info, `fallback after ${deadRole} died`).catch(() => {})
