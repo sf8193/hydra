@@ -433,7 +433,7 @@ export function onRunDisconnect(sessionId: string): void {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           notifyDisconnect(run, role, 'auto-resume failed')
           if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
-          else if (canDeferFallback(run, role)) { run._pendingFallback = role }
+          else if (canDeferFallback(run, role)) armDeferredFallback(run, role)
           else void cancelRun(run, `${role} auto-resume failed`)
         })
       } else {
@@ -451,7 +451,7 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
   const graceMs = run.protocol.graceMs(role)
   if (!graceMs) {
     if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
-    else if (canDeferFallback(run, role)) { run._pendingFallback = role }
+    else if (canDeferFallback(run, role)) armDeferredFallback(run, role)
     else void cancelRun(run, `${role} disconnected (no grace period)`)
     return
   }
@@ -459,7 +459,7 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} — ${graceMs / 1000}s grace\n`)
   run.disconnectTimers.set(sessionId, setTimeout(() => {
     if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
-    else if (canDeferFallback(run, role)) { run._pendingFallback = role }
+    else if (canDeferFallback(run, role)) armDeferredFallback(run, role)
     else void cancelRun(run, `${role} did not reconnect`)
   }, graceMs))
 }
@@ -493,6 +493,18 @@ function canDeferFallback(run: ProtocolRun, deadRole: string): boolean {
   if (!run.protocol.notifications.onFallback) return false
   // The current phase doesn't have on.fallback, but some phase does
   return Object.values(run.protocol.phases).some(p => !!p.on?.fallback)
+}
+
+// Arm a deferred fallback. A fallback hands the ENTIRE review to the owner
+// regardless of which role died, so a single marker covers every dead non-owner
+// role: first write wins, and a second non-owner death in the same fallback-less
+// phase is subsumed by the same deferred fallback rather than clobbering the
+// first (which would drop a dead participant silently). Whichever role armed it
+// gets named in the notification; the rest are retired at completion like any
+// non-owner participant. Only relevant to a future multi-non-owner protocol —
+// review has a single critic — but the engine is generic, so guard it here.
+function armDeferredFallback(run: ProtocolRun, deadRole: string): void {
+  if (!run._pendingFallback) run._pendingFallback = deadRole
 }
 
 async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<void> {
@@ -554,6 +566,11 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
   run.messageIds.push(...ids)
   notifyParticipant(run, run.ownerSessionId, instructions)
   await postStatusLine(run)
+  // Deferred path only: this runs inside the owner's own advance() rather than
+  // from an idle timer, so the owner can post its fallback summary and complete
+  // the run during the awaits above. Arming timers on a terminal/cleaned-up run
+  // would leak setTimeout/setInterval handles past cleanupRun — bail instead.
+  if (isTerminal(run)) return
   resetTimeout(run) // give the owner the full fallback window to work
   startKeepalive(run)
   process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${deadRole} died (${attempts} resume attempts)\n`)
