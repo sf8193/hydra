@@ -175,7 +175,7 @@ describe('review: total backstop', () => {
 })
 
 describe('review: disconnect and grace', () => {
-  test('critic disconnect past grace cancels the run', async () => {
+  test('critic disconnect past grace falls back to subagent review', async () => {
     h = createHarness(review, { rounds: 3 })
 
     h.disconnect('critic')
@@ -183,9 +183,11 @@ describe('review: disconnect and grace', () => {
     const graceMs = h.run.protocol.graceMs('critic')!
     await h.tick(3_000 + graceMs + 1_000)
 
-    expect(h.isTerminated).toBe(true)
-    expect(h.completionEvents).toHaveLength(1)
-    expect(h.completionEvents[0].outcome).toBe('cancelled')
+    // Critic death no longer cancels — the owner is handed the review.
+    expect(h.phase).toBe('fallback_review')
+    expect(h.isTerminated).toBe(false)
+    expect(h.completionEvents).toHaveLength(0)
+    expect(h.threadMessages.some(m => m.text.includes('Falling back to subagent review'))).toBe(true)
   })
 
   test('critic reconnect within grace saves the run', async () => {
@@ -200,6 +202,47 @@ describe('review: disconnect and grace', () => {
 
     await h.advance('critic', 'Back online with critique.')
     expect(h.phase).toBe('owner_turn')
+  })
+})
+
+describe('review: subagent review fallback', () => {
+  test('critic death enters fallback_review; owner summary completes the run', async () => {
+    h = createHarness(review, { rounds: 3, topic: 'auth flow' })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+
+    // Fell back instead of cancelling
+    expect(h.phase).toBe('fallback_review')
+    expect(h.isTerminated).toBe(false)
+    expect(h.completionEvents).toHaveLength(0)
+
+    // Owner received subagent-review instructions, carrying the topic focus
+    expect(h.threadMessages.some(m => m.text.includes('Falling back to subagent review'))).toBe(true)
+    expect(h.threadMessages.some(m => m.text.includes('auth flow'))).toBe(true)
+
+    // Owner synthesizes findings and posts the summary → run completes
+    await h.advance('owner', '**Review Summary** — subagent review complete.')
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents).toHaveLength(1)
+    expect(h.completionEvents[0].outcome).toBe('complete')
+  })
+
+  test('owner death does not fall back — the run cancels', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    // Move to owner_turn so the owner is the actor that dies
+    await h.advance('critic', 'Opening critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    h.disconnect('owner')
+    const graceMs = h.run.protocol.graceMs('owner')!
+    await h.tick(graceMs + 1_000)
+
+    expect(h.phase).not.toBe('fallback_review')
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
   })
 })
 
@@ -512,10 +555,11 @@ describe('review: disconnect timer fires and triggers grace', () => {
     const graceMs = h.run.protocol.graceMs('critic')!
     expect(graceMs).toBeGreaterThan(0)
 
-    // Grace expires → cancel
+    // Grace expires → owner-run subagent review (review protocol only)
     await h.tick(graceMs + 500)
-    expect(h.isTerminated).toBe(true)
-    expect(h.completionEvents[0].outcome).toBe('cancelled')
+    expect(h.phase).toBe('fallback_review')
+    expect(h.isTerminated).toBe(false)
+    expect(h.completionEvents).toHaveLength(0)
   })
 })
 

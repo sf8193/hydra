@@ -45,6 +45,38 @@ describe('review protocol (TypeScript DSL)', () => {
     if (result.ok) expect(result.to).toBe('cleanup')
   })
 
+  test('fallback event transitions critic_turn and owner_turn to fallback_review', () => {
+    const fromCritic = review.machine.transition('critic_turn' as any, 'fallback' as any)
+    expect(fromCritic.ok).toBe(true)
+    if (fromCritic.ok) expect(fromCritic.to).toBe('fallback_review')
+
+    const fromOwner = review.machine.transition('owner_turn' as any, 'fallback' as any)
+    expect(fromOwner.ok).toBe(true)
+    if (fromOwner.ok) expect(fromOwner.to).toBe('fallback_review')
+  })
+
+  test('fallback_review advances to complete on summary_posted', () => {
+    const result = review.machine.transition('fallback_review' as any, 'summary_posted' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('complete')
+  })
+
+  test('fallback_review times out to complete', () => {
+    const result = review.machine.transition('fallback_review' as any, 'timeout' as any)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.to).toBe('complete')
+  })
+
+  test('fallback_review is an owner advance phase', () => {
+    expect(review.phases.fallback_review.actor).toBe('owner')
+    expect(review.phaseInteraction('fallback_review')).toEqual({ verdict: 'none' })
+  })
+
+  test('fallback is review-only — build has no fallback_review phase', () => {
+    expect(build.phases['fallback_review']).toBeUndefined()
+    expect(build.machine.transition('reviewing' as any, 'fallback' as any).ok).toBe(false)
+  })
+
 
 
   test('half is derivable from phase definitions', () => {

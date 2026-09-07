@@ -406,7 +406,8 @@ export function onRunDisconnect(sessionId: string): void {
         void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           notifyDisconnect(run, role, 'auto-resume failed')
-          void cancelRun(run, `${role} auto-resume failed`)
+          if (shouldFallbackToSubagentReview(run, role)) void fallbackToSubagentReview(run, role)
+          else void cancelRun(run, `${role} auto-resume failed`)
         })
       } else {
         notifyDisconnect(run, role, 'session disconnected')
@@ -422,14 +423,98 @@ export function onRunDisconnect(sessionId: string): void {
 function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): void {
   const graceMs = run.protocol.graceMs(role)
   if (!graceMs) {
-    void cancelRun(run, `${role} disconnected (no grace period)`)
+    if (shouldFallbackToSubagentReview(run, role)) void fallbackToSubagentReview(run, role)
+    else void cancelRun(run, `${role} disconnected (no grace period)`)
     return
   }
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} — ${graceMs / 1000}s grace\n`)
   run.disconnectTimers.set(sessionId, setTimeout(() => {
-    void cancelRun(run, `${role} did not reconnect`)
+    if (shouldFallbackToSubagentReview(run, role)) void fallbackToSubagentReview(run, role)
+    else void cancelRun(run, `${role} did not reconnect`)
   }, graceMs))
+}
+
+// ---------------------------------------------------------------------------
+// Subagent review fallback — when a review critic dies and auto-resume is
+// exhausted, the owner runs the review itself via Agent forks rather than the
+// run being cancelled. Only applies to the review protocol, only for a dead
+// non-owner (the critic): the fallback asks the owner to work, so it makes no
+// sense when the owner is the one who vanished.
+// ---------------------------------------------------------------------------
+
+function shouldFallbackToSubagentReview(run: ProtocolRun, deadRole: string): boolean {
+  return run.protocol.name === 'review'
+    && !!run.protocol.phases['fallback_review']
+    && deadRole !== run.protocol.ownerRole
+    && !isTerminal(run)
+}
+
+async function fallbackToSubagentReview(run: ProtocolRun, deadRole: string): Promise<void> {
+  if (isTerminal(run)) return
+
+  // Retire the dead critic: drop it from the run maps first (so killing it, or
+  // any late disconnect it fires, can't re-enter this path), then kill it.
+  const deadSessionId = run.participants.get(deadRole)
+  if (deadSessionId) {
+    const timer = run.disconnectTimers.get(deadSessionId)
+    if (timer) { clearTimeout(timer); run.disconnectTimers.delete(deadSessionId) }
+    run.participants.delete(deadRole)
+    run.sessionToRole.delete(deadSessionId)
+    sessionToRun.delete(deadSessionId)
+    const info = registry.get(deadSessionId)
+    if (info && !killsInProgress.has(deadSessionId)) {
+      await killSession(info, 'fallback to subagent review').catch(() => {})
+    }
+  }
+
+  // Re-check after the await — the run may have been cancelled/completed while
+  // the kill was in flight. From here down is synchronous, so `from` and the
+  // machine transition stay atomic.
+  if (isTerminal(run)) return
+
+  const from = run.phase
+  if (!run.protocol.phases[from]?.on?.fallback) {
+    void cancelRun(run, `${deadRole} died, no fallback transition from "${from}"`)
+    return
+  }
+  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
+  if (!result.ok || !advancePhase(run, result.to, from)) {
+    void cancelRun(run, `${deadRole} died, fallback transition failed`)
+    return
+  }
+
+  // Announce the move so observers repaint with the new phase.
+  protocolEvents.emitPhaseChange({ protocol: run.protocol.name, threadId: run.threadId, phase: run.phase })
+
+  const topic = run.params.topic as string | undefined
+  const attempts = run._resumeAttempts ?? 0
+  const completedRounds = Math.max(0, run.currentRound - 1)
+  const deadLabel = run.protocol.roles[deadRole] ?? deadRole
+
+  const instructions = [
+    `[system] **${deadLabel} died** after ${attempts} resume attempt${attempts === 1 ? '' : 's'}. Falling back to subagent review.`,
+    ``,
+    completedRounds > 0
+      ? `${completedRounds} round${completedRounds === 1 ? '' : 's'} completed before the critic died — review the thread for findings so far.`
+      : `No rounds completed before the critic died.`,
+    ``,
+    `**Your task:** Run a subagent-driven review. Spawn Claude Code Agent forks to review the code from multiple angles:`,
+    `- Topology / import correctness`,
+    `- Code quality / golden patterns`,
+    `- Correctness / edge cases`,
+    `- Feature parity / spec compliance`,
+    topic ? `\n**Focus:** ${topic}` : '',
+    ``,
+    `When done, synthesize the findings and post your closing \`advance({ content: "..." })\` using the review summary format.`,
+  ].filter(Boolean).join('\n')
+
+  const ids = await safeSend(run.threadId, instructions)
+  run.messageIds.push(...ids)
+  await postStatusLine(run)
+  resetTimeout(run) // give the owner the full fallback_review window to work
+  startKeepalive(run)
+  process.stderr.write(`daemon: ${run.protocol.name} run: fell back to subagent review after ${deadRole} died (${attempts} resume attempts)\n`)
 }
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {

@@ -14,9 +14,13 @@ export default protocol('review', {
   },
 
   phases: {
-    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'critic_posted' },
-    owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
+    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled', fallback: 'fallback_review' }, advanceEvent: 'critic_posted' },
+    owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled', fallback: 'fallback_review' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
     cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
+    // Critic-death fallback: when auto-resume is exhausted, the owner runs the
+    // review itself via subagent forks instead of the run being cancelled.
+    // Owner-driven, so no killNonOwner/notifyOwnerSummary cleanup behaviors.
+    fallback_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },
@@ -25,6 +29,7 @@ export default protocol('review', {
     critic_turn: '10m',
     owner_turn: '30m',
     cleanup: '5m',
+    fallback_review: '30m',
   },
 
   grace: {
