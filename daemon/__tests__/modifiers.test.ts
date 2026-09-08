@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { resolveModifier, resolveModifiers, listModifierKeys, partitionFlagModifiers, partitionSpawnModifiers } from '../modifiers.js'
+import { resolveModifier, resolveModifiers, listModifierKeys, partitionFlagModifiers, partitionSpawnModifiers, validateModifier, reservedRunParams } from '../modifiers.js'
 
 describe('modifier registry', () => {
   test('security modifier resolves by name', () => {
@@ -72,5 +72,31 @@ describe('flag modifiers', () => {
     const { template, ignored } = partitionSpawnModifiers(['subagent', 'factory'])
     expect(template?.name).toBe('factory')
     expect(ignored).toEqual(['subagent'])
+  })
+})
+
+describe('flag modifier registration discipline', () => {
+  test('a flag naming a reserved run param is refused, not left to shadow it silently', () => {
+    // partitionFlagModifiers spreads flags last, so such a flag would win over
+    // the caller's value. The registry refuses it the way protocol() refuses a
+    // half-declared fallback — at registration, not at runtime.
+    for (const param of reservedRunParams()) {
+      expect(() => validateModifier({ type: 'flag', name: `shadow-${param}`, aliases: [], param }))
+        .toThrow(/reserved run param/)
+    }
+  })
+
+  test('a flag with no param at all is refused', () => {
+    expect(() => validateModifier({ type: 'flag', name: 'paramless', aliases: [], param: '' })).toThrow(/must name the run param/)
+  })
+
+  test('a flag naming an unreserved param registers fine', () => {
+    expect(() => validateModifier({ type: 'flag', name: 'harmless-test-flag', aliases: [], param: 'someOwnParam' })).not.toThrow()
+  })
+
+  test('the reserved list covers every param startProtocolRun reads for run shape', () => {
+    // If a new run param joins that set, it belongs here too — otherwise a
+    // future flag can quietly overwrite it.
+    expect(reservedRunParams().sort()).toEqual(['model', 'modifiers', 'rounds', 'strike', 'topic'])
   })
 })

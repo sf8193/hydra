@@ -83,7 +83,7 @@ describe('review protocol (TypeScript DSL)', () => {
   test('onFallback frames lenses as suggestions and uses fresh subagents, not forks', () => {
     const msg = review.notifications.onFallback!(
       { params: { topic: 'auth flow' }, currentRound: 2, rounds: 3 } as any,
-      { mode: 'fallback', deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 5, completedRounds: 1 },
+      { mode: 'fallback', cause: 'death', deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 5, completedRounds: 1 },
     )
     expect(msg).toContain('The Critic')
     expect(msg).toContain('5 resume attempts')
@@ -120,11 +120,34 @@ describe('review protocol (TypeScript DSL)', () => {
       currentRound: 1,
       rounds: 3,
     } as any
-    for (const ctx of [{ mode: 'direct' as const }, { mode: 'fallback' as const, deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 1, completedRounds: 0 }]) {
+    for (const ctx of [{ mode: 'direct' as const }, { mode: 'fallback' as const, cause: 'death' as const, deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 1, completedRounds: 0 }]) {
       const msg = review.notifications.onFallback!(run, ctx)
       expect(msg).toContain('+security')
       expect(msg).toContain('attack surface only')
     }
+  })
+
+  test('onFallback on the silence path says retired, not died — the critic was alive', () => {
+    const msg = review.notifications.onFallback!(
+      { params: {}, currentRound: 1, rounds: 3 } as any,
+      { mode: 'fallback', cause: 'silence', deadRole: 'critic', deadLabel: 'The Critic', completedRounds: 0 },
+    )
+    expect(msg).toContain('went silent')
+    expect(msg).toContain('retired')
+    // The two facts a timed-out critic makes false.
+    expect(msg).not.toContain('died')
+    expect(msg).not.toContain('resume attempt')
+    // Still the same task.
+    expect(msg).toContain('suggestions, not a checklist')
+  })
+
+  test('a silence fallback still reports the rounds the critic did finish', () => {
+    const msg = review.notifications.onFallback!(
+      { params: {}, currentRound: 3, rounds: 3 } as any,
+      { mode: 'fallback', cause: 'silence', deadRole: 'critic', deadLabel: 'The Critic', completedRounds: 2 },
+    )
+    expect(msg).toContain('2 of')
+    expect(msg).toContain('went silent')
   })
 
   test('review opts into fallback via a declared on.fallback transition + onFallback hook', () => {
@@ -157,9 +180,10 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(() => protocol('degradation-present', { ...spec, fallbackDegradation: 'solo, unchallenged' } as any)).not.toThrow()
   })
 
-  test('an on.fallback transition without an onFallback hook is inert, not a registration error', () => {
-    // Both halves are the opt-in. Half of it can't produce a fallback completion,
-    // so there is nothing for fallbackDegradation to label.
+  test('an on.fallback transition without an onFallback hook is refused, not left inert', () => {
+    // The runner will not fire a fallback without the hook, so the transition
+    // could never be taken — a claim the protocol cannot keep. Same treatment
+    // this factory already gives cancel-events-without-a-cancelPhase.
     expect(() => protocol('half-optin', {
       emoji: '🧪',
       display: 'Half Opt-in',
@@ -173,7 +197,8 @@ describe('review protocol (TypeScript DSL)', () => {
         cancelled: { actor: 'owner', on: {} },
       },
       windows: {},
-    } as any)).not.toThrow()
+      fallbackDegradation: 'solo, unchallenged',
+    } as any)).toThrow(/notifications\.onFallback/)
   })
 
   test('build and spike do NOT opt into fallback (generic gate excludes them)', async () => {

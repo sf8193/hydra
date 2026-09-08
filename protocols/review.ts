@@ -93,16 +93,24 @@ export default protocol('review', {
           ]
         : []
 
+      // The opening line is the thread's record of why this run changed shape,
+      // so it has to name the actual event. A critic that timed out did not die:
+      // it was alive and idle, and the daemon retired it. Saying "died" there
+      // would put a false cause in the one message a human reads later.
       const preamble = ctx.mode === 'direct'
         ? [
             `[system] **Subagent review** — you asked for this directly (\`+subagent\`), so no critic was spawned. There is no adversary to argue with: you run the review and you post the result.`,
           ]
         : [
-            `[system] **${ctx.deadLabel} died** after ${ctx.resumeAttempts} resume attempt${ctx.resumeAttempts === 1 ? '' : 's'}. Falling back to subagent review — you run it yourself.`,
+            ctx.cause === 'death'
+              ? `[system] **${ctx.deadLabel} died** after ${ctx.resumeAttempts} resume attempt${ctx.resumeAttempts === 1 ? '' : 's'}. Falling back to subagent review — you run it yourself.`
+              : `[system] **${ctx.deadLabel} went silent** — its phase window elapsed with nothing posted, so it was retired. Falling back to subagent review — you run it yourself.`,
             ``,
             ctx.completedRounds > 0
               ? `The critic posted findings for ${ctx.completedRounds} of ${run.rounds} round${run.rounds === 1 ? '' : 's'} — read them before choosing your lenses. Focus your subagents on what the critic *didn't* cover.`
-              : `No rounds completed before it died.`,
+              : ctx.cause === 'death'
+                ? `No rounds completed before it died.`
+                : `No rounds completed before it stalled.`,
           ]
       return [
         ...preamble,

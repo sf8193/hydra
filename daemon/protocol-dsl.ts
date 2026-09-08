@@ -104,19 +104,37 @@ export type ProtocolSpec<
 // needs to compose its fallback instructions without reaching into RunState
 // internals it can't see (the dead participant's label, resume attempts).
 //
-// Two shapes, because there are two ways to reach the same owner-run phase: a
-// participant died, or the caller asked for it up front (`+subagent`). Only the
-// death path has a dead participant to name, and a union is what keeps a
-// direct-mode hook from rendering an empty role label.
+// Three shapes, because there are three ways to reach the same owner-run phase,
+// and each knows a different amount. A union rather than optional fields: the
+// hook should not be able to render a fact the path never had.
+//
+//   death   — the participant exited and auto-resume is exhausted. Only here is
+//             `resumeAttempts` a number anyone should print.
+//   silence — the participant is alive but its phase window elapsed with nothing
+//             posted. The runner retires it the same way, but it did not die,
+//             and saying so in the thread would misstate the run's central event.
+//   direct  — the caller asked for the owner-run phase up front (`+subagent`).
+//             There is no participant at all, hence no role to name.
 export type FallbackContext =
   | {
       mode: 'fallback'
+      cause: 'death'
       deadRole: string
       deadLabel: string
       resumeAttempts: number
       completedRounds: number
     }
+  | {
+      mode: 'fallback'
+      cause: 'silence'
+      deadRole: string
+      deadLabel: string
+      completedRounds: number
+    }
   | { mode: 'direct' }
+
+/** Why a run left the normal path for the fallback phase. */
+export type FallbackCause = 'death' | 'silence'
 
 export type Protocol<
   Phase extends string = string,
@@ -182,15 +200,18 @@ export function protocol<
     throw new Error(`protocol "${name}": phases declare cancel events but no cancelPhase is set`)
   }
 
-  // Opting into fallback means completions can arrive by a degraded path. The
-  // CompletionEvent carries `degradation` so consumers can label those without
-  // knowing this protocol — but only this protocol can say what was lost, so
-  // refuse the registration rather than emit a degraded event with no name for
-  // the degradation. Both halves of the opt-in are required: an `on.fallback`
-  // transition alone is inert without the owner instructions to go with it.
+  // Fallback is a three-part opt-in, and a partial one is dead config: the
+  // runner will not fire a fallback without the owner instructions, and a
+  // degraded completion has nothing to call itself without the label. Both
+  // halves are refused at registration for the same reason cancel-events-without
+  // -a-cancelPhase is, a few lines down — a transition that can never fire is a
+  // claim the protocol makes and cannot keep.
   const hasFallbackTransition = Object.values(spec.phases).some(p => 'fallback' in p.on)
-  if (hasFallbackTransition && spec.notifications?.onFallback && !spec.fallbackDegradation) {
-    throw new Error(`protocol "${name}": declares an on.fallback transition and notifications.onFallback but no fallbackDegradation — a fallback completion would have no name for what it gave up`)
+  if (hasFallbackTransition && !spec.notifications?.onFallback) {
+    throw new Error(`protocol "${name}": declares an on.fallback transition but no notifications.onFallback — the runner requires the hook to fire a fallback, so the transition could never be taken`)
+  }
+  if (hasFallbackTransition && !spec.fallbackDegradation) {
+    throw new Error(`protocol "${name}": declares an on.fallback transition but no fallbackDegradation — a fallback completion would have no name for what it gave up`)
   }
 
   const table: Record<string, Record<string, string>> = {}

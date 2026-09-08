@@ -199,3 +199,23 @@ describe('review command → run params', () => {
     expect(getRunByThread(threadId)).toBeUndefined()
   })
 })
+
+describe('review command → contradictory flags', () => {
+  test('+subagent +no-fallback is refused, not silently half-honoured', async () => {
+    const { threadId, msg } = mkOwner()
+
+    await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['subagent', 'no-fallback'])
+
+    expect(sent.some(s => s.text.includes('contradict'))).toBe(true)
+    expect(getRunByThread(threadId)).toBeUndefined()
+  })
+
+  test('the aliases contradict just as loudly as the full names', async () => {
+    const { threadId, msg } = mkOwner()
+
+    await handleReviewIntercept(msg, 3, undefined, undefined, ['sa', 'nf'])
+
+    expect(sent.some(s => s.text.includes('contradict'))).toBe(true)
+    expect(getRunByThread(threadId)).toBeUndefined()
+  })
+})

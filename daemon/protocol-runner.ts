@@ -10,7 +10,7 @@ import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatSt
 import { dumpTranscript } from './transcript-dump.js'
 import { defaultToolDescription } from './bridge-tools.js'
 import { pushToolSurface } from './tool-surface.js'
-import type { Protocol } from './protocol-dsl.js'
+import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
@@ -544,7 +544,7 @@ function armDeferredFallback(run: ProtocolRun, deadRole: string): void {
   if (!run._pendingFallback) run._pendingFallback = deadRole
 }
 
-async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<void> {
+async function enterFallbackPhase(run: ProtocolRun, deadRole: string, cause: FallbackCause = 'death'): Promise<void> {
   if (isTerminal(run)) return
 
   // Everything from here to the kill is synchronous — no await before the
@@ -582,19 +582,19 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
   if (isTerminal(run)) return // defensive: a cancel/complete slipped in during the kill
 
   const attempts = run._resumeAttempts ?? 0
-  const instructions = run.protocol.notifications.onFallback?.(run, {
-    mode: 'fallback',
-    deadRole,
-    deadLabel: run.protocol.roles[deadRole] ?? deadRole,
-    resumeAttempts: attempts,
-    completedRounds: Math.max(0, run.currentRound - 1),
-  }) ?? `[system] ${run.protocol.roles[deadRole] ?? deadRole} died. Post your closing summary via advance({ content: "..." }).`
+  const deadLabel = run.protocol.roles[deadRole] ?? deadRole
+  const completedRounds = completedRoundsOf(run)
+  const instructions = run.protocol.notifications.onFallback?.(run, cause === 'death'
+    ? { mode: 'fallback', cause, deadRole, deadLabel, resumeAttempts: attempts, completedRounds }
+    : { mode: 'fallback', cause, deadRole, deadLabel, completedRounds },
+  ) ?? `[system] ${deadLabel} is gone. Post your closing summary via advance({ content: "..." }).`
 
   // Log the entry breadcrumb here — the transition has committed and run.phase is
   // reliably the fallback phase — rather than after the awaits below, where the
   // deferred-path terminal guard could skip it (and where run.phase may already
   // have moved to `complete`, making the message wrong).
-  process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${deadRole} died (${attempts} resume attempts)\n`)
+  const why = cause === 'death' ? `${deadRole} died (${attempts} resume attempts)` : `${deadRole} went silent`
+  process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${why}\n`)
 
   await announceFallbackPhase(run, instructions)
 }
@@ -786,7 +786,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
       protocol: run.protocol.name,
       threadId: run.threadId,
       topic: run.params.topic as string | undefined,
-      rounds: { completed: Math.max(0, run.currentRound - 1), requested: run.rounds },
+      rounds: { completed: completedRoundsOf(run), requested: run.rounds },
       outcome: 'cancelled',
       reason,
       decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
@@ -820,6 +820,14 @@ function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
   if (!isTerminal(run)) setRunTools(run)
   return true
+}
+
+// Rounds the run actually finished. The counter names the round in FLIGHT, so
+// a run that stops mid-round has completed one fewer — and a direct start, which
+// never enters a round at all, has completed none. Only a run that reached its
+// closing phase has finished the round it is counting.
+function completedRoundsOf(run: ProtocolRun): number {
+  return Math.max(0, run.currentRound - 1)
 }
 
 function isTerminal(run: ProtocolRun): boolean {
@@ -1099,6 +1107,22 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   })
 }
 
+// Tell the actor its window is up, whatever happens next. Worth sending even
+// when the next thing is retiring that session: a timed-out participant that
+// reads its queue before it goes learns why, and the alternative — the actor
+// hearing nothing on the fallback path but something on the cancel path — makes
+// the two outcomes differ in a way that has nothing to do with the outcome.
+function notifyActorOfTimeout(run: ProtocolRun, actorSessionId: string | undefined, phase: string): void {
+  if (!actorSessionId) return
+  const actorName = registry.get(actorSessionId)?.tmuxName
+  const namePrefix = actorName ? `**${actorName}**, phase` : `Phase`
+  transport.sendOrQueue(actorSessionId, {
+    type: 'notification',
+    content: `[system] ⏰ ${namePrefix} "${phase}" timed out. The protocol is advancing.`,
+    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+}
+
 function notifyParticipant(run: ProtocolRun, sessionId: string, content: string): void {
   transport.sendOrQueue(sessionId, {
     type: 'notification',
@@ -1248,27 +1272,20 @@ function resetTimeout(run: ProtocolRun): void {
       return
     }
     process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
-    // A silent non-owner is a dead non-owner as far as the run is concerned: the
-    // phase produced nothing either way. Take the same fallback a crash would,
-    // so a critic that hangs rather than exits doesn't cost the whole review.
+    notifyActorOfTimeout(run, actorSessionId, phase)
+    // A silent non-owner is, to the run, a dead one: the phase produced nothing
+    // either way. Take the same fallback a crash would, so a critic that hangs
+    // rather than exits doesn't cost the whole review. It enters as `silence`,
+    // not `death` — the participant is alive and about to be retired, and the
+    // thread record has to say which of those two things happened.
     // (canFallbackOnDeath already excludes the owner and honours +no-fallback.)
     // No deferred-fallback branch here: the timeout fires for the phase's own
     // actor, and a phase whose actor is a non-owner is exactly the phase a
     // protocol declares on.fallback out of — there is nothing to defer to.
     if (actorRole && canFallbackOnDeath(run, actorRole)) {
       process.stderr.write(`daemon: ${run.protocol.name} run: ${actorRole} timed out — falling back instead of cancelling\n`)
-      void enterFallbackPhase(run, actorRole)
+      void enterFallbackPhase(run, actorRole, 'silence')
       return
-    }
-    if (actorSessionId) {
-      const actorInfo = registry.get(actorSessionId)
-      const actorName = actorInfo?.tmuxName
-      const namePrefix = actorName ? `**${actorName}**, phase` : `Phase`
-      transport.sendOrQueue(actorSessionId, {
-        type: 'notification',
-        content: `[system] ⏰ ${namePrefix} "${phase}" timed out. The protocol is advancing.`,
-        meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-      })
     }
     await fireTransition(run, 'timeout', '', 'timed out')
   }, ms)
@@ -1288,8 +1305,10 @@ function resetTimeout(run: ProtocolRun): void {
       // the protocol's fallback exists for. Read the actor off the current
       // phase: this timer never resets, so the phase may have moved since.
       const cappedActor = run.protocol.phases[run.phase]?.actor
+      const cappedSid = cappedActor ? run.participants.get(cappedActor) : undefined
+      notifyActorOfTimeout(run, cappedSid, run.phase)
       if (cappedActor && canFallbackOnDeath(run, cappedActor)) {
-        void enterFallbackPhase(run, cappedActor)
+        void enterFallbackPhase(run, cappedActor, 'silence')
         return
       }
       await fireTransition(run, 'timeout', '', 'total time exceeded')
@@ -1345,7 +1364,10 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     protocol: run.protocol.name,
     threadId: run.threadId,
     topic: run.params.topic as string | undefined,
-    rounds: { completed: run.currentRound, requested: run.rounds },
+    // A degraded completion never finished the round it was in: the critic died
+    // or fell silent partway through, or (direct) no round ever started. Only the
+    // normal path reaches its closing phase with the counted round genuinely done.
+    rounds: { completed: via === 'normal' ? run.currentRound : completedRoundsOf(run), requested: run.rounds },
     outcome: 'complete',
     decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
     durationMs: Date.now() - run.startedAt,

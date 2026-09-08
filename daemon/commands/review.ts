@@ -53,6 +53,15 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
     resolvedMods = rest.length > 0 ? rest : undefined
   }
 
+  // `+subagent` means "no adversary"; `+no-fallback` means "an adversary or
+  // nothing". Together they ask for opposite things, and the run would honour
+  // the first and drop the second without saying so. Whichever the caller meant,
+  // they should find out now rather than from the summary.
+  if (flagParams.directSubagent && flagParams.noFallback) {
+    await gateway.send(msg.channelId, `\`+subagent\` and \`+no-fallback\` contradict each other — \`+subagent\` skips the critic, so there is no death for \`+no-fallback\` to refuse. Pick one.`, { replyTo: msg.id })
+    return
+  }
+
   try {
     const proto = await getReviewProto()
     await startProtocolRun(proto, threadId, sessionId, {

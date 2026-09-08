@@ -18,9 +18,9 @@ sequenceDiagram
     participant LB as subagent lens B
     participant LN as subagent lens N
 
-    Note over PR: EITHER critic dead/silent, auto-resume exhausted<br/>canFallbackOnDeath passes → enterFallbackPhase<br/>OR `review +subagent` → enterDirectSubagentPhase (no critic ever spawned)
-    PR->>PR: fire the `fallback` transition into subagent_review,<br/>then kill the critic (death path only)
-    PR->>Owner: onFallback instructions via transport<br/>(a thread post alone would not wake it)<br/>mode: 'fallback' names the corpse, 'direct' names the request
+    Note over PR: THREE doors into one phase.<br/>death — critic exited, auto-resume exhausted<br/>silence — critic alive, but its window elapsed with nothing posted<br/>direct — review +subagent, no critic ever spawned
+    PR->>PR: fire the `fallback` transition into subagent_review,<br/>then retire the critic — death and silence both have one,<br/>direct has nobody to retire
+    PR->>Owner: onFallback instructions via transport<br/>(a thread post alone would not wake it)<br/>each door passes its own FallbackContext arm, so the preamble<br/>can only state facts that door actually had
 
     Note over Owner: pick the lenses the MATERIAL calls for.<br/>code → correctness, layering, tests.<br/>design doc → assumptions, alternatives, failure modes
 

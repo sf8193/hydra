@@ -546,6 +546,101 @@ describe('review: completion carries how it got there', () => {
   })
 })
 
+describe('review: a degraded completion counts only finished rounds', () => {
+  test('a direct start reports zero completed rounds, not the round it never entered', async () => {
+    h = await createStartedHarness(review, { rounds: 3, params: { directSubagent: true } })
+
+    await h.advance('owner', '**Review Summary** — subagent review.')
+
+    const event = h.completionEvents[0]
+    expect(event.via).toBe('direct')
+    // currentRound is 1 the whole time; no round ever ran. Saying "1 of 3
+    // completed" alongside via: 'direct' would be two claims that contradict.
+    expect(event.rounds).toEqual({ completed: 0, requested: 3 })
+  })
+
+  test('a fallback mid-round-1 reports zero, matching what the owner was told', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.phase).toBe('subagent_review')
+    // The prompt already used cancel-style accounting; the event must agree.
+    expect(h.threadMessages.some(m => m.text.includes('No rounds completed'))).toBe(true)
+
+    await h.advance('owner', '**Review Summary** — ran it myself.')
+
+    expect(h.completionEvents[0].rounds).toEqual({ completed: 0, requested: 3 })
+  })
+
+  test('a fallback after one full round reports one, not two', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.advance('critic', 'Round 1 critique.')
+    await h.advance('owner', 'Round 1 defense.')
+    expect(h.round).toBe(2)
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.phase).toBe('subagent_review')
+
+    await h.advance('owner', '**Review Summary** — one round in the bank.')
+
+    expect(h.completionEvents[0].rounds).toEqual({ completed: 1, requested: 3 })
+  })
+
+  test('a normal completion still counts the round it closed on', async () => {
+    h = createHarness(review, { rounds: 1 })
+
+    await h.advance('critic', 'Only critique.')
+    await h.advance('owner', 'Only defense.')
+    await h.advance('owner', '**Review Summary** — clean.')
+
+    expect(h.completionEvents[0].via).toBe('normal')
+    expect(h.completionEvents[0].rounds).toEqual({ completed: 1, requested: 1 })
+  })
+})
+
+describe('review: a timed-out critic is retired, not mourned', () => {
+  test('the thread says the critic went silent — it was alive when the window closed', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.tickToTimeout()
+    expect(h.phase).toBe('subagent_review')
+
+    const fallbackPost = h.threadMessages.map(m => m.text).find(t => t.includes('subagent review'))!
+    expect(fallbackPost).toContain('went silent')
+    expect(fallbackPost).toContain('retired')
+    // The two things a death-worded preamble would have asserted falsely.
+    expect(fallbackPost).not.toContain('died')
+    expect(fallbackPost).not.toContain('resume attempt')
+  })
+
+  test('the critic is still told its window closed before it is retired', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.tickToTimeout()
+
+    // The cancel path always sent this; the fallback path must not go quiet
+    // just because the outcome improved.
+    expect(h.actorNotifications('critic').some(n => n.includes('timed out'))).toBe(true)
+  })
+
+  test('a real death still reads as a death', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+
+    const fallbackPost = h.threadMessages.map(m => m.text).find(t => t.includes('subagent review'))!
+    expect(fallbackPost).toContain('died')
+    expect(fallbackPost).not.toContain('went silent')
+  })
+})
+
 describe('review: wrong role rejection', () => {
   test('advance from wrong role is rejected', async () => {
     h = createHarness(review, { rounds: 3 })

@@ -1100,3 +1100,87 @@ describe('factoryReview result delivery', () => {
 
   })
 })
+
+// ---------------------------------------------------------------------------
+// 6. The review gate vs. a self-requested review
+//
+// `protocolEvents.onComplete` maps ANY review completion in a builder thread
+// onto that ticket via builderThreadToTicket, and `+subagent` lets the builder
+// start a review it also owns. What actually stops a builder from reviewing
+// itself through the gate is the phase check, not the ⚠️ in the PM line —
+// pinned here so a future refactor of either cannot quietly remove it.
+// ---------------------------------------------------------------------------
+
+describe('review gate vs. builder-requested review', () => {
+  test('a review completing while the build is still building does not flip the gate', async () => {
+    const pmThreadId = 'qol-pm-thread-gate-1'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-90-1111', pmThreadId, builderName: 'gate1', phase: 'building',
+    })
+
+    // Exactly what a builder typing `review 1 +subagent` in its own thread
+    // produces: a direct, owner-run completion in the builder thread.
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 0, requested: 1 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'I reviewed myself and I am fine',
+      via: 'direct',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    expect(state.phase).toBe('building')
+    expect(state.reviewed).toBeFalsy()
+    expect(sent.some(s => s.text.includes('factory_accept'))).toBe(false)
+  })
+
+  test('nor while the build is already awaiting a decision', async () => {
+    const pmThreadId = 'qol-pm-thread-gate-2'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-91-1111', pmThreadId, builderName: 'gate2', phase: 'awaiting_pm', reviewed: false,
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 0, requested: 1 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      via: 'direct',
+    })
+    await settle()
+
+    // A self-review must not retroactively mark an unreviewed build reviewed.
+    expect(state.reviewed).toBeFalsy()
+  })
+
+  test('the factory\'s own review — the one that started in `reviewing` — still flips it', async () => {
+    const pmThreadId = 'qol-pm-thread-gate-3'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-92-1111', pmThreadId, builderName: 'gate3', phase: 'reviewing',
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 3, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'a real critique',
+      via: 'normal',
+    })
+    await settle()
+
+    expect(state.phase).toBe('awaiting_pm')
+    expect(state.reviewed).toBe(true)
+  })
+})
