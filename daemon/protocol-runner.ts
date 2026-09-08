@@ -154,7 +154,11 @@ export async function startProtocolRun(
   const mods = params.modifiers as Modifier[] | undefined
   const modSuffix = mods?.length ? ` ${mods.map(m => `+${m.name}`).join(' ')}` : ''
   const topicLine = params.topic ? `\nFocus: **${params.topic}**${modSuffix}` : modSuffix ? `\nFocus:${modSuffix}` : ''
-  const annIds = await safeSend(threadId, `**${proto.display}** — ${rounds} round${rounds > 1 ? 's' : ''}${topicLine}`)
+  // A direct start skips straight to the owner-run phase, so there is no
+  // exchange to count — announcing "3 rounds" directly above a message saying
+  // nobody was spawned leaves the reader to reconcile the two.
+  const scale = params.directSubagent ? `owner-run, no rounds` : `${rounds} round${rounds > 1 ? 's' : ''}`
+  const annIds = await safeSend(threadId, `**${proto.display}** — ${scale}${topicLine}`)
   run.messageIds.push(...annIds)
 
   // `+subagent`: the caller asked for the owner-run fallback phase up front, so

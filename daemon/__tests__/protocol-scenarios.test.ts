@@ -453,6 +453,10 @@ describe('review: +subagent direct trigger', () => {
     expect(h.threadMessages.some(m => m.text.includes('auth flow'))).toBe(true)
     // The kickoff would have announced a critic that is orienting — it must not fire.
     expect(notes.some(n => n.includes('reading the thread to orient'))).toBe(false)
+    // Nor may the opening announcement promise rounds that will never happen.
+    const announcement = h.threadMessages[0].text
+    expect(announcement).toContain('owner-run, no rounds')
+    expect(announcement).not.toContain('3 rounds')
 
     await h.advance('owner', '**Review Summary** — subagent review, no critic.')
     expect(h.isTerminated).toBe(true)
