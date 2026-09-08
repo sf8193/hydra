@@ -38,6 +38,7 @@ writeFileSync(PID_FILE, `${process.pid}\n`)
 process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
+import { PLUGIN_MANIFEST, MCP_CONFIG } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji } from './daemon/sessions.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
@@ -256,28 +257,14 @@ try {
   const bridgeSrc = join(import.meta.dir, 'bridge.ts')
   const discordCache = join(CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord')
   const daemonConfig = JSON.stringify({ socket: SOCK_PATH, platform: PLATFORM })
-  const pluginJson = JSON.stringify({
-    name: 'discord',
-    description: 'Discord channel for Claude Code — messaging bridge with built-in access control.',
-    version: '0.0.4',
-    keywords: ['discord', 'messaging', 'channel', 'mcp'],
-  }, null, 2)
   const versionDirs = readdirSync(discordCache, { withFileTypes: true }).filter(d => d.isDirectory())
   for (const d of versionDirs) {
     const targetDir = join(discordCache, d.name)
     copyFileSync(bridgeSrc, join(targetDir, 'server.ts'))
     writeFileSync(join(targetDir, `daemon-${PLATFORM}.json`), daemonConfig)
-    const mcpJson = JSON.stringify({
-      mcpServers: {
-        discord: {
-          command: 'bun',
-          args: ['run', '--cwd', targetDir, '--shell=bun', '--silent', 'start'],
-        },
-      },
-    }, null, 2)
-    writeFileSync(join(targetDir, '.mcp.json'), mcpJson)
+    writeFileSync(join(targetDir, '.mcp.json'), MCP_CONFIG)
     mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
-    writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), pluginJson)
+    writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
   }
   process.stderr.write(`daemon: synced bridge.ts + daemon-${PLATFORM}.json + .mcp.json into ${discordCache}/*/\n`)
 } catch (err) {
