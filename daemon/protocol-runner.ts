@@ -42,6 +42,11 @@ export type ProtocolRun = StatusLineState & {
   _phaseStartedAt: number
   _resumeAttempts?: number
   _pendingFallback?: string
+  // Set the moment the run leaves the normal path for the protocol's fallback
+  // phase, by either door (participant death or a direct request). Read once, at
+  // completion, to label the CompletionEvent — the phase itself can't say it,
+  // since a completed run has already moved on to a terminal phase.
+  _enteredFallback?: boolean
   _keepaliveTimer?: ReturnType<typeof setInterval>
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
@@ -151,6 +156,27 @@ export async function startProtocolRun(
   const topicLine = params.topic ? `\nFocus: **${params.topic}**${modSuffix}` : modSuffix ? `\nFocus:${modSuffix}` : ''
   const annIds = await safeSend(threadId, `**${proto.display}** — ${rounds} round${rounds > 1 ? 's' : ''}${topicLine}`)
   run.messageIds.push(...annIds)
+
+  // `+subagent`: the caller asked for the owner-run fallback phase up front, so
+  // there is no participant to spawn and no kickoff to send — the kickoff's job
+  // is to tell the owner that a critic is orienting. It reaches that phase
+  // through the protocol's own `fallback` transition rather than by staging a
+  // death, so a protocol that declares no fallback path simply cannot be asked
+  // for one.
+  // Same shape as the spawn loop below: a start that cannot finish must not
+  // leave a half-live run holding the thread. Cancel, then let the caller report.
+  if (params.directSubagent) {
+    try {
+      if (!(await enterDirectSubagentPhase(run))) {
+        throw new Error(`${proto.display} does not support +subagent`)
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: ${proto.name} run: direct subagent start failed: ${err}\n`)
+      await cancelRun(run, 'direct subagent start failed')
+      throw err
+    }
+    return run
+  }
 
   try {
     for (const [role] of Object.entries(proto.roles)) {
@@ -331,7 +357,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // doesn't leave the agent thinking advance failed when state moved.
     const sentIds = await safeSend(run.threadId, content)
     // Capture the closing summary whenever the owner advances INTO terminal
-    // completion, not only from the cleanup phase — the fallback_review phase
+    // completion, not only from the cleanup phase — the subagent_review phase
     // also ends at `complete` and its summary must reach CompletionEvent.summary
     // (the factory PM notification reads it). A non-terminal advance is a
     // mid-run post and joins messageIds.
@@ -353,7 +379,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
         // enterFallbackPhase commits the phase transition in its synchronous
         // prefix (before its only await, the kill) — see the "no await before the
         // transition" invariant in that function. All four call sites, including
-        // this one, `void` it and rely on that: the fallback_review transition is
+        // this one, `void` it and rely on that: the subagent_review transition is
         // in effect the moment control returns here. Do not add an early await to
         // enterFallbackPhase without revisiting these call sites.
         void enterFallbackPhase(run, pending)
@@ -471,11 +497,17 @@ function startGraceTimer(run: ProtocolRun, role: string, sessionId: string): voi
 // out of the actor phases plus a `notifications.onFallback` hook for the owner
 // instructions. The engine names no protocol (review is currently the only one
 // that opts in). Never fires for a dead owner — the fallback asks the owner to
-// work, which is meaningless when the owner is the one who vanished.
+// work, which is meaningless when the owner is the one who vanished, and never
+// when the caller passed `noFallback` (`+no-fallback`), which says an
+// adversarial review or nothing.
+//
+// The same phase is also reachable without a death, via enterDirectSubagentPhase
+// (`+subagent`) — see startProtocolRun.
 // ---------------------------------------------------------------------------
 
 function canFallbackOnDeath(run: ProtocolRun, deadRole: string): boolean {
-  return deadRole !== run.protocol.ownerRole
+  return !run.params.noFallback
+    && deadRole !== run.protocol.ownerRole
     && !isTerminal(run)
     && !!run.protocol.phases[run.phase]?.on?.fallback
     && !!run.protocol.notifications.onFallback
@@ -483,11 +515,12 @@ function canFallbackOnDeath(run: ProtocolRun, deadRole: string): boolean {
 
 // Deferred fallback: the current phase has no on.fallback (e.g. owner_turn, where
 // firing fallback mid-composition would let the owner's pending advance() land on
-// fallback_review and turn the defense into the review summary), but the protocol
+// subagent_review and turn the defense into the review summary), but the protocol
 // does support fallback from some other phase. Rather than cancel, remember the
 // dead role and re-check once the owner advances into a fallback-eligible phase
 // (see the _pendingFallback handling in onRunAdvance).
 function canDeferFallback(run: ProtocolRun, deadRole: string): boolean {
+  if (run.params.noFallback) return false
   if (deadRole === run.protocol.ownerRole) return false
   if (isTerminal(run)) return false
   if (!run.protocol.notifications.onFallback) return false
@@ -533,6 +566,7 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
 
   const result = run.protocol.machine.transition(from as any, 'fallback' as any)
   if (!result.ok || !advancePhase(run, result.to, from)) return
+  run._enteredFallback = true
 
   if (deadSessionId) {
     const info = registry.get(deadSessionId)
@@ -543,16 +577,9 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
 
   if (isTerminal(run)) return // defensive: a cancel/complete slipped in during the kill
 
-  // Manual entry rather than afterTransition(): the owner needs the protocol's
-  // custom onFallback instructions, not the generic "your turn" hand-off. The
-  // fallback phase declares no onEnter behaviors, and once the dead participant
-  // is retired the owner is the only participant — so afterTransition's
-  // notifyPhaseChange (which targets non-active participants) would be a no-op.
-  // The calls below therefore cover every responsibility that applies here.
-  protocolEvents.emitPhaseChange({ protocol: run.protocol.name, threadId: run.threadId, phase: run.phase })
-
   const attempts = run._resumeAttempts ?? 0
   const instructions = run.protocol.notifications.onFallback?.(run, {
+    mode: 'fallback',
     deadRole,
     deadLabel: run.protocol.roles[deadRole] ?? deadRole,
     resumeAttempts: attempts,
@@ -564,6 +591,38 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string): Promise<v
   // deferred-path terminal guard could skip it (and where run.phase may already
   // have moved to `complete`, making the message wrong).
   process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} after ${deadRole} died (${attempts} resume attempts)\n`)
+
+  await announceFallbackPhase(run, instructions)
+}
+
+// Enter the fallback phase with no death behind it: the caller asked for the
+// owner-run review up front. Everything enterFallbackPhase does about a corpse —
+// retire the participant, kill the session, count resume attempts — has no
+// subject here, so all that remains is the transition and the hand-off.
+// Returns false when the protocol declares no fallback path to enter.
+async function enterDirectSubagentPhase(run: ProtocolRun): Promise<boolean> {
+  const onFallback = run.protocol.notifications.onFallback
+  const from = run.phase
+  if (!onFallback || !run.protocol.phases[from]?.on?.fallback) return false
+
+  const result = run.protocol.machine.transition(from as any, 'fallback' as any)
+  if (!result.ok || !advancePhase(run, result.to, from)) return false
+  run._enteredFallback = true
+
+  process.stderr.write(`daemon: ${run.protocol.name} run: entered ${run.phase} directly (+subagent) — no participants spawned\n`)
+
+  await announceFallbackPhase(run, onFallback(run, { mode: 'direct' }))
+  return true
+}
+
+// Hand the fallback phase to the owner. Manual, rather than afterTransition():
+// the owner needs the protocol's custom onFallback instructions, not the generic
+// "your turn" hand-off. The fallback phase declares no onEnter behaviors, and the
+// owner is the run's only participant by the time we get here — so
+// afterTransition's notifyPhaseChange (which targets non-active participants)
+// would be a no-op. The calls below cover every responsibility that applies.
+async function announceFallbackPhase(run: ProtocolRun, instructions: string): Promise<void> {
+  protocolEvents.emitPhaseChange({ protocol: run.protocol.name, threadId: run.threadId, phase: run.phase })
 
   // Thread post is the human-visible record; the direct notification is what
   // actually wakes the idle owner session to start working (a safeSend to the
@@ -728,6 +787,9 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
       reason,
       decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
       durationMs: Date.now() - run.startedAt,
+      // No `via`/`degradation`: those describe how a run reached its summary,
+      // and a cancelled run never reached one. `reason` is what a consumer wants
+      // here, and it already says what went wrong.
     }
     protocolEvents.emitComplete(completionEvent)
     cancellingRuns.delete(run.id)
@@ -1182,6 +1244,18 @@ function resetTimeout(run: ProtocolRun): void {
       return
     }
     process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
+    // A silent non-owner is a dead non-owner as far as the run is concerned: the
+    // phase produced nothing either way. Take the same fallback a crash would,
+    // so a critic that hangs rather than exits doesn't cost the whole review.
+    // (canFallbackOnDeath already excludes the owner and honours +no-fallback.)
+    // No deferred-fallback branch here: the timeout fires for the phase's own
+    // actor, and a phase whose actor is a non-owner is exactly the phase a
+    // protocol declares on.fallback out of — there is nothing to defer to.
+    if (actorRole && canFallbackOnDeath(run, actorRole)) {
+      process.stderr.write(`daemon: ${run.protocol.name} run: ${actorRole} timed out — falling back instead of cancelling\n`)
+      void enterFallbackPhase(run, actorRole)
+      return
+    }
     if (actorSessionId) {
       const actorInfo = registry.get(actorSessionId)
       const actorName = actorInfo?.tmuxName
@@ -1205,9 +1279,27 @@ function resetTimeout(run: ProtocolRun): void {
     run._totalTimeout = setTimeout(async () => {
       if (isTerminal(run)) return
       process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" hit total backstop (${Math.round(totalMs / 60_000)}m)\n`)
+      // Same reasoning as the idle timeout above — a non-owner that burned the
+      // hard cap without advancing is wedged, and a wedged participant is one
+      // the protocol's fallback exists for. Read the actor off the current
+      // phase: this timer never resets, so the phase may have moved since.
+      const cappedActor = run.protocol.phases[run.phase]?.actor
+      if (cappedActor && canFallbackOnDeath(run, cappedActor)) {
+        void enterFallbackPhase(run, cappedActor)
+        return
+      }
       await fireTransition(run, 'timeout', '', 'total time exceeded')
     }, totalMs)
   }
+}
+
+// Which door the run came through, for the CompletionEvent. `directSubagent`
+// wins over `_enteredFallback` because the direct path sets both — it is the
+// more specific truth: the caller chose this, nothing died.
+function completionVia(run: ProtocolRun): 'normal' | 'fallback' | 'direct' {
+  if (run.params.directSubagent) return 'direct'
+  if (run._enteredFallback) return 'fallback'
+  return 'normal'
 }
 
 async function completeRun(run: ProtocolRun): Promise<void> {
@@ -1244,6 +1336,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     process.stderr.write(`daemon: ${run.protocol.name} transcript dump failed: ${err}\n`)
   }
 
+  const via = completionVia(run)
   const completionEvent: CompletionEvent = {
     protocol: run.protocol.name,
     threadId: run.threadId,
@@ -1254,6 +1347,13 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     durationMs: Date.now() - run.startedAt,
     transcriptPath,
     summary: run.summary,
+    via,
+    // Only a degraded path has something to name, and only the protocol can name
+    // it. The protocol() assertion makes this present for any protocol that opts
+    // into fallback, so in practice `via !== 'normal'` implies a label.
+    ...(via !== 'normal' && run.protocol.fallbackDegradation
+      ? { degradation: run.protocol.fallbackDegradation }
+      : {}),
   }
 
   protocolEvents.emitComplete(completionEvent)

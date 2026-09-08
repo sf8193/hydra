@@ -20,7 +20,21 @@ export type TemplateModifier = {
   templateName: string   // key in the templates registry (templates.ts)
 }
 
-export type Modifier = SeedModifier | TemplateModifier
+// A flag modifier carries no text. It names a run param the protocol command
+// sets to `true`, and is stripped from the modifier list before the run starts —
+// so nothing downstream (seed composition, the summary's `+mod` note) ever sees
+// it. It lives in this registry for one reason: to be a name the router's
+// `+name` regex recognises. Distinct from a seed modifier with empty
+// instructions, which would leak an empty `**+name:**` block into a seed if it
+// were ever left in the list.
+export type FlagModifier = {
+  type: 'flag'
+  name: string
+  aliases: string[]
+  param: string   // key set to `true` in the protocol run's params
+}
+
+export type Modifier = SeedModifier | TemplateModifier | FlagModifier
 
 const registry = new Map<string, Modifier>()
 
@@ -52,6 +66,21 @@ export function resolveModifiers(names: string[]): { resolved: Modifier[]; unkno
 
 export function listModifierKeys(): string[] {
   return [...registry.keys()]
+}
+
+// Split resolved modifiers into the run params their flags set and the
+// modifiers that survive into the run. Flags are consumed here so a protocol
+// run never carries one: `+subagent` means "start in subagent review", not "add
+// a lens", and leaving it in the list would show up as a `+subagent` note on a
+// summary whose critic never existed.
+export function partitionFlagModifiers(mods: Modifier[]): { params: Record<string, true>; rest: Modifier[] } {
+  const params: Record<string, true> = {}
+  const rest: Modifier[] = []
+  for (const mod of mods) {
+    if (mod.type === 'flag') params[mod.param] = true
+    else rest.push(mod)
+  }
+  return { params, rest }
 }
 
 // Split spawn/respawn `+mods` into the single template modifier that applies
@@ -105,4 +134,23 @@ register({
   name: 'factory',
   aliases: ['f'],
   templateName: 'factory',
+})
+
+// `review +subagent` — skip the adversarial critic and go straight to the
+// owner-run subagent review that a critic death would have fallen back to.
+// Cheaper and quieter than a real critic; no adversarial tension either.
+register({
+  type: 'flag',
+  name: 'subagent',
+  aliases: ['sa'],
+  param: 'directSubagent',
+})
+
+// `review +no-fallback` — a critic death cancels the run instead of handing the
+// review to the owner. For callers who want adversarial review or nothing.
+register({
+  type: 'flag',
+  name: 'no-fallback',
+  aliases: ['nf'],
+  param: 'noFallback',
 })

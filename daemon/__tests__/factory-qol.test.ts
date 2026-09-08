@@ -797,6 +797,59 @@ describe('accept', () => {
     const reviewMsg = sent.findIndex(s => s.text.includes('review complete'))
     expect(reviewMsg).toBeGreaterThanOrEqual(0)
     expect(state.reviewMessageId).toBe(`msg-${reviewMsg + 1}`)
+    // A normal adversarial review is the default — nothing to warn the PM about.
+    expect(sent[reviewMsg].text).not.toContain('⚠️')
+  })
+
+  test('an owner-run review says so on the line the PM decides from', async () => {
+    const pmThreadId = 'qol-pm-thread-17b'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-74-1111', pmThreadId, builderName: 'drift', phase: 'reviewing', spec: 'divergences',
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 1, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'ran it myself',
+      via: 'fallback',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    const reviewMsg = sent.find(s => s.text.includes('review complete'))!
+    expect(reviewMsg.text).toContain('critic died')
+    expect(reviewMsg.text).toContain('no adversarial tension')
+    // The caveat has to precede the decision prompt, not trail the summary.
+    expect(reviewMsg.text.indexOf('critic died')).toBeLessThan(reviewMsg.text.indexOf('factory_accept'))
+  })
+
+  test('a directly requested subagent review is labelled as requested, not as a death', async () => {
+    const pmThreadId = 'qol-pm-thread-17c'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-75-1111', pmThreadId, builderName: 'drift', phase: 'reviewing', spec: 'divergences',
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 1, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      via: 'direct',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    const reviewMsg = sent.find(s => s.text.includes('review complete'))!
+    expect(reviewMsg.text).toContain('requested')
+    expect(reviewMsg.text).not.toContain('died')
   })
 })
 

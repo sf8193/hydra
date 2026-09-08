@@ -1,5 +1,5 @@
 import { jest } from 'bun:test'
-import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, protocolEvents, cancelRun, __test } from '../protocol-runner.js'
+import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, protocolEvents, cancelRun, startProtocolRun, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
@@ -21,7 +21,11 @@ type HarnessOpts = {
 }
 
 export class TestHarness {
-  readonly run: ProtocolRun
+  // Assigned by the constructor for a synthetic run, or by started() once the
+  // real startProtocolRun() returns. Never observable as undefined: started()
+  // disposes and rethrows if the start fails.
+  private _run!: ProtocolRun
+  get run(): ProtocolRun { return this._run }
   private readonly sessionIds: Map<string, string>
   private lastTimeoutArmedAt: number
   private readonly origGatewaySend: typeof gateway.send
@@ -37,7 +41,14 @@ export class TestHarness {
   readonly killedSessions: string[] = []
   private lifecycleOverridden = false
 
-  constructor(proto: Protocol, opts: HarnessOpts = {}) {
+  /**
+   * `defer` skips the synthetic run: the environment (gateway mocks, fake
+   * timers, completion listener) is installed but no run exists yet, so
+   * started() can hand the job to the real startProtocolRun(). Only that path
+   * exercises spawn-time branches — the direct-subagent entry never spawns
+   * anyone, which a hand-built run cannot show.
+   */
+  constructor(proto: Protocol, opts: HarnessOpts = {}, defer = false) {
     this.origStderrWrite = process.stderr.write
     process.stderr.write = (() => true) as any
 
@@ -57,12 +68,18 @@ export class TestHarness {
 
     jest.useFakeTimers()
 
+    this.sessionIds = new Map()
+    this.completionListener = (e) => this.completionEvents.push(e)
+    protocolEvents.onComplete(this.completionListener)
+    this.lastTimeoutArmedAt = Date.now()
+
+    if (defer) return
+
     const rounds = opts.rounds ?? 3
     const threadId = `test-thread-${crypto.randomUUID().slice(0, 8)}`
     const ownerRole = proto.ownerRole
     const roles = Object.keys(proto.roles)
 
-    this.sessionIds = new Map()
     const participants = new Map<string, string>()
     const sessionToRole = new Map<string, string>()
 
@@ -118,13 +135,59 @@ export class TestHarness {
       sessionToRun.set(sid, run.id)
     }
 
-    this.run = run
+    this._run = run
 
-    this.completionListener = (e) => this.completionEvents.push(e)
-    protocolEvents.onComplete(this.completionListener)
-
-    this.lastTimeoutArmedAt = Date.now()
     armTimeout(run)
+  }
+
+  /**
+   * Build a harness around a run created by the real startProtocolRun(), with
+   * session spawning mocked. Use it when what's under test happens at start —
+   * otherwise the cheaper synthetic constructor is equivalent and faster.
+   */
+  static async started(proto: Protocol, opts: HarnessOpts = {}): Promise<TestHarness> {
+    const h = new TestHarness(proto, opts, true)
+    try {
+      await h.startRealRun(proto, opts)
+    } catch (err) {
+      h.dispose()
+      throw err
+    }
+    return h
+  }
+
+  private async startRealRun(proto: Protocol, opts: HarnessOpts): Promise<void> {
+    const threadId = `test-thread-${crypto.randomUUID().slice(0, 8)}`
+    const ownerRole = proto.ownerRole
+    const ownerSid = `test-${ownerRole}-${crypto.randomUUID().slice(0, 8)}`
+
+    registry.set(ownerSid, {
+      sessionId: ownerSid,
+      topic: `${proto.display} ${proto.roles[ownerRole]}`,
+      threadId,
+      createdAt: Date.now(),
+      lastActive: Date.now(),
+      tmuxName: ownerRole,
+      listening: false,
+      turnState: 'idle',
+      sessionType: 'thread_owner',
+    })
+    this.sessionIds.set(ownerRole, ownerSid)
+
+    // startProtocolRun spawns every non-owner role for real — stub the lifecycle
+    // before it gets the chance. Tests can re-stub afterwards.
+    this.mockResume()
+
+    this._run = await startProtocolRun(proto, threadId, ownerSid, {
+      rounds: opts.rounds ?? 3,
+      topic: opts.topic,
+      strike: opts.strike,
+      ...opts.params,
+    })
+
+    for (const [role, sid] of this._run.participants) this.sessionIds.set(role, sid)
+    this.lastTimeoutArmedAt = Date.now()
+    await this.flush()
   }
 
   // ---------------------------------------------------------------------------
@@ -313,10 +376,16 @@ export class TestHarness {
   }
 
   dispose(): void {
-    clearTimeout(this.run.timeout)
-    clearTimeout(this.run._warningTimeout)
-    clearTimeout(this.run._totalTimeout)
-    for (const t of this.run.disconnectTimers.values()) clearTimeout(t)
+    // Absent only when started() failed mid-start — dispose still has mocks,
+    // timers and sessions to unwind.
+    const run = this._run as ProtocolRun | undefined
+    if (run) {
+      clearTimeout(run.timeout)
+      clearTimeout(run._warningTimeout)
+      clearTimeout(run._totalTimeout)
+      clearInterval(run._keepaliveTimer)
+      for (const t of run.disconnectTimers.values()) clearTimeout(t)
+    }
 
     jest.clearAllTimers()
     jest.useRealTimers()
@@ -328,8 +397,10 @@ export class TestHarness {
       registry.delete(sid)
       transport.messageQueues.delete(sid)
     }
-    threadToRun.delete(this.run.threadId)
-    runs.delete(this.run.id)
+    if (run) {
+      threadToRun.delete(run.threadId)
+      runs.delete(run.id)
+    }
 
     if (this.lifecycleOverridden) resetLifecycle()
 
@@ -343,4 +414,9 @@ export class TestHarness {
 
 export function createHarness(proto: Protocol, opts?: HarnessOpts): TestHarness {
   return new TestHarness(proto, opts)
+}
+
+/** createHarness, but the run comes from the real startProtocolRun(). */
+export function createStartedHarness(proto: Protocol, opts?: HarnessOpts): Promise<TestHarness> {
+  return TestHarness.started(proto, opts)
 }

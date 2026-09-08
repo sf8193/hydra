@@ -2,7 +2,7 @@ import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
-import { resolveModifiers } from '../modifiers.js'
+import { resolveModifiers, partitionFlagModifiers } from '../modifiers.js'
 import type { InboundMessage } from '../../gateway.js'
 
 let reviewProto: Awaited<ReturnType<typeof import('../../protocols/review.js')>>['default'] | null = null
@@ -39,13 +39,18 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
   const clampedRounds = Math.max(1, Math.min(rounds, 5))
 
   let resolvedMods: ReturnType<typeof resolveModifiers>['resolved'] | undefined
+  // Flags (`+subagent`, `+no-fallback`) become run params rather than modifiers:
+  // they steer the run, they don't add a lens. See partitionFlagModifiers.
+  let flagParams: Record<string, true> = {}
   if (modifierNames && modifierNames.length > 0) {
     const { resolved, unknown } = resolveModifiers(modifierNames)
     if (unknown.length > 0) {
       await gateway.send(msg.channelId, `Unknown modifier${unknown.length > 1 ? 's' : ''}: ${unknown.map(p => `\`+${p}\``).join(', ')}`, { replyTo: msg.id })
       return
     }
-    resolvedMods = resolved
+    const { params, rest } = partitionFlagModifiers(resolved)
+    flagParams = params
+    resolvedMods = rest.length > 0 ? rest : undefined
   }
 
   try {
@@ -54,6 +59,7 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
       rounds: clampedRounds, topic, model,
       modifiers: resolvedMods,
       strike: true,
+      ...flagParams,
     })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)

@@ -56,4 +56,14 @@ export type CompletionEvent = {
   // Verdict-less advances aren't recorded as decisions, so this is the only channel
   // for the cleanup content — consumers can't recover it from `decisions`.
   summary?: string
+  // Which path the run took to its summary. 'normal' is the protocol as
+  // designed; 'fallback' means a participant died and the owner finished the
+  // work; 'direct' means the caller asked for the owner-run path up front.
+  // Absent on 'cancelled' — a cancelled run never reached a summary, so it took
+  // no path there. Consumers that treat every completion alike would otherwise
+  // report an owner's self-review as an adversarial one.
+  via?: 'normal' | 'fallback' | 'direct'
+  // What the non-normal path gave up, in the protocol's own words (its
+  // `fallbackDegradation`). Present only when `via` is set and not 'normal'.
+  degradation?: string
 }
