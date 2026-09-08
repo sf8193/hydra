@@ -6,7 +6,7 @@
 // spawn announcement.
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { __test as factoryTest, formatBuildLine, factoryAccept } from '../factory.js'
+import { __test as factoryTest, formatBuildLine, factoryAccept, factoryReview } from '../factory.js'
 import { __test as runnerTest, protocolEvents } from '../protocol-runner.js'
 import type { ProtocolRun } from '../protocol-runner.js'
 import { registry, threadRegistry } from '../sessions.js'
@@ -111,8 +111,19 @@ afterEach(async () => {
     threadRegistry.threads.delete(tid)
   }
   trackedThreads.clear()
+  // A test that started a REAL protocol run leaves armed timers behind, and
+  // dropping the map entry does not clear a 10-minute setTimeout. Disarm before
+  // forgetting — including when the test failed on its way to its own cleanup.
+  for (const run of runner.runs.values()) {
+    clearTimeout(run.timeout)
+    clearTimeout(run._warningTimeout)
+    clearTimeout(run._totalTimeout)
+    if (run._keepaliveTimer) clearInterval(run._keepaliveTimer)
+    for (const t of run.disconnectTimers?.values() ?? []) clearTimeout(t)
+  }
   for (const runId of [...runner.runs.keys()]) runner.runs.delete(runId)
   for (const threadId of [...runner.threadToRun.keys()]) runner.threadToRun.delete(threadId)
+  runner.resetLifecycle()
   for (const [name, impl] of Object.entries(origGateway)) (gateway as any)[name] = impl
   process.stderr.write = origStderrWrite
 })
@@ -974,5 +985,118 @@ describe('builder destruction', () => {
     await settle()
 
     expect(deletedMessages).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. factoryReview — the standalone review path (no build cycle)
+//
+// Its own one-shot listener, separate from the global onComplete that serves
+// builds. It shares reviewViaNote with that path, but a shared helper wired to
+// only one of two call sites is the bug this covers.
+// ---------------------------------------------------------------------------
+
+describe('factoryReview result delivery', () => {
+  /** Start a real review run in a target thread and hand back its ids. */
+  async function startStandaloneReview(suffix: string): Promise<{ callerThreadId: string; targetThreadId: string }> {
+    const callerThreadId = `qol-caller-${suffix}`
+    const targetThreadId = `qol-target-${suffix}`
+    const target = mkSession({ tmuxName: `drift-${suffix}`, threadId: targetThreadId })
+
+    runner.setLifecycle({
+      doSpawnSession: async (topic: string, _a: any, _b: any, opts: any) => {
+        const sessionId = `qol-critic-${suffix}`
+        registry.set(sessionId, {
+          sessionId,
+          topic,
+          threadId: opts?.joinThread ?? targetThreadId,
+          createdAt: Date.now(),
+          lastActive: Date.now(),
+          tmuxName: `critic-${suffix}`,
+          listening: false,
+          turnState: 'idle',
+        } as SessionInfo)
+        trackedSessions.add(sessionId)
+        return { name: registry.get(sessionId)!.tmuxName, sessionId, threadId: opts?.joinThread ?? targetThreadId, url: '' }
+      },
+      waitForBridge: async () => true,
+      killSession: async () => {},
+    })
+
+    await factoryReview({
+      callerThreadId,
+      targetSessionId: target.sessionId,
+      targetThreadId,
+      targetName: `drift-${suffix}`,
+      reviewRounds: 3,
+    })
+
+    return { callerThreadId, targetThreadId }
+  }
+
+  test('a normal completion reports plainly, with no degradation caveat', async () => {
+    const { callerThreadId, targetThreadId } = await startStandaloneReview('normal')
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: targetThreadId,
+      rounds: { completed: 3, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'CONFIRMED: nothing blocking',
+      via: 'normal',
+    })
+    await settle()
+
+    const msg = sent.find(s => s.channelId === callerThreadId)!
+    expect(msg.text).toContain('complete')
+    expect(msg.text).toContain('CONFIRMED')
+    expect(msg.text).not.toContain('⚠️')
+
+  })
+
+  test('a fallback completion tells the caller the owner reviewed its own work', async () => {
+    const { callerThreadId, targetThreadId } = await startStandaloneReview('fallback')
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: targetThreadId,
+      rounds: { completed: 1, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'ran it myself',
+      via: 'fallback',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    const msg = sent.find(s => s.channelId === callerThreadId)!
+    expect(msg.text).toContain('critic died')
+    expect(msg.text).toContain('no adversarial tension')
+    // The caveat has to arrive with the result, not after the summary body.
+    expect(msg.text.indexOf('critic died')).toBeLessThan(msg.text.indexOf('ran it myself'))
+
+  })
+
+  test('a cancelled review still reports cancelled, with no via caveat', async () => {
+    const { callerThreadId, targetThreadId } = await startStandaloneReview('cancelled')
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: targetThreadId,
+      rounds: { completed: 0, requested: 3 },
+      outcome: 'cancelled',
+      reason: 'critic did not reconnect',
+      decisions: [],
+      durationMs: 1000,
+    })
+    await settle()
+
+    const msg = sent.find(s => s.channelId === callerThreadId)!
+    expect(msg.text).toContain('cancelled')
+    expect(msg.text).not.toContain('⚠️')
+
   })
 })
