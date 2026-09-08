@@ -1,12 +1,14 @@
-%% Owner-driven subagent review — what the critic-death fallback actually does:
+%% Owner-driven subagent review — what the subagent_review phase actually does:
 %% the owner fans out to fresh, independent subagents (one per material-driven
 %% lens, NOT forks of its own context), runs them in parallel, and synthesizes
 %% their findings into the closing summary.
 %%
-%% This diagram is scoped to the subagent dynamics. The engine-side TRIGGER that
-%% gets here — critic death, 3s debounce, auto-resume (up to 5), grace timer,
-%% canFallbackOnDeath — is in flow-protocol-robustness.mmd. enterFallbackPhase in
-%% protocol-runner.ts is the seam between the two.
+%% This diagram is scoped to the subagent dynamics, which are identical whichever
+%% door the phase was entered through. The engine-side TRIGGERS that get here —
+%% critic death or silence (3s debounce, auto-resume up to 5, grace timer,
+%% canFallbackOnDeath), and the direct `review +subagent` request — are in
+%% flow-protocol-robustness.mmd. enterFallbackPhase / enterDirectSubagentPhase in
+%% protocol-runner.ts are the seam between the two.
 
 sequenceDiagram
     autonumber
@@ -16,9 +18,9 @@ sequenceDiagram
     participant LB as subagent lens B
     participant LN as subagent lens N
 
-    Note over PR: critic dead, auto-resume exhausted<br/>canFallbackOnDeath passes → enterFallbackPhase
-    PR->>PR: transition to fallback_review, then kill critic
-    PR->>Owner: onFallback instructions via transport<br/>(a thread post alone would not wake it)
+    Note over PR: THREE doors into one phase.<br/>death — critic exited, auto-resume exhausted<br/>silence — critic alive, but its window elapsed with nothing posted<br/>direct — review +subagent, no critic ever spawned
+    PR->>PR: fire the `fallback` transition into subagent_review,<br/>then retire the critic — death and silence both have one,<br/>direct has nobody to retire
+    PR->>Owner: onFallback instructions via transport<br/>(a thread post alone would not wake it)<br/>each door passes its own FallbackContext arm, so the preamble<br/>can only state facts that door actually had
 
     Note over Owner: pick the lenses the MATERIAL calls for.<br/>code → correctness, layering, tests.<br/>design doc → assumptions, alternatives, failure modes
 
@@ -38,4 +40,4 @@ sequenceDiagram
 
     Note over Owner: synthesize — resolve conflicts across lenses,<br/>drop the noise, keep what is real
     Owner->>PR: advance({ content: summary })
-    Note over PR: summary_posted → complete<br/>summary → CompletionEvent.summary (factory PM reads it)
+    Note over PR: summary_posted → complete<br/>summary → CompletionEvent.summary (factory PM reads it)<br/>via: 'fallback' | 'direct' + degradation → the PM line says it was owner-run

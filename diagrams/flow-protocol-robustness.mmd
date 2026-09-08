@@ -10,8 +10,9 @@ flowchart LR
         r_pp --> r_cl["cleanup"]
         r_ot -- "final_round<br/>(v2)" --> r_cl
         r_cl --> r_done["complete"]
-        r_ct -- "fallback<br/>(critic death)" --> r_fb["fallback_review<br/><i>owner runs subagent review</i>"]
+        r_ct -- "fallback<br/>(critic death or silence)" --> r_fb["subagent_review<br/><i>owner runs subagent review</i>"]
         r_ot -- "fallback<br/>(critic death)" --> r_fb
+        r_start(["review +subagent"]) -- "direct<br/>(no critic spawned)" --> r_fb
         r_fb --> r_done
     end
 
@@ -51,9 +52,10 @@ flowchart LR
         resume_check -- retryable --> auto_resume["auto-resume<br/>(up to 5 attempts)"]
         resume_check -- not retryable --> grace["grace timer"]
         grace -- reconnect --> continue["continue"]
-        grace -- timeout --> exhausted{"canFallbackOnDeath?<br/>(non-owner death +<br/>on.fallback + onFallback)"}
+        grace -- timeout --> exhausted{"canFallbackOnDeath?<br/>(non-owner death +<br/>on.fallback + onFallback +<br/>not +no-fallback)"}
         auto_resume -- "attempt fails" --> exhausted
-        exhausted -- "yes (review critic)" --> fbr["fallback_review<br/>see flow-review-fallback"]
+        idle["phase window / total backstop<br/>elapses on a non-owner actor"] --> exhausted
+        exhausted -- "yes (review critic)" --> fbr["subagent_review<br/>see flow-review-fallback"]
         exhausted -- "no" --> cancel["cancel"]
     end
 

@@ -73,6 +73,12 @@ export type ProtocolSpec<
   initialPhase?: keyof Phases & string
   cleanupPhase?: keyof Phases & string
   cancelPhase?: keyof Phases & string
+  // What a protocol gives up when the fallback path runs instead of the normal
+  // one, in the protocol's own words — e.g. "subagent self-review (no
+  // adversarial tension)". Rides on every non-normal CompletionEvent so a
+  // consumer can tell the caller what the result is worth without knowing
+  // anything about this protocol. Required once a protocol opts into fallback.
+  fallbackDegradation?: string
   decisions?: Record<string, {
     phase: string
     actor: string
@@ -97,12 +103,38 @@ export type ProtocolSpec<
 // Passed to notifications.onFallback — the runner-computed context a protocol
 // needs to compose its fallback instructions without reaching into RunState
 // internals it can't see (the dead participant's label, resume attempts).
-export type FallbackContext = {
-  deadRole: string
-  deadLabel: string
-  resumeAttempts: number
-  completedRounds: number
-}
+//
+// Three shapes, because there are three ways to reach the same owner-run phase,
+// and each knows a different amount. A union rather than optional fields: the
+// hook should not be able to render a fact the path never had.
+//
+//   death   — the participant exited and auto-resume is exhausted. Only here is
+//             `resumeAttempts` a number anyone should print.
+//   silence — the participant is alive but its phase window elapsed with nothing
+//             posted. The runner retires it the same way, but it did not die,
+//             and saying so in the thread would misstate the run's central event.
+//   direct  — the caller asked for the owner-run phase up front (`+subagent`).
+//             There is no participant at all, hence no role to name.
+export type FallbackContext =
+  | {
+      mode: 'fallback'
+      cause: 'death'
+      deadRole: string
+      deadLabel: string
+      resumeAttempts: number
+      completedRounds: number
+    }
+  | {
+      mode: 'fallback'
+      cause: 'silence'
+      deadRole: string
+      deadLabel: string
+      completedRounds: number
+    }
+  | { mode: 'direct' }
+
+/** Why a run left the normal path for the fallback phase. */
+export type FallbackCause = 'death' | 'silence'
 
 export type Protocol<
   Phase extends string = string,
@@ -116,6 +148,7 @@ export type Protocol<
   initialPhase: Phase
   cleanupPhase?: string
   cancelPhase?: string
+  fallbackDegradation?: string
   machine: ReturnType<typeof createStateMachine<Phase, Event>>
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
@@ -165,6 +198,20 @@ export function protocol<
   const hasCancelEvent = Object.values(spec.phases).some(p => 'cancel' in p.on)
   if (hasCancelEvent && !spec.cancelPhase) {
     throw new Error(`protocol "${name}": phases declare cancel events but no cancelPhase is set`)
+  }
+
+  // Fallback is a three-part opt-in, and a partial one is dead config: the
+  // runner will not fire a fallback without the owner instructions, and a
+  // degraded completion has nothing to call itself without the label. Both
+  // halves are refused at registration for the same reason cancel-events-without
+  // -a-cancelPhase is, a few lines down — a transition that can never fire is a
+  // claim the protocol makes and cannot keep.
+  const hasFallbackTransition = Object.values(spec.phases).some(p => 'fallback' in p.on)
+  if (hasFallbackTransition && !spec.notifications?.onFallback) {
+    throw new Error(`protocol "${name}": declares an on.fallback transition but no notifications.onFallback — the runner requires the hook to fire a fallback, so the transition could never be taken`)
+  }
+  if (hasFallbackTransition && !spec.fallbackDegradation) {
+    throw new Error(`protocol "${name}": declares an on.fallback transition but no fallbackDegradation — a fallback completion would have no name for what it gave up`)
   }
 
   const table: Record<string, Record<string, string>> = {}
@@ -281,6 +328,7 @@ export function protocol<
     initialPhase,
     cleanupPhase: spec.cleanupPhase as string | undefined,
     cancelPhase: spec.cancelPhase as string | undefined,
+    fallbackDegradation: spec.fallbackDegradation,
     ownerRole,
     machine: createStateMachine(name, table as TransitionTable<string, string>),
     windowMs: (phase: string) => windows.get(phase),

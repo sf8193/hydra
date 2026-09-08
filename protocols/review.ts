@@ -8,22 +8,29 @@ export default protocol('review', {
   cleanupPhase: 'cleanup',
   cancelPhase: 'cancelled',
 
+  // What `subagent_review` costs, whichever way it was reached. Rides on the
+  // CompletionEvent so a consumer can tell its caller the review was owner-run.
+  fallbackDegradation: 'subagent self-review (no adversarial tension)',
+
   roles: {
     critic: 'The Critic',
     owner: 'The Owner',
   },
 
   phases: {
-    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled', fallback: 'fallback_review' }, advanceEvent: 'critic_posted' },
+    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled', fallback: 'subagent_review' }, advanceEvent: 'critic_posted' },
     owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
     cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
-    // Critic-death fallback: when auto-resume is exhausted, the owner runs the
-    // review itself (via fresh subagents) instead of the run being cancelled.
+    // The owner runs the review itself, via fresh subagents. Reached two ways,
+    // both through this phase's `fallback` transition: the critic died and
+    // auto-resume is exhausted, or the caller asked for it up front with
+    // `review +subagent`. Named for what the owner does here, not for which
+    // door it came through.
     // Not the cleanupPhase, so the runner drives entry manually and sends the
     // onFallback instructions below — see enterFallbackPhase in protocol-runner.
     // timeout → cancelled (not complete): unlike cleanup, hitting the window here
     // means the review never produced a result, so it's a failure, not a success.
-    fallback_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
+    subagent_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },
@@ -35,7 +42,7 @@ export default protocol('review', {
     // Heavier than a single owner turn — spawn N subagents, wait, synthesize —
     // so the default fits the work rather than forcing extend_phase. The
     // unconditional backstop is 3x this (135m).
-    fallback_review: '45m',
+    subagent_review: '45m',
   },
 
   grace: {
@@ -63,18 +70,50 @@ export default protocol('review', {
       critic: () => null,
     },
 
-    // Critic died and auto-resume is exhausted — the owner runs the review
-    // itself with fresh subagents. Lenses are suggestions, not a checklist:
-    // what's being reviewed drives the choice, and the subagents orient
-    // independently rather than inheriting the owner's context.
-    onFallback: (run, { deadLabel, resumeAttempts, completedRounds }) => {
+    // The owner runs the review itself with fresh subagents. Lenses are
+    // suggestions, not a checklist: what's being reviewed drives the choice, and
+    // the subagents orient independently rather than inheriting the owner's
+    // context. Only the preamble differs by mode — a death is news the owner has
+    // to absorb (which critic, how many rounds survive), while a direct request
+    // is something the owner already knows it asked for. The task is identical,
+    // so it is written once.
+    onFallback: (run, ctx) => {
       const topic = run.params.topic as string | undefined
+
+      // Lens modifiers (`+security`, …) were written for the critic's seed. On
+      // this path there is no critic to carry them — it died, or was never
+      // spawned — so hand them to the owner instead. Without this,
+      // `review +subagent +security` quietly loses the +security.
+      const lenses = ((run.params.modifiers ?? []) as Array<{ name: string; instructions?: string }>)
+        .filter(m => !!m.instructions)
+      const lensBlock = lenses.length > 0
+        ? [
+            `\n**Requested lenses** (${lenses.map(m => `+${m.name}`).join(' ')}) — apply these on top of the ones the material suggests:`,
+            ...lenses.map(m => `\n${m.instructions}`),
+          ]
+        : []
+
+      // The opening line is the thread's record of why this run changed shape,
+      // so it has to name the actual event. A critic that timed out did not die:
+      // it was alive and idle, and the daemon retired it. Saying "died" there
+      // would put a false cause in the one message a human reads later.
+      const preamble = ctx.mode === 'direct'
+        ? [
+            `[system] **Subagent review** — you asked for this directly (\`+subagent\`), so no critic was spawned. There is no adversary to argue with: you run the review and you post the result.`,
+          ]
+        : [
+            ctx.cause === 'death'
+              ? `[system] **${ctx.deadLabel} died** after ${ctx.resumeAttempts} resume attempt${ctx.resumeAttempts === 1 ? '' : 's'}. Falling back to subagent review — you run it yourself.`
+              : `[system] **${ctx.deadLabel} went silent** — its phase window elapsed with nothing posted, so it was retired. Falling back to subagent review — you run it yourself.`,
+            ``,
+            ctx.completedRounds > 0
+              ? `The critic posted findings for ${ctx.completedRounds} of ${run.rounds} round${run.rounds === 1 ? '' : 's'} — read them before choosing your lenses. Focus your subagents on what the critic *didn't* cover.`
+              : ctx.cause === 'death'
+                ? `No rounds completed before it died.`
+                : `No rounds completed before it stalled.`,
+          ]
       return [
-        `[system] **${deadLabel} died** after ${resumeAttempts} resume attempt${resumeAttempts === 1 ? '' : 's'}. Falling back to subagent review — you run it yourself.`,
-        ``,
-        completedRounds > 0
-          ? `The critic posted findings for ${completedRounds} of ${run.rounds} round${run.rounds === 1 ? '' : 's'} — read them before choosing your lenses. Focus your subagents on what the critic *didn't* cover.`
-          : `No rounds completed before it died.`,
+        ...preamble,
         ``,
         `**Your task:** review the work with fresh Claude Code subagents.`,
         ``,
@@ -82,6 +121,7 @@ export default protocol('review', {
         `2. **Spawn one fresh subagent per chosen lens.** Tell each to re-read this thread and the specifics (the diff / doc / spec) and orient on its own — do not fork your own context into them; independence is the point. Run them in parallel.`,
         `3. **Synthesize** their findings yourself — resolve conflicts, drop the noise, keep what's real.`,
         topic ? `\n**Focus:** ${topic} — weight your lens choices toward this.` : '',
+        ...lensBlock,
         ``,
         `When done, post your closing \`advance({ content: "..." })\` using the review summary format.`,
       ].filter(Boolean).join('\n')

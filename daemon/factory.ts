@@ -1072,6 +1072,20 @@ export function factoryListAll(ticket?: string): { builds: BuildSummary[] } {
 }
 
 /**
+ * How a completed review reached its summary, as a suffix for the line that
+ * reports it. Empty for a normal adversarial run — the default needs no label.
+ * Both non-normal paths land the owner reviewing its own work; only the reason
+ * differs, and `degradation` (the protocol's own words) says what that costs.
+ */
+function reviewViaNote(event: CompletionEvent): string {
+  if (!event.via || event.via === 'normal') return ''
+  const how = event.via === 'fallback' ? 'critic died — owner-run subagent review'
+    : event.via === 'silence' ? 'critic timed out — owner-run subagent review'
+    : 'owner-run subagent review (requested)'
+  return ` · ⚠️ ${how}${event.degradation ? `: ${event.degradation}` : ''}`
+}
+
+/**
  * Run adversarial review on an existing session without a full build cycle.
  * Wires a one-shot listener to deliver the review result back to the caller's thread.
  */
@@ -1090,13 +1104,17 @@ export async function factoryReview(opts: {
   const unsub = protocolEvents.onceComplete(targetThreadId, (event) => {
     if (event.outcome === 'cancelled') {
       void safeSend(callerThreadId, `🔍 Review of **${targetName}** cancelled`)
-    } else {
-      const summary = event.summary
-      const summaryBlock = summary
-        ? '\n' + (summary.length > 1500 ? summary.slice(0, 1500) + '\n…(truncated)' : summary)
-        : ''
-      void safeSend(callerThreadId, `🔍 Review of **${targetName}** complete${summaryBlock}`)
+      return
     }
+    const summary = event.summary
+    const summaryBlock = summary
+      ? '\n' + (summary.length > 1500 ? summary.slice(0, 1500) + '\n…(truncated)' : summary)
+      : ''
+    // A completion that came through the fallback path is the owner reviewing
+    // its own work — the finding still counts, but nobody argued with it. Say so
+    // in the same line that reports success, or the caller reads a self-review
+    // as an adversarial one.
+    void safeSend(callerThreadId, `🔍 Review of **${targetName}** complete${reviewViaNote(event)}${summaryBlock}`)
   })
 
   try {
@@ -1557,7 +1575,7 @@ export function onBuilderDeath(sessionId: string): void {
   }
 }
 
-function onFactoryReviewComplete(builderThreadId: string, summaryText?: string): boolean {
+function onFactoryReviewComplete(builderThreadId: string, summaryText?: string, viaNote = ''): boolean {
   const ticket = builderThreadToTicket.get(builderThreadId)
   if (!ticket) return false
 
@@ -1577,7 +1595,9 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string):
   const summaryBlock = state.reviewSummary
     ? '\n' + (state.reviewSummary.length > 1500 ? state.reviewSummary.slice(0, 1500) + '\n…(truncated)' : state.reviewSummary)
     : ''
-  void safeSend(state.pmThreadId, `🏭 🏁 ${eventLine(state)} — review complete${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
+  // viaNote fires before the links: whether the review was adversarial changes
+  // how the PM should read everything after it, including its own accept call.
+  void safeSend(state.pmThreadId, `🏭 🏁 ${eventLine(state)} — review complete${viaNote}${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
     .then(ids => { if (ids[0]) state.reviewMessageId = ids[0] })
     .catch(() => {})
 
@@ -1792,8 +1812,8 @@ function factoryAdopt({ sessionId, threadId }: { sessionId: string; threadId: st
   process.stderr.write(`daemon: factory: adopted ${orphaned.length} build(s) for new PM ${newPmName} in thread ${threadId}\n`)
 }
 
-function factoryReviewComplete({ threadId, summary }: { threadId: string; summary?: string }): void {
-  onFactoryReviewComplete(threadId, summary)
+function factoryReviewComplete({ threadId, summary, viaNote }: { threadId: string; summary?: string; viaNote?: string }): void {
+  onFactoryReviewComplete(threadId, summary, viaNote)
 }
 
 function factoryReviewCancelled({ threadId, reason }: { threadId: string; reason?: string }): void {
@@ -1803,7 +1823,7 @@ function factoryReviewCancelled({ threadId, reason }: { threadId: string; reason
 protocolEvents.onComplete((event: CompletionEvent) => {
   if (event.protocol !== 'review') return
   if (event.outcome === 'complete') {
-    factoryReviewComplete({ threadId: event.threadId, summary: event.summary })
+    factoryReviewComplete({ threadId: event.threadId, summary: event.summary, viaNote: reviewViaNote(event) })
   } else {
     factoryReviewCancelled({ threadId: event.threadId, reason: event.reason })
   }

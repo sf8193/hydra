@@ -1,8 +1,10 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { createHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
+import { createHarness, createStartedHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
 import { computeToolsForSession } from '../bridge-tools.js'
 import { CAPABILITY_TOOLS } from '../../shared/constants.js'
 import { protocol } from '../protocol-dsl.js'
+import { resolveModifier } from '../modifiers.js'
+import { getActiveRuns } from '../protocol-runner.js'
 
 // Real protocol definitions — the harness exercises them as-is
 import review from '../../protocols/review.js'
@@ -65,8 +67,11 @@ describe('review: cooperative 3-round completion', () => {
 })
 
 describe('review: timeout cancellation', () => {
-  test('critic silence past window cancels the run', async () => {
-    h = createHarness(review, { rounds: 3 })
+  // A silent critic is a dead critic as far as the run is concerned, so with the
+  // fallback available the default is now subagent review, not cancellation —
+  // see 'review: timeout falls back'. +no-fallback is what still cancels.
+  test('critic silence past window cancels the run when +no-fallback is set', async () => {
+    h = createHarness(review, { rounds: 3, params: { noFallback: true } })
     expect(h.phase).toBe('critic_turn')
 
     await h.tickToTimeout()
@@ -81,7 +86,7 @@ describe('review: timeout cancellation', () => {
 })
 
 describe('review: timeout deferred by activity', () => {
-  test('working session gets deferred, idle session gets cancelled', async () => {
+  test('working session gets deferred, idle session gets handed over', async () => {
     h = createHarness(review, { rounds: 3 })
 
     const windowMs = h.run.protocol.windowMs('critic_turn')!
@@ -95,8 +100,8 @@ describe('review: timeout deferred by activity', () => {
     h.setTurnState('critic', 'idle')
     await h.tick(windowMs)
 
-    expect(h.phase).toBe('cancelled')
-    expect(h.isTerminated).toBe(true)
+    expect(h.phase).toBe('subagent_review')
+    expect(h.isTerminated).toBe(false)
   })
 })
 
@@ -167,6 +172,21 @@ describe('review: total backstop', () => {
 
     await h.tick(windowMs * TOTAL_PHASE_CAP_FACTOR)
 
+    // A critic that claims to be working for the full hard cap without posting
+    // is wedged, which is what the fallback is for — same call the idle timeout
+    // makes. The backstop firing at all is what this test is about.
+    expect(h.phase).toBe('subagent_review')
+    expect(h.isTerminated).toBe(false)
+  })
+
+  test('cancels with the backstop reason when +no-fallback rules the handover out', async () => {
+    h = createHarness(review, { rounds: 3, params: { noFallback: true } })
+
+    const windowMs = h.run.protocol.windowMs('critic_turn')!
+    h.setTurnState('critic', 'working')
+
+    await h.tick(windowMs * TOTAL_PHASE_CAP_FACTOR)
+
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents).toHaveLength(1)
     expect(h.completionEvents[0].outcome).toBe('cancelled')
@@ -184,7 +204,7 @@ describe('review: disconnect and grace', () => {
     await h.tick(3_000 + graceMs + 1_000)
 
     // Critic death no longer cancels — the owner is handed the review.
-    expect(h.phase).toBe('fallback_review')
+    expect(h.phase).toBe('subagent_review')
     expect(h.isTerminated).toBe(false)
     expect(h.completionEvents).toHaveLength(0)
     expect(h.threadMessages.some(m => m.text.includes('Falling back to subagent review'))).toBe(true)
@@ -206,7 +226,7 @@ describe('review: disconnect and grace', () => {
 })
 
 describe('review: subagent review fallback', () => {
-  test('critic death enters fallback_review; owner summary completes the run', async () => {
+  test('critic death enters subagent_review; owner summary completes the run', async () => {
     h = createHarness(review, { rounds: 3, topic: 'auth flow' })
 
     h.disconnect('critic')
@@ -214,7 +234,7 @@ describe('review: subagent review fallback', () => {
     await h.tick(3_000 + graceMs + 1_000)
 
     // Fell back instead of cancelling
-    expect(h.phase).toBe('fallback_review')
+    expect(h.phase).toBe('subagent_review')
     expect(h.isTerminated).toBe(false)
     expect(h.completionEvents).toHaveLength(0)
 
@@ -253,8 +273,8 @@ describe('review: subagent review fallback', () => {
     // Owner posts defense — transitions to critic_turn, then fallback fires
     await h.advance('owner', 'Here is my defense.')
 
-    // Should now be in fallback_review (fired from critic_turn)
-    expect(h.phase).toBe('fallback_review')
+    // Should now be in subagent_review (fired from critic_turn)
+    expect(h.phase).toBe('subagent_review')
     expect(h.run._pendingFallback).toBeUndefined()
   })
 
@@ -275,7 +295,7 @@ describe('review: subagent review fallback', () => {
     h.reconnect('critic')
     expect(h.run._pendingFallback).toBeUndefined()
 
-    // Owner advances → normal critic_turn, NOT fallback_review (critic is alive)
+    // Owner advances → normal critic_turn, NOT subagent_review (critic is alive)
     await h.advance('owner', 'Here is my defense.')
     expect(h.phase).toBe('critic_turn')
     expect(h.isTerminated).toBe(false)
@@ -310,22 +330,22 @@ describe('review: subagent review fallback', () => {
     h.disconnect('critic')
     await h.tick(3_000 + 500) // 3s debounce → resume attempt → throws → fallback
 
-    expect(h.phase).toBe('fallback_review')
+    expect(h.phase).toBe('subagent_review')
     expect(h.isTerminated).toBe(false)
     expect(h.run._resumeAttempts).toBe(1)
     expect(h.actorNotifications('owner').some(n => n.includes('Falling back to subagent review'))).toBe(true)
   })
 
-  test('a timed-out fallback_review cancels, it does not fake-complete', async () => {
+  test('a timed-out subagent_review cancels, it does not fake-complete', async () => {
     h = createHarness(review, { rounds: 3 })
 
     h.disconnect('critic')
     const graceMs = h.run.protocol.graceMs('critic')!
     await h.tick(3_000 + graceMs + 1_000)
-    expect(h.phase).toBe('fallback_review')
+    expect(h.phase).toBe('subagent_review')
 
     // Owner never posts a summary; the fallback window elapses.
-    const windowMs = h.run.protocol.windowMs('fallback_review')!
+    const windowMs = h.run.protocol.windowMs('subagent_review')!
     await h.tick(windowMs + 1_000)
 
     expect(h.isTerminated).toBe(true)
@@ -343,9 +363,281 @@ describe('review: subagent review fallback', () => {
     const graceMs = h.run.protocol.graceMs('owner')!
     await h.tick(graceMs + 1_000)
 
-    expect(h.phase).not.toBe('fallback_review')
+    expect(h.phase).not.toBe('subagent_review')
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents[0].outcome).toBe('cancelled')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review expressiveness — how a run reached its summary, and the two modifiers
+// that steer which path it takes.
+// ---------------------------------------------------------------------------
+
+describe('review: timeout falls back for a non-owner actor', () => {
+  test('an idle critic that never posts hands the review over instead of cancelling', async () => {
+    h = createHarness(review, { rounds: 3, topic: 'auth flow' })
+
+    await h.tickToTimeout()
+
+    expect(h.phase).toBe('subagent_review')
+    expect(h.isTerminated).toBe(false)
+    expect(h.completionEvents).toHaveLength(0)
+    expect(h.actorNotifications('owner').some(n => n.includes('Falling back to subagent review'))).toBe(true)
+
+    await h.advance('owner', '**Review Summary** — ran it myself.')
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('complete')
+    expect(h.completionEvents[0].via).toBe('fallback')
+  })
+
+  test('an owner that never posts still cancels — the fallback asks the owner to work', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.advance('critic', 'Opening critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    await h.tickToTimeout()
+
+    expect(h.phase).toBe('cancelled')
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
+    expect(h.completionEvents[0].reason).toBe('timed out')
+  })
+})
+
+describe('review: +no-fallback', () => {
+  test('critic death cancels the run instead of handing it to the owner', async () => {
+    h = createHarness(review, { rounds: 3, params: { noFallback: true } })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+
+    expect(h.phase).not.toBe('subagent_review')
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents).toHaveLength(1)
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
+    expect(h.threadMessages.some(m => m.text.includes('Falling back to subagent review'))).toBe(false)
+  })
+
+  test('a critic death during owner_turn is not deferred either — no pending fallback is armed', async () => {
+    h = createHarness(review, { rounds: 3, params: { noFallback: true } })
+
+    await h.advance('critic', 'Opening critique.')
+    expect(h.phase).toBe('owner_turn')
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+
+    expect(h.run._pendingFallback).toBeUndefined()
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
+  })
+})
+
+describe('review: +subagent direct trigger', () => {
+  test('starts in subagent_review with no critic spawned, and completes via direct', async () => {
+    h = await createStartedHarness(review, { rounds: 3, topic: 'auth flow', params: { directSubagent: true } })
+
+    // No critic exists: the spawn loop never ran.
+    expect(h.phase).toBe('subagent_review')
+    expect(h.run.participants.has('critic')).toBe(false)
+    expect([...h.run.participants.keys()]).toEqual(['owner'])
+    expect(h.killedSessions).toHaveLength(0)
+
+    // Owner was told this is a direct request, not a death, and got the focus.
+    const notes = h.actorNotifications('owner')
+    expect(notes.some(n => n.includes('+subagent'))).toBe(true)
+    expect(notes.some(n => n.includes('died'))).toBe(false)
+    expect(h.threadMessages.some(m => m.text.includes('auth flow'))).toBe(true)
+    // The kickoff would have announced a critic that is orienting — it must not fire.
+    expect(notes.some(n => n.includes('reading the thread to orient'))).toBe(false)
+    // Nor may the opening announcement promise rounds that will never happen.
+    const announcement = h.threadMessages[0].text
+    expect(announcement).toContain('owner-run, no rounds')
+    expect(announcement).not.toContain('3 rounds')
+
+    await h.advance('owner', '**Review Summary** — subagent review, no critic.')
+    expect(h.isTerminated).toBe(true)
+    expect(h.completionEvents).toHaveLength(1)
+    expect(h.completionEvents[0].outcome).toBe('complete')
+    expect(h.completionEvents[0].via).toBe('direct')
+    expect(h.completionEvents[0].degradation).toBe('subagent self-review (no adversarial tension)')
+    expect(h.completionEvents[0].summary).toContain('no critic')
+  })
+
+  test('the owner gets the full subagent-review window, not the critic_turn one', async () => {
+    h = await createStartedHarness(review, { rounds: 3, params: { directSubagent: true } })
+
+    const criticWindow = review.windowMs('critic_turn')!
+    await h.tick(criticWindow + 1_000)
+
+    expect(h.phase).toBe('subagent_review')
+    expect(h.isTerminated).toBe(false)
+  })
+
+  test('composes with a lens modifier — +subagent +security reaches the owner', async () => {
+    const security = resolveModifier('security')!
+    h = await createStartedHarness(review, {
+      rounds: 3,
+      params: { directSubagent: true, modifiers: [security] },
+    })
+
+    expect(h.phase).toBe('subagent_review')
+    expect(h.run.participants.has('critic')).toBe(false)
+    // The lens was written for a critic that does not exist here; the owner runs
+    // the subagents, so the instructions have to land on the owner instead.
+    const notes = h.actorNotifications('owner')
+    expect(notes.some(n => n.includes('+security'))).toBe(true)
+    expect(notes.some(n => n.includes('attack surface'))).toBe(true)
+  })
+
+  test('a protocol with no fallback phase refuses the direct start rather than running normally', async () => {
+    await expect(createStartedHarness(build, { rounds: 1, params: { directSubagent: true } }))
+      .rejects.toThrow(/\+subagent/)
+  })
+
+  test('a refused direct start leaves no live run behind to hold the thread', async () => {
+    const before = getActiveRuns().length
+
+    await expect(createStartedHarness(build, { rounds: 1, params: { directSubagent: true } }))
+      .rejects.toThrow(/\+subagent/)
+
+    expect(getActiveRuns()).toHaveLength(before)
+  })
+})
+
+describe('review: completion carries how it got there', () => {
+  test('a normal three-round review reports via normal and names no degradation', async () => {
+    h = createHarness(review, { rounds: 1 })
+
+    await h.advance('critic', 'Opening critique.')
+    await h.advance('owner', 'Defense.')
+    expect(h.phase).toBe('cleanup')
+    await h.advance('owner', '**Review Summary** — clean.')
+
+    expect(h.completionEvents[0].via).toBe('normal')
+    expect(h.completionEvents[0].degradation).toBeUndefined()
+  })
+
+  test('a critic-death completion reports via fallback and names the degradation', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.phase).toBe('subagent_review')
+
+    await h.advance('owner', '**Review Summary** — subagent review.')
+
+    expect(h.completionEvents[0].via).toBe('fallback')
+    expect(h.completionEvents[0].degradation).toBe('subagent self-review (no adversarial tension)')
+  })
+
+  test('a cancelled run carries neither — it never reached a summary', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.cancel('cancelled by user')
+
+    expect(h.completionEvents[0].outcome).toBe('cancelled')
+    expect(h.completionEvents[0].via).toBeUndefined()
+    expect(h.completionEvents[0].degradation).toBeUndefined()
+  })
+})
+
+describe('review: a degraded completion counts only finished rounds', () => {
+  test('a direct start reports zero completed rounds, not the round it never entered', async () => {
+    h = await createStartedHarness(review, { rounds: 3, params: { directSubagent: true } })
+
+    await h.advance('owner', '**Review Summary** — subagent review.')
+
+    const event = h.completionEvents[0]
+    expect(event.via).toBe('direct')
+    // currentRound is 1 the whole time; no round ever ran. Saying "1 of 3
+    // completed" alongside via: 'direct' would be two claims that contradict.
+    expect(event.rounds).toEqual({ completed: 0, requested: 3 })
+  })
+
+  test('a fallback mid-round-1 reports zero, matching what the owner was told', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.phase).toBe('subagent_review')
+    // The prompt already used cancel-style accounting; the event must agree.
+    expect(h.threadMessages.some(m => m.text.includes('No rounds completed'))).toBe(true)
+
+    await h.advance('owner', '**Review Summary** — ran it myself.')
+
+    expect(h.completionEvents[0].rounds).toEqual({ completed: 0, requested: 3 })
+  })
+
+  test('a fallback after one full round reports one, not two', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.advance('critic', 'Round 1 critique.')
+    await h.advance('owner', 'Round 1 defense.')
+    expect(h.round).toBe(2)
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+    expect(h.phase).toBe('subagent_review')
+
+    await h.advance('owner', '**Review Summary** — one round in the bank.')
+
+    expect(h.completionEvents[0].rounds).toEqual({ completed: 1, requested: 3 })
+  })
+
+  test('a normal completion still counts the round it closed on', async () => {
+    h = createHarness(review, { rounds: 1 })
+
+    await h.advance('critic', 'Only critique.')
+    await h.advance('owner', 'Only defense.')
+    await h.advance('owner', '**Review Summary** — clean.')
+
+    expect(h.completionEvents[0].via).toBe('normal')
+    expect(h.completionEvents[0].rounds).toEqual({ completed: 1, requested: 1 })
+  })
+})
+
+describe('review: a timed-out critic is retired, not mourned', () => {
+  test('the thread says the critic went silent — it was alive when the window closed', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.tickToTimeout()
+    expect(h.phase).toBe('subagent_review')
+
+    const fallbackPost = h.threadMessages.map(m => m.text).find(t => t.includes('subagent review'))!
+    expect(fallbackPost).toContain('went silent')
+    expect(fallbackPost).toContain('retired')
+    // The two things a death-worded preamble would have asserted falsely.
+    expect(fallbackPost).not.toContain('died')
+    expect(fallbackPost).not.toContain('resume attempt')
+  })
+
+  test('the critic is still told its window closed before it is retired', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    await h.tickToTimeout()
+
+    // The cancel path always sent this; the fallback path must not go quiet
+    // just because the outcome improved.
+    expect(h.actorNotifications('critic').some(n => n.includes('timed out'))).toBe(true)
+  })
+
+  test('a real death still reads as a death', async () => {
+    h = createHarness(review, { rounds: 3 })
+
+    h.disconnect('critic')
+    const graceMs = h.run.protocol.graceMs('critic')!
+    await h.tick(3_000 + graceMs + 1_000)
+
+    const fallbackPost = h.threadMessages.map(m => m.text).find(t => t.includes('subagent review'))!
+    expect(fallbackPost).toContain('died')
+    expect(fallbackPost).not.toContain('went silent')
   })
 })
 
@@ -607,10 +899,10 @@ describe('review: extension is a full window reset (minutes arg is advisory)', (
     expect(h.phase).toBe('critic_turn')
     expect(h.isTerminated).toBe(false)
 
-    // Tick the remaining window from the extension point
+    // Tick the remaining window from the extension point — the phase ends, which
+    // for an idle critic now means the owner-run handover rather than a cancel.
     await h.tickToTimeout()
-    expect(h.phase).toBe('cancelled')
-    expect(h.isTerminated).toBe(true)
+    expect(h.phase).toBe('subagent_review')
   })
 })
 
@@ -660,7 +952,7 @@ describe('review: disconnect timer fires and triggers grace', () => {
 
     // Grace expires → owner-run subagent review (review protocol only)
     await h.tick(graceMs + 500)
-    expect(h.phase).toBe('fallback_review')
+    expect(h.phase).toBe('subagent_review')
     expect(h.isTerminated).toBe(false)
     expect(h.completionEvents).toHaveLength(0)
   })
@@ -743,9 +1035,9 @@ describe('review: warning + deferral + backstop lifecycle', () => {
     const remaining = totalMs - elapsed
     if (remaining > 0) await h.tick(remaining)
 
-    expect(h.isTerminated).toBe(true)
-    expect(h.completionEvents[0].outcome).toBe('cancelled')
-    expect(h.completionEvents[0].reason).toBe('total time exceeded')
+    // Backstop fired despite the deferrals; a wedged critic hands the review over.
+    expect(h.phase).toBe('subagent_review')
+    expect(h.isTerminated).toBe(false)
   })
 })
 

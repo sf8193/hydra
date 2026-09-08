@@ -6,7 +6,7 @@
 // spawn announcement.
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { __test as factoryTest, formatBuildLine, factoryAccept } from '../factory.js'
+import { __test as factoryTest, formatBuildLine, factoryAccept, factoryReview } from '../factory.js'
 import { __test as runnerTest, protocolEvents } from '../protocol-runner.js'
 import type { ProtocolRun } from '../protocol-runner.js'
 import { registry, threadRegistry } from '../sessions.js'
@@ -111,8 +111,19 @@ afterEach(async () => {
     threadRegistry.threads.delete(tid)
   }
   trackedThreads.clear()
+  // A test that started a REAL protocol run leaves armed timers behind, and
+  // dropping the map entry does not clear a 10-minute setTimeout. Disarm before
+  // forgetting — including when the test failed on its way to its own cleanup.
+  for (const run of runner.runs.values()) {
+    clearTimeout(run.timeout)
+    clearTimeout(run._warningTimeout)
+    clearTimeout(run._totalTimeout)
+    if (run._keepaliveTimer) clearInterval(run._keepaliveTimer)
+    for (const t of run.disconnectTimers?.values() ?? []) clearTimeout(t)
+  }
   for (const runId of [...runner.runs.keys()]) runner.runs.delete(runId)
   for (const threadId of [...runner.threadToRun.keys()]) runner.threadToRun.delete(threadId)
+  runner.resetLifecycle()
   for (const [name, impl] of Object.entries(origGateway)) (gateway as any)[name] = impl
   process.stderr.write = origStderrWrite
 })
@@ -797,6 +808,59 @@ describe('accept', () => {
     const reviewMsg = sent.findIndex(s => s.text.includes('review complete'))
     expect(reviewMsg).toBeGreaterThanOrEqual(0)
     expect(state.reviewMessageId).toBe(`msg-${reviewMsg + 1}`)
+    // A normal adversarial review is the default — nothing to warn the PM about.
+    expect(sent[reviewMsg].text).not.toContain('⚠️')
+  })
+
+  test('an owner-run review says so on the line the PM decides from', async () => {
+    const pmThreadId = 'qol-pm-thread-17b'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-74-1111', pmThreadId, builderName: 'drift', phase: 'reviewing', spec: 'divergences',
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 1, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'ran it myself',
+      via: 'fallback',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    const reviewMsg = sent.find(s => s.text.includes('review complete'))!
+    expect(reviewMsg.text).toContain('critic died')
+    expect(reviewMsg.text).toContain('no adversarial tension')
+    // The caveat has to precede the decision prompt, not trail the summary.
+    expect(reviewMsg.text.indexOf('critic died')).toBeLessThan(reviewMsg.text.indexOf('factory_accept'))
+  })
+
+  test('a directly requested subagent review is labelled as requested, not as a death', async () => {
+    const pmThreadId = 'qol-pm-thread-17c'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-75-1111', pmThreadId, builderName: 'drift', phase: 'reviewing', spec: 'divergences',
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 1, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      via: 'direct',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    const reviewMsg = sent.find(s => s.text.includes('review complete'))!
+    expect(reviewMsg.text).toContain('requested')
+    expect(reviewMsg.text).not.toContain('died')
   })
 })
 
@@ -921,5 +985,202 @@ describe('builder destruction', () => {
     await settle()
 
     expect(deletedMessages).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. factoryReview — the standalone review path (no build cycle)
+//
+// Its own one-shot listener, separate from the global onComplete that serves
+// builds. It shares reviewViaNote with that path, but a shared helper wired to
+// only one of two call sites is the bug this covers.
+// ---------------------------------------------------------------------------
+
+describe('factoryReview result delivery', () => {
+  /** Start a real review run in a target thread and hand back its ids. */
+  async function startStandaloneReview(suffix: string): Promise<{ callerThreadId: string; targetThreadId: string }> {
+    const callerThreadId = `qol-caller-${suffix}`
+    const targetThreadId = `qol-target-${suffix}`
+    const target = mkSession({ tmuxName: `drift-${suffix}`, threadId: targetThreadId })
+
+    runner.setLifecycle({
+      doSpawnSession: async (topic: string, _a: any, _b: any, opts: any) => {
+        const sessionId = `qol-critic-${suffix}`
+        registry.set(sessionId, {
+          sessionId,
+          topic,
+          threadId: opts?.joinThread ?? targetThreadId,
+          createdAt: Date.now(),
+          lastActive: Date.now(),
+          tmuxName: `critic-${suffix}`,
+          listening: false,
+          turnState: 'idle',
+        } as SessionInfo)
+        trackedSessions.add(sessionId)
+        return { name: registry.get(sessionId)!.tmuxName, sessionId, threadId: opts?.joinThread ?? targetThreadId, url: '' }
+      },
+      waitForBridge: async () => true,
+      killSession: async () => {},
+    })
+
+    await factoryReview({
+      callerThreadId,
+      targetSessionId: target.sessionId,
+      targetThreadId,
+      targetName: `drift-${suffix}`,
+      reviewRounds: 3,
+    })
+
+    return { callerThreadId, targetThreadId }
+  }
+
+  test('a normal completion reports plainly, with no degradation caveat', async () => {
+    const { callerThreadId, targetThreadId } = await startStandaloneReview('normal')
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: targetThreadId,
+      rounds: { completed: 3, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'CONFIRMED: nothing blocking',
+      via: 'normal',
+    })
+    await settle()
+
+    const msg = sent.find(s => s.channelId === callerThreadId)!
+    expect(msg.text).toContain('complete')
+    expect(msg.text).toContain('CONFIRMED')
+    expect(msg.text).not.toContain('⚠️')
+
+  })
+
+  test('a fallback completion tells the caller the owner reviewed its own work', async () => {
+    const { callerThreadId, targetThreadId } = await startStandaloneReview('fallback')
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: targetThreadId,
+      rounds: { completed: 1, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'ran it myself',
+      via: 'fallback',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    const msg = sent.find(s => s.channelId === callerThreadId)!
+    expect(msg.text).toContain('critic died')
+    expect(msg.text).toContain('no adversarial tension')
+    // The caveat has to arrive with the result, not after the summary body.
+    expect(msg.text.indexOf('critic died')).toBeLessThan(msg.text.indexOf('ran it myself'))
+
+  })
+
+  test('a cancelled review still reports cancelled, with no via caveat', async () => {
+    const { callerThreadId, targetThreadId } = await startStandaloneReview('cancelled')
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: targetThreadId,
+      rounds: { completed: 0, requested: 3 },
+      outcome: 'cancelled',
+      reason: 'critic did not reconnect',
+      decisions: [],
+      durationMs: 1000,
+    })
+    await settle()
+
+    const msg = sent.find(s => s.channelId === callerThreadId)!
+    expect(msg.text).toContain('cancelled')
+    expect(msg.text).not.toContain('⚠️')
+
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. The review gate vs. a self-requested review
+//
+// `protocolEvents.onComplete` maps ANY review completion in a builder thread
+// onto that ticket via builderThreadToTicket, and `+subagent` lets the builder
+// start a review it also owns. What actually stops a builder from reviewing
+// itself through the gate is the phase check, not the ⚠️ in the PM line —
+// pinned here so a future refactor of either cannot quietly remove it.
+// ---------------------------------------------------------------------------
+
+describe('review gate vs. builder-requested review', () => {
+  test('a review completing while the build is still building does not flip the gate', async () => {
+    const pmThreadId = 'qol-pm-thread-gate-1'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-90-1111', pmThreadId, builderName: 'gate1', phase: 'building',
+    })
+
+    // Exactly what a builder typing `review 1 +subagent` in its own thread
+    // produces: a direct, owner-run completion in the builder thread.
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 0, requested: 1 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'I reviewed myself and I am fine',
+      via: 'direct',
+      degradation: 'subagent self-review (no adversarial tension)',
+    })
+    await settle()
+
+    expect(state.phase).toBe('building')
+    expect(state.reviewed).toBeFalsy()
+    expect(sent.some(s => s.text.includes('factory_accept'))).toBe(false)
+  })
+
+  test('nor while the build is already awaiting a decision', async () => {
+    const pmThreadId = 'qol-pm-thread-gate-2'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-91-1111', pmThreadId, builderName: 'gate2', phase: 'awaiting_pm', reviewed: false,
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 0, requested: 1 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      via: 'direct',
+    })
+    await settle()
+
+    // A self-review must not retroactively mark an unreviewed build reviewed.
+    expect(state.reviewed).toBeFalsy()
+  })
+
+  test('the factory\'s own review — the one that started in `reviewing` — still flips it', async () => {
+    const pmThreadId = 'qol-pm-thread-gate-3'
+    mkPm(pmThreadId)
+    const state = mkBuild({
+      ticket: 'fb-92-1111', pmThreadId, builderName: 'gate3', phase: 'reviewing',
+    })
+
+    protocolEvents.emitComplete({
+      protocol: 'review',
+      threadId: state.builderThreadId!,
+      rounds: { completed: 3, requested: 3 },
+      outcome: 'complete',
+      decisions: [],
+      durationMs: 1000,
+      summary: 'a real critique',
+      via: 'normal',
+    })
+    await settle()
+
+    expect(state.phase).toBe('awaiting_pm')
+    expect(state.reviewed).toBe(true)
   })
 })

@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { PERMISSION_REPLY_RE } from '../config.js'
+import { listModifierKeys } from '../modifiers.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -299,6 +300,48 @@ describe('review command', () => {
 
   test('review without slash', () => {
     expect('review'.match(REVIEW_RE)).not.toBeNull()
+  })
+})
+
+// The router builds its `+name` matcher from the live registry, so a modifier
+// registered anywhere is a modifier the router can parse. Mirrors the
+// construction in router.ts; the key list is the real one.
+function extractModifiers(topic: string): { modifiers: string[]; topic?: string } {
+  const modKeys = listModifierKeys()
+  const modRe = new RegExp(`\\+(${modKeys.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g')
+  const modifiers = [...topic.matchAll(modRe)].map(m => m[1])
+  if (modifiers.length === 0) return { modifiers, topic }
+  return { modifiers, topic: topic.replace(modRe, '').replace(/\s{2,}/g, ' ').trim() || undefined }
+}
+
+describe('review modifier extraction', () => {
+  test('+subagent and its alias are picked out of the topic', () => {
+    expect(extractModifiers('+subagent the auth flow')).toEqual({ modifiers: ['subagent'], topic: 'the auth flow' })
+    expect(extractModifiers('+sa the auth flow')).toEqual({ modifiers: ['sa'], topic: 'the auth flow' })
+  })
+
+  test('+no-fallback survives the hyphen — a prefix alternative must not win', () => {
+    expect(extractModifiers('+no-fallback the auth flow')).toEqual({ modifiers: ['no-fallback'], topic: 'the auth flow' })
+    expect(extractModifiers('+nf the auth flow')).toEqual({ modifiers: ['nf'], topic: 'the auth flow' })
+  })
+
+  test('+subagent is not swallowed by the shorter +s alias', () => {
+    // Alternation is ordered, so `s` is tried first — only the \b anchor stops it
+    // from matching the head of `+subagent` and leaving `ubagent` in the topic.
+    const { modifiers, topic } = extractModifiers('+subagent auth')
+    expect(modifiers).toEqual(['subagent'])
+    expect(topic).not.toContain('ubagent')
+  })
+
+  test('flags compose with lens modifiers and with a bare topic', () => {
+    expect(extractModifiers('+subagent +security auth flow'))
+      .toEqual({ modifiers: ['subagent', 'security'], topic: 'auth flow' })
+    expect(extractModifiers('+subagent')).toEqual({ modifiers: ['subagent'], topic: undefined })
+  })
+
+  test('an unprefixed word that happens to be a modifier name stays in the topic', () => {
+    expect(extractModifiers('subagent review of the parser'))
+      .toEqual({ modifiers: [], topic: 'subagent review of the parser' })
   })
 })
 
