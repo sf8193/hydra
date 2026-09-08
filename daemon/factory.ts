@@ -1079,8 +1079,8 @@ export function factoryListAll(ticket?: string): { builds: BuildSummary[] } {
  */
 function reviewViaNote(event: CompletionEvent): string {
   if (!event.via || event.via === 'normal') return ''
-  const how = event.via === 'fallback'
-    ? 'critic died — owner-run subagent review'
+  const how = event.via === 'fallback' ? 'critic died — owner-run subagent review'
+    : event.via === 'silence' ? 'critic timed out — owner-run subagent review'
     : 'owner-run subagent review (requested)'
   return ` · ⚠️ ${how}${event.degradation ? `: ${event.degradation}` : ''}`
 }

@@ -157,8 +157,9 @@ export async function startProtocolRun(
   // A direct start skips straight to the owner-run phase, so there is no
   // exchange to count — announcing "3 rounds" directly above a message saying
   // nobody was spawned leaves the reader to reconcile the two.
+  const displayName = params.directSubagent ? 'Subagent Review' : proto.display
   const scale = params.directSubagent ? `owner-run, no rounds` : `${rounds} round${rounds > 1 ? 's' : ''}`
-  const annIds = await safeSend(threadId, `**${proto.display}** — ${scale}${topicLine}`)
+  const annIds = await safeSend(threadId, `**${displayName}** — ${scale}${topicLine}`)
   run.messageIds.push(...annIds)
 
   // `+subagent`: the caller asked for the owner-run fallback phase up front, so
