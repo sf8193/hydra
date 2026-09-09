@@ -29,6 +29,7 @@ export const MODEL_ALIASES: Record<string, string> = {
 /** Codex model aliases. Kept separate because selecting one also selects the
  * Codex engine; MODEL_ALIASES historically implies the Claude engine. */
 export const CODEX_MODEL_ALIASES: Record<string, string> = {
+  'astra': 'gpt-6-astra',
   'sol': 'gpt-5.6-sol',
   'terra': 'gpt-5.6-terra',
   'luna': 'gpt-5.6-luna',

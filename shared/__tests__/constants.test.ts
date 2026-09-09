@@ -34,6 +34,7 @@ describe('resolveModelAlias', () => {
 
 describe('resolveCodexModelAlias', () => {
   test('resolves Codex aliases case-insensitively', () => {
+    expect(resolveCodexModelAlias('astra')).toBe('gpt-6-astra')
     expect(resolveCodexModelAlias('sol')).toBe('gpt-5.6-sol')
     expect(resolveCodexModelAlias('Terra')).toBe('gpt-5.6-terra')
     expect(resolveCodexModelAlias('LUNA')).toBe('gpt-5.6-luna')
@@ -41,7 +42,7 @@ describe('resolveCodexModelAlias', () => {
 
   test('does not treat Claude or unknown aliases as Codex models', () => {
     expect(resolveCodexModelAlias('opus')).toBeUndefined()
-    expect(resolveCodexModelAlias('astra')).toBeUndefined()
+    expect(resolveCodexModelAlias('spark')).toBeUndefined()
   })
 })
 
@@ -131,6 +132,6 @@ describe('Codex spawn command regex integration', () => {
 
   test('does not capture Claude or unknown aliases', () => {
     expect('spawn opus: topic'.match(spawnCodexModelRe)).toBeNull()
-    expect('spawn astra: topic'.match(spawnCodexModelRe)).toBeNull()
+    expect('spawn spark: topic'.match(spawnCodexModelRe)).toBeNull()
   })
 })
