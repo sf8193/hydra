@@ -2,8 +2,8 @@
  * Codex Engine Bootstrap — initializes the CodexEngine singleton and wires
  * its events into the daemon's protocol dispatch system.
  *
- * Process model is identical to Claude: codex runs in tmux, daemon connects
- * to its unix socket. This module handles the event plumbing.
+ * Codex app-servers outlive their replaceable tmux TUIs. This module owns the
+ * engine event plumbing and reconnects transiently lost daemon connections.
  */
 
 import { CodexEngine, codexSocketPath } from './codex-engine.js'
@@ -98,16 +98,51 @@ codexEngine.on('contextUsage', (sessionId: string, usage: { usedTokens: number; 
   registry.persist()
 })
 
-codexEngine.on('disconnected', (sessionId: string) => {
-  clearCodexKeys(sessionId)
-  const info = registry.get(sessionId)
-  // For Codex the app-server connection is authoritative; tmux is only a
-  // repairable presentation surface and its durable anchor may remain alive.
+const reconnecting = new Set<string>()
+
+export async function reconnectCodexAfterDisconnect(
+  sessionId: string,
+  deps = {
+    get: (id: string) => registry.get(id),
+    resume: (id: string, socket: string, thread: string) => codexEngine.connectAndResume(id, socket, thread),
+    wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
+    ensure: (info: NonNullable<ReturnType<typeof registry.get>>) => providerFor('codex').ensureInteractiveSurface(info),
+    persist: () => registry.persist(),
+    failed: (id: string) => dispatchDisconnect(id),
+  },
+): Promise<boolean> {
+  const delays = [250, 750, 1_500]
+  for (const delay of delays) {
+    await deps.wait(delay)
+    const info = deps.get(sessionId)
+    if (!info || info.engine !== 'codex' || !info.codexThreadId) return false
+    try {
+      await deps.resume(sessionId, codexSocketPath(info.codexHomeName ?? info.tmuxName), info.codexThreadId)
+      delete info.deadAt
+      deps.persist()
+      deps.ensure(info)
+      process.stderr.write(`codex-bootstrap: restored app-server connection for ${info.tmuxName}\n`)
+      return true
+    } catch (err) {
+      process.stderr.write(`codex-bootstrap: reconnect attempt failed for ${info.tmuxName}: ${err}\n`)
+      try { codexEngine.disconnect(sessionId) } catch {}
+    }
+  }
+
+  const info = deps.get(sessionId)
   if (info && !info.deadAt) {
     info.deadAt = Date.now()
-    registry.persist()
+    deps.persist()
   }
-  dispatchDisconnect(sessionId)
+  clearCodexKeys(sessionId)
+  deps.failed(sessionId)
+  return false
+}
+
+codexEngine.on('disconnected', (sessionId: string) => {
+  if (reconnecting.has(sessionId)) return
+  reconnecting.add(sessionId)
+  void reconnectCodexAfterDisconnect(sessionId).finally(() => reconnecting.delete(sessionId))
 })
 
 // ---------------------------------------------------------------------------

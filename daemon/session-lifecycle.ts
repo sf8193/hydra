@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { execSync, execFileSync } from 'child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, cpSync, rmSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, cpSync, rmSync, symlinkSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
@@ -25,6 +25,7 @@ import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
 import { configureSessionProviders, providerFor } from './session-provider.js'
+import { codexHomeDir, startCodexAppServer, stopCodexAppServer } from './codex-process.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -343,7 +344,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
 /** Unified session creation -- spawn, fork, and handoff all flow through here via SpawnOpts. */
 // ---------------------------------------------------------------------------
-// Codex spawn helper — tmux setup + engine connect
+// Codex spawn helper — durable app-server + engine connect
 // ---------------------------------------------------------------------------
 
 async function spawnCodexSession(p: {
@@ -352,66 +353,46 @@ async function spawnCodexSession(p: {
 }): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string; model?: string }> {
   const codexHomeName = p.codexHomeName ?? p.tmuxName
   const sockPath = codexSocketPath(codexHomeName)
-  const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${codexHomeName}`)
+  const codexHome = codexHomeDir(codexHomeName)
   const mcpServerPath = join(new URL('.', import.meta.url).pathname, 'codex-mcp-server.ts')
-  const codexModel = p.model ? `-c model=${shq(p.model)}` : ''
-  // Spawned Hydra agents are unattended: give them an unrestricted sandbox and
-  // never pause the app-server on an approval prompt. `sandbox_permissions` only
-  // describes individual permission grants; it does not select Codex's runtime
-  // sandbox mode.
-  const fullPerms = `-c 'approval_policy="never"' -c 'sandbox_mode="danger-full-access"'`
-  // Let Codex use the selected model's native context window and automatic
-  // compaction threshold. Provider defaults can evolve independently of Hydra.
-  const serverCmd = `codex app-server --listen 'unix://' ${codexModel} ${fullPerms}`.trim()
-
   // A native fork needs the parent's persisted rollout, but each Hydra session
   // must keep its own app-server socket/home. Seed only the rollout store into
   // the fresh destination home rather than sharing a live CODEX_HOME.
   if (p.forkFromThread && p.forkSourceHomeName && p.forkSourceHomeName !== codexHomeName) {
     const sourceSessions = join(process.env.HOME!, '.codex', `hydra-${p.forkSourceHomeName}`, 'sessions')
-    const destinationSessions = join(codexHomeDir, 'sessions')
+    const destinationSessions = join(codexHome, 'sessions')
     if (!existsSync(sourceSessions)) throw new Error(`codex fork source rollouts not found in ${sourceSessions}`)
-    mkdirSync(codexHomeDir, { recursive: true })
+    mkdirSync(codexHome, { recursive: true })
     // The human-readable tmux name is recyclable. Refresh only its rollout
     // store so a reused destination cannot fork from an obsolete snapshot.
     rmSync(destinationSessions, { recursive: true, force: true })
     cpSync(sourceSessions, destinationSessions, { recursive: true })
   }
 
-  // A dead app-server can leave its Unix socket behind. Reusing its CODEX_HOME
-  // for a true resume is safe only after liveness has already been classified.
-  if (p.resumeThread) {
-    if (await codexEngine.isSocketLive(sockPath)) {
-      throw new Error(`refusing to replace live codex app-server at ${sockPath}`)
-    }
-    try { unlinkSync(sockPath) } catch {}
+  // Every Hydra agent owns exactly one app-server. A live socket means another
+  // owner still exists; a dead socket/pid are residue from a prior process.
+  if (await codexEngine.isSocketLive(sockPath)) {
+    throw new Error(`refusing to replace live codex app-server at ${sockPath}`)
   }
+  stopCodexAppServer(codexHomeName)
+  try { unlinkSync(sockPath) } catch {}
 
-  // Window 0: durable app-server
-  const serverInner = [
-    `cd ${shq(p.effectiveCwd)}`,
-    `export CODEX_HOME=${shq(codexHomeDir)}`,
-    `mkdir -p ${shq(codexHomeDir)}`,
-    `ln -sf ~/.codex/auth.json ${shq(codexHomeDir)}/auth.json`,
-    `codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(codexHomeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(p.sessionId)} -- bun ${shq(mcpServerPath)}`,
-    serverCmd,
-  ].join(' && ')
-
-  process.stderr.write(`daemon: codex spawning ${p.tmuxName}\n`)
+  mkdirSync(codexHome, { recursive: true, mode: 0o700 })
+  const authPath = join(codexHome, 'auth.json')
+  try { unlinkSync(authPath) } catch {}
+  symlinkSync(join(homedir(), '.codex', 'auth.json'), authPath)
+  const codexEnv = { ...process.env, CODEX_HOME: codexHome }
   try {
-    execFileSync('tmux', ['new-session', '-d', '-s', p.tmuxName, withRaisedFdLimit(serverInner)], { stdio: 'pipe' })
+    try { execFileSync('codex', ['mcp', 'remove', 'hydra'], { env: codexEnv, stdio: 'ignore' }) } catch {}
+    execFileSync('codex', ['mcp', 'add', 'hydra', '--env', `DAEMON_SOCK=${SOCK_PATH}`, '--env', `HYDRA_SESSION_ID=${p.sessionId}`, '--', 'bun', mcpServerPath], { env: codexEnv, stdio: 'pipe' })
   } catch (err) {
-    throw new Error(`failed to spawn codex tmux: ${err instanceof Error ? err.message : err}`)
+    throw new Error(`failed to configure codex app-server: ${err instanceof Error ? err.message : err}`)
   }
 
-  // Capture server pane for crash diagnostics
-  let spawnLogPath: string | undefined
-  try {
-    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-    const logPath = join(SPAWN_LOGS_DIR, `${p.tmuxName}-${p.sessionId}.log`)
-    execFileSync('tmux', ['pipe-pane', '-o', '-t', `${p.tmuxName}:0`, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
-    spawnLogPath = logPath
-  } catch {}
+  mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+  const spawnLogPath = join(SPAWN_LOGS_DIR, `${p.tmuxName}-${p.sessionId}.log`)
+  process.stderr.write(`daemon: codex spawning durable app-server for ${p.tmuxName}\n`)
+  startCodexAppServer({ homeName: codexHomeName, cwd: p.effectiveCwd, logPath: spawnLogPath, model: p.model })
 
   // Connect to the app-server socket with retry
   const start = Date.now()
@@ -435,25 +416,15 @@ async function spawnCodexSession(p: {
     } catch (err: any) {
       lastErr = err?.message || String(err)
       try { codexEngine.disconnect(p.sessionId) } catch {}
-      if (!tmuxHasSession(p.tmuxName)) throw new Error(`codex tmux ${p.tmuxName} died during startup`)
       await new Promise(r => setTimeout(r, 500))
     }
   }
   if (!codexThreadId) {
-    process.stderr.write(`daemon: killing codex tmux ${p.tmuxName} (startup timeout: ${lastErr})\n`)
-    try { execFileSync('tmux', ['kill-session', '-t', p.tmuxName], { stdio: 'ignore' }) } catch {}
+    process.stderr.write(`daemon: stopping codex app-server ${p.tmuxName} (startup timeout: ${lastErr})\n`)
+    stopCodexAppServer(codexHomeName)
     throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
   }
   process.stderr.write(`daemon: codex connected for ${p.tmuxName}, thread=${codexThreadId}\n`)
-
-  // Window 1: attachable TUI. Resume the daemon-owned thread explicitly;
-  // bare `codex --remote` starts a second thread on the same app-server.
-  const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && codex resume ${shq(codexThreadId)} --remote "unix://${sockPath}"`
-  try {
-    execFileSync('tmux', ['new-window', '-n', 'hydra-chat', '-t', p.tmuxName, tuiInner], { stdio: 'pipe' })
-  } catch {
-    process.stderr.write(`daemon: codex TUI window failed for ${p.tmuxName} (non-fatal)\n`)
-  }
 
   return { sockPath, spawnLogPath, codexThreadId, model: resolvedModel }
 }
@@ -833,6 +804,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     info.sessionMetadata!.model = displayedModel
     if (spawnLogPath) info.spawnLogPath = spawnLogPath
     registry.persist()
+    providerFor('codex').ensureInteractiveSurface(info)
 
     void codexEngine.startTurn(sessionId, prompt).catch(err => {
       process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
@@ -1212,6 +1184,7 @@ configureSessionProviders({
   spawn: doSpawnSession,
   resumeClaude: tryResume,
   disconnectCodex: sessionId => codexEngine.disconnect(sessionId),
+  stopCodexAppServer,
   isCodexConnected: sessionId => codexEngine.isConnected(sessionId),
 })
 

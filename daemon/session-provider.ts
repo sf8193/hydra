@@ -42,6 +42,7 @@ type ProviderDependencies = {
     worktree?: { repo: string; path: string; branch: string }; preserveWorktree?: boolean;
   }) => Promise<(SpawnResult & { bridgeOrphan?: boolean }) | null>
   disconnectCodex: (sessionId: string) => void
+  stopCodexAppServer: (homeName: string) => boolean
   isCodexConnected: (sessionId: string) => boolean
 }
 
@@ -165,7 +166,10 @@ class CodexSessionProvider implements SessionProvider {
   contextPercent(info: SessionInfo): string {
     return info.contextUsage ? `${info.contextUsage.percent}%` : '?'
   }
-  disconnect(info: SessionInfo): void { deps().disconnectCodex(info.sessionId) }
+  disconnect(info: SessionInfo): void {
+    deps().disconnectCodex(info.sessionId)
+    deps().stopCodexAppServer(info.codexHomeName ?? info.tmuxName)
+  }
 
   private identity(input: ProviderRecoveryInput): { threadId: string; homeName: string } | null {
     const threadId = input.entry?.codexThreadId ?? input.live?.codexThreadId

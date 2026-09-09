@@ -1,9 +1,9 @@
 /**
  * Codex Engine — communicates with Codex app-server instances over unix sockets.
  *
- * Process model: identical to Claude. The codex app-server runs inside tmux.
- * This engine connects to its unix socket via WebSocket (ws library) and speaks
- * JSON-RPC. The daemon can restart and reconnect — codex persists in tmux.
+ * Process model: one durable app-server per Hydra Codex agent. The app-server
+ * is daemon-owned and independent of the optional tmux TUI. This engine connects
+ * to its unix socket via WebSocket and can reconnect to the persistent thread.
  *
  * turn/steer is a fire-and-forget notification — injects input into the active
  * turn at the next decision point.
