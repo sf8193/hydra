@@ -30,10 +30,11 @@ export type CodexConn = {
   pendingRequests: Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>
   messageBuffer: string[]
   steerQueue: string[]
+  deferredTurnQueue: string[]
   lastUsageWarning: number  // threshold of last warning sent (0, 50, 70)
 }
 
-// Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning'
+// Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning', 'contextUsage'
 
 export function codexSocketPath(tmuxName: string): string {
   return join(process.env.HOME!, '.codex', `hydra-${tmuxName}`, 'app-server-control', 'app-server-control.sock')
@@ -47,6 +48,13 @@ export function selectDefaultCodexModel(result: unknown): string | undefined {
   if (!selected || typeof selected !== 'object') return undefined
   const value = (selected as { model?: unknown; id?: unknown }).model ?? (selected as { id?: unknown }).id
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+export function parseCodexContextUsage(params: any): { usedTokens: number; contextWindow: number; percent: number } | null {
+  const contextWindow = params?.tokenUsage?.modelContextWindow
+  const usedTokens = params?.tokenUsage?.last?.totalTokens
+  if (typeof contextWindow !== 'number' || contextWindow <= 0 || typeof usedTokens !== 'number') return null
+  return { usedTokens, contextWindow, percent: Math.min(100, Math.max(0, Math.round(usedTokens * 100 / contextWindow))) }
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +110,7 @@ export class CodexEngine extends EventEmitter {
     const conn: CodexConn = {
       sessionId, ws, threadId: threadId ?? null, currentTurnId: null,
       nextRequestId: 0, pendingRequests: new Map(),
-      messageBuffer: [], steerQueue: [], turnPending: false, turnWatchdog: null, lastUsageWarning: 0,
+      messageBuffer: [], steerQueue: [], deferredTurnQueue: [], turnPending: false, turnWatchdog: null, lastUsageWarning: 0,
     }
 
     this.connections.set(sessionId, conn)
@@ -165,6 +173,36 @@ export class CodexEngine extends EventEmitter {
     this.sendSteer(conn, text)
   }
 
+  /** Deliver as a distinct future turn, never as input to the current turn. */
+  queueTurn(sessionId: string, text: string): void {
+    const conn = this.connections.get(sessionId)
+    if (!conn?.threadId) return
+    if (conn.deferredTurnQueue.length >= 50) conn.deferredTurnQueue.shift()
+    conn.deferredTurnQueue.push(text)
+    if (conn.currentTurnId || conn.turnPending) return
+    const first = conn.deferredTurnQueue.shift()!
+    this.startDeferredTurn(conn, first)
+  }
+
+  private startDeferredTurn(conn: CodexConn, text: string, attempt = 0): void {
+    void this.startTurn(conn.sessionId, text).catch(err => {
+      const current = this.connections.get(conn.sessionId)
+      if (!current) return
+      if (attempt < 2) {
+        const delay = 250 * (attempt + 1)
+        process.stderr.write(`codex-engine: deferred turn failed for ${conn.sessionId}, retrying in ${delay}ms: ${err}\n`)
+        setTimeout(() => {
+          const live = this.connections.get(conn.sessionId)
+          if (live) this.startDeferredTurn(live, text, attempt + 1)
+        }, delay)
+        return
+      }
+      current.deferredTurnQueue.unshift(text)
+      process.stderr.write(`codex-engine: deferred turn failed for ${conn.sessionId} after 3 attempts: ${err}\n`)
+      this.emit('turnStalled', conn.sessionId)
+    })
+  }
+
   disconnect(sessionId: string): void {
     const conn = this.connections.get(sessionId)
     if (!conn) return
@@ -176,6 +214,17 @@ export class CodexEngine extends EventEmitter {
 
   isConnected(sessionId: string): boolean {
     return this.connections.has(sessionId)
+  }
+
+  /** Probe the transport without creating/resuming a thread. */
+  async isSocketLive(socketPath: string): Promise<boolean> {
+    try {
+      const ws = await this.wsConnect(socketPath)
+      ws.close()
+      return true
+    } catch {
+      return false
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -386,11 +435,9 @@ export class CodexEngine extends EventEmitter {
       case 'turn/completed':
         if (conn.turnWatchdog) { clearTimeout(conn.turnWatchdog); conn.turnWatchdog = null }
         conn.currentTurnId = null
-        if (conn.steerQueue.length > 0) {
-          const first = conn.steerQueue.shift()!
-          void this.startTurn(conn.sessionId, first).catch(err => {
-            process.stderr.write(`codex-engine: auto-turn failed for ${conn.sessionId}: ${err}\n`)
-          })
+        if (conn.deferredTurnQueue.length > 0) {
+          const first = conn.deferredTurnQueue.shift()!
+          this.startDeferredTurn(conn, first)
         } else {
           this.emit('turnCompleted', conn.sessionId)
         }
@@ -408,6 +455,12 @@ export class CodexEngine extends EventEmitter {
             }
           }
         }
+        break
+      }
+
+      case 'thread/tokenUsage/updated': {
+        const usage = parseCodexContextUsage(params)
+        if (usage) this.emit('contextUsage', conn.sessionId, usage)
         break
       }
 

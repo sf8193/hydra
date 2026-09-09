@@ -9,13 +9,14 @@ import { existsSync } from 'fs'
 import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, SessionInfo } from './sessions.js'
-import { doSpawnSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
+import { tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { tmuxHasSession, isAlive, safeSend, baseNameFromBranch } from './util.js'
 import { parsePrUrl, getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import type { WatchEntry } from './pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
 import { loadAccess } from './access.js'
 import type { InboundMessage } from '../gateway.js'
+import { providerFor } from './session-provider.js'
 
 // ---------------------------------------------------------------------------
 // Recover — crash recovery via resume or resurrect
@@ -27,12 +28,10 @@ const STAGGER_MS = 5_000
 
 // Dead, recoverable sessions for the manual `recover` command. Broader than the
 // auto-recover filter (which is thread_owner-only + excludes parked/ephemeral/headless):
-// a user may deliberately recover any dead non-guest session. Codex is excluded — the
-// recoverOne cascade would relaunch it as Claude (codex reconnects via its own path).
+// a user may deliberately recover any dead non-guest session through its provider.
 function findDeadSessions(): SessionInfo[] {
   return [...registry.values()].filter(info =>
     info.sessionType !== 'thread_guest'
-    && info.engine !== 'codex'
     // suppressAutoRecover intentionally NOT checked — it gates only AUTOMATIC boot recovery
     // (parked awaiting_pm / branch-gone); an explicit manual `recover` overrides it.
     && !isAlive(info)
@@ -47,14 +46,17 @@ function toRecoverInput(info: SessionInfo, siblingWatches?: WatchEntry[]) {
     sessionId: info.sessionId,
     thread: threadRegistry.get(info.threadId)!,
     claudeSessionId: info.claudeSessionId,
+    engine: info.engine ?? 'claude',
+    codexThreadId: info.codexThreadId,
+    codexHomeName: info.codexHomeName,
     lastTmuxName: info.tmuxName,
     model: info.sessionMetadata?.model,
     siblingWatches,
   }
 }
 
-async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string; siblingWatches?: WatchEntry[] }): Promise<{ name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string }> {
-  const { thread, claudeSessionId, lastTmuxName, model } = dead
+async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; claudeSessionId?: string; engine?: 'claude' | 'codex'; codexThreadId?: string; codexHomeName?: string; lastTmuxName: string; model?: string; siblingWatches?: WatchEntry[] }): Promise<{ name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string }> {
+  const { thread, lastTmuxName, model } = dead
 
   // Capture everything off the dead record up front: tier 1's kill deletes it, so the
   // fallback tiers (and post-cascade watch restore) can't read it later. Resolve by the
@@ -110,6 +112,12 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   }
 
   const commonOpts = { preserveWorktree: true, reuseWorktree: worktree, carryOver, promptPrefix: RECOVERY_REVERIFY_GUARD }
+  const provider = providerFor(dead.engine ?? deadInfo?.engine ?? 'claude')
+  const recoveryInput = { topic: thread.topic, threadId: thread.threadId, threadUrl: thread.threadUrl,
+    lastName: lastTmuxName, model, live: deadInfo ?? ({ claudeSessionId: dead.claudeSessionId,
+      codexThreadId: dead.codexThreadId, codexHomeName: dead.codexHomeName } as SessionInfo),
+    worktree, preserveWorktree: true, spawnOptions: commonOpts,
+    recoveryNotice: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off. ${RECOVERY_REVERIFY_GUARD}` }
 
   // Reserve the predecessor's name for the whole cascade so a concurrent spawn can't grab
   // it (freed when the dead record is killed) and `branch -D` the worktree branch we're
@@ -127,9 +135,9 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
     : undefined
   if (reservedName) registry.reservedNames.add(reservedName)
   try {
-    if (claudeSessionId) {
+    if (dead.claudeSessionId || dead.codexThreadId || deadInfo?.codexThreadId) {
       // Tier 1: full resume
-      const result = await tryResume({ topic: thread.topic, threadId: thread.threadId, claudeSessionId, threadUrl: thread.threadUrl, model, worktree, preserveWorktree: true })
+      const result = await provider.resume(recoveryInput)
       if (result) {
         restoreOnto(result)
         return { name: lastTmuxName, method: 'resumed', newName: result.name, threadUrl: thread.threadUrl }
@@ -138,12 +146,8 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
 
       // Tier 2: fork from dead session (best-effort, short timeout)
       try {
-        const forkResult = await doSpawnSession(thread.topic, undefined, undefined, {
-          ...commonOpts,
-          existingThreadId: thread.threadId,
-          forkFrom: { claudeSessionId, parentName: lastTmuxName },
-          model,
-        })
+        const forkResult = await provider.fork(recoveryInput)
+        if (!forkResult) throw new Error('provider cannot fork this session')
         restoreOnto(forkResult)
         return { name: lastTmuxName, method: 'forked', newName: forkResult.name, threadUrl: thread.threadUrl }
       } catch {
@@ -152,7 +156,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
     }
 
     // Tier 3: respawn
-    const result = await tryRespawn(thread.threadId, thread.topic, lastTmuxName, model, commonOpts)
+    const result = await tryRespawn(thread.threadId, thread.topic, lastTmuxName, model, { ...commonOpts, engine: provider.id })
     if (result) {
       restoreOnto(result)
       return { name: lastTmuxName, method: 'resurrected', newName: result.name, threadUrl: thread.threadUrl }
@@ -456,7 +460,6 @@ export async function autoRecoverAfterBoot(): Promise<void> {
     && !info.suppressAutoRecover  // e.g. awaiting_pm builder preserved by sweepOrphanedBuilders for PM peek/kill
     && !info.ephemeral
     && !info.headless
-    && info.engine !== 'codex'  // codex reconnects via reconnectCodexSessions() at boot; recoverOne would relaunch it as Claude
     && !tmuxHasSession(info.tmuxName)
     && threadRegistry.has(info.threadId),
   )

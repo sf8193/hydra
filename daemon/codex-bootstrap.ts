@@ -12,14 +12,34 @@ import { registry } from './sessions.js'
 import { dispatchDisconnect } from './protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
 import { appendFileSync } from 'fs'
-import { tmuxHasSession, safeSend } from './util.js'
+import { safeSend } from './util.js'
 import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
+import { providerFor } from './session-provider.js'
 
 // ---------------------------------------------------------------------------
 // Singleton
 // ---------------------------------------------------------------------------
 
 export const codexEngine = new CodexEngine()
+
+export const CODEX_SURFACE_REPAIR_DELAYS_MS = [1_000, 3_000] as const
+
+export function scheduleCodexSurfaceRepairs(
+  sessionId: string,
+  deps = {
+    get: (id: string) => registry.get(id),
+    ensure: (info: NonNullable<ReturnType<typeof registry.get>>) => providerFor('codex').ensureInteractiveSurface(info),
+    schedule: (fn: () => void, delay: number) => setTimeout(fn, delay),
+  },
+): void {
+  for (const delay of CODEX_SURFACE_REPAIR_DELAYS_MS) {
+    deps.schedule(() => {
+      const current = deps.get(sessionId)
+      if (!current || current.deadAt || current.engine !== 'codex') return
+      deps.ensure(current)
+    }, delay)
+  }
+}
 
 // Register with transport so sendOrQueue can route to it
 transport.setCodexEngine(codexEngine)
@@ -49,6 +69,12 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   const info = registry.get(sessionId)
   if (!info) return
   info.turnState = 'idle'
+  // The remote TUI may exit with the completed turn. Repair its tmux surface
+  // immediately so the next protocol turn/keys command has somewhere to land.
+  providerFor('codex').ensureInteractiveSurface(info)
+  // The remote TUI may disappear just after turn/completed. Recheck after that
+  // teardown window; the provider is idempotent when the surface stayed alive.
+  scheduleCodexSurfaceRepairs(sessionId)
   flushCodexKeys(sessionId)
   handleSilenceEvent(info.tmuxName)
 })
@@ -65,10 +91,19 @@ codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
   void safeSend(info.threadId, `\u26a0\ufe0f Codex usage at **${usedPercent}%** of monthly limit.`)
 })
 
+codexEngine.on('contextUsage', (sessionId: string, usage: { usedTokens: number; contextWindow: number; percent: number }) => {
+  const info = registry.get(sessionId)
+  if (!info) return
+  info.contextUsage = { ...usage, updatedAt: Date.now() }
+  registry.persist()
+})
+
 codexEngine.on('disconnected', (sessionId: string) => {
   clearCodexKeys(sessionId)
   const info = registry.get(sessionId)
-  if (info && !info.deadAt && !tmuxHasSession(info.tmuxName)) {
+  // For Codex the app-server connection is authoritative; tmux is only a
+  // repairable presentation surface and its durable anchor may remain alive.
+  if (info && !info.deadAt) {
     info.deadAt = Date.now()
     registry.persist()
   }
@@ -85,10 +120,6 @@ export async function reconnectCodexSessions(): Promise<void> {
 
   let reconnected = 0
   for (const info of codexSessions) {
-    if (!tmuxHasSession(info.tmuxName)) {
-      info.deadAt = Date.now()
-      continue
-    }
     const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
     let connected = false
 
@@ -125,6 +156,8 @@ export async function reconnectCodexSessions(): Promise<void> {
     if (!connected) {
       info.deadAt = Date.now()
     } else {
+      delete info.deadAt
+      providerFor('codex').ensureInteractiveSurface(info)
       reconnected++
     }
   }

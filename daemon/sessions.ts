@@ -66,12 +66,17 @@ export type SessionInfo = {
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
+  contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
   capabilities?: Capability[]
   // Keys are subsystem-owned: factory owns 'factory_done', protocol owns 'advance'/'extend_phase'.
   // clearFactoryIdentity and clearProtocolOverrides are the canonical cleanup paths.
   toolDescriptions?: Partial<Record<ToolName, string>>
   toolInputSchemas?: Partial<Record<ToolName, object>>
+}
+
+export function deferPersistedLivenessToProvider(info: Pick<SessionInfo, 'engine' | 'codexThreadId'>, tmuxAlive: boolean): boolean {
+  return !tmuxAlive && info.engine === 'codex' && !!info.codexThreadId
 }
 
 export function addCapability(info: SessionInfo, cap: Capability): void {
@@ -135,6 +140,9 @@ export type ThreadSessionEntry = {
   endedAt?: number
   messageCount: number
   claudeSessionId?: string
+  engine?: 'claude' | 'codex'
+  codexThreadId?: string
+  codexHomeName?: string
   model?: string
 }
 
@@ -155,7 +163,7 @@ export type ThreadMetadata = {
 }
 
 export type SpawnOpts = {
-  forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string }
+  forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string; codexHomeName?: string }
   handedOffFrom?: string
   artifact?: string
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
@@ -164,6 +172,7 @@ export type SpawnOpts = {
   resurrectFrom?: string                                       // tmuxName of predecessor (for lineage in respawn)
   joinThread?: string                                          // join existing thread as member (skip thread creation)
   promptBuilder?: (sessionId: string, tmuxName: string) => string
+  beforeInitialTurn?: (sessionId: string) => void                 // register dynamic capabilities before Codex snapshots MCP tools
   promptPrefix?: string                                        // prepended to the generated prompt (used by templates)
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
@@ -445,6 +454,12 @@ export class SessionRegistry {
         if (tmuxAlive) {
           delete info.deadAt
           restored++
+        } else if (deferPersistedLivenessToProvider(info, tmuxAlive)) {
+          // tmux is only Codex's replaceable presentation container. Keep the
+          // record eligible for reconnectCodexSessions(), which probes the
+          // authoritative app-server socket and either repairs the UI or marks
+          // the session dead after that probe fails.
+          delete info.deadAt
         } else {
           info.deadAt = info.deadAt ?? Date.now()
           dead++
@@ -507,6 +522,7 @@ export class ThreadRegistry {
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
+    engine?: 'claude' | 'codex', codexThreadId?: string, codexHomeName?: string,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -540,18 +556,26 @@ export class ThreadRegistry {
       messageCount: 0,
       model: opts.model,
       claudeSessionId: opts.claudeSessionId,
+      engine: opts.engine,
+      codexThreadId: opts.codexThreadId,
+      codexHomeName: opts.codexHomeName,
     })
     this.persist()
   }
 
-  recordKill(threadId: string, sessionId: string, messageCount: number, claudeSessionId?: string): void {
+  recordKill(threadId: string, sessionId: string, messageCount: number, identity?: {
+    claudeSessionId?: string, engine?: 'claude' | 'codex', codexThreadId?: string, codexHomeName?: string,
+  }): void {
     const thread = this.threads.get(threadId)
     if (!thread) return
     const entry = thread.sessionHistory.find(h => h.sessionId === sessionId && !h.endedAt)
     if (entry) {
       entry.endedAt = Date.now()
       entry.messageCount = messageCount
-      entry.claudeSessionId = claudeSessionId
+      entry.claudeSessionId = identity?.claudeSessionId
+      entry.engine = identity?.engine ?? entry.engine
+      entry.codexThreadId = identity?.codexThreadId ?? entry.codexThreadId
+      entry.codexHomeName = identity?.codexHomeName ?? entry.codexHomeName
     }
     this.persist()
   }
@@ -605,6 +629,10 @@ export class ThreadRegistry {
           startedAt: session.createdAt,
           messageCount: session.messageCount ?? 0,
           claudeSessionId: session.claudeSessionId,
+          engine: session.engine ?? 'claude',
+          codexThreadId: session.codexThreadId,
+          codexHomeName: session.codexHomeName,
+          model: session.sessionMetadata?.model,
         }],
       })
       created++

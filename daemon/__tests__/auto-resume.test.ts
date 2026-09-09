@@ -43,8 +43,8 @@ describe('decideResume', () => {
 
 describe('protocolResumeRef', () => {
   test('uses engine-specific persisted state', () => {
-    expect(protocolResumeRef({ engine: 'codex', codexThreadId: 'thr_parent', tmuxName: 'ember' })).toEqual({
-      engine: 'codex', codexThreadId: 'thr_parent', parentName: 'ember',
+    expect(protocolResumeRef({ engine: 'codex', codexThreadId: 'thr_parent', codexHomeName: 'original-home', tmuxName: 'bloom' })).toEqual({
+      engine: 'codex', codexThreadId: 'thr_parent', parentName: 'bloom', homeName: 'original-home',
     })
     expect(protocolResumeRef({ engine: 'claude', claudeSessionId: 'claude-parent', tmuxName: 'ember' })).toEqual({
       engine: 'claude', claudeSessionId: 'claude-parent', parentName: 'ember',

@@ -17,6 +17,7 @@
 
 import { connect, type Socket } from 'net'
 import { createInterface } from 'readline'
+import { computeToolsForSession } from './bridge-tools.js'
 
 const DAEMON_SOCK = process.env.DAEMON_SOCK
 const SESSION_ID = process.env.HYDRA_SESSION_ID
@@ -34,6 +35,16 @@ let daemonSocket: Socket | null = null
 let daemonBuf = ''
 let toolCallCounter = 0
 const pendingToolCalls = new Map<string, (result: any) => void>()
+
+// Codex snapshots the MCP catalog during client initialization and does not
+// reliably refresh it from list_changed. Advertise the complete owner protocol
+// surface statically; daemon dispatch remains the authorization boundary and
+// rejects tools the current session/capabilities do not grant.
+const TOOLS = computeToolsForSession('thread_owner', new Set(['protocol_context'])).map(t => ({
+  name: t.name,
+  description: t.description,
+  inputSchema: t.inputSchema,
+}))
 
 function connectToDaemon(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -116,13 +127,6 @@ async function callDaemonTool(id: string, name: string, args: Record<string, unk
 
 const rl = createInterface({ input: process.stdin })
 
-// Import tools from the canonical source — keeps codex and claude tool sets in sync.
-// Codex sessions get advance/extend_phase statically (no dynamic tools_update path).
-import { computeToolsForSession } from './bridge-tools.js'
-const TOOLS = computeToolsForSession('thread_owner', new Set(['protocol_context'])).map(t => ({
-  name: t.name, description: t.description, inputSchema: t.inputSchema,
-}))
-
 function send(msg: any): void {
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n')
 }
@@ -146,7 +150,7 @@ rl.on('line', async (line) => {
   const { id, method, params } = parsed
   switch (method) {
     case 'initialize':
-      send({ id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'hydra-tools', version: '1.0.0' } } })
+      send({ id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'hydra-tools', version: '1.0.0' } } })
       break
     case 'notifications/initialized':
       break

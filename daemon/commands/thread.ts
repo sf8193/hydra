@@ -5,10 +5,10 @@ import { unlinkSync } from 'fs'
 import { gateway } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn } from '../session-lifecycle.js'
+import { killSession, doSpawnSession, discoverClaudeSessionId, tryRespawn, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError, safeSend, tmuxUiTarget } from '../util.js'
+import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
@@ -16,6 +16,7 @@ import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 import { canNativeFork } from '../fork-strategy.js'
+import { providerFor, providerForEntry } from '../session-provider.js'
 
 export async function handleThreadKillIntercept(
   msg: InboundMessage,
@@ -83,7 +84,9 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     }
   }
 
-  if (!tmuxHasSession(info.tmuxName)) {
+  const provider = providerFor(info.engine ?? 'claude')
+  if (!tmuxHasSession(info.tmuxName)) provider.ensureInteractiveSurface(info)
+  if (!tmuxHasSession(info.tmuxName) && !(info.engine === 'codex' && transport.has(info.sessionId))) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
     return
@@ -123,8 +126,6 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   void gateway.react(msg.channelId, msg.id, '🍴').catch(() => {})
 
   const parentName = info.tmuxName
-  const parentMessages = info.messageCount ?? 0
-  const parentContext = getContextPercent(parentName)
   const thread = threadRegistry.get(info.threadId)
   const forkTopic = description || `continuing: ${thread?.topic ?? info.description ?? 'session'}`
   const baseChatId = msg.parentChannelId ?? msg.channelId
@@ -132,7 +133,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   try {
     const ephemeralPrefix = opts?.ephemeral ? `When you are finished, post exactly \`[done]\` on its own line to your thread. This signals the system to clean up your session automatically.\n\n` : undefined
     const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
-      forkFrom: { claudeSessionId: info.claudeSessionId, parentName, codexThreadId: info.codexThreadId },
+      forkFrom: { claudeSessionId: info.claudeSessionId, parentName, codexThreadId: info.codexThreadId, codexHomeName: info.codexHomeName ?? info.tmuxName },
       model: forkModel,
       engine: targetEngine,
       ephemeral: opts?.ephemeral,
@@ -165,6 +166,8 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
         resurrectFrom: parentName,
         model: forkModel,
+        engine: targetEngine,
+        ephemeral: opts?.ephemeral,
       })
       const e = sessionEmoji(result.name)
       await gateway.send(msg.channelId, `${e} \`${result.name}\` spawned (reading thread from **${parentName}**)${result.url ? ` — ${result.url}` : ''}`, { replyTo: msg.id })
@@ -194,7 +197,7 @@ export async function handleForksIntercept(msg: InboundMessage): Promise<void> {
     const t = threadRegistry.get(s.threadId)
     const url = t?.threadUrl ?? ''
     const desc = s.description ?? fallbackDescription(t?.topic ?? '')
-    const ctx = getContextPercent(s.tmuxName)
+    const ctx = providerFor(s.engine ?? 'claude').contextPercent(s)
     const msgs = s.messageCount ?? 0
     const duration = formatDuration(Date.now() - s.createdAt)
     const e = sessionEmoji(s.tmuxName)
@@ -259,7 +262,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   if (liveSessionId) {
     const liveInfo = registry.get(liveSessionId)
     if (liveInfo) {
-      if (tmuxHasSession(liveInfo.tmuxName)) {
+      if (tmuxHasSession(liveInfo.tmuxName) && !(liveInfo.engine === 'codex' && !transport.has(liveInfo.sessionId))) {
         void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
         try { await gateway.send(msg.channelId, `Session **${liveInfo.tmuxName}** is already running.`, { replyTo: msg.id }) } catch {}
         return
@@ -269,22 +272,20 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
 
   // Thread is detached — find claudeSessionId from last session in history
   const lastSession = thread.sessionHistory[thread.sessionHistory.length - 1]
+  const lastInfo = registry.get(lastSession?.sessionId ?? '')
   const claudeSessionId = lastSession?.claudeSessionId
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
-  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.sessionMetadata?.model
+  const deadModel = lastSession?.model ?? lastInfo?.sessionMetadata?.model
+  const provider = lastInfo ? providerFor(lastInfo.engine) : providerForEntry(lastSession)
 
   void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
 
   // Three-tier cascade: resume → fork-from-dead → respawn
-  if (claudeSessionId) {
+  if (claudeSessionId || lastSession?.codexThreadId || lastInfo?.codexThreadId) {
     // Tier 1: full resume (--resume, same conversation)
-    const result = await tryResume({
-      topic: thread.topic,
-      threadId: thread.threadId,
-      claudeSessionId,
-      threadUrl: thread.threadUrl,
-      model: deadModel,
-    })
+    const result = await provider.resume({ topic: thread.topic, threadId: thread.threadId,
+      threadUrl: thread.threadUrl, lastName: lastTmuxName, model: deadModel, entry: lastSession, live: lastInfo,
+      recoveryNotice: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off. ${RECOVERY_REVERIFY_GUARD}` })
     if (result) {
       const method = result.bridgeOrphan
         ? 'resumed — context restored, but bridge not yet connected (may need a moment)'
@@ -296,11 +297,10 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
 
     // Tier 2: fork from dead session (--resume --fork-session, transcript copy)
     try {
-      const forkResult = await doSpawnSession(thread.topic, undefined, undefined, {
-        existingThreadId: thread.threadId,
-        forkFrom: { claudeSessionId, parentName: lastTmuxName },
-        model: deadModel,
-      })
+      const forkResult = await provider.fork({ topic: thread.topic, threadId: thread.threadId,
+        threadUrl: thread.threadUrl, lastName: lastTmuxName, model: deadModel, entry: lastSession, live: lastInfo,
+        recoveryNotice: RECOVERY_REVERIFY_GUARD })
+      if (!forkResult) throw new Error('provider cannot fork this session')
       await announceRecovery(msg, forkResult, thread, 'resumed (forked from dead session — transcript preserved)', '⏯️', lastTmuxName)
       return
     } catch {
@@ -309,7 +309,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   }
 
   // Tier 3: respawn (fresh session reads thread history)
-  const t3result = await tryRespawn(threadId, thread.topic, lastTmuxName, deadModel)
+  const t3result = await tryRespawn(threadId, thread.topic, lastTmuxName, deadModel, { engine: provider.id })
   if (t3result) {
     await announceRecovery(msg, t3result, thread, 'respawned (resume unavailable — reading thread history)', '🔁', lastTmuxName)
   } else {
@@ -452,7 +452,10 @@ export async function handleDestroyIntercept(msg: InboundMessage, opts?: { initi
 
   // Clean up registry only after successful thread deletion
   if (info && sessionId) {
-    threadRegistry.recordKill(threadId, sessionId, info.messageCount ?? 0, info.claudeSessionId)
+    threadRegistry.recordKill(threadId, sessionId, info.messageCount ?? 0, {
+      claudeSessionId: info.claudeSessionId, engine: info.engine ?? 'claude',
+      codexThreadId: info.codexThreadId, codexHomeName: info.codexHomeName,
+    })
     registry.delete(sessionId)
     registry.deleteThread(threadId)
     registry.persist()
@@ -512,15 +515,16 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
     name = info.tmuxName
   }
 
-  if (!tmuxHasSession(name)) {
+  const provider = providerFor(info.engine)
+  if (!provider.ensureInteractiveSurface(info)) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
-    void gateway.send(msg.channelId, `**${name}** tmux not running`, { replyTo: msg.id }).catch(() => {})
+    void gateway.send(msg.channelId, `**${name}** interactive surface unavailable`, { replyTo: msg.id }).catch(() => {})
     return
   }
 
   void gateway.react(msg.channelId, msg.id, '📸').catch(() => {})
 
-  const ctx = getContextPercent(name)
+  const ctx = provider.contextPercent(info)
   const duration = formatDuration(Date.now() - info.createdAt)
   const msgs = info.messageCount ?? 0
   const header = `📸 **${name}** · ${ctx} · ${msgs} msgs · ${duration}`
@@ -528,7 +532,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   if (hasFreeze()) {
     const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
     try {
-      const safeName = tmuxUiTarget(info).replace(/'/g, "'\\''")
+      const safeName = provider.uiTarget(info).replace(/'/g, "'\\''")
       execSync(
         `tmux capture-pane -t '${safeName}' -e -p | freeze -o '${outPath}' --language bash`,
         { stdio: 'pipe', timeout: 10000 },
@@ -544,7 +548,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 
   // Fallback: text capture
   try {
-    const safeName = tmuxUiTarget(info).replace(/'/g, "'\\''")
+    const safeName = provider.uiTarget(info).replace(/'/g, "'\\''")
     const text = execSync(
       `tmux capture-pane -t '${safeName}' -p -S -60`,
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },

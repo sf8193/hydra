@@ -25,8 +25,9 @@ import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
 import { getThreadIntercept } from './pane-probe.js'
-import { isAlive, reportError, tmuxUiTarget } from './util.js'
+import { isAlive, reportError } from './util.js'
 import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
+import { providerFor } from './session-provider.js'
 import { listTemplates, getTemplate } from './templates.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
@@ -794,6 +795,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const text = keysMatch[1].replace(/\n/g, ' ').trim()
             if (text) {
               try {
+                const provider = providerFor(info.engine)
+                if (!provider.ensureInteractiveSurface(info)) throw new Error(`${provider.id} interactive surface is unavailable`)
                 // Map lowercase → canonical tmux key name (tmux is case-sensitive)
                 const TMUX_KEY_MAP = new Map<string, string>()
                 for (const k of [
@@ -814,10 +817,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 const resolved = tokens.map(resolveKey)
                 const allKeyNames = resolved.every((r): r is string => r !== null)
                 const action: TmuxKeyAction = allKeyNames
-                  ? { target: tmuxUiTarget(info), mode: 'raw', keys: resolved }
-                  : { target: tmuxUiTarget(info), mode: 'literal', text }
-                if (info.engine === 'codex' && info.turnState === 'working') {
-                  const position = queueCodexKeys(info.sessionId, action)
+                  ? { target: provider.uiTarget(info), mode: 'raw', keys: resolved }
+                  : { target: provider.uiTarget(info), mode: 'literal', text }
+                const queued = provider.capabilities.queueKeysWhileWorking && info.turnState === 'working'
+                if (queued) {
+                  const position = queueCodexKeys(info.sessionId, action, error => {
+                    void gateway.unreact(msg.channelId, msg.id, '⏳').catch(() => {})
+                    void gateway.react(msg.channelId, msg.id, error ? '❌' : '⌨️').catch(() => {})
+                    if (error) void gateway.send(msg.channelId, `Key delivery failed: ${error.message}`, { replyTo: msg.id }).catch(() => {})
+                    else setTimeout(() => { void handlePeekIntercept(msg) }, 500)
+                  })
                   void gateway.react(msg.channelId, msg.id, '⏳').catch(() => {})
                   process.stderr.write(`daemon: queued keys for ${info.tmuxName} at position ${position}: ${text.slice(0, 100)}\n`)
                 } else {
@@ -825,8 +834,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
                   void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
                   process.stderr.write(`daemon: sent keys to ${info.tmuxName} (${allKeyNames ? 'raw' : 'literal'}): ${text.slice(0, 100)}\n`)
                 }
-                // Auto-peek after 1s so the user sees the result
-                setTimeout(() => { void handlePeekIntercept(msg) }, 1000)
+                // Immediate sends can be peeked now; queued sends peek after flush.
+                if (!queued) {
+                  setTimeout(() => { void handlePeekIntercept(msg) }, 1000)
+                }
               } catch (err) {
                 void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
                 process.stderr.write(`daemon: send-keys failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
@@ -840,7 +851,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
             if (stripped) {
               void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
               try {
-                Bun.spawn(['tmux', 'send-keys', '-t', tmuxUiTarget(info), 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
+                const provider = providerFor(info.engine)
+                provider.ensureInteractiveSurface(info)
+                Bun.spawn(['tmux', 'send-keys', '-t', provider.uiTarget(info), 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
                 process.stderr.write(`daemon: interrupt sent to ${info.tmuxName} via ! prefix\n`)
               } catch (err) {
                 process.stderr.write(`daemon: interrupt failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)

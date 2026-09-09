@@ -440,6 +440,7 @@ export function onRunDisconnect(sessionId: string): void {
   const run = runs.get(runId)
   if (!run || isTerminal(run)) return
   if (transport.has(sessionId)) return
+  if (run.disconnectTimers.has(sessionId)) return
 
   const role = run.sessionToRole.get(sessionId)
   if (!role) return
@@ -657,9 +658,14 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
       sessionType: 'thread_guest',
       ...(resumeRef.engine === 'claude'
         ? { resumeFrom: resumeRef.claudeSessionId }
-        : { resumeCodex: { threadId: resumeRef.codexThreadId, homeName: resumeRef.parentName } }),
+        : { resumeCodex: { threadId: resumeRef.codexThreadId, homeName: resumeRef.homeName } }),
       model: resumeModel,
       engine: resumeRef.engine,
+      beforeInitialTurn: (sessionId) => {
+        run.sessionToRole.set(sessionId, role)
+        sessionToRun.set(sessionId, run.id)
+        setProtocolTools(run, sessionId)
+      },
       promptBuilder: () => `[system] Hydra resumed your ${run.protocol.roles[role] ?? role} session after a disconnect. Continue the active ${run.protocol.display} from its current phase; do not restart or greet.`,
     },
   )
@@ -721,6 +727,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   run.sessionToRole.delete(deadSessionId)
   run.disconnectTimers.delete(deadSessionId)
   registerParticipant(run, role, result.sessionId)
+  run._resumeAttempts = 0
 
   resetTimeout(run)
   startKeepalive(run)
@@ -1043,12 +1050,17 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   }
 
   const model = (params.model as string) ?? undefined
+  let registeredBeforeInitialTurn = false
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,
     sessionType: 'thread_guest',
     model,
     engine: params.engine as 'claude' | 'codex' | undefined,
+    beforeInitialTurn: (sessionId) => {
+      registerParticipant(run, role, sessionId)
+      registeredBeforeInitialTurn = true
+    },
     promptBuilder: (sessionId, tmuxName) => {
       let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
       const seedMods = ((run.params.modifiers as Modifier[] | undefined) ?? [])
@@ -1060,7 +1072,9 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
     },
   })
 
-  registerParticipant(run, role, result.sessionId)
+  // Claude starts as part of process creation and therefore cannot use the
+  // Codex pre-turn hook. Register it once spawning returns.
+  if (!registeredBeforeInitialTurn) registerParticipant(run, role, result.sessionId)
 }
 
 async function postStatusLine(run: ProtocolRun): Promise<void> {
@@ -1110,6 +1124,7 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
   transport.sendOrQueue(sid, {
     type: 'notification',
     content: notification,
+    deferUntilTurnComplete: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -1409,7 +1424,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
 export const __test = process.env.NODE_ENV === 'test'
   ? {
-      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification,
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification, spawnRole,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge

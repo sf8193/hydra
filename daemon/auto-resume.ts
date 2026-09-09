@@ -4,15 +4,15 @@
 export type ResumeDecision = 'resume' | 'grace' | 'reconnected'
 export type ProtocolResumeRef =
   | { engine: 'claude'; claudeSessionId: string; parentName: string }
-  | { engine: 'codex'; codexThreadId: string; parentName: string }
+  | { engine: 'codex'; codexThreadId: string; parentName: string; homeName: string }
 
 export function protocolResumeRef(info: {
-  engine?: 'claude' | 'codex'; claudeSessionId?: string; codexThreadId?: string; tmuxName: string
+  engine?: 'claude' | 'codex'; claudeSessionId?: string; codexThreadId?: string; codexHomeName?: string; tmuxName: string
 } | undefined): ProtocolResumeRef | undefined {
   if (!info) return undefined
   if (info.engine === 'codex') {
     return info.codexThreadId
-      ? { engine: 'codex', codexThreadId: info.codexThreadId, parentName: info.tmuxName }
+      ? { engine: 'codex', codexThreadId: info.codexThreadId, parentName: info.tmuxName, homeName: info.codexHomeName ?? info.tmuxName }
       : undefined
   }
   return info.claudeSessionId

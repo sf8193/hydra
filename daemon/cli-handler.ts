@@ -1,7 +1,8 @@
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, getContextPercent, tmuxUiTarget } from './util.js'
+import { fallbackDescription, formatDuration, tmuxUiTarget } from './util.js'
+import { providerFor } from './session-provider.js'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
@@ -123,7 +124,7 @@ function handleList(req: CLIRequest): CLIResponse {
     sessionId: s.sessionId,
     description: s.description ?? (s.topic ? fallbackDescription(s.topic) : ''),
     url: (s.lastReplyId ? gateway.getMessageUrl(s.threadId, s.lastReplyId) : '') || s.threadUrl || '',
-    context: getContextPercent(tmuxUiTarget(s)),
+    context: providerFor(s.engine).contextPercent(s),
     tmuxTarget: tmuxUiTarget(s),
     running_for: formatDuration(Date.now() - s.createdAt),
     status: transport.has(s.sessionId) ? 'connected' : 'disconnected',
@@ -152,7 +153,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
     description: info.description,
     threadId: info.threadId,
     url: info.threadUrl,
-    context: getContextPercent(info.tmuxName),
+    context: providerFor(info.engine).contextPercent(info),
     running_for: formatDuration(Date.now() - info.createdAt),
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
     tmux: tmuxAlive ? 'alive' : 'dead',

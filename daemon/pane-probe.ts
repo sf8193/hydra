@@ -2,8 +2,8 @@
 // login required) by periodically capturing tmux pane text and pattern
 // matching against the pane TAIL (where the active prompt renders).
 //
-// CC-specific — coupled to Claude Code's terminal UI strings. When a
-// second harness arrives, introduce a HarnessProbe interface.
+// Claude-specific prompt patterns; provider capabilities decide which sessions
+// use this probe while other providers supply structured health signals.
 //
 // Injectable seams: capturePaneTail, getWindowActivity, sendKeys, readFile
 // are replaceable for testing.
@@ -19,6 +19,7 @@ import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { loadAccess } from './access.js'
 import { safeSend } from './util.js'
 import { transport } from './bridge-transport.js'
+import { providerFor } from './session-provider.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -617,7 +618,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
   for (const info of io.getSessions()) {
     if (info.deadAt) continue
-    if (info.engine === 'codex') continue
+    if (!providerFor(info.engine).capabilities.paneProbe) continue
     targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
   }
 

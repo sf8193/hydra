@@ -96,6 +96,14 @@ export class BridgeTransport {
   }
 
   sendOrQueue(sessionId: string, msg: Record<string, unknown>): void {
+    // Codex's MCP sidecar owns tool discovery. Capability changes must reach it
+    // even though ordinary user messages route through the app-server.
+    if (msg.type === 'tools_update') {
+      const bridge = this.bridges.get(sessionId)
+      if (bridge) this.sendToBridge(bridge, msg)
+      else this.enqueue(sessionId, msg)
+      return
+    }
     // Route to Codex engine if this session is connected via codex
     if (this.codexEngine?.isConnected(sessionId)) {
       const content = msg.content
@@ -107,7 +115,8 @@ export class BridgeTransport {
         if (downloadedFiles) {
           steerText += `\n\n[attachments: ${downloadedFiles}]`
         }
-        this.codexEngine.steer(sessionId, steerText)
+        if (msg.deferUntilTurnComplete === true) this.codexEngine.queueTurn(sessionId, steerText)
+        else this.codexEngine.steer(sessionId, steerText)
       } else if (content !== undefined) {
         process.stderr.write(`daemon: codex ${sessionId}: non-string content (${typeof content}) dropped: ${JSON.stringify(msg).slice(0, 200)}\n`)
       }

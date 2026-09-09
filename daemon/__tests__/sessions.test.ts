@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { SessionRegistry, ThreadRegistry, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
+import { SessionRegistry, ThreadRegistry, deferPersistedLivenessToProvider, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -34,6 +34,11 @@ function makeThread(overrides: Partial<ThreadMetadata> = {}): ThreadMetadata {
 // Real sessions may exist on the host, so we test behaviors that are additive/relative.
 
 describe('SessionRegistry', () => {
+  test('defers tmux-absent Codex liveness to the startup socket probe', () => {
+    expect(deferPersistedLivenessToProvider({ engine: 'codex', codexThreadId: 'thread-1' }, false)).toBe(true)
+    expect(deferPersistedLivenessToProvider({ engine: 'claude' }, false)).toBe(false)
+    expect(deferPersistedLivenessToProvider({ engine: 'codex', codexThreadId: 'thread-1' }, true)).toBe(false)
+  })
   test('set and get', () => {
     const reg = new SessionRegistry()
     const baseline = reg.size
@@ -97,6 +102,21 @@ describe('SessionRegistry', () => {
 })
 
 describe('ThreadRegistry', () => {
+  test('persists provider recovery identity across spawn and kill', () => {
+    const tr = new ThreadRegistry()
+    tr.recordSpawn('thread-provider', {
+      topic: 'provider test', respawnCount: 0, sessionId: 'sid-provider', tmuxName: 'flint',
+      originType: 'spawn', model: 'gpt-6-astra', engine: 'codex',
+      codexThreadId: 'codex-thread', codexHomeName: 'flint',
+    })
+    tr.recordKill('thread-provider', 'sid-provider', 4, {
+      engine: 'codex', codexThreadId: 'codex-thread', codexHomeName: 'flint',
+    })
+    expect(tr.get('thread-provider')!.sessionHistory[0]).toMatchObject({
+      engine: 'codex', codexThreadId: 'codex-thread', codexHomeName: 'flint', messageCount: 4,
+    })
+  })
+
   test('set and get', () => {
     const tr = new ThreadRegistry()
     const info = makeThread({ threadId: 'thread-tr-1' })

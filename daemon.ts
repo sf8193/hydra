@@ -72,7 +72,7 @@ initEphemeralTimers()
 
 // Reconnect persisted codex sessions to their app-server sockets
 import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
-reconnectCodexSessions().then(() => {
+const codexReconnectSweep = reconnectCodexSessions().then(() => {
   process.stderr.write('daemon: codex reconnection sweep complete\n')
 }).catch(err => {
   process.stderr.write(`daemon: codex reconnection failed: ${err}\n`)
@@ -339,6 +339,7 @@ void startGateway().then(async () => {
   // the gateway is up (respawns post to their threads) AND after the factory sweep
   // settled (so it doesn't race sweepOrphanedBuilders over factory records). No-op otherwise.
   await factorySweep
+  await codexReconnectSweep
   await autoRecoverAfterBoot().catch(err =>
     process.stderr.write(`daemon: auto-recovery failed: ${err instanceof Error ? err.message : err}\n`),
   )
@@ -449,7 +450,9 @@ void (async () => {
 // ---------------------------------------------------------------------------
 
 import { startSessionHealthPoll } from './daemon/session-health.js'
-startSessionHealthPoll()
+// The eager first poll must not classify persisted Codex sessions while their
+// socket reconnects are still in flight.
+void codexReconnectSweep.finally(() => startSessionHealthPoll())
 
 // Reply guard: poll window_activity timestamp every 20s.
 // Only checks sessions with pending replies — O(pending) not O(sessions).

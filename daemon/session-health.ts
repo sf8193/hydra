@@ -1,9 +1,11 @@
 import { registry, threadRegistry } from './sessions.js'
+import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { gateway } from './config.js'
-import { tmuxHasSession, getContextPercent } from './util.js'
+import { tmuxHasSession } from './util.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { discoverClaudeSessionId } from './session-lifecycle.js'
+import { providerFor } from './session-provider.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
@@ -14,10 +16,19 @@ const contextAlerted = new Set<string>()
 const crashAlerted = new Set<string>()
 const orphanAlerted = new Set<string>()
 
+export function maintainInteractiveSurface(
+  info: SessionInfo,
+  ensure: (info: SessionInfo) => boolean = current => providerFor(current.engine).ensureInteractiveSurface(current),
+): boolean {
+  if (info.deadAt) return false
+  return ensure(info)
+}
+
 export function startSessionHealthPoll(): void {
-  setInterval(() => {
+  const poll = () => {
     const now = Date.now()
     for (const info of registry.values()) {
+      maintainInteractiveSurface(info)
       // Crash detection — both tmux AND bridge must be gone. Bridge-only disconnects are handled
       // by the bridge-server disconnect handler (3s delay + tmux check). Skip sessions in spawn
       // grace period (bridge needs time to connect).
@@ -71,7 +82,7 @@ export function startSessionHealthPoll(): void {
       }
 
       // Context alert
-      const pct = getContextPercent(info.tmuxName)
+      const pct = providerFor(info.engine).contextPercent(info)
       if (pct === '?') continue
       const num = parseInt(pct)
       if (num >= CONTEXT_ALERT_THRESHOLD && !contextAlerted.has(info.sessionId)) {
@@ -80,5 +91,7 @@ export function startSessionHealthPoll(): void {
         void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`respawn\` to continue in a fresh session.`).catch(() => {})
       }
     }
-  }, SESSION_CHECK_INTERVAL_MS)
+  }
+  poll()
+  setInterval(poll, SESSION_CHECK_INTERVAL_MS)
 }

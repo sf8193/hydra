@@ -5,10 +5,11 @@ import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { fallbackDescription, formatDuration, getContextPercent, atomicWriteFileSync, isAlive, safeSend, safeEdit } from '../util.js'
+import { fallbackDescription, formatDuration, atomicWriteFileSync, isAlive, safeSend, safeEdit } from '../util.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import type { InboundMessage } from '../../gateway.js'
+import { providerFor } from '../session-provider.js'
 
 export const daemonStartedAt = Date.now()
 
@@ -38,7 +39,7 @@ function formatSessionEntry(e: SessionEntry, indent?: string): string {
   const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
   const duration = formatDuration(Date.now() - s.createdAt)
   const msgCount = s.messageCount ?? 0
-  const ctx = getContextPercent(s.tmuxName)
+  const ctx = providerFor(s.engine).contextPercent(s)
   const badge = transport.has(s.sessionId) ? '' : ' ⚠️'
   const emoji = sessionEmoji(s.tmuxName)
   const url = thread?.threadUrl
@@ -254,7 +255,7 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   }
 
   void gateway.react(msg.channelId, msg.id, '📈').catch(() => {})
-  const ctx = getContextPercent(info.tmuxName)
+  const ctx = providerFor(info.engine).contextPercent(info)
   const duration = formatDuration(Date.now() - info.createdAt)
   const msgs = info.messageCount ?? 0
   const status = transport.has(info.sessionId) ? 'connected' : 'disconnected'

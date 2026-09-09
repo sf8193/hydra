@@ -44,6 +44,29 @@ describe('BridgeTransport', () => {
     expect(bt.messageQueues.has('s1')).toBe(false)
   })
 
+  test('tool surface updates reach the MCP bridge even when Codex is connected', () => {
+    const { written, socket } = mockSocket()
+    bt.set('codex-1', { sessionId: 'codex-1', socket, buf: '' })
+    let steered = false
+    bt.setCodexEngine({ isConnected: () => true, steer: () => { steered = true } } as any)
+    bt.sendOrQueue('codex-1', { type: 'tools_update', tools: [{ name: 'reply' }] })
+    expect(JSON.parse(written[0])).toEqual({ type: 'tools_update', tools: [{ name: 'reply' }] })
+    expect(steered).toBe(false)
+  })
+
+  test('routes deferred Codex notifications to the discrete-turn queue', () => {
+    let queued = ''
+    let steered = ''
+    bt.setCodexEngine({
+      isConnected: () => true,
+      queueTurn: (_id: string, text: string) => { queued = text },
+      steer: (_id: string, text: string) => { steered = text },
+    } as any)
+    bt.sendOrQueue('codex-1', { type: 'notification', content: 'next round', deferUntilTurnComplete: true })
+    expect(queued).toBe('next round')
+    expect(steered).toBe('')
+  })
+
   test('sendOrQueue queues when no bridge connected', () => {
     bt.sendOrQueue('s2', { type: 'notification', content: 'queued' })
     const queue = bt.messageQueues.get('s2')

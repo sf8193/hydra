@@ -162,6 +162,33 @@ describe('protocol runner — advance routing', () => {
   })
 })
 
+describe('protocol runner — participant startup', () => {
+  test('registers a protocol role before a provider starts its initial turn', async () => {
+    const run = createTestRun({
+      participants: new Map([['owner', 'test-owner']]),
+      sessionToRole: new Map([['test-owner', 'owner']]),
+    })
+    let registeredAtTurnStart = false
+    __test!.setLifecycle({
+      doSpawnSession: (async (_topic: string, _chatId?: string, _messageId?: string, opts?: any) => {
+        opts?.beforeInitialTurn?.('new-critic')
+        registeredAtTurnStart = run.participants.get('critic') === 'new-critic'
+          && run.sessionToRole.get('new-critic') === 'critic'
+          && sessionToRun.get('new-critic') === run.id
+        return { name: 'new-critic', sessionId: 'new-critic', threadId: run.threadId, url: '' }
+      }) as any,
+    })
+
+    try {
+      await __test!.spawnRole(run, 'critic', { engine: 'codex' })
+      expect(registeredAtTurnStart).toBe(true)
+      expect([...run.participants.values()].filter(id => id === 'new-critic')).toHaveLength(1)
+    } finally {
+      __test!.resetLifecycle()
+    }
+  })
+})
+
 describe('protocol runner — disconnect / reconnect', () => {
   test('disconnect starts grace timer', () => {
     const run = createTestRun()

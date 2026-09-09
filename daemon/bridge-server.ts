@@ -363,6 +363,12 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       break
     }
 
+    case 'tools_request': {
+      const { id } = msg as { id: string }
+      transport.sendToBridge(conn, { type: 'tools_result', id, tools: getToolsForSession(conn.sessionId ?? '') })
+      break
+    }
+
     case 'permission_response': {
       break
     }

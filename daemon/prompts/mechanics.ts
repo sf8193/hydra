@@ -51,7 +51,7 @@ export function mechanicsBlock(opts: MechanicsOpts): string {
     `**If a tool call returns InputValidationError, that tool is *deferred* — its name is known but its schema is not loaded. Call ToolSearch(query="select:<tool_name>") to load it, then retry. Never abandon your protocol action because its tool errored — recover the tool and complete the action.**`,
     ``,
     ...speakLines,
-    ...(waits ? [``, `**Between rounds:** after posting, stay idle and wait for the next [system] notification — it will deliver the other party's response. Do not poll the thread or exit; the protocol needs you alive for subsequent rounds.`] : []),
+    ...(waits ? [``, `**Between rounds:** after posting with \`advance\`, finish that model turn and return to idle, but keep the session running. The next [system] notification starts a fresh turn with the other party's response. Do not poll the thread, hold the current turn open with idle tool calls, or exit the session.`] : []),
   ].join('\n')
 }
 
