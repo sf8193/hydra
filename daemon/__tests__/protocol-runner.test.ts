@@ -23,6 +23,7 @@ afterEach(() => {
   threadToRun.clear()
   sessionToRun.clear()
   transport.messageQueues.clear()
+  __test.resetLifecycle()
 })
 
 if (!__test) throw new Error('protocol-runner.__test only available under NODE_ENV=test')
@@ -66,6 +67,8 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
     _phaseStartedAt: Date.now(),
     params: {},
     participants: new Map([['critic', 'test-critic'], ['owner', 'test-owner']]),
+    participantExecutions: new Map(),
+    retiredParticipants: new Set(),
     sessionToRole: new Map([['test-critic', 'critic'], ['test-owner', 'owner']]),
     timeout: undefined,
     disconnectTimers: new Map(),
@@ -217,6 +220,21 @@ describe('protocol runner — terminal phases', () => {
 
     expect(runs.has('test-run')).toBe(false)
     expect(threadToRun.has('test-thread')).toBe(false)
+  })
+
+  test('cancellation interrupts a Codex participant after its registry record vanished', async () => {
+    const run = createTestRun()
+    const interrupted: any[] = []
+    run.participantExecutions.set('critic', {
+      provider: 'codex', sessionId: 'test-critic', codexThreadId: 'thread-stale', codexHomeName: 'drift',
+    })
+    __test.setLifecycle({ interruptExecution: async ref => { interrupted.push(ref); return true } })
+
+    await cancelRun(run, 'cancelled by user')
+
+    expect(interrupted).toEqual([{
+      provider: 'codex', sessionId: 'test-critic', codexThreadId: 'thread-stale', codexHomeName: 'drift',
+    }])
   })
 })
 

@@ -216,6 +216,50 @@ export class CodexEngine extends EventEmitter {
     return this.connections.has(sessionId)
   }
 
+  /** Interrupt the active turn without disconnecting or stopping its app-server. */
+  interruptCurrentTurn(sessionId: string): boolean {
+    const conn = this.connections.get(sessionId)
+    if (!conn?.threadId || !conn.currentTurnId) return false
+    this.send(conn, {
+      method: 'turn/interrupt',
+      params: { threadId: conn.threadId, turnId: conn.currentTurnId },
+    })
+    if (conn.turnWatchdog) { clearTimeout(conn.turnWatchdog); conn.turnWatchdog = null }
+    conn.currentTurnId = null
+    return true
+  }
+
+  /** Interrupt an orphaned thread without disturbing siblings on a legacy shared server. */
+  async interruptPersistedThread(socketPath: string, threadId: string): Promise<boolean> {
+    const ws = await this.wsConnect(socketPath)
+    const conn: CodexConn = {
+      sessionId: `cleanup:${threadId}`, ws, threadId, currentTurnId: null,
+      nextRequestId: 0, pendingRequests: new Map(), messageBuffer: [], steerQueue: [],
+      deferredTurnQueue: [], turnPending: false, turnWatchdog: null, lastUsageWarning: 0,
+    }
+    this.attachWsHandlers(ws, conn, conn.sessionId)
+    try {
+      await this.request(conn, 'initialize', {
+        clientInfo: { name: 'hydra-cleanup', title: 'Hydra cleanup', version: '1.0.0' },
+        capabilities: { experimentalApi: true },
+      })
+      this.send(conn, { method: 'initialized' })
+      const result = await this.request(conn, 'thread/resume', { threadId })
+      const thread = result?.thread
+      const turns = Array.isArray(thread?.turns) ? thread.turns : []
+      const active = [...turns].reverse().find((turn: any) => {
+        const status = turn?.status?.type ?? turn?.status
+        return status === 'inProgress' || status === 'active'
+      }) ?? (thread?.status?.type === 'active' ? turns.at(-1) : undefined)
+      if (!active?.id) return false
+      await this.request(conn, 'turn/interrupt', { threadId, turnId: active.id })
+      return true
+    } finally {
+      this.rejectAllPending(conn, 'cleanup connection closed')
+      try { ws.close() } catch {}
+    }
+  }
+
   /** Probe the transport without creating/resuming a thread. */
   async isSocketLive(socketPath: string): Promise<boolean> {
     try {

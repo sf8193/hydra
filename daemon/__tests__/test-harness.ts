@@ -118,6 +118,8 @@ export class TestHarness {
       _phaseStartedAt: Date.now(),
       params: { rounds, topic: opts.topic, strike: opts.strike, ...opts.params },
       participants,
+      participantExecutions: new Map(),
+      retiredParticipants: new Set(),
       sessionToRole,
       timeout: undefined,
       _warningTimeout: undefined,

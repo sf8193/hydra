@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { CodexEngine, parseCodexContextUsage, selectDefaultCodexModel } from '../codex-engine.js'
+import { EventEmitter } from 'events'
 
 describe('selectDefaultCodexModel', () => {
   test('returns the model marked as default', () => {
@@ -20,6 +21,41 @@ describe('selectDefaultCodexModel', () => {
 })
 
 describe('CodexEngine deferred turns', () => {
+  test('interrupts only the current session turn without disconnecting it', () => {
+    const engine = new CodexEngine() as any
+    const sent: any[] = []
+    const conn = {
+      sessionId: 's', ws: { send(value: string) { sent.push(JSON.parse(value)) } },
+      threadId: 'thread', currentTurnId: 'turn', turnPending: false, turnWatchdog: null,
+      nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [], steerQueue: [],
+      deferredTurnQueue: [], lastUsageWarning: 0,
+    }
+    engine.connections.set('s', conn)
+
+    expect(engine.interruptCurrentTurn('s')).toBe(true)
+    expect(sent).toEqual([{ method: 'turn/interrupt', params: { threadId: 'thread', turnId: 'turn' } }])
+    expect(conn.currentTurnId).toBeNull()
+    expect(engine.isConnected('s')).toBe(true)
+  })
+
+  test('finds and interrupts an orphaned persisted turn through a temporary connection', async () => {
+    const engine = new CodexEngine() as any
+    const ws = Object.assign(new EventEmitter(), { send() {}, close() {} })
+    const calls: Array<{ method: string; params: any }> = []
+    engine.wsConnect = async () => ws
+    engine.request = async (_conn: any, method: string, params: any) => {
+      calls.push({ method, params })
+      if (method === 'thread/resume') return {
+        thread: { status: { type: 'active' }, turns: [{ id: 'old', status: 'completed' }, { id: 'live', status: 'inProgress' }] },
+      }
+      return {}
+    }
+
+    expect(await engine.interruptPersistedThread('/tmp/stale.sock', 'thread-stale')).toBe(true)
+    expect(calls.at(-1)).toEqual({ method: 'turn/interrupt', params: { threadId: 'thread-stale', turnId: 'live' } })
+    expect(engine.connections.size).toBe(0)
+  })
+
   test('does not steer a deferred turn into a pending turn and starts it only after completion', () => {
     const engine = new CodexEngine() as any
     const started: string[] = []

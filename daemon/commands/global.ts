@@ -8,7 +8,7 @@ import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession } from '../session-lifecycle.js'
 import { tmuxHasSession, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { getActiveRuns } from '../protocol-runner.js'
+import { cancelAllRuns, getActiveRuns } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
@@ -162,12 +162,8 @@ export async function handleKillIntercept(msg: InboundMessage, name: string): Pr
 export async function handleRestartIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔄').catch(() => {})
 
-  // Active protocol runs live only in memory — a restart tears down the daemon
-  // and they do not survive it, so report how many are being interrupted.
-  // (These are NOT gracefully cancelled first: cancelRun() is async and the
-  // daemon exits before its cleanup — killing critics, striking messages —
-  // could finish. Wiring a clean pre-restart cancel is a separate, pre-existing
-  // gap, not something this migration introduced.)
+  // Active protocol runs live only in memory. Retire their exact provider turns
+  // before the daemon exits so durable Codex app-servers cannot retain critics.
   const activeReviews = getActiveRuns()
 
   const cancelled = activeReviews.length
@@ -180,6 +176,8 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
   try {
     await gateway.send(msg.channelId, `🔄 Restarting daemon${cancelNote}${modeNote} — back in a moment...`, { replyTo: msg.id })
   } catch {}
+
+  if (cancelled > 0) await cancelAllRuns('daemon restarting')
 
   try {
     const restartChatId = registry.resolveThreadId(msg)

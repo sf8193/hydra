@@ -10,6 +10,13 @@ const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
 export type ProviderId = 'claude' | 'codex'
 
+export type ProviderExecutionRef = {
+  provider: ProviderId
+  sessionId: string
+  codexThreadId?: string
+  codexHomeName?: string
+}
+
 export type ProviderCapabilities = {
   nativeFork: boolean
   nativeResume: boolean
@@ -44,6 +51,8 @@ type ProviderDependencies = {
   disconnectCodex: (sessionId: string) => void
   stopCodexAppServer: (homeName: string) => boolean
   isCodexConnected: (sessionId: string) => boolean
+  interruptCodexCurrent: (sessionId: string) => boolean
+  interruptCodexPersisted: (homeName: string, threadId: string) => Promise<boolean>
 }
 
 let dependencies: ProviderDependencies | undefined
@@ -66,6 +75,8 @@ export interface SessionProvider {
   uiTarget(info: Pick<SessionInfo, 'tmuxName'>): string
   ensureInteractiveSurface(info: SessionInfo): boolean
   contextPercent(info: SessionInfo): string
+  executionRef(info: SessionInfo): ProviderExecutionRef
+  interruptExecution(ref: ProviderExecutionRef): Promise<boolean>
   disconnect(info: SessionInfo): void
   resume(input: ProviderRecoveryInput): Promise<(SpawnResult & { bridgeOrphan?: boolean }) | null>
   fork(input: ProviderRecoveryInput): Promise<SpawnResult | null>
@@ -123,6 +134,8 @@ class ClaudeSessionProvider implements SessionProvider {
   uiTarget(info: Pick<SessionInfo, 'tmuxName'>): string { return info.tmuxName }
   ensureInteractiveSurface(info: SessionInfo): boolean { return tmuxHasSession(info.tmuxName) }
   contextPercent(info: SessionInfo): string { return getContextPercent(info.tmuxName) }
+  executionRef(info: SessionInfo): ProviderExecutionRef { return { provider: 'claude', sessionId: info.sessionId } }
+  async interruptExecution(_ref: ProviderExecutionRef): Promise<boolean> { return false }
   disconnect(_info: SessionInfo): void {}
 
   async resume(input: ProviderRecoveryInput) {
@@ -165,6 +178,21 @@ class CodexSessionProvider implements SessionProvider {
   }
   contextPercent(info: SessionInfo): string {
     return info.contextUsage ? `${info.contextUsage.percent}%` : '?'
+  }
+  executionRef(info: SessionInfo): ProviderExecutionRef {
+    return {
+      provider: 'codex', sessionId: info.sessionId, codexThreadId: info.codexThreadId,
+      codexHomeName: info.codexHomeName ?? info.tmuxName,
+    }
+  }
+  async interruptExecution(ref: ProviderExecutionRef): Promise<boolean> {
+    if (deps().interruptCodexCurrent(ref.sessionId)) return true
+    if (!ref.codexHomeName || !ref.codexThreadId) return false
+    try { return await deps().interruptCodexPersisted(ref.codexHomeName, ref.codexThreadId) }
+    catch (err) {
+      process.stderr.write(`daemon: codex provider could not interrupt ${ref.sessionId}: ${err}\n`)
+      return false
+    }
   }
   disconnect(info: SessionInfo): void {
     deps().disconnectCodex(info.sessionId)

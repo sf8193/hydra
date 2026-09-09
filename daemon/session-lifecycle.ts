@@ -1186,6 +1186,8 @@ configureSessionProviders({
   disconnectCodex: sessionId => codexEngine.disconnect(sessionId),
   stopCodexAppServer,
   isCodexConnected: sessionId => codexEngine.isConnected(sessionId),
+  interruptCodexCurrent: sessionId => codexEngine.interruptCurrentTurn(sessionId),
+  interruptCodexPersisted: (homeName, threadId) => codexEngine.interruptPersistedThread(codexSocketPath(homeName), threadId),
 })
 
 // ---------------------------------------------------------------------------

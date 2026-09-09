@@ -14,10 +14,13 @@ import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
+import { providerFor, type ProviderExecutionRef } from './session-provider.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
 let killSession = _killSession
+const defaultInterruptExecution = (ref: ProviderExecutionRef) => providerFor(ref.provider).interruptExecution(ref)
+let interruptExecution = defaultInterruptExecution
 
 // ---------------------------------------------------------------------------
 // Run state
@@ -34,6 +37,8 @@ export type ProtocolRun = StatusLineState & {
   startedAt: number
   params: Record<string, unknown>
   participants: Map<string, string>
+  participantExecutions: Map<string, ProviderExecutionRef>
+  retiredParticipants: Set<string>
   sessionToRole: Map<string, string>
   timeout?: ReturnType<typeof setTimeout>
   _warningTimeout?: ReturnType<typeof setTimeout>
@@ -129,6 +134,8 @@ export async function startProtocolRun(
     startedAt: Date.now(),
     params,
     participants: new Map(),
+    participantExecutions: new Map(),
+    retiredParticipants: new Set(),
     sessionToRole: new Map(),
     timeout: undefined,
     _extensions: 0,
@@ -288,9 +295,26 @@ function clearProtocolTools(run: ProtocolRun): void {
 
 function registerParticipant(run: ProtocolRun, role: string, sessionId: string): void {
   run.participants.set(role, sessionId)
+  const info = registry.get(sessionId)
+  if (info) run.participantExecutions.set(role, providerFor(info.engine).executionRef(info))
   run.sessionToRole.set(sessionId, role)
   sessionToRun.set(sessionId, run.id)
   setProtocolTools(run, sessionId)
+}
+
+async function retireParticipant(run: ProtocolRun, role: string, sessionId: string, reason: string): Promise<void> {
+  run.retiredParticipants ??= new Set()
+  if (run.retiredParticipants.has(sessionId)) return
+  run.retiredParticipants.add(sessionId)
+  const info = registry.get(sessionId)
+  const ref = info
+    ? providerFor(info.engine).executionRef(info)
+    : run.participantExecutions?.get(role)
+  if (ref) await interruptExecution(ref)
+  if (info && !killsInProgress.has(sessionId)) {
+    try { await killSession(info, reason) }
+    catch (err) { process.stderr.write(`daemon: participant retirement failed for ${sessionId}: ${err}\n`) }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -575,10 +599,7 @@ async function enterFallbackPhase(run: ProtocolRun, deadRole: string, cause: Fal
   run._enteredFallback = true
 
   if (deadSessionId) {
-    const info = registry.get(deadSessionId)
-    if (info && !killsInProgress.has(deadSessionId)) {
-      await killSession(info, `fallback after ${deadRole} died`).catch(() => {})
-    }
+    await retireParticipant(run, deadRole, deadSessionId, `fallback after ${deadRole} died`)
   }
 
   if (isTerminal(run)) return // defensive: a cancel/complete slipped in during the kill
@@ -786,10 +807,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
 
     for (const [role, sid] of run.participants) {
       if (sid === run.ownerSessionId) continue
-      const info = registry.get(sid)
-      if (info && !killsInProgress.has(sid)) {
-        try { await killSession(info, reason) } catch (err) { process.stderr.write(`daemon: kill on cancel failed: ${err}\n`) }
-      }
+      await retireParticipant(run, role, sid, reason)
     }
 
     const cancelIds = await safeSend(run.threadId, `${run.protocol.display} cancelled: ${reason}`)
@@ -896,15 +914,12 @@ function cleanupRun(run: ProtocolRun): void {
 type BehaviorHandler = (run: ProtocolRun, prevPhase: string, content: string, ctx: BehaviorContext) => boolean | Promise<boolean>
 
 const BEHAVIORS: Record<string, BehaviorHandler> = {
-  killNonOwner: (run, prevPhase) => {
+  killNonOwner: async (run, prevPhase) => {
     if (prevPhase === run.phase) return false
     for (const [role, sid] of run.participants) {
       if (sid === run.ownerSessionId) continue
       sessionToRun.delete(sid)
-      const info = registry.get(sid)
-      if (info && !killsInProgress.has(sid)) {
-        void killSession(info, 'protocol closing').catch(() => {})
-      }
+      await retireParticipant(run, role, sid, 'protocol closing')
     }
     return false
   },
@@ -1406,13 +1421,10 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
   protocolEvents.emitComplete(completionEvent)
 
-  for (const [, sid] of run.participants) {
+  for (const [role, sid] of run.participants) {
     if (sid === run.ownerSessionId) continue
     sessionToRun.delete(sid)
-    const info = registry.get(sid)
-    if (info && !killsInProgress.has(sid)) {
-      void killSession(info, 'protocol complete').catch(err => process.stderr.write(`daemon: kill on complete failed: ${err}\n`))
-    }
+    await retireParticipant(run, role, sid, 'protocol complete')
   }
   cleanupRun(run)
   refreshSessionVisual(run.threadId)
@@ -1425,15 +1437,17 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification, spawnRole,
-      setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
+      setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession; interruptExecution?: typeof defaultInterruptExecution }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
         if (overrides.killSession) killSession = overrides.killSession
+        if (overrides.interruptExecution) interruptExecution = overrides.interruptExecution
       },
       resetLifecycle() {
         doSpawnSession = _doSpawnSession
         waitForBridge = _waitForBridge
         killSession = _killSession
+        interruptExecution = defaultInterruptExecution
       },
     } as const
   : undefined
@@ -1449,6 +1463,12 @@ export function getRunByThread(threadId: string): ProtocolRun | undefined {
 
 export function getActiveRuns(): ProtocolRun[] {
   return [...runs.values()].filter(r => !isTerminal(r))
+}
+
+export async function cancelAllRuns(reason: string): Promise<number> {
+  const active = getActiveRuns()
+  await Promise.all(active.map(run => cancelRun(run, reason)))
+  return active.length
 }
 
 // ---------------------------------------------------------------------------

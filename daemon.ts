@@ -46,6 +46,7 @@ import { setupPermissionHandler } from './daemon/permission.js'
 import { socketServer, startBridgeServer, initEphemeralTimers } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
+import { cancelAllRuns } from './daemon/protocol-runner.js'
 
 threadRegistry.boot(registry)
 
@@ -493,19 +494,25 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   process.stderr.write('daemon: shutting down\n')
+  const forceExit = setTimeout(() => process.exit(0), 2000)
+  void (async () => {
+    await Promise.race([
+      cancelAllRuns('daemon shutting down'),
+      new Promise(resolve => setTimeout(resolve, 1_500)),
+    ])
+    registry.persist()
+    transport.persistQueues()
+    socketServer.close()
+    try { unlinkSync(SOCK_PATH) } catch {}
 
-  registry.persist()
-  transport.persistQueues()
-  socketServer.close()
-  try { unlinkSync(SOCK_PATH) } catch {}
-
-  for (const [, bridge] of transport.bridges) {
-    try { bridge.socket.end() } catch {}
-  }
-  transport.clear()
-
-  setTimeout(() => process.exit(0), 2000)
-  void Promise.resolve(gateway.stop()).finally(() => process.exit(0))
+    for (const [, bridge] of transport.bridges) {
+      try { bridge.socket.end() } catch {}
+    }
+    transport.clear()
+    try { await gateway.stop() } catch {}
+    clearTimeout(forceExit)
+    process.exit(0)
+  })()
 }
 
 process.on('SIGTERM', shutdown)
