@@ -15,6 +15,7 @@ import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } fro
 import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
 import { providerFor, type ProviderExecutionRef } from './session-provider.js'
+import { completePendingRetirement, listPendingRetirements, recordPendingRetirement } from './retirement-journal.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -71,6 +72,7 @@ const threadToRun = new Map<string, string>()
 const sessionToRun = new Map<string, string>()
 const transitioningRuns = new Set<string>()
 const cancellingRuns = new Set<string>()
+const participantRetirements = new Map<string, Promise<boolean>>()
 
 // ---------------------------------------------------------------------------
 // Completion event bus
@@ -305,16 +307,44 @@ function registerParticipant(run: ProtocolRun, role: string, sessionId: string):
 async function retireParticipant(run: ProtocolRun, role: string, sessionId: string, reason: string): Promise<void> {
   run.retiredParticipants ??= new Set()
   if (run.retiredParticipants.has(sessionId)) return
-  run.retiredParticipants.add(sessionId)
   const info = registry.get(sessionId)
   const ref = info
     ? providerFor(info.engine).executionRef(info)
     : run.participantExecutions?.get(role)
-  if (ref) await interruptExecution(ref)
-  if (info && !killsInProgress.has(sessionId)) {
-    try { await killSession(info, reason) }
-    catch (err) { process.stderr.write(`daemon: participant retirement failed for ${sessionId}: ${err}\n`) }
+  const generation = ref?.ownershipGeneration ?? sessionId
+  const existingRetirement = participantRetirements.get(generation)
+  if (existingRetirement) {
+    if (await existingRetirement) run.retiredParticipants.add(sessionId)
+    return
   }
+  if (ref) recordPendingRetirement(ref, generation, reason)
+  const retirement = (async () => {
+    let terminal = ref ? await interruptExecution(ref) : false
+    if (info && !killsInProgress.has(sessionId)) {
+      try { await killSession(info, reason); terminal = true }
+      catch (err) { process.stderr.write(`daemon: participant retirement failed for ${sessionId}: ${err}\n`) }
+    }
+    return terminal
+  })()
+  participantRetirements.set(generation, retirement)
+  let terminal = false
+  try { terminal = await retirement }
+  finally { participantRetirements.delete(generation) }
+  if (terminal) {
+    completePendingRetirement(generation)
+    run.retiredParticipants.add(sessionId)
+  }
+}
+
+export async function replayPendingRetirements(): Promise<number> {
+  let completed = 0
+  for (const entry of listPendingRetirements()) {
+    if (await interruptExecution(entry)) {
+      completePendingRetirement(entry.ownershipGeneration)
+      completed++
+    }
+  }
+  return completed
 }
 
 // ---------------------------------------------------------------------------

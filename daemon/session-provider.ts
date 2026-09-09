@@ -15,6 +15,7 @@ export type ProviderExecutionRef = {
   sessionId: string
   codexThreadId?: string
   codexHomeName?: string
+  ownershipGeneration?: string
 }
 
 export type ProviderCapabilities = {
@@ -51,7 +52,7 @@ type ProviderDependencies = {
   disconnectCodex: (sessionId: string) => void
   stopCodexAppServer: (homeName: string) => boolean
   isCodexConnected: (sessionId: string) => boolean
-  interruptCodexCurrent: (sessionId: string) => boolean
+  interruptCodexCurrent: (sessionId: string) => Promise<boolean>
   interruptCodexPersisted: (homeName: string, threadId: string) => Promise<boolean>
 }
 
@@ -183,10 +184,11 @@ class CodexSessionProvider implements SessionProvider {
     return {
       provider: 'codex', sessionId: info.sessionId, codexThreadId: info.codexThreadId,
       codexHomeName: info.codexHomeName ?? info.tmuxName,
+      ownershipGeneration: info.ownershipGeneration ?? info.sessionId,
     }
   }
   async interruptExecution(ref: ProviderExecutionRef): Promise<boolean> {
-    if (deps().interruptCodexCurrent(ref.sessionId)) return true
+    if (await deps().interruptCodexCurrent(ref.sessionId)) return true
     if (!ref.codexHomeName || !ref.codexThreadId) return false
     try { return await deps().interruptCodexPersisted(ref.codexHomeName, ref.codexThreadId) }
     catch (err) {

@@ -34,6 +34,22 @@ function makeThread(overrides: Partial<ThreadMetadata> = {}): ThreadMetadata {
 // Real sessions may exist on the host, so we test behaviors that are additive/relative.
 
 describe('SessionRegistry', () => {
+  test('reserves Codex homes exclusively and releases them', () => {
+    const reg = new SessionRegistry()
+    expect(reg.reserveCodexHome('unit-exclusive-home')).toBe(true)
+    expect(reg.reserveCodexHome('unit-exclusive-home')).toBe(false)
+    reg.releaseCodexHome('unit-exclusive-home')
+    expect(reg.reserveCodexHome('unit-exclusive-home')).toBe(true)
+    reg.releaseCodexHome('unit-exclusive-home')
+  })
+
+  test('active Codex homes remain unavailable after an agent rename', () => {
+    const reg = new SessionRegistry()
+    const id = `unit-renamed-${Date.now()}`
+    reg.set(id, makeInfo({ sessionId: id, tmuxName: 'bloom', engine: 'codex', codexHomeName: 'unit-old-home' }))
+    expect(reg.reserveCodexHome('unit-old-home')).toBe(false)
+    reg.delete(id)
+  })
   test('defers tmux-absent Codex liveness to the startup socket probe', () => {
     expect(deferPersistedLivenessToProvider({ engine: 'codex', codexThreadId: 'thread-1' }, false)).toBe(true)
     expect(deferPersistedLivenessToProvider({ engine: 'claude' }, false)).toBe(false)

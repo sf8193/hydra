@@ -25,6 +25,7 @@ import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
 import { configureSessionProviders, providerFor } from './session-provider.js'
+import { hasPendingRetirementForHome } from './retirement-journal.js'
 import { codexHomeDir, startCodexAppServer, stopCodexAppServer } from './codex-process.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -358,6 +359,11 @@ async function spawnCodexSession(p: {
   // A native fork needs the parent's persisted rollout, but each Hydra session
   // must keep its own app-server socket/home. Seed only the rollout store into
   // the fresh destination home rather than sharing a live CODEX_HOME.
+  // Verify external ownership before touching a recyclable destination home.
+  if (await codexEngine.isSocketLive(sockPath)) {
+    throw new Error(`refusing to replace live codex app-server at ${sockPath}`)
+  }
+
   if (p.forkFromThread && p.forkSourceHomeName && p.forkSourceHomeName !== codexHomeName) {
     const sourceSessions = join(process.env.HOME!, '.codex', `hydra-${p.forkSourceHomeName}`, 'sessions')
     const destinationSessions = join(codexHome, 'sessions')
@@ -371,9 +377,6 @@ async function spawnCodexSession(p: {
 
   // Every Hydra agent owns exactly one app-server. A live socket means another
   // owner still exists; a dead socket/pid are residue from a prior process.
-  if (await codexEngine.isSocketLive(sockPath)) {
-    throw new Error(`refusing to replace live codex app-server at ${sockPath}`)
-  }
   stopCodexAppServer(codexHomeName)
   try { unlinkSync(sockPath) } catch {}
 
@@ -473,6 +476,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   const sessionId = randomUUID()
   const tmuxName = registry.pickSessionName()
+  const requestedCodexHome = opts?.resumeCodex?.homeName ?? tmuxName
+  const ownsCodexReservation = opts?.engine === 'codex'
+  if (ownsCodexReservation && !registry.reserveCodexHome(requestedCodexHome)) {
+    throw new Error(`codex home ${requestedCodexHome} is already active or starting`)
+  }
+  if (ownsCodexReservation && hasPendingRetirementForHome(requestedCodexHome)) {
+    registry.releaseCodexHome(requestedCodexHome)
+    throw new Error(`codex home ${requestedCodexHome} has unresolved retirement`)
+  }
   // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
   // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
   // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
@@ -765,6 +777,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
       threadUrl: url || undefined, engine: 'codex',
       codexHomeName: opts?.resumeCodex?.homeName ?? tmuxName,
+      ownershipGeneration: sessionId,
       ...(respawnCount > 0 ? { respawnCount } : {}),
       ...(resumeCount > 0 ? { resumeCount } : {}),
       ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
@@ -788,6 +801,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         forkSourceHomeName: opts?.forkFrom?.codexHomeName,
       })
     } catch (err) {
+      registry.releaseCodexHome(requestedCodexHome)
       registry.delete(sessionId)
       if (isJoin) registry.removeMember(threadId!, sessionId)
       else registry.deleteThread(threadId!)
@@ -804,6 +818,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     info.sessionMetadata!.model = displayedModel
     if (spawnLogPath) info.spawnLogPath = spawnLogPath
     registry.persist()
+    registry.releaseCodexHome(requestedCodexHome)
+    // Refresh protocol execution identity now that the persistent thread exists.
+    opts?.beforeInitialTurn?.(sessionId)
     providerFor('codex').ensureInteractiveSurface(info)
 
     void codexEngine.startTurn(sessionId, prompt).catch(err => {
@@ -1186,7 +1203,7 @@ configureSessionProviders({
   disconnectCodex: sessionId => codexEngine.disconnect(sessionId),
   stopCodexAppServer,
   isCodexConnected: sessionId => codexEngine.isConnected(sessionId),
-  interruptCodexCurrent: sessionId => codexEngine.interruptCurrentTurn(sessionId),
+  interruptCodexCurrent: sessionId => codexEngine.retireSession(sessionId),
   interruptCodexPersisted: (homeName, threadId) => codexEngine.interruptPersistedThread(codexSocketPath(homeName), threadId),
 })
 

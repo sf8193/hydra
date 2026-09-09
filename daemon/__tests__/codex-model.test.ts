@@ -21,21 +21,76 @@ describe('selectDefaultCodexModel', () => {
 })
 
 describe('CodexEngine deferred turns', () => {
-  test('interrupts only the current session turn without disconnecting it', () => {
+  test('interrupts only the current session turn without disconnecting it', async () => {
     const engine = new CodexEngine() as any
     const sent: any[] = []
     const conn = {
       sessionId: 's', ws: { send(value: string) { sent.push(JSON.parse(value)) } },
       threadId: 'thread', currentTurnId: 'turn', turnPending: false, turnWatchdog: null,
       nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [], steerQueue: [],
-      deferredTurnQueue: [], lastUsageWarning: 0,
+      deferredTurnQueue: [], lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
     }
     engine.connections.set('s', conn)
+    engine.request = async (_conn: any, method: string, params: any) => {
+      sent.push({ method, params })
+      return {}
+    }
 
-    expect(engine.interruptCurrentTurn('s')).toBe(true)
+    expect(await engine.interruptCurrentTurn('s')).toBe(true)
     expect(sent).toEqual([{ method: 'turn/interrupt', params: { threadId: 'thread', turnId: 'turn' } }])
     expect(conn.currentTurnId).toBeNull()
     expect(engine.isConnected('s')).toBe(true)
+  })
+
+  test('does not report retirement success when the interrupt write fails', async () => {
+    const engine = new CodexEngine() as any
+    const conn = {
+      sessionId: 's', ws: { send() { throw new Error('closed') }, terminate() {} },
+      threadId: 'thread', currentTurnId: 'turn', turnPending: false, turnWatchdog: null,
+      nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [], steerQueue: [],
+      deferredTurnQueue: ['ROUND_2'], lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+
+    expect(await engine.retireSession('s')).toBe(false)
+    expect(conn.deferredTurnQueue).toEqual([])
+    expect(engine.isConnected('s')).toBe(false)
+  })
+
+  test('retirement fences queued protocol work after completion', async () => {
+    const engine = new CodexEngine() as any
+    const started: string[] = []
+    engine.request = async () => ({})
+    engine.startTurn = async (_sessionId: string, text: string) => { started.push(text) }
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'ROUND_1',
+      turnPending: false, turnWatchdog: null, nextRequestId: 1, pendingRequests: new Map(),
+      messageBuffer: [], steerQueue: [], deferredTurnQueue: ['ROUND_2'], lastUsageWarning: 0,
+      retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.scheduling.set('s', { steerQueue: conn.steerQueue, deferredTurnQueue: conn.deferredTurnQueue, fenced: false })
+
+    expect(await engine.retireSession('s')).toBe(true)
+    engine.handleNotification(conn, 'turn/completed', { turn: { id: 'ROUND_1' } })
+    expect(started).toEqual([])
+    expect(conn.deferredTurnQueue).toEqual([])
+  })
+
+  test('a stale socket close cannot delete its replacement generation', () => {
+    const engine = new CodexEngine() as any
+    const oldWs = Object.assign(new EventEmitter(), { send() {}, close() {} })
+    const newWs = Object.assign(new EventEmitter(), { send() {}, close() {} })
+    const base = { threadId: 'thread', currentTurnId: null, turnPending: false, turnWatchdog: null,
+      nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set() }
+    const oldConn = { ...base, sessionId: 's', ws: oldWs, generation: 1 }
+    const newConn = { ...base, sessionId: 's', ws: newWs, generation: 2 }
+    engine.attachWsHandlers(oldWs, oldConn, 's')
+    engine.connections.set('s', newConn)
+
+    oldWs.emit('close')
+    expect(engine.connections.get('s')).toBe(newConn)
   })
 
   test('finds and interrupts an orphaned persisted turn through a temporary connection', async () => {
@@ -82,7 +137,7 @@ describe('CodexEngine deferred turns', () => {
     const engine = new CodexEngine() as any
     let attempts = 0
     let stalled = 0
-    engine.startTurn = async () => { attempts++; throw new Error('rejected') }
+    engine.startTurn = async () => { attempts++; throw new Error('rejected (code -32000)') }
     engine.on('turnStalled', () => { stalled++ })
     const conn = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'ROUND_1',
@@ -97,6 +152,28 @@ describe('CodexEngine deferred turns', () => {
     expect(attempts).toBe(3)
     expect(conn.deferredTurnQueue).toEqual(['ROUND_2'])
     expect(stalled).toBe(1)
+  })
+
+  test('does not replay a deferred start with an unknown outcome', async () => {
+    const engine = new CodexEngine() as any
+    let attempts = 0
+    let unknown = 0
+    engine.startTurn = async () => { attempts++; throw new Error('request turn/start timed out') }
+    engine.on('turnDeliveryUnknown', () => { unknown++ })
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.scheduling.set('s', { steerQueue: conn.steerQueue, deferredTurnQueue: conn.deferredTurnQueue, fenced: false })
+
+    engine.queueTurn('s', 'ROUND_2')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(attempts).toBe(1)
+    expect(unknown).toBe(1)
+    expect(conn.deferredTurnQueue).toEqual([])
   })
 })
 

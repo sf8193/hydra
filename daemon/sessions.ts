@@ -6,6 +6,7 @@ import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName } from '../shared/constants.js'
+import { recordPendingRetirement } from './retirement-journal.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,7 @@ export type SessionInfo = {
   engine?: 'claude' | 'codex'  // which backend runs this session (default: claude)
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
+  ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
   contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
@@ -245,6 +247,7 @@ export class SessionRegistry {
   readonly sessions = new Map<string, SessionInfo>()
   readonly threadToSession = new Map<string, string>()
   readonly reservedNames = new Set<string>() // in-flight session names pickSessionName must avoid (recovery kill→persist window); in-memory only
+  readonly reservedCodexHomes = new Set<string>()
   private readonly threadMembers = new Map<string, ThreadMember[]>() // in-memory only — not persisted across daemon restarts
   private readonly sessionsFile: string
 
@@ -340,6 +343,7 @@ export class SessionRegistry {
 
   pickSessionName(): string {
     const used = new Set([...this.sessions.values()].map(s => s.tmuxName))
+    for (const s of this.sessions.values()) if (s.codexHomeName) used.add(s.codexHomeName)
     // Also reserve names still referenced by a record's worktree branch (`wt/<name>`).
     // A recovered session keeps its predecessor's branch (its tmuxName differs), so the
     // old name looks free — but handing it to a new spawn would make createWorktree's
@@ -351,6 +355,7 @@ export class SessionRegistry {
     // In-flight reservations cover the recovery window between deleting a dead record and
     // persisting its replacement, when the record-based reservation above doesn't yet apply.
     for (const n of this.reservedNames) used.add(n)
+    for (const n of this.reservedCodexHomes) used.add(n)
     try {
       const tmuxOut = execSync('tmux ls -F "#{session_name}" 2>/dev/null', { encoding: 'utf8' })
       for (const line of tmuxOut.split('\n')) {
@@ -362,6 +367,17 @@ export class SessionRegistry {
     }
     return `session-${randomBytes(3).toString('hex')}`
   }
+
+  reserveCodexHome(name: string): boolean {
+    if (this.reservedCodexHomes.has(name)) return false
+    for (const session of this.sessions.values()) {
+      if (!session.deadAt && (session.codexHomeName ?? (session.engine === 'codex' ? session.tmuxName : undefined)) === name) return false
+    }
+    this.reservedCodexHomes.add(name)
+    return true
+  }
+
+  releaseCodexHome(name: string): void { this.reservedCodexHomes.delete(name) }
 
   resolveThreadId(msg: { channelId: string; effectiveThreadId: string | null }): string {
     return msg.effectiveThreadId ?? msg.channelId
@@ -440,6 +456,13 @@ export class SessionRegistry {
         // Orphaned guests can't be re-associated with their review state
         // after restart — kill them and discard
         if (info.sessionType === 'thread_guest') {
+          if (info.engine === 'codex' && info.codexThreadId) {
+            recordPendingRetirement({
+              provider: 'codex', sessionId: info.sessionId, codexThreadId: info.codexThreadId,
+              codexHomeName: info.codexHomeName ?? info.tmuxName,
+              ownershipGeneration: info.ownershipGeneration ?? info.sessionId,
+            }, info.ownershipGeneration ?? info.sessionId, 'orphaned protocol guest found during startup')
+          }
           try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
           pruned++
           continue
