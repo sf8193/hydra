@@ -54,6 +54,23 @@ describe('BridgeTransport', () => {
     expect(steered).toBe(false)
   })
 
+  test('control bridges receive tool updates without replacing the session bridge', () => {
+    const session = mockSocket()
+    const control = mockSocket()
+    const sessionConn = { sessionId: 'codex-1', socket: session.socket, buf: '', connectionRole: 'session' as const }
+    const controlConn = { sessionId: 'codex-1', socket: control.socket, buf: '', connectionRole: 'control' as const }
+    bt.set('codex-1', sessionConn)
+    bt.addControl('codex-1', controlConn)
+
+    bt.sendOrQueue('codex-1', { type: 'tools_update', tools: [{ name: 'advance' }] })
+    expect(bt.get('codex-1')).toBe(sessionConn)
+    expect(control.written).toHaveLength(1)
+    expect(session.written).toHaveLength(0)
+
+    bt.removeControl('codex-1', controlConn)
+    expect(bt.get('codex-1')).toBe(sessionConn)
+  })
+
   test('routes deferred Codex notifications to the discrete-turn queue', () => {
     let queued = ''
     let steered = ''

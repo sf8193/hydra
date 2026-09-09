@@ -15,6 +15,7 @@ export type BridgeConn = {
   socket: Socket
   buf: string
   mainCloseRecorded?: boolean // guards double 'error'+'end' from recording twice
+  connectionRole?: 'session' | 'control'
 }
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,7 @@ export type BridgeConn = {
 
 export class BridgeTransport {
   readonly bridges = new Map<string, BridgeConn>()
+  readonly controlBridges = new Map<string, Set<BridgeConn>>()
   readonly messageQueues = new Map<string, Array<Record<string, unknown>>>()
   private readonly maxQueueSize = 50
   private readonly queueFile: string
@@ -52,6 +54,19 @@ export class BridgeTransport {
     this.bridges.set(sessionId, conn)
   }
 
+  addControl(sessionId: string, conn: BridgeConn): void {
+    const controls = this.controlBridges.get(sessionId) ?? new Set<BridgeConn>()
+    controls.add(conn)
+    this.controlBridges.set(sessionId, controls)
+  }
+
+  removeControl(sessionId: string, conn: BridgeConn): void {
+    const controls = this.controlBridges.get(sessionId)
+    if (!controls) return
+    controls.delete(conn)
+    if (controls.size === 0) this.controlBridges.delete(sessionId)
+  }
+
   delete(sessionId: string): void {
     this.bridges.delete(sessionId)
     this.queueFullLogged.delete(sessionId)
@@ -59,6 +74,7 @@ export class BridgeTransport {
 
   clear(): void {
     this.bridges.clear()
+    this.controlBridges.clear()
   }
 
   sendToBridge(bridge: BridgeConn, msg: Record<string, unknown>): boolean {
@@ -99,6 +115,11 @@ export class BridgeTransport {
     // Codex's MCP sidecar owns tool discovery. Capability changes must reach it
     // even though ordinary user messages route through the app-server.
     if (msg.type === 'tools_update') {
+      const controls = this.controlBridges.get(sessionId)
+      if (controls?.size) {
+        for (const control of controls) this.sendToBridge(control, msg)
+        return
+      }
       const bridge = this.bridges.get(sessionId)
       if (bridge) this.sendToBridge(bridge, msg)
       else this.enqueue(sessionId, msg)

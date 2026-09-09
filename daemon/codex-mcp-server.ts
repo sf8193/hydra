@@ -56,7 +56,7 @@ function connectToDaemon(): Promise<void> {
       connected = true
       sock.removeListener('error', onError)
       daemonSocket = sock
-      sock.write(JSON.stringify({ type: 'register', sessionId: SESSION_ID }) + '\n')
+      sock.write(JSON.stringify({ type: 'register', sessionId: SESSION_ID, connectionRole: 'control' }) + '\n')
       sock.on('error', (err) => {
         process.stderr.write(`codex-mcp-server: daemon socket error: ${err.message}\n`)
       })
