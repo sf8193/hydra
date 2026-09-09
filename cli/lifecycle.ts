@@ -7,7 +7,7 @@ import type { HydraConfig } from './helpers.js'
 import {
   resolveConfig, tmuxExists, tmuxKill, tmuxSpawn, tmuxSessionAge,
   compileCheck, killOrphanBytes, hasOrphanBytes, appendLog, shq,
-  waitForSocket, buildDaemonEnvs, pluginVersionDir, probeDaemonHealth,
+  waitForSocket, buildDaemonEnvs, requireSpawnCwd, pluginVersionDir, probeDaemonHealth,
 } from './helpers.js'
 import { isKnownModel } from '../shared/constants.js'
 
@@ -131,6 +131,8 @@ function startTranscribeAuto(cfg: HydraConfig): string | null {
 export async function lifecycleUp(platform: string): Promise<void> {
   const cfg = resolveConfig(platform)
 
+  requireSpawnCwd(cfg)
+
   const aliveSessions = [cfg.daemonTmux, cfg.byteTmux].filter(tmuxExists)
   if (aliveSessions.length > 0) {
     console.error(`error: ${platform} is already running (${aliveSessions.join(', ')})`)
@@ -232,6 +234,12 @@ export async function lifecycleDown(platform: string): Promise<void> {
 export async function lifecycleRestart(platform: string, opts?: { validate?: boolean }): Promise<void> {
   const cfg = resolveConfig(platform)
   const validate = opts?.validate ?? false
+
+  requireSpawnCwd(cfg)
+
+  if (!isKnownModel(cfg.byteModel)) {
+    console.warn(`\u26a0\ufe0f  Unrecognized model "${cfg.byteModel}" \u2014 may be a new release or typo. Restarting anyway.`)
+  }
 
   appendLog(cfg.daemonLog, `Restart requested${validate ? ' (+v)' : ''}`)
 
@@ -405,6 +413,10 @@ async function restartDaemonForWatchdog(cfg: HydraConfig): Promise<void> {
   if (!check.ok) {
     appendLog(cfg.watchdogLog, 'COMPILE FAILED — refusing to restart daemon')
     return
+  }
+
+  if (cfg.spawnCwdBlank) {
+    appendLog(cfg.watchdogLog, `SPAWN_CWD is set but empty — restarting daemon with it unset so auto-recovery bails and alerts instead of resolving worktrees against ${homedir()}; check ${join(cfg.stateDir, '.env')} and the launchd plist`)
   }
 
   tmuxKill(cfg.daemonTmux)
@@ -649,6 +661,9 @@ export async function lifecycleInstall(platform: string, opts?: InstallOpts): Pr
   if (opts?.cwd) process.env.SPAWN_CWD = opts.cwd
   if (opts?.configDir) process.env.CLAUDE_CONFIG_DIR = opts.configDir
   const cfg = resolveConfig(platform)
+
+  requireSpawnCwd(cfg)
+
   const dest = plistPath(platform)
   const label = plistLabel(platform)
 

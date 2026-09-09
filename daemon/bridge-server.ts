@@ -191,7 +191,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           type: 'registered', sessionId, tools, platform: PLATFORM,
           sessionMetadata: info?.sessionMetadata ?? {
             role: 'worker', tools: tools.map(t => t.name), model: spawnModel(),
-            cwd: process.env.SPAWN_CWD ?? '(unknown)', platform: PLATFORM,
+            cwd: process.env.SPAWN_CWD || '(unknown)', platform: PLATFORM,
           },
         })
         process.stderr.write(`daemon: control bridge registered for session ${sessionId}\n`)
@@ -277,7 +277,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           role: sessionId === 'main' ? 'main' : 'worker',
           tools: tools.map(t => t.name),
           model: spawnModel(),
-          cwd: process.env.SPAWN_CWD ?? '(unknown)',
+          cwd: process.env.SPAWN_CWD || '(unknown)',
           platform: PLATFORM,
         },
       })

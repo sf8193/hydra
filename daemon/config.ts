@@ -1,12 +1,9 @@
-import {
-  readFileSync,
-  chmodSync,
-} from 'fs'
+import { chmodSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
 import type { ChatGateway } from '../gateway.js'
-import { parseEnvLine } from '../shared/env-parse.js'
+import { sourceEnvFiles } from '../shared/env-parse.js'
 
 // ---------------------------------------------------------------------------
 // Paths & env
@@ -21,18 +18,13 @@ export const ENV_FILE = join(STATE_DIR, '.env')
 export const SOCK_PATH = join(STATE_DIR, 'daemon.sock')
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
 
-export const CLAUDE_CONFIG = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude-personal')
-
 const LOCAL_ENV_FILE = join(import.meta.dir, '..', '.env')
 for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
-  try {
-    if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600)
-    for (const line of readFileSync(envFile, 'utf8').split('\n')) {
-      const parsed = parseEnvLine(line)
-      if (parsed && process.env[parsed[0]] === undefined) process.env[parsed[0]] = parsed[1]
-    }
-  } catch {}
+  try { if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600) } catch {}
 }
+sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
+
+export const CLAUDE_CONFIG = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude-personal')
 
 // Read after .env sourcing — .env values must be available.
 // If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
