@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { decideResume } from '../auto-resume.js'
+import { decideResume, protocolResumeRef } from '../auto-resume.js'
 import { SessionRegistry } from '../sessions.js'
 
 process.stderr.write = (() => true) as any
@@ -38,6 +38,21 @@ describe('decideResume', () => {
   test('custom maxAttempts', () => {
     expect(decideResume(false, true, true, 0, 1)).toBe('resume')
     expect(decideResume(false, true, true, 1, 1)).toBe('grace')
+  })
+})
+
+describe('protocolResumeRef', () => {
+  test('uses engine-specific persisted state', () => {
+    expect(protocolResumeRef({ engine: 'codex', codexThreadId: 'thr_parent', tmuxName: 'ember' })).toEqual({
+      engine: 'codex', codexThreadId: 'thr_parent', parentName: 'ember',
+    })
+    expect(protocolResumeRef({ engine: 'claude', claudeSessionId: 'claude-parent', tmuxName: 'ember' })).toEqual({
+      engine: 'claude', claudeSessionId: 'claude-parent', parentName: 'ember',
+    })
+  })
+
+  test('rejects state belonging to the wrong engine', () => {
+    expect(protocolResumeRef({ engine: 'codex', claudeSessionId: 'wrong-kind', tmuxName: 'ember' })).toBeUndefined()
   })
 })
 

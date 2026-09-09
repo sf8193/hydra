@@ -5,7 +5,7 @@ import { registry, resolveSendTarget } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, getContextPercent, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
+import { fallbackDescription, formatDuration, getContextPercent, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration, tmuxUiTarget } from './util.js'
 import { dispatchAdvance } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -592,7 +592,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!tmuxHasSession(name)) throw new Error(`session "${name}" tmux not running`)
 
         const output = execSync(
-          `tmux capture-pane -t '${name.replace(/'/g, "'\\''")}' -p -S -${lines}`,
+          `tmux capture-pane -t '${tmuxUiTarget(found).replace(/'/g, "'\\''")}' -p -S -${lines}`,
           { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
         ).trimEnd()
 

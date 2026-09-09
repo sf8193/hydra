@@ -24,6 +24,7 @@ let origRegistryPersist: typeof registry.persist
 const origGateway: Record<string, unknown> = {}
 
 let sent: Array<{ channelId: string; text: string }> = []
+let lastSpawnOpts: any
 const trackedSessions = new Set<string>()
 const trackedThreads = new Set<string>()
 
@@ -45,6 +46,7 @@ beforeEach(() => {
   origStderrWrite = process.stderr.write
   process.stderr.write = (() => true) as any
   sent = []
+  lastSpawnOpts = undefined
 
   stub('send', async (channelId: string, text: string) => {
     sent.push({ channelId, text })
@@ -57,6 +59,7 @@ beforeEach(() => {
   // a run that tries to spawn a critic gets a registry entry and nothing else.
   runner.setLifecycle({
     doSpawnSession: async (topic: string, _a: any, _b: any, opts: any) => {
+      lastSpawnOpts = opts
       const sessionId = `rc-spawned-${trackedSessions.size + 1}`
       registry.set(sessionId, {
         sessionId,
@@ -98,7 +101,7 @@ afterEach(async () => {
 let threadSeq = 0
 
 /** An owner session that owns its own thread — what `review` requires. */
-function mkOwner(): { sessionId: string; threadId: string; msg: InboundMessage } {
+function mkOwner(engine?: 'claude' | 'codex'): { sessionId: string; threadId: string; msg: InboundMessage } {
   const threadId = `rc-thread-${++threadSeq}`
   const sessionId = `rc-owner-${threadSeq}`
   registry.set(sessionId, {
@@ -111,6 +114,7 @@ function mkOwner(): { sessionId: string; threadId: string; msg: InboundMessage }
     listening: false,
     turnState: 'idle',
     sessionType: 'thread_owner',
+    engine,
   } as SessionInfo)
   registry.setThread(threadId, sessionId)
   trackedSessions.add(sessionId)
@@ -128,6 +132,24 @@ function mkOwner(): { sessionId: string; threadId: string; msg: InboundMessage }
 }
 
 describe('review command → run params', () => {
+  test('inherits a Codex owner engine and propagates an explicit Codex model', async () => {
+    const { msg } = mkOwner('codex')
+
+    await handleReviewIntercept(msg, 1, 'auth flow', 'gpt-5.6-sol', undefined, 'codex')
+
+    expect(lastSpawnOpts.engine).toBe('codex')
+    expect(lastSpawnOpts.model).toBe('gpt-5.6-sol')
+  })
+
+  test('inherits the owner engine when review has no explicit model', async () => {
+    const { msg } = mkOwner('codex')
+
+    await handleReviewIntercept(msg, 1, 'auth flow')
+
+    expect(lastSpawnOpts.engine).toBe('codex')
+    expect(lastSpawnOpts.model).toBeUndefined()
+  })
+
   test('+subagent becomes directSubagent and starts the run in subagent_review', async () => {
     const { threadId, msg } = mkOwner()
 

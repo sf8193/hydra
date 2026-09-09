@@ -2,7 +2,7 @@ import { gateway } from './config.js'
 import { registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
-import { decideResume } from './auto-resume.js'
+import { decideResume, protocolResumeRef, type ProtocolResumeRef } from './auto-resume.js'
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol } from './protocol-registry.js'
@@ -446,7 +446,7 @@ export function onRunDisconnect(sessionId: string): void {
 
   if (role !== run.protocol.ownerRole) {
     const info = registry.get(sessionId)
-    const claudeSessionId = info?.claudeSessionId
+    const resumeRef = protocolResumeRef(info)
     run.disconnectTimers.set(sessionId, setTimeout(async () => {
       if (isTerminal(run)) return
       const currentInfo = registry.get(sessionId)
@@ -454,13 +454,13 @@ export function onRunDisconnect(sessionId: string): void {
       const decision = decideResume(
         transport.has(sessionId),
         currentInfo ? !isAlive(currentInfo) : true,
-        !!claudeSessionId,
+        !!resumeRef,
         attempts,
       )
       if (decision === 'reconnected') { run.disconnectTimers.delete(sessionId); return }
       if (decision === 'resume') {
         run._resumeAttempts = attempts + 1
-        void resumeParticipant(run, role, sessionId, claudeSessionId!).catch(err => {
+        void resumeParticipant(run, role, sessionId, resumeRef!).catch(err => {
           process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resume failed: ${err}\n`)
           notifyDisconnect(run, role, 'auto-resume failed')
           if (canFallbackOnDeath(run, role)) void enterFallbackPhase(run, role)
@@ -645,8 +645,9 @@ async function announceFallbackPhase(run: ProtocolRun, instructions: string): Pr
   startKeepalive(run)
 }
 
-async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
+async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, resumeRef: ProtocolResumeRef): Promise<void> {
   const info = registry.get(deadSessionId)
+  const resumeModel = (run.params.model as string | undefined) ?? info?.sessionMetadata?.model
   if (info) recordSessionDeath(info, `${role} exited (auto-resuming)`, getProtocolContext(deadSessionId))
 
   const result = await doSpawnSession(
@@ -654,8 +655,12 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     undefined, undefined, {
       joinThread: run.threadId,
       sessionType: 'thread_guest',
-      resumeFrom: claudeSessionId,
-      model: run.params.model as string | undefined,
+      ...(resumeRef.engine === 'claude'
+        ? { resumeFrom: resumeRef.claudeSessionId }
+        : { resumeCodex: { threadId: resumeRef.codexThreadId, homeName: resumeRef.parentName } }),
+      model: resumeModel,
+      engine: resumeRef.engine,
+      promptBuilder: () => `[system] Hydra resumed your ${run.protocol.roles[role] ?? role} session after a disconnect. Continue the active ${run.protocol.display} from its current phase; do not restart or greet.`,
     },
   )
   if (isTerminal(run)) {
@@ -1043,6 +1048,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
     joinThread: run.threadId,
     sessionType: 'thread_guest',
     model,
+    engine: params.engine as 'claude' | 'codex' | undefined,
     promptBuilder: (sessionId, tmuxName) => {
       let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
       const seedMods = ((run.params.modifiers as Modifier[] | undefined) ?? [])

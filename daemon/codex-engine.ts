@@ -39,6 +39,16 @@ export function codexSocketPath(tmuxName: string): string {
   return join(process.env.HOME!, '.codex', `hydra-${tmuxName}`, 'app-server-control', 'app-server-control.sock')
 }
 
+export function selectDefaultCodexModel(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined
+  const data = (result as { data?: unknown }).data
+  if (!Array.isArray(data)) return undefined
+  const selected = data.find(item => item && typeof item === 'object' && (item as { isDefault?: unknown }).isDefault === true)
+  if (!selected || typeof selected !== 'object') return undefined
+  const value = (selected as { model?: unknown; id?: unknown }).model ?? (selected as { id?: unknown }).id
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
 // ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
@@ -53,12 +63,21 @@ export class CodexEngine extends EventEmitter {
     })
   }
 
-  async connect(sessionId: string, socketPath: string): Promise<{ threadId: string }> {
+  async connect(sessionId: string, socketPath: string, requestedModel?: string): Promise<{ threadId: string; model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath)
-    const result = await this.request(conn, 'thread/start', {})
+    let model = requestedModel
+    if (!model) {
+      try {
+        const models = await this.request(conn, 'model/list', { limit: 100, includeHidden: false })
+        model = selectDefaultCodexModel(models)
+      } catch (err) {
+        process.stderr.write(`codex-engine: model/list failed, using app-server default: ${err}\n`)
+      }
+    }
+    const result = await this.request(conn, 'thread/start', model ? { model } : {})
     conn.threadId = result.thread?.id
     if (!conn.threadId) throw new Error('codex-engine: thread/start did not return a thread ID')
-    return { threadId: conn.threadId }
+    return { threadId: conn.threadId, model }
   }
 
   async connectAndResume(sessionId: string, socketPath: string, existingThreadId: string): Promise<void> {

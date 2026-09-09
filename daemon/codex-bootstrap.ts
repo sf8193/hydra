@@ -13,6 +13,7 @@ import { dispatchDisconnect } from './protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
 import { appendFileSync } from 'fs'
 import { tmuxHasSession, safeSend } from './util.js'
+import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -48,6 +49,7 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   const info = registry.get(sessionId)
   if (!info) return
   info.turnState = 'idle'
+  flushCodexKeys(sessionId)
   handleSilenceEvent(info.tmuxName)
 })
 
@@ -64,6 +66,7 @@ codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
 })
 
 codexEngine.on('disconnected', (sessionId: string) => {
+  clearCodexKeys(sessionId)
   const info = registry.get(sessionId)
   if (info && !info.deadAt && !tmuxHasSession(info.tmuxName)) {
     info.deadAt = Date.now()
@@ -86,7 +89,7 @@ export async function reconnectCodexSessions(): Promise<void> {
       info.deadAt = Date.now()
       continue
     }
-    const sockPath = codexSocketPath(info.tmuxName)
+    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
     let connected = false
 
     // Strategy 1: resume existing thread (preserves conversation)

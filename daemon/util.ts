@@ -52,6 +52,10 @@ export function tmuxHasSession(name: string): boolean {
   }
 }
 
+export function tmuxUiTarget(info: { tmuxName: string; engine?: 'claude' | 'codex' }): string {
+  return info.engine === 'codex' ? `${info.tmuxName}:hydra-chat` : info.tmuxName
+}
+
 export function getContextPercent(tmuxName: string): string {
   try {
     const pane = execFileSync('tmux', ['capture-pane', '-t', tmuxName, '-p'], { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()

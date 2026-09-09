@@ -349,14 +349,27 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
 async function spawnCodexSession(p: {
   tmuxName: string; sessionId: string; effectiveCwd: string;
-  model?: string; forkFromThread?: string;
-}): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string }> {
-  const sockPath = codexSocketPath(p.tmuxName)
-  const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${p.tmuxName}`)
+  model?: string; forkFromThread?: string; resumeThread?: string; codexHomeName?: string;
+}): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string; model?: string }> {
+  const codexHomeName = p.codexHomeName ?? p.tmuxName
+  const sockPath = codexSocketPath(codexHomeName)
+  const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${codexHomeName}`)
   const mcpServerPath = join(new URL('.', import.meta.url).pathname, 'codex-mcp-server.ts')
   const codexModel = p.model ? `-c model=${shq(p.model)}` : ''
-  const fullPerms = `-c 'sandbox_permissions=["disk-full-read-access","disk-full-write-access","network-full-access"]'`
+  // Spawned Hydra agents are unattended: give them an unrestricted sandbox and
+  // never pause the app-server on an approval prompt. `sandbox_permissions` only
+  // describes individual permission grants; it does not select Codex's runtime
+  // sandbox mode.
+  const fullPerms = `-c 'approval_policy="never"' -c 'sandbox_mode="danger-full-access"'`
+  // Let Codex use the selected model's native context window and automatic
+  // compaction threshold. Provider defaults can evolve independently of Hydra.
   const serverCmd = `codex app-server --listen 'unix://' ${codexModel} ${fullPerms}`.trim()
+
+  // A dead app-server can leave its Unix socket behind. Reusing its CODEX_HOME
+  // for a true resume is safe only after liveness has already been classified.
+  if (p.resumeThread) {
+    try { unlinkSync(sockPath) } catch {}
+  }
 
   // Window 0: durable app-server
   const serverInner = [
@@ -384,26 +397,23 @@ async function spawnCodexSession(p: {
     spawnLogPath = logPath
   } catch {}
 
-  // Window 1: attachable TUI
-  const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && sleep 3 && codex --remote "unix://${sockPath}"`
-  try {
-    execFileSync('tmux', ['new-window', '-t', p.tmuxName, tuiInner], { stdio: 'pipe' })
-  } catch {
-    process.stderr.write(`daemon: codex TUI window failed for ${p.tmuxName} (non-fatal)\n`)
-  }
-
   // Connect to the app-server socket with retry
   const start = Date.now()
   let codexThreadId: string | null = null
+  let resolvedModel = p.model
   let lastErr = ''
   while (Date.now() - start < 15_000) {
     try {
-      if (p.forkFromThread) {
+      if (p.resumeThread) {
+        await codexEngine.connectAndResume(p.sessionId, sockPath, p.resumeThread)
+        codexThreadId = p.resumeThread
+      } else if (p.forkFromThread) {
         const r = await codexEngine.connectAndFork(p.sessionId, sockPath, p.forkFromThread)
         codexThreadId = r.threadId
       } else {
-        const r = await codexEngine.connect(p.sessionId, sockPath)
+        const r = await codexEngine.connect(p.sessionId, sockPath, p.model)
         codexThreadId = r.threadId
+        resolvedModel = r.model
       }
       break
     } catch (err: any) {
@@ -413,10 +423,22 @@ async function spawnCodexSession(p: {
       await new Promise(r => setTimeout(r, 500))
     }
   }
-  if (!codexThreadId) throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
+  if (!codexThreadId) {
+    try { execFileSync('tmux', ['kill-session', '-t', p.tmuxName], { stdio: 'ignore' }) } catch {}
+    throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
+  }
   process.stderr.write(`daemon: codex connected for ${p.tmuxName}, thread=${codexThreadId}\n`)
 
-  return { sockPath, spawnLogPath, codexThreadId }
+  // Window 1: attachable TUI. Resume the daemon-owned thread explicitly;
+  // bare `codex --remote` starts a second thread on the same app-server.
+  const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && codex resume ${shq(codexThreadId)} --remote "unix://${sockPath}"`
+  try {
+    execFileSync('tmux', ['new-window', '-n', 'hydra-chat', '-t', p.tmuxName, tuiInner], { stdio: 'pipe' })
+  } catch {
+    process.stderr.write(`daemon: codex TUI window failed for ${p.tmuxName} (non-fatal)\n`)
+  }
+
+  return { sockPath, spawnLogPath, codexThreadId, model: resolvedModel }
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +496,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const threadName = `${sessionEmoji(tmuxName)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
   const isFork = !!opts?.forkFrom
   const isHandoff = !!opts?.handedOffFrom
-  const isResume = !!opts?.resumeFrom
+  const isResume = !!opts?.resumeFrom || !!opts?.resumeCodex
   const isResurrect = !!opts?.resurrectFrom
   const originType: 'spawn' | 'fork' | 'handoff' | 'resurrect' = isFork ? 'fork' : isHandoff ? 'handoff' : isResurrect ? 'resurrect' : 'spawn'
   const originFrom = opts?.forkFrom?.parentName ?? opts?.handedOffFrom ?? opts?.resurrectFrom
@@ -497,7 +519,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let resumeCount = 0
   if (isResume) {
     const predecessor = [...registry.values()]
-      .filter(s => s.claudeSessionId === opts!.resumeFrom && s.deadAt)
+      .filter(s => opts?.resumeCodex
+        ? s.tmuxName === opts.resumeCodex.homeName && s.codexThreadId === opts.resumeCodex.threadId && s.deadAt
+        : s.claudeSessionId === opts?.resumeFrom && s.deadAt)
       .sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
     if (predecessor) resumeCount = (predecessor.resumeCount ?? 0) + 1
   }
@@ -740,8 +764,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   // --- Codex engine: spawn in tmux, connect via unix socket ---
   if (engine === 'codex') {
-    const { sockPath, spawnLogPath, codexThreadId } = await spawnCodexSession({
+    const { sockPath, spawnLogPath, codexThreadId, model: resolvedCodexModel } = await spawnCodexSession({
       tmuxName, sessionId, effectiveCwd, model: opts?.model, forkFromThread: opts?.forkFrom?.codexThreadId,
+      resumeThread: opts?.resumeCodex?.threadId, codexHomeName: opts?.resumeCodex?.homeName,
     })
     void codexEngine.startTurn(sessionId, prompt).catch(err => {
       process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
@@ -749,12 +774,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
     // SYNC: keep in sync with Claude registration block (~line 655+)
     const now = Date.now()
-    const sessionMetadata: SessionMetadata = { role: 'worker', tools: [], model: opts?.model ?? 'codex-default', cwd: effectiveCwd, platform: PLATFORM }
+    const displayedModel = resolvedCodexModel ?? opts?.model ?? 'codex-default'
+    const sessionMetadata: SessionMetadata = { role: 'worker', tools: [], model: displayedModel, cwd: effectiveCwd, platform: PLATFORM }
     const url = await gateway.getThreadUrl(threadId!)
     registry.set(sessionId, {
       sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
       tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
       threadUrl: url || undefined, engine: 'codex', codexThreadId: codexThreadId!,
+      codexHomeName: opts?.resumeCodex?.homeName ?? tmuxName,
       ...(spawnLogPath ? { spawnLogPath } : {}),
       ...(respawnCount > 0 ? { respawnCount } : {}),
       ...(resumeCount > 0 ? { resumeCount } : {}),
@@ -772,13 +799,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (!isJoin) {
       threadRegistry.recordSpawn(threadId!, {
         anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
-        sessionId, tmuxName, originType, originFrom, model: opts?.model ?? 'codex-default', parentChannelId,
+        sessionId, tmuxName, originType, originFrom, model: displayedModel, parentChannelId,
       })
     }
     refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
 
     const spawnLine = formatSpawnLine({
-      emoji: sessionEmoji(tmuxName), name: tmuxName, model: opts?.model ?? 'codex',
+      emoji: sessionEmoji(tmuxName), name: tmuxName, model: displayedModel,
       trigger: opts?.trigger ?? originType ?? 'spawn',
     })
     const announceIds = await safeSend(threadId!, spawnLine)
@@ -800,7 +827,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (isFork) {
     claudeArgs = [
       `claude`,
-      `--resume ${shq(opts!.forkFrom!.claudeSessionId)}`,
+      `--resume ${shq(opts!.forkFrom!.claudeSessionId!)}`,
       `--fork-session`,
       `--model ${shq(model)}`,
       `--channels ${shq(channelFlag)}`,

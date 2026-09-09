@@ -19,6 +19,7 @@ import {
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
 import { sanitizeFilename, COUNT_EMOJI, SUPERSCRIPT } from './gateway.js'
 import { GatewayHealth } from './daemon/gateway-health.js'
+import { planReactionReconciliation } from './shared/reaction-reconcile.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -590,12 +591,20 @@ export class DiscordGateway implements ChatGateway {
       if (!ch?.isTextBased() || !('messages' in ch)) return
       const msg = await (ch as any).messages.fetch(messageId)
       if (!msg) return
-      const removePromises = [...(msg.reactions?.cache?.values() ?? [])].map(
-        (r: any) => r.users.remove(this.client.user?.id).catch((e: unknown) => process.stderr.write(`discord gateway: reaction remove failed: ${e}\n`))
-      )
+      const botId = this.client.user?.id
+      const reactions = [...(msg.reactions?.cache?.values() ?? [])] as any[]
+      const desired = countEmoji ? [emoji, countEmoji] : [emoji]
+      const plan = planReactionReconciliation(reactions.map(r => ({
+        emoji: r.emoji?.toString?.() ?? r.emoji?.name ?? '',
+        mine: !!r.me || (!!botId && !!r.users?.cache?.has?.(botId)),
+      })), desired)
+      const removePromises = reactions
+        .filter(r => plan.remove.includes(r.emoji?.toString?.() ?? r.emoji?.name ?? ''))
+        .map(r => r.users.remove(botId).catch((e: unknown) => process.stderr.write(`discord gateway: reaction remove failed: ${e}\n`)))
       await Promise.allSettled(removePromises)
-      await msg.react(emoji).catch((e: unknown) => process.stderr.write(`discord gateway: react failed: ${e}\n`))
-      if (countEmoji) await msg.react(countEmoji).catch((e: unknown) => process.stderr.write(`discord gateway: react countEmoji failed: ${e}\n`))
+      for (const toAdd of plan.add) {
+        await msg.react(toAdd).catch((e: unknown) => process.stderr.write(`discord gateway: react failed: ${e}\n`))
+      }
     }, 500,
   )
 

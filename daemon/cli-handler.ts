@@ -1,7 +1,7 @@
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, getContextPercent } from './util.js'
+import { fallbackDescription, formatDuration, getContextPercent, tmuxUiTarget } from './util.js'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
@@ -123,7 +123,8 @@ function handleList(req: CLIRequest): CLIResponse {
     sessionId: s.sessionId,
     description: s.description ?? (s.topic ? fallbackDescription(s.topic) : ''),
     url: (s.lastReplyId ? gateway.getMessageUrl(s.threadId, s.lastReplyId) : '') || s.threadUrl || '',
-    context: getContextPercent(s.tmuxName),
+    context: getContextPercent(tmuxUiTarget(s)),
+    tmuxTarget: tmuxUiTarget(s),
     running_for: formatDuration(Date.now() - s.createdAt),
     status: transport.has(s.sessionId) ? 'connected' : 'disconnected',
   }))
@@ -156,6 +157,9 @@ function handleStatus(req: CLIRequest): CLIResponse {
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
     tmux: tmuxAlive ? 'alive' : 'dead',
     origin: info.originType,
+    engine: info.engine ?? 'claude',
+    codexThreadId: info.codexThreadId,
+    codexHomeName: info.codexHomeName,
   })
 }
 

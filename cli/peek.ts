@@ -6,6 +6,7 @@ type SessionEntry = {
   name: string
   description?: string
   status: string
+  tmuxTarget?: string
 }
 
 const tmux = (cmd: string) => execSync(cmd, { stdio: 'pipe' })
@@ -20,14 +21,16 @@ async function getLiveSessions(socketPath: string): Promise<SessionEntry[]> {
   return data.filter(s => s.status === 'connected' || s.status === 'disconnected')
 }
 
-function attachSession(name: string): void {
-  if (!tmuxExists(name)) {
-    console.error(`error: tmux session "${name}" not found`)
+function attachSession(session: SessionEntry): void {
+  if (!tmuxExists(session.name)) {
+    console.error(`error: tmux session "${session.name}" not found`)
     process.exit(1)
   }
+  const target = session.tmuxTarget ?? session.name
+  try { tmux(`tmux select-window -t ${shq(target)}`) } catch {}
   console.log(`\x1b[2m(detach: ctrl+b d)\x1b[0m`)
   try {
-    execSync(`tmux attach-session -t ${shq(name)}`, { stdio: 'inherit' })
+    execSync(`tmux attach-session -t ${shq(session.name)}`, { stdio: 'inherit' })
   } catch {}
 }
 
@@ -49,7 +52,7 @@ function buildPeekSession(sessions: SessionEntry[]): void {
   for (const s of sessions) {
     if (!tmuxExists(s.name)) continue
     try {
-      tmux(`tmux link-window -s ${shq(s.name)}:0 -t ${p}`)
+      tmux(`tmux link-window -s ${shq(s.tmuxTarget ?? `${s.name}:0`)} -t ${p}`)
       const idx = tmuxRead(`tmux list-windows -t ${p} -F '#{window_index}' | tail -1`)
       linked.push({ session: s, windowIndex: idx })
     } catch {}
@@ -125,13 +128,13 @@ export async function peek(args: string[], daemonName?: string): Promise<void> {
       process.exit(1)
       return
     }
-    attachSession(target.name)
+    attachSession(target)
     return
   }
 
   // hydra peek (no args) — single session: attach directly, multiple: chooser
   if (sessions.length === 1) {
-    attachSession(sessions[0].name)
+    attachSession(sessions[0])
     return
   }
 

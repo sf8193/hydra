@@ -299,19 +299,32 @@ async function main(): Promise<void> {
         process.exit(1)
       }
       const { codexSocketPath } = await import('../daemon/codex-engine.js')
-      const sockPath = codexSocketPath(name)
+      const { join: pathJoin } = await import('path')
+      const { execFileSync } = await import('child_process')
+      const response = await sendRequest(socketPath, {
+        type: 'cli', command: 'status', id: randomUUID(), params: { name },
+      })
+      const status = response.data as { engine?: string; codexThreadId?: string; codexHomeName?: string } | undefined
+      if (!response.ok) {
+        console.error(`error: ${response.error}`)
+        process.exit(typeof response.exitCode === 'number' ? response.exitCode : 1)
+      }
+      if (status?.engine !== 'codex' || !status.codexThreadId) {
+        console.error(`error: session "${name}" is not an attachable codex session`)
+        process.exit(1)
+      }
+      const codexHomeName = status.codexHomeName ?? name
+      const sockPath = codexSocketPath(codexHomeName)
       const { existsSync } = await import('fs')
       if (!existsSync(sockPath)) {
         console.error(`error: no codex socket found for "${name}" at ${sockPath}`)
-        console.error('Is this a codex session? Is the app-server running?')
+        console.error('Is this codex session still running?')
         process.exit(1)
       }
-      const { join: pathJoin } = await import('path')
-      const { execFileSync } = await import('child_process')
-      const codexHome = pathJoin(process.env.HOME!, '.codex', `hydra-${name}`)
+      const codexHome = pathJoin(process.env.HOME!, '.codex', `hydra-${codexHomeName}`)
       console.log(`Attaching to codex session "${name}"...`)
       try {
-        execFileSync('codex', ['--remote', `unix://${sockPath}`], {
+        execFileSync('codex', ['resume', status.codexThreadId, '--remote', `unix://${sockPath}`], {
           stdio: 'inherit',
           env: { ...process.env, CODEX_HOME: codexHome },
         })

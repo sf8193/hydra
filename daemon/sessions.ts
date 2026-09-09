@@ -64,6 +64,7 @@ export type SessionInfo = {
   debugLogPath?: string    // CC --debug-file output: internal diagnostics, written throughout session lifetime
   engine?: 'claude' | 'codex'  // which backend runs this session (default: claude)
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
+  codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
   sessionType: SessionType
   capabilities?: Capability[]
@@ -154,11 +155,12 @@ export type ThreadMetadata = {
 }
 
 export type SpawnOpts = {
-  forkFrom?: { claudeSessionId: string; parentName: string; codexThreadId?: string }
+  forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string }
   handedOffFrom?: string
   artifact?: string
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
   resumeFrom?: string                                          // claude session ID for --resume (no --fork-session)
+  resumeCodex?: { threadId: string; homeName: string }          // Codex thread + original CODEX_HOME identity
   resurrectFrom?: string                                       // tmuxName of predecessor (for lineage in respawn)
   joinThread?: string                                          // join existing thread as member (skip thread creation)
   promptBuilder?: (sessionId: string, tmuxName: string) => string

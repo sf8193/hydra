@@ -1,8 +1,4 @@
-import { execFile as execFileCb } from 'child_process'
-import { promisify } from 'util'
 import { gateway, PERMISSION_REPLY_RE, INBOX_DIR } from './config.js'
-
-const execFileAsync = promisify(execFileCb)
 import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
@@ -15,7 +11,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES } from '../shared/constants.js'
+import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
@@ -29,7 +25,8 @@ import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
 import { getThreadIntercept } from './pane-probe.js'
-import { isAlive, reportError } from './util.js'
+import { isAlive, reportError, tmuxUiTarget } from './util.js'
+import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
 import { listTemplates, getTemplate } from './templates.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
@@ -39,6 +36,7 @@ import { listTemplates, getTemplate } from './templates.js'
 const COMMAND_PREFIXES = [
   'new session:', 'spawn:', '/spawn', 'spawn-wt:', '/spawn-wt',
   ...Object.keys(MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`, `spawn-wt ${a}:`]),
+  ...Object.keys(CODEX_MODEL_ALIASES).flatMap(a => [`spawn ${a}:`, `new session ${a}:`]),
   'kill session:', 'kill:', '/kill',
   '/sessions', 'list sessions',
   '/restart', 'restart daemon', 'restart',
@@ -54,21 +52,29 @@ const COMMAND_RE = new RegExp(
   `^(?:${COMMAND_PREFIXES.map(p => p.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&')).join('|')})(?:\\s|$)`, 'i',
 )
 const SPAWN_MODEL_RE = new RegExp(`^(?:new session|spawn)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
+const SPAWN_CODEX_ALIAS_RE = new RegExp(`^(?:new session|spawn)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const SPAWN_CODEX_RE = /^(?:new session|spawn)\s+codex(?:\s+(\S+))?:\s*([\s\S]+)/i
 const SPAWN_WT_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
+const SPAWN_WT_CODEX_MODEL_RE = new RegExp(`^(?:spawn-wt|/spawn-wt)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*(\\S+)\\s+([\\s\\S]+)`, 'i')
 const FORK_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
+const FORK_CODEX_MODEL_RE = new RegExp(`^(?:fork|/fork)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
 const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
+const BARE_CODEX_ALIAS_RE = new RegExp(`^(${CODEX_MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
-function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): string | undefined | false {
+type ProtocolModelSelection = { model: string; engine: 'claude' | 'codex' }
+
+function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
   if (!alias) return undefined
-  const resolved = resolveModelAlias(alias)
-  if (!resolved) {
-    const available = Object.keys(MODEL_ALIASES).join(', ')
+  const claudeModel = resolveModelAlias(alias)
+  if (claudeModel) return { model: claudeModel, engine: 'claude' }
+  const codexModel = resolveCodexModelAlias(alias)
+  if (!codexModel) {
+    const available = [...Object.keys(MODEL_ALIASES), ...Object.keys(CODEX_MODEL_ALIASES)].join(', ')
     void gateway.send(channelId, `_Unknown model \`${alias}\`. Available: ${available}_`, { replyTo }).catch(() => {})
     return false
   }
-  return resolved
+  return { model: codexModel, engine: 'codex' }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +321,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
+    // "spawn sol: topic" — a Codex model alias selects both model and engine.
+    const spawnCodexAliasMatch = msg.content.match(SPAWN_CODEX_ALIAS_RE)
+    if (spawnCodexAliasMatch) {
+      const topic = spawnCodexAliasMatch[2].trim()
+      if (topic) {
+        void handleSpawnIntercept(msg, topic, access, resolveCodexModelAlias(spawnCodexAliasMatch[1]), 'codex')
+        return
+      }
+    }
+
     // "spawn sonnet: topic" / "new session haiku: topic" — model alias before colon
     const spawnModelMatch = msg.content.match(SPAWN_MODEL_RE)
     if (spawnModelMatch) {
@@ -352,7 +368,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
       // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
-      const bareAlias = topic.match(BARE_ALIAS_RE) || topic.match(BARE_CODEX_RE)
+      const bareAlias = topic.match(BARE_ALIAS_RE) || topic.match(BARE_CODEX_ALIAS_RE) || topic.match(BARE_CODEX_RE)
       if (bareAlias) {
         const alias = bareAlias[1] || 'codex'
         void gateway.send(msg.channelId, `_\`spawn ${alias}:\` needs a topic — e.g. \`spawn ${alias}: describe the task\`_`, { replyTo: msg.id })
@@ -370,6 +386,15 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const [, alias, repo, topic] = spawnWtModelMatch
       if (repo && topic.trim()) {
         void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, access, alias)
+        return
+      }
+    }
+
+    const spawnWtCodexModelMatch = msg.content.match(SPAWN_WT_CODEX_MODEL_RE)
+    if (spawnWtCodexModelMatch) {
+      const [, alias, repo, topic] = spawnWtCodexModelMatch
+      if (repo && topic.trim()) {
+        void handleSpawnIntercept(msg, `wt:${repo.trim()} ${topic.trim()}`, access, resolveCodexModelAlias(alias), 'codex')
         return
       }
     }
@@ -554,10 +579,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
     }
 
     if (msg.isThread) {
+      const forkCodexModelMatch = msg.content.match(FORK_CODEX_MODEL_RE)
+      if (forkCodexModelMatch) {
+        void handleForkIntercept(msg, forkCodexModelMatch[2].trim(), resolveCodexModelAlias(forkCodexModelMatch[1]), { engine: 'codex' })
+        return
+      }
+
       // "fork sonnet: topic" / "fork opus-5: topic" — fork with model override
       const forkModelMatch = msg.content.match(FORK_MODEL_RE)
       if (forkModelMatch) {
-        void handleForkIntercept(msg, forkModelMatch[2].trim(), resolveModelAlias(forkModelMatch[1]))
+        void handleForkIntercept(msg, forkModelMatch[2].trim(), resolveModelAlias(forkModelMatch[1]), { engine: 'claude' })
         return
       }
 
@@ -588,12 +619,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
         if (preModel === false) return
         const postModel = resolveProtocolModel(reviewMatch[3]?.toLowerCase(), msg.channelId, msg.id)
         if (postModel === false) return
-        const modelId = preModel ?? postModel
+        const selection = preModel ?? postModel
         const rounds = parseInt(reviewMatch[2] ?? '3')
         let topic = reviewMatch[4]?.trim()
-        if (!modelId && topic) {
+        if (!selection && topic) {
           const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
-          if (badOrder && resolveModelAlias(badOrder[1])) {
+          if (badOrder && (resolveModelAlias(badOrder[1]) || resolveCodexModelAlias(badOrder[1]))) {
             void gateway.send(msg.channelId, `_Model syntax: \`/review ${badOrder[2]} ${badOrder[1]}: topic\` or \`/review ${badOrder[1]}: ${badOrder[2]} topic\`_`, { replyTo: msg.id }).catch(() => {})
             return
           }
@@ -607,7 +638,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             topic = topic.replace(modRe, '').replace(/\s{2,}/g, ' ').trim() || undefined
           }
         }
-        void handleReviewIntercept(msg, rounds, topic, modelId, modifiers.length > 0 ? modifiers : undefined)
+        void handleReviewIntercept(msg, rounds, topic, selection?.model, modifiers.length > 0 ? modifiers : undefined, selection?.engine)
         return
       }
 
@@ -625,7 +656,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
         if (postModel === false) return
         const v2Rounds = parseInt(buildV2Match[2] ?? '3')
         const v2Task = buildV2Match[4]?.trim()
-        void handleBuildV2Intercept(msg, v2Rounds, v2Task, preModel ?? postModel)
+        const selection = preModel ?? postModel
+        void handleBuildV2Intercept(msg, v2Rounds, v2Task, selection?.model, selection?.engine)
         return
       }
 
@@ -641,7 +673,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const spikeModel = resolveProtocolModel(spikeV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
         if (spikeModel === false) return
         const spikeTopic = spikeV2Match[2]?.trim()
-        void handleSpikeV2Intercept(msg, spikeTopic, spikeModel)
+        void handleSpikeV2Intercept(msg, spikeTopic, spikeModel?.model, spikeModel?.engine)
         return
       }
 
@@ -781,16 +813,18 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 }
                 const resolved = tokens.map(resolveKey)
                 const allKeyNames = resolved.every((r): r is string => r !== null)
-                if (allKeyNames) {
-                  // Raw key mode: send each token as a tmux key name
-                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, ...resolved], { timeout: 3000 })
+                const action: TmuxKeyAction = allKeyNames
+                  ? { target: tmuxUiTarget(info), mode: 'raw', keys: resolved }
+                  : { target: tmuxUiTarget(info), mode: 'literal', text }
+                if (info.engine === 'codex' && info.turnState === 'working') {
+                  const position = queueCodexKeys(info.sessionId, action)
+                  void gateway.react(msg.channelId, msg.id, '⏳').catch(() => {})
+                  process.stderr.write(`daemon: queued keys for ${info.tmuxName} at position ${position}: ${text.slice(0, 100)}\n`)
                 } else {
-                  // Literal text mode: send text + Enter
-                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, '-l', text], { timeout: 3000 })
-                  await execFileAsync('tmux', ['send-keys', '-t', info.tmuxName, 'Enter'], { timeout: 3000 })
+                  await sendTmuxKeys(action)
+                  void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
+                  process.stderr.write(`daemon: sent keys to ${info.tmuxName} (${allKeyNames ? 'raw' : 'literal'}): ${text.slice(0, 100)}\n`)
                 }
-                void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
-                process.stderr.write(`daemon: sent keys to ${info.tmuxName} (${allKeyNames ? 'raw' : 'literal'}): ${text.slice(0, 100)}\n`)
                 // Auto-peek after 1s so the user sees the result
                 setTimeout(() => { void handlePeekIntercept(msg) }, 1000)
               } catch (err) {
@@ -806,7 +840,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             if (stripped) {
               void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
               try {
-                Bun.spawn(['tmux', 'send-keys', '-t', info.tmuxName, 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
+                Bun.spawn(['tmux', 'send-keys', '-t', tmuxUiTarget(info), 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
                 process.stderr.write(`daemon: interrupt sent to ${info.tmuxName} via ! prefix\n`)
               } catch (err) {
                 process.stderr.write(`daemon: interrupt failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)

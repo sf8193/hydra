@@ -26,6 +26,14 @@ export const MODEL_ALIASES: Record<string, string> = {
   'opus-4-8': 'claude-opus-4-8[1m]',
 }
 
+/** Codex model aliases. Kept separate because selecting one also selects the
+ * Codex engine; MODEL_ALIASES historically implies the Claude engine. */
+export const CODEX_MODEL_ALIASES: Record<string, string> = {
+  'sol': 'gpt-5.6-sol',
+  'terra': 'gpt-5.6-terra',
+  'luna': 'gpt-5.6-luna',
+}
+
 // Validate aliases at load time.
 const ALIAS_KEY_RE = /^[a-z0-9-]+$/
 for (const [key, id] of Object.entries(MODEL_ALIASES)) {
@@ -39,10 +47,18 @@ export const MODEL_ALIAS_PATTERN = Object.keys(MODEL_ALIASES)
   .sort((a, b) => b.length - a.length)
   .join('|')
 
+export const CODEX_MODEL_ALIAS_PATTERN = Object.keys(CODEX_MODEL_ALIASES)
+  .sort((a, b) => b.length - a.length)
+  .join('|')
+
 /** Look up a chat alias. Returns the full model ID or undefined.
  *  Lowercases input — router regex 'i' flag handles matching, this handles lookup. */
 export function resolveModelAlias(alias: string): string | undefined {
   return MODEL_ALIASES[alias.toLowerCase()]
+}
+
+export function resolveCodexModelAlias(alias: string): string | undefined {
+  return CODEX_MODEL_ALIASES[alias.toLowerCase()]
 }
 
 /** Strip [1m] context-window suffix and check against known models. */

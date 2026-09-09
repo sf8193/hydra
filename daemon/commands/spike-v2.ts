@@ -11,7 +11,7 @@ async function getSpikeProto() {
   return spikeProto
 }
 
-export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string, model?: string): Promise<void> {
+export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔬').catch(() => {})
 
   const resolvedThreadId = registry.resolveThreadId(msg)
@@ -37,7 +37,7 @@ export async function handleSpikeV2Intercept(msg: InboundMessage, topic?: string
 
   try {
     const proto = await getSpikeProto()
-    await startProtocolRun(proto, threadId, sessionId, { rounds: 1, topic, model })
+    await startProtocolRun(proto, threadId, sessionId, { rounds: 1, topic, model, engine: engine ?? info.engine })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Spike failed to start: ${errMsg}`, { replyTo: msg.id })
