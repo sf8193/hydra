@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
 import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
+import { registry } from '../sessions.js'
 
 let origStderrWrite: typeof process.stderr.write
 
@@ -497,6 +498,22 @@ describe('extend_phase', () => {
 })
 
 describe('protocol runner — keepalive', () => {
+  test('Codex participants never receive synthetic model-turn keepalives', () => {
+    const run = createTestRun()
+    registry.set('test-critic', {
+      sessionId: 'test-critic', topic: 'critic', threadId: 'test-thread', createdAt: Date.now(),
+      lastActive: Date.now(), tmuxName: 'critic', listening: true, engine: 'codex', sessionType: 'thread_guest',
+    })
+    try {
+      __test!.sendKeepaliveNotification(run as any, 'test-critic', 'critic')
+      __test!.startKeepalive(run as any)
+      expect(transport.messageQueues.get('test-critic') ?? []).toHaveLength(0)
+      expect(run._keepaliveTimer).toBeUndefined()
+    } finally {
+      registry.delete('test-critic')
+    }
+  })
+
   test('keepalive timer starts after phase transition', async () => {
     const run = createTestRun()
     await onRunAdvance('test-critic', 'Finding #1', 'approve')

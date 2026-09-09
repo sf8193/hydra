@@ -904,6 +904,9 @@ function clearPhaseTimers(run: ProtocolRun): void {
 }
 
 export function sendKeepaliveNotification(run: ProtocolRun, sessionId: string, actor: string): void {
+  // Codex notifications are real model turns. Its durable app-server is probed
+  // out of band, so never spend context on synthetic liveness messages.
+  if (registry.get(sessionId)?.engine === 'codex') return
   transport.sendOrQueue(sessionId, {
     type: 'notification',
     content: `[system] keepalive`,
@@ -916,6 +919,8 @@ function startKeepalive(run: ProtocolRun): void {
   if (!KEEPALIVE_ENABLED) return
   const actor = run.protocol.phases[run.phase]?.actor
   if (!actor) return
+  const actorSessionId = run.participants.get(actor)
+  if (actorSessionId && registry.get(actorSessionId)?.engine === 'codex') return
   run._keepaliveTimer = setInterval(() => {
     if (isTerminal(run)) { clearInterval(run._keepaliveTimer!); run._keepaliveTimer = undefined; return }
     const sid = run.participants.get(actor)
@@ -1466,7 +1471,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
 export const __test = process.env.NODE_ENV === 'test'
   ? {
-      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification, spawnRole,
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification, startKeepalive, spawnRole,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession; interruptExecution?: typeof defaultInterruptExecution }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge

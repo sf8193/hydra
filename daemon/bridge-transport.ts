@@ -129,6 +129,9 @@ export class BridgeTransport {
     if (this.codexEngine?.isConnected(sessionId)) {
       const content = msg.content
       if (typeof content === 'string' && content) {
+        // Defense in depth: synthetic bridge liveness must never become a Codex
+        // model turn, even if a future caller bypasses protocol-runner's guard.
+        if (content === '[system] keepalive') return
         // Enrich with attachment paths so codex can view images/files
         const meta = msg.meta as Record<string, string> | undefined
         const downloadedFiles = meta?.downloaded_files

@@ -84,6 +84,17 @@ describe('BridgeTransport', () => {
     expect(steered).toBe('')
   })
 
+  test('drops synthetic keepalives before they reach the Codex model', () => {
+    let turns = 0
+    bt.setCodexEngine({
+      isConnected: () => true,
+      queueTurn: () => { turns++ },
+      steer: () => { turns++ },
+    } as any)
+    bt.sendOrQueue('codex-1', { type: 'notification', content: '[system] keepalive' })
+    expect(turns).toBe(0)
+  })
+
   test('sendOrQueue queues when no bridge connected', () => {
     bt.sendOrQueue('s2', { type: 'notification', content: 'queued' })
     const queue = bt.messageQueues.get('s2')
