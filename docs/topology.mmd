@@ -74,6 +74,7 @@ graph TD
 
   daemon --> daemon_config
   daemon --> daemon_sessions
+  daemon --> daemon_util
   daemon --> daemon_bridge-transport
   daemon --> daemon_access
   daemon --> daemon_permission
@@ -87,7 +88,6 @@ graph TD
   daemon --> daemon_router
   daemon --> daemon_pr-watch
   daemon --> daemon_reply-guard
-  daemon --> daemon_util
   daemon --> daemon_session-health
   cli_hydra --> shared_constants
   shared_constants --> shared_tool-definitions
@@ -98,6 +98,7 @@ graph TD
   daemon_bridge-transport --> daemon_sessions
   daemon_bridge-transport --> daemon_util
   daemon_util --> daemon_config
+  daemon_util --> shared_constants
   daemon_bridge-tools --> shared_constants
   daemon_bridge-tools --> shared_tool-definitions
   daemon_tool-surface --> daemon_sessions

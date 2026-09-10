@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { safeSend, formatSpawnLine, tmuxHasSession, killDetachedDevSessions } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -15,7 +15,7 @@ import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants
 import type { SessionType } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import { withRaisedFdLimit } from '../shared/tmux-env.js'
-import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
+import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt, LOCAL_STACK_INSTRUCTION } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
@@ -153,18 +153,6 @@ export function resolveForkSpawnCwd(
   return (isFork && hasWorktree) ? spawnCwd : effectiveCwd
 }
 
-/**
- * Append worktree location to the prompt for fork+worktree builders.
- * The builder starts from spawnCwd (for --resume CWD compatibility), so it
- * needs an explicit path to cd into. Returns '' for all other spawn forms.
- */
-export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string | undefined): string {
-  if (isFork && worktreePath) {
-    return `\n\nWORKTREE: Your isolated worktree is at ${worktreePath}. cd there before making any code changes.`
-  }
-  return ''
-}
-
 // ---------------------------------------------------------------------------
 // Listen state resolution: thread override → channel group → global → false
 // ---------------------------------------------------------------------------
@@ -261,6 +249,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
     clearInterceptsForSession(info.tmuxName)
+    killDetachedDevSessions(info.tmuxName)
 
     if (info.worktreePath && info.worktreeRepo && !opts?.skipWorktreeDestroy) {
       const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
@@ -821,7 +810,7 @@ export async function tryResume(dead: {
     // was recovered.
     transport.sendOrQueue(result.sessionId, {
       type: 'notification',
-      content: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off. ${RECOVERY_REVERIFY_GUARD}`,
+      content: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off. ${RECOVERY_REVERIFY_GUARD}${dead.worktree ? `\n\n${LOCAL_STACK_INSTRUCTION(result.name, dead.worktree.path)}` : ''}`,
       meta: { chat_id: dead.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
 

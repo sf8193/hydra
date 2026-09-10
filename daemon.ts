@@ -40,6 +40,7 @@ process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
+import { sweepOrphanedDevSessions } from './daemon/util.js'
 import { resolveEngine } from './daemon/engines/instances.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
@@ -74,6 +75,8 @@ if (existsSync(SOCK_PATH)) {
 
 startBridgeServer()
 initEphemeralTimers()
+
+sweepOrphanedDevSessions([...registry.values()].map(s => s.tmuxName))
 
 // Reconnect persisted codex sessions to their app-server sockets
 import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'

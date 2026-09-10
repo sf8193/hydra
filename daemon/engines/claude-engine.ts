@@ -18,6 +18,7 @@ import type {
 import { transport } from '../bridge-transport.js'
 import { tmuxHasSession } from '../util.js'
 import { isKnownModel } from '../../shared/constants.js'
+import { buildWorktreePromptAppend } from '../prompts/session.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { withRaisedFdLimit } from '../../shared/tmux-env.js'
@@ -40,12 +41,6 @@ export function resolveForkSpawnCwd(isFork: boolean, hasWorktree: boolean, spawn
   return (isFork && hasWorktree) ? spawnCwd : effectiveCwd
 }
 
-export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string | undefined): string {
-  if (isFork && worktreePath) {
-    return `\n\nWORKTREE: Your isolated worktree is at ${worktreePath}. cd there before making any code changes.`
-  }
-  return ''
-}
 
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
@@ -65,7 +60,7 @@ export class ClaudeEngine implements EngineAdapter {
     }
 
     let prompt = input.prompt
-    const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
+    const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath, tmuxName)
     if (worktreeAppend) prompt += worktreeAppend
 
     const channelFlag = 'plugin:discord@claude-plugins-official'

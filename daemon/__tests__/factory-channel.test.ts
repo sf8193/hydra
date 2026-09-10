@@ -1,6 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { resolveBuilderChannel } from '../factory.js'
-import { resolveForkSpawnCwd, buildWorktreePromptAppend } from '../session-lifecycle.js'
+import { resolveForkSpawnCwd } from '../session-lifecycle.js'
+import { buildWorktreePromptAppend, LOCAL_STACK_INSTRUCTION } from '../prompts/session.js'
+import { HYDRA_DEV_PREFIX } from '../../shared/constants.js'
 
 // Save and restore process.stderr.write so we suppress noise without leaking
 let originalStderrWrite: typeof process.stderr.write
@@ -73,23 +75,44 @@ describe('resolveForkSpawnCwd', () => {
 
 describe('buildWorktreePromptAppend', () => {
   const worktreePath = '/Users/sam/trading/.worktrees/options_bot-vale'
+  const name = 'vale'
 
-  test('fork + worktree returns cd instruction with absolute path', () => {
-    const result = buildWorktreePromptAppend(true, worktreePath)
+  test('fork + worktree keeps the cd instruction with the absolute path', () => {
+    const result = buildWorktreePromptAppend(true, worktreePath, name)
     expect(result).toContain(worktreePath)
     expect(result).toContain('cd there')
-    expect(result).not.toBe('')
   })
 
-  test('fork without worktree returns empty string', () => {
-    expect(buildWorktreePromptAppend(true, undefined)).toBe('')
+  test('fork and non-fork worktree spawns both carry the rule', () => {
+    for (const isFork of [true, false]) {
+      const result = buildWorktreePromptAppend(isFork, worktreePath, name)
+      expect(result).toContain('RUNNING A LOCAL STACK')
+      expect(result).toContain(`tmux new-session -d -s ${HYDRA_DEV_PREFIX}${name}-<label>`)
+    }
   })
 
-  test('non-fork with worktree returns empty string (builder starts in worktree already)', () => {
-    expect(buildWorktreePromptAppend(false, worktreePath)).toBe('')
+  test('non-fork worktree gets the rule but not the cd instruction', () => {
+    const result = buildWorktreePromptAppend(false, worktreePath, name)
+    expect(result).toContain('RUNNING A LOCAL STACK')
+    expect(result).not.toContain('cd there')
   })
 
-  test('plain spawn returns empty string', () => {
-    expect(buildWorktreePromptAppend(false, undefined)).toBe('')
+  test('the worktree path is interpolated, never left as a placeholder', () => {
+    for (const isFork of [true, false]) {
+      const result = buildWorktreePromptAppend(isFork, worktreePath, name)
+      expect(result).toContain(`cd ${worktreePath} &&`)
+      expect(result).not.toContain('<worktree>')
+    }
+  })
+
+  test('the log path is labelled so a second process cannot collide', () => {
+    const rule = LOCAL_STACK_INSTRUCTION(name, worktreePath)
+    expect(rule).toContain(`/tmp/${HYDRA_DEV_PREFIX}${name}-<label>.log`)
+    expect(rule).toContain('One tmux session per process')
+  })
+
+  test('no worktree returns empty string regardless of fork', () => {
+    expect(buildWorktreePromptAppend(true, undefined, name)).toBe('')
+    expect(buildWorktreePromptAppend(false, undefined, name)).toBe('')
   })
 })

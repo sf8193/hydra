@@ -1,3 +1,5 @@
+import { HYDRA_DEV_PREFIX } from '../../shared/constants.js'
+
 // ---------------------------------------------------------------------------
 // Session prompt builders — behavioral contracts for each spawn type.
 //
@@ -17,6 +19,25 @@ export const DESCRIPTION_INSTRUCTION = (sessionId: string) =>
   `call set_description(session_id="${sessionId}", description="...") to name this thread. ` +
   `Lead with the domain if one is clear. 5 words max. ` +
   `Rewrite it whenever your focus shifts — the thread name updates live.`
+
+export const LOCAL_STACK_INSTRUCTION = (tmuxName: string, worktreePath: string) =>
+  [
+    `RUNNING A LOCAL STACK: if your task needs a dev server, watcher, or build daemon running — typically full-stack work with a frontend — never start it in the foreground. Its output streams into your context and across the bridge for as long as the process lives.`,
+    `Start each one detached in its own tmux session, named for the process, logging to a file:`,
+    `  tmux new-session -d -s ${HYDRA_DEV_PREFIX}${tmuxName}-<label> "cd ${worktreePath} && <command> 2>&1 | tee /tmp/${HYDRA_DEV_PREFIX}${tmuxName}-<label>.log"`,
+    `One tmux session per process — reusing a name fails with "duplicate session" and truncates the log. Pick a distinct <label> per process (app, graph, watch).`,
+    `Check it came up by polling its port. For a watcher or anything else with no port, take a single bounded read of the last 40 lines instead — never tail or follow. Either way, 40 lines is the ceiling, and you only re-read when something looks wrong. Prefer quiet flags when output must come back in-band (turbo --output-logs=errors-only, vitest --reporter=dot).`,
+    `Detached tmux is preferred over Bash(run_in_background) here because it survives your own restart and hydra reaps it when your session ends. If you do use run_in_background, do not poll its output on a loop.`,
+    `Run \`tmux kill-session -t ${HYDRA_DEV_PREFIX}${tmuxName}-<label>\` when you no longer need it.`,
+  ].join('\n')
+
+export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string | undefined, tmuxName: string): string {
+  if (!worktreePath) return ''
+  const parts: string[] = []
+  if (isFork) parts.push(`WORKTREE: Your isolated worktree is at ${worktreePath}. cd there before making any code changes.`)
+  parts.push(LOCAL_STACK_INSTRUCTION(tmuxName, worktreePath))
+  return `\n\n${parts.join('\n\n')}`
+}
 
 export function buildSpawnPrompt(p: PromptParams): string {
   return [
