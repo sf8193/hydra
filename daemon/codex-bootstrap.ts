@@ -77,13 +77,14 @@ codexEngine.on('disconnected', (sessionId: string) => {
 // ---------------------------------------------------------------------------
 
 export async function reconnectCodexSessions(): Promise<void> {
-  const sessions = [...registry.values()].filter(s => !s.deadAt)
-  if (sessions.length === 0) return
+  const codexSessions = [...registry.values()].filter(s => s.engine === 'codex' && !s.deadAt)
+  if (codexSessions.length === 0) return
 
   let reconnected = 0
-  for (const info of sessions) {
-    if (!info.adapter) continue
-    const ok = await info.adapter.reconnect(info)
+  for (const info of codexSessions) {
+    const ok = info.adapter
+      ? await info.adapter.reconnect(info)
+      : false
     if (!ok) {
       info.deadAt = Date.now()
     } else {

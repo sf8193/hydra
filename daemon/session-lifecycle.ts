@@ -737,7 +737,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const sessionMetadata = {
     role: 'worker' as const,
-    tools: adapter.provider === 'claude' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : [],
+    // Codex sessions discover tools via their own MCP sidecar, not the daemon bridge
+    tools: engine === 'claude' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : [],
     model: launched.model,
     cwd: effectiveCwd,
     platform: PLATFORM,
@@ -749,7 +750,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
     sessionType: spawnType,
     threadUrl: url || undefined,
-    engine,
+    ...(engine !== 'claude' ? { engine } : {}),
     ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
     ...(launched.codexThreadId ? { codexThreadId: launched.codexThreadId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
@@ -766,12 +767,19 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     adapter,
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)
+  // Thread ownership: setThread claims the thread for message routing. Only the
+  // thread OWNER calls setThread — join members (protocol critics, guest agents)
+  // use addMember and must never touch the mapping, or they'd hijack routing.
+  // Headless sessions use a synthetic UUID as threadId — don't register it.
   if (!isJoin && !isHeadless) {
     registry.setThread(threadId!, sessionId)
   } else if (isJoin) {
     registry.addMember(threadId!, sessionId, opts?.memberLabel)
   }
 
+  // Lossless respawn: re-apply the replaced record's deliverables/description so
+  // the dashboard row keeps its PR/artifact links across respawns. Reset
+  // artifactsBackfilled so a later boot's history-rescan re-derives links.
   if (carriedArtifacts?.length || carriedContextLinks?.length || carriedDescription) {
     const created = registry.get(sessionId)
     if (created) {
@@ -816,6 +824,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         if (info) info.spawnAnnounceId = ids[0]
       }
     })
+    // Echo to the causing thread — but only when it IS a thread we track
+    // (a session or protocol thread). A plain channel already shows the new
+    // thread's anchor; echoing there would double-announce.
     if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
       void safeSend(chatId, spawnLine)
     }
