@@ -62,7 +62,7 @@ export type SessionInfo = {
   exitFilePath?: string    // exit marker file: exit code, wall clock, signal — written by spawn command on exit
   stderrLogPath?: string   // stderr redirect: separate file for spawn's stderr output
   debugLogPath?: string    // CC --debug-file output: internal diagnostics, written throughout session lifetime
-  engine?: 'claude' | 'codex'  // which backend runs this session — serialized string for persistence
+  engine: 'claude' | 'codex'  // which backend runs this session
   adapter?: import('./engines/engine-adapter.js').EngineAdapter // runtime instance, not persisted — reattached on load
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
@@ -400,6 +400,9 @@ export class SessionRegistry {
           raw.toolDescriptions = raw.toolDescriptionOverrides
           delete raw.toolDescriptionOverrides
         }
+
+        // Backfill explicit engine for pre-adapter sessions
+        if (!raw.engine) raw.engine = 'claude'
 
         // Migrate legacy booleans → new identity fields
         if (raw.allowMainTools && !raw.sessionType) {

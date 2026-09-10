@@ -750,7 +750,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
     sessionType: spawnType,
     threadUrl: url || undefined,
-    ...(engine !== 'claude' ? { engine } : {}),
+    engine,
     ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
     ...(launched.codexThreadId ? { codexThreadId: launched.codexThreadId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
