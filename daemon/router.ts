@@ -15,6 +15,7 @@ import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, MODEL_AL
 import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
+import { handleDelegatedBuildIntercept } from './commands/delegated-build.js'
 import { handleSpikeV2Intercept, handleCancelSpikeV2Intercept } from './commands/spike-v2.js'
 import { listModifierKeys, partitionSpawnModifiers } from './modifiers.js'
 import { isThreadOccupied } from './protocol-registry.js'
@@ -662,6 +663,19 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const v2Task = buildV2Match[4]?.trim()
         const selection = preModel ?? postModel
         void handleBuildV2Intercept(msg, v2Rounds, v2Task, selection?.model, selection?.engine)
+        return
+      }
+
+      const delegateMatch = msg.content.match(/^(?:\/delegate|delegate)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (delegateMatch) {
+        const preModel = resolveProtocolModel(delegateMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+        if (preModel === false) return
+        const postModel = resolveProtocolModel(delegateMatch[3]?.toLowerCase(), msg.channelId, msg.id)
+        if (postModel === false) return
+        const dRounds = parseInt(delegateMatch[2] ?? '3')
+        const dTask = delegateMatch[4]?.trim()
+        const selection = preModel ?? postModel
+        void handleDelegatedBuildIntercept(msg, dRounds, dTask, selection?.model, selection?.engine)
         return
       }
 
