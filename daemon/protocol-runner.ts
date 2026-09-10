@@ -868,18 +868,9 @@ function startHealthMonitor(run: ProtocolRun): void {
     const alive = info.adapter ? await info.adapter.isAlive(info) : isAlive(info)
     const connected = transport.has(actorSid)
 
-    if (!alive && !connected) {
-      process.stderr.write(`daemon: health: ${info.tmuxName} is dead, triggering disconnect handler\n`)
-      onRunDisconnect(actorSid)
-      return
-    }
-
-    if (info.turnState === 'working') return
-
-    const idleMs = Date.now() - info.lastActive
+    // Hard cap check first — unconditional, never skipped by turnState
     const phaseElapsed = Date.now() - run._phaseStartedAt
     const hardCapMs = (run.protocol.windowMs(run.phase) ?? 30 * 60 * 1000) * TOTAL_PHASE_CAP_FACTOR
-
     if (phaseElapsed > hardCapMs) {
       process.stderr.write(`daemon: health: ${info.tmuxName} hit hard cap (${Math.round(phaseElapsed / 60_000)}m)\n`)
       clearInterval(run._healthMonitor!)
@@ -892,6 +883,26 @@ function startHealthMonitor(run: ProtocolRun): void {
       }
       return
     }
+
+    // Dead or half-dead: recover immediately regardless of turnState
+    if (!alive) {
+      process.stderr.write(`daemon: health: ${info.tmuxName} is dead (connected=${connected}), triggering recovery\n`)
+      onRunDisconnect(actorSid)
+      return
+    }
+    if (!connected) {
+      // Process alive but bridge down — can't deliver notifications.
+      // Only nudge the thread (not the session) and let disconnect handler sort it out.
+      if (!run._escalated) {
+        run._escalated = true
+        void safeSend(run.threadId, `_⚠️ ${info.tmuxName} is running but disconnected — bridge may be recovering_`)
+        process.stderr.write(`daemon: health: ${info.tmuxName} alive but disconnected\n`)
+      }
+      return
+    }
+
+    // Working — let it cook (but hard cap above still applies)
+    if (info.turnState === 'working') return
 
     if (idleMs > IDLE_ESCALATE_MS && !run._escalated) {
       run._escalated = true
