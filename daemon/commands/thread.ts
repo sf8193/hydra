@@ -20,6 +20,7 @@ import { canNativeFork } from '../fork-strategy.js'
 import { recoveryEntry, recoveryModel } from '../recovery-selection.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../engines/instances.js'
+import { blocksRecovery, classifyReachability } from '../session-reachability.js'
 
 function adapterFor(info: { engine?: 'claude' | 'codex'; adapter?: any }) {
   return info.adapter ?? resolveEngine(info.engine)
@@ -27,6 +28,20 @@ function adapterFor(info: { engine?: 'claude' | 'codex'; adapter?: any }) {
 
 async function executionAlive(info: NonNullable<ReturnType<typeof registry.get>>): Promise<boolean> {
   return adapterFor(info).isAlive(info)
+}
+
+/**
+ * A live process is not a reachable session. When the bridge is gone the
+ * session keeps running with no channel back to the daemon, and Claude Code
+ * never reconnects a stdio MCP server it has given up on — so recovery has to
+ * tear the process down before it can resume onto the same conversation.
+ */
+async function reachabilityOf(info: NonNullable<ReturnType<typeof registry.get>>) {
+  return classifyReachability({
+    executionAlive: await executionAlive(info),
+    bridgeConnected: transport.has(info.sessionId),
+    ageMs: Date.now() - info.createdAt,
+  })
 }
 
 export async function handleThreadKillIntercept(
@@ -274,11 +289,24 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   if (liveSessionId) {
     const liveInfo = registry.get(liveSessionId)
     if (liveInfo) {
-      if (await executionAlive(liveInfo)) {
+      const reachability = await reachabilityOf(liveInfo)
+      if (blocksRecovery(reachability)) {
         const surfaceReady = adapterFor(liveInfo).ensureSurface(liveInfo)
         void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
-        try { await gateway.send(msg.channelId, `Session **${liveInfo.tmuxName}** is already running.${surfaceReady ? '' : ' Its interactive surface is unavailable; the server is alive and may still be reconnecting.'}`, { replyTo: msg.id }) } catch {}
+        const note = reachability === 'starting'
+          ? `Session **${liveInfo.tmuxName}** is still starting up — give its bridge a moment to connect.`
+          : `Session **${liveInfo.tmuxName}** is already running.${surfaceReady ? '' : ' Its interactive surface is unavailable; the server is alive and may still be reconnecting.'}`
+        try { await gateway.send(msg.channelId, note, { replyTo: msg.id }) } catch {}
         return
+      }
+      // Orphaned: the process is up but unreachable. Tear it down so the resume
+      // cascade below can reattach to its conversation — killSession closes the
+      // history entry with the claudeSessionId that tier 1 needs.
+      if (reachability === 'orphaned') {
+        process.stderr.write(`daemon: resume: tearing down orphaned ${liveInfo.tmuxName} before reattaching\n`)
+        // Keep the worktree: recovery reuses the dead session's on-disk worktree
+        // rather than recreating one, and it may hold unpushed work.
+        await killSession(liveInfo, 'bridge was unreachable — reattaching to this conversation', { skipWorktreeDestroy: true })
       }
       if (liveInfo.engine === 'codex') {
         liveInfo.deadAt = Date.now()
@@ -383,9 +411,16 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   if (respawnLiveId) {
     const liveInfo = registry.get(respawnLiveId)
     if (liveInfo) {
-      if (await executionAlive(liveInfo)) {
+      const reachability = await reachabilityOf(liveInfo)
+      if (blocksRecovery(reachability)) {
         await reportError(msg.channelId, msg.id, 'respawn', `thread has a live session (**${liveInfo.tmuxName}**)`, 'Use `kill` first, or `spawn:` for a new thread.')
         return
+      }
+      // An orphaned session would otherwise wedge respawn behind a kill the
+      // alert never mentioned. Prefer resume, which keeps the transcript.
+      if (reachability === 'orphaned') {
+        process.stderr.write(`daemon: respawn: tearing down orphaned ${liveInfo.tmuxName}\n`)
+        await killSession(liveInfo, 'bridge was unreachable — respawning', { skipWorktreeDestroy: true })
       }
     }
   }

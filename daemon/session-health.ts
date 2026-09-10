@@ -6,10 +6,12 @@ import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { discoverClaudeSessionId } from './session-lifecycle.js'
+import { ORPHAN_GRACE_MS } from './session-reachability.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
-const ORPHAN_GRACE_MS = 90_000
+// SYNC: shared with the recovery commands' reachability check, which must agree
+// on what counts as an orphan. See daemon/session-reachability.ts.
 const CONTEXT_ALERT_THRESHOLD = 70
 
 const contextAlerted = new Set<string>()
@@ -66,7 +68,7 @@ export function startSessionHealthPoll(): void {
         if (!orphanAlerted.has(info.sessionId)) {
           orphanAlerted.add(info.sessionId)
           process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)\n`)
-          void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread. Use \`respawn\` to start fresh.`).catch(() => {})
+          void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread. Use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`).catch(() => {})
         }
       } else {
         orphanAlerted.delete(info.sessionId)
