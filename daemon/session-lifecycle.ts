@@ -263,6 +263,16 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     process.stderr.write(`daemon: killing tmux session ${tmuxName} (${reason})\n`)
     try { providerFor(info.engine).disconnect(info) }
     catch (err) { process.stderr.write(`daemon: killSession: provider disconnect failed for ${info.tmuxName}: ${err}\n`) }
+    if (info.engine === 'codex') {
+      // SIGTERM is asynchronous. Keep ownership until the old server has
+      // actually stopped, otherwise an immediate resume races its live socket.
+      const socket = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+      const deadline = Date.now() + 5_000
+      while (await codexEngine.isSocketLive(socket)) {
+        if (Date.now() >= deadline) throw new Error(`Codex server ${info.tmuxName} is still shutting down; retry kill before resuming`)
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+    }
     try {
       execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
     } catch {}
@@ -405,11 +415,13 @@ async function spawnCodexSession(p: {
   while (Date.now() - start < 15_000) {
     try {
       if (p.resumeThread) {
-        await codexEngine.connectAndResume(p.sessionId, sockPath, p.resumeThread)
+        const r = await codexEngine.connectAndResume(p.sessionId, sockPath, p.resumeThread)
+        resolvedModel = r.model ?? resolvedModel
         codexThreadId = p.resumeThread
       } else if (p.forkFromThread) {
-        const r = await codexEngine.connectAndFork(p.sessionId, sockPath, p.forkFromThread)
+        const r = await codexEngine.connectAndFork(p.sessionId, sockPath, p.forkFromThread, p.model)
         codexThreadId = r.threadId
+        resolvedModel = r.model ?? resolvedModel
       } else {
         const r = await codexEngine.connect(p.sessionId, sockPath, p.model)
         codexThreadId = r.threadId
@@ -437,6 +449,7 @@ async function spawnCodexSession(p: {
 // ---------------------------------------------------------------------------
 
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
+  if (opts?.engine === 'codex' && opts.model === 'codex-default') opts = { ...opts, model: undefined }
   let threadId: string | undefined
   let anchorMessageId: string | undefined
   let anchorChannelId: string | undefined
@@ -485,6 +498,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     registry.releaseCodexHome(requestedCodexHome)
     throw new Error(`codex home ${requestedCodexHome} has unresolved retirement`)
   }
+  try {
   // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
   // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
   // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
@@ -549,7 +563,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          try { execFileSync('tmux', ['has-session', '-t', existing.tmuxName], { stdio: 'pipe' }) } catch {
+          const alive = existing.engine === 'codex'
+            ? codexEngine.isConnected(existing.sessionId) || await codexEngine.isSocketLive(codexSocketPath(existing.codexHomeName ?? existing.tmuxName))
+            : tmuxHasSession(existing.tmuxName)
+          if (!alive) {
             respawnCount = (existing.respawnCount ?? 0) + 1
             // Lossless respawn (mirror the existingThreadId branch): carry the dead
             // record's deliverables/description to the replacement. Worktree destruction
@@ -611,7 +628,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (existingId) {
       const existing = registry.get(existingId)
       if (existing) {
-        if (tmuxHasSession(existing.tmuxName)) {
+        if (existing.engine === 'codex'
+          ? codexEngine.isConnected(existing.sessionId) || await codexEngine.isSocketLive(codexSocketPath(existing.codexHomeName ?? existing.tmuxName))
+          : tmuxHasSession(existing.tmuxName)) {
           throw new Error(`thread has a live session (${existing.tmuxName}) — kill it first or spawn in a new thread`)
         }
         respawnCount = (existing.respawnCount ?? 0) + 1
@@ -801,7 +820,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         forkSourceHomeName: opts?.forkFrom?.codexHomeName,
       })
     } catch (err) {
-      registry.releaseCodexHome(requestedCodexHome)
       registry.delete(sessionId)
       if (isJoin) registry.removeMember(threadId!, sessionId)
       else registry.deleteThread(threadId!)
@@ -818,7 +836,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     info.sessionMetadata!.model = displayedModel
     if (spawnLogPath) info.spawnLogPath = spawnLogPath
     registry.persist()
-    registry.releaseCodexHome(requestedCodexHome)
     // Refresh protocol execution identity now that the persistent thread exists.
     opts?.beforeInitialTurn?.(sessionId)
     providerFor('codex').ensureInteractiveSurface(info)
@@ -1059,6 +1076,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }
+  } finally {
+    if (ownsCodexReservation) registry.releaseCodexHome(requestedCodexHome)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,7 +1209,7 @@ export async function tryRespawn(
       resurrectFrom,
       // Respawn continuity: keep the dead session's model if we have one,
       // else fall back to the template's model (extraOpts), else the default.
-      model: model ?? extraOpts?.model,
+      model: (model === 'codex-default' ? undefined : model) ?? extraOpts?.model,
     })
   } catch (err) {
     process.stderr.write(`daemon: tryRespawn: doSpawnSession failed for ${threadId}: ${err}\n`)

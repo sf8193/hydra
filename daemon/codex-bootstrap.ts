@@ -8,7 +8,7 @@
 
 import { CodexEngine, codexSocketPath } from './codex-engine.js'
 import { transport } from './bridge-transport.js'
-import { registry } from './sessions.js'
+import { registry, threadRegistry } from './sessions.js'
 import { dispatchDisconnect } from './protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
 import { appendFileSync } from 'fs'
@@ -104,7 +104,16 @@ export async function reconnectCodexAfterDisconnect(
   sessionId: string,
   deps = {
     get: (id: string) => registry.get(id),
-    resume: (id: string, socket: string, thread: string) => codexEngine.connectAndResume(id, socket, thread),
+    resume: async (id: string, socket: string, thread: string) => {
+      const result = await codexEngine.connectAndResume(id, socket, thread)
+      const info = registry.get(id)
+      if (info?.sessionMetadata && result.model) {
+        info.sessionMetadata.model = result.model
+        const entry = threadRegistry.get(info.threadId)?.sessionHistory.find(e => e.sessionId === id)
+        if (entry) entry.model = result.model
+        threadRegistry.persist()
+      }
+    },
     wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
     ensure: (info: NonNullable<ReturnType<typeof registry.get>>) => providerFor('codex').ensureInteractiveSurface(info),
     persist: () => registry.persist(),
@@ -161,7 +170,8 @@ export async function reconnectCodexSessions(): Promise<void> {
     // Strategy 1: resume existing thread (preserves conversation)
     if (info.codexThreadId) {
       try {
-        await codexEngine.connectAndResume(info.sessionId, sockPath, info.codexThreadId)
+        const result = await codexEngine.connectAndResume(info.sessionId, sockPath, info.codexThreadId)
+        if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
         connected = true
         process.stderr.write(`codex-bootstrap: reconnected ${info.tmuxName} (resumed)\n`)
       } catch (err: any) {
@@ -177,6 +187,7 @@ export async function reconnectCodexSessions(): Promise<void> {
       try {
         const result = await codexEngine.connect(info.sessionId, sockPath)
         info.codexThreadId = result.threadId
+        if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
         connected = true
         if (hadPriorThread) {
           void safeSend(info.threadId, `\u26a0\ufe0f Session resumed but conversation history was lost. The agent is starting fresh.`)
@@ -192,6 +203,13 @@ export async function reconnectCodexSessions(): Promise<void> {
       info.deadAt = Date.now()
     } else {
       delete info.deadAt
+      const entry = threadRegistry.get(info.threadId)?.sessionHistory.find(e => e.sessionId === info.sessionId)
+      if (entry) {
+        entry.codexThreadId = info.codexThreadId
+        entry.codexHomeName = info.codexHomeName ?? info.tmuxName
+        entry.model = info.sessionMetadata?.model
+        threadRegistry.persist()
+      }
       providerFor('codex').ensureInteractiveSurface(info)
       reconnected++
     }

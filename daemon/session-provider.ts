@@ -1,5 +1,4 @@
 import type { SessionInfo, SpawnOpts, SpawnResult, ThreadSessionEntry } from './sessions.js'
-import { transport } from './bridge-transport.js'
 import { execFileSync } from 'child_process'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -215,16 +214,12 @@ class CodexSessionProvider implements SessionProvider {
         existingThreadId: input.threadId,
         ...input.spawnOptions,
         resumeCodex: identity,
+        promptPrefix: input.recoveryNotice,
         model: input.model,
         engine: 'codex',
         preserveWorktree: input.preserveWorktree,
         reuseWorktree: input.preserveWorktree ? input.worktree : undefined,
       } as SpawnOpts)
-      transport.sendOrQueue(result.sessionId, {
-        type: 'notification',
-        content: input.recoveryNotice,
-        meta: { chat_id: input.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-      })
       return result
     } catch (err) {
       process.stderr.write(`daemon: codex provider resume failed for ${input.lastName}: ${err}\n`)
