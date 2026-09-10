@@ -107,6 +107,7 @@ function seedSession(opts: { deadAt?: number; initiator?: string } = {}): Sessio
     lastActive: Date.now(),
     tmuxName: 'drift',
     listening: false,
+      engine: 'claude',
     sessionType: 'thread_owner',
     anchorChannelId: PARENT,
     anchorMessageId: ANCHOR,

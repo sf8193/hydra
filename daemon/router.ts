@@ -799,7 +799,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             if (text) {
               try {
                 const provider = providerFor(info.engine)
-                if (!provider.ensureInteractiveSurface(info)) throw new Error(`${provider.id} interactive surface is unavailable`)
+                if (!provider.ensureSurface(info)) throw new Error(`${provider.provider} interactive surface is unavailable`)
                 // Map lowercase → canonical tmux key name (tmux is case-sensitive)
                 const TMUX_KEY_MAP = new Map<string, string>()
                 for (const k of [
@@ -866,7 +866,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
               void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
               try {
                 const provider = providerFor(info.engine)
-                provider.ensureInteractiveSurface(info)
+                provider.ensureSurface(info)
                 Bun.spawn(['tmux', 'send-keys', '-t', provider.uiTarget(info), 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
                 process.stderr.write(`daemon: interrupt sent to ${info.tmuxName} via ! prefix\n`)
               } catch (err) {

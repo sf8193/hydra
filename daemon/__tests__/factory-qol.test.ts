@@ -144,6 +144,7 @@ function mkSession(opts: { tmuxName: string; threadId: string; sessionId?: strin
     lastActive: Date.now(),
     tmuxName: opts.tmuxName,
     listening: false,
+      engine: 'claude',
     sessionType: 'thread_owner',
   }
   registry.set(sessionId, info)
@@ -1017,6 +1018,7 @@ describe('factoryReview result delivery', () => {
           lastActive: Date.now(),
           tmuxName: `critic-${suffix}`,
           listening: false,
+      engine: 'claude',
           turnState: 'idle',
         } as SessionInfo)
         trackedSessions.add(sessionId)

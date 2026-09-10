@@ -16,7 +16,7 @@ afterEach(() => {
 describe('event-bus', () => {
   test('on + emit delivers payload to listener', () => {
     const received: string[] = []
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:basic')
+    on('review:complete', ({ threadId }) => void received.push(threadId), 'test:basic')
     emit('review:complete', { threadId: 'thread-1' })
     expect(received).toEqual(['thread-1'])
   })
@@ -24,8 +24,8 @@ describe('event-bus', () => {
   test('fan-out: multiple listeners receive the same event', () => {
     const a: string[] = []
     const b: string[] = []
-    on('review:complete', ({ threadId }) => a.push(threadId), 'test:a')
-    on('review:complete', ({ threadId }) => b.push(threadId), 'test:b')
+    on('review:complete', ({ threadId }) => void a.push(threadId), 'test:a')
+    on('review:complete', ({ threadId }) => void b.push(threadId), 'test:b')
     emit('review:complete', { threadId: 'thread-1' })
     expect(a).toEqual(['thread-1'])
     expect(b).toEqual(['thread-1'])
@@ -33,7 +33,7 @@ describe('event-bus', () => {
 
   test('unsubscribe stops delivery', () => {
     const received: string[] = []
-    const unsub = on('review:complete', ({ threadId }) => received.push(threadId), 'test:unsub')
+    const unsub = on('review:complete', ({ threadId }) => void received.push(threadId), 'test:unsub')
     emit('review:complete', { threadId: 'thread-1' })
     unsub()
     emit('review:complete', { threadId: 'thread-2' })
@@ -43,7 +43,7 @@ describe('event-bus', () => {
   test('error isolation: one listener throwing does not block others', () => {
     const received: string[] = []
     on('review:complete', () => { throw new Error('boom') }, 'test:thrower')
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:receiver')
+    on('review:complete', ({ threadId }) => void received.push(threadId), 'test:receiver')
     emit('review:complete', { threadId: 'thread-1' })
     expect(received).toEqual(['thread-1'])
   })
@@ -67,7 +67,7 @@ describe('event-bus', () => {
 
   test('_resetForTesting clears all listeners', () => {
     const received: string[] = []
-    on('review:complete', ({ threadId }) => received.push(threadId), 'test:reset')
+    on('review:complete', ({ threadId }) => void received.push(threadId), 'test:reset')
     _resetForTesting()
     emit('review:complete', { threadId: 'thread-1' })
     expect(received).toEqual([])
