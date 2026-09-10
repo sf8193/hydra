@@ -1,9 +1,9 @@
 /**
  * Codex Engine — communicates with Codex app-server instances over unix sockets.
  *
- * Process model: identical to Claude. The codex app-server runs inside tmux.
- * This engine connects to its unix socket via WebSocket (ws library) and speaks
- * JSON-RPC. The daemon can restart and reconnect — codex persists in tmux.
+ * Process model: one durable app-server per Hydra Codex agent. The app-server
+ * is daemon-owned and independent of the optional tmux TUI. This engine connects
+ * to its unix socket via WebSocket and can reconnect to the persistent thread.
  *
  * turn/steer is a fire-and-forget notification — injects input into the active
  * turn at the next decision point.
@@ -30,13 +30,33 @@ export type CodexConn = {
   pendingRequests: Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>
   messageBuffer: string[]
   steerQueue: string[]
+  deferredTurnQueue: string[]
   lastUsageWarning: number  // threshold of last warning sent (0, 50, 70)
+  generation: number
+  retryTimers: Set<ReturnType<typeof setTimeout>>
 }
 
-// Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning'
+// Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning', 'contextUsage'
 
 export function codexSocketPath(tmuxName: string): string {
   return join(process.env.HOME!, '.codex', `hydra-${tmuxName}`, 'app-server-control', 'app-server-control.sock')
+}
+
+export function selectDefaultCodexModel(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined
+  const data = (result as { data?: unknown }).data
+  if (!Array.isArray(data)) return undefined
+  const selected = data.find(item => item && typeof item === 'object' && (item as { isDefault?: unknown }).isDefault === true)
+  if (!selected || typeof selected !== 'object') return undefined
+  const value = (selected as { model?: unknown; id?: unknown }).model ?? (selected as { id?: unknown }).id
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+export function parseCodexContextUsage(params: any): { usedTokens: number; contextWindow: number; percent: number } | null {
+  const contextWindow = params?.tokenUsage?.modelContextWindow
+  const usedTokens = params?.tokenUsage?.last?.totalTokens
+  if (typeof contextWindow !== 'number' || contextWindow <= 0 || typeof usedTokens !== 'number') return null
+  return { usedTokens, contextWindow, percent: Math.min(100, Math.max(0, Math.round(usedTokens * 100 / contextWindow))) }
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +65,8 @@ export function codexSocketPath(tmuxName: string): string {
 
 export class CodexEngine extends EventEmitter {
   private connections = new Map<string, CodexConn>()
+  private generations = new Map<string, number>()
+  private scheduling = new Map<string, { steerQueue: string[]; deferredTurnQueue: string[]; fenced: boolean }>()
 
   constructor() {
     super()
@@ -53,25 +75,45 @@ export class CodexEngine extends EventEmitter {
     })
   }
 
-  async connect(sessionId: string, socketPath: string): Promise<{ threadId: string }> {
+  async connect(sessionId: string, socketPath: string, requestedModel?: string): Promise<{ threadId: string; model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath)
-    const result = await this.request(conn, 'thread/start', {})
+    let model = requestedModel
+    if (!model) {
+      try {
+        const models = await this.request(conn, 'model/list', { limit: 100, includeHidden: false })
+        model = selectDefaultCodexModel(models)
+      } catch (err) {
+        process.stderr.write(`codex-engine: model/list failed, using app-server default: ${err}\n`)
+      }
+    }
+    const result = await this.request(conn, 'thread/start', model ? { model } : {})
     conn.threadId = result.thread?.id
     if (!conn.threadId) throw new Error('codex-engine: thread/start did not return a thread ID')
-    return { threadId: conn.threadId }
+    return { threadId: conn.threadId, model: result.model ?? model }
   }
 
-  async connectAndResume(sessionId: string, socketPath: string, existingThreadId: string): Promise<void> {
+  async connectAndResume(sessionId: string, socketPath: string, existingThreadId: string): Promise<{ model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath, existingThreadId)
-    await this.request(conn, 'thread/resume', { threadId: existingThreadId })
+    const result = await this.request(conn, 'thread/resume', { threadId: existingThreadId })
+    // Completion can occur while the socket is absent. Reconcile against the
+    // resumed thread instead of waiting forever for an event we already missed.
+    const turns = result.thread?.turns
+    if (Array.isArray(turns)) {
+      conn.currentTurnId = turns.findLast((turn: any) => turn.status === 'inProgress')?.id ?? null
+      if (conn.currentTurnId) this.resetWatchdog(conn)
+      else if (conn.deferredTurnQueue.length && !this.scheduling.get(sessionId)?.fenced) {
+        this.startDeferredTurn(conn, conn.deferredTurnQueue.shift()!)
+      }
+    }
+    return { model: result.model }
   }
 
-  async connectAndFork(sessionId: string, socketPath: string, parentThreadId: string): Promise<{ threadId: string }> {
+  async connectAndFork(sessionId: string, socketPath: string, parentThreadId: string, model?: string): Promise<{ threadId: string; model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath)
-    const result = await this.request(conn, 'thread/fork', { threadId: parentThreadId })
+    const result = await this.request(conn, 'thread/fork', { threadId: parentThreadId, ...(model ? { model } : {}) })
     conn.threadId = result.thread?.id
     if (!conn.threadId) throw new Error('codex-engine: thread/fork did not return a thread ID')
-    return { threadId: conn.threadId }
+    return { threadId: conn.threadId, model: result.model }
   }
 
   private async connectBase(sessionId: string, socketPath: string, threadId?: string): Promise<CodexConn> {
@@ -80,10 +122,15 @@ export class CodexEngine extends EventEmitter {
     }
 
     const ws = await this.wsConnect(socketPath)
+    const scheduling = this.scheduling.get(sessionId) ?? { steerQueue: [], deferredTurnQueue: [], fenced: false }
+    this.scheduling.set(sessionId, scheduling)
+    const generation = (this.generations.get(sessionId) ?? 0) + 1
+    this.generations.set(sessionId, generation)
     const conn: CodexConn = {
       sessionId, ws, threadId: threadId ?? null, currentTurnId: null,
       nextRequestId: 0, pendingRequests: new Map(),
-      messageBuffer: [], steerQueue: [], turnPending: false, turnWatchdog: null, lastUsageWarning: 0,
+      messageBuffer: [], steerQueue: scheduling.steerQueue, deferredTurnQueue: scheduling.deferredTurnQueue,
+      turnPending: false, turnWatchdog: null, lastUsageWarning: 0, generation, retryTimers: new Set(),
     }
 
     this.connections.set(sessionId, conn)
@@ -97,7 +144,7 @@ export class CodexEngine extends EventEmitter {
       this.send(conn, { method: 'initialized' })
       return conn
     } catch (err) {
-      this.connections.delete(sessionId)
+      if (this.connections.get(sessionId) === conn) this.connections.delete(sessionId)
       try { ws.terminate() } catch {}
       throw err
     }
@@ -107,6 +154,7 @@ export class CodexEngine extends EventEmitter {
     const conn = this.connections.get(sessionId)
     if (!conn?.threadId) throw new Error(`codex-engine: session ${sessionId} not connected or no thread`)
 
+    if (this.scheduling.get(sessionId)?.fenced) throw new Error(`codex-engine: session ${sessionId} is retiring`)
     conn.turnPending = true
     conn.messageBuffer = []
     try {
@@ -114,7 +162,13 @@ export class CodexEngine extends EventEmitter {
         threadId: conn.threadId,
         input: [{ type: 'text', text }],
       })
-      if (result?.turn?.id) conn.currentTurnId = result.turn.id
+      if (result?.turn?.id) {
+        conn.currentTurnId = result.turn.id
+        if (this.scheduling.get(sessionId)?.fenced) {
+          await this.request(conn, 'turn/interrupt', { threadId: conn.threadId, turnId: conn.currentTurnId })
+          conn.currentTurnId = null
+        }
+      }
     } finally {
       conn.turnPending = false
     }
@@ -122,7 +176,7 @@ export class CodexEngine extends EventEmitter {
 
   steer(sessionId: string, text: string): void {
     const conn = this.connections.get(sessionId)
-    if (!conn) return
+    if (!conn || this.scheduling.get(sessionId)?.fenced) return
     if (!conn.threadId) {
       process.stderr.write(`codex-engine: steer on ${sessionId} with no threadId — dropped\n`)
       return
@@ -146,17 +200,135 @@ export class CodexEngine extends EventEmitter {
     this.sendSteer(conn, text)
   }
 
+  /** Deliver as a distinct future turn, never as input to the current turn. */
+  queueTurn(sessionId: string, text: string): void {
+    const conn = this.connections.get(sessionId)
+    if (!conn?.threadId || this.scheduling.get(sessionId)?.fenced) return
+    if (conn.deferredTurnQueue.length >= 50) conn.deferredTurnQueue.shift()
+    conn.deferredTurnQueue.push(text)
+    if (conn.currentTurnId || conn.turnPending) return
+    const first = conn.deferredTurnQueue.shift()!
+    this.startDeferredTurn(conn, first)
+  }
+
+  private startDeferredTurn(conn: CodexConn, text: string, attempt = 0): void {
+    if (this.scheduling.get(conn.sessionId)?.fenced) return
+    void this.startTurn(conn.sessionId, text).catch(err => {
+      const current = this.connections.get(conn.sessionId)
+      const definitelyRejected = /\(code\s+-?\d+\)/.test(String(err))
+      if (!definitelyRejected) {
+        this.emit('turnDeliveryUnknown', conn.sessionId, text, err)
+        return
+      }
+      if (!current) return
+      if (attempt < 2) {
+        const delay = 250 * (attempt + 1)
+        process.stderr.write(`codex-engine: deferred turn failed for ${conn.sessionId}, retrying in ${delay}ms: ${err}\n`)
+        const timer = setTimeout(() => {
+          conn.retryTimers.delete(timer)
+          const live = this.connections.get(conn.sessionId)
+          if (live === conn && !this.scheduling.get(conn.sessionId)?.fenced && !live.currentTurnId && !live.turnPending) {
+            this.startDeferredTurn(live, text, attempt + 1)
+          } else if (!this.scheduling.get(conn.sessionId)?.fenced) {
+            this.scheduling.get(conn.sessionId)?.deferredTurnQueue.unshift(text)
+          }
+        }, delay)
+        ;(conn.retryTimers ??= new Set()).add(timer)
+        return
+      }
+      current.deferredTurnQueue.unshift(text)
+      process.stderr.write(`codex-engine: deferred turn failed for ${conn.sessionId} after 3 attempts: ${err}\n`)
+      this.emit('turnStalled', conn.sessionId)
+    })
+  }
+
   disconnect(sessionId: string): void {
     const conn = this.connections.get(sessionId)
     if (!conn) return
     if (conn.turnWatchdog) clearTimeout(conn.turnWatchdog)
+    for (const timer of conn.retryTimers) clearTimeout(timer)
+    conn.retryTimers.clear()
     this.rejectAllPending(conn, 'disconnected')
-    try { conn.ws.close() } catch {}
     this.connections.delete(sessionId)
+    try { conn.ws.close() } catch {}
   }
 
   isConnected(sessionId: string): boolean {
     return this.connections.has(sessionId)
+  }
+
+  /** Fence scheduling and interrupt the active turn with server acknowledgement. */
+  async retireSession(sessionId: string): Promise<boolean> {
+    const conn = this.connections.get(sessionId)
+    const scheduling = this.scheduling.get(sessionId) ?? { steerQueue: [], deferredTurnQueue: [], fenced: true }
+    scheduling.fenced = true
+    scheduling.steerQueue.length = 0
+    scheduling.deferredTurnQueue.length = 0
+    this.scheduling.set(sessionId, scheduling)
+    if (!conn) return false
+    conn.steerQueue.length = 0
+    conn.deferredTurnQueue.length = 0
+    for (const timer of conn.retryTimers) clearTimeout(timer)
+    conn.retryTimers.clear()
+    if (conn.turnWatchdog) { clearTimeout(conn.turnWatchdog); conn.turnWatchdog = null }
+    if (!conn.threadId || !conn.currentTurnId) return false
+    const turnId = conn.currentTurnId
+    try {
+      await this.request(conn, 'turn/interrupt', { threadId: conn.threadId, turnId })
+    } catch {
+      return false
+    }
+    conn.currentTurnId = null
+    return true
+  }
+
+  /** Backwards-compatible name for callers migrating to acknowledged retirement. */
+  interruptCurrentTurn(sessionId: string): Promise<boolean> {
+    return this.retireSession(sessionId)
+  }
+
+  /** Interrupt an orphaned thread without disturbing siblings on a legacy shared server. */
+  async interruptPersistedThread(socketPath: string, threadId: string): Promise<boolean> {
+    const ws = await this.wsConnect(socketPath)
+    const conn: CodexConn = {
+      sessionId: `cleanup:${threadId}`, ws, threadId, currentTurnId: null,
+      nextRequestId: 0, pendingRequests: new Map(), messageBuffer: [], steerQueue: [],
+      deferredTurnQueue: [], turnPending: false, turnWatchdog: null, lastUsageWarning: 0,
+      generation: 0, retryTimers: new Set(),
+    }
+    this.attachWsHandlers(ws, conn, conn.sessionId, false)
+    try {
+      await this.request(conn, 'initialize', {
+        clientInfo: { name: 'hydra-cleanup', title: 'Hydra cleanup', version: '1.0.0' },
+        capabilities: { experimentalApi: true },
+      })
+      this.send(conn, { method: 'initialized' })
+      const result = await this.request(conn, 'thread/resume', { threadId })
+      const thread = result?.thread
+      const turns = Array.isArray(thread?.turns) ? thread.turns : []
+      const active = [...turns].reverse().find((turn: any) => {
+        const status = turn?.status?.type ?? turn?.status
+        return status === 'inProgress' || status === 'active'
+      }) ?? (thread?.status?.type === 'active' ? turns.at(-1) : undefined)
+      // A successfully resumed thread with no active turn is already terminal.
+      if (!active?.id) return true
+      await this.request(conn, 'turn/interrupt', { threadId, turnId: active.id })
+      return true
+    } finally {
+      this.rejectAllPending(conn, 'cleanup connection closed')
+      try { ws.close() } catch {}
+    }
+  }
+
+  /** Probe the transport without creating/resuming a thread. */
+  async isSocketLive(socketPath: string): Promise<boolean> {
+    try {
+      const ws = await this.wsConnect(socketPath)
+      ws.close()
+      return true
+    } catch {
+      return false
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -184,17 +356,20 @@ export class CodexEngine extends EventEmitter {
   // WebSocket connection
   // ---------------------------------------------------------------------------
 
-  private attachWsHandlers(ws: WebSocket, conn: CodexConn, sessionId: string): void {
+  private attachWsHandlers(ws: WebSocket, conn: CodexConn, sessionId: string, managed = true): void {
     ws.on('message', (data: WebSocket.Data) => {
+      if (managed && this.connections.get(sessionId) !== conn) return
       this.handleMessage(conn, data.toString())
     })
     ws.on('close', () => {
-      if (this.connections.has(sessionId)) {
+      if (!managed) return
+      if (this.connections.get(sessionId) === conn) {
         this.connections.delete(sessionId)
         this.emit('disconnected', sessionId)
       }
     })
     ws.on('error', (err: Error) => {
+      if (managed && this.connections.get(sessionId) !== conn) return
       process.stderr.write(`codex-engine: ws error for ${sessionId}: ${err.message}\n`)
     })
   }
@@ -268,9 +443,10 @@ export class CodexEngine extends EventEmitter {
     })
   }
 
-  private send(conn: CodexConn, msg: Record<string, unknown>): void {
+  private send(conn: CodexConn, msg: Record<string, unknown>): boolean {
     try {
       conn.ws.send(JSON.stringify(msg))
+      return true
     } catch (err) {
       process.stderr.write(`codex-engine: send failed for ${conn.sessionId}: ${err}\n`)
       this.rejectAllPending(conn, `send failed: ${err}`)
@@ -279,6 +455,7 @@ export class CodexEngine extends EventEmitter {
         this.connections.delete(conn.sessionId)
         this.emit('disconnected', conn.sessionId)
       }
+      return false
     }
   }
 
@@ -333,6 +510,11 @@ export class CodexEngine extends EventEmitter {
   private handleNotification(conn: CodexConn, method: string, params: any): void {
     switch (method) {
       case 'turn/started':
+        if (this.scheduling.get(conn.sessionId)?.fenced) {
+          const lateTurnId = params.turn?.id ?? params.turnId
+          if (lateTurnId && conn.threadId) void this.request(conn, 'turn/interrupt', { threadId: conn.threadId, turnId: lateTurnId }).catch(() => {})
+          break
+        }
         conn.currentTurnId = params.turn?.id ?? params.turnId ?? null
         if (conn.steerQueue.length > 0 && conn.currentTurnId && conn.threadId) {
           for (const text of conn.steerQueue) this.sendSteer(conn, text)
@@ -365,13 +547,19 @@ export class CodexEngine extends EventEmitter {
         break
 
       case 'turn/completed':
+        if (params.threadId && conn.threadId && params.threadId !== conn.threadId) break
+        {
+          const completedTurnId = params.turn?.id ?? params.turnId
+          if (completedTurnId && conn.currentTurnId && completedTurnId !== conn.currentTurnId) break
+        }
         if (conn.turnWatchdog) { clearTimeout(conn.turnWatchdog); conn.turnWatchdog = null }
         conn.currentTurnId = null
-        if (conn.steerQueue.length > 0) {
-          const first = conn.steerQueue.shift()!
-          void this.startTurn(conn.sessionId, first).catch(err => {
-            process.stderr.write(`codex-engine: auto-turn failed for ${conn.sessionId}: ${err}\n`)
-          })
+        if (this.scheduling.get(conn.sessionId)?.fenced) {
+          conn.deferredTurnQueue.length = 0
+          conn.steerQueue.length = 0
+        } else if (conn.deferredTurnQueue.length > 0) {
+          const first = conn.deferredTurnQueue.shift()!
+          this.startDeferredTurn(conn, first)
         } else {
           this.emit('turnCompleted', conn.sessionId)
         }
@@ -389,6 +577,12 @@ export class CodexEngine extends EventEmitter {
             }
           }
         }
+        break
+      }
+
+      case 'thread/tokenUsage/updated': {
+        const usage = parseCodexContextUsage(params)
+        if (usage) this.emit('contextUsage', conn.sessionId, usage)
         break
       }
 

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { resolveModelAlias, isKnownModel, MODEL_ALIASES, MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
+import { resolveModelAlias, resolveCodexModelAlias, isKnownModel, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
 
 describe('resolveModelAlias', () => {
   test('resolves short aliases', () => {
@@ -29,6 +29,20 @@ describe('resolveModelAlias', () => {
   test('returns undefined for full model IDs (not an alias lookup)', () => {
     expect(resolveModelAlias('claude-opus-4-6')).toBeUndefined()
     expect(resolveModelAlias('claude-sonnet-4-6[1m]')).toBeUndefined()
+  })
+})
+
+describe('resolveCodexModelAlias', () => {
+  test('resolves Codex aliases case-insensitively', () => {
+    expect(resolveCodexModelAlias('astra')).toBe('gpt-6-astra')
+    expect(resolveCodexModelAlias('sol')).toBe('gpt-5.6-sol')
+    expect(resolveCodexModelAlias('Terra')).toBe('gpt-5.6-terra')
+    expect(resolveCodexModelAlias('LUNA')).toBe('gpt-5.6-luna')
+  })
+
+  test('does not treat Claude or unknown aliases as Codex models', () => {
+    expect(resolveCodexModelAlias('opus')).toBeUndefined()
+    expect(resolveCodexModelAlias('spark')).toBeUndefined()
   })
 })
 
@@ -102,5 +116,22 @@ describe('spawn command regex integration', () => {
 
   test('does not match plain spawn:', () => {
     expect('spawn: normal topic'.match(spawnModelRe)).toBeNull()
+  })
+})
+
+describe('Codex spawn command regex integration', () => {
+  const spawnCodexModelRe = new RegExp(`^(?:new session|spawn)\\s+(${CODEX_MODEL_ALIAS_PATTERN}):\\s*([\\s\\S]+)`, 'i')
+
+  test('matches every Codex model alias', () => {
+    for (const alias of Object.keys(CODEX_MODEL_ALIASES)) {
+      const match = `spawn ${alias}: investigate thing`.match(spawnCodexModelRe)
+      expect(match?.[1]).toBe(alias)
+      expect(match?.[2]).toBe('investigate thing')
+    }
+  })
+
+  test('does not capture Claude or unknown aliases', () => {
+    expect('spawn opus: topic'.match(spawnCodexModelRe)).toBeNull()
+    expect('spawn spark: topic'.match(spawnCodexModelRe)).toBeNull()
   })
 })
