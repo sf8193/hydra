@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { execSync, execFileSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { writeFileSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -18,7 +18,6 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
 import { codexEngine } from './codex-bootstrap.js'
-import { codexSocketPath } from './codex-engine.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
@@ -26,11 +25,10 @@ import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktre
 import { codexForkSpawnOptions } from './session-provider.js'
 import type { ProviderId, ProviderRecoveryInput } from './engines/engine-adapter.js'
 import { engineAdapters } from './engines/instances.js'
-import { hasPendingRetirementForHome } from './retirement-journal.js'
+import { SpawnOwnership } from './spawn-ownership.js'
+import { hasPendingRetirementForHome, recordPendingRetirement, completePendingRetirement } from './retirement-journal.js'
 
 import type { EngineAdapter } from './engines/engine-adapter.js'
-
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
 // ---------------------------------------------------------------------------
 // Channel resolution — determines where to create a new thread
@@ -186,6 +184,7 @@ export type RuntimeAdapters = {
 
 /** Owns lifecycle orchestration; adapters own native execution. */
 export class SessionRuntime {
+  private readonly stopping = new Map<string, Promise<void>>()
   constructor(private readonly adapters: RuntimeAdapters = engineAdapters) {}
 
   async resume(provider: ProviderId, input: ProviderRecoveryInput): Promise<(SpawnResult & { bridgeOrphan?: boolean }) | null> {
@@ -233,7 +232,19 @@ export class SessionRuntime {
   }
 
   async kill(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean }): Promise<void> {
+    const pending = this.stopping.get(info.sessionId)
+    if (pending) return pending
+    const stopping = this.killOwned(info, reason, opts)
+    this.stopping.set(info.sessionId, stopping)
+    try { await stopping }
+    finally { this.stopping.delete(info.sessionId) }
+  }
+
+  private async killOwned(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean }): Promise<void> {
     if (killsInProgress.has(info.sessionId)) return
+    const successor = [...registry.values()].find(current => current.sessionId !== info.sessionId
+      && current.tmuxName === info.tmuxName)
+    if (successor) throw new Error(`cannot stop stale session ${info.sessionId}; ${info.tmuxName} belongs to ${successor.sessionId}`)
     killsInProgress.add(info.sessionId)
 
     try {
@@ -288,21 +299,7 @@ export class SessionRuntime {
 
       const tmuxName = info.tmuxName
       process.stderr.write(`daemon: killing tmux session ${tmuxName} (${reason})\n`)
-      try { this.adapters[info.engine ?? 'claude'].disconnect(info) }
-      catch (err) { process.stderr.write(`daemon: killSession: provider disconnect failed for ${info.tmuxName}: ${err}\n`) }
-      if (info.engine === 'codex') {
-        // SIGTERM is asynchronous. Keep ownership until the old server has
-        // actually stopped, otherwise an immediate resume races its live socket.
-        const socket = codexSocketPath(info.codexHomeName ?? info.tmuxName)
-        const deadline = Date.now() + 5_000
-        while (await codexEngine.isSocketLive(socket)) {
-          if (Date.now() >= deadline) throw new Error(`Codex server ${info.tmuxName} is still shutting down; retry kill before resuming`)
-          await new Promise(resolve => setTimeout(resolve, 100))
-        }
-      }
-      try {
-        execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
-      } catch {}
+      await this.adapters[info.engine ?? 'claude'].stop(info)
 
       transport.disconnect(info.sessionId)
       clearPhaseBudget(info.sessionId)
@@ -357,22 +354,8 @@ export class SessionRuntime {
         tmuxName: info.tmuxName,
       })
 
-      setTimeout(() => {
-        try {
-          // Only kill if the tmux session isn't owned by a new session (name recycling)
-          const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName)
-          if (!currentOwner) {
-            execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
-            process.stderr.write(`daemon: deferred tmux kill ${tmuxName} (no registry owner)\n`)
-            execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
-            process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
-          }
-        } catch {}
-        killsInProgress.delete(info.sessionId)
-      }, 3000)
-    } catch (err) {
+    } finally {
       killsInProgress.delete(info.sessionId)
-      throw err
     }
   }
 
@@ -396,7 +379,7 @@ export class SessionRuntime {
     // The recovery orchestrator (recoverOne) reserves the predecessor's name in
     // registry.reservedNames across the whole cascade — protecting the preserved worktree
     // branch from a concurrent spawn's `branch -D` during the kill→persist window — so
-    // doSpawnSession doesn't manage the reservation itself.
+    // The new launch independently reserves its own name below.
 
     // Parse worktree:repo_name prefix early so it doesn't leak into thread names/prompts
     let worktreeTarget: string | undefined = opts?.worktree
@@ -418,22 +401,11 @@ export class SessionRuntime {
     const sessionId = randomUUID()
     const tmuxName = registry.pickSessionName()
     const requestedCodexHome = opts?.resumeCodex?.homeName ?? tmuxName
-    const ownsCodexReservation = opts?.engine === 'codex'
-    if (ownsCodexReservation && !registry.reserveCodexHome(requestedCodexHome)) {
-      throw new Error(`codex home ${requestedCodexHome} is already active or starting`)
-    }
-    if (ownsCodexReservation && hasPendingRetirementForHome(requestedCodexHome)) {
-      registry.releaseCodexHome(requestedCodexHome)
-      throw new Error(`codex home ${requestedCodexHome} has unresolved retirement`)
-    }
+    const ownership = new SpawnOwnership(
+      registry, tmuxName, opts?.engine ?? 'claude', requestedCodexHome, hasPendingRetirementForHome,
+    )
+    let launchedInfo: SessionInfo | undefined
     try {
-    // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
-    // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
-    // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
-    // recoveries don't collide; and a genuine collision is self-healing — `tmux new-session`
-    // fails cleanly on a duplicate name, the tier returns null, and recovery retries. Reserving
-    // it here would instead leak the name on any throw before registry.set (no try/finally on
-    // this large function), which is worse than the self-healing collision it would prevent.
     const cleanTopic = topic.replace(/\*\*/g, '').replace(/\*/g, '').replace(/[\[\]<>]/g, '').replace(/\s+/g, ' ').trim()
     const threadName = `${sessionEmoji(tmuxName)} ${cleanTopic || tmuxName} · ${tmuxName}`.slice(0, 100)
     const isFork = !!opts?.forkFrom
@@ -491,9 +463,7 @@ export class SessionRuntime {
         if (existingId) {
           const existing = registry.get(existingId)
           if (existing) {
-            const alive = existing.engine === 'codex'
-              ? codexEngine.isConnected(existing.sessionId) || await codexEngine.isSocketLive(codexSocketPath(existing.codexHomeName ?? existing.tmuxName))
-              : tmuxHasSession(existing.tmuxName)
+            const alive = await this.adapters[existing.engine ?? 'claude'].isAlive(existing)
             if (!alive) {
               respawnCount = (existing.respawnCount ?? 0) + 1
               // Lossless respawn (mirror the existingThreadId branch): carry the dead
@@ -556,9 +526,7 @@ export class SessionRuntime {
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          if (existing.engine === 'codex'
-            ? codexEngine.isConnected(existing.sessionId) || await codexEngine.isSocketLive(codexSocketPath(existing.codexHomeName ?? existing.tmuxName))
-            : tmuxHasSession(existing.tmuxName)) {
+          if (await this.adapters[existing.engine ?? 'claude'].isAlive(existing)) {
             throw new Error(`thread has a live session (${existing.tmuxName}) — kill it first or spawn in a new thread`)
           }
           respawnCount = (existing.respawnCount ?? 0) + 1
@@ -711,7 +679,7 @@ export class SessionRuntime {
     // --- Codex engine: spawn in tmux, connect via unix socket ---
     if (engine === 'codex') {
       const now = Date.now()
-      const url = await gateway.getThreadUrl(threadId!)
+      const url = isHeadless ? '' : await gateway.getThreadUrl(threadId!)
       const provisionalModel = opts?.model ?? 'codex-default'
       const sessionMetadata: SessionMetadata = { role: 'worker', tools: [], model: provisionalModel, cwd: effectiveCwd, platform: PLATFORM }
 
@@ -730,17 +698,19 @@ export class SessionRuntime {
         sessionType: opts?.sessionType ?? (isJoin ? 'thread_guest' as const : 'thread_owner' as const),
         initiator: opts?.initiator,
         ephemeral: opts?.ephemeral,
+        ...(isHeadless ? { headless: true } : {}),
+        ...(carriedArtifacts?.length ? { artifacts: carriedArtifacts } : {}),
+        ...(carriedContextLinks?.length ? { contextLinks: carriedContextLinks } : {}),
+        ...(carriedDescription ? { description: carriedDescription } : {}),
         ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
       })
       if (phaseBudgetMs) startPhaseBudget(sessionId)
-      if (!isJoin) registry.setThread(threadId!, sessionId)
-      else registry.addMember(threadId!, sessionId, opts?.memberLabel)
+      if (isJoin) registry.addMember(threadId!, sessionId, opts?.memberLabel)
+      else if (!isHeadless) registry.setThread(threadId!, sessionId)
       registry.persist()
       opts?.beforeInitialTurn?.(sessionId)
 
-      let spawned: Awaited<ReturnType<EngineAdapter<'codex'>['spawn']>>
-      try {
-        spawned = await this.adapters.codex.spawn({
+      const spawned = await this.adapters.codex.spawn({
           sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model: opts?.model, prompt,
           mode: opts?.resumeCodex
             ? { kind: 'resume', source: { provider: 'codex', threadId: opts.resumeCodex.threadId, homeName: opts.resumeCodex.homeName } }
@@ -748,13 +718,7 @@ export class SessionRuntime {
               ? { kind: 'fork', source: { provider: 'codex', threadId: opts.forkFrom.codexThreadId, homeName: opts.forkFrom.codexHomeName ?? tmuxName } }
               : { kind: 'fresh' },
         })
-      } catch (err) {
-        registry.delete(sessionId)
-        if (isJoin) registry.removeMember(threadId!, sessionId)
-        else registry.deleteThread(threadId!)
-        registry.persist()
-        throw err
-      }
+      launchedInfo = registry.get(sessionId)!
       const { spawnLogPath, model: resolvedCodexModel } = spawned
       const codexThreadId = spawned.nativeIdentity!.threadId
       const displayedModel = resolvedCodexModel ?? provisionalModel
@@ -774,20 +738,20 @@ export class SessionRuntime {
         process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
       })
 
-      if (!isJoin) {
+      if (!isJoin && !isHeadless) {
         threadRegistry.recordSpawn(threadId!, {
           anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
           sessionId, tmuxName, originType, originFrom, model: displayedModel, parentChannelId,
           engine: 'codex', codexThreadId, codexHomeName: opts?.resumeCodex?.homeName ?? tmuxName,
         })
       }
-      refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
+      if (!isHeadless) refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
 
       const spawnLine = formatSpawnLine({
         emoji: sessionEmoji(tmuxName), name: tmuxName, model: displayedModel,
         trigger: opts?.trigger ?? originType ?? 'spawn',
       })
-      const announceIds = await safeSend(threadId!, spawnLine)
+      const announceIds = isHeadless ? [] : await safeSend(threadId!, spawnLine)
       if (announceIds.length > 0) { info.spawnAnnounceId = announceIds[0]; registry.persist() }
 
       return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
@@ -804,6 +768,13 @@ export class SessionRuntime {
           : { kind: 'fresh' },
     })
     const assignedClaudeSessionId = launched.nativeIdentity?.sessionId
+    // Retain native ownership even if a subsequent URL/registry operation throws.
+    launchedInfo = {
+      sessionId, tmuxName, topic, threadId: threadId!, createdAt: Date.now(), lastActive: Date.now(),
+      listening: false, engine: 'claude', sessionType: opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner'),
+      ownershipGeneration: sessionId, claudeSessionId: assignedClaudeSessionId,
+      worktreeRepo, worktreePath, worktreeBranch,
+    }
     const { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog, debugLogPath: debugLog } = launched
 
     const now = Date.now()
@@ -915,8 +886,35 @@ export class SessionRuntime {
     }
 
     return { name: tmuxName, sessionId, threadId: threadId!, url }
+    } catch (err) {
+      const published = registry.get(sessionId)
+      if (launchedInfo) {
+        const adapter = this.adapters[launchedInfo.engine ?? 'claude']
+        const ref = adapter.executionRef(launchedInfo)
+        recordPendingRetirement(ref, sessionId, 'spawn rollback')
+        try {
+          await adapter.stop(launchedInfo)
+          completePendingRetirement(sessionId)
+        } catch (cleanupError) {
+          // Preserve ownership and durable cleanup when termination is uncertain.
+          // A later launch must not acquire this name/home and replace a live process.
+          if (!published) registry.set(sessionId, launchedInfo)
+          registry.persist()
+          throw new AggregateError([err, cleanupError], `spawn failed and native cleanup remains pending for ${tmuxName}`)
+        }
+      }
+      clearPhaseBudget(sessionId)
+      if (published) {
+        registry.delete(sessionId)
+        if (threadId) {
+          registry.removeMember(threadId, sessionId)
+          if (registry.getByThread(threadId) === sessionId) registry.deleteThread(threadId)
+        }
+        registry.persist()
+      }
+      throw err
     } finally {
-      if (ownsCodexReservation) registry.releaseCodexHome(requestedCodexHome)
+      ownership.release()
     }
   }
 

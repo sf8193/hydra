@@ -45,7 +45,9 @@ export interface EngineAdapter<P extends ProviderId = ProviderId> {
   contextPercent(info: SessionInfo): string
   executionRef(info: SessionInfo): ProviderExecutionRef
   interruptExecution(ref: ProviderExecutionRef): Promise<boolean>
-  disconnect(info: SessionInfo): void
+  /** Stop native execution and verify it is terminal before releasing ownership. */
+  stop(info: SessionInfo): Promise<void>
+  isAlive(info: SessionInfo): Promise<boolean>
 }
 
 export type ProviderExecutionRef = {
@@ -80,4 +82,3 @@ export type ProviderRecoveryInput = {
   spawnOptions?: Partial<SpawnOpts>
   recoveryNotice: string
 }
-

@@ -73,9 +73,20 @@ export class CodexAdapter implements EngineAdapter<'codex'> {
       return false
     }
   }
-  disconnect(info: SessionInfo): void {
+  async isAlive(info: SessionInfo): Promise<boolean> {
+    return this.engine.isConnected(info.sessionId) || this.engine.isSocketLive(codexSocketPath(info.codexHomeName ?? info.tmuxName))
+  }
+  async stop(info: SessionInfo): Promise<void> {
     this.engine.disconnect(info.sessionId)
     this.io.stop(info.codexHomeName ?? info.tmuxName)
+    const socket = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+    const deadline = this.io.now() + 5_000
+    while (await this.engine.isSocketLive(socket)) {
+      if (this.io.now() >= deadline) throw new Error(`Codex server ${info.tmuxName} is still shutting down; retry kill before resuming`)
+      await this.io.wait(100)
+    }
+    // The UI is disposable and can already be absent after the server stops.
+    try { this.io.execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
   }
 
   async spawn(input: EngineSpawnInput<'codex'>): Promise<EngineSpawnResult<'codex'>> {

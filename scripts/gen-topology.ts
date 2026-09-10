@@ -49,6 +49,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/engines/engine-adapter.ts': { layer: 'lifecycle', desc: 'Typed native launch contract and provider identities' },
   'daemon/engines/claude-adapter.ts': { layer: 'lifecycle', desc: 'Claude native launch, tmux command and capture' },
   'daemon/engines/codex-adapter.ts': { layer: 'lifecycle', desc: 'Codex native launch, home seeding and app-server connection' },
+  'daemon/spawn-ownership.ts': { layer: 'lifecycle', desc: 'Synchronous name/home acquisition and release' },
   'daemon/session-runtime.ts': { layer: 'lifecycle', desc: 'SessionRuntime: lifecycle orchestration with native adapter dependencies' },
   'daemon/session-lifecycle.ts': { layer: 'lifecycle', desc: 'doSpawnSession, killSession, tryResume, tryRespawn' },
   'daemon/recovery.ts':       { layer: 'lifecycle', desc: 'Post-reboot/crash recovery: recoverOne cascade, work-key dedup, autoRecoverAfterBoot' },

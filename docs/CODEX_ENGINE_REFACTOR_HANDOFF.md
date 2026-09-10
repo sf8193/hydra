@@ -315,3 +315,27 @@ fake adapters. This is headless Claude characterization, not yet the full
 failure-boundary/ownership suite. Verified 1,240 tests (71 files) and all three
 bundles after consolidation. Shared transactional rollback, semantic delivery and
 retirement, remaining caller migration and all live gates remain outstanding.
+
+### Spawn ownership and failure boundaries
+
+`SpawnOwnership` synchronously reserves every provider's session name and Codex's
+home before asynchronous preparation. Runtime rollback now removes provisional
+registry/routing entries even when `beforeInitialTurn` fails, stops a successfully
+launched native process if a later operation fails, and retains the owner plus a
+durable retirement record if shutdown remains uncertain. Codex headless launches
+skip synthetic chat routing and carry-over now applies to Codex records too.
+
+Native `stop` and `isAlive` operations belong to adapters. Codex stop waits for the
+socket to stop accepting connections before returning; Claude distinguishes a
+missing session from failed termination of a live session. Concurrent runtime
+kills await the same operation, and stale kills cannot target a successor's name.
+The old delayed, name-based tmux kill has been removed.
+
+Added tests exercise pre-launch callback failure for owner/guest routing,
+post-launch failure, uncertain shutdown retention, concurrent kill completion,
+stale kills and native stop verification. This still does **not** prove full
+transaction rollback: worktree preparation failure/cleanup, observational history
+rollback, native partial-start failure and all required live gates need coverage.
+Semantic retirement/journal replay still lives in protocol-runner, and delivery
+still routes through BridgeTransport/CodexEngine; migrate these next. The older
+memory file's tmux-owned Codex process description is obsolete.

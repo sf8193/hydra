@@ -195,6 +195,12 @@
       "desc": "Codex native launch, home seeding and app-server connection"
     },
     {
+      "id": "daemon_spawn-ownership",
+      "label": "daemon/spawn-ownership.ts",
+      "layer": "lifecycle",
+      "desc": "Synchronous name/home acquisition and release"
+    },
+    {
       "id": "daemon_session-runtime",
       "label": "daemon/session-runtime.ts",
       "layer": "lifecycle",
@@ -679,6 +685,10 @@
       "daemon_config"
     ],
     [
+      "daemon_spawn-ownership",
+      "daemon_engines_engine-adapter"
+    ],
+    [
       "daemon_session-runtime",
       "daemon_config"
     ],
@@ -729,6 +739,10 @@
     [
       "daemon_session-runtime",
       "daemon_engines_instances"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_spawn-ownership"
     ],
     [
       "daemon_recovery",

@@ -63,7 +63,16 @@ export class ClaudeAdapter implements EngineAdapter<'claude'> {
   contextPercent(info: SessionInfo): string { return getContextPercent(info.tmuxName) }
   executionRef(info: SessionInfo): ProviderExecutionRef { return { provider: 'claude', sessionId: info.sessionId } }
   async interruptExecution(_ref: ProviderExecutionRef): Promise<boolean> { return false }
-  disconnect(_info: SessionInfo): void {}
+  async isAlive(info: SessionInfo): Promise<boolean> { return tmuxHasSession(info.tmuxName) }
+  async stop(info: SessionInfo): Promise<void> {
+    try { this.io.execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) }
+    catch {
+      // A missing session is already terminal; other failures retain ownership.
+      try { this.io.execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' }) }
+      catch { return }
+      throw new Error(`Claude session ${info.tmuxName} is still running`)
+    }
+  }
 
   async spawn(input: EngineSpawnInput<'claude'>): Promise<EngineSpawnResult<'claude'>> {
     const { sessionId, tmuxName, prompt: initialPrompt, model } = input

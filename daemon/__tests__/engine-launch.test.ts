@@ -2,10 +2,15 @@ import { describe, expect, test } from 'bun:test'
 import { ClaudeAdapter, type ClaudeLaunchIo } from '../engines/claude-adapter.js'
 import { CodexAdapter, type CodexLaunchIo } from '../engines/codex-adapter.js'
 import type { EngineSpawnInput } from '../engines/engine-adapter.js'
+import type { SessionInfo } from '../sessions.js'
 
 const base = {
   sessionId: 'hydra-test-id', tmuxName: 'adapter-test', cwd: '/work/tree', originalCwd: '/work/main',
   model: 'test-model', prompt: "do the user's task", tools: ['Read'], disallowedTools: ['Write', 'Edit'],
+}
+const session: SessionInfo = {
+  sessionId: base.sessionId, tmuxName: base.tmuxName, topic: 'test', threadId: 'chat',
+  createdAt: 1, lastActive: 1, listening: false, sessionType: 'thread_owner',
 }
 
 function claude(failure?: string) {
@@ -23,6 +28,11 @@ function claude(failure?: string) {
 }
 
 describe('Claude native launch — L06/L07/L08/L10/L13/L14', () => {
+  test('failed stop of a live native session rejects', async () => {
+    const { adapter, calls } = claude('kill-session')
+    await expect(adapter.stop(session)).rejects.toThrow('still running')
+    expect(calls.map(c => c[0])).toEqual(['kill-session', 'has-session'])
+  })
   test('fresh launch sets identity, environment, restrictions and exit capture', async () => {
     const { adapter, calls } = claude()
     const result = await adapter.spawn({ ...base, mode: { kind: 'fresh' } })
@@ -130,6 +140,19 @@ const fork: EngineSpawnInput<'codex'> = { ...base,
   mode: { kind: 'fork', source: { provider: 'codex', threadId: 'parent-thread', homeName: 'parent-home' } } }
 
 describe('Codex native launch — L08/L13/L16/L25', () => {
+  test('stop waits for socket termination before touching the UI', async () => {
+    const { adapter, calls } = codex({ live: true })
+    await expect(adapter.stop({ ...session, engine: 'codex' })).rejects.toThrow('still shutting down')
+    expect(calls.slice(0, 2)).toEqual(['disconnect', 'stop'])
+    expect(calls.filter(c => c === 'probe').length).toBeGreaterThan(1)
+    expect(calls.some(c => c.startsWith('exec:kill-session'))).toBe(false)
+  })
+
+  test('stop cleans the UI once the native server is terminal', async () => {
+    const { adapter, calls } = codex()
+    await adapter.stop({ ...session, engine: 'codex' })
+    expect(calls).toEqual(['disconnect', 'stop', 'probe', `exec:kill-session -t ${base.tmuxName}`])
+  })
   test('live destination rejects before any mutation', async () => {
     const { adapter, calls } = codex({ live: true })
     await expect(adapter.spawn(fork)).rejects.toThrow('refusing to replace live')
