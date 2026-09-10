@@ -679,6 +679,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
+      const cancelDelegateMatch = msg.content.match(/^(?:kill delegate|kill delegated-build)\s*$/i)
+      if (cancelDelegateMatch) {
+        void gateway.react(msg.channelId, msg.id, '🛑').catch(() => {})
+        const threadId = registry.resolveThreadId(msg)
+        const run = getRunByThread(threadId)
+        if (!run) { await gateway.send(msg.channelId, `No delegated build in progress.`, { replyTo: msg.id }); return }
+        await cancelRun(run, 'cancelled by user')
+        return
+      }
+
       const cancelBuildMatch = msg.content.match(/^(?:kill build|kill build_v2)\s*$/i)
       if (cancelBuildMatch) {
         void handleCancelBuildV2Intercept(msg)

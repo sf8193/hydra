@@ -3,7 +3,7 @@ import { registry, sessionEmoji, addCapability, removeCapability, setToolDescrip
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-import { isAlive, safeSend, type StatusLineState } from './util.js'
+import { isAlive, safeSend, isTmuxRecentlyActive, type StatusLineState } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { recordSessionDeath } from './observability.js'
@@ -898,8 +898,10 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
       return
     }
 
-    // Working — let it cook (but hard cap above still applies)
-    if (info.turnState === 'working') return
+    // Check tmux pane activity — source of truth for whether session is working.
+    // turnState can be stale (set by bridge, not updated during long tool runs).
+    const tmuxActive = isTmuxRecentlyActive(info.tmuxName)
+    if (info.turnState === 'working' || tmuxActive) return
 
     const idleMs = Date.now() - info.lastActive
 

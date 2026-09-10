@@ -52,6 +52,16 @@ export function tmuxHasSession(name: string): boolean {
   }
 }
 
+export function isTmuxRecentlyActive(name: string, thresholdSeconds = 60): boolean {
+  try {
+    const ts = execFileSync('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).trim()
+    const epoch = parseInt(ts, 10)
+    if (isNaN(epoch)) return false
+    return (Date.now() / 1000 - epoch) < thresholdSeconds
+  } catch { return false }
+}
+
 export function getContextPercent(tmuxName: string): string {
   try {
     const pane = execFileSync('tmux', ['capture-pane', '-t', tmuxName, '-p'], { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
