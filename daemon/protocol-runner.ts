@@ -244,15 +244,15 @@ function describePhaseTools(run: ProtocolRun, sessionId: string): { descriptions
 
 function buildAdvanceSchema(ia: { verdict: 'none' | 'required' | 'optional'; options?: readonly string[] }): object {
   const contentProp = { type: 'string', description: 'Your deliverable — posted to the thread verbatim.' }
-  if (ia.verdict === 'none') {
-    return { type: 'object', properties: { content: contentProp }, required: ['content'] }
+  const verdictDesc = ia.options?.length
+    ? `Structured choice: ${ia.options.join(', ')}.`
+    : 'Optional structured choice (pass when the protocol phase requires one).'
+  const verdictProp = { type: 'string', description: verdictDesc }
+  return {
+    type: 'object',
+    properties: { content: contentProp, verdict: verdictProp },
+    required: ia.verdict === 'required' ? ['content', 'verdict'] : ['content'],
   }
-  const optionsList = ia.options?.length ? ia.options.join(', ') : 'see protocol'
-  const verdictProp = { type: 'string', description: `Structured choice: ${optionsList}.` }
-  if (ia.verdict === 'required') {
-    return { type: 'object', properties: { content: contentProp, verdict: verdictProp }, required: ['content', 'verdict'] }
-  }
-  return { type: 'object', properties: { content: contentProp, verdict: verdictProp }, required: ['content'] }
 }
 
 function clearProtocolOverrides(info: SessionInfo): void {
