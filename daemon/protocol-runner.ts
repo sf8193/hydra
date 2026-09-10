@@ -52,6 +52,7 @@ export type ProtocolRun = StatusLineState & {
   _healthMonitor?: ReturnType<typeof setInterval>
   _nudged?: boolean
   _escalated?: boolean
+  _bridgeEscalated?: boolean
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
   strike: boolean
@@ -824,6 +825,7 @@ function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   run._phaseStartedAt = Date.now()
   run._nudged = false
   run._escalated = false
+  run._bridgeEscalated = false
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
   if (!isTerminal(run)) setRunTools(run)
@@ -854,6 +856,7 @@ function startHealthMonitor(run: ProtocolRun): void {
   if (run._healthMonitor) { clearInterval(run._healthMonitor); run._healthMonitor = undefined }
   run._nudged = false
   run._escalated = false
+  run._bridgeEscalated = false
 
   run._healthMonitor = setInterval(async () => {
     if (isTerminal(run)) { clearInterval(run._healthMonitor!); run._healthMonitor = undefined; return }
@@ -893,8 +896,8 @@ function startHealthMonitor(run: ProtocolRun): void {
     if (!connected) {
       // Process alive but bridge down — can't deliver notifications.
       // Only nudge the thread (not the session) and let disconnect handler sort it out.
-      if (!run._escalated) {
-        run._escalated = true
+      if (!run._bridgeEscalated) {
+        run._bridgeEscalated = true
         void safeSend(run.threadId, `_⚠️ ${info.tmuxName} is running but disconnected — bridge may be recovering_`)
         process.stderr.write(`daemon: health: ${info.tmuxName} alive but disconnected\n`)
       }
@@ -903,6 +906,8 @@ function startHealthMonitor(run: ProtocolRun): void {
 
     // Working — let it cook (but hard cap above still applies)
     if (info.turnState === 'working') return
+
+    const idleMs = Date.now() - info.lastActive
 
     if (idleMs > IDLE_ESCALATE_MS && !run._escalated) {
       run._escalated = true
