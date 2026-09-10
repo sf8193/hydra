@@ -53,7 +53,9 @@ rm -f "$STATE_DIR/daemon.sock"
 # vars into new sessions — its server global env is frozen at first launch — so relying on
 # inheritance silently dropped CLAUDE_CONFIG_DIR and broke spawned-session bridges.
 # PATH must also be forwarded so bun/claude are reachable when launched via launchd.
-ENVS="PATH='$PATH' HYDRA_STATE_DIR='$STATE_DIR' SPAWN_CWD='$SPAWN_CWD' BUN_RUNTIME_TRANSPILER_CACHE=0"
+# HYDRA_LOG is forwarded so the daemon can cap this same file (trimDaemonLog).
+# Without it the daemon has no path to trim and the log grows unbounded.
+ENVS="PATH='$PATH' HYDRA_STATE_DIR='$STATE_DIR' SPAWN_CWD='$SPAWN_CWD' HYDRA_LOG='$LOG' BUN_RUNTIME_TRANSPILER_CACHE=0"
 [ -n "$CHAT_PLATFORM" ] && ENVS="$ENVS CHAT_PLATFORM='$CHAT_PLATFORM'"
 [ -n "$CLAUDE_CONFIG_DIR" ] && ENVS="$ENVS CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
 [ -n "${HYDRA_MODEL:-}" ] && ENVS="$ENVS HYDRA_MODEL='$HYDRA_MODEL'"
