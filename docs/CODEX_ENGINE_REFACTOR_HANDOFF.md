@@ -361,3 +361,95 @@ remaining caller migrations are still outstanding.
 Latest verification after retirement migration: **1,257 tests pass across 73
 files**, 3,202 assertions; daemon, CLI and bridge builds pass. Topology regenerated.
 No refactor deployment or full live protocol acceptance has been performed.
+
+## Resume checkpoint: interface and worktree state
+
+This branch is `sf/session-runtime-refactor`. The committed refactor sequence is:
+
+| Commit | Contents |
+| --- | --- |
+| `761947e` | Audit, test catalogue, and original handoff. |
+| `12cc892` | Typed Claude/Codex native launch adapters with injected I/O. |
+| `1210821` | `SessionRuntime` owns spawn, kill, resume, and respawn. |
+| `8d3be66` | Spawn ownership, rollback, adapter shutdown, kill joining, stale-owner protection. |
+| `91cf410` | Runtime-owned retirement deduplication/replay and structured outcomes. |
+
+The latest committed verification was 1,257 tests across 73 files, all three
+entry-point bundles, and regenerated topology files. The worktree also contains
+unfinished delivery migration edits. Treat those edits as exploratory until they
+are tested and reviewed. The user-owned edits in
+`daemon/prompts/review-critic.ts` and `protocols/review.ts` must remain separate.
+
+The objects and current boundaries are:
+
+```text
+thread command / protocol / recovery / health
+                    |
+             SessionRuntime
+       registry, ownership, rollback,
+       journaling, routing, policy
+                    |
+              EngineAdapter<P>
+                /          \
+        ClaudeAdapter      CodexAdapter
+        CLI + tmux +       app-server + native
+        Claude bridge      thread + home + UI
+```
+
+`SessionInfo` is the persisted per-agent record, not a provider object.
+`SessionRuntime` owns registry/thread transactions, reservations, generation
+checks, artifact carry-over, recovery policy, retirement journaling, and
+user-visible state. `ProtocolRun` owns protocol phases and roles but delegates
+delivery and retirement. `BridgeTransport` owns raw sockets, control bridges,
+and Claude queue persistence; provider selection does not belong there.
+
+The current `EngineAdapter<P>` in `daemon/engines/engine-adapter.ts` has these
+operations: `spawn`, `deliver`, `isConnected`, `isAlive`, `stop`,
+`retireExecution`, `executionRef`, `uiTarget`, `ensureInteractiveSurface`, and
+`contextPercent`, plus `capabilities`. It still accepts whole `SessionInfo`,
+uses optional fields in `ProviderExecutionRef`, and treats
+`SessionMessage` as `Record<string, unknown>`; this is an extraction boundary,
+not the final design.
+
+The intended stronger boundary is:
+
+```ts
+interface EngineAdapter<P extends ProviderId> {
+  readonly provider: P
+  readonly capabilities: ProviderCapabilities
+  launch(request: LaunchRequest<P>): Promise<LaunchResult<P>>
+  deliver(target: ExecutionRef<P>, input: DeliveryInput): Promise<DeliveryResult>
+  inspect(target: ExecutionRef<P>): Promise<EngineSnapshot>
+  retire(target: ExecutionRef<P>, reason: string): Promise<ExecutionRetirementResult>
+  stop(target: ExecutionRef<P>): Promise<StopResult>
+  readonly surface: InteractiveSurface<P>
+}
+```
+
+`ExecutionRef` should be a discriminated provider-specific identity: Claude
+requires its native session ID, while Codex requires thread ID, home name, and
+ownership generation. `LaunchRequest` should be a fresh/resume/fork union whose
+resume and fork variants require a source identity. `DeliveryInput` should be a
+typed text/attachment/mode envelope. `EngineSnapshot` should return structured
+execution, connection, surface, and numeric usage state; formatting belongs to
+the dashboard. `retire` fences and interrupts one execution; `stop` releases
+its owned native resources.
+
+The remaining implementation order is: finish and test delivery outcomes and
+no-replay behavior; replace `SessionInfo` adapter arguments with typed native
+references; move health and surface callers behind structured runtime APIs;
+migrate commands/recovery/startup/phase budgets/factory/watches/router; expand
+worktree/thread/history and partial-launch rollback tests; run the three-round
+Codex review, active-turn cancellation, restart handoff, control-bridge, and
+no-keepalive live gates; then update this handoff with final evidence and open
+the refactor PR.
+
+Safe verification uses an isolated state directory:
+
+```bash
+state_dir=$(mktemp -d)
+HYDRA_STATE_DIR="$state_dir" DISCORD_STATE_DIR="$state_dir" bun test
+bun build daemon.ts --target bun --outfile /tmp/hydra-daemon-check.js
+bun build cli/hydra.ts --target bun --outfile /tmp/hydra-cli-check.js
+bun build bridge.ts --target bun --outfile /tmp/hydra-bridge-check.js
+```
