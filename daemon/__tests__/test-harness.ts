@@ -98,6 +98,7 @@ export class TestHarness {
         tmuxName: role,
         listening: false,
         turnState: 'idle',
+        engine: 'claude',
         sessionType: role === ownerRole ? 'thread_owner' : 'thread_guest',
       }
       registry.set(sid, info)
@@ -170,6 +171,7 @@ export class TestHarness {
       tmuxName: ownerRole,
       listening: false,
       turnState: 'idle',
+      engine: 'claude',
       sessionType: 'thread_owner',
     })
     this.sessionIds.set(ownerRole, ownerSid)
@@ -285,6 +287,8 @@ export class TestHarness {
           tmuxName: `resumed-${sid.slice(14)}`,
           listening: false,
           turnState: 'idle',
+          engine: 'claude',
+          sessionType: spawnOpts?.joinThread ? 'thread_guest' : 'thread_owner',
         }
         registry.set(sid, info)
         return { sessionId: sid }

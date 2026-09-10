@@ -119,6 +119,16 @@ export interface EngineAdapter {
   reconnect(info: SessionInfo): Promise<boolean>
 }
 
+// Compat — flat serializable ref used by retirement journal persistence
+export type ProviderExecutionRef = {
+  provider: ProviderId
+  sessionId: string
+  claudeSessionId?: string
+  codexThreadId?: string
+  codexHomeName?: string
+  ownershipGeneration?: string
+}
+
 /** Format context usage as "N%" or "?" for display. */
 export function formatContextPercent(adapter: EngineAdapter, info: SessionInfo): string {
   const u = adapter.usage(info)

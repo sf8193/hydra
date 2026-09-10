@@ -45,7 +45,7 @@ function connectToDaemon(): Promise<void> {
       connected = true
       sock.removeListener('error', onError)
       daemonSocket = sock
-      sock.write(JSON.stringify({ type: 'register', sessionId: SESSION_ID }) + '\n')
+      sock.write(JSON.stringify({ type: 'register', sessionId: SESSION_ID, connectionRole: 'control' }) + '\n')
       sock.on('error', (err) => {
         process.stderr.write(`codex-mcp-server: daemon socket error: ${err.message}\n`)
       })
@@ -146,7 +146,7 @@ rl.on('line', async (line) => {
   const { id, method, params } = parsed
   switch (method) {
     case 'initialize':
-      send({ id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'hydra-tools', version: '1.0.0' } } })
+      send({ id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'hydra-tools', version: '1.0.0' } } })
       break
     case 'notifications/initialized':
       break

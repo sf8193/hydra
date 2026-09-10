@@ -4,7 +4,6 @@ import type { Socket } from 'net'
 import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
 import { atomicWriteFileSync } from './util.js'
-import type { CodexEngine } from './codex-engine.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,6 +14,7 @@ export type BridgeConn = {
   socket: Socket
   buf: string
   mainCloseRecorded?: boolean // guards double 'error'+'end' from recording twice
+  connectionRole?: 'session' | 'control'
 }
 
 // ---------------------------------------------------------------------------
@@ -23,19 +23,14 @@ export type BridgeConn = {
 
 export class BridgeTransport {
   readonly bridges = new Map<string, BridgeConn>()
+  readonly controlBridges = new Map<string, Set<BridgeConn>>()
   readonly messageQueues = new Map<string, Array<Record<string, unknown>>>()
   private readonly maxQueueSize = 50
   private readonly queueFile: string
   private readonly queueFullLogged = new Set<string>()
-  private codexEngine: CodexEngine | null = null
-
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
     this.loadPersistedQueues()
-  }
-
-  setCodexEngine(engine: CodexEngine): void {
-    this.codexEngine = engine
   }
 
   get(sessionId: string): BridgeConn | undefined {
@@ -44,12 +39,27 @@ export class BridgeTransport {
 
   has(sessionId: string): boolean {
     if (this.bridges.has(sessionId)) return true
-    if (this.codexEngine?.isConnected(sessionId)) return true
+    // Codex sessions are connected via their adapter, not the bridge
+    const info = registry.get(sessionId)
+    if (info?.engine === 'codex' && info.adapter) return true
     return false
   }
 
   set(sessionId: string, conn: BridgeConn): void {
     this.bridges.set(sessionId, conn)
+  }
+
+  addControl(sessionId: string, conn: BridgeConn): void {
+    const controls = this.controlBridges.get(sessionId) ?? new Set<BridgeConn>()
+    controls.add(conn)
+    this.controlBridges.set(sessionId, controls)
+  }
+
+  removeControl(sessionId: string, conn: BridgeConn): void {
+    const controls = this.controlBridges.get(sessionId)
+    if (!controls) return
+    controls.delete(conn)
+    if (controls.size === 0) this.controlBridges.delete(sessionId)
   }
 
   delete(sessionId: string): void {
@@ -59,6 +69,7 @@ export class BridgeTransport {
 
   clear(): void {
     this.bridges.clear()
+    this.controlBridges.clear()
   }
 
   sendToBridge(bridge: BridgeConn, msg: Record<string, unknown>): boolean {
@@ -96,20 +107,27 @@ export class BridgeTransport {
   }
 
   sendOrQueue(sessionId: string, msg: Record<string, unknown>): void {
-    // Route to Codex engine if this session is connected via codex
-    if (this.codexEngine?.isConnected(sessionId)) {
+    // Codex's MCP sidecar owns tool discovery. Capability changes must reach it
+    // even though ordinary user messages route through the app-server.
+    if (msg.type === 'tools_update') {
+      const controls = this.controlBridges.get(sessionId)
+      if (controls?.size) {
+        for (const control of controls) this.sendToBridge(control, msg)
+        return
+      }
+      const bridge = this.bridges.get(sessionId)
+      if (bridge) this.sendToBridge(bridge, msg)
+      else this.enqueue(sessionId, msg)
+      return
+    }
+    // Route through adapter for Codex sessions — adapter owns delivery mechanics
+    const info = registry.get(sessionId)
+    if (info?.engine === 'codex' && info.adapter) {
       const content = msg.content
       if (typeof content === 'string' && content) {
-        // Enrich with attachment paths so codex can view images/files
         const meta = msg.meta as Record<string, string> | undefined
-        const downloadedFiles = meta?.downloaded_files
-        let steerText = content
-        if (downloadedFiles) {
-          steerText += `\n\n[attachments: ${downloadedFiles}]`
-        }
-        this.codexEngine.steer(sessionId, steerText)
-      } else if (content !== undefined) {
-        process.stderr.write(`daemon: codex ${sessionId}: non-string content (${typeof content}) dropped: ${JSON.stringify(msg).slice(0, 200)}\n`)
+        const mode = msg.deferUntilTurnComplete === true ? 'next-turn' as const : undefined
+        void info.adapter.deliver(info, content, mode, meta)
       }
       return
     }

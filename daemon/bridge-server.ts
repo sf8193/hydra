@@ -148,6 +148,10 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 
       const claudeSessionId = msg.claudeSessionId as string | undefined
       const info = registry.get(sessionId)
+      // Existing Codex MCP processes may predate the explicit role field. Codex
+      // session traffic uses codexEngine, so daemon-socket registrations for a
+      // Codex record are control-plane connections by definition.
+      conn.connectionRole = msg.connectionRole === 'control' || info?.engine === 'codex' ? 'control' : 'session'
       if (info) {
         const resolved = claudeSessionId || discoverClaudeSessionId(info.tmuxName)
         if (resolved) {
@@ -163,6 +167,23 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           }
         }
         if (sessionId !== 'main') logCorrelation(info)
+      }
+
+      // Codex MCP sidecars are control-plane clients. They may execute tools and
+      // receive tool-surface updates, but must never replace the persistent
+      // session bridge or emit session disconnect/death events when they exit.
+      if (conn.connectionRole === 'control') {
+        transport.addControl(sessionId, conn)
+        const tools = getToolsForSession(sessionId)
+        transport.sendToBridge(conn, {
+          type: 'registered', sessionId, tools, platform: PLATFORM,
+          sessionMetadata: info?.sessionMetadata ?? {
+            role: 'worker', tools: tools.map(t => t.name), model: spawnModel(),
+            cwd: process.env.SPAWN_CWD ?? '(unknown)', platform: PLATFORM,
+          },
+        })
+        process.stderr.write(`daemon: control bridge registered for session ${sessionId}\n`)
+        break
       }
 
       if (sessionId !== 'main' && info?.engine !== 'codex' && trackRegistration(sessionId)) {
@@ -363,6 +384,12 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       break
     }
 
+    case 'tools_request': {
+      const { id } = msg as { id: string }
+      transport.sendToBridge(conn, { type: 'tools_result', id, tools: getToolsForSession(conn.sessionId ?? '') })
+      break
+    }
+
     case 'permission_response': {
       break
     }
@@ -520,6 +547,10 @@ export const socketServer = createServer((socket: Socket) => {
 
   function handleSocketClose(reason: string): void {
     if (!conn.sessionId) return
+    if (conn.connectionRole === 'control') {
+      transport.removeControl(conn.sessionId, conn)
+      return
+    }
     const isOwner = transport.get(conn.sessionId) === conn
     // First reason wins. A socket can emit both 'error' and 'end'; the owner's
     // first close records the cause (and the transport.delete below then makes any
@@ -540,7 +571,7 @@ export const socketServer = createServer((socket: Socket) => {
   }
 
   socket.on('end', () => {
-    if (conn.sessionId && conn.sessionId !== 'main') {
+    if (conn.sessionId && conn.sessionId !== 'main' && conn.connectionRole !== 'control') {
       process.stderr.write(`daemon: bridge disconnected for session ${conn.sessionId}\n`)
     }
     handleSocketClose('end')

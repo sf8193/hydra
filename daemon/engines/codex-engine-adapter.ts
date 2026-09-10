@@ -5,6 +5,7 @@
 
 import { execFileSync, execSync } from 'child_process'
 import { mkdirSync } from 'fs'
+import { homedir } from 'os'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
@@ -15,10 +16,9 @@ import type {
   ContextUsage, EngineSnapshot,
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
-import { transport } from '../bridge-transport.js'
+import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 import { tmuxHasSession } from '../util.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
-import { withRaisedFdLimit } from '../../shared/tmux-env.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -29,65 +29,56 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, cwd: effectiveCwd, model, prompt } = input
-    const sockPath = codexSocketPath(tmuxName)
-    const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${tmuxName}`)
+    const codexHomeName = tmuxName
+    const sockPath = codexSocketPath(codexHomeName)
+    const homeDir = codexHomeDirFn(codexHomeName)
+
+    // Register MCP server before starting app-server
     const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
-    const codexModel = model ? `-c model=${shq(model)}` : ''
-    const fullPerms = `-c 'sandbox_permissions=["disk-full-read-access","disk-full-write-access","network-full-access"]'`
-    const serverCmd = `codex app-server --listen 'unix://' ${codexModel} ${fullPerms}`.trim()
-
-    const serverInner = [
-      `cd ${shq(effectiveCwd)}`,
-      `export CODEX_HOME=${shq(codexHomeDir)}`,
-      `mkdir -p ${shq(codexHomeDir)}`,
-      `ln -sf ~/.codex/auth.json ${shq(codexHomeDir)}/auth.json`,
-      `codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(codexHomeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
-      serverCmd,
-    ].join(' && ')
-
-    process.stderr.write(`daemon: codex spawning ${tmuxName}\n`)
     try {
-      execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, withRaisedFdLimit(serverInner)], { stdio: 'pipe' })
+      execFileSync('bash', ['-c', [
+        `mkdir -p ${shq(homeDir)}`,
+        `ln -sf ~/.codex/auth.json ${shq(homeDir)}/auth.json`,
+        `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
+      ].join(' && ')], { stdio: 'pipe' })
     } catch (err) {
-      throw new Error(`failed to spawn codex tmux: ${err instanceof Error ? err.message : err}`)
+      process.stderr.write(`daemon: codex MCP registration failed for ${tmuxName}: ${err}\n`)
     }
 
-    let spawnLogPath: string | undefined
-    try {
-      mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-      const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
-      execFileSync('tmux', ['pipe-pane', '-o', '-t', `${tmuxName}:0`, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
-      spawnLogPath = logPath
-    } catch {}
+    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+    const spawnLogPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
 
-    const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && sleep 3 && codex --remote "unix://${sockPath}"`
-    try {
-      execFileSync('tmux', ['new-window', '-t', tmuxName, tuiInner], { stdio: 'pipe' })
-    } catch {
-      process.stderr.write(`daemon: codex TUI window failed for ${tmuxName} (non-fatal)\n`)
-    }
+    process.stderr.write(`daemon: codex spawning durable app-server for ${tmuxName}\n`)
+    startCodexAppServer({ homeName: codexHomeName, cwd: effectiveCwd, logPath: spawnLogPath, model })
 
+    // Connect to the app-server socket with retry
     const start = Date.now()
     let codexThreadId: string | null = null
+    let resolvedModel = model
     let lastErr = ''
     while (Date.now() - start < 15_000) {
       try {
         if (input.forkFrom?.codexThreadId) {
-          const r = await this.engine.connectAndFork(sessionId, sockPath, input.forkFrom.codexThreadId)
+          const r = await this.engine.connectAndFork(sessionId, sockPath, input.forkFrom.codexThreadId, model)
           codexThreadId = r.threadId
+          resolvedModel = r.model ?? resolvedModel
         } else {
-          const r = await this.engine.connect(sessionId, sockPath)
+          const r = await this.engine.connect(sessionId, sockPath, model)
           codexThreadId = r.threadId
+          resolvedModel = r.model ?? resolvedModel
         }
         break
       } catch (err: any) {
         lastErr = err?.message || String(err)
         try { this.engine.disconnect(sessionId) } catch {}
-        if (!tmuxHasSession(tmuxName)) throw new Error(`codex tmux ${tmuxName} died during startup`)
         await new Promise(r => setTimeout(r, 500))
       }
     }
-    if (!codexThreadId) throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
+    if (!codexThreadId) {
+      process.stderr.write(`daemon: stopping codex app-server ${tmuxName} (startup timeout: ${lastErr})\n`)
+      stopCodexAppServer(codexHomeName)
+      throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
+    }
     process.stderr.write(`daemon: codex connected for ${tmuxName}, thread=${codexThreadId}\n`)
 
     void this.engine.startTurn(sessionId, prompt).catch(err => {
@@ -95,7 +86,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     })
 
     return {
-      provider: 'codex', model: model ?? 'codex-default',
+      provider: 'codex', model: resolvedModel ?? 'codex-default',
       codexThreadId, spawnLogPath,
     }
   }
@@ -121,18 +112,35 @@ export class CodexEngineAdapter implements EngineAdapter {
     return { status: 'accepted', via: 'steer' }
   }
 
-  async retire(_info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
-    return { status: 'unknown', reason: 'main branch codex has no native retirement' }
+  async retire(info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
+    try {
+      await this.engine.retireSession(info.sessionId)
+    } catch {}
+    // Also interrupt any persisted thread so it doesn't keep running after we leave
+    if (info.codexThreadId) {
+      const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+      try {
+        await this.engine.interruptPersistedThread(sockPath, info.codexThreadId)
+      } catch {}
+    }
+    return { status: 'terminal' }
   }
 
   async stop(info: SessionInfo): Promise<StopResult> {
     this.engine.disconnect(info.sessionId)
+    stopCodexAppServer(info.codexHomeName ?? info.tmuxName)
     try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
     return { status: 'stopped' }
   }
 
   async isAlive(info: SessionInfo): Promise<boolean> {
-    return this.engine.isConnected(info.sessionId) || tmuxHasSession(info.tmuxName)
+    if (this.engine.isConnected(info.sessionId)) return true
+    // Check if the app-server socket is reachable even when we're not connected
+    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+    try {
+      if (await this.engine.isSocketLive(sockPath)) return true
+    } catch {}
+    return tmuxHasSession(info.tmuxName)
   }
 
   peek(info: SessionInfo, lines: number = 50): string {
@@ -153,8 +161,11 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   usage(info: SessionInfo): ContextUsage | null {
-    // Same pane-capture approach as Claude — both engines parse the tmux status bar.
-    // Codex uses :hydra-chat window instead of the root pane.
+    // Prefer structured usage from codex-bootstrap's contextUsage event
+    if (info.contextUsage) {
+      return { usedTokens: info.contextUsage.usedTokens, contextWindow: info.contextUsage.contextWindow, percent: info.contextUsage.percent }
+    }
+    // Fall back to pane-capture approach
     try {
       const pane = execFileSync('tmux', ['capture-pane', '-t', `${info.tmuxName}:hydra-chat`, '-p', '-S', '-3'],
         { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
@@ -181,7 +192,40 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   uiTarget(info: SessionInfo): string { return `${info.tmuxName}:hydra-chat` }
 
-  ensureSurface(info: SessionInfo): boolean { return tmuxHasSession(info.tmuxName) }
+  ensureSurface(info: SessionInfo): boolean {
+    if (!info.codexThreadId) return false
+    try {
+      // A remote Codex TUI can take its tmux session down when the attached turn
+      // finishes even though the daemon-owned app-server and socket remain live.
+      // Recreate a durable container around that live engine.
+      if (!tmuxHasSession(info.tmuxName)) {
+        if (!this.engine.isConnected(info.sessionId)) return false
+        try {
+          execFileSync('tmux', [
+            'new-session', '-d', '-s', info.tmuxName, '-n', 'hydra-anchor',
+            'while :; do sleep 3600; done',
+          ], { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
+          process.stderr.write(`daemon: codex adapter recreated tmux container for ${info.tmuxName}\n`)
+        } catch (err) {
+          if (!tmuxHasSession(info.tmuxName)) throw err
+        }
+      }
+      const windows = execFileSync('tmux', ['list-windows', '-t', info.tmuxName, '-F', '#{window_name}'],
+        { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
+      if (windows.split('\n').includes('hydra-chat')) return true
+      const homeName = info.codexHomeName ?? info.tmuxName
+      const codexHome = join(homedir(), '.codex', `hydra-${homeName}`)
+      const socket = codexSocketPath(homeName)
+      const command = `export CODEX_HOME=${shq(codexHome)} && codex resume ${shq(info.codexThreadId)} --remote ${shq(`unix://${socket}`)}`
+      execFileSync('tmux', ['new-window', '-d', '-n', 'hydra-chat', '-t', info.tmuxName, command],
+        { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
+      process.stderr.write(`daemon: codex adapter recreated TUI for ${info.tmuxName}\n`)
+      return true
+    } catch (err) {
+      process.stderr.write(`daemon: codex adapter could not ensure TUI for ${info.tmuxName}: ${err}\n`)
+      return false
+    }
+  }
 
   async sendKeys(info: SessionInfo, keys: string): Promise<void> {
     const target = `${info.tmuxName}:hydra-chat`
@@ -199,12 +243,17 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async reconnect(info: SessionInfo): Promise<boolean> {
-    if (!tmuxHasSession(info.tmuxName)) return false
-    const sockPath = codexSocketPath(info.tmuxName)
+    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+
+    // Check if app-server socket is reachable (survives tmux death)
+    let socketLive = false
+    try { socketLive = await this.engine.isSocketLive(sockPath) } catch {}
+    if (!socketLive && !tmuxHasSession(info.tmuxName)) return false
 
     if (info.codexThreadId) {
       try {
-        await this.engine.connectAndResume(info.sessionId, sockPath, info.codexThreadId)
+        const result = await this.engine.connectAndResume(info.sessionId, sockPath, info.codexThreadId)
+        if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
         process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (resumed)\n`)
         return true
       } catch (err: any) {
@@ -218,6 +267,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     try {
       const result = await this.engine.connect(info.sessionId, sockPath)
       info.codexThreadId = result.threadId
+      if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
       if (hadPriorThread) {
         const { safeSend } = await import('../util.js')
         void safeSend(info.threadId, `⚠️ Session resumed but conversation history was lost. The agent is starting fresh.`)

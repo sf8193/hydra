@@ -6,6 +6,7 @@ import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName } from '../shared/constants.js'
+import { recordPendingRetirement } from './retirement-journal.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,13 +66,20 @@ export type SessionInfo = {
   engine: 'claude' | 'codex'  // which backend runs this session
   adapter?: import('./engines/engine-adapter.js').EngineAdapter // runtime instance, not persisted — reattached on load
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
+  codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
+  ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
+  contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
   capabilities?: Capability[]
   // Keys are subsystem-owned: factory owns 'factory_done', protocol owns 'advance'/'extend_phase'.
   // clearFactoryIdentity and clearProtocolOverrides are the canonical cleanup paths.
   toolDescriptions?: Partial<Record<ToolName, string>>
   toolInputSchemas?: Partial<Record<ToolName, object>>
+}
+
+export function deferPersistedLivenessToProvider(info: Pick<SessionInfo, 'engine' | 'codexThreadId'>, tmuxAlive: boolean): boolean {
+  return !tmuxAlive && info.engine === 'codex' && !!info.codexThreadId
 }
 
 export function addCapability(info: SessionInfo, cap: Capability): void {
@@ -135,6 +143,9 @@ export type ThreadSessionEntry = {
   endedAt?: number
   messageCount: number
   claudeSessionId?: string
+  engine?: 'claude' | 'codex'
+  codexThreadId?: string
+  codexHomeName?: string
   model?: string
 }
 
@@ -155,14 +166,16 @@ export type ThreadMetadata = {
 }
 
 export type SpawnOpts = {
-  forkFrom?: { claudeSessionId: string; parentName: string; codexThreadId?: string }
+  forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string; codexHomeName?: string }
   handedOffFrom?: string
   artifact?: string
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
   resumeFrom?: string                                          // claude session ID for --resume (no --fork-session)
+  resumeCodex?: { threadId: string; homeName: string }          // Codex thread + original CODEX_HOME identity
   resurrectFrom?: string                                       // tmuxName of predecessor (for lineage in respawn)
   joinThread?: string                                          // join existing thread as member (skip thread creation)
   promptBuilder?: (sessionId: string, tmuxName: string) => string
+  beforeInitialTurn?: (sessionId: string) => void                 // register dynamic capabilities before Codex snapshots MCP tools
   promptPrefix?: string                                        // prepended to the generated prompt (used by templates)
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
@@ -444,7 +457,7 @@ export class SessionRegistry {
           tmuxAlive = true
         } catch {}
 
-        if (tmuxAlive) {
+        if (tmuxAlive || deferPersistedLivenessToProvider(info, tmuxAlive)) {
           delete info.deadAt
           restored++
         } else {
@@ -559,14 +572,17 @@ export class ThreadRegistry {
     this.persist()
   }
 
-  recordKill(threadId: string, sessionId: string, messageCount: number, claudeSessionId?: string): void {
+  recordKill(threadId: string, sessionId: string, messageCount: number, identity?: { claudeSessionId?: string; engine?: string; codexThreadId?: string; codexHomeName?: string }): void {
     const thread = this.threads.get(threadId)
     if (!thread) return
     const entry = thread.sessionHistory.find(h => h.sessionId === sessionId && !h.endedAt)
     if (entry) {
       entry.endedAt = Date.now()
       entry.messageCount = messageCount
-      entry.claudeSessionId = claudeSessionId
+      if (identity?.claudeSessionId) entry.claudeSessionId = identity.claudeSessionId
+      if (identity?.engine) entry.engine = identity.engine as any
+      if (identity?.codexThreadId) entry.codexThreadId = identity.codexThreadId
+      if (identity?.codexHomeName) entry.codexHomeName = identity.codexHomeName
     }
     this.persist()
   }
