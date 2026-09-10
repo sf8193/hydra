@@ -65,7 +65,7 @@ export class CodexEngineAdapter implements EngineAdapter {
         } else {
           const r = await this.engine.connect(sessionId, sockPath, model)
           codexThreadId = r.threadId
-          resolvedModel = r.model
+          resolvedModel = r.model ?? resolvedModel
         }
         break
       } catch (err: any) {

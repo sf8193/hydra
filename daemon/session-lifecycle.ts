@@ -283,7 +283,10 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
     // Update thread metadata before deleting session
     if (info.sessionType !== 'thread_guest') {
-      threadRegistry.recordKill(info.threadId, info.sessionId, info.messageCount ?? 0, info.claudeSessionId)
+      threadRegistry.recordKill(info.threadId, info.sessionId, info.messageCount ?? 0, {
+        claudeSessionId: info.claudeSessionId, engine: info.engine,
+        codexThreadId: info.codexThreadId, codexHomeName: info.codexHomeName,
+      })
       registry.deleteThread(info.threadId)
     }
     registry.delete(info.sessionId)

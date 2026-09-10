@@ -572,14 +572,17 @@ export class ThreadRegistry {
     this.persist()
   }
 
-  recordKill(threadId: string, sessionId: string, messageCount: number, claudeSessionId?: string): void {
+  recordKill(threadId: string, sessionId: string, messageCount: number, identity?: { claudeSessionId?: string; engine?: string; codexThreadId?: string; codexHomeName?: string }): void {
     const thread = this.threads.get(threadId)
     if (!thread) return
     const entry = thread.sessionHistory.find(h => h.sessionId === sessionId && !h.endedAt)
     if (entry) {
       entry.endedAt = Date.now()
       entry.messageCount = messageCount
-      entry.claudeSessionId = claudeSessionId
+      if (identity?.claudeSessionId) entry.claudeSessionId = identity.claudeSessionId
+      if (identity?.engine) entry.engine = identity.engine as any
+      if (identity?.codexThreadId) entry.codexThreadId = identity.codexThreadId
+      if (identity?.codexHomeName) entry.codexHomeName = identity.codexHomeName
     }
     this.persist()
   }

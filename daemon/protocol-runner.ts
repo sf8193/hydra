@@ -1,5 +1,5 @@
 import { gateway } from './config.js'
-import { registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas } from './sessions.js'
+import { registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas, type SessionInfo } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
