@@ -13,6 +13,7 @@ import { extractPhaseBudget } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
 import type { SessionType } from '../shared/constants.js'
+import { resolveEngine } from './engines/instances.js'
 import { withRaisedFdLimit } from '../shared/tmux-env.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -257,18 +258,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     const tmuxName = info.tmuxName
-    if (info.engine === 'codex') {
-      try {
-        // codexEngine imported at module scope
-        codexEngine.disconnect(info.sessionId)
-      } catch (err) {
-        process.stderr.write(`daemon: killSession: codexEngine.disconnect failed for ${info.tmuxName}: ${err}
-`)
-      }
-    }
-    try {
-      execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
-    } catch {}
+    await (info.adapter ?? resolveEngine(info.engine)).stop(info)
 
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
@@ -763,6 +753,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       initiator: opts?.initiator,
       ephemeral: opts?.ephemeral,
       ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
+      adapter: resolveEngine('codex'),
     })
     if (phaseBudgetMs) startPhaseBudget(sessionId)
     if (!isJoin) registry.setThread(threadId!, sessionId)
@@ -918,6 +909,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ephemeral: opts?.ephemeral,
     ...(isHeadless ? { headless: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
+    adapter: resolveEngine('claude'),
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)
   // Thread ownership: setThread claims the thread for message routing.

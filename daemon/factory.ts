@@ -24,7 +24,9 @@ import type { CompletionEvent } from './protocol-types.js'
 import reviewProto from '../protocols/review.js'
 import { registry, threadRegistry, sessionEmoji, setToolDescription, removeToolDescriptions } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
-import { safeSend, safeEdit, formatDuration, getContextPercent } from './util.js'
+import { safeSend, safeEdit, formatDuration } from './util.js'
+import { formatContextPercent } from './engines/engine-adapter.js'
+import { resolveEngine } from './engines/instances.js'
 import { defaultToolDescription } from './bridge-tools.js'
 import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
@@ -190,7 +192,7 @@ export function formatBuildLine(
     line += ` · ${formatDuration(Date.now() - state.createdAt)}`
   }
   if (opts?.includeCtx && info) {
-    const ctx = getContextPercent(info.tmuxName)
+    const ctx = formatContextPercent(info.adapter ?? resolveEngine(info.engine), info)
     if (ctx !== '?') line += ` · ctx ${ctx}`
   }
   return `${line} (${shortTicket(state.ticket)})`

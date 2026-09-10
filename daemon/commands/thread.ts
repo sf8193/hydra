@@ -8,7 +8,9 @@ import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn } from '../session-lifecycle.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, getContextPercent, tmuxHasSession, reportError, safeSend } from '../util.js'
+import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
+import { formatContextPercent } from '../engines/engine-adapter.js'
+import { resolveEngine } from '../engines/instances.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
@@ -115,7 +117,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const parentName = info.tmuxName
   const parentMessages = info.messageCount ?? 0
-  const parentContext = getContextPercent(parentName)
+  const parentContext = formatContextPercent(info.adapter ?? resolveEngine(info.engine), info)
   const thread = threadRegistry.get(info.threadId)
   const forkTopic = description || `continuing: ${thread?.topic ?? info.description ?? 'session'}`
   const baseChatId = msg.parentChannelId ?? msg.channelId
@@ -185,7 +187,7 @@ export async function handleForksIntercept(msg: InboundMessage): Promise<void> {
     const t = threadRegistry.get(s.threadId)
     const url = t?.threadUrl ?? ''
     const desc = s.description ?? fallbackDescription(t?.topic ?? '')
-    const ctx = getContextPercent(s.tmuxName)
+    const ctx = formatContextPercent(s.adapter ?? resolveEngine(s.engine), s)
     const msgs = s.messageCount ?? 0
     const duration = formatDuration(Date.now() - s.createdAt)
     const e = sessionEmoji(s.tmuxName)
@@ -511,7 +513,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 
   void gateway.react(msg.channelId, msg.id, '📸').catch(() => {})
 
-  const ctx = getContextPercent(name)
+  const ctx = formatContextPercent(info.adapter ?? resolveEngine(info.engine), info)
   const duration = formatDuration(Date.now() - info.createdAt)
   const msgs = info.messageCount ?? 0
   const header = `📸 **${name}** · ${ctx} · ${msgs} msgs · ${duration}`

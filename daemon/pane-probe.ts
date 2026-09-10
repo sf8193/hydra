@@ -617,7 +617,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
   for (const info of io.getSessions()) {
     if (info.deadAt) continue
-    if (info.engine === 'codex') continue
+    // All engines participate in probe — each adapter implements its own patterns
     targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
   }
 
@@ -645,7 +645,10 @@ export async function probeAllSessions(now?: number): Promise<void> {
       continue
     }
 
-    const detected = detectBlockingState(tailText)
+    const sessionInfo = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
+    const detected = sessionInfo?.adapter
+      ? sessionInfo.adapter.detectBlockingState(sessionInfo, tailText)
+      : detectBlockingState(tailText)
 
     if (!detected) {
       clearState(key, t, 'cleared') // no detection — genuine leave; reset latch

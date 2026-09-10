@@ -220,8 +220,10 @@ function makeTestIO(): PaneProbeIO {
   }
 }
 
+const codexAdapter = { detectBlockingState: () => null } as any
 function addSession(sessionId: string, opts: { tmuxName: string; threadId: string; deadAt?: number; engine?: string }) {
-  registryEntries.set(sessionId, { sessionId, ...opts, createdAt: T0, lastActive: T0, listening: true })
+  const adapter = opts.engine === 'codex' ? codexAdapter : undefined
+  registryEntries.set(sessionId, { sessionId, ...opts, adapter, createdAt: T0, lastActive: T0, listening: true })
 }
 
 describe('detectBlockingState (pure)', () => {
@@ -468,7 +470,7 @@ describe('probeAllSessions', () => {
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
-  it('skips codex sessions', async () => {
+  it('codex sessions detect no Claude-specific blocking states', async () => {
     addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1', engine: 'codex' })
     paneTails.set('cedar', PLAN_MODE_TAIL)
     windowActivity.set('cedar', Math.floor(T0 / 1000) - 60)
