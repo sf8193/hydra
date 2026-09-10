@@ -723,172 +723,22 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   const engine = opts?.engine ?? 'claude'
 
-  if (engine === 'claude' && !isKnownModel(model)) {
-    process.stderr.write(`daemon: unrecognized model ${model} — may be a new release or typo. Spawning anyway.\n`)
-    if (threadId) void gateway.send(threadId, `\u26a0\ufe0f Unrecognized model \`${model}\` — may be a new release or typo. Spawning anyway.`).catch(() => {})
-  }
-
-  // --- Codex engine: spawn in tmux, connect via unix socket ---
-  if (engine === 'codex') {
-    const { sockPath, spawnLogPath, codexThreadId } = await spawnCodexSession({
-      tmuxName, sessionId, effectiveCwd, model: opts?.model, forkFromThread: opts?.forkFrom?.codexThreadId,
-    })
-    void codexEngine.startTurn(sessionId, prompt).catch(err => {
-      process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
-    })
-
-    // SYNC: keep in sync with Claude registration block (~line 655+)
-    const now = Date.now()
-    const sessionMetadata: SessionMetadata = { role: 'worker', tools: [], model: opts?.model ?? 'codex-default', cwd: effectiveCwd, platform: PLATFORM }
-    const url = await gateway.getThreadUrl(threadId!)
-    registry.set(sessionId, {
-      sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
-      tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
-      threadUrl: url || undefined, engine: 'codex', codexThreadId: codexThreadId!,
-      ...(spawnLogPath ? { spawnLogPath } : {}),
-      ...(respawnCount > 0 ? { respawnCount } : {}),
-      ...(resumeCount > 0 ? { resumeCount } : {}),
-      ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
-      sessionType: opts?.sessionType ?? (isJoin ? 'thread_guest' as const : 'thread_owner' as const),
-      initiator: opts?.initiator,
-      ephemeral: opts?.ephemeral,
-      ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
-      adapter: resolveEngine('codex'),
-    })
-    if (phaseBudgetMs) startPhaseBudget(sessionId)
-    if (!isJoin) registry.setThread(threadId!, sessionId)
-    else registry.addMember(threadId!, sessionId, opts?.memberLabel)
-    registry.persist()
-
-    if (!isJoin) {
-      threadRegistry.recordSpawn(threadId!, {
-        anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
-        sessionId, tmuxName, originType, originFrom, model: opts?.model ?? 'codex-default', parentChannelId,
-      })
-    }
-    refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })
-
-    const spawnLine = formatSpawnLine({
-      emoji: sessionEmoji(tmuxName), name: tmuxName, model: opts?.model ?? 'codex',
-      trigger: opts?.trigger ?? originType ?? 'spawn',
-    })
-    const announceIds = await safeSend(threadId!, spawnLine)
-    const info = registry.get(sessionId)
-    if (info && announceIds.length > 0) { info.spawnAnnounceId = announceIds[0]; registry.persist() }
-
-    return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
-  }
-
-  // For fork+worktree: tell the builder its exact worktree path via the prompt.
-  // (The process starts from spawnCwd for --resume CWD compatibility, so the
-  // builder can't infer its worktree from $PWD.)
-  const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
-  if (worktreeAppend) prompt += worktreeAppend
-
-  // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
-  let claudeArgs: string
-  let assignedClaudeSessionId: string | undefined
-  if (isFork) {
-    claudeArgs = [
-      `claude`,
-      `--resume ${shq(opts!.forkFrom!.claudeSessionId)}`,
-      `--fork-session`,
-      `--model ${shq(model)}`,
-      `--channels ${shq(channelFlag)}`,
-      `--dangerously-skip-permissions`,
-      shq(prompt),
-    ].join(' ')
-  } else if (isResume) {
-    claudeArgs = [
-      `claude`,
-      `--resume ${shq(opts!.resumeFrom!)}`,
-      `--model ${shq(model)}`,
-      `--channels ${shq(channelFlag)}`,
-      `--dangerously-skip-permissions`,
-    ].join(' ')
-  } else {
-    assignedClaudeSessionId = randomUUID()
-    const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
-    const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
-    if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
-    if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
-  }
-
-  const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
-  const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)
-  const exitFile = join(SPAWN_LOGS_DIR, `exit-${tmuxName}-${sessionId}.log`)
-  const writeExitMarker = [
-    `_HYDRA_EXIT_CODE=$?`,
-    `_HYDRA_EXIT_TS=$(date +%s)`,
-    `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
-    `echo "wall_clock=\${SECONDS}s"`,
-    `echo "exit_ts=$_HYDRA_EXIT_TS"`,
-    `echo "session_id=${sessionId}"`,
-    `echo "tmux_name=${tmuxName}"`,
-    `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
-    `} > ${shq(exitFile)}`,
-  ].join('; ')
-  claudeArgs += ` --debug-file ${shq(debugLog)}`
-  const spawnCd = resolveForkSpawnCwd(isFork, !!worktreeTarget, spawnCwd, effectiveCwd)
-  if (isFork && worktreeTarget) {
-    process.stderr.write(`daemon: spawn ${tmuxName}: fork+worktree — using PM CWD ${spawnCwd} for fork (worktree ${effectiveCwd} in prompt)\n`)
-  }
-  const inner = [
-    `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
-    `cd ${shq(spawnCd)}`,
-    ...buildSpawnEnv(sessionId, tmuxName),
-    `${claudeArgs} 2>>${shq(stderrLog)}`,
-  ].join(' && ')
-
-  process.stderr.write(`daemon: spawn ${tmuxName}: running tmux new-session\n`)
-  process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
-
-  mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-  try {
-    execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, withRaisedFdLimit(inner)], { stdio: 'pipe' })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`daemon: spawn ${tmuxName}: execFileSync FAILED: ${msg}\n`)
-    throw new Error(`failed to spawn tmux session: ${msg}`)
-  }
-
-  // Verify the tmux session actually exists after creation
-  let tmuxConfirmedAlive = false
-  try {
-    execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
-    process.stderr.write(`daemon: spawn ${tmuxName}: tmux session confirmed alive\n`)
-    tmuxConfirmedAlive = true
-  } catch {
-    process.stderr.write(`daemon: spawn ${tmuxName}: WARNING -- tmux session died immediately after creation\n`)
-  }
-
-
-  // Best-effort: any failure is logged, never fatal to the spawn.
-  let spawnLogPath: string | undefined
-  if (tmuxConfirmedAlive) {
-    try {
-      // 0o700: the spawn logs are sensitive by construction (raw pane output).
-      // Assert it at the artifact, not only via STATE_DIR's mode.
-      mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-      const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
-      // Shell string is unavoidable here — `pipe-pane` runs its argument through a
-      // shell, so it can't be array-form execFileSync; the path is shq-quoted.
-      execFileSync('tmux', ['pipe-pane', '-o', '-t', tmuxName, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
-      spawnLogPath = logPath
-      process.stderr.write(`daemon: spawn ${tmuxName}: pane capture -> ${logPath}\n`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`daemon: spawn ${tmuxName}: pipe-pane capture setup FAILED (non-fatal): ${msg}\n`)
-    }
-  }
+  // --- Launch via engine adapter ---
+  const adapter = resolveEngine(engine)
+  const launched = await adapter.launch({
+    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
+    worktreePath, forkFromOriginalCwd: !!worktreeTarget,
+    tools: opts?.tools, disallowedTools: opts?.disallowedTools,
+    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom,
+    threadId,
+  })
 
   const now = Date.now()
-  const spawnType: SessionType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
-  const sessionMetadata: SessionMetadata = {
-    role: 'worker',
-    tools: computeToolsForSession(spawnType, new Set()).map(t => t.name),
-    model,
+  const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
+  const sessionMetadata = {
+    role: 'worker' as const,
+    tools: adapter.provider === 'claude' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : [],
+    model: launched.model,
     cwd: effectiveCwd,
     platform: PLATFORM,
   }
@@ -899,35 +749,29 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
     sessionType: spawnType,
     threadUrl: url || undefined,
-    ...(assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {}),
+    engine,
+    ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
+    ...(launched.codexThreadId ? { codexThreadId: launched.codexThreadId } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(resumeCount > 0 ? { resumeCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
-    ...(spawnLogPath ? { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog } : {}),
-    debugLogPath: debugLog,
+    ...(launched.spawnLogPath ? { spawnLogPath: launched.spawnLogPath } : {}),
+    ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
+    ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
+    ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
     ...(isHeadless ? { headless: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
-    adapter: resolveEngine('claude'),
+    adapter,
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)
-  // Thread ownership: setThread claims the thread for message routing.
-  // Only the thread OWNER should call setThread — join members (protocol
-  // critics, guest agents) use addMember and never touch the mapping.
-  // Callers resuming a non-owner session MUST pass joinThread to preserve
-  // the real owner's routing. See auto-resume in protocol-runner.ts.
-  // Headless sessions use a synthetic UUID as threadId — don't register it.
   if (!isJoin && !isHeadless) {
     registry.setThread(threadId!, sessionId)
   } else if (isJoin) {
     registry.addMember(threadId!, sessionId, opts?.memberLabel)
   }
 
-  // Lossless respawn: re-apply the replaced record's deliverables/description so the
-  // dashboard row keeps its PR/artifact links. Reset artifactsBackfilled so a LATER
-  // boot's history-rescan re-derives links (the snapshot is the complete array, so
-  // nothing is lost now; this only re-arms the self-heal for links captured after).
   if (carriedArtifacts?.length || carriedContextLinks?.length || carriedDescription) {
     const created = registry.get(sessionId)
     if (created) {
@@ -940,21 +784,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   registry.persist()
 
-  // Co-update thread metadata (observational — not load-bearing for message routing)
   if (!isJoin && !isHeadless) {
     threadRegistry.recordSpawn(threadId!, {
-      anchorMessageId,
-      anchorChannelId,
-      threadUrl: url || undefined,
-      topic,
-      respawnCount,
-      sessionId,
-      tmuxName,
-      originType,
-      originFrom,
-      model,
-      parentChannelId,
-      claudeSessionId: assignedClaudeSessionId,
+      anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
+      sessionId, tmuxName, originType, originFrom, model: launched.model, parentChannelId,
+      ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
     })
   }
 
@@ -962,13 +796,12 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     roleLabel: opts?.memberLabel,
     emoji: sessionEmoji(tmuxName),
     name: tmuxName,
-    model,
+    model: launched.model,
     trigger: opts?.trigger ?? originType,
     initiator: opts?.initiator,
   })
 
   if (isHeadless) {
-    // Announce headless worker in the parent session's thread
     const parentInfo = opts?.initiator ? registry.findByName(opts.initiator) : undefined
     if (parentInfo) {
       void safeSend(parentInfo.threadId, `${spawnLine}\n_↳ headless worker_`)
@@ -983,9 +816,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         if (info) info.spawnAnnounceId = ids[0]
       }
     })
-    // Echo to the causing thread — but only when it IS a thread we track
-    // (a session or protocol thread). A plain channel already shows the new
-    // thread's anchor; echoing there would double-announce.
     if (chatId && chatId !== threadId && (registry.getByThread(chatId) || threadRegistry.get(chatId))) {
       void safeSend(chatId, spawnLine)
     }

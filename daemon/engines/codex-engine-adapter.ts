@@ -4,10 +4,12 @@
 // and the disposable tmux TUI.
 
 import { execFileSync, execSync } from 'child_process'
+import { mkdirSync } from 'fs'
+import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
-  EngineAdapter,
+  EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult,
   ExecutionRetirementResult, StopResult,
   ContextUsage, EngineSnapshot,
@@ -15,12 +17,88 @@ import type {
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { transport } from '../bridge-transport.js'
 import { tmuxHasSession } from '../util.js'
+import { SOCK_PATH, STATE_DIR } from '../config.js'
+import { withRaisedFdLimit } from '../../shared/tmux-env.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 export class CodexEngineAdapter implements EngineAdapter {
   readonly provider = 'codex' as const
   constructor(private readonly engine: CodexEngine) {}
+
+  async launch(input: LaunchInput): Promise<LaunchResult> {
+    const { sessionId, tmuxName, cwd: effectiveCwd, model, prompt } = input
+    const sockPath = codexSocketPath(tmuxName)
+    const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${tmuxName}`)
+    const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
+    const codexModel = model ? `-c model=${shq(model)}` : ''
+    const fullPerms = `-c 'sandbox_permissions=["disk-full-read-access","disk-full-write-access","network-full-access"]'`
+    const serverCmd = `codex app-server --listen 'unix://' ${codexModel} ${fullPerms}`.trim()
+
+    const serverInner = [
+      `cd ${shq(effectiveCwd)}`,
+      `export CODEX_HOME=${shq(codexHomeDir)}`,
+      `mkdir -p ${shq(codexHomeDir)}`,
+      `ln -sf ~/.codex/auth.json ${shq(codexHomeDir)}/auth.json`,
+      `codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(codexHomeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
+      serverCmd,
+    ].join(' && ')
+
+    process.stderr.write(`daemon: codex spawning ${tmuxName}\n`)
+    try {
+      execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, withRaisedFdLimit(serverInner)], { stdio: 'pipe' })
+    } catch (err) {
+      throw new Error(`failed to spawn codex tmux: ${err instanceof Error ? err.message : err}`)
+    }
+
+    let spawnLogPath: string | undefined
+    try {
+      mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+      const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
+      execFileSync('tmux', ['pipe-pane', '-o', '-t', `${tmuxName}:0`, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
+      spawnLogPath = logPath
+    } catch {}
+
+    const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && sleep 3 && codex --remote "unix://${sockPath}"`
+    try {
+      execFileSync('tmux', ['new-window', '-t', tmuxName, tuiInner], { stdio: 'pipe' })
+    } catch {
+      process.stderr.write(`daemon: codex TUI window failed for ${tmuxName} (non-fatal)\n`)
+    }
+
+    const start = Date.now()
+    let codexThreadId: string | null = null
+    let lastErr = ''
+    while (Date.now() - start < 15_000) {
+      try {
+        if (input.forkFrom?.codexThreadId) {
+          const r = await this.engine.connectAndFork(sessionId, sockPath, input.forkFrom.codexThreadId)
+          codexThreadId = r.threadId
+        } else {
+          const r = await this.engine.connect(sessionId, sockPath)
+          codexThreadId = r.threadId
+        }
+        break
+      } catch (err: any) {
+        lastErr = err?.message || String(err)
+        try { this.engine.disconnect(sessionId) } catch {}
+        if (!tmuxHasSession(tmuxName)) throw new Error(`codex tmux ${tmuxName} died during startup`)
+        await new Promise(r => setTimeout(r, 500))
+      }
+    }
+    if (!codexThreadId) throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
+    process.stderr.write(`daemon: codex connected for ${tmuxName}, thread=${codexThreadId}\n`)
+
+    void this.engine.startTurn(sessionId, prompt).catch(err => {
+      process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
+    })
+
+    return {
+      provider: 'codex', model: model ?? 'codex-default',
+      codexThreadId, spawnLogPath,
+    }
+  }
 
   async deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
     if (!this.engine.isConnected(info.sessionId)) {

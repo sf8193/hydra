@@ -57,6 +57,37 @@ export type EngineSnapshot = {
 }
 
 // ---------------------------------------------------------------------------
+// Launch
+// ---------------------------------------------------------------------------
+
+export type LaunchInput = {
+  readonly sessionId: string
+  readonly tmuxName: string
+  readonly cwd: string
+  readonly originalCwd: string
+  readonly model: string
+  readonly prompt: string
+  readonly worktreePath?: string
+  readonly forkFromOriginalCwd?: boolean
+  readonly tools?: string[]
+  readonly disallowedTools?: string[]
+  readonly forkFrom?: { claudeSessionId?: string; codexThreadId?: string }
+  readonly resumeFrom?: string
+  readonly threadId?: string
+}
+
+export type LaunchResult = {
+  readonly provider: ProviderId
+  readonly model: string
+  readonly spawnLogPath?: string
+  readonly exitFilePath?: string
+  readonly stderrLogPath?: string
+  readonly debugLogPath?: string
+  readonly claudeSessionId?: string
+  readonly codexThreadId?: string
+}
+
+// ---------------------------------------------------------------------------
 // Engine adapter interface
 // ---------------------------------------------------------------------------
 
@@ -64,6 +95,7 @@ export interface EngineAdapter {
   readonly provider: ProviderId
 
   // Lifecycle
+  launch(input: LaunchInput): Promise<LaunchResult>
   deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult>
   retire(info: SessionInfo, reason: string): Promise<ExecutionRetirementResult>
   stop(info: SessionInfo): Promise<StopResult>
