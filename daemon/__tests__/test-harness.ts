@@ -387,7 +387,7 @@ export class TestHarness {
       clearTimeout(run.timeout)
       clearTimeout(run._warningTimeout)
       clearTimeout(run._totalTimeout)
-      clearInterval(run._keepaliveTimer)
+      clearInterval(run._healthMonitor)
       for (const t of run.disconnectTimers.values()) clearTimeout(t)
     }
 

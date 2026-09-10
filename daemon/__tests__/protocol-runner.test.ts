@@ -16,7 +16,7 @@ afterEach(() => {
   const { runs, threadToRun, sessionToRun } = __test
   for (const [, run] of runs) {
     if (run.timeout) clearTimeout(run.timeout)
-    if (run._keepaliveTimer) clearInterval(run._keepaliveTimer)
+    if (run._healthMonitor) clearInterval(run._healthMonitor)
     for (const t of run.disconnectTimers.values()) clearTimeout(t)
   }
   runs.clear()
@@ -451,58 +451,59 @@ describe('extend_phase', () => {
   })
 })
 
-describe('protocol runner — keepalive', () => {
-  test('keepalive timer starts after phase transition', async () => {
+describe('protocol runner — health monitor', () => {
+  test('health monitor starts after phase transition', async () => {
     const run = createTestRun()
     await onRunAdvance('test-critic', 'Finding #1', 'approve')
     expect(run.phase).toBe('owner_turn')
-    expect(run._keepaliveTimer).toBeDefined()
+    expect(run._healthMonitor).toBeDefined()
   })
 
-  test('keepalive timer clears on next transition', async () => {
+  test('health monitor resets on next transition', async () => {
     const run = createTestRun()
     await onRunAdvance('test-critic', 'Finding #1', 'approve')
-    const firstTimer = run._keepaliveTimer
-    expect(firstTimer).toBeDefined()
+    const firstMonitor = run._healthMonitor
+    expect(firstMonitor).toBeDefined()
     await onRunAdvance('test-owner', 'Addressed.')
-    expect(run._keepaliveTimer).toBeDefined()
-    expect(run._keepaliveTimer).not.toBe(firstTimer)
+    expect(run._healthMonitor).toBeDefined()
+    expect(run._healthMonitor).not.toBe(firstMonitor)
   })
 
-  test('keepalive timer clears on run cancellation', async () => {
+  test('health monitor clears on run cancellation', async () => {
     const { cancelRun } = await import('../protocol-runner.js')
     const run = createTestRun()
     await onRunAdvance('test-critic', 'Finding #1', 'approve')
-    expect(run._keepaliveTimer).toBeDefined()
+    expect(run._healthMonitor).toBeDefined()
     await cancelRun(run as any, 'test cancellation')
-    expect(run._keepaliveTimer).toBeUndefined()
+    expect(run._healthMonitor).toBeUndefined()
   })
 
-  test('keepalive timer clears on run completion', async () => {
+  test('health monitor clears on run completion', async () => {
     const run = createTestRun({ currentRound: 3, rounds: 3 })
     await onRunAdvance('test-critic', 'Final finding', 'approve')
     expect(run.phase).toBe('owner_turn')
-    expect(run._keepaliveTimer).toBeDefined()
+    expect(run._healthMonitor).toBeDefined()
     await onRunAdvance('test-owner', 'Final defense')
-    // closing phase should still have a keepalive
     expect(run.phase).toBe('closing')
-    // complete the run by advancing through closing
     await onRunAdvance('test-owner', 'Summary.')
-    // run is now terminal — timer cleared
-    expect(run._keepaliveTimer).toBeUndefined()
+    expect(run._healthMonitor).toBeUndefined()
   })
 
-  test('sendKeepaliveNotification queues inert system message', () => {
-    const { sendKeepaliveNotification } = __test!
+  test('nudge and escalate flags reset on phase transition', async () => {
     const run = createTestRun()
-    sendKeepaliveNotification(run as any, 'test-critic', 'critic')
-    const queued = transport.messageQueues.get('test-critic') ?? []
-    const keepalives = queued.filter((m: any) => m.content === '[system] keepalive')
-    expect(keepalives.length).toBe(1)
-    expect(keepalives[0].meta.user).toBe('system')
+    run._nudged = true
+    run._escalated = true
+    await onRunAdvance('test-critic', 'Finding #1', 'approve')
+    expect(run._nudged).toBe(false)
+    expect(run._escalated).toBe(false)
   })
 
-  test('KEEPALIVE_INTERVAL_MS is 30 seconds', () => {
-    expect(__test!.KEEPALIVE_INTERVAL_MS).toBe(30_000)
+  test('HEALTH_CHECK_INTERVAL_MS is 30 seconds', () => {
+    expect(__test!.HEALTH_CHECK_INTERVAL_MS).toBe(30_000)
+  })
+
+  test('idle thresholds are 5 min (nudge) and 10 min (escalate)', () => {
+    expect(__test!.IDLE_NUDGE_MS).toBe(5 * 60 * 1000)
+    expect(__test!.IDLE_ESCALATE_MS).toBe(10 * 60 * 1000)
   })
 })
