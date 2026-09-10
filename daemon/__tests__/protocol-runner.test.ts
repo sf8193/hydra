@@ -229,7 +229,7 @@ describe('protocol runner — terminal phases', () => {
     run.participantExecutions.set('critic', {
       provider: 'codex', sessionId: 'test-critic', codexThreadId: 'thread-stale', codexHomeName: 'drift',
     })
-    __test.setLifecycle({ interruptExecution: async ref => { interrupted.push(ref); return true } })
+    __test.setLifecycle({ retireSession: async ref => { interrupted.push(ref); return { status: 'terminal' } } })
 
     await cancelRun(run, 'cancelled by user')
 

@@ -336,6 +336,28 @@ post-launch failure, uncertain shutdown retention, concurrent kill completion,
 stale kills and native stop verification. This still does **not** prove full
 transaction rollback: worktree preparation failure/cleanup, observational history
 rollback, native partial-start failure and all required live gates need coverage.
-Semantic retirement/journal replay still lives in protocol-runner, and delivery
-still routes through BridgeTransport/CodexEngine; migrate these next. The older
+Delivery still routes through BridgeTransport/CodexEngine; migrate it next. The older
 memory file's tmux-owned Codex process description is obsolete.
+
+### Runtime retirement coordination
+
+`SessionRuntime.retire` now owns generation-based deduplication, journal-before-
+interrupt ordering, pending versus terminal results, and restart replay. The
+protocol runner retains participant identities and calls runtime retirement;
+daemon startup calls the same runtime replay path. Adapters expose structured
+native retirement outcomes instead of an ambiguous boolean. A superseded owner
+cannot interrupt a successor holding the same native identity. Codex native stop
+checks shared-home ownership and interrupts only the retiring logical thread
+when siblings still require the server.
+
+`runtime-retirement.test.ts` covers concurrent requests, unknown/exceptional
+outcomes across two reconstructed runtime instances, and successor protection.
+`engine-launch.test.ts` covers shared-server stop isolation with injected I/O.
+These are deterministic tests, not substitutes for the outstanding live gates.
+Absent-registry Claude retirement still lacks enough durable native identity for
+safe cleanup, and native delivery semantics, full spawn failure coverage and
+remaining caller migrations are still outstanding.
+
+Latest verification after retirement migration: **1,257 tests pass across 73
+files**, 3,202 assertions; daemon, CLI and bridge builds pass. Topology regenerated.
+No refactor deployment or full live protocol acceptance has been performed.

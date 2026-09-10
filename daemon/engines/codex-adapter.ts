@@ -1,6 +1,6 @@
 import { ensureCodexInteractiveSurface } from './codex-surface.js'
-import type { SessionInfo } from '../sessions.js'
-import type { ProviderCapabilities, ProviderExecutionRef } from './engine-adapter.js'
+import { registry, type SessionInfo } from '../sessions.js'
+import type { ProviderCapabilities, ProviderExecutionRef, ExecutionRetirementResult } from './engine-adapter.js'
 import { tmuxHasSession } from '../util.js'
 import { execFileSync } from 'child_process'
 import { existsSync, mkdirSync, unlinkSync, cpSync, rmSync, symlinkSync } from 'fs'
@@ -38,6 +38,7 @@ export class CodexAdapter implements EngineAdapter<'codex'> {
   constructor(
     private readonly engine: Pick<CodexEngine, 'isSocketLive' | 'connect' | 'connectAndResume' | 'connectAndFork' | 'disconnect' | 'isConnected' | 'retireSession' | 'interruptPersistedThread'>,
     private readonly io: CodexLaunchIo = nativeIo,
+    private readonly sessions: () => Iterable<SessionInfo> = () => registry.values(),
   ) {}
 
   readonly capabilities: ProviderCapabilities = {
@@ -64,22 +65,37 @@ export class CodexAdapter implements EngineAdapter<'codex'> {
       ownershipGeneration: info.ownershipGeneration ?? info.sessionId,
     }
   }
-  async interruptExecution(ref: ProviderExecutionRef): Promise<boolean> {
-    if (await this.engine.retireSession(ref.sessionId)) return true
-    if (!ref.codexHomeName || !ref.codexThreadId) return false
-    try { return await this.engine.interruptPersistedThread(codexSocketPath(ref.codexHomeName), ref.codexThreadId) }
+  async retireExecution(ref: ProviderExecutionRef): Promise<ExecutionRetirementResult> {
+    if (await this.engine.retireSession(ref.sessionId)) return { status: 'terminal' }
+    if (!ref.codexHomeName || !ref.codexThreadId) return { status: 'unknown', reason: 'native execution identity is missing' }
+    try {
+      const terminal = await this.engine.interruptPersistedThread(codexSocketPath(ref.codexHomeName), ref.codexThreadId)
+      return terminal ? { status: 'terminal' } : { status: 'unknown', reason: 'native interruption was not acknowledged' }
+    }
     catch (err) {
       process.stderr.write(`daemon: codex provider could not interrupt ${ref.sessionId}: ${err}\n`)
-      return false
+      return { status: 'unknown', reason: String(err) }
     }
   }
   async isAlive(info: SessionInfo): Promise<boolean> {
     return this.engine.isConnected(info.sessionId) || this.engine.isSocketLive(codexSocketPath(info.codexHomeName ?? info.tmuxName))
   }
   async stop(info: SessionInfo): Promise<void> {
+    const home = info.codexHomeName ?? info.tmuxName
+    const shared = [...this.sessions()].some(other => other.sessionId !== info.sessionId
+      && other.engine === 'codex' && (other.codexHomeName ?? other.tmuxName) === home)
+    if (shared) {
+      // Legacy homes can host several threads. Stopping one logical execution
+      // must not signal the server that still owns its siblings.
+      const result = await this.retireExecution(this.executionRef(info))
+      if (result.status !== 'terminal') throw new Error(result.reason)
+      this.engine.disconnect(info.sessionId)
+      try { this.io.execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+      return
+    }
     this.engine.disconnect(info.sessionId)
-    this.io.stop(info.codexHomeName ?? info.tmuxName)
-    const socket = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+    this.io.stop(home)
+    const socket = codexSocketPath(home)
     const deadline = this.io.now() + 5_000
     while (await this.engine.isSocketLive(socket)) {
       if (this.io.now() >= deadline) throw new Error(`Codex server ${info.tmuxName} is still shutting down; retry kill before resuming`)

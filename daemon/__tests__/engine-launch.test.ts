@@ -110,7 +110,7 @@ describe('Claude native launch — L06/L07/L08/L10/L13/L14', () => {
   })
 })
 
-function codex(options: { live?: boolean; missingSource?: boolean; failConnect?: boolean } = {}) {
+function codex(options: { live?: boolean; missingSource?: boolean; failConnect?: boolean; sibling?: SessionInfo } = {}) {
   const calls: string[] = []
   let now = 0
   const connected = async (kind: string) => {
@@ -128,11 +128,11 @@ function codex(options: { live?: boolean; missingSource?: boolean; failConnect?:
     now: () => now, wait: async ms => { now += ms },
   }
   const adapter = new CodexAdapter({
-    isConnected: () => false, retireSession: async () => false, interruptPersistedThread: async () => false,
+    isConnected: () => false, retireSession: async () => { calls.push('retire'); return !!options.sibling }, interruptPersistedThread: async () => false,
     isSocketLive: async () => { calls.push('probe'); return !!options.live },
     connect: () => connected('connect'), connectAndResume: () => connected('resume'),
     connectAndFork: () => connected('fork'), disconnect: () => { calls.push('disconnect') },
-  }, io)
+  }, io, () => options.sibling ? [options.sibling] : [])
   return { adapter, calls }
 }
 
@@ -140,6 +140,15 @@ const fork: EngineSpawnInput<'codex'> = { ...base,
   mode: { kind: 'fork', source: { provider: 'codex', threadId: 'parent-thread', homeName: 'parent-home' } } }
 
 describe('Codex native launch — L08/L13/L16/L25', () => {
+  test('stopping a legacy shared-home thread preserves its sibling server', async () => {
+    const { adapter, calls } = codex({ sibling: {
+      ...session, sessionId: 'sibling', tmuxName: 'sibling-ui', engine: 'codex',
+      codexHomeName: base.tmuxName, codexThreadId: 'sibling-thread',
+    } })
+    await adapter.stop({ ...session, engine: 'codex', codexThreadId: 'retiring-thread' })
+    expect(calls).toEqual(['retire', 'disconnect', `exec:kill-session -t ${base.tmuxName}`])
+    expect(calls).not.toContain('stop')
+  })
   test('stop waits for socket termination before touching the UI', async () => {
     const { adapter, calls } = codex({ live: true })
     await expect(adapter.stop({ ...session, engine: 'codex' })).rejects.toThrow('still shutting down')

@@ -93,7 +93,7 @@ try {
    catch (err) { console.error('RPC failed:', args[1], String(err)); throw err }
  }
  const { providerFor } = await import(repo + '/daemon/session-provider.ts')
- assert(await providerFor('codex').interruptExecution(providerFor('codex').executionRef(info)))
+ assert.equal((await providerFor('codex').retireExecution(providerFor('codex').executionRef(info))).status, 'terminal')
  assert(!starts.some(s => s.text.startsWith('ROUND_3')))
  console.log('PASS retirement fences and discards queued handoff')
  // Resume under a fresh Hydra identity below; keep the old server alive for fork.

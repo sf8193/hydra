@@ -1,5 +1,5 @@
 import type { SessionInfo } from '../sessions.js'
-import type { ProviderCapabilities, ProviderExecutionRef } from './engine-adapter.js'
+import type { ProviderCapabilities, ProviderExecutionRef, ExecutionRetirementResult } from './engine-adapter.js'
 import { getContextPercent, tmuxHasSession } from '../util.js'
 import { randomUUID } from 'crypto'
 import { execFileSync } from 'child_process'
@@ -61,8 +61,12 @@ export class ClaudeAdapter implements EngineAdapter<'claude'> {
   uiTarget(info: Pick<SessionInfo, 'tmuxName'>): string { return info.tmuxName }
   ensureInteractiveSurface(info: SessionInfo): boolean { return tmuxHasSession(info.tmuxName) }
   contextPercent(info: SessionInfo): string { return getContextPercent(info.tmuxName) }
-  executionRef(info: SessionInfo): ProviderExecutionRef { return { provider: 'claude', sessionId: info.sessionId } }
-  async interruptExecution(_ref: ProviderExecutionRef): Promise<boolean> { return false }
+  executionRef(info: SessionInfo): ProviderExecutionRef {
+    return { provider: 'claude', sessionId: info.sessionId, ownershipGeneration: info.ownershipGeneration ?? info.sessionId }
+  }
+  async retireExecution(_ref: ProviderExecutionRef): Promise<ExecutionRetirementResult> {
+    return { status: 'unknown', reason: 'Claude retirement requires its registered native process' }
+  }
   async isAlive(info: SessionInfo): Promise<boolean> { return tmuxHasSession(info.tmuxName) }
   async stop(info: SessionInfo): Promise<void> {
     try { this.io.execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) }

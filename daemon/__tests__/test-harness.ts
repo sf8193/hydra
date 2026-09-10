@@ -299,6 +299,11 @@ export class TestHarness {
         harness.killedSessions.push(info.sessionId)
         registry.delete(info.sessionId)
       },
+      retireSession: async ref => {
+        harness.killedSessions.push(ref.sessionId)
+        registry.delete(ref.sessionId)
+        return { status: 'terminal' }
+      },
     })
   }
 

@@ -36,6 +36,14 @@ export type EngineSpawnResult<P extends ProviderId> = {
   debugLogPath?: string
 }
 
+export type ExecutionRetirementResult =
+  | { status: 'terminal' }
+  | { status: 'unknown'; reason: string }
+
+export type RetirementResult =
+  | { status: 'terminal' }
+  | { status: 'pending'; journaled: true; reason: string }
+
 export interface EngineAdapter<P extends ProviderId = ProviderId> {
   readonly id: P
   spawn(input: EngineSpawnInput<P>): Promise<EngineSpawnResult<P>>
@@ -44,7 +52,7 @@ export interface EngineAdapter<P extends ProviderId = ProviderId> {
   ensureInteractiveSurface(info: SessionInfo): boolean
   contextPercent(info: SessionInfo): string
   executionRef(info: SessionInfo): ProviderExecutionRef
-  interruptExecution(ref: ProviderExecutionRef): Promise<boolean>
+  retireExecution(ref: ProviderExecutionRef): Promise<ExecutionRetirementResult>
   /** Stop native execution and verify it is terminal before releasing ownership. */
   stop(info: SessionInfo): Promise<void>
   isAlive(info: SessionInfo): Promise<boolean>

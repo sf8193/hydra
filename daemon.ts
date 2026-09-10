@@ -46,7 +46,8 @@ import { setupPermissionHandler } from './daemon/permission.js'
 import { socketServer, startBridgeServer, initEphemeralTimers } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
-import { cancelAllRuns, replayPendingRetirements } from './daemon/protocol-runner.js'
+import { cancelAllRuns } from './daemon/protocol-runner.js'
+import { sessionRuntime } from './daemon/session-runtime.js'
 
 threadRegistry.boot(registry)
 
@@ -71,7 +72,7 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
-await replayPendingRetirements().catch(err => {
+await sessionRuntime.replayPendingRetirements().catch(err => {
   process.stderr.write(`daemon: pending retirement replay failed: ${err}\n`)
 })
 

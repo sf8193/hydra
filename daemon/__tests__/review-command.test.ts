@@ -76,6 +76,7 @@ beforeEach(() => {
     },
     waitForBridge: async () => true,
     killSession: async (info: SessionInfo) => { registry.delete(info.sessionId) },
+    retireSession: async ref => { registry.delete(ref.sessionId); return { status: 'terminal' } },
   })
 })
 

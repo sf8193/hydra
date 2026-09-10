@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
-import type { ProviderExecutionRef } from './session-provider.js'
+import type { ProviderExecutionRef } from './engines/engine-adapter.js'
 
 export type PendingRetirement = ProviderExecutionRef & {
   ownershipGeneration: string

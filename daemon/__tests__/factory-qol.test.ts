@@ -1021,6 +1021,7 @@ describe('factoryReview result delivery', () => {
       },
       waitForBridge: async () => true,
       killSession: async () => {},
+      retireSession: async () => ({ status: 'terminal' }),
     })
 
     await factoryReview({

@@ -23,10 +23,10 @@ import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
 import { codexForkSpawnOptions } from './session-provider.js'
-import type { ProviderId, ProviderRecoveryInput } from './engines/engine-adapter.js'
+import type { ProviderId, ProviderRecoveryInput, ProviderExecutionRef, RetirementResult } from './engines/engine-adapter.js'
 import { engineAdapters } from './engines/instances.js'
 import { SpawnOwnership } from './spawn-ownership.js'
-import { hasPendingRetirementForHome, recordPendingRetirement, completePendingRetirement } from './retirement-journal.js'
+import { hasPendingRetirementForHome, recordPendingRetirement, completePendingRetirement, listPendingRetirements } from './retirement-journal.js'
 
 import type { EngineAdapter } from './engines/engine-adapter.js'
 
@@ -185,7 +185,59 @@ export type RuntimeAdapters = {
 /** Owns lifecycle orchestration; adapters own native execution. */
 export class SessionRuntime {
   private readonly stopping = new Map<string, Promise<void>>()
+  private readonly retiring = new Map<string, Promise<RetirementResult>>()
   constructor(private readonly adapters: RuntimeAdapters = engineAdapters) {}
+
+  executionRef(info: SessionInfo): ProviderExecutionRef {
+    return this.adapters[info.engine ?? 'claude'].executionRef(info)
+  }
+
+  async retire(ref: ProviderExecutionRef, reason: string): Promise<RetirementResult> {
+    const generation = ref.ownershipGeneration ?? ref.sessionId
+    const pending = this.retiring.get(generation)
+    if (pending) return pending
+    recordPendingRetirement(ref, generation, reason)
+    const retiring = this.retireOwned(ref, reason)
+    this.retiring.set(generation, retiring)
+    try {
+      const result = await retiring
+      if (result.status === 'terminal') completePendingRetirement(generation)
+      return result
+    } finally { this.retiring.delete(generation) }
+  }
+
+  private async retireOwned(ref: ProviderExecutionRef, reason: string): Promise<RetirementResult> {
+    const info = registry.get(ref.sessionId)
+    const generation = ref.ownershipGeneration ?? ref.sessionId
+    // A retained reference can outlive its registry record. Do not interrupt an
+    // execution that has since been acquired by a different owner generation.
+    const successor = [...registry.values()].find(current => {
+      if ((current.ownershipGeneration ?? current.sessionId) === generation) return false
+      return current.sessionId === ref.sessionId || (ref.provider === 'codex'
+        && current.engine === 'codex' && current.codexThreadId === ref.codexThreadId
+        && (current.codexHomeName ?? current.tmuxName) === ref.codexHomeName)
+    })
+    if (successor) return { status: 'terminal' } // the old ownership is superseded
+    try {
+      const result = await this.adapters[ref.provider].retireExecution(ref)
+      if (info) {
+        await this.kill(info, reason)
+        return { status: 'terminal' }
+      }
+      return result.status === 'terminal'
+        ? result : { status: 'pending', journaled: true, reason: result.reason }
+    } catch (err) {
+      return { status: 'pending', journaled: true, reason: String(err) }
+    }
+  }
+
+  async replayPendingRetirements(): Promise<number> {
+    let completed = 0
+    for (const entry of listPendingRetirements()) {
+      if ((await this.retire(entry, entry.reason)).status === 'terminal') completed++
+    }
+    return completed
+  }
 
   async resume(provider: ProviderId, input: ProviderRecoveryInput): Promise<(SpawnResult & { bridgeOrphan?: boolean }) | null> {
     if (!this.adapters[provider].capabilities.nativeResume) return null

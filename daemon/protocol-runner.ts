@@ -1,6 +1,6 @@
 import { gateway } from './config.js'
 import { registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas } from './sessions.js'
-import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
+import { doSpawnSession as _doSpawnSession, killSession as _killSession, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume, protocolResumeRef, type ProtocolResumeRef } from './auto-resume.js'
 import { isAlive, safeSend, getContextPercent, type StatusLineState } from './util.js'
@@ -14,14 +14,14 @@ import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import type { Modifier, SeedModifier } from './modifiers.js'
-import { providerFor, type ProviderExecutionRef } from './session-provider.js'
-import { completePendingRetirement, listPendingRetirements, recordPendingRetirement } from './retirement-journal.js'
+import type { ProviderExecutionRef } from './engines/engine-adapter.js'
+import { sessionRuntime } from './session-runtime.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
 let killSession = _killSession
-const defaultInterruptExecution = (ref: ProviderExecutionRef) => providerFor(ref.provider).interruptExecution(ref)
-let interruptExecution = defaultInterruptExecution
+const defaultRetireSession = sessionRuntime.retire.bind(sessionRuntime)
+let retireSession = defaultRetireSession
 
 // ---------------------------------------------------------------------------
 // Run state
@@ -72,7 +72,6 @@ const threadToRun = new Map<string, string>()
 const sessionToRun = new Map<string, string>()
 const transitioningRuns = new Set<string>()
 const cancellingRuns = new Set<string>()
-const participantRetirements = new Map<string, Promise<boolean>>()
 
 // ---------------------------------------------------------------------------
 // Completion event bus
@@ -298,7 +297,7 @@ function clearProtocolTools(run: ProtocolRun): void {
 function registerParticipant(run: ProtocolRun, role: string, sessionId: string): void {
   run.participants.set(role, sessionId)
   const info = registry.get(sessionId)
-  if (info) run.participantExecutions.set(role, providerFor(info.engine).executionRef(info))
+  if (info) run.participantExecutions.set(role, sessionRuntime.executionRef(info))
   run.sessionToRole.set(sessionId, role)
   sessionToRun.set(sessionId, run.id)
   setProtocolTools(run, sessionId)
@@ -309,42 +308,11 @@ async function retireParticipant(run: ProtocolRun, role: string, sessionId: stri
   if (run.retiredParticipants.has(sessionId)) return
   const info = registry.get(sessionId)
   const ref = info
-    ? providerFor(info.engine).executionRef(info)
+    ? sessionRuntime.executionRef(info)
     : run.participantExecutions?.get(role)
-  const generation = ref?.ownershipGeneration ?? sessionId
-  const existingRetirement = participantRetirements.get(generation)
-  if (existingRetirement) {
-    if (await existingRetirement) run.retiredParticipants.add(sessionId)
-    return
-  }
-  if (ref) recordPendingRetirement(ref, generation, reason)
-  const retirement = (async () => {
-    let terminal = ref ? await interruptExecution(ref) : false
-    if (info && !killsInProgress.has(sessionId)) {
-      try { await killSession(info, reason); terminal = true }
-      catch (err) { process.stderr.write(`daemon: participant retirement failed for ${sessionId}: ${err}\n`) }
-    }
-    return terminal
-  })()
-  participantRetirements.set(generation, retirement)
-  let terminal = false
-  try { terminal = await retirement }
-  finally { participantRetirements.delete(generation) }
-  if (terminal) {
-    completePendingRetirement(generation)
+  if (ref && (await retireSession(ref, reason)).status === 'terminal') {
     run.retiredParticipants.add(sessionId)
   }
-}
-
-export async function replayPendingRetirements(): Promise<number> {
-  let completed = 0
-  for (const entry of listPendingRetirements()) {
-    if (await interruptExecution(entry)) {
-      completePendingRetirement(entry.ownershipGeneration)
-      completed++
-    }
-  }
-  return completed
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,17 +1440,17 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification, startKeepalive, spawnRole,
-      setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession; interruptExecution?: typeof defaultInterruptExecution }) {
+      setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession; retireSession?: typeof defaultRetireSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
         if (overrides.killSession) killSession = overrides.killSession
-        if (overrides.interruptExecution) interruptExecution = overrides.interruptExecution
+        if (overrides.retireSession) retireSession = overrides.retireSession
       },
       resetLifecycle() {
         doSpawnSession = _doSpawnSession
         waitForBridge = _waitForBridge
         killSession = _killSession
-        interruptExecution = defaultInterruptExecution
+        retireSession = defaultRetireSession
       },
     } as const
   : undefined
