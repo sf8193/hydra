@@ -22,6 +22,9 @@ import { join, dirname } from 'path'
 import { randomUUID } from 'crypto'
 import { readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
+
+import { ToolsWaiterSet, type ToolsWaiter } from './shared/tools-waiters.js'
+
 // Resolve daemon socket path. Priority:
 // 1. DAEMON_SOCK env var (explicit override — needed when multiple daemons share a plugin cache)
 // 2. daemon-{platform}.json next to this bridge (platform-keyed — no race when two daemons share a plugin cache)
@@ -121,8 +124,9 @@ let socketReady = false
 let dynamicTools: Array<Record<string, unknown>> | null = null
 let sessionMetadata: Record<string, unknown> | null = null
 
-// Pending tools_request callbacks — resolved by tools_update or tools_response
-let pendingToolsResolve: ((tools: Array<Record<string, unknown>>) => void) | null = null
+// Every in-flight tools/list waits here. See ToolsWaiterSet for why this cannot
+// be a single slot.
+const pendingToolsWaiters = new ToolsWaiterSet<Array<Record<string, unknown>>>()
 
 // ── Tool refresh fallback ────────────────────────────────────────────
 // Notifications from the daemon often coincide with phase transitions that
@@ -245,10 +249,7 @@ function handleDaemonMessage(msg: Record<string, unknown>): void {
       process.stderr.write(`bridge: ← daemon tools_update received: ${tools?.length ?? 0} tools (was ${prevCount}) ts=${new Date().toISOString()}\n`)
       if (tools) {
         dynamicTools = tools
-        if (pendingToolsResolve) {
-          pendingToolsResolve(tools)
-          pendingToolsResolve = null
-        }
+        pendingToolsWaiters.settleAll(tools)
         mcp.notification({ method: 'notifications/tools/list_changed' }).then(() => {
           process.stderr.write(`bridge: → CC notifications/tools/list_changed delivered ts=${new Date().toISOString()} tools=${tools.length}\n`)
         }).catch(err => {
@@ -393,14 +394,10 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => {
   if (socketReady) {
     try {
       const fresh = await new Promise<Array<Record<string, unknown>> | null>(resolve => {
-        pendingToolsResolve = resolve
+        const waiter: ToolsWaiter<Array<Record<string, unknown>>> = tools => resolve(tools)
+        pendingToolsWaiters.add(waiter)
         sendToSocket({ type: 'request_tools' })
-        setTimeout(() => {
-          if (pendingToolsResolve === resolve) {
-            pendingToolsResolve = null
-            resolve(null)
-          }
-        }, 2_000)
+        setTimeout(() => pendingToolsWaiters.timeout(waiter), 2_000)
       })
       if (fresh) {
         dynamicTools = fresh
