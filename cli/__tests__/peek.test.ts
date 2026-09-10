@@ -9,7 +9,7 @@ mock.module('child_process', () => ({
 }))
 
 // Mock helpers to avoid real socket/tmux calls
-const mockSendRequest = mock(async () => ({ ok: true, data: [] }))
+const mockSendRequest = mock(async () => ({ ok: true, data: [] as Array<Record<string, string>> }))
 const mockTmuxExists = mock(() => true)
 const mockTmuxKill = mock(() => {})
 mock.module('../helpers.js', () => ({
