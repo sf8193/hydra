@@ -1,7 +1,8 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
 import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
+import { registry } from '../sessions.js'
 
 let origStderrWrite: typeof process.stderr.write
 
@@ -505,5 +506,84 @@ describe('protocol runner — health monitor', () => {
   test('idle thresholds are 5 min (nudge) and 10 min (escalate)', () => {
     expect(__test!.IDLE_NUDGE_MS).toBe(5 * 60 * 1000)
     expect(__test!.IDLE_ESCALATE_MS).toBe(10 * 60 * 1000)
+  })
+})
+
+describe('health monitor — callback behavior', () => {
+  const fakeAdapter = (alive: boolean) => ({ isAlive: async () => alive, usage: () => null }) as any
+
+  function setupSession(sessionId: string, overrides: Record<string, unknown> = {}) {
+    registry.set(sessionId, {
+      sessionId, topic: 'test', threadId: 'test-thread',
+      createdAt: Date.now(), lastActive: Date.now(),
+      tmuxName: sessionId, listening: false, engine: 'claude' as const,
+      sessionType: 'thread_guest' as const, turnState: 'idle',
+      adapter: fakeAdapter(true),
+      ...overrides,
+    })
+  }
+
+  afterEach(() => {
+    registry.delete('test-critic')
+    registry.delete('test-owner')
+    transport.messageQueues.clear()
+  })
+
+  test('dead session triggers onRunDisconnect', async () => {
+    const run = createTestRun()
+    setupSession('test-critic', { adapter: fakeAdapter(false) })
+    setupSession('test-owner', { adapter: fakeAdapter(true) })
+    transport.bridges.delete('test-critic')
+
+    await __test!.runHealthCheck(run as any)
+
+    expect(run.disconnectTimers.has('test-critic') || run.phase !== 'critic_turn').toBe(true)
+  })
+
+  test('working session is not nudged', async () => {
+    const run = createTestRun()
+    setupSession('test-critic', { turnState: 'working', lastActive: Date.now() - 6 * 60 * 1000, adapter: fakeAdapter(true) })
+    setupSession('test-owner')
+    transport.bridges.set('test-critic', { sessionId: 'test-critic', socket: {} as any, buf: '' })
+
+    await __test!.runHealthCheck(run as any)
+
+    expect(run._nudged).toBeFalsy()
+    expect(run._escalated).toBeFalsy()
+  })
+
+  test('idle session receives nudge after 5 minutes', async () => {
+    const run = createTestRun()
+    setupSession('test-critic', { lastActive: Date.now() - 6 * 60 * 1000, adapter: fakeAdapter(true) })
+    setupSession('test-owner')
+    transport.bridges.set('test-critic', { sessionId: 'test-critic', socket: {} as any, buf: '' })
+
+    await __test!.runHealthCheck(run as any)
+
+    expect(run._nudged).toBe(true)
+  })
+
+  test('idle session receives escalation after 10 minutes', async () => {
+    const run = createTestRun()
+    setupSession('test-critic', { lastActive: Date.now() - 11 * 60 * 1000, adapter: fakeAdapter(true) })
+    setupSession('test-owner')
+    transport.bridges.set('test-critic', { sessionId: 'test-critic', socket: {} as any, buf: '' })
+
+    await __test!.runHealthCheck(run as any)
+
+    expect(run._escalated).toBe(true)
+  })
+
+  test('bridge flap does not suppress idle escalation', async () => {
+    const run = createTestRun()
+    run._bridgeEscalated = true
+    setupSession('test-critic', { lastActive: Date.now() - 11 * 60 * 1000, adapter: fakeAdapter(true) })
+    setupSession('test-owner')
+    transport.bridges.set('test-critic', { sessionId: 'test-critic', socket: {} as any, buf: '' })
+
+    await __test!.runHealthCheck(run as any)
+
+    expect(run._escalated).toBe(true)
+    expect(run._bridgeEscalated).toBe(true)
   })
 })

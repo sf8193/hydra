@@ -852,13 +852,7 @@ function clearPhaseTimers(run: ProtocolRun): void {
   if (run._healthMonitor) { clearInterval(run._healthMonitor); run._healthMonitor = undefined }
 }
 
-function startHealthMonitor(run: ProtocolRun): void {
-  if (run._healthMonitor) { clearInterval(run._healthMonitor); run._healthMonitor = undefined }
-  run._nudged = false
-  run._escalated = false
-  run._bridgeEscalated = false
-
-  run._healthMonitor = setInterval(async () => {
+async function runHealthCheck(run: ProtocolRun): Promise<void> {
     if (isTerminal(run)) { clearInterval(run._healthMonitor!); run._healthMonitor = undefined; return }
 
     const actorRole = run.protocol.phases[run.phase]?.actor
@@ -920,7 +914,14 @@ function startHealthMonitor(run: ProtocolRun): void {
       notifyParticipant(run, actorSid, `[system] Checking in — are you still working? Use advance() when ready.`)
       process.stderr.write(`daemon: health: ${info.tmuxName} nudged — idle ${Math.round(idleMs / 60_000)}m\n`)
     }
-  }, HEALTH_CHECK_INTERVAL_MS)
+}
+
+function startHealthMonitor(run: ProtocolRun): void {
+  if (run._healthMonitor) { clearInterval(run._healthMonitor); run._healthMonitor = undefined }
+  run._nudged = false
+  run._escalated = false
+  run._bridgeEscalated = false
+  run._healthMonitor = setInterval(() => { void runHealthCheck(run) }, HEALTH_CHECK_INTERVAL_MS)
 }
 
 function clearTimers(run: ProtocolRun): void {
@@ -1461,7 +1462,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
 export const __test = process.env.NODE_ENV === 'test'
   ? {
-      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor,
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
