@@ -28,6 +28,7 @@ import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
 import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
 import { providerFor } from './session-provider.js'
+import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
@@ -506,10 +507,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
     // "respawn" / "respawn: topic" / "respawn +f:" / "respawn +factory: topic"
     // — the optional `+mods` group applies a template (e.g. factory) to the respawn.
-    const respawnMatch = msg.content.match(/^(?:respawn|\/respawn)(?:\s+((?:\+\w+\s*)+))?(?::\s*([\s\S]*))?$/i)
+    const respawnMatch = msg.content.match(RESPAWN_RE)
     if (respawnMatch) {
-      const respawnModNames = respawnMatch[1] ? [...respawnMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase()) : []
-      const respawnTopic = respawnMatch[2]?.trim() || undefined
+      const selection = resolveProtocolModel(respawnMatch[1], msg.channelId, msg.id)
+      if (selection === false) return
+      const respawnModNames = respawnMatch[2] ? [...respawnMatch[2].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase()) : []
+      const respawnTopic = respawnMatch[3]?.trim() || undefined
       if (respawnModNames.length > 0) {
         const { template: respawnTemplateMod, ignored } = partitionSpawnModifiers(respawnModNames)
         if (!respawnTemplateMod) {
@@ -519,9 +522,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
         if (ignored.length > 0) {
           void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier (\`+f\`/\`+factory\`)._`, { replyTo: msg.id }).catch(() => {})
         }
-        void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName)
+        void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName, selection)
       } else {
-        void handleRespawnIntercept(msg, respawnTopic)
+        void handleRespawnIntercept(msg, respawnTopic, undefined, selection)
       }
       return
     }

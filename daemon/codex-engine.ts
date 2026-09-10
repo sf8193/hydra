@@ -89,20 +89,31 @@ export class CodexEngine extends EventEmitter {
     const result = await this.request(conn, 'thread/start', model ? { model } : {})
     conn.threadId = result.thread?.id
     if (!conn.threadId) throw new Error('codex-engine: thread/start did not return a thread ID')
-    return { threadId: conn.threadId, model }
+    return { threadId: conn.threadId, model: result.model ?? model }
   }
 
-  async connectAndResume(sessionId: string, socketPath: string, existingThreadId: string): Promise<void> {
+  async connectAndResume(sessionId: string, socketPath: string, existingThreadId: string): Promise<{ model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath, existingThreadId)
-    await this.request(conn, 'thread/resume', { threadId: existingThreadId })
+    const result = await this.request(conn, 'thread/resume', { threadId: existingThreadId })
+    // Completion can occur while the socket is absent. Reconcile against the
+    // resumed thread instead of waiting forever for an event we already missed.
+    const turns = result.thread?.turns
+    if (Array.isArray(turns)) {
+      conn.currentTurnId = turns.findLast((turn: any) => turn.status === 'inProgress')?.id ?? null
+      if (conn.currentTurnId) this.resetWatchdog(conn)
+      else if (conn.deferredTurnQueue.length && !this.scheduling.get(sessionId)?.fenced) {
+        this.startDeferredTurn(conn, conn.deferredTurnQueue.shift()!)
+      }
+    }
+    return { model: result.model }
   }
 
-  async connectAndFork(sessionId: string, socketPath: string, parentThreadId: string): Promise<{ threadId: string }> {
+  async connectAndFork(sessionId: string, socketPath: string, parentThreadId: string, model?: string): Promise<{ threadId: string; model?: string }> {
     const conn = await this.connectBase(sessionId, socketPath)
-    const result = await this.request(conn, 'thread/fork', { threadId: parentThreadId })
+    const result = await this.request(conn, 'thread/fork', { threadId: parentThreadId, ...(model ? { model } : {}) })
     conn.threadId = result.thread?.id
     if (!conn.threadId) throw new Error('codex-engine: thread/fork did not return a thread ID')
-    return { threadId: conn.threadId }
+    return { threadId: conn.threadId, model: result.model }
   }
 
   private async connectBase(sessionId: string, socketPath: string, threadId?: string): Promise<CodexConn> {
@@ -133,7 +144,7 @@ export class CodexEngine extends EventEmitter {
       this.send(conn, { method: 'initialized' })
       return conn
     } catch (err) {
-      this.connections.delete(sessionId)
+      if (this.connections.get(sessionId) === conn) this.connections.delete(sessionId)
       try { ws.terminate() } catch {}
       throw err
     }
@@ -238,8 +249,8 @@ export class CodexEngine extends EventEmitter {
     for (const timer of conn.retryTimers) clearTimeout(timer)
     conn.retryTimers.clear()
     this.rejectAllPending(conn, 'disconnected')
-    try { conn.ws.close() } catch {}
     this.connections.delete(sessionId)
+    try { conn.ws.close() } catch {}
   }
 
   isConnected(sessionId: string): boolean {

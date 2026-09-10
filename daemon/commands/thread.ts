@@ -17,6 +17,15 @@ import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 import { canNativeFork } from '../fork-strategy.js'
 import { providerFor, providerForEntry } from '../session-provider.js'
+import { recoveryEntry, recoveryModel } from '../recovery-selection.js'
+import { codexEngine } from '../codex-bootstrap.js'
+import { codexSocketPath } from '../codex-engine.js'
+
+async function executionAlive(info: NonNullable<ReturnType<typeof registry.get>>): Promise<boolean> {
+  if (info.engine !== 'codex') return tmuxHasSession(info.tmuxName)
+  return transport.has(info.sessionId)
+    || await codexEngine.isSocketLive(codexSocketPath(info.codexHomeName ?? info.tmuxName))
+}
 
 export async function handleThreadKillIntercept(
   msg: InboundMessage,
@@ -165,6 +174,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       await gateway.send(msg.channelId, `⚠️ Fork failed — spawning fresh session that will read the thread for context.`, { replyTo: msg.id })
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
         resurrectFrom: parentName,
+        promptPrefix: `Read the parent thread for context using fetch_messages(channel="${info.threadId}", limit=50), then continue in your own thread.`,
         model: forkModel,
         engine: targetEngine,
         ephemeral: opts?.ephemeral,
@@ -262,20 +272,25 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   if (liveSessionId) {
     const liveInfo = registry.get(liveSessionId)
     if (liveInfo) {
-      if (tmuxHasSession(liveInfo.tmuxName) && !(liveInfo.engine === 'codex' && !transport.has(liveInfo.sessionId))) {
+      if (await executionAlive(liveInfo)) {
+        const surfaceReady = providerFor(liveInfo.engine).ensureInteractiveSurface(liveInfo)
         void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
-        try { await gateway.send(msg.channelId, `Session **${liveInfo.tmuxName}** is already running.`, { replyTo: msg.id }) } catch {}
+        try { await gateway.send(msg.channelId, `Session **${liveInfo.tmuxName}** is already running.${surfaceReady ? '' : ' Its interactive surface is unavailable; the server is alive and may still be reconnecting.'}`, { replyTo: msg.id }) } catch {}
         return
+      }
+      if (liveInfo.engine === 'codex') {
+        liveInfo.deadAt = Date.now()
+        registry.persist()
       }
     }
   }
 
   // Thread is detached — find claudeSessionId from last session in history
-  const lastSession = thread.sessionHistory[thread.sessionHistory.length - 1]
+  const lastSession = recoveryEntry(thread.sessionHistory)
   const lastInfo = registry.get(lastSession?.sessionId ?? '')
   const claudeSessionId = lastSession?.claudeSessionId
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
-  const deadModel = lastSession?.model ?? lastInfo?.sessionMetadata?.model
+  const deadModel = recoveryModel(lastSession?.model ?? lastInfo?.sessionMetadata?.model)
   const provider = lastInfo ? providerFor(lastInfo.engine) : providerForEntry(lastSession)
 
   void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
@@ -317,7 +332,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   }
 }
 
-export async function handleRespawnIntercept(msg: InboundMessage, topic?: string, templateName?: string): Promise<void> {
+export async function handleRespawnIntercept(msg: InboundMessage, topic?: string, templateName?: string, selection?: { model: string; engine: 'claude' | 'codex' }): Promise<void> {
   if (!msg.isThread) {
     await reportError(msg.channelId, msg.id, 'respawn', 'must be used in a thread')
     return
@@ -339,7 +354,7 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   if (respawnLiveId) {
     const liveInfo = registry.get(respawnLiveId)
     if (liveInfo) {
-      if (tmuxHasSession(liveInfo.tmuxName)) {
+      if (await executionAlive(liveInfo)) {
         await reportError(msg.channelId, msg.id, 'respawn', `thread has a live session (**${liveInfo.tmuxName}**)`, 'Use `kill` first, or `spawn:` for a new thread.')
         return
       }
@@ -348,15 +363,17 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
 
   void gateway.react(msg.channelId, msg.id, '🔁').catch(() => {})
 
-  const lastSession = thread?.sessionHistory[thread.sessionHistory.length - 1]
+  const lastSession = recoveryEntry(thread?.sessionHistory ?? [])
   const resolvedTopic = topic || thread?.topic || 'respawned session'
   const resurrectFrom = lastSession?.tmuxName
-  const deadModel = lastSession?.model ?? registry.get(lastSession?.sessionId ?? '')?.sessionMetadata?.model
+  const lastInfo = registry.get(lastSession?.sessionId ?? '')
+  const provider = lastInfo ? providerFor(lastInfo.engine) : providerForEntry(lastSession)
+  const deadModel = selection?.model ?? recoveryModel(lastSession?.model ?? lastInfo?.sessionMetadata?.model)
 
   // A template respawn layers the template's prompt/tool settings onto the
   // resurrect spawn. `trigger` is kept so the session's origin still reads as the
   // template (e.g. `factory:`) in the spawn announce + `list sessions`.
-  const extraOpts = template ? buildTemplateSpawnOpts(templateName!, template) : undefined
+  const extraOpts = { ...(template ? buildTemplateSpawnOpts(templateName!, template) : {}), engine: selection?.engine ?? provider.id }
 
   const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel, extraOpts)
   if (result) {

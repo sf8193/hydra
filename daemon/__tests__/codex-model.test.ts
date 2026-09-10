@@ -2,6 +2,67 @@ import { describe, expect, test } from 'bun:test'
 import { CodexEngine, parseCodexContextUsage, selectDefaultCodexModel } from '../codex-engine.js'
 import { EventEmitter } from 'events'
 
+describe('Codex model continuity', () => {
+  test('an explicit fork model reaches the native fork request', async () => {
+    const engine = new CodexEngine() as any
+    engine.connectBase = async () => ({ threadId: null })
+    engine.request = async (_conn: any, method: string, params: any) => {
+      expect(method).toBe('thread/fork')
+      expect(params).toEqual({ threadId: 'parent', model: 'chosen-model' })
+      return { thread: { id: 'child' }, model: 'chosen-model' }
+    }
+    expect(await engine.connectAndFork('s', 'socket', 'parent', 'chosen-model'))
+      .toEqual({ threadId: 'child', model: 'chosen-model' })
+  })
+
+  test('explicit disconnect cannot trigger automatic reconnect through a synchronous close', () => {
+    const engine = new CodexEngine() as any
+    const ws = Object.assign(new EventEmitter(), { close() { this.emit('close') } })
+    const conn = { ws, pendingRequests: new Map(), retryTimers: new Set(), turnWatchdog: null }
+    engine.connections.set('s', conn)
+    engine.attachWsHandlers(ws, conn, 's')
+    let disconnected = 0
+    engine.on('disconnected', () => disconnected++)
+    engine.disconnect('s')
+    expect(disconnected).toBe(0)
+    expect(engine.isConnected('s')).toBe(false)
+  })
+  test('resuming after a missed completion drains queued work once', async () => {
+    const engine = new CodexEngine() as any
+    const conn = { currentTurnId: null, deferredTurnQueue: ['next-round'] }
+    engine.connectBase = async () => conn
+    engine.request = async () => ({ thread: { turns: [{ id: 'previous', status: 'completed' }] } })
+    const started: string[] = []
+    engine.startDeferredTurn = (_conn: any, text: string) => started.push(text)
+    await engine.connectAndResume('s', 'socket', 'parent')
+    expect(started).toEqual(['next-round'])
+    expect(conn.deferredTurnQueue).toEqual([])
+  })
+
+  test('resuming an active turn waits before delivering queued work', async () => {
+    const engine = new CodexEngine() as any
+    const conn = { currentTurnId: null, deferredTurnQueue: ['next-round'] }
+    engine.connectBase = async () => conn
+    engine.request = async () => ({ thread: { turns: [{ id: 'active', status: 'inProgress' }] } })
+    engine.resetWatchdog = () => {}
+    engine.startDeferredTurn = () => { throw new Error('must wait for completion') }
+    await engine.connectAndResume('s', 'socket', 'parent')
+    expect(conn.currentTurnId).toBe('active')
+    expect(conn.deferredTurnQueue).toEqual(['next-round'])
+  })
+
+  test('start, resume and fork use the server-resolved model', async () => {
+    const engine = new CodexEngine() as any
+    engine.connectBase = async () => ({ threadId: null })
+    engine.request = async (_conn: any, method: string) => ({
+      thread: { id: method === 'thread/fork' ? 'child' : 'parent' }, model: 'resolved-model',
+    })
+    expect(await engine.connect('s', 'socket', 'requested-model')).toEqual({ threadId: 'parent', model: 'resolved-model' })
+    expect(await engine.connectAndResume('s', 'socket', 'parent')).toEqual({ model: 'resolved-model' })
+    expect(await engine.connectAndFork('s', 'socket', 'parent')).toEqual({ threadId: 'child', model: 'resolved-model' })
+  })
+})
+
 describe('selectDefaultCodexModel', () => {
   test('returns the model marked as default', () => {
     expect(selectDefaultCodexModel({ data: [
