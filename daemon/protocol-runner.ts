@@ -1516,6 +1516,7 @@ function runnerHooks(name: string, protoName: string) {
 runnerHooks('review', 'review')
 runnerHooks('build_v2', 'build')
 runnerHooks('spike_v2', 'spike')
+runnerHooks('delegated_build', 'delegated-build')
 
 // Protocol context for autopsy — joins session to protocol state
 export function getProtocolContext(sessionId: string): { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null {
