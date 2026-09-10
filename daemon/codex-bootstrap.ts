@@ -82,44 +82,10 @@ export async function reconnectCodexSessions(): Promise<void> {
 
   let reconnected = 0
   for (const info of codexSessions) {
-    if (!tmuxHasSession(info.tmuxName)) {
-      info.deadAt = Date.now()
-      continue
-    }
-    const sockPath = codexSocketPath(info.tmuxName)
-    let connected = false
-
-    // Strategy 1: resume existing thread (preserves conversation)
-    if (info.codexThreadId) {
-      try {
-        await codexEngine.connectAndResume(info.sessionId, sockPath, info.codexThreadId)
-        connected = true
-        process.stderr.write(`codex-bootstrap: reconnected ${info.tmuxName} (resumed)\n`)
-      } catch (err: any) {
-        process.stderr.write(`codex-bootstrap: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
-        try { codexEngine.disconnect(info.sessionId) } catch {}
-        await new Promise(r => setTimeout(r, 2000)) // cooldown before fresh connect
-      }
-    }
-
-    // Strategy 2: fresh thread (resume failed or no threadId)
-    if (!connected) {
-      const hadPriorThread = !!info.codexThreadId
-      try {
-        const result = await codexEngine.connect(info.sessionId, sockPath)
-        info.codexThreadId = result.threadId
-        connected = true
-        if (hadPriorThread) {
-          void safeSend(info.threadId, `\u26a0\ufe0f Session resumed but conversation history was lost. The agent is starting fresh.`)
-        }
-        process.stderr.write(`codex-bootstrap: reconnected ${info.tmuxName} (new thread)\n`)
-      } catch (err: any) {
-        process.stderr.write(`codex-bootstrap: fresh connect failed for ${info.tmuxName}: ${err?.message || err}\n`)
-        try { codexEngine.disconnect(info.sessionId) } catch {}
-      }
-    }
-
-    if (!connected) {
+    const ok = info.adapter
+      ? await info.adapter.reconnect(info)
+      : false
+    if (!ok) {
       info.deadAt = Date.now()
     } else {
       reconnected++

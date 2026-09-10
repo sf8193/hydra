@@ -1,7 +1,9 @@
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { gateway } from './config.js'
-import { tmuxHasSession, getContextPercent } from './util.js'
+import { tmuxHasSession } from './util.js'
+import { formatContextPercent } from './engines/engine-adapter.js'
+import { resolveEngine } from './engines/instances.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { discoverClaudeSessionId } from './session-lifecycle.js'
 
@@ -71,7 +73,7 @@ export function startSessionHealthPoll(): void {
       }
 
       // Context alert
-      const pct = getContextPercent(info.tmuxName)
+      const pct = formatContextPercent(info.adapter ?? resolveEngine(info.engine), info)
       if (pct === '?') continue
       const num = parseInt(pct)
       if (num >= CONTEXT_ALERT_THRESHOLD && !contextAlerted.has(info.sessionId)) {

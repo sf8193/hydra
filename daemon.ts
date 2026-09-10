@@ -39,7 +39,8 @@ process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG } from './daemon/plugin-manifest.js'
-import { registry, threadRegistry, sessionEmoji } from './daemon/sessions.js'
+import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
+import { resolveEngine } from './daemon/engines/instances.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
@@ -48,6 +49,10 @@ import { announceRestartComplete } from './daemon/commands/global.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
 
 threadRegistry.boot(registry)
+reattachAdapters(resolveEngine)
+for (const info of registry.values()) {
+  if (!info.adapter) throw new Error(`boot: session ${info.sessionId} (${info.tmuxName}) has no adapter after reattach`)
+}
 
 // ---------------------------------------------------------------------------
 // Singleton enforcement — socket probe (more reliable than PID-only check).

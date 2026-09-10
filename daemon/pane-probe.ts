@@ -617,6 +617,9 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
   for (const info of io.getSessions()) {
     if (info.deadAt) continue
+    // Skip engines that don't support pane probing yet — avoids wasted tmux captures.
+    // When Codex pane probing is implemented in the adapter, remove this guard —
+    // the adapter dispatch at line ~660 (detectBlockingState) already handles it.
     if (info.engine === 'codex') continue
     targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
   }
@@ -645,7 +648,10 @@ export async function probeAllSessions(now?: number): Promise<void> {
       continue
     }
 
-    const detected = detectBlockingState(tailText)
+    const sessionInfo = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
+    const detected = sessionInfo?.adapter
+      ? sessionInfo.adapter.detectBlockingState(sessionInfo, tailText)
+      : detectBlockingState(tailText)
 
     if (!detected) {
       clearState(key, t, 'cleared') // no detection — genuine leave; reset latch
