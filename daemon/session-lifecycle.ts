@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto'
 import { execSync, execFileSync } from 'child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, cpSync, rmSync, symlinkSync } from 'fs'
-import { join, resolve } from 'path'
+import { writeFileSync, readFileSync, existsSync } from 'fs'
+import { join } from 'path'
 import { homedir } from 'os'
-import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
+import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
@@ -13,7 +13,6 @@ import { extractPhaseBudget } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
 import type { SessionType } from '../shared/constants.js'
-import { withRaisedFdLimit } from '../shared/tmux-env.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -26,7 +25,12 @@ import { classifyResumeFailure } from './resume-health.js'
 import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
 import { configureSessionProviders, providerFor } from './session-provider.js'
 import { hasPendingRetirementForHome } from './retirement-journal.js'
-import { codexHomeDir, startCodexAppServer, stopCodexAppServer } from './codex-process.js'
+import { stopCodexAppServer } from './codex-process.js'
+import { ClaudeAdapter } from './engines/claude-adapter.js'
+import { CodexAdapter } from './engines/codex-adapter.js'
+
+const claudeAdapter = new ClaudeAdapter()
+const codexAdapter = new CodexAdapter(codexEngine)
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -114,60 +118,8 @@ export async function backfillAnchorChannelIds(): Promise<void> {
   process.stderr.write(`daemon: backfill: ${filled} filled, ${failed} failed, ${missing.length - filled - failed} skipped\n`)
 }
 
-// Per-session pane logfile — `tmux pipe-pane` captures each spawn's output so a
-// crash still leaves it on disk.
-
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
-
-// ---------------------------------------------------------------------------
-// Spawn env whitelist — explicit construction, not ambient inheritance
-// ---------------------------------------------------------------------------
-// Each env var the byte carries gets a conscious routing decision here:
-//   pass-through: shared between byte and sessions (platform, socket, config)
-//   override:     session-specific identity
-//   strip:        byte-only (HYDRA_ROLE) — prevented from leaking into sessions
-
-function buildSpawnEnv(sessionId: string, tmuxName: string): string[] {
-  return [
-    `export HYDRA_SESSION_ID=${shq(sessionId)}`,
-    `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
-    `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
-    `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
-    `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-    `unset HYDRA_ROLE`, // prevent spawned session from inheriting byte's HYDRA_ROLE=main
-  ]
-}
-
-// ---------------------------------------------------------------------------
-// Fork CWD resolution — exported for testing
-// ---------------------------------------------------------------------------
-
-/**
- * When forking into a worktree, the process must start in the PM's original
- * CWD (spawnCwd) so that `--resume --fork-session` can locate the conversation
- * file at ~/.claude/projects/<cwd>/<sessionId>.jsonl. For all other spawn
- * forms, use effectiveCwd (which may be the worktree path itself).
- */
-export function resolveForkSpawnCwd(
-  isFork: boolean,
-  hasWorktree: boolean,
-  spawnCwd: string,
-  effectiveCwd: string,
-): string {
-  return (isFork && hasWorktree) ? spawnCwd : effectiveCwd
-}
-
-/**
- * Append worktree location to the prompt for fork+worktree builders.
- * The builder starts from spawnCwd (for --resume CWD compatibility), so it
- * needs an explicit path to cd into. Returns '' for all other spawn forms.
- */
-export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string | undefined): string {
-  if (isFork && worktreePath) {
-    return `\n\nWORKTREE: Your isolated worktree is at ${worktreePath}. cd there before making any code changes.`
-  }
-  return ''
-}
+// Compatibility exports while callers migrate to the runtime.
+export { resolveForkSpawnCwd, buildWorktreePromptAppend } from './engines/claude-adapter.js'
 
 // ---------------------------------------------------------------------------
 // Listen state resolution: thread override → channel group → global → false
@@ -347,101 +299,6 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     killsInProgress.delete(info.sessionId)
     throw err
   }
-}
-
-// ---------------------------------------------------------------------------
-// Spawn helper
-// ---------------------------------------------------------------------------
-
-/** Unified session creation -- spawn, fork, and handoff all flow through here via SpawnOpts. */
-// ---------------------------------------------------------------------------
-// Codex spawn helper — durable app-server + engine connect
-// ---------------------------------------------------------------------------
-
-async function spawnCodexSession(p: {
-  tmuxName: string; sessionId: string; effectiveCwd: string;
-  model?: string; forkFromThread?: string; forkSourceHomeName?: string; resumeThread?: string; codexHomeName?: string;
-}): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string; model?: string }> {
-  const codexHomeName = p.codexHomeName ?? p.tmuxName
-  const sockPath = codexSocketPath(codexHomeName)
-  const codexHome = codexHomeDir(codexHomeName)
-  const mcpServerPath = join(new URL('.', import.meta.url).pathname, 'codex-mcp-server.ts')
-  // A native fork needs the parent's persisted rollout, but each Hydra session
-  // must keep its own app-server socket/home. Seed only the rollout store into
-  // the fresh destination home rather than sharing a live CODEX_HOME.
-  // Verify external ownership before touching a recyclable destination home.
-  if (await codexEngine.isSocketLive(sockPath)) {
-    throw new Error(`refusing to replace live codex app-server at ${sockPath}`)
-  }
-
-  if (p.forkFromThread && p.forkSourceHomeName && p.forkSourceHomeName !== codexHomeName) {
-    const sourceSessions = join(process.env.HOME!, '.codex', `hydra-${p.forkSourceHomeName}`, 'sessions')
-    const destinationSessions = join(codexHome, 'sessions')
-    if (!existsSync(sourceSessions)) throw new Error(`codex fork source rollouts not found in ${sourceSessions}`)
-    mkdirSync(codexHome, { recursive: true })
-    // The human-readable tmux name is recyclable. Refresh only its rollout
-    // store so a reused destination cannot fork from an obsolete snapshot.
-    rmSync(destinationSessions, { recursive: true, force: true })
-    cpSync(sourceSessions, destinationSessions, { recursive: true })
-  }
-
-  // Every Hydra agent owns exactly one app-server. A live socket means another
-  // owner still exists; a dead socket/pid are residue from a prior process.
-  stopCodexAppServer(codexHomeName)
-  try { unlinkSync(sockPath) } catch {}
-
-  mkdirSync(codexHome, { recursive: true, mode: 0o700 })
-  const authPath = join(codexHome, 'auth.json')
-  try { unlinkSync(authPath) } catch {}
-  symlinkSync(join(homedir(), '.codex', 'auth.json'), authPath)
-  const codexEnv = { ...process.env, CODEX_HOME: codexHome }
-  try {
-    try { execFileSync('codex', ['mcp', 'remove', 'hydra'], { env: codexEnv, stdio: 'ignore' }) } catch {}
-    execFileSync('codex', ['mcp', 'add', 'hydra', '--env', `DAEMON_SOCK=${SOCK_PATH}`, '--env', `HYDRA_SESSION_ID=${p.sessionId}`, '--', 'bun', mcpServerPath], { env: codexEnv, stdio: 'pipe' })
-  } catch (err) {
-    throw new Error(`failed to configure codex app-server: ${err instanceof Error ? err.message : err}`)
-  }
-
-  mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-  const spawnLogPath = join(SPAWN_LOGS_DIR, `${p.tmuxName}-${p.sessionId}.log`)
-  process.stderr.write(`daemon: codex spawning durable app-server for ${p.tmuxName}\n`)
-  startCodexAppServer({ homeName: codexHomeName, cwd: p.effectiveCwd, logPath: spawnLogPath, model: p.model })
-
-  // Connect to the app-server socket with retry
-  const start = Date.now()
-  let codexThreadId: string | null = null
-  let resolvedModel = p.model
-  let lastErr = ''
-  while (Date.now() - start < 15_000) {
-    try {
-      if (p.resumeThread) {
-        const r = await codexEngine.connectAndResume(p.sessionId, sockPath, p.resumeThread)
-        resolvedModel = r.model ?? resolvedModel
-        codexThreadId = p.resumeThread
-      } else if (p.forkFromThread) {
-        const r = await codexEngine.connectAndFork(p.sessionId, sockPath, p.forkFromThread, p.model)
-        codexThreadId = r.threadId
-        resolvedModel = r.model ?? resolvedModel
-      } else {
-        const r = await codexEngine.connect(p.sessionId, sockPath, p.model)
-        codexThreadId = r.threadId
-        resolvedModel = r.model
-      }
-      break
-    } catch (err: any) {
-      lastErr = err?.message || String(err)
-      try { codexEngine.disconnect(p.sessionId) } catch {}
-      await new Promise(r => setTimeout(r, 500))
-    }
-  }
-  if (!codexThreadId) {
-    process.stderr.write(`daemon: stopping codex app-server ${p.tmuxName} (startup timeout: ${lastErr})\n`)
-    stopCodexAppServer(codexHomeName)
-    throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
-  }
-  process.stderr.write(`daemon: codex connected for ${p.tmuxName}, thread=${codexThreadId}\n`)
-
-  return { sockPath, spawnLogPath, codexThreadId, model: resolvedModel }
 }
 
 // ---------------------------------------------------------------------------
@@ -680,7 +537,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
-  const channelFlag = `plugin:discord@claude-plugins-official`
   const spawnCwd = process.env.SPAWN_CWD
   if (!spawnCwd) throw new Error('SPAWN_CWD env var is required -- set it to the working directory for spawned sessions')
 
@@ -811,13 +667,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     registry.persist()
     opts?.beforeInitialTurn?.(sessionId)
 
-    let spawned: Awaited<ReturnType<typeof spawnCodexSession>>
+    let spawned: Awaited<ReturnType<CodexAdapter['spawn']>>
     try {
-      spawned = await spawnCodexSession({
-        tmuxName, sessionId, effectiveCwd, model: opts?.model, forkFromThread: opts?.forkFrom?.codexThreadId,
-        resumeThread: opts?.resumeCodex?.threadId,
-        codexHomeName: opts?.resumeCodex?.homeName,
-        forkSourceHomeName: opts?.forkFrom?.codexHomeName,
+      spawned = await codexAdapter.spawn({
+        sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model: opts?.model, prompt,
+        mode: opts?.resumeCodex
+          ? { kind: 'resume', source: { provider: 'codex', threadId: opts.resumeCodex.threadId, homeName: opts.resumeCodex.homeName } }
+          : opts?.forkFrom?.codexThreadId
+            ? { kind: 'fork', source: { provider: 'codex', threadId: opts.forkFrom.codexThreadId, homeName: opts.forkFrom.codexHomeName ?? tmuxName } }
+            : { kind: 'fresh' },
       })
     } catch (err) {
       registry.delete(sessionId)
@@ -826,7 +684,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       registry.persist()
       throw err
     }
-    const { spawnLogPath, codexThreadId, model: resolvedCodexModel } = spawned
+    const { spawnLogPath, model: resolvedCodexModel } = spawned
+    const codexThreadId = spawned.nativeIdentity!.threadId
     const displayedModel = resolvedCodexModel ?? provisionalModel
     const info = registry.get(sessionId)!
     // A failed connection attempt emits disconnected while this provisional
@@ -863,109 +722,18 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     return { name: tmuxName, sessionId, threadId: threadId!, url: url || '' }
   }
 
-  // For fork+worktree: tell the builder its exact worktree path via the prompt.
-  // (The process starts from spawnCwd for --resume CWD compatibility, so the
-  // builder can't infer its worktree from $PWD.)
-  const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
-  if (worktreeAppend) prompt += worktreeAppend
-
-  // Build claude command — fork adds --resume --fork-session, resume uses --resume without fork
-  let claudeArgs: string
-  let assignedClaudeSessionId: string | undefined
-  if (isFork) {
-    claudeArgs = [
-      `claude`,
-      `--resume ${shq(opts!.forkFrom!.claudeSessionId!)}`,
-      `--fork-session`,
-      `--model ${shq(model)}`,
-      `--channels ${shq(channelFlag)}`,
-      `--dangerously-skip-permissions`,
-      shq(prompt),
-    ].join(' ')
-  } else if (isResume) {
-    claudeArgs = [
-      `claude`,
-      `--resume ${shq(opts!.resumeFrom!)}`,
-      `--model ${shq(model)}`,
-      `--channels ${shq(channelFlag)}`,
-      `--dangerously-skip-permissions`,
-    ].join(' ')
-  } else {
-    assignedClaudeSessionId = randomUUID()
-    const disallowed = opts?.disallowedTools?.length ? ` --disallowedTools ${shq(opts.disallowedTools.join(','))}` : ''
-    const toolsFlag = opts?.tools?.length ? ` --tools ${shq(opts.tools.join(','))}` : ''
-    claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
-    if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
-    if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${opts!.tools!.length} tools, Edit/Write blocked)\n`)
-  }
-
-  const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
-  const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)
-  const exitFile = join(SPAWN_LOGS_DIR, `exit-${tmuxName}-${sessionId}.log`)
-  const writeExitMarker = [
-    `_HYDRA_EXIT_CODE=$?`,
-    `_HYDRA_EXIT_TS=$(date +%s)`,
-    `{ echo "exit_code=$_HYDRA_EXIT_CODE"`,
-    `echo "wall_clock=\${SECONDS}s"`,
-    `echo "exit_ts=$_HYDRA_EXIT_TS"`,
-    `echo "session_id=${sessionId}"`,
-    `echo "tmux_name=${tmuxName}"`,
-    `if [ $_HYDRA_EXIT_CODE -gt 128 ]; then echo "signal=$(( $_HYDRA_EXIT_CODE - 128 ))"; fi`,
-    `} > ${shq(exitFile)}`,
-  ].join('; ')
-  claudeArgs += ` --debug-file ${shq(debugLog)}`
-  const spawnCd = resolveForkSpawnCwd(isFork, !!worktreeTarget, spawnCwd, effectiveCwd)
-  if (isFork && worktreeTarget) {
-    process.stderr.write(`daemon: spawn ${tmuxName}: fork+worktree — using PM CWD ${spawnCwd} for fork (worktree ${effectiveCwd} in prompt)\n`)
-  }
-  const inner = [
-    `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
-    `cd ${shq(spawnCd)}`,
-    ...buildSpawnEnv(sessionId, tmuxName),
-    `${claudeArgs} 2>>${shq(stderrLog)}`,
-  ].join(' && ')
-
-  process.stderr.write(`daemon: spawn ${tmuxName}: running tmux new-session\n`)
-  process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
-
-  mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-  try {
-    execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, withRaisedFdLimit(inner)], { stdio: 'pipe' })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`daemon: spawn ${tmuxName}: execFileSync FAILED: ${msg}\n`)
-    throw new Error(`failed to spawn tmux session: ${msg}`)
-  }
-
-  // Verify the tmux session actually exists after creation
-  let tmuxConfirmedAlive = false
-  try {
-    execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
-    process.stderr.write(`daemon: spawn ${tmuxName}: tmux session confirmed alive\n`)
-    tmuxConfirmedAlive = true
-  } catch {
-    process.stderr.write(`daemon: spawn ${tmuxName}: WARNING -- tmux session died immediately after creation\n`)
-  }
-
-
-  // Best-effort: any failure is logged, never fatal to the spawn.
-  let spawnLogPath: string | undefined
-  if (tmuxConfirmedAlive) {
-    try {
-      // 0o700: the spawn logs are sensitive by construction (raw pane output).
-      // Assert it at the artifact, not only via STATE_DIR's mode.
-      mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-      const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
-      // Shell string is unavoidable here — `pipe-pane` runs its argument through a
-      // shell, so it can't be array-form execFileSync; the path is shq-quoted.
-      execFileSync('tmux', ['pipe-pane', '-o', '-t', tmuxName, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
-      spawnLogPath = logPath
-      process.stderr.write(`daemon: spawn ${tmuxName}: pane capture -> ${logPath}\n`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`daemon: spawn ${tmuxName}: pipe-pane capture setup FAILED (non-fatal): ${msg}\n`)
-    }
-  }
+  const launched = await claudeAdapter.spawn({
+    sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
+    worktreePath, forkFromOriginalCwd: !!worktreeTarget,
+    tools: opts?.tools, disallowedTools: opts?.disallowedTools,
+    mode: isFork
+      ? { kind: 'fork', source: { provider: 'claude', sessionId: opts!.forkFrom!.claudeSessionId! } }
+      : isResume
+        ? { kind: 'resume', source: { provider: 'claude', sessionId: opts!.resumeFrom! } }
+        : { kind: 'fresh' },
+  })
+  const assignedClaudeSessionId = launched.nativeIdentity?.sessionId
+  const { spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog, debugLogPath: debugLog } = launched
 
   const now = Date.now()
   const spawnType: SessionType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')

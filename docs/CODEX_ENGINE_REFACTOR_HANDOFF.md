@@ -285,3 +285,17 @@ At handoff:
 - All invariants and tests above pass.
 - A fresh Codex review completes three rounds, cancellation cleans up the exact critic, restart preserves delivery/retirement state, and waiting consumes no synthetic model turns.
 - The new PR is based on PR #331 (or its landed successor) and contains only the refactor plus its tests.
+
+## Implementation progress — native launch extraction
+
+Branch: `sf/session-runtime-refactor`, based on `sf/codex-command-parity`.
+The audit/handoff and generator were preserved in commit `761947e`.
+
+- `daemon/engines/engine-adapter.ts` defines typed native identity and fresh/resume/fork launch inputs.
+- `ClaudeAdapter.spawn` owns native command/environment construction, tmux launch, exit markers, and pane capture.
+- `CodexAdapter.spawn` owns home seeding, MCP configuration, detached process launch, and socket startup retries. Its engine and native I/O are injected.
+- `session-lifecycle.ts` calls those adapters; registry publication and orchestration remain there for the next slice.
+- `engine-launch.test.ts` characterizes matrix L06/L07/L08/L10/L13/L14/L16 and the native startup subset of L25. These use fake native I/O, not live providers or full registry rollback.
+- Preserved existing fresh-only Claude tool restrictions, immediate-exit observational behavior, Codex provisional capabilities, and final persistent identity refresh.
+
+This is **not completion**: expand the interface with delivery/retirement/health/recovery, consolidate `SessionProvider`, implement runtime transactions and rollback, migrate callers, add actual router/bridge integration tests, and run every live gate above. Do not infer full lifecycle coverage from native launch tests.

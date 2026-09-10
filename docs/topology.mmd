@@ -37,6 +37,9 @@ graph TD
   end
 
   subgraph lifecycle["Lifecycle"]
+    daemon_engines_engine-adapter["engine-adapter.ts"]
+    daemon_engines_claude-adapter["claude-adapter.ts"]
+    daemon_engines_codex-adapter["codex-adapter.ts"]
     daemon_session-lifecycle["session-lifecycle.ts"]
     daemon_recovery["recovery.ts"]
     daemon_anchor-state["anchor-state.ts"]
@@ -141,6 +144,10 @@ graph TD
   daemon_cli-handler --> daemon_idempotency
   daemon_cli-handler --> daemon_config
   daemon_cli-handler --> daemon_access
+  daemon_engines_claude-adapter --> daemon_config
+  daemon_engines_claude-adapter --> daemon_engines_engine-adapter
+  daemon_engines_codex-adapter --> daemon_config
+  daemon_engines_codex-adapter --> daemon_engines_engine-adapter
   daemon_session-lifecycle --> daemon_config
   daemon_session-lifecycle --> daemon_util
   daemon_session-lifecycle --> daemon_sessions
@@ -152,6 +159,8 @@ graph TD
   daemon_session-lifecycle --> daemon_pr-watch
   daemon_session-lifecycle --> daemon_access
   daemon_session-lifecycle --> daemon_worktree-manager
+  daemon_session-lifecycle --> daemon_engines_claude-adapter
+  daemon_session-lifecycle --> daemon_engines_codex-adapter
   daemon_recovery --> daemon_config
   daemon_recovery --> daemon_sessions
   daemon_recovery --> daemon_session-lifecycle

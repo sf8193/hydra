@@ -165,6 +165,24 @@
       "desc": "CLI socket request handler"
     },
     {
+      "id": "daemon_engines_engine-adapter",
+      "label": "daemon/engines/engine-adapter.ts",
+      "layer": "lifecycle",
+      "desc": "Typed native launch contract and provider identities"
+    },
+    {
+      "id": "daemon_engines_claude-adapter",
+      "label": "daemon/engines/claude-adapter.ts",
+      "layer": "lifecycle",
+      "desc": "Claude native launch, tmux command and capture"
+    },
+    {
+      "id": "daemon_engines_codex-adapter",
+      "label": "daemon/engines/codex-adapter.ts",
+      "layer": "lifecycle",
+      "desc": "Codex native launch, home seeding and app-server connection"
+    },
+    {
       "id": "daemon_session-lifecycle",
       "label": "daemon/session-lifecycle.ts",
       "layer": "lifecycle",
@@ -587,6 +605,22 @@
       "daemon_access"
     ],
     [
+      "daemon_engines_claude-adapter",
+      "daemon_config"
+    ],
+    [
+      "daemon_engines_claude-adapter",
+      "daemon_engines_engine-adapter"
+    ],
+    [
+      "daemon_engines_codex-adapter",
+      "daemon_config"
+    ],
+    [
+      "daemon_engines_codex-adapter",
+      "daemon_engines_engine-adapter"
+    ],
+    [
       "daemon_session-lifecycle",
       "daemon_config"
     ],
@@ -629,6 +663,14 @@
     [
       "daemon_session-lifecycle",
       "daemon_worktree-manager"
+    ],
+    [
+      "daemon_session-lifecycle",
+      "daemon_engines_claude-adapter"
+    ],
+    [
+      "daemon_session-lifecycle",
+      "daemon_engines_codex-adapter"
     ],
     [
       "daemon_recovery",
