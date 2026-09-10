@@ -19,8 +19,6 @@ import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPr
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
-import { codexEngine } from './codex-bootstrap.js'
-import { codexSocketPath } from './codex-engine.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
@@ -336,78 +334,6 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 // ---------------------------------------------------------------------------
 // Codex spawn helper — tmux setup + engine connect
 // ---------------------------------------------------------------------------
-
-async function spawnCodexSession(p: {
-  tmuxName: string; sessionId: string; effectiveCwd: string;
-  model?: string; forkFromThread?: string;
-}): Promise<{ sockPath: string; spawnLogPath?: string; codexThreadId: string }> {
-  const sockPath = codexSocketPath(p.tmuxName)
-  const codexHomeDir = join(process.env.HOME!, '.codex', `hydra-${p.tmuxName}`)
-  const mcpServerPath = join(new URL('.', import.meta.url).pathname, 'codex-mcp-server.ts')
-  const codexModel = p.model ? `-c model=${shq(p.model)}` : ''
-  const fullPerms = `-c 'sandbox_permissions=["disk-full-read-access","disk-full-write-access","network-full-access"]'`
-  const serverCmd = `codex app-server --listen 'unix://' ${codexModel} ${fullPerms}`.trim()
-
-  // Window 0: durable app-server
-  const serverInner = [
-    `cd ${shq(p.effectiveCwd)}`,
-    `export CODEX_HOME=${shq(codexHomeDir)}`,
-    `mkdir -p ${shq(codexHomeDir)}`,
-    `ln -sf ~/.codex/auth.json ${shq(codexHomeDir)}/auth.json`,
-    `codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(codexHomeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(p.sessionId)} -- bun ${shq(mcpServerPath)}`,
-    serverCmd,
-  ].join(' && ')
-
-  process.stderr.write(`daemon: codex spawning ${p.tmuxName}\n`)
-  try {
-    execFileSync('tmux', ['new-session', '-d', '-s', p.tmuxName, withRaisedFdLimit(serverInner)], { stdio: 'pipe' })
-  } catch (err) {
-    throw new Error(`failed to spawn codex tmux: ${err instanceof Error ? err.message : err}`)
-  }
-
-  // Capture server pane for crash diagnostics
-  let spawnLogPath: string | undefined
-  try {
-    mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-    const logPath = join(SPAWN_LOGS_DIR, `${p.tmuxName}-${p.sessionId}.log`)
-    execFileSync('tmux', ['pipe-pane', '-o', '-t', `${p.tmuxName}:0`, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
-    spawnLogPath = logPath
-  } catch {}
-
-  // Window 1: attachable TUI
-  const tuiInner = `export CODEX_HOME=${shq(codexHomeDir)} && sleep 3 && codex --remote "unix://${sockPath}"`
-  try {
-    execFileSync('tmux', ['new-window', '-t', p.tmuxName, tuiInner], { stdio: 'pipe' })
-  } catch {
-    process.stderr.write(`daemon: codex TUI window failed for ${p.tmuxName} (non-fatal)\n`)
-  }
-
-  // Connect to the app-server socket with retry
-  const start = Date.now()
-  let codexThreadId: string | null = null
-  let lastErr = ''
-  while (Date.now() - start < 15_000) {
-    try {
-      if (p.forkFromThread) {
-        const r = await codexEngine.connectAndFork(p.sessionId, sockPath, p.forkFromThread)
-        codexThreadId = r.threadId
-      } else {
-        const r = await codexEngine.connect(p.sessionId, sockPath)
-        codexThreadId = r.threadId
-      }
-      break
-    } catch (err: any) {
-      lastErr = err?.message || String(err)
-      try { codexEngine.disconnect(p.sessionId) } catch {}
-      if (!tmuxHasSession(p.tmuxName)) throw new Error(`codex tmux ${p.tmuxName} died during startup`)
-      await new Promise(r => setTimeout(r, 500))
-    }
-  }
-  if (!codexThreadId) throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
-  process.stderr.write(`daemon: codex connected for ${p.tmuxName}, thread=${codexThreadId}\n`)
-
-  return { sockPath, spawnLogPath, codexThreadId }
-}
 
 // ---------------------------------------------------------------------------
 // Main spawn orchestrator

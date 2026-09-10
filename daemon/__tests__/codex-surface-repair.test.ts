@@ -32,15 +32,17 @@ describe('delayed Codex surface repair', () => {
 
 describe('Codex app-server reconnect', () => {
   test('keeps the session alive after a transient transport close', async () => {
-    const info = { sessionId: 'sid', engine: 'codex', tmuxName: 'ember', codexHomeName: 'ember', codexThreadId: 'thread-1', deadAt: 1 } as any
     let attempts = 0
     let ensured = 0
     let failed = 0
+    const fakeAdapter = {
+      reconnect: async () => { attempts++; if (attempts === 1) throw new Error('transient close'); return true },
+      ensureSurface: () => { ensured++; return true },
+    }
+    const info = { sessionId: 'sid', engine: 'codex', tmuxName: 'ember', codexHomeName: 'ember', codexThreadId: 'thread-1', deadAt: 1, adapter: fakeAdapter } as any
     const restored = await reconnectCodexAfterDisconnect('sid', {
       get: () => info,
-      resume: async () => { attempts++; if (attempts === 1) throw new Error('transient close') },
       wait: async () => {},
-      ensure: () => { ensured++; return true },
       persist: () => {},
       failed: () => { failed++ },
     })
@@ -53,14 +55,16 @@ describe('Codex app-server reconnect', () => {
   })
 
   test('classifies death only after bounded reconnect attempts fail', async () => {
-    const info = { sessionId: 'sid', engine: 'codex', tmuxName: 'ember', codexHomeName: 'ember', codexThreadId: 'thread-1' } as any
     let attempts = 0
     let failed = 0
+    const fakeAdapter = {
+      reconnect: async () => { attempts++; throw new Error('server gone') },
+      ensureSurface: () => true,
+    }
+    const info = { sessionId: 'sid', engine: 'codex', tmuxName: 'ember', codexHomeName: 'ember', codexThreadId: 'thread-1', adapter: fakeAdapter } as any
     const restored = await reconnectCodexAfterDisconnect('sid', {
       get: () => info,
-      resume: async () => { attempts++; throw new Error('server gone') },
       wait: async () => {},
-      ensure: () => true,
       persist: () => {},
       failed: () => { failed++ },
     })
