@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, buildCrashNotice, buildAutopsy } from '../observability.js'
+import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy } from '../observability.js'
 import type { SessionInfo } from '../sessions.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
@@ -18,6 +18,43 @@ afterEach(() => {
 })
 
 const MB = 1024 * 1024
+
+describe('trimDaemonLog (HYDRA_LOG gating)', () => {
+  // The trim mechanics are shared with trimSpawnLog above — both route through
+  // frontTrim — so these cover only what is specific here: that the daemon
+  // truncates the path it was handed and nothing else.
+  const saved = process.env.HYDRA_LOG
+  afterEach(() => {
+    if (saved === undefined) delete process.env.HYDRA_LOG
+    else process.env.HYDRA_LOG = saved
+  })
+
+  test('does nothing when HYDRA_LOG is unset — never guesses a path to truncate', () => {
+    delete process.env.HYDRA_LOG
+    const p = tmpFile('untouched.log')
+    writeFileSync(p, 'keep me\n')
+
+    expect(() => trimDaemonLog()).not.toThrow()
+
+    expect(readFileSync(p, 'utf8')).toBe('keep me\n')
+  })
+
+  test('does not throw when HYDRA_LOG points at a file that does not exist', () => {
+    process.env.HYDRA_LOG = join(tmp, 'no-such-daemon.log')
+    expect(() => trimDaemonLog()).not.toThrow()
+  })
+
+  test('leaves an under-cap daemon log alone', () => {
+    const p = tmpFile('small-daemon.log')
+    writeFileSync(p, 'a'.repeat(1024) + '\n')
+    process.env.HYDRA_LOG = p
+    const before = statSync(p).size
+
+    trimDaemonLog()
+
+    expect(statSync(p).size).toBe(before)
+  })
+})
 
 describe('trimSpawnLog (front-trim cap)', () => {
   test('over-cap file is front-trimmed to the ~2MB tail, keeping the newest output', () => {

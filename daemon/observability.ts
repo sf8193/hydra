@@ -16,6 +16,13 @@ const VITALS_INTERVAL_MS = 60_000
 // Front-trim cap for the black-box spawn logs. A live session's pane output is
 // otherwise unbounded on disk; over the cap we keep only the most recent bytes —
 // the dying tail is the whole point of the recorder — and discard the front.
+// The daemon log is one file for the whole fleet, not one per session, so it gets
+// a far larger cap than a spawn log. Sized to hold days of ordinary operation
+// while still bounding a runaway: the 2026-08-31 tools/list loop wrote 2.3GB, and
+// the same loop had it back to 4.8GB by 2026-09-10 because nothing capped it.
+const DAEMON_LOG_MAX_BYTES = 512 * 1024 * 1024
+const DAEMON_LOG_KEEP_BYTES = 64 * 1024 * 1024
+
 const SPAWN_LOG_MAX_BYTES = 5 * 1024 * 1024
 const SPAWN_LOG_KEEP_BYTES = 2 * 1024 * 1024
 
@@ -198,15 +205,32 @@ export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (
 // (the inode-preservation rationale is at the writeFileSync call below). Best-effort
 // — a few bytes appended during the read→write window may be lost; only over the cap.
 export function trimSpawnLog(path: string): void {
+  frontTrim(path, SPAWN_LOG_MAX_BYTES, SPAWN_LOG_KEEP_BYTES, 'spawn-log')
+}
+
+/**
+ * Cap the daemon's own log, on the same principle as a spawn log.
+ *
+ * Only ever trims the path the launcher handed us in HYDRA_LOG — the file it is
+ * teeing to. A daemon that re-derived this path could truncate the wrong file,
+ * and no cap is worth that.
+ */
+export function trimDaemonLog(): void {
+  const path = process.env.HYDRA_LOG
+  if (!path) return
+  frontTrim(path, DAEMON_LOG_MAX_BYTES, DAEMON_LOG_KEEP_BYTES, 'daemon-log')
+}
+
+function frontTrim(path: string, maxBytes: number, keepBytes: number, label: string): void {
   let size: number
   try { size = statSync(path).size } catch { return }
-  if (size <= SPAWN_LOG_MAX_BYTES) return
+  if (size <= maxBytes) return
   try {
     const fd = openSync(path, 'r')
     let kept: Buffer
     try {
-      const buf = Buffer.alloc(SPAWN_LOG_KEEP_BYTES)
-      const read = readSync(fd, buf, 0, SPAWN_LOG_KEEP_BYTES, size - SPAWN_LOG_KEEP_BYTES)
+      const buf = Buffer.alloc(keepBytes)
+      const read = readSync(fd, buf, 0, keepBytes, size - keepBytes)
       const sub = buf.subarray(0, read)
       // Drop the partial first line so the file starts on a clean boundary.
       const nl = sub.indexOf(0x0a)
@@ -219,9 +243,9 @@ export function trimSpawnLog(path: string): void {
     // same inode and capture continues past the trim (locked by the inode-identity
     // test in observability.test.ts).
     writeFileSync(path, kept)
-    process.stderr.write(`daemon: spawn-log front-trimmed ${path} (${Math.round(size / 1048576)}MB -> kept ${Math.round(SPAWN_LOG_KEEP_BYTES / 1048576)}MB tail)\n`)
+    process.stderr.write(`daemon: ${label} front-trimmed ${path} (${Math.round(size / 1048576)}MB -> kept ${Math.round(keepBytes / 1048576)}MB tail)\n`)
   } catch (err) {
-    process.stderr.write(`daemon: spawn-log trim failed ${path}: ${err}\n`)
+    process.stderr.write(`daemon: ${label} trim failed ${path}: ${err}\n`)
   }
 }
 
@@ -239,6 +263,8 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
     const live = [...registry.values()].filter(s => !s.deadAt)
     for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
     for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
+    // Ahead of the empty-fleet return: a runaway can outlive every session.
+    trimDaemonLog()
     if (live.length === 0) return
     const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected))
     process.stderr.write(`daemon: vitals (${live.length} live):\n${lines.join('\n')}\n`)

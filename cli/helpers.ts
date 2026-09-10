@@ -501,5 +501,10 @@ export function buildDaemonEnvs(cfg: HydraConfig): string {
     `SPAWN_CWD=${shq(cfg.spawnCwd)}`,
     `CHAT_PLATFORM=${shq(cfg.platform)}`,
     `CLAUDE_CONFIG_DIR=${shq(cfg.configDir)}`,
+    // The daemon caps this file itself (observability.trimDaemonLog). Passing the
+    // resolved path rather than letting the daemon re-derive it keeps one source of
+    // truth with the `tee -a` target above — and the daemon truncates only a path it
+    // was handed, never one it guessed.
+    `HYDRA_LOG=${shq(cfg.daemonLog)}`,
   ].join(' ')
 }
