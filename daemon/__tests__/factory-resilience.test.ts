@@ -141,6 +141,7 @@ function mkSession(opts: {
     lastActive: Date.now(),
     tmuxName: opts.tmuxName,
     listening: false,
+      engine: 'claude',
     sessionType: opts.sessionType ?? 'thread_owner',
     ...(opts.deadAt ? { deadAt: opts.deadAt } : {}),
   }

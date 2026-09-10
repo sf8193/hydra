@@ -53,6 +53,7 @@ beforeEach(() => {
     lastActive: Date.now(),
     tmuxName: 'drift',
     listening: false,
+      engine: 'claude',
     sessionType: 'thread_owner',
   }
   registry.set(info.sessionId, info)

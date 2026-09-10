@@ -799,7 +799,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             if (text) {
               try {
                 const provider = providerFor(info.engine)
-                if (!provider.ensureInteractiveSurface(info)) throw new Error(`${provider.id} interactive surface is unavailable`)
+                if (!provider.ensureSurface(info)) throw new Error(`${provider.provider} interactive surface is unavailable`)
                 // Map lowercase → canonical tmux key name (tmux is case-sensitive)
                 const TMUX_KEY_MAP = new Map<string, string>()
                 for (const k of [
@@ -819,9 +819,20 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 }
                 const resolved = tokens.map(resolveKey)
                 const allKeyNames = resolved.every((r): r is string => r !== null)
-                const action: TmuxKeyAction = allKeyNames
-                  ? { target: provider.uiTarget(info), mode: 'raw', keys: resolved }
-                  : { target: provider.uiTarget(info), mode: 'literal', text }
+                const target = provider.uiTarget(info)
+                let action: TmuxKeyAction = allKeyNames
+                  ? { target, mode: 'raw', keys: resolved }
+                  : { target, mode: 'literal', text }
+                // Trailing key detection: if the last token is a recognized key
+                // name (e.g. "enter", "escape"), split it off so it's sent as a
+                // key press rather than typed literally.
+                if (!allKeyNames && tokens.length > 1) {
+                  const lastToken = tokens[tokens.length - 1]
+                  const trailingKey = TMUX_KEY_MAP.get(lastToken.toLowerCase())
+                  if (trailingKey) {
+                    action = { target, mode: 'literal', text: tokens.slice(0, -1).join(' '), trailingKey }
+                  }
+                }
                 const queued = provider.capabilities.queueKeysWhileWorking && info.turnState === 'working'
                 if (queued) {
                   const position = queueCodexKeys(info.sessionId, action, error => {
@@ -855,7 +866,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
               void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
               try {
                 const provider = providerFor(info.engine)
-                provider.ensureInteractiveSurface(info)
+                provider.ensureSurface(info)
                 Bun.spawn(['tmux', 'send-keys', '-t', provider.uiTarget(info), 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
                 process.stderr.write(`daemon: interrupt sent to ${info.tmuxName} via ! prefix\n`)
               } catch (err) {

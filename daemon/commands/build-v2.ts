@@ -11,7 +11,7 @@ async function getBuildProto() {
   return buildProto
 }
 
-export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number, task?: string, model?: string): Promise<void> {
+export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🔨').catch(() => {})
 
   if (isNaN(rounds)) rounds = 3
@@ -41,7 +41,7 @@ export async function handleBuildV2Intercept(msg: InboundMessage, rounds: number
 
   try {
     const proto = await getBuildProto()
-    await startProtocolRun(proto, threadId, sessionId, { rounds: clampedRounds, task, model, strike: true })
+    await startProtocolRun(proto, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Build v2 failed to start: ${errMsg}`, { replyTo: msg.id })

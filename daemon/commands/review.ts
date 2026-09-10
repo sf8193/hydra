@@ -12,7 +12,7 @@ async function getReviewProto() {
   return reviewProto
 }
 
-export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, modifierNames?: string[]): Promise<void> {
+export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, modifierNames?: string[], engine?: 'claude' | 'codex'): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '⚔️').catch(() => {})
 
   const resolvedThreadId = registry.resolveThreadId(msg)
@@ -65,7 +65,7 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
   try {
     const proto = await getReviewProto()
     await startProtocolRun(proto, threadId, sessionId, {
-      rounds: clampedRounds, topic, model,
+      rounds: clampedRounds, topic, model, engine,
       modifiers: resolvedMods,
       strike: true,
       ...flagParams,

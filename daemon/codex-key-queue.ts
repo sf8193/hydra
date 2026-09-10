@@ -8,7 +8,7 @@ const queues = new Map<string, QueuedAction[]>()
 
 export type TmuxKeyAction =
   | { target: string; mode: 'raw'; keys: string[] }
-  | { target: string; mode: 'literal'; text: string }
+  | { target: string; mode: 'literal'; text: string; trailingKey?: string }
 
 export function queueCodexKeys(sessionId: string, action: TmuxKeyAction, settled?: (error?: Error) => void): number {
   const queue = queues.get(sessionId) ?? []
@@ -27,7 +27,7 @@ export async function sendTmuxKeys(action: TmuxKeyAction): Promise<void> {
     return
   }
   await execFileAsync('tmux', ['send-keys', '-t', action.target, '-l', action.text], { timeout: 3000 })
-  await execFileAsync('tmux', ['send-keys', '-t', action.target, 'Enter'], { timeout: 3000 })
+  await execFileAsync('tmux', ['send-keys', '-t', action.target, action.trailingKey ?? 'Enter'], { timeout: 3000 })
 }
 
 export function flushCodexKeys(sessionId: string): void {

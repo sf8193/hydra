@@ -144,6 +144,7 @@ function mkSession(opts: { tmuxName: string; threadId: string; sessionId?: strin
     lastActive: Date.now(),
     tmuxName: opts.tmuxName,
     listening: false,
+      engine: 'claude',
     sessionType: 'thread_owner',
   }
   registry.set(sessionId, info)
@@ -481,6 +482,8 @@ describe('progress board', () => {
   })
 
   test('a board too long to fit drops lines and says how many', async () => {
+    const originalMax = gateway.maxMessageLength
+    ;(gateway as any).maxMessageLength = 2000
     const pmThreadId = 'qol-pm-thread-8c'
     const pm = mkPm(pmThreadId)
     const longSpec = 'refactor the entire ingestion pipeline end to end again'
@@ -488,7 +491,7 @@ describe('progress board', () => {
     factory.tickProgress(pmThreadId)
     await settle()
 
-    // Worst-case lines: a full-width spec tag on every entry, at the cap.
+    // Enough entries to guarantee the board exceeds the 2000-char limit.
     for (let i = 1; i <= 25; i++) {
       mkBuild({
         ticket: `fb-8${String(i).padStart(2, '0')}-1111`, pmThreadId,
@@ -506,6 +509,7 @@ describe('progress board', () => {
     expect(board.text.length).toBeLessThanOrEqual(gateway.maxMessageLength)
     // The note leads, because the lines kept are the most recent ones.
     expect(board.text).toMatch(/^🏭 Factory · complete\n {2}…and \d+ earlier\n/)
+    ;(gateway as any).maxMessageLength = originalMax
   })
 
   test('a line that has stopped updating carries no numbers that would rot', async () => {
@@ -1014,6 +1018,7 @@ describe('factoryReview result delivery', () => {
           lastActive: Date.now(),
           tmuxName: `critic-${suffix}`,
           listening: false,
+      engine: 'claude',
           turnState: 'idle',
         } as SessionInfo)
         trackedSessions.add(sessionId)

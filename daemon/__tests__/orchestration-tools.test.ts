@@ -52,6 +52,7 @@ describe('send_to_thread', () => {
       lastActive: Date.now(),
       tmuxName: 'file-test-session',
       listening: false,
+      engine: 'claude', sessionType: 'thread_owner' as const,
     })
     try {
       const result = await executeTool('send_to_thread', { target: 'file-test-session', type: 'progress', text: 'hello', files: ['/nonexistent'] })
@@ -71,6 +72,7 @@ describe('send_to_thread', () => {
       lastActive: Date.now(),
       tmuxName: 'orch-test-session',
       listening: false,
+      engine: 'claude', sessionType: 'thread_owner' as const,
     })
     try {
       const result = await executeTool('send_to_thread', { target: 'orch-test-session', type: 'result', text: 'done' })
@@ -119,12 +121,14 @@ describe('peek_session', () => {
       sessionId: childId, topic: 'child task', threadId: 'thread-child',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-child', listening: false,
+      engine: 'claude', sessionType: 'thread_owner' as const,
       originFrom: 'peek-parent', originType: 'spawn',
     })
     registry.set(siblingId, {
       sessionId: siblingId, topic: 'sibling task', threadId: 'thread-sibling',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-sibling', listening: false,
+      engine: 'claude', sessionType: 'thread_owner' as const,
       originFrom: 'peek-parent', originType: 'spawn',
     })
     try {
@@ -143,6 +147,7 @@ describe('peek_session', () => {
       sessionId: testId, topic: 'test', threadId: 'thread-peek-main',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-main-target', listening: false,
+      engine: 'claude', sessionType: 'thread_owner' as const,
       originFrom: 'some-other-parent',
     })
     try {
@@ -160,6 +165,7 @@ describe('peek_session', () => {
       sessionId: testId, topic: 'test', threadId: 'thread-peek',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-test-session', listening: false,
+      engine: 'claude', sessionType: 'thread_owner' as const,
     })
     try {
       const result = await executeTool('peek_session', { name: 'peek-test-session', lines: 9999 })
