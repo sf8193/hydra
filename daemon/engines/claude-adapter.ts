@@ -1,3 +1,6 @@
+import type { SessionInfo } from '../sessions.js'
+import type { ProviderCapabilities, ProviderExecutionRef } from './engine-adapter.js'
+import { getContextPercent, tmuxHasSession } from '../util.js'
 import { randomUUID } from 'crypto'
 import { execFileSync } from 'child_process'
 import { mkdirSync } from 'fs'
@@ -49,6 +52,18 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 export class ClaudeAdapter implements EngineAdapter<'claude'> {
   readonly id = 'claude' as const
   constructor(private readonly io: ClaudeLaunchIo = { execFileSync, mkdirSync, randomUUID }) {}
+
+  readonly capabilities: ProviderCapabilities = {
+    nativeFork: true, nativeResume: true, steerDuringTurn: false, dynamicTools: true,
+    structuredUsage: false, interactiveTui: true, paneProbe: true, queueKeysWhileWorking: false,
+  }
+
+  uiTarget(info: Pick<SessionInfo, 'tmuxName'>): string { return info.tmuxName }
+  ensureInteractiveSurface(info: SessionInfo): boolean { return tmuxHasSession(info.tmuxName) }
+  contextPercent(info: SessionInfo): string { return getContextPercent(info.tmuxName) }
+  executionRef(info: SessionInfo): ProviderExecutionRef { return { provider: 'claude', sessionId: info.sessionId } }
+  async interruptExecution(_ref: ProviderExecutionRef): Promise<boolean> { return false }
+  disconnect(_info: SessionInfo): void {}
 
   async spawn(input: EngineSpawnInput<'claude'>): Promise<EngineSpawnResult<'claude'>> {
     const { sessionId, tmuxName, prompt: initialPrompt, model } = input

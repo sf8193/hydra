@@ -165,6 +165,18 @@
       "desc": "CLI socket request handler"
     },
     {
+      "id": "daemon_engines_instances",
+      "label": "daemon/engines/instances.ts",
+      "layer": "lifecycle",
+      "desc": "Constructs provider adapters and the durable Codex engine"
+    },
+    {
+      "id": "daemon_engines_codex-surface",
+      "label": "daemon/engines/codex-surface.ts",
+      "layer": "lifecycle",
+      "desc": "Codex disposable TUI repair"
+    },
+    {
       "id": "daemon_engines_engine-adapter",
       "label": "daemon/engines/engine-adapter.ts",
       "layer": "lifecycle",
@@ -181,6 +193,12 @@
       "label": "daemon/engines/codex-adapter.ts",
       "layer": "lifecycle",
       "desc": "Codex native launch, home seeding and app-server connection"
+    },
+    {
+      "id": "daemon_session-runtime",
+      "label": "daemon/session-runtime.ts",
+      "layer": "lifecycle",
+      "desc": "SessionRuntime: lifecycle orchestration with native adapter dependencies"
     },
     {
       "id": "daemon_session-lifecycle",
@@ -605,72 +623,116 @@
       "daemon_access"
     ],
     [
-      "daemon_engines_claude-adapter",
-      "daemon_config"
-    ],
-    [
-      "daemon_engines_claude-adapter",
-      "daemon_engines_engine-adapter"
-    ],
-    [
-      "daemon_engines_codex-adapter",
-      "daemon_config"
-    ],
-    [
-      "daemon_engines_codex-adapter",
-      "daemon_engines_engine-adapter"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_config"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_util"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_sessions"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_bridge-transport"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_bridge-tools"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_phase-budget"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "shared_constants"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_anchor-state"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_pr-watch"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_access"
-    ],
-    [
-      "daemon_session-lifecycle",
-      "daemon_worktree-manager"
-    ],
-    [
-      "daemon_session-lifecycle",
+      "daemon_engines_instances",
       "daemon_engines_claude-adapter"
     ],
     [
-      "daemon_session-lifecycle",
+      "daemon_engines_instances",
       "daemon_engines_codex-adapter"
+    ],
+    [
+      "daemon_engines_instances",
+      "daemon_engines_engine-adapter"
+    ],
+    [
+      "daemon_engines_codex-surface",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_engines_engine-adapter",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_engines_claude-adapter",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_engines_claude-adapter",
+      "daemon_engines_engine-adapter"
+    ],
+    [
+      "daemon_engines_claude-adapter",
+      "daemon_util"
+    ],
+    [
+      "daemon_engines_claude-adapter",
+      "daemon_config"
+    ],
+    [
+      "daemon_engines_codex-adapter",
+      "daemon_engines_codex-surface"
+    ],
+    [
+      "daemon_engines_codex-adapter",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_engines_codex-adapter",
+      "daemon_engines_engine-adapter"
+    ],
+    [
+      "daemon_engines_codex-adapter",
+      "daemon_util"
+    ],
+    [
+      "daemon_engines_codex-adapter",
+      "daemon_config"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_config"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_util"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_bridge-transport"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_bridge-tools"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_phase-budget"
+    ],
+    [
+      "daemon_session-runtime",
+      "shared_constants"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_anchor-state"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_pr-watch"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_access"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_worktree-manager"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_engines_engine-adapter"
+    ],
+    [
+      "daemon_session-runtime",
+      "daemon_engines_instances"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_session-runtime"
     ],
     [
       "daemon_recovery",
@@ -959,6 +1021,10 @@
     [
       "daemon_commands_status",
       "daemon_pr-watch"
+    ],
+    [
+      "daemon_commands_thread",
+      "daemon_session-runtime"
     ],
     [
       "daemon_commands_thread",

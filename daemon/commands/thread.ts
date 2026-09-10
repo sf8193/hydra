@@ -1,3 +1,4 @@
+import { sessionRuntime } from '../session-runtime.js'
 import { execSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -298,7 +299,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   // Three-tier cascade: resume → fork-from-dead → respawn
   if (claudeSessionId || lastSession?.codexThreadId || lastInfo?.codexThreadId) {
     // Tier 1: full resume (--resume, same conversation)
-    const result = await provider.resume({ topic: thread.topic, threadId: thread.threadId,
+    const result = await sessionRuntime.resume(provider.id, { topic: thread.topic, threadId: thread.threadId,
       threadUrl: thread.threadUrl, lastName: lastTmuxName, model: deadModel, entry: lastSession, live: lastInfo,
       recoveryNotice: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off. ${RECOVERY_REVERIFY_GUARD}` })
     if (result) {
@@ -312,7 +313,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
 
     // Tier 2: fork from dead session (--resume --fork-session, transcript copy)
     try {
-      const forkResult = await provider.fork({ topic: thread.topic, threadId: thread.threadId,
+      const forkResult = await sessionRuntime.fork(provider.id, { topic: thread.topic, threadId: thread.threadId,
         threadUrl: thread.threadUrl, lastName: lastTmuxName, model: deadModel, entry: lastSession, live: lastInfo,
         recoveryNotice: RECOVERY_REVERIFY_GUARD })
       if (!forkResult) throw new Error('provider cannot fork this session')

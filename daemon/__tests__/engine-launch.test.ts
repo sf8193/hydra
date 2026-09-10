@@ -118,6 +118,7 @@ function codex(options: { live?: boolean; missingSource?: boolean; failConnect?:
     now: () => now, wait: async ms => { now += ms },
   }
   const adapter = new CodexAdapter({
+    isConnected: () => false, retireSession: async () => false, interruptPersistedThread: async () => false,
     isSocketLive: async () => { calls.push('probe'); return !!options.live },
     connect: () => connected('connect'), connectAndResume: () => connected('resume'),
     connectAndFork: () => connected('fork'), disconnect: () => { calls.push('disconnect') },

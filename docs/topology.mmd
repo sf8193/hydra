@@ -37,9 +37,12 @@ graph TD
   end
 
   subgraph lifecycle["Lifecycle"]
+    daemon_engines_instances["instances.ts"]
+    daemon_engines_codex-surface["codex-surface.ts"]
     daemon_engines_engine-adapter["engine-adapter.ts"]
     daemon_engines_claude-adapter["claude-adapter.ts"]
     daemon_engines_codex-adapter["codex-adapter.ts"]
+    daemon_session-runtime["session-runtime.ts"]
     daemon_session-lifecycle["session-lifecycle.ts"]
     daemon_recovery["recovery.ts"]
     daemon_anchor-state["anchor-state.ts"]
@@ -144,23 +147,34 @@ graph TD
   daemon_cli-handler --> daemon_idempotency
   daemon_cli-handler --> daemon_config
   daemon_cli-handler --> daemon_access
-  daemon_engines_claude-adapter --> daemon_config
+  daemon_engines_instances --> daemon_engines_claude-adapter
+  daemon_engines_instances --> daemon_engines_codex-adapter
+  daemon_engines_instances --> daemon_engines_engine-adapter
+  daemon_engines_codex-surface --> daemon_sessions
+  daemon_engines_engine-adapter --> daemon_sessions
+  daemon_engines_claude-adapter --> daemon_sessions
   daemon_engines_claude-adapter --> daemon_engines_engine-adapter
-  daemon_engines_codex-adapter --> daemon_config
+  daemon_engines_claude-adapter --> daemon_util
+  daemon_engines_claude-adapter --> daemon_config
+  daemon_engines_codex-adapter --> daemon_engines_codex-surface
+  daemon_engines_codex-adapter --> daemon_sessions
   daemon_engines_codex-adapter --> daemon_engines_engine-adapter
-  daemon_session-lifecycle --> daemon_config
-  daemon_session-lifecycle --> daemon_util
-  daemon_session-lifecycle --> daemon_sessions
-  daemon_session-lifecycle --> daemon_bridge-transport
-  daemon_session-lifecycle --> daemon_bridge-tools
-  daemon_session-lifecycle --> daemon_phase-budget
-  daemon_session-lifecycle --> shared_constants
-  daemon_session-lifecycle --> daemon_anchor-state
-  daemon_session-lifecycle --> daemon_pr-watch
-  daemon_session-lifecycle --> daemon_access
-  daemon_session-lifecycle --> daemon_worktree-manager
-  daemon_session-lifecycle --> daemon_engines_claude-adapter
-  daemon_session-lifecycle --> daemon_engines_codex-adapter
+  daemon_engines_codex-adapter --> daemon_util
+  daemon_engines_codex-adapter --> daemon_config
+  daemon_session-runtime --> daemon_config
+  daemon_session-runtime --> daemon_util
+  daemon_session-runtime --> daemon_sessions
+  daemon_session-runtime --> daemon_bridge-transport
+  daemon_session-runtime --> daemon_bridge-tools
+  daemon_session-runtime --> daemon_phase-budget
+  daemon_session-runtime --> shared_constants
+  daemon_session-runtime --> daemon_anchor-state
+  daemon_session-runtime --> daemon_pr-watch
+  daemon_session-runtime --> daemon_access
+  daemon_session-runtime --> daemon_worktree-manager
+  daemon_session-runtime --> daemon_engines_engine-adapter
+  daemon_session-runtime --> daemon_engines_instances
+  daemon_recovery --> daemon_session-runtime
   daemon_recovery --> daemon_config
   daemon_recovery --> daemon_sessions
   daemon_recovery --> daemon_session-lifecycle
@@ -233,6 +247,7 @@ graph TD
   daemon_commands_status --> daemon_bridge-transport
   daemon_commands_status --> daemon_util
   daemon_commands_status --> daemon_pr-watch
+  daemon_commands_thread --> daemon_session-runtime
   daemon_commands_thread --> daemon_config
   daemon_commands_thread --> daemon_sessions
   daemon_commands_thread --> daemon_bridge-transport

@@ -6,7 +6,7 @@
  * engine event plumbing and reconnects transiently lost daemon connections.
  */
 
-import { CodexEngine, codexSocketPath } from './codex-engine.js'
+import { codexSocketPath } from './codex-engine.js'
 import { transport } from './bridge-transport.js'
 import { registry, threadRegistry } from './sessions.js'
 import { dispatchDisconnect } from './protocol-registry.js'
@@ -20,7 +20,8 @@ import { providerFor } from './session-provider.js'
 // Singleton
 // ---------------------------------------------------------------------------
 
-export const codexEngine = new CodexEngine()
+import { codexEngine } from './engines/instances.js'
+export { codexEngine } from './engines/instances.js'
 
 export const CODEX_SURFACE_REPAIR_DELAYS_MS = [1_000, 3_000] as const
 

@@ -1,3 +1,7 @@
+import { ensureCodexInteractiveSurface } from './codex-surface.js'
+import type { SessionInfo } from '../sessions.js'
+import type { ProviderCapabilities, ProviderExecutionRef } from './engine-adapter.js'
+import { tmuxHasSession } from '../util.js'
 import { execFileSync } from 'child_process'
 import { existsSync, mkdirSync, unlinkSync, cpSync, rmSync, symlinkSync } from 'fs'
 import { join } from 'path'
@@ -32,9 +36,47 @@ const nativeIo: CodexLaunchIo = {
 export class CodexAdapter implements EngineAdapter<'codex'> {
   readonly id = 'codex' as const
   constructor(
-    private readonly engine: Pick<CodexEngine, 'isSocketLive' | 'connect' | 'connectAndResume' | 'connectAndFork' | 'disconnect'>,
+    private readonly engine: Pick<CodexEngine, 'isSocketLive' | 'connect' | 'connectAndResume' | 'connectAndFork' | 'disconnect' | 'isConnected' | 'retireSession' | 'interruptPersistedThread'>,
     private readonly io: CodexLaunchIo = nativeIo,
   ) {}
+
+  readonly capabilities: ProviderCapabilities = {
+    nativeFork: true, nativeResume: true, steerDuringTurn: true, dynamicTools: true,
+    structuredUsage: true, interactiveTui: true, paneProbe: false, queueKeysWhileWorking: true,
+  }
+
+  uiTarget(info: Pick<SessionInfo, 'tmuxName'>): string { return `${info.tmuxName}:hydra-chat` }
+
+  ensureInteractiveSurface(info: SessionInfo): boolean {
+    return ensureCodexInteractiveSurface(info, {
+      isConnected: sessionId => this.engine.isConnected(sessionId),
+      hasSession: tmuxHasSession,
+      tmux: args => execFileSync('tmux', args, { encoding: 'utf8', timeout: 2000, stdio: 'pipe' }).toString(),
+    })
+  }
+  contextPercent(info: SessionInfo): string {
+    return info.contextUsage ? `${info.contextUsage.percent}%` : '?'
+  }
+  executionRef(info: SessionInfo): ProviderExecutionRef {
+    return {
+      provider: 'codex', sessionId: info.sessionId, codexThreadId: info.codexThreadId,
+      codexHomeName: info.codexHomeName ?? info.tmuxName,
+      ownershipGeneration: info.ownershipGeneration ?? info.sessionId,
+    }
+  }
+  async interruptExecution(ref: ProviderExecutionRef): Promise<boolean> {
+    if (await this.engine.retireSession(ref.sessionId)) return true
+    if (!ref.codexHomeName || !ref.codexThreadId) return false
+    try { return await this.engine.interruptPersistedThread(codexSocketPath(ref.codexHomeName), ref.codexThreadId) }
+    catch (err) {
+      process.stderr.write(`daemon: codex provider could not interrupt ${ref.sessionId}: ${err}\n`)
+      return false
+    }
+  }
+  disconnect(info: SessionInfo): void {
+    this.engine.disconnect(info.sessionId)
+    this.io.stop(info.codexHomeName ?? info.tmuxName)
+  }
 
   async spawn(input: EngineSpawnInput<'codex'>): Promise<EngineSpawnResult<'codex'>> {
     const source = input.mode.kind === 'fresh' ? undefined : input.mode.source

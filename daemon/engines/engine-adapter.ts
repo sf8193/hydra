@@ -1,3 +1,5 @@
+import type { SessionInfo, SpawnOpts, ThreadSessionEntry } from '../sessions.js'
+
 /** Native launch boundary. Registry/thread transactions belong to SessionRuntime. */
 export type ProviderId = 'claude' | 'codex'
 
@@ -37,4 +39,45 @@ export type EngineSpawnResult<P extends ProviderId> = {
 export interface EngineAdapter<P extends ProviderId = ProviderId> {
   readonly id: P
   spawn(input: EngineSpawnInput<P>): Promise<EngineSpawnResult<P>>
+  readonly capabilities: ProviderCapabilities
+  uiTarget(info: Pick<SessionInfo, 'tmuxName'>): string
+  ensureInteractiveSurface(info: SessionInfo): boolean
+  contextPercent(info: SessionInfo): string
+  executionRef(info: SessionInfo): ProviderExecutionRef
+  interruptExecution(ref: ProviderExecutionRef): Promise<boolean>
+  disconnect(info: SessionInfo): void
 }
+
+export type ProviderExecutionRef = {
+  provider: ProviderId
+  sessionId: string
+  codexThreadId?: string
+  codexHomeName?: string
+  ownershipGeneration?: string
+}
+
+export type ProviderCapabilities = {
+  nativeFork: boolean
+  nativeResume: boolean
+  steerDuringTurn: boolean
+  dynamicTools: boolean
+  structuredUsage: boolean
+  interactiveTui: boolean
+  paneProbe: boolean
+  queueKeysWhileWorking: boolean
+}
+
+export type ProviderRecoveryInput = {
+  topic: string
+  threadId: string
+  threadUrl?: string
+  lastName: string
+  model?: string
+  entry?: ThreadSessionEntry
+  live?: SessionInfo
+  worktree?: { repo: string; path: string; branch: string }
+  preserveWorktree?: boolean
+  spawnOptions?: Partial<SpawnOpts>
+  recoveryNotice: string
+}
+

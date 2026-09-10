@@ -299,3 +299,19 @@ The audit/handoff and generator were preserved in commit `761947e`.
 - Preserved existing fresh-only Claude tool restrictions, immediate-exit observational behavior, Codex provisional capabilities, and final persistent identity refresh.
 
 This is **not completion**: expand the interface with delivery/retirement/health/recovery, consolidate `SessionProvider`, implement runtime transactions and rollback, migrate callers, add actual router/bridge integration tests, and run every live gate above. Do not infer full lifecycle coverage from native launch tests.
+
+### Runtime and provider consolidation
+
+`SessionRuntime` now contains spawn/kill/resume/respawn orchestration and accepts
+its adapters through the constructor. `session-lifecycle.ts` is a compatibility
+export facade. The two `SessionProvider` implementations and global
+`configureSessionProviders` registration have been removed: native adapters also
+own capabilities, UI repair, context, execution references and disconnect.
+Recovery/thread-command native resume/fork paths call the runtime.
+
+`session-runtime.test.ts` exercises actual runtime publication timing, failed
+native launch, resolved models/native resume intent, and artifact carry-over with
+fake adapters. This is headless Claude characterization, not yet the full
+failure-boundary/ownership suite. Verified 1,240 tests (71 files) and all three
+bundles after consolidation. Shared transactional rollback, semantic delivery and
+retirement, remaining caller migration and all live gates remain outstanding.

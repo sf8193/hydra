@@ -1,3 +1,4 @@
+import { sessionRuntime } from './session-runtime.js'
 // Post-reboot / crash recovery engine — extracted from commands/global.ts so the commands
 // layer stays a thin orchestration shell and the worktree-manager/pr-watch imports live at the
 // lifecycle layer (alongside session-lifecycle) rather than crossing into commands.
@@ -137,7 +138,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   try {
     if (dead.claudeSessionId || dead.codexThreadId || deadInfo?.codexThreadId) {
       // Tier 1: full resume
-      const result = await provider.resume(recoveryInput)
+      const result = await sessionRuntime.resume(provider.id, recoveryInput)
       if (result) {
         restoreOnto(result)
         return { name: lastTmuxName, method: 'resumed', newName: result.name, threadUrl: thread.threadUrl }
@@ -146,7 +147,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
 
       // Tier 2: fork from dead session (best-effort, short timeout)
       try {
-        const forkResult = await provider.fork(recoveryInput)
+        const forkResult = await sessionRuntime.fork(provider.id, recoveryInput)
         if (!forkResult) throw new Error('provider cannot fork this session')
         restoreOnto(forkResult)
         return { name: lastTmuxName, method: 'forked', newName: forkResult.name, threadUrl: thread.threadUrl }
