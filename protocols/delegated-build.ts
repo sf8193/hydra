@@ -5,6 +5,7 @@ export default protocol('delegated-build', {
   display: 'Delegated Build',
 
   owner: 'pm',
+  roundPhase: 'building',
   cleanupPhase: 'closing',
   cancelPhase: 'cancelled',
 
