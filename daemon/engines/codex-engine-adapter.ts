@@ -227,10 +227,20 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
-  async sendKeys(info: SessionInfo, keys: string): Promise<void> {
+  async sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
     const target = `${info.tmuxName}:hydra-chat`
-    execFileSync('tmux', ['send-keys', '-t', target, '-l', keys], { timeout: 3000 })
-    execFileSync('tmux', ['send-keys', '-t', target, 'Enter'], { timeout: 3000 })
+    const action: TmuxKeyAction = opts?.raw
+      ? { target, mode: 'raw', keys: keys.split(/\s+/) }
+      : { target, mode: 'literal', text: keys, trailingKey: opts?.trailingKey }
+    if (info.turnState === 'working') {
+      return new Promise((resolve, reject) => {
+        queueCodexKeys(info.sessionId, action, (err) => {
+          if (err) reject(err); else resolve({ queued: true })
+        })
+      })
+    }
+    await sendTmuxKeys(action)
+    return { queued: false }
   }
 
   async interrupt(info: SessionInfo): Promise<void> {

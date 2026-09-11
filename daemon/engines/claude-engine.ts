@@ -240,9 +240,14 @@ export class ClaudeEngine implements EngineAdapter {
 
   ensureSurface(info: SessionInfo): boolean { return tmuxHasSession(info.tmuxName) }
 
-  async sendKeys(info: SessionInfo, keys: string): Promise<void> {
-    execFileSync('tmux', ['send-keys', '-t', info.tmuxName, '-l', keys], { timeout: 3000 })
-    execFileSync('tmux', ['send-keys', '-t', info.tmuxName, 'Enter'], { timeout: 3000 })
+  async sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
+    if (opts?.raw) {
+      execFileSync('tmux', ['send-keys', '-t', info.tmuxName, ...keys.split(/\s+/)], { timeout: 3000 })
+    } else {
+      execFileSync('tmux', ['send-keys', '-t', info.tmuxName, '-l', keys], { timeout: 3000 })
+      execFileSync('tmux', ['send-keys', '-t', info.tmuxName, opts?.trailingKey ?? 'Enter'], { timeout: 3000 })
+    }
+    return { queued: false }
   }
 
   async interrupt(info: SessionInfo): Promise<void> {

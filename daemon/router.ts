@@ -28,7 +28,7 @@ import { notePendingReply } from './reply-guard.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
 import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
-import { providerFor } from './session-provider.js'
+import { resolveEngine } from './engines/instances.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
 
@@ -835,8 +835,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const text = keysMatch[1].replace(/\n/g, ' ').trim()
             if (text) {
               try {
-                const provider = providerFor(info.engine)
-                if (!provider.ensureSurface(info)) throw new Error(`${provider.provider} interactive surface is unavailable`)
+                const adapter = info.adapter ?? resolveEngine(info.engine)
+                if (!adapter.ensureSurface(info)) throw new Error(`interactive surface is unavailable`)
                 // Map lowercase → canonical tmux key name (tmux is case-sensitive)
                 const TMUX_KEY_MAP = new Map<string, string>()
                 for (const k of [
@@ -856,7 +856,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 }
                 const resolved = tokens.map(resolveKey)
                 const allKeyNames = resolved.every((r): r is string => r !== null)
-                const target = provider.uiTarget(info)
+                const target = adapter.uiTarget(info)
                 let action: TmuxKeyAction = allKeyNames
                   ? { target, mode: 'raw', keys: resolved }
                   : { target, mode: 'literal', text }
@@ -870,23 +870,17 @@ gateway.onMessage(async (msg: InboundMessage) => {
                     action = { target, mode: 'literal', text: tokens.slice(0, -1).join(' '), trailingKey }
                   }
                 }
-                const queued = provider.capabilities.queueKeysWhileWorking && info.turnState === 'working'
-                if (queued) {
-                  const position = queueCodexKeys(info.sessionId, action, error => {
-                    void gateway.unreact(msg.channelId, msg.id, '⏳').catch(() => {})
-                    void gateway.react(msg.channelId, msg.id, error ? '❌' : '⌨️').catch(() => {})
-                    if (error) void gateway.send(msg.channelId, `Key delivery failed: ${error.message}`, { replyTo: msg.id }).catch(() => {})
-                    else setTimeout(() => { void handlePeekIntercept(msg) }, 500)
-                  })
+                const keyOpts = allKeyNames
+                  ? { raw: true }
+                  : action.mode === 'literal' && 'trailingKey' in action ? { trailingKey: action.trailingKey } : undefined
+                const keyText = allKeyNames ? resolved.join(' ') : (action.mode === 'literal' ? action.text ?? text : text)
+                const result = await adapter.sendKeys(info, keyText, keyOpts)
+                if (result.queued) {
                   void gateway.react(msg.channelId, msg.id, '⏳').catch(() => {})
-                  process.stderr.write(`daemon: queued keys for ${info.tmuxName} at position ${position}: ${text.slice(0, 100)}\n`)
+                  process.stderr.write(`daemon: queued keys for ${info.tmuxName}: ${text.slice(0, 100)}\n`)
                 } else {
-                  await sendTmuxKeys(action)
                   void gateway.react(msg.channelId, msg.id, '⌨️').catch(() => {})
-                  process.stderr.write(`daemon: sent keys to ${info.tmuxName} (${allKeyNames ? 'raw' : 'literal'}): ${text.slice(0, 100)}\n`)
-                }
-                // Immediate sends can be peeked now; queued sends peek after flush.
-                if (!queued) {
+                  process.stderr.write(`daemon: sent keys to ${info.tmuxName}: ${text.slice(0, 100)}\n`)
                   setTimeout(() => { void handlePeekIntercept(msg) }, 1000)
                 }
               } catch (err) {
@@ -902,9 +896,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
             if (stripped) {
               void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
               try {
-                const provider = providerFor(info.engine)
-                provider.ensureSurface(info)
-                Bun.spawn(['tmux', 'send-keys', '-t', provider.uiTarget(info), 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
+                const interruptAdapter = info.adapter ?? resolveEngine(info.engine)
+                interruptAdapter.ensureSurface(info)
+                void interruptAdapter.interrupt(info)
                 process.stderr.write(`daemon: interrupt sent to ${info.tmuxName} via ! prefix\n`)
               } catch (err) {
                 process.stderr.write(`daemon: interrupt failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)

@@ -109,7 +109,7 @@ export interface EngineAdapter {
   // Surface
   uiTarget(info: SessionInfo): string
   ensureSurface(info: SessionInfo): boolean
-  sendKeys(info: SessionInfo, keys: string): Promise<void>
+  sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }>
   interrupt(info: SessionInfo): Promise<void>
 
   // Probe — detect and resolve blocking TUI states
