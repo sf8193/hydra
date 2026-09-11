@@ -8,6 +8,7 @@ export default protocol('delegated-build', {
   roundPhase: 'building',
   cleanupPhase: 'closing',
   cancelPhase: 'cancelled',
+  fallbackDegradation: 'PM self-build (no delegation)',
 
   roles: {
     pm: 'The PM',
@@ -16,8 +17,9 @@ export default protocol('delegated-build', {
 
   phases: {
     clarifying:   { actor: 'pm',      half: 'top',    on: { spec_ready: 'building', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'spec_ready' },
-    building:     { actor: 'builder', half: 'bottom', on: { build_done: 'reviewing', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'build_done' },
+    building:     { actor: 'builder', half: 'bottom', on: { build_done: 'reviewing', timeout: 'cancelled', cancel: 'cancelled', fallback: 'pm_build' }, advanceEvent: 'build_done' },
     reviewing:    { actor: 'pm',      half: 'top',    on: { pm_approve: 'closing', pm_changes: 'building', timeout: 'cancelled', cancel: 'cancelled' } },
+    pm_build:     { actor: 'pm',      half: 'top',    on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     closing:      { actor: 'pm',      half: 'top',    on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:     { actor: 'pm',      half: 'top',    on: {} },
     cancelled:    { actor: 'pm',      half: 'top',    on: {} },
@@ -27,6 +29,7 @@ export default protocol('delegated-build', {
     clarifying: '15m',
     building: '30m',
     reviewing: '15m',
+    pm_build: '30m',
     closing: '5m',
   },
 
@@ -84,6 +87,13 @@ export default protocol('delegated-build', {
         ].join('\n')
       },
       builder: () => null,
+    },
+    onFallback: {
+      pm: () => [
+        `[system] The builder died and couldn't be recovered. You wrote the spec — implement it yourself.`,
+        ``,
+        `Read the thread for your spec and the builder's partial work (if any). Build the feature, then call \`advance({ content: "summary" })\` when done.`,
+      ].join('\n'),
     },
   },
 
