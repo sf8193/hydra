@@ -900,7 +900,7 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
 
     // Check tmux pane activity — source of truth for whether session is working.
     // turnState can be stale (set by bridge, not updated during long tool runs).
-    const tmuxActive = isTmuxRecentlyActive(info.tmuxName)
+    const tmuxActive = await isTmuxRecentlyActive(info.tmuxName)
     if (info.turnState === 'working' || tmuxActive) return
 
     const idleMs = Date.now() - info.lastActive

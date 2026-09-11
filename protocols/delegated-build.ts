@@ -56,10 +56,15 @@ export default protocol('delegated-build', {
       const taskLine = ctx.task
         ? `**Task:** ${ctx.task}`
         : `Read this thread for context — the PM's conversation describes what needs to be done.`
+      if (quick) {
+        return protocolSeed(ctx.protocol, 'builder', ctx)
+          + `\n\n${taskLine}`
+          + `\n\nImplement the task. When done, call \`advance({ content: "summary of what you built" })\`.`
+          + `\n\nUse \`fetch_messages\` to read the thread if you need more context.`
+      }
       return protocolSeed(ctx.protocol, 'builder', ctx)
-        + `\n\n${quick ? taskLine : `**Spec from PM:** ${ctx.task ?? 'Implement the spec provided in the handoff.'}`}`
-        + `\n\nImplement the task. When done, call \`advance({ content: "summary of what you built" })\`.`
-        + (quick ? `\n\nUse \`fetch_messages\` to read the thread if you need more context.` : '')
+        + `\n\nThe PM is writing a spec for you. Wait for the handoff notification — it will contain the full spec. Do not start building until you receive it.`
+        + `\n\nWhen you receive the spec, implement it. Then call \`advance({ content: "summary of what you built" })\`.`
     },
   },
 
