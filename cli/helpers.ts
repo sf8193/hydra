@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 import { spawnModel, TRANSCRIBE_TMUX } from '../shared/constants.js'
 import { withRaisedFdLimit } from '../shared/tmux-env.js'
+import { sourceEnvFiles } from '../shared/env-parse.js'
 
 // ---------------------------------------------------------------------------
 // Config resolution (replaces env-setup.sh)
@@ -26,8 +27,18 @@ export type HydraConfig = {
   byteModel: string
   byteAuth: 'auto' | 'keychain'
   byteCwd: string
+  spawnCwdBlank: boolean
   byteChannel: string
   socketTimeout: number
+}
+
+export function sourceStateDirEnv(stateDir: string): { configDir: string; spawnCwd: string; spawnCwdBlank: boolean } {
+  sourceEnvFiles([join(stateDir, '.env')])
+  return {
+    configDir: process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'),
+    spawnCwd: process.env.SPAWN_CWD?.trim() || homedir(),
+    spawnCwdBlank: process.env.SPAWN_CWD !== undefined && process.env.SPAWN_CWD.trim() === '',
+  }
 }
 
 export function resolveConfig(platform?: string): HydraConfig {
@@ -73,36 +84,15 @@ export function resolveConfig(platform?: string): HydraConfig {
   const stateDir = platformExplicit
     ? join(homedir(), '.claude', 'channels', platform)
     : process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', platform)
-  const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
-  const spawnCwd = process.env.SPAWN_CWD ?? homedir()
 
-  // Source .env from state dir (mirrors env-setup.sh)
-  const envFile = join(stateDir, '.env')
-  if (existsSync(envFile)) {
-    const content = readFileSync(envFile, 'utf-8')
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-      const eq = trimmed.indexOf('=')
-      if (eq === -1) continue
-      const key = trimmed.slice(0, eq)
-      let val = trimmed.slice(eq + 1)
-      // Strip surrounding quotes. Does NOT handle escape sequences (\", \n) or
-      // multiline values — if .env files grow beyond simple key=value, use dotenv.
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1)
-      }
-      if (!(key in process.env)) {
-        process.env[key] = val
-      }
-    }
-  }
+  const { configDir, spawnCwd, spawnCwdBlank } = sourceStateDirEnv(stateDir)
 
   return {
     platform,
     stateDir,
     configDir,
-    spawnCwd: process.env.SPAWN_CWD ?? spawnCwd,
+    spawnCwd,
+    spawnCwdBlank,
     hydraDir,
     daemonTmux: `${platform}-daemon`,
     byteTmux: process.env.BYTE_SESSION_NAME ?? `${platform}-byte`,
@@ -113,7 +103,7 @@ export function resolveConfig(platform?: string): HydraConfig {
     sockPath: join(stateDir, 'daemon.sock'),
     byteModel: spawnModel(),
     byteAuth: (process.env.HYDRA_AUTH?.trim() ?? 'auto') === 'keychain' ? 'keychain' : 'auto',
-    byteCwd: process.env.BYTE_CWD ?? spawnCwd,
+    byteCwd: process.env.BYTE_CWD || spawnCwd,
     byteChannel: process.env.BYTE_CHANNEL ?? '',
     socketTimeout: Math.max(Number(process.env.HYDRA_SOCKET_TIMEOUT) || 15_000, 1_000),
   }
@@ -500,11 +490,18 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
 // Daemon env string builder
 // ---------------------------------------------------------------------------
 
+export function requireSpawnCwd(cfg: HydraConfig): void {
+  if (!cfg.spawnCwdBlank) return
+  console.error('error: SPAWN_CWD is set but empty — every spawn and worktree would resolve against the wrong root')
+  console.error(`give it a value in ${join(cfg.stateDir, '.env')}, or unset it to fall back to ${homedir()}`)
+  process.exit(1)
+}
+
 export function buildDaemonEnvs(cfg: HydraConfig): string {
-  return [
+  const envs = [
     `PATH='${process.env.PATH}'`,
     `HYDRA_STATE_DIR=${shq(cfg.stateDir)}`,
-    `SPAWN_CWD=${shq(cfg.spawnCwd)}`,
+    `SPAWN_CWD=${shq(cfg.spawnCwdBlank ? '' : cfg.spawnCwd)}`,
     `CHAT_PLATFORM=${shq(cfg.platform)}`,
     `CLAUDE_CONFIG_DIR=${shq(cfg.configDir)}`,
     // The daemon caps this file itself (observability.trimDaemonLog). Passing the
@@ -512,5 +509,8 @@ export function buildDaemonEnvs(cfg: HydraConfig): string {
     // truth with the `tee -a` target above — and the daemon truncates only a path it
     // was handed, never one it guessed.
     `HYDRA_LOG=${shq(cfg.daemonLog)}`,
-  ].join(' ')
+  ]
+  const model = process.env.HYDRA_MODEL?.trim()
+  if (model) envs.push(`HYDRA_MODEL=${shq(model)}`)
+  return envs.join(' ')
 }
