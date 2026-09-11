@@ -27,6 +27,7 @@ export type InboundMessage = {
   hasExistingThread: boolean
   existingThreadId: string | null
   referenceMessageId: string | null
+  referenceChannelId: string | null
   effectiveThreadId: string | null  // normalized thread ID: in Discord = channelId when isThread; in Slack = channel:thread_ts
   attachments: AttachmentInfo[]
   createdAt: Date
@@ -179,6 +180,7 @@ export interface ChatGateway {
 
   // Channels & threads
   fetchChannel(id: string): Promise<ChannelInfo>
+  fetchMessage(channelId: string, messageId: string): Promise<FetchedMessage | null>
   fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]>
   createThread(channelId: string, name: string, opts?: {
     messageId?: string

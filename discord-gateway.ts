@@ -398,6 +398,23 @@ export class DiscordGateway implements ChatGateway {
     }
   }
 
+  async fetchMessage(channelId: string, messageId: string): Promise<FetchedMessage | null> {
+    try {
+      const ch = await this.fetchTextChannel(channelId)
+      const m = await ch.messages.fetch(messageId)
+      return {
+        id: m.id,
+        authorId: m.author.id,
+        authorUsername: m.author.username,
+        content: m.content,
+        attachmentCount: m.attachments.size,
+        createdAt: m.createdAt,
+      }
+    } catch {
+      return null
+    }
+  }
+
   async fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]> {
     const ch = await this.fetchTextChannel(channelId)
     const msgs = await ch.messages.fetch({ limit: Math.min(limit, 100) })
@@ -715,6 +732,7 @@ export class DiscordGateway implements ChatGateway {
       hasExistingThread: msg.hasThread,
       existingThreadId: msg.thread?.id ?? null,
       referenceMessageId: msg.reference?.messageId ?? null,
+      referenceChannelId: msg.reference?.channelId ?? null,
       effectiveThreadId: msg.channel.isThread() ? msg.channelId : (msg.thread?.id ?? null),
       attachments: atts,
       createdAt: msg.createdAt,
