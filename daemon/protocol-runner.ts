@@ -274,7 +274,13 @@ function setProtocolTools(run: ProtocolRun, sessionId: string): void {
 }
 
 function setRunTools(run: ProtocolRun): void {
-  for (const [, sid] of run.participants) setProtocolTools(run, sid)
+  // Only push tools to the active actor — idle participants don't need
+  // updated tools and the full JSON payload causes bridge backpressure.
+  const activeRole = run.protocol.phases[run.phase]?.actor
+  const activeSid = activeRole ? run.participants.get(activeRole) : undefined
+  if (activeSid) {
+    setProtocolTools(run, activeSid)
+  }
   registry.persist()
 }
 

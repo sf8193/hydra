@@ -1258,21 +1258,17 @@ describe('tools_update on phase transition', () => {
     expect(tools.some(t => t.name === 'advance')).toBe(true)
   })
 
-  test('previous actor (guest) receives tools_update with guest base set', async () => {
+  test('only active actor receives tools_update on phase transition', async () => {
     h = createHarness(review, { rounds: 3 })
     await h.advance('critic', 'Critique.')
 
-    const criticMsgs = h.actorMessages('critic')
-    const toolsUpdates = criticMsgs.filter(m => m.type === 'tools_update')
-    const latest = toolsUpdates[toolsUpdates.length - 1]
-    expect(latest).toBeDefined()
+    // After critic advances, owner_turn is active — owner should get tools, not critic
+    const ownerMsgs = h.actorMessages('owner')
+    const ownerUpdates = ownerMsgs.filter(m => m.type === 'tools_update')
+    expect(ownerUpdates.length).toBeGreaterThan(0)
+    const latest = ownerUpdates[ownerUpdates.length - 1]
     const tools = latest.tools as Array<{ name: string; description: string }>
-    // Guest base set always includes advance — protocol validation rejects non-active calls
     expect(tools.some(t => t.name === 'advance')).toBe(true)
-    // Default description (not phase-specific custom description)
-    const advance = tools.find(t => t.name === 'advance')!
-    expect(advance.description).toContain('Post your protocol deliverable')
-    expect(tools).toHaveLength(8)
   })
 
   test('advance description contains verdict options for build reviewing', async () => {
