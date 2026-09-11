@@ -1,0 +1,48 @@
+%% Spike — exploratory investigation with guide steering loop
+%% Explorer investigates depth-first, guide steers at checkpoints.
+%% The loop: exploring → steering → exploring (or reporting)
+
+sequenceDiagram
+    participant guide as Guide<br/>(thread owner)
+    participant daemon as daemon.ts
+    participant runner as protocol-<br/>runner.ts
+    participant explorer as Explorer<br/>(spawned)
+
+    guide->>daemon: spike: topic
+    daemon->>runner: startProtocolRun(spike,<br/>threadId, ownerSession)
+    runner->>explorer: spawn tmux session
+    runner-->>guide: [system] Spike starting
+
+    Note over runner: phase: exploring (60m)
+    runner->>explorer: onTurn — investigate the topic
+
+    loop steering loop
+        explorer->>runner: advance({ content: "checkpoint" })
+        runner->>runner: exploring → steering
+        Note over runner: phase: steering (5m)
+        runner-->>guide: onTurn — checkpoint + steer options
+
+        alt continue
+            guide->>runner: advance({ content: "...",<br/>verdict: "continue" })
+            runner->>runner: steering → exploring
+            runner-->>explorer: onTurn — continue investigating
+        else redirect
+            guide->>runner: advance({ content: "new focus",<br/>verdict: "redirect" })
+            runner->>runner: steering → exploring
+            runner-->>explorer: onTurn — redirected,<br/>new focus from guide
+        else wrap_up
+            guide->>runner: advance({ content: "...",<br/>verdict: "wrap_up" })
+            runner->>runner: steering → reporting
+        else timeout (5m)
+            runner->>runner: steering → exploring
+            runner-->>explorer: onTurn — timeout, continue
+        end
+    end
+
+    Note over runner: phase: reporting (10m)
+    runner-->>explorer: onTurn — write final report
+
+    explorer->>runner: advance({ content: "report" })
+    runner->>runner: reporting → complete
+    runner-->>guide: summary posted to thread
+    runner->>explorer: session killed
