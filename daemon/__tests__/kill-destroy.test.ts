@@ -87,7 +87,7 @@ function msg(content: string): InboundMessage {
     id: 'msg-kd', channelId: THREAD, authorId: 'u1', authorUsername: 'operator',
     content, isDM: false, isThread: true, isBot: false,
     parentChannelId: PARENT, hasExistingThread: false, existingThreadId: null,
-    referenceMessageId: null, effectiveThreadId: THREAD, attachments: [], createdAt: new Date(),
+    referenceMessageId: null, referenceChannelId: null, effectiveThreadId: THREAD, attachments: [], createdAt: new Date(),
   }
 }
 
