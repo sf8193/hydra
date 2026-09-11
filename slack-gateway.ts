@@ -246,6 +246,7 @@ export class SlackGateway implements ChatGateway {
         hasExistingThread: false,
         existingThreadId: (!!event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
         referenceMessageId: event.thread_ts ?? null,
+        referenceChannelId: null,
         effectiveThreadId: (!!event.thread_ts && event.thread_ts !== event.ts) ? `${event.channel}:${event.thread_ts}` : null,
         attachments: [],
         createdAt: new Date(parseFloat(event.ts) * 1000),
@@ -516,6 +517,38 @@ export class SlackGateway implements ChatGateway {
       parentId: parsed.threadTs ? parsed.channel : null,
       recipientId: isDM ? (ch as any).user ?? '' : '',
       sendable: true,
+    }
+  }
+
+  async fetchMessage(channelId: string, messageId: string): Promise<FetchedMessage | null> {
+    if (!this.app) throw new Error('not connected')
+    const { channel } = this.parseChannelId(channelId)
+    try {
+      const result = await this.app.client.conversations.history({
+        channel,
+        latest: messageId,
+        inclusive: true,
+        limit: 1,
+      })
+      const m = result.messages?.[0]
+      if (!m || m.ts !== messageId) return null
+      let username = m.user ?? 'unknown'
+      if (m.user) {
+        try {
+          const userInfo = await this.app.client.users.info({ user: m.user })
+          username = userInfo.user?.profile?.display_name || userInfo.user?.real_name || userInfo.user?.name || m.user
+        } catch {}
+      }
+      return {
+        id: m.ts!,
+        authorId: m.user ?? m.bot_id ?? 'unknown',
+        authorUsername: username,
+        content: m.text ?? '',
+        attachmentCount: (m.files ?? []).length,
+        createdAt: new Date(parseFloat(m.ts!) * 1000),
+      }
+    } catch {
+      return null
     }
   }
 
@@ -1058,6 +1091,7 @@ export class SlackGateway implements ChatGateway {
       hasExistingThread: false,
       existingThreadId: isThread ? `${msg.channel}:${msg.thread_ts}` : null,
       referenceMessageId: msg.thread_ts ?? null,
+      referenceChannelId: null,
       effectiveThreadId: isThread ? `${msg.channel}:${msg.thread_ts}` : null,
       attachments: atts,
       createdAt: new Date(parseFloat(msg.ts) * 1000),

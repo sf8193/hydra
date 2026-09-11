@@ -129,6 +129,21 @@ async function buildNotificationPayload(
     }
   }
 
+  let refContext: Record<string, string> = {}
+  if (msg.referenceMessageId) {
+    const refChannelId = msg.referenceChannelId ?? msg.channelId
+    try {
+      const ref = await gateway.fetchMessage(refChannelId, msg.referenceMessageId)
+      if (ref) {
+        refContext = {
+          referenced_message_id: ref.id,
+          referenced_message_user: ref.authorUsername,
+          referenced_message_content: ref.content,
+        }
+      }
+    } catch {}
+  }
+
   const meta: Record<string, string> = {
     chat_id: chatId,
     message_id: msg.id,
@@ -139,6 +154,7 @@ async function buildNotificationPayload(
     ...(downloadedFiles.length > 0 ? { downloaded_files: downloadedFiles.map(f => f.path).join('; ') } : {}),
     ...(transcripts.length > 0 ? { voice_transcript_count: String(transcripts.length) } : {}),
     ...threadContext,
+    ...refContext,
   }
 
   return { content, meta }
