@@ -360,7 +360,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
       run.decisions.push({ phase: advancePhaseFrom, role, value: verdict, because: content })
     }
 
-    if (result.to === run.protocol.roundPhase && advancePhaseFrom !== run.protocol.roundPhase) {
+    if (result.to === run.protocol.roundPhase && advancePhaseFrom !== run.protocol.roundPhase && advancePhaseFrom !== run.protocol.initialPhase) {
       run.currentRound++
     }
 

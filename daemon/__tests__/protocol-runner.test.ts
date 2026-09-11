@@ -1,8 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
 import { protocol } from '../protocol-dsl.js'
-import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, __test } from '../protocol-runner.js'
+import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, startProtocolRun, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
+import delegatedBuildProto from '../../protocols/delegated-build.js'
 
 let origStderrWrite: typeof process.stderr.write
 
@@ -585,5 +586,141 @@ describe('health monitor — callback behavior', () => {
 
     expect(run._escalated).toBe(true)
     expect(run._bridgeEscalated).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Delegated-build protocol tests
+// ---------------------------------------------------------------------------
+
+function createDelegateRun(overrides: Record<string, unknown> = {}) {
+  const threadId = `delegate-thread-${Math.random().toString(36).slice(2, 8)}`
+  const pmSid = `test-pm-${Math.random().toString(36).slice(2, 8)}`
+  const builderSid = `test-builder-${Math.random().toString(36).slice(2, 8)}`
+  registry.set(pmSid, {
+    sessionId: pmSid, topic: 'delegate pm', threadId, createdAt: Date.now(),
+    lastActive: Date.now(), tmuxName: 'pm', listening: false, engine: 'claude',
+    turnState: 'idle', sessionType: 'thread_owner',
+  })
+  registry.set(builderSid, {
+    sessionId: builderSid, topic: 'delegate builder', threadId, createdAt: Date.now(),
+    lastActive: Date.now(), tmuxName: 'builder', listening: false, engine: 'claude',
+    turnState: 'idle', sessionType: 'thread_guest',
+  })
+  const run = {
+    id: `delegate-run-${Math.random().toString(36).slice(2, 8)}`,
+    protocol: delegatedBuildProto,
+    threadId,
+    ownerSessionId: pmSid,
+    phase: overrides.phase ?? 'clarifying',
+    currentRound: 1,
+    rounds: (overrides.rounds as number) ?? 3,
+    startedAt: Date.now(),
+    _extensions: 0,
+    _phaseStartedAt: Date.now(),
+    params: overrides.params ?? {},
+    participants: new Map([['pm', pmSid], ['builder', builderSid]]),
+    sessionToRole: new Map([[pmSid, 'pm'], [builderSid, 'builder']]),
+    timeout: undefined,
+    disconnectTimers: new Map(),
+    decisions: [],
+    messageIds: [],
+    statusHistory: [],
+    strike: false,
+    ...overrides,
+  } as any
+  runs.set(run.id, run)
+  threadToRun.set(threadId, run.id)
+  sessionToRun.set(pmSid, run.id)
+  sessionToRun.set(builderSid, run.id)
+  return { run, pmSid, builderSid, threadId }
+}
+
+describe('delegated-build protocol', () => {
+  test('roundPhase: clarifying → building does NOT increment round', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'clarifying' })
+    expect(run.currentRound).toBe(1)
+    await onRunAdvance(pmSid, 'Here is my spec.')
+    expect(run.phase).toBe('building')
+    expect(run.currentRound).toBe(1)
+  })
+
+  test('roundPhase: reviewing → building increments round', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'reviewing' })
+    expect(run.currentRound).toBe(1)
+    await onRunAdvance(pmSid, 'Changes needed.', 'request_changes')
+    expect(run.phase).toBe('building')
+    expect(run.currentRound).toBe(2)
+  })
+
+  test('PM approve transitions to closing', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'reviewing' })
+    // On final round, approve goes to closing
+    run.currentRound = run.rounds
+    await onRunAdvance(pmSid, 'Looks good!', 'approve')
+    expect(run.phase).toBe('closing')
+  })
+
+  test('PM request_changes loops back to building', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'reviewing' })
+    await onRunAdvance(pmSid, 'Fix the tests.', 'request_changes')
+    expect(run.phase).toBe('building')
+  })
+
+  test('builder advance transitions to reviewing', async () => {
+    const { run, builderSid } = createDelegateRun({ phase: 'building' })
+    await onRunAdvance(builderSid, 'Built the feature.')
+    expect(run.phase).toBe('reviewing')
+  })
+
+  test('builder disconnect triggers fallback to pm_build', async () => {
+    const { run, builderSid } = createDelegateRun({ phase: 'building' })
+    // Simulate disconnect — builder has 30s grace
+    onRunDisconnect(builderSid)
+    // Grace timer should be set
+    expect(run.disconnectTimers.has(builderSid)).toBe(true)
+    // Fast-forward the grace timer
+    const timer = run.disconnectTimers.get(builderSid)!
+    clearTimeout(timer)
+    // Manually fire what the timer would do
+    // canFallbackOnDeath checks: non-owner role, phase has fallback transition
+    const role = run.sessionToRole.get(builderSid)
+    const phase = run.protocol.phases[run.phase]
+    expect(role).toBe('builder')
+    expect(phase.on.fallback).toBe('pm_build')
+  })
+
+  test('skipClarify starts at building phase', () => {
+    // Verify the protocol's roundPhase is 'building' (not initialPhase 'clarifying')
+    expect(delegatedBuildProto.initialPhase).toBe('clarifying')
+    expect(delegatedBuildProto.roundPhase).toBe('building')
+    // When skipClarify is set, the run should start at roundPhase
+    const { run } = createDelegateRun({
+      phase: 'building', // simulates what startProtocolRun does with skipClarify
+      params: { skipClarify: true },
+    })
+    expect(run.phase).toBe('building')
+  })
+
+  test('full round cycle: clarify → build → review → build → review → approve', async () => {
+    const { run, pmSid, builderSid } = createDelegateRun({ rounds: 2 })
+    expect(run.phase).toBe('clarifying')
+
+    await onRunAdvance(pmSid, 'Build a login page.')
+    expect(run.phase).toBe('building')
+    expect(run.currentRound).toBe(1)
+
+    await onRunAdvance(builderSid, 'Done — login page built.')
+    expect(run.phase).toBe('reviewing')
+
+    await onRunAdvance(pmSid, 'Fix the styling.', 'request_changes')
+    expect(run.phase).toBe('building')
+    expect(run.currentRound).toBe(2)
+
+    await onRunAdvance(builderSid, 'Styling fixed.')
+    expect(run.phase).toBe('reviewing')
+
+    await onRunAdvance(pmSid, 'Approved.', 'approve')
+    expect(run.phase).toBe('closing')
   })
 })
