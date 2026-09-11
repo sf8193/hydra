@@ -49,6 +49,7 @@ export function resolveConfig(platform?: string): HydraConfig {
 
   const hydraDir = join(import.meta.dir, '..')
 
+  const platformExplicit = !!platform
   if (!platform) {
     const channelsDir = join(homedir(), '.claude', 'channels')
     try {
@@ -66,7 +67,12 @@ export function resolveConfig(platform?: string): HydraConfig {
     if (!platform) platform = 'discord'
   }
 
-  const stateDir = process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', platform)
+  // When platform is explicit, derive stateDir from it — env vars may belong to
+  // a different platform (e.g. a session spawned by the slack daemon running
+  // `hydra up discord` inherits HYDRA_STATE_DIR pointing at slack).
+  const stateDir = platformExplicit
+    ? join(homedir(), '.claude', 'channels', platform)
+    : process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', platform)
   const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
   const spawnCwd = process.env.SPAWN_CWD ?? homedir()
 
