@@ -11,8 +11,8 @@ async function getProto() {
   return proto
 }
 
-export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
-  void gateway.react(msg.channelId, msg.id, '📋').catch(() => {})
+export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: 'claude' | 'codex', opts?: { skipClarify?: boolean }): Promise<void> {
+  void gateway.react(msg.channelId, msg.id, opts?.skipClarify ? '⚡' : '📋').catch(() => {})
 
   if (isNaN(rounds)) rounds = 3
 
@@ -41,7 +41,7 @@ export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds:
 
   try {
     const p = await getProto()
-    await startProtocolRun(p, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true })
+    await startProtocolRun(p, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true, skipClarify: opts?.skipClarify })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     await gateway.send(msg.channelId, `Delegated build failed to start: ${errMsg}`, { replyTo: msg.id })

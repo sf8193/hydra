@@ -129,7 +129,7 @@ export async function startProtocolRun(
     protocol: proto,
     threadId,
     ownerSessionId,
-    phase: proto.initialPhase,
+    phase: params.skipClarify && proto.roundPhase !== proto.initialPhase ? proto.roundPhase : proto.initialPhase,
     currentRound: 1,
     rounds,
     startedAt: Date.now(),

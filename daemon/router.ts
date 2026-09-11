@@ -666,6 +666,19 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
+      const delegateQuickMatch = msg.content.match(/^(?:\/delegate!|delegate!)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      if (delegateQuickMatch) {
+        const preModel = resolveProtocolModel(delegateQuickMatch[1]?.toLowerCase(), msg.channelId, msg.id)
+        if (preModel === false) return
+        const postModel = resolveProtocolModel(delegateQuickMatch[3]?.toLowerCase(), msg.channelId, msg.id)
+        if (postModel === false) return
+        const dRounds = parseInt(delegateQuickMatch[2] ?? '1')
+        const dTask = delegateQuickMatch[4]?.trim()
+        const selection = preModel ?? postModel
+        void handleDelegatedBuildIntercept(msg, dRounds, dTask, selection?.model, selection?.engine, { skipClarify: true })
+        return
+      }
+
       const delegateMatch = msg.content.match(/^(?:\/delegate|delegate)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
       if (delegateMatch) {
         const preModel = resolveProtocolModel(delegateMatch[1]?.toLowerCase(), msg.channelId, msg.id)

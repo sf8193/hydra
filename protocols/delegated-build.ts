@@ -51,13 +51,22 @@ export default protocol('delegated-build', {
   },
 
   seed: {
-    builder: (ctx) => protocolSeed(ctx.protocol, 'builder', ctx)
-      + `\n\n**Spec from PM:** ${ctx.task ?? 'Implement the spec provided in the handoff.'}\n\nImplement exactly what the PM specifies. When done, call \`advance({ content: "summary of what you built" })\`.`,
+    builder: (ctx) => {
+      const quick = ctx.skipClarify
+      const taskLine = ctx.task
+        ? `**Task:** ${ctx.task}`
+        : `Read this thread for context — the PM's conversation describes what needs to be done.`
+      return protocolSeed(ctx.protocol, 'builder', ctx)
+        + `\n\n${quick ? taskLine : `**Spec from PM:** ${ctx.task ?? 'Implement the spec provided in the handoff.'}`}`
+        + `\n\nImplement the task. When done, call \`advance({ content: "summary of what you built" })\`.`
+        + (quick ? `\n\nUse \`fetch_messages\` to read the thread if you need more context.` : '')
+    },
   },
 
   notifications: {
     onKickoff: {
       pm: (run) => {
+        if (run.params.skipClarify) return null
         const task = (run.params.task ?? run.params.topic ?? 'Clarify what needs to be built.') as string
         return [
           `[system] **Delegated Build** — clarification phase`,
