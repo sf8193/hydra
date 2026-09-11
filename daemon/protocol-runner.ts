@@ -3,7 +3,7 @@ import { registry, sessionEmoji, addCapability, removeCapability, setToolDescrip
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-import { isAlive, safeSend, isTmuxRecentlyActive, type StatusLineState } from './util.js'
+import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type StatusLineState } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { recordSessionDeath } from './observability.js'
@@ -1311,51 +1311,59 @@ function resetTimeout(run: ProtocolRun): void {
       if (run.phase !== phase || !actorSessionId) return
       const info = registry.get(actorSessionId)
       if (info?.turnState === 'working') {
-        process.stderr.write(`daemon: ${run.protocol.name} run: warning skipped — ${info.tmuxName} is actively working\n`)
+        process.stderr.write(`daemon: ${run.protocol.name} run: warning skipped — ${info.tmuxName} is actively working (turnState)\n`)
         return
       }
-      const ctx = info ? formatContextPercent(info.adapter ?? resolveEngine(info.engine), info) : '?'
-      const advanceCall = `Call \`${formatAdvanceUsagePattern(run.protocol, phase)}\``
-      const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
-      const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
-      const totalRemaining = Math.max(0, Math.round((run._phaseStartedAt + totalMs - Date.now()) / 60_000))
-      // Escalation: urgency text appears only after a deferral (elapsed > window), not on first warning
-      const urgency = elapsed > ms / 60_000 ? ` Phase has been running ${elapsed}m — ${totalRemaining}m until hard limit.` : ''
-      transport.sendOrQueue(actorSessionId, {
-        type: 'notification',
-        content: `[system] ⏰ Phase timeout in 2 minutes. ${advanceCall} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
-        meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-      })
-      void safeSend(run.threadId, `_⏰ ${info?.tmuxName ?? 'actor'} warned: 2m remaining (${ctx} context)_`)
-      process.stderr.write(`daemon: ${run.protocol.name} run: warning sent to ${info?.tmuxName ?? actorSessionId} (${ctx} context, ${elapsed}m elapsed)\n`)
+      // Async tmux check — if active, skip the warning
+      if (info && isTmuxRecentlyActiveSync(info.tmuxName)) {
+        process.stderr.write(`daemon: ${run.protocol.name} run: warning skipped — ${info.tmuxName} is actively working (tmux)\n`)
+        return
+      }
+      sendWarning()
+      function sendWarning() {
+        if (run.phase !== phase) return
+        const ctx = info ? formatContextPercent(info.adapter ?? resolveEngine(info.engine), info) : '?'
+        const advanceCall = `Call \`${formatAdvanceUsagePattern(run.protocol, phase)}\``
+        const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
+        const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
+        const totalRemaining = Math.max(0, Math.round((run._phaseStartedAt + totalMs - Date.now()) / 60_000))
+        const urgency = elapsed > ms / 60_000 ? ` Phase has been running ${elapsed}m — ${totalRemaining}m until hard limit.` : ''
+        transport.sendOrQueue(actorSessionId!, {
+          type: 'notification',
+          content: `[system] ⏰ Phase timeout in 2 minutes. ${advanceCall} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
+          meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+        })
+        void safeSend(run.threadId, `_⏰ ${info?.tmuxName ?? 'actor'} warned: 2m remaining (${ctx} context)_`)
+        process.stderr.write(`daemon: ${run.protocol.name} run: warning sent to ${info?.tmuxName ?? actorSessionId} (${ctx} context, ${elapsed}m elapsed)\n`)
+      }
     }, ms - WARNING_BEFORE_TIMEOUT_MS)
   }
 
-  run.timeout = setTimeout(async () => {
+  run.timeout = setTimeout(() => {
     if (run.phase !== phase) return
     const info = actorSessionId ? registry.get(actorSessionId) : undefined
     if (info?.turnState === 'working') {
-      process.stderr.write(`daemon: ${run.protocol.name} run: timeout deferred — ${info.tmuxName} is actively working\n`)
+      process.stderr.write(`daemon: ${run.protocol.name} run: timeout deferred — ${info.tmuxName} is actively working (turnState)\n`)
       resetTimeout(run)
       return
     }
-    process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
-    notifyActorOfTimeout(run, actorSessionId, phase)
-    // A silent non-owner is, to the run, a dead one: the phase produced nothing
-    // either way. Take the same fallback a crash would, so a critic that hangs
-    // rather than exits doesn't cost the whole review. It enters as `silence`,
-    // not `death` — the participant is alive and about to be retired, and the
-    // thread record has to say which of those two things happened.
-    // (canFallbackOnDeath already excludes the owner and honours +no-fallback.)
-    // No deferred-fallback branch here: the timeout fires for the phase's own
-    // actor, and a phase whose actor is a non-owner is exactly the phase a
-    // protocol declares on.fallback out of — there is nothing to defer to.
-    if (actorRole && canFallbackOnDeath(run, actorRole)) {
-      process.stderr.write(`daemon: ${run.protocol.name} run: ${actorRole} timed out — falling back instead of cancelling\n`)
-      void enterFallbackPhase(run, actorRole, 'silence')
+    if (info && isTmuxRecentlyActiveSync(info.tmuxName)) {
+      process.stderr.write(`daemon: ${run.protocol.name} run: timeout deferred — ${info.tmuxName} is actively working (tmux)\n`)
+      resetTimeout(run)
       return
     }
-    await fireTransition(run, 'timeout', '', 'timed out')
+    fireTimeout()
+    function fireTimeout() {
+      if (run.phase !== phase) return
+      process.stderr.write(`daemon: ${run.protocol.name} run: phase "${run.phase}" timed out\n`)
+      notifyActorOfTimeout(run, actorSessionId, phase)
+      if (actorRole && canFallbackOnDeath(run, actorRole)) {
+      process.stderr.write(`daemon: ${run.protocol.name} run: ${actorRole} timed out — falling back instead of cancelling\n`)
+        void enterFallbackPhase(run, actorRole, 'silence')
+        return
+      }
+      void fireTransition(run, 'timeout', '', 'timed out')
+    }
   }, ms)
 
   // Invariant: on deferral (recursive resetTimeout), _totalTimeout and

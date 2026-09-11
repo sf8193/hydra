@@ -52,6 +52,16 @@ export function tmuxHasSession(name: string): boolean {
   }
 }
 
+export function isTmuxRecentlyActiveSync(name: string, thresholdSeconds = 60): boolean {
+  try {
+    const ts = execFileSync('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString().trim()
+    const epoch = parseInt(ts, 10)
+    if (isNaN(epoch)) return false
+    return (Date.now() / 1000 - epoch) < thresholdSeconds
+  } catch { return false }
+}
+
 export async function isTmuxRecentlyActive(name: string, thresholdSeconds = 60): Promise<boolean> {
   try {
     const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
