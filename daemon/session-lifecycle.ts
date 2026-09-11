@@ -646,7 +646,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   // Central model resolution: alias → full ID → validate. All callers can pass
-  // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-4-6[1m]").
+  // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-5[1m]").
   const rawModel = opts?.model
   const model = rawModel ? (resolveModelAlias(rawModel) ?? rawModel) : spawnModel()
 

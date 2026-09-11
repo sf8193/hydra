@@ -189,8 +189,8 @@ describe('buildTemplateSpawnOpts', () => {
 
   test('model override takes priority over template.model', () => {
     const t: ReturnType<typeof getTemplate> = { prompt: 'test', model: 'claude-opus-4-6[1m]' }
-    const opts = buildTemplateSpawnOpts('test', t!, 'claude-sonnet-4-6[1m]')
-    expect(opts.model).toBe('claude-sonnet-4-6[1m]')
+    const opts = buildTemplateSpawnOpts('test', t!, 'claude-sonnet-5[1m]')
+    expect(opts.model).toBe('claude-sonnet-5[1m]')
   })
 
   test('template model used when no override', () => {

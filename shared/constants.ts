@@ -7,7 +7,6 @@ export const KNOWN_MODELS = new Set([
   'claude-fable-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
-  'claude-sonnet-4-6',
   'claude-opus-4-6',
   'claude-opus-4-5-20251101',
   'claude-haiku-4-5-20251001',
@@ -16,12 +15,11 @@ export const KNOWN_MODELS = new Set([
 
 /** Short aliases for chat commands like `spawn sonnet: topic`. */
 export const MODEL_ALIASES: Record<string, string> = {
-  'sonnet': 'claude-sonnet-4-6[1m]',
+  'sonnet': 'claude-sonnet-5[1m]',
   'haiku': 'claude-haiku-4-5-20251001',
   'opus': 'claude-opus-4-6[1m]',
   'fable': 'claude-fable-5[1m]',
   'opus-5': 'claude-opus-5[1m]',
-  'sonnet-5': 'claude-sonnet-5[1m]',
   'opus-4-7': 'claude-opus-4-7[1m]',
   'opus-4-8': 'claude-opus-4-8[1m]',
 }

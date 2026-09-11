@@ -3,7 +3,7 @@ import { resolveModelAlias, resolveCodexModelAlias, isKnownModel, MODEL_ALIASES,
 
 describe('resolveModelAlias', () => {
   test('resolves short aliases', () => {
-    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-4-6[1m]')
+    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5[1m]')
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001')
     expect(resolveModelAlias('opus')).toBe('claude-opus-4-6[1m]')
     expect(resolveModelAlias('fable')).toBe('claude-fable-5[1m]')
@@ -12,11 +12,11 @@ describe('resolveModelAlias', () => {
   test('resolves hyphenated aliases', () => {
     expect(resolveModelAlias('opus-4-7')).toBe('claude-opus-4-7[1m]')
     expect(resolveModelAlias('opus-4-8')).toBe('claude-opus-4-8[1m]')
-    expect(resolveModelAlias('sonnet-5')).toBe('claude-sonnet-5[1m]')
+    // sonnet-5 alias removed — 'sonnet' now points to sonnet-5
   })
 
   test('is case-insensitive', () => {
-    expect(resolveModelAlias('Sonnet')).toBe('claude-sonnet-4-6[1m]')
+    expect(resolveModelAlias('Sonnet')).toBe('claude-sonnet-5[1m]')
     expect(resolveModelAlias('HAIKU')).toBe('claude-haiku-4-5-20251001')
   })
 
@@ -28,7 +28,7 @@ describe('resolveModelAlias', () => {
 
   test('returns undefined for full model IDs (not an alias lookup)', () => {
     expect(resolveModelAlias('claude-opus-4-6')).toBeUndefined()
-    expect(resolveModelAlias('claude-sonnet-4-6[1m]')).toBeUndefined()
+    expect(resolveModelAlias('claude-sonnet-5[1m]')).toBeUndefined()
   })
 })
 
@@ -49,13 +49,13 @@ describe('resolveCodexModelAlias', () => {
 describe('isKnownModel', () => {
   test('recognizes bare model IDs', () => {
     expect(isKnownModel('claude-opus-4-6')).toBe(true)
-    expect(isKnownModel('claude-sonnet-4-6')).toBe(true)
+    expect(isKnownModel('claude-sonnet-5')).toBe(true)
     expect(isKnownModel('claude-haiku-4-5-20251001')).toBe(true)
   })
 
   test('recognizes [1m] suffixed model IDs', () => {
     expect(isKnownModel('claude-opus-4-6[1m]')).toBe(true)
-    expect(isKnownModel('claude-sonnet-4-6[1m]')).toBe(true)
+    expect(isKnownModel('claude-sonnet-5[1m]')).toBe(true)
   })
 
   test('rejects unknown models', () => {
