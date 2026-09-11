@@ -1,6 +1,6 @@
 import { realpathSync, writeFileSync, renameSync } from 'fs'
 import { join, sep } from 'path'
-import { execSync, execFileSync } from 'child_process'
+import { execSync, execFileSync, execFile } from 'child_process'
 import { gateway, STATE_DIR } from './config.js'
 import { formatDiscordTables } from '../discord-table-format.js'
 
@@ -50,6 +50,18 @@ export function tmuxHasSession(name: string): boolean {
   } catch {
     return false
   }
+}
+
+export async function isTmuxRecentlyActive(name: string, thresholdSeconds = 60): Promise<boolean> {
+  try {
+    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+      execFile('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
+        { encoding: 'utf8', timeout: 2000 }, (err, stdout) => err ? reject(err) : resolve({ stdout }))
+    })
+    const epoch = parseInt(stdout.trim(), 10)
+    if (isNaN(epoch)) return false
+    return (Date.now() / 1000 - epoch) < thresholdSeconds
+  } catch { return false }
 }
 
 export function getContextPercent(tmuxName: string): string {

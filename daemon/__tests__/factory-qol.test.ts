@@ -118,7 +118,7 @@ afterEach(async () => {
     clearTimeout(run.timeout)
     clearTimeout(run._warningTimeout)
     clearTimeout(run._totalTimeout)
-    if (run._keepaliveTimer) clearInterval(run._keepaliveTimer)
+    if (run._healthMonitor) clearInterval(run._healthMonitor)
     for (const t of run.disconnectTimers?.values() ?? []) clearTimeout(t)
   }
   for (const runId of [...runner.runs.keys()]) runner.runs.delete(runId)

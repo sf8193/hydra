@@ -3,7 +3,7 @@ import { registry, sessionEmoji, addCapability, removeCapability, setToolDescrip
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-import { isAlive, safeSend, type StatusLineState } from './util.js'
+import { isAlive, safeSend, isTmuxRecentlyActive, type StatusLineState } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { recordSessionDeath } from './observability.js'
@@ -49,7 +49,10 @@ export type ProtocolRun = StatusLineState & {
   // completion, to label the CompletionEvent — the phase itself can't say it,
   // since a completed run has already moved on to a terminal phase.
   _enteredFallback?: boolean
-  _keepaliveTimer?: ReturnType<typeof setInterval>
+  _healthMonitor?: ReturnType<typeof setInterval>
+  _nudged?: boolean
+  _escalated?: boolean
+  _bridgeEscalated?: boolean
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
   strike: boolean
@@ -60,8 +63,9 @@ export type ProtocolRun = StatusLineState & {
 const MAX_EXTENSIONS_PER_PHASE = 2
 const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
-const KEEPALIVE_INTERVAL_MS = 30_000
-const KEEPALIVE_ENABLED = process.env.HYDRA_KEEPALIVE !== '0'
+const HEALTH_CHECK_INTERVAL_MS = 30_000
+const IDLE_NUDGE_MS = 5 * 60 * 1000
+const IDLE_ESCALATE_MS = 10 * 60 * 1000
 
 const runs = new Map<string, ProtocolRun>()
 const threadToRun = new Map<string, string>()
@@ -125,7 +129,7 @@ export async function startProtocolRun(
     protocol: proto,
     threadId,
     ownerSessionId,
-    phase: proto.initialPhase,
+    phase: params.skipClarify && proto.roundPhase !== proto.initialPhase ? proto.roundPhase : proto.initialPhase,
     currentRound: 1,
     rounds,
     startedAt: Date.now(),
@@ -240,15 +244,15 @@ function describePhaseTools(run: ProtocolRun, sessionId: string): { descriptions
 
 function buildAdvanceSchema(ia: { verdict: 'none' | 'required' | 'optional'; options?: readonly string[] }): object {
   const contentProp = { type: 'string', description: 'Your deliverable — posted to the thread verbatim.' }
-  if (ia.verdict === 'none') {
-    return { type: 'object', properties: { content: contentProp }, required: ['content'] }
+  const verdictDesc = ia.options?.length
+    ? `Structured choice: ${ia.options.join(', ')}.`
+    : 'Optional structured choice (pass when the protocol phase requires one).'
+  const verdictProp = { type: 'string', description: verdictDesc }
+  return {
+    type: 'object',
+    properties: { content: contentProp, verdict: verdictProp },
+    required: ia.verdict === 'required' ? ['content', 'verdict'] : ['content'],
   }
-  const optionsList = ia.options?.length ? ia.options.join(', ') : 'see protocol'
-  const verdictProp = { type: 'string', description: `Structured choice: ${optionsList}.` }
-  if (ia.verdict === 'required') {
-    return { type: 'object', properties: { content: contentProp, verdict: verdictProp }, required: ['content', 'verdict'] }
-  }
-  return { type: 'object', properties: { content: contentProp, verdict: verdictProp }, required: ['content'] }
 }
 
 function clearProtocolOverrides(info: SessionInfo): void {
@@ -356,7 +360,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
       run.decisions.push({ phase: advancePhaseFrom, role, value: verdict, because: content })
     }
 
-    if (result.to === run.protocol.initialPhase && advancePhaseFrom !== run.protocol.initialPhase) {
+    if (result.to === run.protocol.roundPhase && advancePhaseFrom !== run.protocol.roundPhase && advancePhaseFrom !== run.protocol.initialPhase) {
       run.currentRound++
     }
 
@@ -644,7 +648,7 @@ async function announceFallbackPhase(run: ProtocolRun, instructions: string): Pr
   // would leak setTimeout/setInterval handles past cleanupRun — bail instead.
   if (isTerminal(run)) return
   resetTimeout(run) // give the owner the full fallback window to work
-  startKeepalive(run)
+  startHealthMonitor(run)
 }
 
 async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: string, claudeSessionId: string): Promise<void> {
@@ -720,7 +724,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   registerParticipant(run, role, result.sessionId)
 
   resetTimeout(run)
-  startKeepalive(run)
+  startHealthMonitor(run)
   process.stderr.write(`daemon: ${run.protocol.name} run: ${role} auto-resumed: ${deadSessionId} → ${result.sessionId}\n`)
 }
 
@@ -819,6 +823,9 @@ function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   run.phase = to
   run._extensions = 0
   run._phaseStartedAt = Date.now()
+  run._nudged = false
+  run._escalated = false
+  run._bridgeEscalated = false
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
   if (!isTerminal(run)) setRunTools(run)
@@ -842,29 +849,81 @@ function clearPhaseTimers(run: ProtocolRun): void {
   if (run.timeout) { clearTimeout(run.timeout); run.timeout = undefined }
   if (run._warningTimeout) { clearTimeout(run._warningTimeout); run._warningTimeout = undefined }
   if (run._totalTimeout) { clearTimeout(run._totalTimeout); run._totalTimeout = undefined }
-  if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
+  if (run._healthMonitor) { clearInterval(run._healthMonitor); run._healthMonitor = undefined }
 }
 
-export function sendKeepaliveNotification(run: ProtocolRun, sessionId: string, actor: string): void {
-  transport.sendOrQueue(sessionId, {
-    type: 'notification',
-    content: `[system] keepalive`,
-    meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
+async function runHealthCheck(run: ProtocolRun): Promise<void> {
+    if (isTerminal(run)) { clearInterval(run._healthMonitor!); run._healthMonitor = undefined; return }
+
+    const actorRole = run.protocol.phases[run.phase]?.actor
+    if (!actorRole) return
+    const actorSid = run.participants.get(actorRole)
+    if (!actorSid) return
+    const info = registry.get(actorSid)
+    if (!info) return
+
+    const alive = info.adapter ? await info.adapter.isAlive(info) : isAlive(info)
+    const connected = transport.has(actorSid)
+
+    // Hard cap check first — unconditional, never skipped by turnState
+    const phaseElapsed = Date.now() - run._phaseStartedAt
+    const hardCapMs = (run.protocol.windowMs(run.phase) ?? 30 * 60 * 1000) * TOTAL_PHASE_CAP_FACTOR
+    if (phaseElapsed > hardCapMs) {
+      process.stderr.write(`daemon: health: ${info.tmuxName} hit hard cap (${Math.round(phaseElapsed / 60_000)}m)\n`)
+      clearInterval(run._healthMonitor!)
+      run._healthMonitor = undefined
+      notifyActorOfTimeout(run, actorSid, run.phase)
+      if (actorRole && canFallbackOnDeath(run, actorRole)) {
+        void enterFallbackPhase(run, actorRole, 'silence')
+      } else {
+        void fireTransition(run, 'timeout', '', 'health monitor hard cap')
+      }
+      return
+    }
+
+    // Dead or half-dead: recover immediately regardless of turnState
+    if (!alive) {
+      process.stderr.write(`daemon: health: ${info.tmuxName} is dead (connected=${connected}), triggering recovery\n`)
+      onRunDisconnect(actorSid)
+      return
+    }
+    if (!connected) {
+      // Process alive but bridge down — can't deliver notifications.
+      // Only nudge the thread (not the session) and let disconnect handler sort it out.
+      if (!run._bridgeEscalated) {
+        run._bridgeEscalated = true
+        void safeSend(run.threadId, `_⚠️ ${info.tmuxName} is running but disconnected — bridge may be recovering_`)
+        process.stderr.write(`daemon: health: ${info.tmuxName} alive but disconnected\n`)
+      }
+      return
+    }
+
+    // Check tmux pane activity — source of truth for whether session is working.
+    // turnState can be stale (set by bridge, not updated during long tool runs).
+    const tmuxActive = await isTmuxRecentlyActive(info.tmuxName)
+    if (info.turnState === 'working' || tmuxActive) return
+
+    const idleMs = Date.now() - info.lastActive
+
+    if (idleMs > IDLE_ESCALATE_MS && !run._escalated) {
+      run._escalated = true
+      const ctx = info.adapter ? formatContextPercent(info.adapter, info) : '?'
+      void safeSend(run.threadId, `_⚠️ ${info.tmuxName} idle for ${Math.round(idleMs / 60_000)}m (${ctx} context)_`)
+      notifyParticipant(run, actorSid, `[system] ⚠️ You've been idle for ${Math.round(idleMs / 60_000)} minutes. Use advance() to post your response, or the protocol will time out.`)
+      process.stderr.write(`daemon: health: ${info.tmuxName} escalated — idle ${Math.round(idleMs / 60_000)}m\n`)
+    } else if (idleMs > IDLE_NUDGE_MS && !run._nudged) {
+      run._nudged = true
+      notifyParticipant(run, actorSid, `[system] Checking in — are you still working? Use advance() when ready.`)
+      process.stderr.write(`daemon: health: ${info.tmuxName} nudged — idle ${Math.round(idleMs / 60_000)}m\n`)
+    }
 }
 
-function startKeepalive(run: ProtocolRun): void {
-  if (run._keepaliveTimer) { clearInterval(run._keepaliveTimer); run._keepaliveTimer = undefined }
-  if (!KEEPALIVE_ENABLED) return
-  const actor = run.protocol.phases[run.phase]?.actor
-  if (!actor) return
-  run._keepaliveTimer = setInterval(() => {
-    if (isTerminal(run)) { clearInterval(run._keepaliveTimer!); run._keepaliveTimer = undefined; return }
-    const sid = run.participants.get(actor)
-    if (!sid) { clearInterval(run._keepaliveTimer!); run._keepaliveTimer = undefined; return }
-    sendKeepaliveNotification(run, sid, actor)
-    process.stderr.write(`daemon: ${run.protocol.name} run: keepalive sent to ${actor}\n`)
-  }, KEEPALIVE_INTERVAL_MS)
+function startHealthMonitor(run: ProtocolRun): void {
+  if (run._healthMonitor) { clearInterval(run._healthMonitor); run._healthMonitor = undefined }
+  run._nudged = false
+  run._escalated = false
+  run._bridgeEscalated = false
+  run._healthMonitor = setInterval(() => { void runHealthCheck(run) }, HEALTH_CHECK_INTERVAL_MS)
 }
 
 function clearTimers(run: ProtocolRun): void {
@@ -996,7 +1055,7 @@ async function afterTransition(run: ProtocolRun, prevPhase: string, content: str
     resetTimeout(run)
   }
 
-  startKeepalive(run)
+  startHealthMonitor(run)
 }
 
 
@@ -1405,7 +1464,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 
 export const __test = process.env.NODE_ENV === 'test'
   ? {
-      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, KEEPALIVE_INTERVAL_MS, sendKeepaliveNotification,
+      runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
@@ -1459,6 +1518,7 @@ function runnerHooks(name: string, protoName: string) {
 runnerHooks('review', 'review')
 runnerHooks('build_v2', 'build')
 runnerHooks('spike_v2', 'spike')
+runnerHooks('delegated_build', 'delegated-build')
 
 // Protocol context for autopsy — joins session to protocol state
 export function getProtocolContext(sessionId: string): { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null {

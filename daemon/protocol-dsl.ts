@@ -71,6 +71,8 @@ export type ProtocolSpec<
   grace?: GraceDef
   owner?: keyof Roles & string
   initialPhase?: keyof Phases & string
+  /** Phase that marks the start of a new round when transitioned TO. Defaults to initialPhase. */
+  roundPhase?: keyof Phases & string
   cleanupPhase?: keyof Phases & string
   cancelPhase?: keyof Phases & string
   // What a protocol gives up when the fallback path runs instead of the normal
@@ -146,6 +148,7 @@ export type Protocol<
   roles: RoleDef
   phases: Record<string, PhaseDef>
   initialPhase: Phase
+  roundPhase: Phase
   cleanupPhase?: string
   cancelPhase?: string
   fallbackDegradation?: string
@@ -273,6 +276,8 @@ export function protocol<
 
   const initialPhase = (spec.initialPhase as string) ?? phaseNames[0]
   if (!phaseNames.includes(initialPhase)) throw new Error(`protocol "${name}": initialPhase "${initialPhase}" is not a declared phase`)
+  const roundPhase = (spec.roundPhase as string) ?? initialPhase
+  if (!phaseNames.includes(roundPhase)) throw new Error(`protocol "${name}": roundPhase "${roundPhase}" is not a declared phase`)
 
   if (spec.cleanupPhase && !phaseNames.includes(spec.cleanupPhase as string)) {
     throw new Error(`protocol "${name}": cleanupPhase "${spec.cleanupPhase}" is not a declared phase`)
@@ -326,6 +331,7 @@ export function protocol<
     roles: spec.roles,
     phases: spec.phases as Record<string, PhaseDef>,
     initialPhase,
+    roundPhase,
     cleanupPhase: spec.cleanupPhase as string | undefined,
     cancelPhase: spec.cancelPhase as string | undefined,
     fallbackDegradation: spec.fallbackDegradation,
