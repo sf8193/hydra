@@ -65,7 +65,7 @@ async function spawnAndNotify(
   const resolvedModel = model ?? template?.template.model
   const spawnOpts = {
     ...(template && buildTemplateSpawnOpts(template.name, template.template, model)),
-    ...(!template && { trigger: 'spawn:' }),
+    ...(!template && { trigger: 'spawn:', ...(model && { model }) }),
     ...(engine && { engine }),
     initiator: msg.authorUsername,
   }
