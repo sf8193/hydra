@@ -6,7 +6,7 @@ describe('resolveModelAlias', () => {
     expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5[1m]')
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001')
     expect(resolveModelAlias('opus')).toBe('claude-opus-4-6[1m]')
-    expect(resolveModelAlias('fable')).toBe('claude-fable-5[1m]')
+    expect(resolveModelAlias('fable')).toBe('claude-fable-5-1[1m]')
   })
 
   test('resolves hyphenated aliases', () => {

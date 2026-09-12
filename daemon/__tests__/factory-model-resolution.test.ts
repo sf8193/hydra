@@ -20,7 +20,7 @@ describe('getDifficultyLadder', () => {
   test('hard: opus-5 builds, fable reviews', () => {
     const { builder, reviewer } = getDifficultyLadder('hard')
     expect(builder).toBe('claude-opus-5[1m]')
-    expect(reviewer).toBe('claude-fable-5[1m]')
+    expect(reviewer).toBe('claude-fable-5-1[1m]')
   })
 
   test('covers all valid difficulties', () => {
@@ -51,7 +51,7 @@ describe('resolveModels', () => {
     test('hard: returns ladder defaults', () => {
       const { builder, reviewer, warning } = resolveModels('hard')
       expect(builder).toBe('claude-opus-5[1m]')
-      expect(reviewer).toBe('claude-fable-5[1m]')
+      expect(reviewer).toBe('claude-fable-5-1[1m]')
       expect(warning).toBeUndefined()
     })
   })
@@ -59,7 +59,7 @@ describe('resolveModels', () => {
   describe('explicit overrides', () => {
     test('builder override only: uses override + ladder reviewer', () => {
       const { builder, reviewer, warning } = resolveModels('easy', 'fable')
-      expect(builder).toBe('claude-fable-5[1m]')
+      expect(builder).toBe('claude-fable-5-1[1m]')
       expect(reviewer).toBe('claude-opus-4-8[1m]')  // easy ladder reviewer
       expect(warning).toBeUndefined()
     })
@@ -73,7 +73,7 @@ describe('resolveModels', () => {
 
     test('both overrides: uses both', () => {
       const { builder, reviewer, warning } = resolveModels('easy', 'fable', 'opus-5')
-      expect(builder).toBe('claude-fable-5[1m]')
+      expect(builder).toBe('claude-fable-5-1[1m]')
       expect(reviewer).toBe('claude-opus-5[1m]')
       expect(warning).toBeUndefined()
     })
@@ -119,10 +119,10 @@ describe('resolveModels', () => {
       // easy ladder reviewer is opus-4-8, so force builder=fable, reviewer=fable
       // ladder.reviewer for easy is opus-4-8 which differs → uses ladder reviewer
       const { builder, reviewer, warning } = resolveModels('easy', 'fable', 'fable')
-      expect(builder).toBe('claude-fable-5[1m]')
+      expect(builder).toBe('claude-fable-5-1[1m]')
       expect(reviewer).toBe('claude-opus-4-8[1m]')  // easy ladder reviewer
       expect(warning).toBeTruthy()
-      expect(warning).toContain('Builder and reviewer both resolved to claude-fable-5')
+      expect(warning).toContain('Builder and reviewer both resolved to claude-fable-5-1')
     })
 
     test('collision where ladder reviewer also same: uses FALLBACK_REVIEWERS', () => {
@@ -140,7 +140,7 @@ describe('resolveModels', () => {
       // hard ladder: builder=opus-5, reviewer=fable-5
       // Force both to opus-5 → collision → ladder reviewer is fable-5 (different) → uses ladder reviewer
       const { reviewer, warning } = resolveModels('hard', 'opus-5', 'opus-5')
-      expect(reviewer).toBe('claude-fable-5[1m]')  // hard ladder reviewer
+      expect(reviewer).toBe('claude-fable-5-1[1m]')  // hard ladder reviewer
       expect(warning).toBeTruthy()
     })
 
@@ -156,8 +156,8 @@ describe('resolveModels', () => {
       // hard ladder: builder=opus-5, reviewer=fable-5
       // Force builder=fable, reviewer=fable → collision → ladder.reviewer(fable-5) also same → FALLBACK_REVIEWERS
       const { builder, reviewer, warning } = resolveModels('hard', 'fable', 'fable')
-      expect(builder).toBe('claude-fable-5[1m]')
-      // FALLBACK_REVIEWERS['claude-fable-5'] = 'claude-opus-5[1m]'
+      expect(builder).toBe('claude-fable-5-1[1m]')
+      // FALLBACK_REVIEWERS['claude-fable-5-1'] = 'claude-opus-5[1m]'
       expect(reviewer).toBe('claude-opus-5[1m]')
       expect(warning).toBeTruthy()
     })

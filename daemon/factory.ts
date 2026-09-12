@@ -700,7 +700,7 @@ export function getDifficultyLadder(difficulty: Difficulty): { builder: string; 
   switch (difficulty) {
     case 'easy':   return { builder: 'claude-opus-4-6[1m]',  reviewer: 'claude-opus-4-8[1m]' }
     case 'medium': return { builder: 'claude-opus-4-8[1m]',  reviewer: 'claude-opus-4-6[1m]' }
-    case 'hard':   return { builder: 'claude-opus-5[1m]',    reviewer: 'claude-fable-5[1m]' }
+    case 'hard':   return { builder: 'claude-opus-5[1m]',    reviewer: 'claude-fable-5-1[1m]' }
   }
 }
 
@@ -748,7 +748,8 @@ export function resolveModels(
     'claude-opus-4-6': 'claude-opus-4-8[1m]',
     'claude-opus-4-7': 'claude-opus-4-8[1m]',
     'claude-opus-4-8': 'claude-opus-4-6[1m]',
-    'claude-opus-5': 'claude-fable-5[1m]',
+    'claude-opus-5': 'claude-fable-5-1[1m]',
+    'claude-fable-5-1': 'claude-opus-5[1m]',
     'claude-fable-5': 'claude-opus-5[1m]',
   }
 
