@@ -1,5 +1,6 @@
 export const DEFAULT_MODEL = 'claude-opus-4-6[1m]'
 export const TRANSCRIBE_TMUX = 'hydra-transcribe'
+export const HYDRA_DEV_PREFIX = 'hydra-dev-'
 
 export const KNOWN_MODELS = new Set([
   'claude-opus-5',

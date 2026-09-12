@@ -4,6 +4,7 @@
 // and the disposable tmux TUI.
 
 import { execFileSync, execSync } from 'child_process'
+import { buildWorktreePromptAppend } from '../prompts/session.js'
 import { mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -28,7 +29,8 @@ export class CodexEngineAdapter implements EngineAdapter {
   constructor(private readonly engine: CodexEngine) {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    const { sessionId, tmuxName, cwd: effectiveCwd, model, prompt } = input
+    const { sessionId, tmuxName, cwd: effectiveCwd, model } = input
+    const prompt = input.prompt + buildWorktreePromptAppend(false, input.worktreePath, tmuxName)
     const codexHomeName = tmuxName
     const sockPath = codexSocketPath(codexHomeName)
     const homeDir = codexHomeDirFn(codexHomeName)

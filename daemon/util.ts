@@ -2,6 +2,7 @@ import { realpathSync, writeFileSync, renameSync } from 'fs'
 import { join, sep } from 'path'
 import { execSync, execFileSync, execFile } from 'child_process'
 import { gateway, STATE_DIR } from './config.js'
+import { HYDRA_DEV_PREFIX } from '../shared/constants.js'
 import { formatDiscordTables } from '../discord-table-format.js'
 
 export function atomicWriteFileSync(filePath: string, data: string, mode?: number): void {
@@ -362,4 +363,48 @@ export async function safeSend(
     }
   }
   return sentIds
+}
+
+export function isOwnedDevSession(devName: string, owners: Iterable<string>): boolean {
+  for (const o of owners) {
+    if (devName === `${HYDRA_DEV_PREFIX}${o}` || devName.startsWith(`${HYDRA_DEV_PREFIX}${o}-`)) return true
+  }
+  return false
+}
+
+export function selectOrphanedDevSessions(names: string[], owners: Iterable<string>): string[] {
+  const all = new Set(owners)
+  for (const n of names) all.add(n)
+  return names.filter(n => n.startsWith(HYDRA_DEV_PREFIX) && !isOwnedDevSession(n, all))
+}
+
+function listTmuxSessions(): string[] | null {
+  try {
+    return execFileSync('tmux', ['list-sessions', '-F', '#{session_name}'], { encoding: 'utf8', timeout: 2000, stdio: ['pipe', 'pipe', 'pipe'] })
+      .split('\n').map(n => n.trim()).filter(Boolean)
+  } catch { return null }
+}
+
+function killTmuxSessions(names: string[], label: string): number {
+  let killed = 0
+  for (const name of names) {
+    try {
+      execFileSync('tmux', ['kill-session', '-t', name], { stdio: 'pipe' })
+      process.stderr.write(`daemon: ${label} dev session "${name}"\n`)
+      killed++
+    } catch {}
+  }
+  return killed
+}
+
+export function killDetachedDevSessions(tmuxName: string): void {
+  const names = listTmuxSessions()
+  if (!names) return
+  killTmuxSessions(names.filter(n => isOwnedDevSession(n, [tmuxName])), 'reaped detached')
+}
+
+export function sweepOrphanedDevSessions(ownerNames: Iterable<string>): number {
+  const names = listTmuxSessions()
+  if (!names) return 0
+  return killTmuxSessions(selectOrphanedDevSessions(names, ownerNames), 'swept orphaned')
 }

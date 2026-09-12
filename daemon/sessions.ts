@@ -3,7 +3,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
-import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
+import { atomicWriteFileSync, baseNameFromBranch, killDetachedDevSessions } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName } from '../shared/constants.js'
 import { recordPendingRetirement } from './retirement-journal.js'
@@ -447,6 +447,7 @@ export class SessionRegistry {
         // after restart — kill them and discard
         if (info.sessionType === 'thread_guest') {
           try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+          killDetachedDevSessions(info.tmuxName)
           pruned++
           continue
         }

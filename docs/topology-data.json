@@ -320,6 +320,10 @@
     ],
     [
       "daemon",
+      "daemon_util"
+    ],
+    [
+      "daemon",
       "daemon_bridge-transport"
     ],
     [
@@ -372,10 +376,6 @@
     ],
     [
       "daemon",
-      "daemon_util"
-    ],
-    [
-      "daemon",
       "daemon_session-health"
     ],
     [
@@ -413,6 +413,10 @@
     [
       "daemon_util",
       "daemon_config"
+    ],
+    [
+      "daemon_util",
+      "shared_constants"
     ],
     [
       "daemon_bridge-tools",

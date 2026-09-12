@@ -20,7 +20,7 @@ import { watchPr, getWatchesBySession } from './pr-watch.js'
 import { shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
 import { clearInterceptsForSession } from './pane-probe.js'
-import { safeSend } from './util.js'
+import { safeSend, killDetachedDevSessions } from './util.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import { emit } from './event-bus.js'
 import type { ButtonDef } from '../gateway.js'
@@ -202,6 +202,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         if (info) {
           process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
           try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+          killDetachedDevSessions(info.tmuxName)
           info.deadAt = Date.now()
           registry.persist()
           void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
