@@ -103,7 +103,10 @@ export class CodexEngineAdapter implements EngineAdapter {
         if (this.engine.isConnected(info.sessionId)) { connected = true; break }
       }
       if (!connected) {
-        return { status: 'rejected', retryable: true, reason: 'codex session not connected after 15s' }
+        // Queue for delivery when connection arrives rather than dropping
+        this.engine.queueTurn(info.sessionId, text)
+        process.stderr.write(`daemon: codex adapter queued message for ${info.tmuxName} (not connected after 15s)\n`)
+        return { status: 'accepted', via: 'queued-turn' }
       }
     }
     if (text === '[system] keepalive') {
