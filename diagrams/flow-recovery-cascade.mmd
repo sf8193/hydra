@@ -6,6 +6,7 @@ flowchart TD
         resume["resume<br/><i>thread-scoped</i>"]
         respawn["respawn<br/><i>thread-scoped</i>"]
         recover["recover<br/><i>global batch</i>"]
+        auto["autoRecoverAfterBoot<br/><i>boot-triggered</i>"]
     end
 
     subgraph primitives["Shared Primitives<br/><i>session-lifecycle.ts</i>"]
@@ -35,6 +36,7 @@ flowchart TD
 
     resume --> tryResume
     recover --> tryResume
+    auto --> tryResume
     respawn --> tryRespawn
 
     tryResume --> t1

@@ -418,8 +418,10 @@ async function postAutoRecoverySummary(
     const label = r.topic ? ` — ${r.topic}` : ''
     lines.push(`❌ \`${r.name}\`${label} (${r.reason})`)
   }
-  lines.push('')
-  lines.push('_Recovered sessions re-reading thread context._')
+  if (recovered.length > 0) {
+    lines.push('')
+    lines.push('_Recovered sessions re-reading thread context._')
+  }
 
   await notifyOperator(lines.join('\n'))
 }
