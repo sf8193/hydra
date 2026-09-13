@@ -412,7 +412,8 @@ async function postAutoRecoverySummary(
   lines.push('')
   for (const r of recovered) {
     const label = r.topic ? ` — ${r.topic}` : ''
-    lines.push(`✅ \`${r.newName}\`${label} (${r.method})`)
+    const emoji = r.method === 'resumed' ? '✅' : '🔁'
+    lines.push(`${emoji} \`${r.newName}\`${label} (${r.method})`)
   }
   for (const r of failed) {
     const label = r.topic ? ` — ${r.topic}` : ''
@@ -420,7 +421,7 @@ async function postAutoRecoverySummary(
   }
   for (const s of skipped) {
     const label = s.info.description || s.info.topic ? ` — ${s.info.description || s.info.topic}` : ''
-    lines.push(`⏭ \`${s.info.tmuxName}\`${label} (${s.reason})`)
+    lines.push(`↩️ \`${s.info.tmuxName}\`${label} (${s.reason})`)
   }
   lines.push('')
   lines.push('_Recovered sessions re-reading thread context._')
