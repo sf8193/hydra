@@ -401,7 +401,6 @@ function formatGap(ms: number): string {
 
 async function postAutoRecoverySummary(
   results: Awaited<ReturnType<typeof recoverOne>>[],
-  skipped: Array<{ info: SessionInfo; reason: string }>,
   gapMs?: number,
 ): Promise<void> {
   const recovered = results.filter(r => r.method !== 'failed') as Array<{ name: string; method: string; newName: string; topic?: string }>
@@ -418,10 +417,6 @@ async function postAutoRecoverySummary(
   for (const r of failed) {
     const label = r.topic ? ` — ${r.topic}` : ''
     lines.push(`❌ \`${r.name}\`${label} (${r.reason})`)
-  }
-  for (const s of skipped) {
-    const label = s.info.description || s.info.topic ? ` — ${s.info.description || s.info.topic}` : ''
-    lines.push(`↩️ \`${s.info.tmuxName}\`${label} (${s.reason})`)
   }
   lines.push('')
   lines.push('_Recovered sessions re-reading thread context._')
@@ -486,26 +481,23 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
   const gapLabel = gapMs ? ` (${formatGap(gapMs)} gap)` : ''
   const promptPrefix = `You were recovered automatically after a system restart${gapLabel}. ${RECOVERY_REVERIFY_GUARD}`
 
-  // Set the single-flight flag BEFORE the first await (dedupForRecovery does git I/O),
-  // so a manual `recover` can't interleave between the guard check above and here.
   recoveryInProgress = true
   const results: Awaited<ReturnType<typeof recoverOne>>[] = []
   try {
-    const { unique, skipped, siblingWatches } = await dedupForRecovery(deadInfos)
-    process.stderr.write(`daemon: auto-recover: ${unique.length} dead session(s) to revive, ${skipped.length} deduped\n`)
+    process.stderr.write(`daemon: auto-recover: ${deadInfos.length} dead session(s) to revive\n`)
 
-    for (let i = 0; i < unique.length; i += MAX_CONCURRENT) {
-      const wave = unique.slice(i, i + MAX_CONCURRENT)
+    for (let i = 0; i < deadInfos.length; i += MAX_CONCURRENT) {
+      const wave = deadInfos.slice(i, i + MAX_CONCURRENT)
       const settled = await Promise.allSettled(wave.map(async (info, j) => {
         if (j > 0) await new Promise(r => setTimeout(r, STAGGER_MS * j))
-        return recoverOne(toRecoverInput(info, siblingWatches.get(info.sessionId), promptPrefix))
+        return recoverOne(toRecoverInput(info, undefined, promptPrefix))
       }))
       for (const s of settled) {
         if (s.status === 'fulfilled') results.push(s.value)
         else results.push({ name: '(unknown)', method: 'failed', reason: String(s.reason) })
       }
     }
-    await postAutoRecoverySummary(results, skipped, gapMs)
+    await postAutoRecoverySummary(results, gapMs)
   } finally {
     recoveryInProgress = false
   }
