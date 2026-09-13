@@ -18,6 +18,7 @@ import type {
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 import { tmuxHasSession } from '../util.js'
+import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
