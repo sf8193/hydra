@@ -509,6 +509,7 @@ export function buildDaemonEnvs(cfg: HydraConfig): string {
     // truth with the `tee -a` target above — and the daemon truncates only a path it
     // was handed, never one it guessed.
     `HYDRA_LOG=${shq(cfg.daemonLog)}`,
+    'HYDRA_AUTO_RECOVER=1',
   ]
   const model = process.env.HYDRA_MODEL?.trim()
   if (model) envs.push(`HYDRA_MODEL=${shq(model)}`)
