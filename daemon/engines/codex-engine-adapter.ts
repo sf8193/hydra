@@ -93,8 +93,18 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
+    // ponytail: poll up to 15s for codex connection — covers spawn race where
+    // kickoff fires before WebSocket is established. Upgrade to event-driven if
+    // 15s proves too short or polling is too frequent.
     if (!this.engine.isConnected(info.sessionId)) {
-      return { status: 'rejected', retryable: true, reason: 'codex session not connected' }
+      let connected = false
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 500))
+        if (this.engine.isConnected(info.sessionId)) { connected = true; break }
+      }
+      if (!connected) {
+        return { status: 'rejected', retryable: true, reason: 'codex session not connected after 15s' }
+      }
     }
     if (text === '[system] keepalive') {
       return { status: 'rejected', retryable: false, reason: 'keepalive blocked for codex' }
