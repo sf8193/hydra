@@ -444,10 +444,9 @@ async function notifyOperator(text: string): Promise<void> {
 }
 
 // Opt-in via HYDRA_AUTO_RECOVER=1. Runs once at daemon startup: reads persisted
-// dead workers (loadPersisted keeps them with deadAt set), dedups by PR/ticket,
-// then revives each via the same resume→fork→respawn cascade as manual `recover`
-// (which now preserves worktrees + carries artifacts/description + injects the
-// re-verify guard). Idempotent — a session whose tmux is already live is skipped.
+// dead workers (loadPersisted keeps them with deadAt set) and revives each via
+// the resume→fork→respawn cascade. Idempotent — a session whose tmux is already
+// live is skipped.
 export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
   if ((process.env.HYDRA_AUTO_RECOVER || '') !== '1') return
   if (recoveryInProgress) return
