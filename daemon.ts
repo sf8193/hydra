@@ -307,9 +307,15 @@ async function startGateway(attempt = 0): Promise<void> {
     const { resolveDefaultChannel } = await import('./daemon/config.js')
     await resolveDefaultChannel()
     void announceRestartComplete()
+    // Send the standalone recovery report only if auto-recovery won't run —
+    // otherwise the gap info is folded into the auto-recovery summary (which
+    // fires ~30s later) and the standalone report would mislead with "N disconnected"
+    // right before auto-recovery fixes them.
     if (startupGapMs !== null) {
-      sendRecoveryReport(startupGapMs)
-      startupGapMs = null
+      const hasDeadWorkers = [...registry.values()].some(s => !!s.deadAt && s.sessionType === 'thread_owner')
+      if (!hasDeadWorkers || (process.env.HYDRA_AUTO_RECOVER || '') !== '1') {
+        sendRecoveryReport(startupGapMs)
+      }
     }
   } catch (err) {
     if (attempt >= GATEWAY_MAX_RETRIES) {
@@ -344,7 +350,7 @@ void startGateway().then(async () => {
   // the gateway is up (respawns post to their threads) AND after the factory sweep
   // settled (so it doesn't race sweepOrphanedBuilders over factory records). No-op otherwise.
   await factorySweep
-  await autoRecoverAfterBoot().catch(err =>
+  await autoRecoverAfterBoot(startupGapMs ?? undefined).catch(err =>
     process.stderr.write(`daemon: auto-recovery failed: ${err instanceof Error ? err.message : err}\n`),
   )
 })

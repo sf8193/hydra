@@ -594,6 +594,8 @@ function buildPlist(platform: string, opts: { stateDir: string; spawnCwd: string
         <string>${escapeXmlText(opts.spawnCwd)}</string>
         <key>CLAUDE_CONFIG_DIR</key>
         <string>${escapeXmlText(opts.configDir)}</string>
+        <key>HYDRA_AUTO_RECOVER</key>
+        <string>1</string>
     </dict>
     <key>StartInterval</key>
     <integer>120</integer>

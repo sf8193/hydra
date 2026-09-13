@@ -771,9 +771,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 export const HEALTH_TIMEOUT_MS = 30_000
 
 // Injected into every recovered session (resume notification + respawn/fork prompt).
-// Post-crash the session must assume nothing about what completed before it died.
 export const RECOVERY_REVERIFY_GUARD =
-  '⚠️ SAFETY: You were recovered after a crash/reboot — mid-task state is unknown. Before ANY write, commit, push, deploy, migration, or other state-changing/prod operation, re-verify current repo/PR/system state first (git status, gh pr view, etc.). Assume nothing about what finished before the crash.'
+  'Orient yourself — read your thread history, check the state of any work in progress (git status, gh pr view, etc.), and continue where the previous session left off.'
 
 export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -821,7 +820,7 @@ export async function tryResume(dead: {
     // was recovered.
     transport.sendOrQueue(result.sessionId, {
       type: 'notification',
-      content: `[system] You were interrupted by a system crash and have been recovered with full conversation context. Check your thread for any messages you may have missed, and continue where you left off. ${RECOVERY_REVERIFY_GUARD}`,
+      content: `[system] You were recovered automatically after a system restart with full conversation context. ${RECOVERY_REVERIFY_GUARD}`,
       meta: { chat_id: dead.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
 
