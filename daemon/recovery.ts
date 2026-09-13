@@ -407,20 +407,22 @@ async function postAutoRecoverySummary(
   results: Awaited<ReturnType<typeof recoverOne>>[],
   gapMs?: number,
 ): Promise<void> {
-  const recovered = results.filter(r => r.method !== 'failed') as Array<{ name: string; method: string; newName: string; label?: string }>
-  const failed = results.filter(r => r.method === 'failed') as Array<{ name: string; method: 'failed'; reason: string; label?: string }>
+  const recovered = results.filter(r => r.method !== 'failed') as Array<{ name: string; method: string; newName: string; label?: string; threadUrl?: string }>
+  const failed = results.filter(r => r.method === 'failed') as Array<{ name: string; method: 'failed'; reason: string; label?: string; threadUrl?: string }>
 
   const gapStr = gapMs ? ` — ${formatGap(gapMs)} gap` : ''
   const lines = [`🔮 **Fleet recovered**${gapStr}`]
   lines.push('')
   for (const r of recovered) {
+    const nameStr = r.threadUrl ? `[${r.newName}](${r.threadUrl})` : `\`${r.newName}\``
     const desc = r.label ? ` — ${r.label}` : ''
     const emoji = r.method === 'resumed' ? '✅' : '🔁'
-    lines.push(`${emoji} \`${r.newName}\`${desc} (${r.method})`)
+    lines.push(`${emoji} ${nameStr}${desc} (${r.method})`)
   }
   for (const r of failed) {
+    const nameStr = r.threadUrl ? `[${r.name}](${r.threadUrl})` : `\`${r.name}\``
     const desc = r.label ? ` — ${r.label}` : ''
-    lines.push(`❌ \`${r.name}\`${desc} (${r.reason})`)
+    lines.push(`❌ ${nameStr}${desc} (${r.reason})`)
   }
   if (recovered.length > 0) {
     lines.push('')
