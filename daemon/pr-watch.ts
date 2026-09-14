@@ -3,6 +3,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
+import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { atomicWriteFileSync, formatDuration, tmuxHasSession } from './util.js'
 
@@ -47,6 +48,20 @@ export type WatchEntry = {
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
 
+/**
+ * pr-watch content only ever reaches its delivery point as a NOW-tier event
+ * (CI failure or a real reviewer comment/review — CI success/no-op returns
+ * before any content is built). NOW-tier events must never wait on a
+ * recency guess: only a turn literally in flight this instant is safe to
+ * piggyback on, since it's already happening regardless. Anything based on
+ * `lastActive` would classify a session that just *finished* work as still
+ * "active" for a whole window, silently delaying an actionable event with
+ * nothing left to piggyback onto.
+ */
+export function shouldPiggyback(info: Pick<SessionInfo, 'adapter' | 'turnState'> | undefined): boolean {
+  return !!info?.adapter && !info.adapter.deliveryIsFree && info.turnState === 'working'
+}
+
 export function shouldNotifyCiChange(
   lastStatus: CheckStatusType, lastSha: string,
   newStatus: CheckStatusType, newSha: string,
@@ -64,9 +79,6 @@ export function shouldNotifyCiChange(
 const watches = new Map<string, WatchEntry>()
 const PERSIST_FILE = join(STATE_DIR, 'pr-watches.json')
 const POLL_INTERVAL_MS = 3 * 60 * 1000
-// A session with a turn in flight, or activity within this window, has a turn
-// coming anyway — piggyback onto it instead of paying for a standalone one.
-const PIGGYBACK_ACTIVE_WINDOW_MS = 60 * 60 * 1000
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let ghToken: string | null = null
 let rateLimitWarned = false
@@ -452,10 +464,9 @@ async function pollPr(entry: WatchEntry): Promise<void> {
 
   const content = parts.join('\n')
   const info = registry.get(entry.sessionId)
-  const isActive = info?.turnState === 'working' || (info && Date.now() - info.lastActive < PIGGYBACK_ACTIVE_WINDOW_MS)
-  if (info?.adapter && !info.adapter.deliveryIsFree && isActive) {
-    // A turn is already happening or just happened — ride along on the next
-    // real delivery instead of paying for a standalone one.
+  if (shouldPiggyback(info)) {
+    // A turn is already running right now — ride along on it instead of
+    // paying for a standalone one that would just queue behind it anyway.
     transport.bufferForPiggyback(entry.sessionId, content)
   } else {
     transport.sendOrQueue(entry.sessionId, {

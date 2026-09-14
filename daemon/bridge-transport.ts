@@ -144,7 +144,12 @@ export class BridgeTransport {
     const info = registry.get(sessionId)
     if (info?.engine === 'codex' && info.adapter) {
       let content = msg.content
-      if (typeof content === 'string' && content && content !== '[system] keepalive') {
+      // Liveness probes (idle nudges, reply-guard nudges) are marked
+      // noPiggyback: they exist to check whether the model is stuck, and the
+      // model may treat them as a no-op. Real buffered content must never
+      // ride silently along on one — it could get absorbed into a turn that
+      // produces nothing.
+      if (typeof content === 'string' && content && content !== '[system] keepalive' && !msg.noPiggyback) {
         const prefix = this.takePendingPrefix(sessionId)
         if (prefix) content = `${prefix}\n\n---\n\n${content}`
       }
