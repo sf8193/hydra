@@ -1,0 +1,86 @@
+%% hydra deliver — Whisper Channel Flow
+%% External process delivers a message to a session's context (not thread).
+%% Default: sendToBridge directly (binary outcome).
+%% --queue: sendOrQueue for disconnected bridges (fire-and-forget).
+%% Codex sessions route through their adapter.
+
+sequenceDiagram
+    participant caller as External Process<br/>(cron / script / session)
+    participant cli as cli/hydra.ts
+    participant server as bridge-server.ts
+    participant handler as cli-handler.ts
+    participant idemp as idempotency.ts
+    participant sessions as sessions.ts
+    participant transport as bridge-<br/>transport.ts
+    participant cc as Claude Code / Codex<br/>(target session)
+
+    Note left of caller: run_bookkeeper.sh detects<br/>stale pending items
+
+    caller->>cli: hydra deliver --session bloom<br/>--message "..." [--initiator cron:bk] [--queue]
+    Note over cli: parse flags, validate<br/>--message required<br/>default --initiator to $USER
+    cli->>server: unix socket + NDJSON<br/>{type: 'cli', command: 'deliver'}
+    server->>handler: handleCLIRequest(req)
+
+    opt --idempotency-key provided
+        handler->>idemp: checkIdempotency(K)
+        alt key exists (within 15min TTL)
+            handler-->>cli: {ok: false, exitCode: 2}
+            Note left of cli: exit 2 — dedup
+        end
+    end
+
+    alt --session name
+        handler->>sessions: registry.find(name)
+    else --thread id
+        handler->>sessions: registry.getByThread(id)
+    end
+
+    alt not found in registry
+        handler->>sessions: threadRegistry.get(threadId)
+        alt thread existed (session gone)
+            handler-->>cli: {ok: false, exitCode: 3,<br/>error: "session gone"}
+        else truly not found
+            handler-->>cli: {ok: false, exitCode: 1}
+        end
+    end
+
+    Note over handler: check reachability<br/>(isAlive + transport.has + ORPHAN_GRACE_MS)
+
+    alt gone (tmux dead)
+        handler-->>cli: {exitCode: 3, "session gone"}
+    else starting (within grace window)
+        handler-->>cli: {exitCode: 5, "retry in ~30s"}
+    else orphaned (bridge disconnected)
+        alt --queue
+            Note over handler: fall through to queue path
+        else default
+            handler-->>cli: {exitCode: 4, "orphaned"}
+        end
+    end
+
+    Note over handler: reachable (or --queue with orphan)
+
+    alt codex session (adapter routing)
+        handler->>cc: adapter.deliver(info, message, meta)
+        handler-->>cli: {ok: true, status: 'delivered',<br/>proof: 'adapter'}
+        Note left of cli: exit 0
+    else --queue + bridge disconnected
+        handler->>transport: sendOrQueue(sessionId, notification)
+        transport->>transport: enqueue → message-queue.json
+        handler-->>cli: {ok: true, status: 'queued',<br/>proof: 'persisted'}
+        Note left of cli: exit 0
+    else claude session (bridge socket)
+        handler->>transport: sendToBridge(bridge, notification)
+        alt write succeeds
+            transport->>cc: NDJSON → MCP notification
+            handler-->>cli: {ok: true, status: 'delivered',<br/>proof: 'socket_write'}
+            Note left of cli: exit 0
+        else write fails (socket destroyed)
+            handler-->>cli: {exitCode: 6,<br/>"bridge write failed — retry"}
+            Note left of cli: exit 6
+        end
+    end
+
+    opt idempotency key + success
+        handler->>idemp: registerIdempotency(K, 15min TTL)
+    end

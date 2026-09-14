@@ -467,6 +467,9 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
     case 'clear-key':
       console.log(`cleared: ${data.cleared}`)
       return
+    case 'deliver':
+      console.log(`${data.status}: ${data.sessionName} (${data.proof})`)
+      return
     case 'factory': {
       if (data.accepted) { console.log(`accepted: ${data.accepted}`); return }
       if (data.abandoned) { console.log(`abandoned: ${data.abandoned}`); return }

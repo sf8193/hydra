@@ -1,6 +1,6 @@
 ---
 name: hydra-cli
-description: Use when spawning sessions via the hydra CLI, orchestrating multi-session work, or using hydra programmatically. Triggers on "hydra spawn", "use hydra to", "spin up a session", "spawn via CLI", or any request to programmatically create/manage hydra sessions.
+description: Use when spawning sessions or delivering messages via the hydra CLI, orchestrating multi-session work, or using hydra programmatically. Triggers on "hydra spawn", "hydra deliver", "use hydra to", "spin up a session", "spawn via CLI", "nudge a session", "send a message to a session", or any request to programmatically create/manage/message hydra sessions.
 ---
 
 # Hydra CLI
@@ -15,8 +15,11 @@ The machine channel into the hydra daemon — the same primitives as chat comman
 | A session spawning a child | `spawn_session` tool (bridge) |
 | External automation / pipeline | `hydra spawn` CLI |
 | A script that might retry | `hydra spawn` CLI (idempotency) |
+| A cron nudging an existing session | `hydra deliver` CLI |
+| A session whispering to another session | `hydra deliver` CLI (via Bash) |
+| A session posting visibly to another thread | `send_to_thread` tool (bridge) |
 
-The CLI's advantage over the bridge tool: **idempotency keys** prevent duplicate spawns across retries. If your automation might run twice, use the CLI.
+Two CLI primitives: **spawn** creates sessions, **deliver** messages existing ones. `deliver` is the whisper channel — messages go to the session's context only, never to the chat thread. `send_to_thread` is the visible channel — messages appear in the thread AND reach the session.
 
 ## Spawning a Session
 
@@ -115,6 +118,74 @@ hydra spawn "generate daily standup report" \
   --quiet
 ```
 
+## Delivering to a Session
+
+The whisper channel — deliver a message to a session's context without posting to the chat thread.
+
+```bash
+hydra deliver --session <name> --message "<text>" \
+  [--initiator "<who>"] [--idempotency-key "<key>"] [--queue]
+```
+
+`--session` (by name) is the primary addressing mode. `--thread <id>` is the alternative for callers that saved a thread ID at spawn time. Both can be given — they cross-validate.
+
+`--initiator` defaults to `$USER`. `--idempotency-key` is optional (15min TTL, prevents duplicate delivery on retries).
+
+### Default vs --queue
+
+By default, `deliver` fails if the session's bridge is disconnected — callers get a binary signal. `--queue` opts into fire-and-forget: the message is persisted to `message-queue.json` and flushed when the bridge reconnects.
+
+```bash
+# Default: fail if unreachable
+hydra deliver --session bloom --message "check replies"
+# exit 4 if orphaned
+
+# Opt-in: queue for later
+hydra deliver --session bloom --message "check replies" --queue
+# exit 0, status: queued
+```
+
+### Reading the Response
+
+```json
+{
+  "status": "delivered",
+  "proof": "socket_write",
+  "sessionId": "uuid",
+  "sessionName": "bloom",
+  "threadId": "thread-id"
+}
+```
+
+Exit codes: `0` delivered/queued, `1` bad request, `2` idempotency hit, `3` session gone, `4` orphaned, `5` still booting, `6` bridge write failed (transient).
+
+### Common Patterns
+
+**Cron nudge with respawn fallback:**
+```bash
+THREAD="1548796828059963513"
+if ! hydra deliver --thread "$THREAD" --message "NUDGE: check replies" \
+    --initiator "cron:bookkeeper" --idempotency-key "bk-nudge-w37" 2>/dev/null; then
+  if [ $? -eq 3 ]; then
+    hydra spawn "Resume bookkeeper: check replies" \
+      --initiator "cron:bookkeeper" \
+      --idempotency-key "bk-respawn-w37" \
+      --channel "$THREAD" --read-thread 50
+  fi
+fi
+```
+
+**Cross-session communication:**
+```bash
+# From inside a session (via Bash tool):
+hydra deliver --session bloom --message "PR #42 merged, you can close the review"
+```
+
+**Fire-and-forget nudge:**
+```bash
+hydra deliver --session bloom --message "check your PR watches" --queue
+```
+
 ## Managing Sessions
 
 | Command | What |
@@ -163,6 +234,8 @@ Global options: `--daemon <name>` (target specific daemon), `--json` (raw JSON o
 | `daemon/cli-handler.ts` | Daemon-side request dispatch |
 | `daemon/idempotency.ts` | Idempotency state machine |
 | `daemon/session-lifecycle.ts` | `doSpawnSession` primitive |
+| `daemon/session-reachability.ts` | Reachability classification (used by deliver) |
 | `shared/constants.ts` | Model aliases |
+| `diagrams/flow-deliver.mmd` | Deliver flow diagram |
 
 See also: `README.md` (quick start), `CLAUDE.md` (build/test), `docs/ONBOARDING_TIPS.md` (first-time setup).
