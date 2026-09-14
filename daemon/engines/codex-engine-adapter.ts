@@ -26,6 +26,7 @@ const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
 export class CodexEngineAdapter implements EngineAdapter {
   readonly provider = 'codex' as const
+  readonly deliveryIsFree = false
   constructor(private readonly engine: CodexEngine) {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
