@@ -49,7 +49,6 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
-  readonly deliveryIsFree = true
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
