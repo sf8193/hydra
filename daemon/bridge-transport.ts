@@ -30,6 +30,14 @@ export class BridgeTransport {
   private readonly maxQueueSize = 50
   private readonly queueFile: string
   private readonly queueFullLogged = new Set<string>()
+  // Codex-only: low-priority content (e.g. pr-watch CI/comment notices while a
+  // session is already active) waiting to ride inside the next real delivery
+  // to that session instead of paying for its own turn. Flushed either by
+  // riding along (sendOrQueue prepends it) or by the backstop timer if nothing
+  // else is delivered in time.
+  private readonly pendingPrefix = new Map<string, string[]>()
+  private readonly piggybackTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private static readonly PIGGYBACK_BACKSTOP_MS = 10 * 60_000
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
     this.loadPersistedQueues()
@@ -135,7 +143,11 @@ export class BridgeTransport {
     // Route through adapter for Codex sessions — adapter owns delivery mechanics
     const info = registry.get(sessionId)
     if (info?.engine === 'codex' && info.adapter) {
-      const content = msg.content
+      let content = msg.content
+      if (typeof content === 'string' && content && content !== '[system] keepalive') {
+        const prefix = this.takePendingPrefix(sessionId)
+        if (prefix) content = `${prefix}\n\n---\n\n${content}`
+      }
       if (typeof content === 'string' && content) {
         const meta = msg.meta as Record<string, string> | undefined
         const mode = msg.deferUntilTurnComplete === true ? 'next-turn' as const : undefined
@@ -154,6 +166,47 @@ export class BridgeTransport {
       }
       this.enqueue(sessionId, msg)
     }
+  }
+
+  /**
+   * Buffer low-priority content for a codex session instead of sending it as
+   * its own turn. It rides inside the next real delivery to this session
+   * (sendOrQueue prepends it) at zero marginal turn cost. If nothing else is
+   * delivered within the backstop window, it flushes on its own so it's never
+   * silently lost.
+   */
+  bufferForPiggyback(sessionId: string, text: string): void {
+    const arr = this.pendingPrefix.get(sessionId) ?? []
+    arr.push(text)
+    this.pendingPrefix.set(sessionId, arr)
+
+    const existing = this.piggybackTimers.get(sessionId)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => this.flushPiggybackStandalone(sessionId), BridgeTransport.PIGGYBACK_BACKSTOP_MS)
+    timer.unref?.()
+    this.piggybackTimers.set(sessionId, timer)
+  }
+
+  private takePendingPrefix(sessionId: string): string | undefined {
+    const arr = this.pendingPrefix.get(sessionId)
+    if (!arr || arr.length === 0) return undefined
+    this.pendingPrefix.delete(sessionId)
+    const timer = this.piggybackTimers.get(sessionId)
+    if (timer) { clearTimeout(timer); this.piggybackTimers.delete(sessionId) }
+    return arr.join('\n\n')
+  }
+
+  /** Backstop: nothing else rode this content out in time, so send it as its own turn. */
+  private flushPiggybackStandalone(sessionId: string): void {
+    const prefix = this.takePendingPrefix(sessionId)
+    if (!prefix) return
+    const info = registry.get(sessionId)
+    if (!info) return
+    this.sendOrQueue(sessionId, {
+      type: 'notification',
+      content: prefix,
+      meta: { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    })
   }
 
   flushQueue(sessionId: string): void {

@@ -64,6 +64,9 @@ export function shouldNotifyCiChange(
 const watches = new Map<string, WatchEntry>()
 const PERSIST_FILE = join(STATE_DIR, 'pr-watches.json')
 const POLL_INTERVAL_MS = 3 * 60 * 1000
+// A session with a turn in flight, or activity within this window, has a turn
+// coming anyway — piggyback onto it instead of paying for a standalone one.
+const PIGGYBACK_ACTIVE_WINDOW_MS = 5 * 60 * 1000
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let ghToken: string | null = null
 let rateLimitWarned = false
@@ -447,17 +450,26 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     return
   }
 
-  transport.sendOrQueue(entry.sessionId, {
-    type: 'notification',
-    content: parts.join('\n'),
-    meta: {
-      chat_id: entry.threadId,
-      message_id: '',
-      user: 'pr-watch',
-      user_id: 'system',
-      ts: new Date().toISOString(),
-    },
-  })
+  const content = parts.join('\n')
+  const info = registry.get(entry.sessionId)
+  const isActive = info?.turnState === 'working' || (info && Date.now() - info.lastActive < PIGGYBACK_ACTIVE_WINDOW_MS)
+  if (info?.engine === 'codex' && isActive) {
+    // A turn is already happening or just happened — ride along on the next
+    // real delivery instead of paying for a standalone one.
+    transport.bufferForPiggyback(entry.sessionId, content)
+  } else {
+    transport.sendOrQueue(entry.sessionId, {
+      type: 'notification',
+      content,
+      meta: {
+        chat_id: entry.threadId,
+        message_id: '',
+        user: 'pr-watch',
+        user_id: 'system',
+        ts: new Date().toISOString(),
+      },
+    })
+  }
 
   if (watches.get(entry.prUrl) === entry) persist()
   process.stderr.write(`daemon: pr-watch: delivered ${allComments.length} comment(s) + ${reviews.length} review(s) for ${entry.prUrl}\n`)
