@@ -694,6 +694,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
   transport.sendOrQueue(result.sessionId, {
     type: 'notification',
     content: resumeLines.join('\n'),
+    allowPiggyback: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 
@@ -993,6 +994,7 @@ const BEHAVIORS: Record<string, BehaviorHandler> = {
         ``,
         ...formatLines,
       ].join('\n'),
+      allowPiggyback: true,
       meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
     return true
@@ -1013,6 +1015,7 @@ function makeBehaviorCtx(run: ProtocolRun): BehaviorContext {
       transport.sendOrQueue(actorSid, {
         type: 'notification',
         content,
+        allowPiggyback: true,
         meta: { chat_id: r.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
       })
     },
@@ -1173,6 +1176,7 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
     type: 'notification',
     content: notification,
     ...(defer && { deferUntilTurnComplete: true }),
+    allowPiggyback: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -1205,7 +1209,10 @@ function notifyParticipant(run: ProtocolRun, sessionId: string, content: string,
     type: 'notification',
     content,
     ...(defer && { deferUntilTurnComplete: true }),
-    ...(opts?.noPiggyback && { noPiggyback: true }),
+    // Default: genuine protocol content (kickoff, phase turns, critique
+    // posts) is real actionable work — allowed to carry buffered content.
+    // The idle check-in/escalation call sites opt out explicitly.
+    allowPiggyback: !opts?.noPiggyback,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -1342,6 +1349,7 @@ function resetTimeout(run: ProtocolRun): void {
         transport.sendOrQueue(actorSessionId!, {
           type: 'notification',
           content: `[system] ⏰ Phase timeout in 2 minutes. ${advanceCall} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,
+          allowPiggyback: true,
           meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
         })
         void safeSend(run.threadId, `_⏰ ${info?.tmuxName ?? 'actor'} warned: 2m remaining (${ctx} context)_`)

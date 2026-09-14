@@ -211,10 +211,25 @@ describe('BridgeTransport piggyback buffering (codex)', () => {
     expect(delivered).toHaveLength(0)
   })
 
-  test('the next sendOrQueue prepends buffered content instead of a separate turn', () => {
+  test('the next allowPiggyback:true sendOrQueue prepends buffered content instead of a separate turn', () => {
     bt.bufferForPiggyback('cx1', '[PR Feedback] CI failed')
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
+    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message', allowPiggyback: true })
     expect(delivered).toHaveLength(1)
+    expect(delivered[0].text).toContain('[PR Feedback] CI failed')
+    expect(delivered[0].text).toContain('real message')
+  })
+
+  test('a send without allowPiggyback:true never absorbs buffered content (opt-in default)', () => {
+    // Most sendOrQueue callers are procedural (liveness probes, budget
+    // warnings) and never pass allowPiggyback — the default must be deny,
+    // not "anything not explicitly excluded."
+    bt.bufferForPiggyback('cx1', '[PR Feedback] CI failed')
+    bt.sendOrQueue('cx1', { type: 'notification', content: 'some procedural message' })
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0].text).toBe('some procedural message')
+    // The buffered content is still waiting for an opted-in delivery.
+    delivered.length = 0
+    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message', allowPiggyback: true })
     expect(delivered[0].text).toContain('[PR Feedback] CI failed')
     expect(delivered[0].text).toContain('real message')
   })
@@ -222,7 +237,7 @@ describe('BridgeTransport piggyback buffering (codex)', () => {
   test('a second buffered item without an intervening send merges into one prefix', () => {
     bt.bufferForPiggyback('cx1', 'first notice')
     bt.bufferForPiggyback('cx1', 'second notice')
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
+    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message', allowPiggyback: true })
     expect(delivered).toHaveLength(1)
     expect(delivered[0].text).toContain('first notice')
     expect(delivered[0].text).toContain('second notice')
@@ -251,15 +266,15 @@ describe('BridgeTransport piggyback buffering (codex)', () => {
     expect(delivered).toEqual([{ text: 'real message', mode: undefined }])
   })
 
-  test('a noPiggyback delivery (liveness nudge) never absorbs buffered content', () => {
+  test('an explicit liveness nudge (no allowPiggyback) never absorbs buffered content', () => {
     bt.bufferForPiggyback('cx1', '[PR Feedback] CI failed')
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'are you still working?', noPiggyback: true })
+    bt.sendOrQueue('cx1', { type: 'notification', content: 'are you still working?' })
     // The nudge goes out unmodified...
     expect(delivered).toHaveLength(1)
     expect(delivered[0].text).toBe('are you still working?')
-    // ...and the buffered content is still waiting for a real delivery.
+    // ...and the buffered content is still waiting for an opted-in delivery.
     delivered.length = 0
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
+    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message', allowPiggyback: true })
     expect(delivered).toHaveLength(1)
     expect(delivered[0].text).toContain('[PR Feedback] CI failed')
     expect(delivered[0].text).toContain('real message')
