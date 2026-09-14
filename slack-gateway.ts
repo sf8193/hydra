@@ -621,26 +621,13 @@ export class SlackGateway implements ChatGateway {
     if (!this.app) throw new Error('not connected')
     const { channel, threadTs } = this.parseChannelId(channelId)
 
-    let msg: any
-    if (threadTs) {
-      const result = await this.app.client.conversations.replies({
-        channel,
-        ts: threadTs,
-        latest: messageId,
-        inclusive: true,
-        limit: 1,
-      })
-      msg = result.messages?.find(m => m.ts === messageId)
-    } else {
-      const result = await this.app.client.conversations.history({
-        channel,
-        latest: messageId,
-        inclusive: true,
-        limit: 1,
-      })
-      msg = result.messages?.[0]
-    }
-    if (!msg || !msg.files?.length) return []
+    const window = { oldest: messageId, latest: messageId, inclusive: true }
+    const result = threadTs
+      ? await this.app.client.conversations.replies({ channel, ts: threadTs, ...window })
+      : await this.app.client.conversations.history({ channel, ...window })
+    const msg = result.messages?.find(m => m.ts === messageId)
+    if (!msg) throw new Error(`message ${messageId} not found in ${channelId}`)
+    if (!msg.files?.length) return []
 
     const results: DownloadedFile[] = []
     for (const file of msg.files) {
