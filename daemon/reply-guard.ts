@@ -65,10 +65,6 @@ export function notePendingReply(sessionId: string, meta: Record<string, string>
   if (!chatId || !messageId) return
   // FYI notifications never demand replies — no nag loops.
   if (meta.user === 'system' || meta.user_id === 'system') return
-  // Codex sessions don't have the "answered in transcript" problem — they
-  // either call reply() or they don't. Nudging just burns a full context turn.
-  const info = deps.registryGet(sessionId)
-  if (info?.engine === 'codex') return
   // Deliveries interleave (attachment downloads await before arming) — never
   // let an older message overwrite a newer expectation. ISO ts orders lexically.
   const ts = meta.ts ?? ''
