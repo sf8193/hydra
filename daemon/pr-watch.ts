@@ -51,11 +51,10 @@ export function shouldNotifyCiChange(
   lastStatus: CheckStatusType, lastSha: string,
   newStatus: CheckStatusType, newSha: string,
 ): boolean {
-  const newCommit = newSha !== lastSha
-  const statusFlipped = newStatus !== lastStatus
-    && newStatus !== 'pending' && newStatus !== 'unknown'
-    && !(lastStatus === 'unknown' && newStatus === 'success')
-  return (newCommit && newStatus === 'failure') || statusFlipped
+  // Failures only — a success/pending flip is not worth a codex turn (each
+  // delivery is a full context-window turn for codex; success is silent).
+  if (newStatus !== 'failure') return false
+  return newStatus !== lastStatus || newSha !== lastSha
 }
 
 // ---------------------------------------------------------------------------
@@ -377,7 +376,6 @@ async function pollPr(entry: WatchEntry): Promise<void> {
 
   // Detect CI status changes
   let ciChanged = false
-  let prevCheckStatus = entry.lastCheckStatus
   if (checkResult) {
     ciChanged = shouldNotifyCiChange(entry.lastCheckStatus, entry.lastHeadSha, checkResult.status, checkResult.headSha)
     entry.lastHeadSha = checkResult.headSha
@@ -422,17 +420,12 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     parts.push('')
   }
 
-  if (ciChanged && checkResult) {
-    if (checkResult.status === 'failure') {
-      parts.push(`🔴 **CI Failed** (${checkResult.failed.length} check${checkResult.failed.length !== 1 ? 's' : ''})`)
-      for (const f of checkResult.failed) {
-        parts.push(`  • \`${f.name}\` — ${f.conclusion}${f.url ? ` — ${f.url}` : ''}`)
-      }
-      parts.push('')
-    } else if (checkResult.status === 'success' && prevCheckStatus !== 'unknown') {
-      parts.push(`✅ **CI Passed** — all checks green`)
-      parts.push('')
+  if (ciChanged && checkResult?.status === 'failure') {
+    parts.push(`🔴 **CI Failed** (${checkResult.failed.length} check${checkResult.failed.length !== 1 ? 's' : ''})`)
+    for (const f of checkResult.failed) {
+      parts.push(`  • \`${f.name}\` — ${f.conclusion}${f.url ? ` — ${f.url}` : ''}`)
     }
+    parts.push('')
   }
 
   parts.push('---')
