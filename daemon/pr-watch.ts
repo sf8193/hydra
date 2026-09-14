@@ -66,7 +66,7 @@ const PERSIST_FILE = join(STATE_DIR, 'pr-watches.json')
 const POLL_INTERVAL_MS = 3 * 60 * 1000
 // A session with a turn in flight, or activity within this window, has a turn
 // coming anyway — piggyback onto it instead of paying for a standalone one.
-const PIGGYBACK_ACTIVE_WINDOW_MS = 60 * 60 * 1000
+const PIGGYBACK_ACTIVE_WINDOW_MS = 5 * 60 * 1000
 let pollTimer: ReturnType<typeof setInterval> | undefined
 let ghToken: string | null = null
 let rateLimitWarned = false
@@ -453,7 +453,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   const content = parts.join('\n')
   const info = registry.get(entry.sessionId)
   const isActive = info?.turnState === 'working' || (info && Date.now() - info.lastActive < PIGGYBACK_ACTIVE_WINDOW_MS)
-  if (info?.adapter && !info.adapter.deliveryIsFree && isActive) {
+  if (info?.engine === 'codex' && isActive) {
     // A turn is already happening or just happened — ride along on the next
     // real delivery instead of paying for a standalone one.
     transport.bufferForPiggyback(entry.sessionId, content)

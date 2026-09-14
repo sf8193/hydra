@@ -37,7 +37,7 @@ export class BridgeTransport {
   // else is delivered in time.
   private readonly pendingPrefix = new Map<string, string[]>()
   private readonly piggybackTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private static readonly PIGGYBACK_BACKSTOP_MS = 60 * 60_000
+  private static readonly PIGGYBACK_BACKSTOP_MS = 10 * 60_000
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
     this.loadPersistedQueues()
