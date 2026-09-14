@@ -42,6 +42,16 @@ Session management:
   hydra clear-key <key>                Clear a stuck idempotency key
   hydra check-key <key>                Check if an idempotency key exists
 
+Deliver (whisper channel — message to session context, not thread):
+  hydra deliver --session <name> --message "..."
+  hydra deliver --thread <id> --message "..."
+    --session <name>                   Target session by name (primary)
+    --thread <id>                      Target session by thread ID (alternative)
+    --message <text>                   Message to deliver (required)
+    --initiator <who>                  Who sent this (default: $USER)
+    --idempotency-key <key>            Prevent duplicate delivery (optional, 15min TTL)
+    --queue                            Queue if bridge disconnected (default: fail)
+
 Factory:
   hydra factory list                   List all active factory builds
   hydra factory status <ticket>        Show a build's phase, spec, retries
@@ -282,6 +292,56 @@ async function main(): Promise<void> {
       const response = await sendRequest(socketPath, {
         type: 'cli', command: 'factory', id: randomUUID(),
         params: { sub, ...(ticket && { ticket }), ...(allowUnreviewed && { allowUnreviewed }) },
+      })
+      printResponse(response, json)
+      break
+    }
+
+    case 'deliver': {
+      let thread: string | undefined
+      let session: string | undefined
+      let message: string | undefined
+      let initiator: string | undefined
+      let idempotencyKey: string | undefined
+      let queue = false
+
+      for (let i = 1; i < filtered.length; i++) {
+        if (filtered[i] === '--thread' && i + 1 < filtered.length) {
+          thread = filtered[++i]
+        } else if (filtered[i] === '--session' && i + 1 < filtered.length) {
+          session = filtered[++i]
+        } else if (filtered[i] === '--message' && i + 1 < filtered.length) {
+          message = filtered[++i]
+        } else if (filtered[i] === '--initiator' && i + 1 < filtered.length) {
+          initiator = filtered[++i]
+        } else if (filtered[i] === '--idempotency-key' && i + 1 < filtered.length) {
+          idempotencyKey = filtered[++i]
+        } else if (filtered[i] === '--queue') {
+          queue = true
+        }
+      }
+
+      if (!message) {
+        console.error('error: --message is required')
+        process.exit(1)
+      }
+      if (!thread && !session) {
+        console.error('error: --session or --thread is required')
+        process.exit(1)
+      }
+
+      if (!initiator) initiator = process.env.USER ?? 'unknown'
+
+      const response = await sendRequest(socketPath, {
+        type: 'cli', command: 'deliver', id: randomUUID(),
+        params: {
+          ...(thread && { thread }),
+          ...(session && { session }),
+          message,
+          initiator,
+          ...(idempotencyKey && { idempotencyKey }),
+          ...(queue && { queue }),
+        },
       })
       printResponse(response, json)
       break

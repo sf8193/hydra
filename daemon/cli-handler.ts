@@ -1,10 +1,11 @@
-import { registry } from './sessions.js'
+import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration } from './util.js'
+import { fallbackDescription, formatDuration, isAlive } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
+import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
@@ -123,11 +124,13 @@ function handleList(req: CLIRequest): CLIResponse {
   const list = sorted.map(s => ({
     name: s.tmuxName,
     sessionId: s.sessionId,
+    threadId: s.threadId,
     description: s.description ?? (s.topic ? fallbackDescription(s.topic) : ''),
     url: (s.lastReplyId ? gateway.getMessageUrl(s.threadId, s.lastReplyId) : '') || s.threadUrl || '',
     context: formatContextPercent(s.adapter ?? resolveEngine(s.engine), s),
     running_for: formatDuration(Date.now() - s.createdAt),
     status: transport.has(s.sessionId) ? 'connected' : 'disconnected',
+    ...(s.initiator && { initiator: s.initiator }),
   }))
   return respond(req, true, list)
 }
@@ -246,6 +249,134 @@ function handleFactory(req: CLIRequest): CLIResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Deliver — whisper channel: message to session context, not thread
+// ---------------------------------------------------------------------------
+
+const DELIVER_MAX_MESSAGE_BYTES = 10_000
+const DELIVER_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000
+
+function handleDeliver(req: CLIRequest): CLIResponse {
+  const { thread, session, message, initiator, idempotencyKey, queue } = req.params as {
+    thread?: string
+    session?: string
+    message?: string
+    initiator?: string
+    idempotencyKey?: string
+    queue?: boolean
+  }
+
+  if (!message) return respond(req, false, 'message is required')
+  if (Buffer.byteLength(message) > DELIVER_MAX_MESSAGE_BYTES) {
+    return respond(req, false, `message too large (${Buffer.byteLength(message)} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`)
+  }
+  if (!thread && !session) return respond(req, false, '--thread or --session is required')
+
+  if (idempotencyKey) {
+    const check = checkIdempotency(idempotencyKey)
+    if (check.blocked) {
+      return respond(req, false, `already delivered with key "${idempotencyKey}"`, { existing: check.entry }, 2)
+    }
+  }
+
+  let info = session
+    ? [...registry.values()].find(s => s.tmuxName === session || s.sessionId === session)
+    : undefined
+
+  if (thread && !info) {
+    const sessionId = registry.getByThread(thread)
+    if (sessionId) info = registry.get(sessionId)
+  }
+
+  if (thread && session && info && info.threadId !== thread) {
+    return respond(req, false, `session "${session}" is in thread ${info.threadId}, not ${thread}`)
+  }
+
+  if (!info && thread) {
+    const threadMeta = threadRegistry.get(thread)
+    if (threadMeta) {
+      return respond(req, false, 'session gone — use \'hydra spawn\' to create a new session in this thread, or \'resume\'/\'respawn\' in chat', undefined, 3)
+    }
+  }
+
+  if (!info) return respond(req, false, `${thread ? 'thread' : 'session'} "${thread ?? session}" not found`)
+
+  const executionAlive = isAlive(info)
+  const bridgeConnected = transport.has(info.sessionId)
+
+  if (!executionAlive) {
+    return respond(req, false, 'session gone — use \'hydra spawn\' to create a new session, or \'resume\'/\'respawn\' in chat', undefined, 3)
+  }
+  if (!bridgeConnected) {
+    const ageMs = Date.now() - info.createdAt
+    if (ageMs < ORPHAN_GRACE_MS) {
+      return respond(req, false, 'session still booting — retry in ~30s', undefined, 5)
+    }
+    if (!queue) {
+      return respond(req, false, 'session orphaned (tmux alive, bridge disconnected) — try \'resume\' in the thread, or use --queue to queue for later', undefined, 4)
+    }
+  }
+
+  const meta: Record<string, string> = { source: 'cli-deliver' }
+  if (initiator) meta.initiator = initiator
+
+  const notification = { type: 'notification', content: message, meta }
+
+  // Codex sessions route through their adapter, not the bridge socket
+  if (info.engine === 'codex' && info.adapter) {
+    void info.adapter.deliver(info, message, undefined, meta)
+    if (idempotencyKey) {
+      registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
+    }
+    return respond(req, true, {
+      status: 'delivered',
+      proof: 'adapter',
+      sessionId: info.sessionId,
+      sessionName: info.tmuxName,
+      threadId: info.threadId,
+    })
+  }
+
+  // With --queue: use sendOrQueue (persists for later flush)
+  // Without: direct sendToBridge (binary outcome)
+  if (queue && !bridgeConnected) {
+    transport.sendOrQueue(info.sessionId, notification)
+    if (idempotencyKey) {
+      registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
+    }
+    return respond(req, true, {
+      status: 'queued',
+      proof: 'persisted',
+      sessionId: info.sessionId,
+      sessionName: info.tmuxName,
+      threadId: info.threadId,
+    })
+  }
+
+  const bridge = transport.get(info.sessionId)
+  if (!bridge) {
+    return respond(req, false, 'bridge unexpectedly absent after reachability check', undefined, 6)
+  }
+
+  const written = transport.sendToBridge(bridge, notification)
+
+  if (!written) {
+    return respond(req, false, 'bridge write failed (socket destroyed) — transient, retry', undefined, 6)
+  }
+
+  if (idempotencyKey) {
+    registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
+  }
+
+  return respond(req, true, {
+    status: 'delivered',
+    proof: 'socket_write',
+    sessionId: info.sessionId,
+    sessionName: info.tmuxName,
+    threadId: info.threadId,
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -265,6 +396,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
       case 'factory': response = handleFactory(req); break
+      case 'deliver': response = handleDeliver(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }
