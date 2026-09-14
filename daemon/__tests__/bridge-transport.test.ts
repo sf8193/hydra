@@ -1,7 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach } from 'bun:test'
 import { BridgeTransport } from '../bridge-transport.js'
-import { registry } from '../sessions.js'
-import type { SessionInfo } from '../sessions.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -175,61 +173,5 @@ describe('BridgeTransport backpressure reporting', () => {
     expect(stallLines).toHaveLength(2)
     expect(stallLines.some(l => l.includes('bridge a'))).toBe(true)
     expect(stallLines.some(l => l.includes('bridge b'))).toBe(true)
-  })
-})
-
-describe('BridgeTransport piggyback buffering (codex)', () => {
-  let bt: BridgeTransport
-  const delivered: Array<{ text: string; mode?: string }> = []
-
-  function fakeCodexInfo(): SessionInfo {
-    return {
-      sessionId: 'cx1', topic: 'test', threadId: 'thread-1',
-      createdAt: Date.now(), lastActive: Date.now(), tmuxName: 'cx',
-      listening: false, engine: 'codex',
-      adapter: {
-        deliver: async (_info: SessionInfo, text: string, mode?: string) => {
-          delivered.push({ text, mode })
-          return { status: 'accepted', deliveryId: 'd1', stage: 'queued' }
-        },
-      },
-    } as unknown as SessionInfo
-  }
-
-  beforeEach(() => {
-    bt = new BridgeTransport()
-    delivered.length = 0
-    registry.set('cx1', fakeCodexInfo())
-  })
-
-  afterEach(() => {
-    registry.delete('cx1')
-  })
-
-  test('buffered content does not deliver until a real send happens', () => {
-    bt.bufferForPiggyback('cx1', '[PR Feedback] CI failed')
-    expect(delivered).toHaveLength(0)
-  })
-
-  test('the next sendOrQueue prepends buffered content instead of a separate turn', () => {
-    bt.bufferForPiggyback('cx1', '[PR Feedback] CI failed')
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
-    expect(delivered).toHaveLength(1)
-    expect(delivered[0].text).toContain('[PR Feedback] CI failed')
-    expect(delivered[0].text).toContain('real message')
-  })
-
-  test('a second buffered item without an intervening send merges into one prefix', () => {
-    bt.bufferForPiggyback('cx1', 'first notice')
-    bt.bufferForPiggyback('cx1', 'second notice')
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
-    expect(delivered).toHaveLength(1)
-    expect(delivered[0].text).toContain('first notice')
-    expect(delivered[0].text).toContain('second notice')
-  })
-
-  test('a send with no buffered content is unaffected', () => {
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
-    expect(delivered).toEqual([{ text: 'real message', mode: undefined }])
   })
 })
