@@ -1164,9 +1164,12 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
         `---`,
         `${actorLabel}, your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol.${timeLine}`,
       ].join('\n')
+  const actorInfo = registry.get(sid)
+  const defer = actorInfo?.engine === 'codex'
   transport.sendOrQueue(sid, {
     type: 'notification',
     content: notification,
+    ...(defer && { deferUntilTurnComplete: true }),
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -1178,19 +1181,27 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
 // the two outcomes differ in a way that has nothing to do with the outcome.
 function notifyActorOfTimeout(run: ProtocolRun, actorSessionId: string | undefined, phase: string): void {
   if (!actorSessionId) return
-  const actorName = registry.get(actorSessionId)?.tmuxName
+  const actorInfo = registry.get(actorSessionId)
+  const actorName = actorInfo?.tmuxName
   const namePrefix = actorName ? `**${actorName}**, phase` : `Phase`
+  const defer = actorInfo?.engine === 'codex'
   transport.sendOrQueue(actorSessionId, {
     type: 'notification',
     content: `[system] ⏰ ${namePrefix} "${phase}" timed out. The protocol is advancing.`,
+    ...(defer && { deferUntilTurnComplete: true }),
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
 
 function notifyParticipant(run: ProtocolRun, sessionId: string, content: string): void {
+  // Codex sessions can only receive messages as new turns (steer only works mid-turn).
+  // Protocol notifications are between-turn by definition, so always queue them.
+  const info = registry.get(sessionId)
+  const defer = info?.engine === 'codex'
   transport.sendOrQueue(sessionId, {
     type: 'notification',
     content,
+    ...(defer && { deferUntilTurnComplete: true }),
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
