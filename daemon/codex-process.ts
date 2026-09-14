@@ -20,6 +20,11 @@ export type StartCodexAppServerOptions = {
 
 /** Start an app-server independently of tmux so the presentation surface is disposable. */
 export function startCodexAppServer(options: StartCodexAppServerOptions): number {
+  // Idempotent: a prior spawn for this home may still be running (retry, crash-restart
+  // race). Clear it first so its PID doesn't survive as an untracked orphan once this
+  // call's pid file overwrite makes it unreachable via the normal stop path.
+  stopCodexAppServer(options.homeName)
+
   const home = codexHomeDir(options.homeName)
   mkdirSync(home, { recursive: true, mode: 0o700 })
   mkdirSync(dirname(options.logPath), { recursive: true, mode: 0o700 })
