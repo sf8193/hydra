@@ -214,7 +214,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           INBOX_DIR,
         )
         if (results.length === 0) {
-          return { content: [{ type: 'text', text: 'message has no attachments' }] }
+          return { content: [{ type: 'text', text: `message ${args.message_id} has no downloadable attachments` }] }
         }
         const lines = results.map(r => `  ${r.path}  (${r.name}, ${r.contentType}, ${r.sizeKB}KB)`)
         return {

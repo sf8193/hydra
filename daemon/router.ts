@@ -85,14 +85,14 @@ function resolveProtocolModel(alias: string | undefined, channelId: string, repl
 // Notification payload builder (auto-downloads attachments)
 // ---------------------------------------------------------------------------
 
-async function buildNotificationPayload(
+export async function buildNotificationPayload(
   msg: InboundMessage,
   chatId: string,
 ): Promise<{ content: string; meta: Record<string, string> }> {
   let downloadedFiles: DownloadedFile[] = []
   if (msg.attachments.length > 0) {
     try {
-      downloadedFiles = await gateway.downloadAttachments(msg.channelId, msg.id, INBOX_DIR)
+      downloadedFiles = await gateway.downloadAttachments(registry.resolveThreadId(msg), msg.id, INBOX_DIR)
     } catch (err) {
       process.stderr.write(`daemon: auto-download failed for ${msg.id}: ${err}\n`)
     }

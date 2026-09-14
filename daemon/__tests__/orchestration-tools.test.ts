@@ -198,3 +198,34 @@ describe('list_sessions', () => {
     }
   })
 })
+
+describe('download_attachment', () => {
+  test('a message with nothing downloadable reports that, without a path', async () => {
+    const { gateway } = await import('../config.js')
+    const real = gateway.downloadAttachments
+    gateway.downloadAttachments = (async () => []) as typeof gateway.downloadAttachments
+    try {
+      const result = await executeTool('download_attachment', { chat_id: 'D0BE3RB4Y00', message_id: '1789403254.473939' })
+      expect(result.isError).toBeFalsy()
+      expect(result.content[0].text).toContain('1789403254.473939')
+      expect(result.content[0].text).not.toContain('/')
+    } finally {
+      gateway.downloadAttachments = real
+    }
+  })
+
+  test('a failed lookup surfaces as an error, not as an absence of attachments', async () => {
+    const { gateway } = await import('../config.js')
+    const real = gateway.downloadAttachments
+    gateway.downloadAttachments = (async () => {
+      throw new Error('message 1789405927.425409 not found in D0BE3RB4Y00')
+    }) as typeof gateway.downloadAttachments
+    try {
+      const result = await executeTool('download_attachment', { chat_id: 'D0BE3RB4Y00', message_id: '1789405927.425409' })
+      expect(result.isError).toBe(true)
+      expect(result.content[0].text).toContain('not found')
+    } finally {
+      gateway.downloadAttachments = real
+    }
+  })
+})
