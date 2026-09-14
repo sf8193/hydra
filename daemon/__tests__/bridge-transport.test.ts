@@ -228,6 +228,24 @@ describe('BridgeTransport piggyback buffering (codex)', () => {
     expect(delivered[0].text).toContain('second notice')
   })
 
+  test('a second buffered item does not push out the backstop deadline', () => {
+    // Regression: bufferForPiggyback used to clearTimeout+restart on every
+    // call, so a steady trickle of events could starve the backstop forever.
+    // It must arm once per episode (first item) and ignore the timer on
+    // subsequent items until the episode flushes.
+    const origSetTimeout = global.setTimeout
+    let timeoutCalls = 0
+    global.setTimeout = ((fn: any, ms?: number) => { timeoutCalls++; return origSetTimeout(fn, ms) }) as any
+    try {
+      bt.bufferForPiggyback('cx1', 'first notice')
+      bt.bufferForPiggyback('cx1', 'second notice')
+      bt.bufferForPiggyback('cx1', 'third notice')
+      expect(timeoutCalls).toBe(1)
+    } finally {
+      global.setTimeout = origSetTimeout
+    }
+  })
+
   test('a send with no buffered content is unaffected', () => {
     bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
     expect(delivered).toEqual([{ text: 'real message', mode: undefined }])

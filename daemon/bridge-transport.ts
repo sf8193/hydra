@@ -37,7 +37,12 @@ export class BridgeTransport {
   // else is delivered in time.
   private readonly pendingPrefix = new Map<string, string[]>()
   private readonly piggybackTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private static readonly PIGGYBACK_BACKSTOP_MS = 60 * 60_000
+  // Bounded by "how long could the in-flight turn it's riding on plausibly
+  // run" (buffering only ever happens mid-turn — shouldPiggyback), not by how
+  // long a user might stay active. Turns doing real work (full test suites,
+  // review rounds) have run 15+ minutes tonight; 20m covers that with margin
+  // without leaving content stranded for the better part of an hour.
+  private static readonly PIGGYBACK_BACKSTOP_MS = 20 * 60_000
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
     this.loadPersistedQueues()
@@ -185,8 +190,13 @@ export class BridgeTransport {
     arr.push(text)
     this.pendingPrefix.set(sessionId, arr)
 
-    const existing = this.piggybackTimers.get(sessionId)
-    if (existing) clearTimeout(existing)
+    // Arm the backstop once per buffering episode, not once per item — this is
+    // only ever buffered while a turn is already in flight (shouldPiggyback),
+    // so the deadline is "that turn finished with nothing to carry this out,"
+    // not "keep pushing the clock out as long as events keep trickling in."
+    // A new event arriving mid-episode shouldn't reset how long the *first*
+    // one has already been waiting.
+    if (this.piggybackTimers.has(sessionId)) return
     const timer = setTimeout(() => this.flushPiggybackStandalone(sessionId), BridgeTransport.PIGGYBACK_BACKSTOP_MS)
     timer.unref?.()
     this.piggybackTimers.set(sessionId, timer)
