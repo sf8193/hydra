@@ -608,7 +608,8 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   const ctx = formatContextPercent(adapter, info)
   const duration = formatDuration(Date.now() - info.createdAt)
   const msgs = info.messageCount ?? 0
-  const header = `📸 **${name}** · ${ctx} · ${msgs} msgs · ${duration}`
+  const model = info.sessionMetadata?.model ?? info.engine ?? '?'
+  const header = `📸 **${name}** · \`${model}\` · ${ctx} · ${msgs} msgs · ${duration}`
 
   if (hasFreeze()) {
     const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
