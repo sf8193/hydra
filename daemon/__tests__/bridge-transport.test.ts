@@ -232,18 +232,4 @@ describe('BridgeTransport piggyback buffering (codex)', () => {
     bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
     expect(delivered).toEqual([{ text: 'real message', mode: undefined }])
   })
-
-  test('a noPiggyback delivery (liveness nudge) never absorbs buffered content', () => {
-    bt.bufferForPiggyback('cx1', '[PR Feedback] CI failed')
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'are you still working?', noPiggyback: true })
-    // The nudge goes out unmodified...
-    expect(delivered).toHaveLength(1)
-    expect(delivered[0].text).toBe('are you still working?')
-    // ...and the buffered content is still waiting for a real delivery.
-    delivered.length = 0
-    bt.sendOrQueue('cx1', { type: 'notification', content: 'real message' })
-    expect(delivered).toHaveLength(1)
-    expect(delivered[0].text).toContain('[PR Feedback] CI failed')
-    expect(delivered[0].text).toContain('real message')
-  })
 })

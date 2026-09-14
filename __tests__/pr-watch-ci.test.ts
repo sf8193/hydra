@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { shouldNotifyCiChange, shouldPiggyback, type CheckStatusType } from '../daemon/pr-watch.js'
+import { shouldNotifyCiChange, type CheckStatusType } from '../daemon/pr-watch.js'
 
 const SHA_A = 'aaaa'
 const SHA_B = 'bbbb'
@@ -48,31 +48,5 @@ describe('shouldNotifyCiChange — new SHA (force push / new commit)', () => {
     for (const last of ['unknown', 'pending', 'success', 'failure'] as CheckStatusType[]) {
       expect(shouldNotifyCiChange(last, SHA_A, 'pending', SHA_B)).toBe(false)
     }
-  })
-})
-
-describe('shouldPiggyback', () => {
-  const codexAdapter = { deliveryIsFree: false }
-  const claudeAdapter = { deliveryIsFree: true }
-
-  test('codex session with a turn in flight: piggyback', () => {
-    expect(shouldPiggyback({ adapter: codexAdapter as any, turnState: 'working' })).toBe(true)
-  })
-
-  test('codex session idle, even if lastActive was seconds ago: never piggyback', () => {
-    // Regression: a session that just finished a turn must not be treated as
-    // "still active" — there's no other turn coming to ride along with.
-    expect(shouldPiggyback({ adapter: codexAdapter as any, turnState: 'idle' })).toBe(false)
-    expect(shouldPiggyback({ adapter: codexAdapter as any, turnState: 'waiting' })).toBe(false)
-    expect(shouldPiggyback({ adapter: codexAdapter as any, turnState: undefined })).toBe(false)
-  })
-
-  test('claude session: never piggyback, even mid-turn (delivery is already free)', () => {
-    expect(shouldPiggyback({ adapter: claudeAdapter as any, turnState: 'working' })).toBe(false)
-  })
-
-  test('no session / no adapter: never piggyback', () => {
-    expect(shouldPiggyback(undefined)).toBe(false)
-    expect(shouldPiggyback({ adapter: undefined, turnState: 'working' })).toBe(false)
   })
 })

@@ -909,14 +909,11 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
       run._escalated = true
       const ctx = info.adapter ? formatContextPercent(info.adapter, info) : '?'
       void safeSend(run.threadId, `_⚠️ ${info.tmuxName} idle for ${Math.round(idleMs / 60_000)}m (${ctx} context)_`)
-      // noPiggyback: this is a liveness probe, not real work — a buffered
-      // CI-failure/PR-comment must never ride silently along on a nudge the
-      // model may treat as a no-op.
-      notifyParticipant(run, actorSid, `[system] ⚠️ You've been idle for ${Math.round(idleMs / 60_000)} minutes. Use advance() to post your response, or the protocol will time out.`, { noPiggyback: true })
+      notifyParticipant(run, actorSid, `[system] ⚠️ You've been idle for ${Math.round(idleMs / 60_000)} minutes. Use advance() to post your response, or the protocol will time out.`)
       process.stderr.write(`daemon: health: ${info.tmuxName} escalated — idle ${Math.round(idleMs / 60_000)}m\n`)
     } else if (idleMs > IDLE_NUDGE_MS && !run._nudged) {
       run._nudged = true
-      notifyParticipant(run, actorSid, `[system] Checking in — are you still working? Use advance() when ready.`, { noPiggyback: true })
+      notifyParticipant(run, actorSid, `[system] Checking in — are you still working? Use advance() when ready.`)
       process.stderr.write(`daemon: health: ${info.tmuxName} nudged — idle ${Math.round(idleMs / 60_000)}m\n`)
     }
 }
@@ -1196,7 +1193,7 @@ function notifyActorOfTimeout(run: ProtocolRun, actorSessionId: string | undefin
   })
 }
 
-function notifyParticipant(run: ProtocolRun, sessionId: string, content: string, opts?: { noPiggyback?: boolean }): void {
+function notifyParticipant(run: ProtocolRun, sessionId: string, content: string): void {
   // Codex sessions can only receive messages as new turns (steer only works mid-turn).
   // Protocol notifications are between-turn by definition, so always queue them.
   const info = registry.get(sessionId)
@@ -1205,7 +1202,6 @@ function notifyParticipant(run: ProtocolRun, sessionId: string, content: string,
     type: 'notification',
     content,
     ...(defer && { deferUntilTurnComplete: true }),
-    ...(opts?.noPiggyback && { noPiggyback: true }),
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
