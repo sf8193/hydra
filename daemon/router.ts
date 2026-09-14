@@ -235,7 +235,7 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
   const chatId = sessionInfo?.threadId ?? msg.channelId
 
   const { content, meta } = await buildNotificationPayload(msg, chatId)
-  transport.sendOrQueue(targetSessionId, { type: 'notification', content, allowPiggyback: true, meta })
+  transport.sendOrQueue(targetSessionId, { type: 'notification', content, meta })
   notePendingReply(targetSessionId, meta)
 }
 
@@ -1021,6 +1021,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
     }
   }
   const { content, meta } = await buildNotificationPayload(msg, effectiveChatId)
-  transport.sendOrQueue(targetSessionId, { type: 'notification', content, allowPiggyback: true, meta })
+  transport.sendOrQueue(targetSessionId, { type: 'notification', content, meta })
   notePendingReply(targetSessionId, meta)
 })

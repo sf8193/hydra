@@ -182,9 +182,9 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
         `The sender cannot see your transcript — if you answered in-transcript only, send that answer now via the reply tool (chat_id ${p.chatId}).`,
         `If a reply is imminent, you already replied in a thread or another chat, or the message needed no response, ignore this.`,
       ].join('\n'),
-      // No allowPiggyback: this is a liveness probe, not real work — the
-      // default (opt-in required) keeps a buffered notification from riding
-      // silently along on a nudge the model may treat as a no-op.
+      // Liveness probe, not real work — a buffered notification must never
+      // ride silently along on a nudge the model may treat as a no-op.
+      noPiggyback: true,
       meta: { chat_id: p.chatId, message_id: '', user: 'system', user_id: 'system', ts: new Date(now).toISOString() },
     })
   }
