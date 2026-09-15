@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { deliverPrUpdate } from '../pr-watch.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
@@ -259,6 +259,16 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
       },
     } as any)
   }
+
+  // registry is a module-level singleton shared by the whole bun test
+  // process, not reset between files. These adapters deliberately omit
+  // usage() (they only need deliver()) — left behind, they're exactly the
+  // shape that broke list-display.test.ts's isAlive()-filtered registry
+  // scan in CI (order-dependent: only reproduced when this file happened
+  // to run first on CI's file ordering, never locally on macOS's).
+  afterEach(() => {
+    for (const id of ['pr-s1', 'pr-s2', 'pr-s3']) registry.delete(id)
+  })
 
   // Claude sessions deliver via a bridge socket, not adapter.deliver() — a
   // fake socket, not the codex mock, is what proves "delivered immediately."
