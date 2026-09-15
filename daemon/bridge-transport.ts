@@ -166,8 +166,15 @@ export class BridgeTransport {
       // delivery is actually confirmed, so a crash or a failed deliver() in
       // between doesn't lose content that was supposedly "never lost."
       const hasPrefix = typeof content === 'string' && content && msg.allowPiggyback === true && this.pendingPrefix.has(sessionId)
+      // Snapshot exactly how many buffered items are riding this delivery —
+      // deliver() is async, and a new item can land in pendingPrefix (another
+      // pr-watch poll, the backstop timer) before it resolves. The success
+      // callback must remove only these, not whatever the array holds by then.
+      let carriedCount = 0
       if (hasPrefix) {
-        const prefix = this.pendingPrefix.get(sessionId)!.join('\n\n')
+        const buffered = this.pendingPrefix.get(sessionId)!
+        carriedCount = buffered.length
+        const prefix = buffered.join('\n\n')
         content = `${prefix}\n\n---\n\n${content as string}`
       }
       if (typeof content === 'string' && content) {
@@ -176,7 +183,7 @@ export class BridgeTransport {
         const delivery = info.adapter.deliver(info, content, mode, meta)
         if (hasPrefix) {
           void delivery
-            .then(() => { this.takePendingPrefix(sessionId) })
+            .then(() => { this.takePendingPrefix(sessionId, carriedCount) })
             .catch(err => { process.stderr.write(`daemon: piggyback carry failed for ${sessionId}, content stays buffered: ${err}\n`) })
         } else {
           // Every other delivery path here logs and recovers on failure — this
@@ -226,15 +233,29 @@ export class BridgeTransport {
     this.piggybackTimers.set(sessionId, timer)
   }
 
-  private takePendingPrefix(sessionId: string): string | undefined {
+  /**
+   * Remove and return the first `count` buffered items (default: all of
+   * them — used by callers, like clearPiggyback, that want everything gone
+   * regardless of what a caller actually delivered). Only clears the timer
+   * and bufferedAt once the buffer is fully drained; leftover items keep
+   * riding the original backstop window.
+   */
+  private takePendingPrefix(sessionId: string, count?: number): string | undefined {
     const arr = this.pendingPrefix.get(sessionId)
     if (!arr || arr.length === 0) return undefined
-    this.pendingPrefix.delete(sessionId)
-    this.bufferedAt.delete(sessionId)
-    const timer = this.piggybackTimers.get(sessionId)
-    if (timer) { clearTimeout(timer); this.piggybackTimers.delete(sessionId) }
+    const n = count ?? arr.length
+    const taken = arr.slice(0, n)
+    const remaining = arr.slice(n)
+    if (remaining.length > 0) {
+      this.pendingPrefix.set(sessionId, remaining)
+    } else {
+      this.pendingPrefix.delete(sessionId)
+      this.bufferedAt.delete(sessionId)
+      const timer = this.piggybackTimers.get(sessionId)
+      if (timer) { clearTimeout(timer); this.piggybackTimers.delete(sessionId) }
+    }
     this.persistPiggyback()
-    return arr.join('\n\n')
+    return taken.join('\n\n')
   }
 
   /** Drop any buffered piggyback content for a session that's gone — nothing left to ride it out on, or to flush it standalone to. */
@@ -255,10 +276,11 @@ export class BridgeTransport {
     if (!arr || arr.length === 0) return
     const info = registry.get(sessionId)
     if (!info || info.deadAt || !info.adapter) { this.takePendingPrefix(sessionId); return }
+    const count = arr.length
     const content = arr.join('\n\n')
     const meta = { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() }
     void info.adapter.deliver(info, content, undefined, meta)
-      .then(() => { this.takePendingPrefix(sessionId) })
+      .then(() => { this.takePendingPrefix(sessionId, count) })
       .catch(err => {
         process.stderr.write(`daemon: piggyback backstop delivery failed for ${sessionId}, re-arming: ${err}\n`)
         // Leave the content buffered and give it a fresh backstop window
@@ -363,7 +385,11 @@ export class BridgeTransport {
         this.armPiggybackTimer(sid, remaining)
       }
       if (total > 0) process.stderr.write(`daemon: restored ${total} buffered piggyback item(s) across ${sessions} session(s)\n`)
-      try { unlinkSync(this.piggybackFile) } catch {}
+      // Write the restored (filtered) state back out immediately rather than
+      // just unlinking — until the next bufferForPiggyback/takePendingPrefix
+      // call, this in-memory copy is the only one. A second crash in that
+      // window would otherwise lose it a second time with nothing to recover.
+      this.persistPiggyback()
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         process.stderr.write(`daemon: failed to load piggyback buffer: ${err}\n`)

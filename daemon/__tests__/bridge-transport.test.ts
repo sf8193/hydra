@@ -395,4 +395,49 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     }
     expect(logged.some(l => l.includes('delivery failed for s12'))).toBe(true)
   })
+
+  test('a second item buffered while a piggyback-carry delivery is in flight is not swallowed by its success callback', async () => {
+    // Round 3 finding: takePendingPrefix used to unconditionally delete the
+    // whole array, not just the items a given delivery actually carried. If
+    // bufferForPiggyback races the in-flight deliver() promise, its success
+    // callback wiped the new item too — read as delivered, actually gone.
+    let resolveDeliver!: () => void
+    const deliverGate = new Promise<void>(resolve => { resolveDeliver = resolve })
+    registry.set('s13', {
+      sessionId: 's13', engine: 'codex', threadId: 'chat1',
+      adapter: {
+        provider: 'codex', deliveryIsFree: false,
+        deliver: async (_i: any, text: string) => { await deliverGate; delivered.push(text); return { status: 'accepted' } },
+      },
+    } as any)
+    delivered = []
+    bt.bufferForPiggyback('s13', 'first item')
+    // Kicks off deliver() with 'first item' carried, but it won't resolve
+    // until resolveDeliver() below — simulating the real network round trip.
+    bt.sendOrQueue('s13', { type: 'notification', content: 'user message', allowPiggyback: true })
+    // A second item lands while that delivery is still pending.
+    bt.bufferForPiggyback('s13', 'second item')
+    resolveDeliver()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(delivered).toEqual(['first item\n\n---\n\nuser message'])
+    // 'second item' must still be there to ride the next delivery out.
+    bt.sendOrQueue('s13', { type: 'notification', content: 'next user message', allowPiggyback: true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(delivered[1]).toContain('second item')
+  })
+
+  test('a daemon restart persists the restored buffer back to disk, not just into memory', () => {
+    // Round 3 finding: loadPersistedPiggyback unlinked the on-disk file after
+    // restoring into memory, without ever writing it back out. A second crash
+    // before the next bufferForPiggyback/takePendingPrefix call (which are the
+    // only other things that persist) would lose it a second time for good.
+    mockCodexSession('s14')
+    bt.bufferForPiggyback('s14', 'first restart survivor')
+    const bt2 = new BridgeTransport() // simulates the restart
+    void bt2
+    const onDisk = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8'))
+    expect(onDisk.s14.items).toEqual(['first restart survivor'])
+  })
 })
