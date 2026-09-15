@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { BridgeTransport } from '../bridge-transport.js'
@@ -200,6 +200,17 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
 
   beforeEach(() => {
     bt = new BridgeTransport()
+  })
+
+  // registry is a module-level singleton shared by the whole bun test
+  // process, not reset between files. Every session this describe block
+  // registers (s1-s14) must be removed again, or it leaks into whichever
+  // other test file's registry.values() scan happens to run afterward in
+  // the same process — these adapters deliberately omit usage(), which is
+  // exactly the shape that broke list-display.test.ts's isAlive()-filtered
+  // render in CI (order-dependent: only showed up when this file ran first).
+  afterEach(() => {
+    for (let i = 1; i <= 14; i++) registry.delete(`s${i}`)
   })
 
   test('buffered content prepends onto the next allowPiggyback delivery', () => {
