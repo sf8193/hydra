@@ -11,6 +11,8 @@ import { registry, threadRegistry } from './sessions.js'
 import { dispatchDisconnect } from './protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
 import { appendFileSync } from 'fs'
+import { join } from 'path'
+import { STATE_DIR } from './config.js'
 import { safeSend } from './util.js'
 import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
 
@@ -91,7 +93,23 @@ codexEngine.on('contextUsage', (sessionId: string, usage: { usedTokens: number; 
   if (!info) return
   info.contextUsage = { ...usage, updatedAt: Date.now() }
   registry.persist()
+  logContextUsageSample(sessionId, info.tmuxName, usage)
 })
+
+// Append-only samples, one per turn (contextUsage fires once per completed
+// turn). Registry only ever keeps the latest snapshot per session, so there's
+// no history to compute turn-over-turn token growth from — this is that
+// history, so "does turn count or payload size actually drive codex token
+// cost" (open question from tonight's reviews) has real data to answer it
+// from, instead of staying an assumption indefinitely.
+const CONTEXT_USAGE_LOG = join(STATE_DIR, 'context-usage-samples.jsonl')
+function logContextUsageSample(sessionId: string, tmuxName: string, usage: { usedTokens: number; contextWindow: number; percent: number }): void {
+  try {
+    appendFileSync(CONTEXT_USAGE_LOG, JSON.stringify({ ts: Date.now(), sessionId, tmuxName, ...usage }) + '\n')
+  } catch (err) {
+    process.stderr.write(`daemon: failed to log context usage sample: ${err}\n`)
+  }
+}
 
 const reconnecting = new Set<string>()
 

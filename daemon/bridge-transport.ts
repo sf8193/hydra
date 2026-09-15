@@ -4,6 +4,7 @@ import type { Socket } from 'net'
 import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
 import { atomicWriteFileSync } from './util.js'
+import { on } from './event-bus.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,9 +31,27 @@ export class BridgeTransport {
   private readonly maxQueueSize = 50
   private readonly queueFile: string
   private readonly queueFullLogged = new Set<string>()
+  // Priced-turn engines only: low-priority content (pr-watch CI/comment
+  // notices) waiting to ride inside the next turn the user creates for this
+  // session, instead of paying for its own turn. Only real user-message
+  // deliveries (allowPiggyback: true) can carry it — automated/protocol
+  // turns never do. If nothing rides it out within the backstop, it flushes
+  // standalone. Persisted to disk (piggybackFile) so a daemon restart mid-
+  // buffer doesn't silently drop content the "never lost" guarantee promises.
+  private readonly pendingPrefix = new Map<string, string[]>()
+  private readonly bufferedAt = new Map<string, number>()
+  private readonly piggybackTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly piggybackFile: string
+  // Armed once per episode from the first buffered item (see bufferForPiggyback),
+  // not reset by later activity — bounds how long the OLDEST buffered item can
+  // sit unfired, regardless of how long the user keeps chatting about something
+  // else in the meantime.
+  private static readonly PIGGYBACK_BACKSTOP_MS = 60 * 60_000
   constructor() {
     this.queueFile = join(STATE_DIR, 'message-queue.json')
+    this.piggybackFile = join(STATE_DIR, 'piggyback-buffer.json')
     this.loadPersistedQueues()
+    this.loadPersistedPiggyback()
   }
 
   get(sessionId: string): BridgeConn | undefined {
@@ -41,9 +60,11 @@ export class BridgeTransport {
 
   has(sessionId: string): boolean {
     if (this.bridges.has(sessionId)) return true
-    // Codex sessions are connected via their adapter, not the bridge
+    // Priced-turn engines (Codex, and any future non-free adapter) connect
+    // via their adapter, not the bridge socket — check the capability, not
+    // the provider name, so a new engine doesn't need this taught to it twice.
     const info = registry.get(sessionId)
-    if (info?.engine === 'codex' && info.adapter) return true
+    if (info?.adapter && info.adapter.deliveryIsFree === false) return true
     return false
   }
 
@@ -132,14 +153,38 @@ export class BridgeTransport {
       else this.enqueue(sessionId, msg)
       return
     }
-    // Route through adapter for Codex sessions — adapter owns delivery mechanics
+    // Route through the adapter for priced-turn engines — it owns delivery
+    // mechanics. Capability-based (deliveryIsFree), not a provider-name
+    // check, so this doesn't need updating for the next non-free engine.
     const info = registry.get(sessionId)
-    if (info?.engine === 'codex' && info.adapter) {
-      const content = msg.content
+    if (info?.adapter && info.adapter.deliveryIsFree === false) {
+      let content = msg.content
+      // Opt-IN, not opt-out: only a caller that knows it's delivering a turn
+      // the user actually created (a real message, not a liveness/procedural
+      // nudge the model may no-op on) should carry buffered content along.
+      // Peek, don't take yet — only clear the buffer (memory + disk) after
+      // delivery is actually confirmed, so a crash or a failed deliver() in
+      // between doesn't lose content that was supposedly "never lost."
+      const hasPrefix = typeof content === 'string' && content && msg.allowPiggyback === true && this.pendingPrefix.has(sessionId)
+      if (hasPrefix) {
+        const prefix = this.pendingPrefix.get(sessionId)!.join('\n\n')
+        content = `${prefix}\n\n---\n\n${content as string}`
+      }
       if (typeof content === 'string' && content) {
         const meta = msg.meta as Record<string, string> | undefined
         const mode = msg.deferUntilTurnComplete === true ? 'next-turn' as const : undefined
-        void info.adapter.deliver(info, content, mode, meta)
+        const delivery = info.adapter.deliver(info, content, mode, meta)
+        if (hasPrefix) {
+          void delivery
+            .then(() => { this.takePendingPrefix(sessionId) })
+            .catch(err => { process.stderr.write(`daemon: piggyback carry failed for ${sessionId}, content stays buffered: ${err}\n`) })
+        } else {
+          // Every other delivery path here logs and recovers on failure — this
+          // was the one bare fire-and-forget with nothing behind it, an
+          // unhandled rejection waiting to happen on the exact case most
+          // likely to reject: a dead session's adapter.deliver() call.
+          void delivery.catch(err => { process.stderr.write(`daemon: delivery failed for ${sessionId}: ${err}\n`) })
+        }
       }
       return
     }
@@ -154,6 +199,74 @@ export class BridgeTransport {
       }
       this.enqueue(sessionId, msg)
     }
+  }
+
+  /**
+   * Buffer low-priority content for a codex session instead of sending it as
+   * its own turn. It rides inside the next turn the user creates for this
+   * session (sendOrQueue prepends it when allowPiggyback: true) at zero
+   * marginal turn cost. If nothing rides it out within the backstop window
+   * (measured from when this content was first buffered, not from user
+   * activity), it flushes on its own so it's never silently lost.
+   */
+  bufferForPiggyback(sessionId: string, text: string): void {
+    const arr = this.pendingPrefix.get(sessionId) ?? []
+    arr.push(text)
+    this.pendingPrefix.set(sessionId, arr)
+    if (!this.bufferedAt.has(sessionId)) this.bufferedAt.set(sessionId, Date.now())
+    this.persistPiggyback()
+
+    if (this.piggybackTimers.has(sessionId)) return
+    this.armPiggybackTimer(sessionId, BridgeTransport.PIGGYBACK_BACKSTOP_MS)
+  }
+
+  private armPiggybackTimer(sessionId: string, delayMs: number): void {
+    const timer = setTimeout(() => this.flushPiggybackStandalone(sessionId), Math.max(0, delayMs))
+    timer.unref?.()
+    this.piggybackTimers.set(sessionId, timer)
+  }
+
+  private takePendingPrefix(sessionId: string): string | undefined {
+    const arr = this.pendingPrefix.get(sessionId)
+    if (!arr || arr.length === 0) return undefined
+    this.pendingPrefix.delete(sessionId)
+    this.bufferedAt.delete(sessionId)
+    const timer = this.piggybackTimers.get(sessionId)
+    if (timer) { clearTimeout(timer); this.piggybackTimers.delete(sessionId) }
+    this.persistPiggyback()
+    return arr.join('\n\n')
+  }
+
+  /** Drop any buffered piggyback content for a session that's gone — nothing left to ride it out on, or to flush it standalone to. */
+  clearPiggyback(sessionId: string): void {
+    this.takePendingPrefix(sessionId)
+  }
+
+  /**
+   * Backstop: nothing rode this content out in time, so send it as its own
+   * turn. Delivers directly through the adapter (this is only ever armed for
+   * a priced-turn session — see bufferForPiggyback) and only clears the
+   * buffer (memory + disk) once delivery is confirmed, same reasoning as
+   * sendOrQueue's piggyback-carry path: clearing first and delivering after
+   * would lose content on a crash or a failed deliver() in between.
+   */
+  private flushPiggybackStandalone(sessionId: string): void {
+    const arr = this.pendingPrefix.get(sessionId)
+    if (!arr || arr.length === 0) return
+    const info = registry.get(sessionId)
+    if (!info || info.deadAt || !info.adapter) { this.takePendingPrefix(sessionId); return }
+    const content = arr.join('\n\n')
+    const meta = { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() }
+    void info.adapter.deliver(info, content, undefined, meta)
+      .then(() => { this.takePendingPrefix(sessionId) })
+      .catch(err => {
+        process.stderr.write(`daemon: piggyback backstop delivery failed for ${sessionId}, re-arming: ${err}\n`)
+        // Leave the content buffered and give it a fresh backstop window
+        // rather than losing it — the one-shot timer that got us here is
+        // already spent, so without this it would never fire again.
+        this.piggybackTimers.delete(sessionId)
+        this.armPiggybackTimer(sessionId, BridgeTransport.PIGGYBACK_BACKSTOP_MS)
+      })
   }
 
   flushQueue(sessionId: string): void {
@@ -213,6 +326,56 @@ export class BridgeTransport {
       }
     }
   }
+
+  private persistPiggyback(): void {
+    try {
+      const data: Record<string, { items: string[]; bufferedAt: number }> = {}
+      for (const [sid, items] of this.pendingPrefix) {
+        if (items.length > 0) data[sid] = { items, bufferedAt: this.bufferedAt.get(sid) ?? Date.now() }
+      }
+      if (Object.keys(data).length > 0) {
+        atomicWriteFileSync(this.piggybackFile, JSON.stringify(data) + '\n')
+      } else {
+        try { unlinkSync(this.piggybackFile) } catch {}
+      }
+    } catch (err) {
+      process.stderr.write(`daemon: failed to persist piggyback buffer: ${err}\n`)
+    }
+  }
+
+  private loadPersistedPiggyback(): void {
+    try {
+      const raw = readFileSync(this.piggybackFile, 'utf8')
+      const data = JSON.parse(raw) as Record<string, { items: string[]; bufferedAt: number }>
+      let total = 0
+      let sessions = 0
+      const now = Date.now()
+      for (const [sid, entry] of Object.entries(data)) {
+        if (!registry.has(sid) || registry.get(sid)?.deadAt || entry.items.length === 0) continue
+        this.pendingPrefix.set(sid, entry.items)
+        this.bufferedAt.set(sid, entry.bufferedAt)
+        total += entry.items.length
+        sessions++
+        // Re-arm with the REMAINING backstop time, not a fresh hour — an item
+        // buffered 50 minutes before a restart should flush ~10 minutes later,
+        // not gain another full hour of life it was never promised.
+        const remaining = BridgeTransport.PIGGYBACK_BACKSTOP_MS - (now - entry.bufferedAt)
+        this.armPiggybackTimer(sid, remaining)
+      }
+      if (total > 0) process.stderr.write(`daemon: restored ${total} buffered piggyback item(s) across ${sessions} session(s)\n`)
+      try { unlinkSync(this.piggybackFile) } catch {}
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        process.stderr.write(`daemon: failed to load piggyback buffer: ${err}\n`)
+      }
+    }
+  }
 }
 
 export const transport = new BridgeTransport()
+
+// A session that's gone (killed/crashed/ended) has no turn left to ride
+// buffered content out on and no chat to standalone-flush it to.
+on('session:death', ({ sessionId }: { sessionId: string }) => {
+  transport.clearPiggyback(sessionId)
+}, 'bridge-transport:piggyback-cleanup')

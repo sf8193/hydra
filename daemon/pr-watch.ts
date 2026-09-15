@@ -47,6 +47,36 @@ export type WatchEntry = {
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
 
+// The one place that decides whether a PR update piggybacks or fires as its
+// own turn — extracted so it's directly unit-testable against a real registry
+// entry, not just simulated by calling bufferForPiggyback/sendOrQueue
+// straight from a test (which proves the mechanism works, not that pollPr
+// actually wires into it correctly).
+export function deliverPrUpdate(sessionId: string, threadId: string, content: string): void {
+  const info = registry.get(sessionId)
+  if (info && !info.deadAt && info.adapter && info.adapter.deliveryIsFree === false) {
+    // Codex: ride this out on the next turn the user creates for this
+    // session instead of paying for a standalone one, CI failures and
+    // changes-requested included — Sam's call (2026-09-15): 1h backstop
+    // bounds the delay for everything, no urgency carve-out. Backstop flushes it
+    // if it's sat unfired for too long.
+    transport.bufferForPiggyback(sessionId, content)
+    return
+  }
+
+  transport.sendOrQueue(sessionId, {
+    type: 'notification',
+    content,
+    meta: {
+      chat_id: threadId,
+      message_id: '',
+      user: 'pr-watch',
+      user_id: 'system',
+      ts: new Date().toISOString(),
+    },
+  })
+}
+
 export function shouldNotifyCiChange(
   lastStatus: CheckStatusType, lastSha: string,
   newStatus: CheckStatusType, newSha: string,
@@ -447,17 +477,8 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     return
   }
 
-  transport.sendOrQueue(entry.sessionId, {
-    type: 'notification',
-    content: parts.join('\n'),
-    meta: {
-      chat_id: entry.threadId,
-      message_id: '',
-      user: 'pr-watch',
-      user_id: 'system',
-      ts: new Date().toISOString(),
-    },
-  })
+  const content = parts.join('\n')
+  deliverPrUpdate(entry.sessionId, entry.threadId, content)
 
   if (watches.get(entry.prUrl) === entry) persist()
   process.stderr.write(`daemon: pr-watch: delivered ${allComments.length} comment(s) + ${reviews.length} review(s) for ${entry.prUrl}\n`)

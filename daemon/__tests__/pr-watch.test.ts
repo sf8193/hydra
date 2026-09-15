@@ -1,4 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
+import { deliverPrUpdate } from '../pr-watch.js'
+import { registry } from '../sessions.js'
+import { transport } from '../bridge-transport.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -240,5 +243,62 @@ describe('watch map operations', () => {
     watchPr('https://github.com/o/r/pull/2', 'sess-1', 'thread-1')
     watchPr('https://github.com/o/r/pull/3', 'sess-2', 'thread-2')
     expect(watches.size).toBe(3)
+  })
+})
+
+describe('deliverPrUpdate (the real production wiring, not a simulation)', () => {
+  let delivered: string[]
+
+  function codexSession(sessionId: string, opts: { deadAt?: number } = {}) {
+    delivered = []
+    registry.set(sessionId, {
+      sessionId, engine: 'codex', threadId: 'thread-1', ...opts,
+      adapter: {
+        provider: 'codex', deliveryIsFree: false,
+        deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } },
+      },
+    } as any)
+  }
+
+  // Claude sessions deliver via a bridge socket, not adapter.deliver() — a
+  // fake socket, not the codex mock, is what proves "delivered immediately."
+  function claudeSession(sessionId: string): string[] {
+    const written: string[] = []
+    registry.set(sessionId, {
+      sessionId, engine: 'claude', threadId: 'thread-1',
+      adapter: { provider: 'claude', deliveryIsFree: true, deliver: async () => ({ status: 'accepted' }) },
+    } as any)
+    transport.set(sessionId, { sessionId, socket: { write: (d: string) => { written.push(d); return true }, end() {}, destroyed: false }, buf: '' } as any)
+    return written
+  }
+
+  test('a codex session buffers instead of firing its own turn', () => {
+    codexSession('pr-s1')
+    deliverPrUpdate('pr-s1', 'thread-1', 'CI failed on PR #1')
+    expect(delivered).toEqual([]) // not delivered yet — buffered
+    // Prove it's actually buffered (not dropped) by piggybacking a real turn onto it.
+    transport.sendOrQueue('pr-s1', { type: 'notification', content: 'real user message', allowPiggyback: true })
+    expect(delivered[0]).toContain('CI failed on PR #1')
+  })
+
+  test('a claude session gets it immediately, not buffered', () => {
+    const written = claudeSession('pr-s2')
+    deliverPrUpdate('pr-s2', 'thread-1', 'CI failed on PR #2')
+    expect(written).toHaveLength(1)
+    expect(written[0]).toContain('CI failed on PR #2')
+  })
+
+  test('a dead codex session does not get buffered — the !info.deadAt guard is live', () => {
+    codexSession('pr-s3', { deadAt: Date.now() })
+    deliverPrUpdate('pr-s3', 'thread-1', 'CI failed on PR #3')
+    // Falls through to the immediate path (dead sessions aren't piggyback-eligible);
+    // whether that immediate send actually reaches anyone is transport's problem,
+    // not this function's — the guard's job is just "don't buffer for a dead session."
+    expect(delivered).toEqual(['CI failed on PR #3'])
+  })
+
+  test('an unknown session id does not throw', () => {
+    delivered = []
+    expect(() => deliverPrUpdate('no-such-session', 'thread-1', 'content')).not.toThrow()
   })
 })
