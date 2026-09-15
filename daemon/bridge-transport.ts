@@ -286,7 +286,15 @@ export class BridgeTransport {
         // Leave the content buffered and give it a fresh backstop window
         // rather than losing it — the one-shot timer that got us here is
         // already spent, so without this it would never fire again.
+        // bufferedAt must move too (and get persisted): loadPersistedPiggyback
+        // computes the restart-remaining backstop from this timestamp, and the
+        // old one is by definition already >= PIGGYBACK_BACKSTOP_MS in the past
+        // (that's why this retry fired) — leaving it stale would make a crash
+        // right after this retry fire the item again immediately on boot
+        // instead of honoring the fresh hour just granted.
         this.piggybackTimers.delete(sessionId)
+        this.bufferedAt.set(sessionId, Date.now())
+        this.persistPiggyback()
         this.armPiggybackTimer(sessionId, BridgeTransport.PIGGYBACK_BACKSTOP_MS)
       })
   }
