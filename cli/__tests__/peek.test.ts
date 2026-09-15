@@ -1,9 +1,15 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
+import * as realChildProcess from 'child_process'
 
-// Mock child_process before importing peek
+// Mock child_process before importing peek. Bun's mock.module replaces the
+// module for the whole test process (leaks across files, not just this one),
+// so spread the real module first — otherwise any other file that imports an
+// export this mock doesn't list (e.g. util.ts's `execFile`) gets a
+// "not found" SyntaxError depending on file execution order.
 const mockExecSync = mock(() => '')
 const mockExecFileSync = mock(() => '')
 mock.module('child_process', () => ({
+  ...realChildProcess,
   execSync: mockExecSync,
   execFileSync: mockExecFileSync,
 }))
