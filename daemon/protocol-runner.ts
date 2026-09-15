@@ -1165,7 +1165,7 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
         `${actorLabel}, your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol.${timeLine}`,
       ].join('\n')
   const actorInfo = registry.get(sid)
-  const defer = actorInfo?.engine === 'codex'
+  const defer = actorInfo?.adapter?.deliveryIsFree === false
   transport.sendOrQueue(sid, {
     type: 'notification',
     content: notification,
@@ -1184,7 +1184,7 @@ function notifyActorOfTimeout(run: ProtocolRun, actorSessionId: string | undefin
   const actorInfo = registry.get(actorSessionId)
   const actorName = actorInfo?.tmuxName
   const namePrefix = actorName ? `**${actorName}**, phase` : `Phase`
-  const defer = actorInfo?.engine === 'codex'
+  const defer = actorInfo?.adapter?.deliveryIsFree === false
   transport.sendOrQueue(actorSessionId, {
     type: 'notification',
     content: `[system] ⏰ ${namePrefix} "${phase}" timed out. The protocol is advancing.`,
@@ -1194,10 +1194,10 @@ function notifyActorOfTimeout(run: ProtocolRun, actorSessionId: string | undefin
 }
 
 function notifyParticipant(run: ProtocolRun, sessionId: string, content: string): void {
-  // Codex sessions can only receive messages as new turns (steer only works mid-turn).
-  // Protocol notifications are between-turn by definition, so always queue them.
+  // Engines where delivery is never free (e.g. Codex: only new turns, no mid-turn
+  // steer) must defer — see EngineAdapter.deliveryIsFree.
   const info = registry.get(sessionId)
-  const defer = info?.engine === 'codex'
+  const defer = info?.adapter?.deliveryIsFree === false
   transport.sendOrQueue(sessionId, {
     type: 'notification',
     content,

@@ -93,6 +93,11 @@ export type LaunchResult = {
 
 export interface EngineAdapter {
   readonly provider: ProviderId
+  // true when a delivery just sits in the engine's own buffer (Claude's tmux
+  // pane) at no extra cost; false when every delivery is a priced turn
+  // (Codex). Callers deciding whether to buffer/piggyback low-priority
+  // notifications should ask this, not special-case a provider name.
+  readonly deliveryIsFree: boolean
 
   // Lifecycle
   launch(input: LaunchInput): Promise<LaunchResult>

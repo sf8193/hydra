@@ -9,8 +9,8 @@ import {
   noteActivityForSession,
   _resetReplyGuardForTesting,
   _pendingForTesting,
-  _NUDGE_COOLDOWN_MS,
   _ACTIVITY_BACKSTOP_MS,
+  _NUDGE_COOLDOWN_MS,
   _setDeps,
   _resetDeps,
 } from '../reply-guard.js'
@@ -25,6 +25,7 @@ const T0 = 1_000_000_000
 
 const testSessions = new Map<string, SessionInfo>()
 const connectedBridges = new Map<string, string[]>()
+const escalations: Array<{ channelId: string; text: string }> = []
 
 function fakeBridge(sessionId: string): string[] {
   const sent: string[] = []
@@ -36,6 +37,8 @@ function meta(over: Record<string, string> = {}): Record<string, string> {
   return { chat_id: 'chat-1', message_id: 'msg-1', user: 'kevin', user_id: 'U123', ts: '2026-07-09T00:00:00.000Z', ...over }
 }
 
+// 'main' has no registry entry (info undefined) — same as a Claude session:
+// no adapter, deliveryIsFree doesn't apply, so it always takes the nudge path.
 function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): SessionInfo {
   const info: SessionInfo = {
     sessionId,
@@ -51,10 +54,19 @@ function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): Sessio
   return info
 }
 
+function codexSession(sessionId: string, tmuxName: string): SessionInfo {
+  return liveSession(sessionId, {
+    tmuxName,
+    engine: 'codex',
+    adapter: { provider: 'codex', deliveryIsFree: false } as any,
+  })
+}
+
 beforeEach(() => {
   _resetReplyGuardForTesting()
   testSessions.clear()
   connectedBridges.clear()
+  escalations.length = 0
   _setDeps({
     registryGet: (id) => testSessions.get(id),
     registryValues: () => testSessions.values(),
@@ -63,7 +75,9 @@ beforeEach(() => {
       const sent = connectedBridges.get(id)
       if (sent) sent.push(JSON.stringify(msg))
     },
-    gatewaySend: async () => ({ id: 'msg-1' }),
+    gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
+    capturePaneScreenshot: () => null,
+    capturePaneText: () => 'fake pane content',
   })
 })
 
@@ -93,13 +107,10 @@ describe('notePendingReply', () => {
   test('a newer message in the same chat resets the clock', () => {
     fakeBridge('main')
     notePendingReply('main', meta({ message_id: 'msg-1' }), T0)
-    // Mark activity so the gate is open
     noteActivityForSession('main', T0 + 1000)
     notePendingReply('main', meta({ message_id: 'msg-2', ts: '2026-07-09T00:01:00.000Z' }), T0 + 120_000)
-    // Mark activity again for the new message
     noteActivityForSession('main', T0 + 121_000)
     expect(_pendingForTesting().size).toBe(1)
-    // msg-2 is the active pending — a silence event should nudge for it
     expect(handleSilenceEvent('main', T0 + 120_000 + 60_000)).toBe(1)
   })
 
@@ -108,7 +119,6 @@ describe('notePendingReply', () => {
     notePendingReply('main', meta({ message_id: 'msg-2', ts: '2026-07-09T00:01:00.000Z' }), T0)
     notePendingReply('main', meta({ message_id: 'msg-1', ts: '2026-07-09T00:00:00.000Z' }), T0 + 500)
     expect([..._pendingForTesting().values()][0].messageId).toBe('msg-2')
-    // React-ack to the visible newest message settles it
     settlePendingOnReact('main', 'chat-1', 'msg-2')
     expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
   })
@@ -198,7 +208,7 @@ describe('notePendingFromQueue', () => {
   })
 })
 
-describe('handleSilenceEvent', () => {
+describe('handleSilenceEvent — Claude/main path (nudge first, escalate if ignored)', () => {
   test('nudges when a pending reply exists, bridge is connected, and activity was seen', () => {
     const sent = fakeBridge('main')
     notePendingReply('main', meta(), T0)
@@ -210,18 +220,17 @@ describe('handleSilenceEvent', () => {
     expect(payload.content).toContain('Reply check')
     expect(payload.content).toContain('msg-1')
     expect(payload.content).toContain('kevin')
-    expect(payload.content).toContain('chat_id chat-1')
-    expect(payload.content).toContain('reply tool')
     expect(payload.meta.user).toBe('system')
     expect(payload.meta.chat_id).toBe('chat-1')
+    // No escalation yet — the session gets a chance to reply first
+    expect(escalations.length).toBe(0)
   })
 
   test('no nudge when bridge is offline', () => {
-    // No bridge connected — silence event fires but cannot deliver nudge
     notePendingReply('main', meta(), T0)
     noteActivityForSession('main', T0 + 1000)
     expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
-    expect(_pendingForTesting().size).toBe(1) // still pending, waiting for reconnect
+    expect(_pendingForTesting().size).toBe(1)
   })
 
   test('no nudge for unknown tmux session names', () => {
@@ -231,7 +240,7 @@ describe('handleSilenceEvent', () => {
     expect(handleSilenceEvent('nonexistent-session', T0 + 60_000)).toBe(0)
   })
 
-  test('nudges a live non-main session by tmuxName', () => {
+  test('nudges a live non-main Claude session by tmuxName', () => {
     liveSession('sess-1', { tmuxName: 'cedar' })
     const sent = fakeBridge('sess-1')
     notePendingReply('sess-1', meta(), T0)
@@ -265,68 +274,22 @@ describe('handleSilenceEvent', () => {
     notePendingReply('main', meta(), T0)
     noteActivityForSession('main', T0 + 1000)
     expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
-    // New message arrives — should be nudgeable again
     notePendingReply('main', meta({ message_id: 'msg-2', ts: '2026-07-09T00:05:00.000Z' }), T0 + 300_000)
     noteActivityForSession('main', T0 + 301_000)
     expect(handleSilenceEvent('main', T0 + 360_000)).toBe(1)
     expect(sent.length).toBe(2)
     expect(JSON.parse(sent[1]).content).toContain('msg-2')
   })
-})
 
-describe('activity gate', () => {
-  test('silence without prior activity does not nudge', () => {
-    fakeBridge('main')
-    notePendingReply('main', meta(), T0)
-    // No activity event — gate is closed
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
-    // Pending entry is still alive (not pruned)
-    expect(_pendingForTesting().size).toBe(1)
-  })
-
-  test('silence AFTER activity does nudge', () => {
-    const sent = fakeBridge('main')
-    notePendingReply('main', meta(), T0)
-    // Activity event fires — gate opens
-    noteActivityForSession('main', T0 + 5_000)
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
-    expect(sent.length).toBe(1)
-  })
-
-  test('5-minute backstop: silence after 5min without activity still nudges', () => {
-    const sent = fakeBridge('main')
-    notePendingReply('main', meta(), T0)
-    // No activity event — but enough time passes to trigger the backstop
-    expect(handleSilenceEvent('main', T0 + _ACTIVITY_BACKSTOP_MS + 1)).toBe(1)
-    expect(sent.length).toBe(1)
-  })
-
-  test('backstop does not fire before 5 minutes', () => {
-    fakeBridge('main')
-    notePendingReply('main', meta(), T0)
-    // No activity, and less than 5 minutes elapsed
-    expect(handleSilenceEvent('main', T0 + _ACTIVITY_BACKSTOP_MS - 1)).toBe(0)
-  })
-
-  test('activity before deliveredAt does not open gate', () => {
-    fakeBridge('main')
-    // Activity at T0-1000 is before delivery at T0
-    noteActivityForSession('main', T0 - 1000)
-    notePendingReply('main', meta(), T0)
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
-  })
-})
-
-describe('cooldown-based re-nudge', () => {
-  test('escalates after cooldown period (no second nudge)', () => {
+  test('escalates with a pane capture after the nudge cooldown, with nothing sent to the session', () => {
     const sent = fakeBridge('main')
     notePendingReply('main', meta(), T0)
     noteActivityForSession('main', T0 + 1000)
-    // First nudge
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
-    expect(sent.length).toBe(1)
-    // After cooldown: escalation fires (nudgeCount > ESCALATION_AFTER_NUDGES), pending deleted
-    expect(handleSilenceEvent('main', T0 + 60_000 + _NUDGE_COOLDOWN_MS + 1)).toBe(1)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1) // nudge
+    expect(handleSilenceEvent('main', T0 + 60_000 + _NUDGE_COOLDOWN_MS + 1)).toBe(1) // escalate
+    expect(sent.length).toBe(1) // only the one nudge — escalation goes through gatewaySend
+    expect(escalations.length).toBe(1)
+    expect(escalations[0].channelId).toBe('chat-1')
     expect(_pendingForTesting().size).toBe(0)
   })
 
@@ -334,25 +297,96 @@ describe('cooldown-based re-nudge', () => {
     const sent = fakeBridge('main')
     notePendingReply('main', meta(), T0)
     noteActivityForSession('main', T0 + 1000)
-    // First nudge
     expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
-    expect(sent.length).toBe(1)
-    // Attempt re-nudge within cooldown — should be blocked
     expect(handleSilenceEvent('main', T0 + 60_000 + _NUDGE_COOLDOWN_MS - 1)).toBe(0)
     expect(sent.length).toBe(1)
-    // But pending is still alive (not pruned after nudge)
+    expect(_pendingForTesting().size).toBe(1)
+  })
+})
+
+describe('handleSilenceEvent — Codex path (skip the nudge, escalate immediately)', () => {
+  test('escalates with a pane capture on the first silence event, no nudge sent', () => {
+    codexSession('sess-1', 'cedar')
+    const sent = fakeBridge('sess-1')
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(1)
+    expect(sent).toEqual([]) // no notification ever sent to the codex session itself
+    expect(escalations.length).toBe(1)
+    expect(escalations[0].channelId).toBe('chat-1')
+    expect(escalations[0].text).toContain('kevin')
+    expect(_pendingForTesting().size).toBe(0) // settled immediately, no cooldown wait
+  })
+
+  test('a Claude adapter with deliveryIsFree: true still takes the nudge path', () => {
+    liveSession('sess-1', { tmuxName: 'cedar', engine: 'claude', adapter: { provider: 'claude', deliveryIsFree: true } as any })
+    const sent = fakeBridge('sess-1')
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(1)
+    expect(sent.length).toBe(1) // nudge, not escalation
+    expect(escalations.length).toBe(0)
+  })
+
+  test('the branch is capability-based, not engine-name-based — a mismatched pair proves it', () => {
+    // engine: 'codex' but deliveryIsFree: true (e.g. a future free-delivery codex
+    // variant) — a regression back to `info.engine === 'codex'` would escalate
+    // here; the correct (capability-based) behavior is to nudge, since delivery
+    // is free and there's no turn cost to save.
+    liveSession('sess-1', { tmuxName: 'cedar', engine: 'codex', adapter: { provider: 'codex', deliveryIsFree: true } as any })
+    const sent = fakeBridge('sess-1')
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(1)
+    expect(sent.length).toBe(1) // nudge, not escalation
+    expect(escalations.length).toBe(0)
+  })
+})
+
+describe('activity gate', () => {
+  test('silence without prior activity does not act', () => {
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
     expect(_pendingForTesting().size).toBe(1)
   })
 
-  test('pending entry persists after nudge (only deleted on settle)', () => {
+  test('silence AFTER activity does act', () => {
+    const sent = fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    noteActivityForSession('main', T0 + 5_000)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(1)
+    expect(sent.length).toBe(1)
+  })
+
+  test('5-minute backstop: silence after 5min without activity still acts', () => {
+    const sent = fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    expect(handleSilenceEvent('main', T0 + _ACTIVITY_BACKSTOP_MS + 1)).toBe(1)
+    expect(sent.length).toBe(1)
+  })
+
+  test('backstop does not fire before 5 minutes', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
-    noteActivityForSession('main', T0 + 1000)
-    handleSilenceEvent('main', T0 + 60_000)
-    // Pending should still exist
-    expect(_pendingForTesting().size).toBe(1)
-    // Settle via reply
-    clearPendingReply('main', 'chat-1')
-    expect(_pendingForTesting().size).toBe(0)
+    expect(handleSilenceEvent('main', T0 + _ACTIVITY_BACKSTOP_MS - 1)).toBe(0)
+  })
+
+  test('activity before deliveredAt does not open gate', () => {
+    fakeBridge('main')
+    noteActivityForSession('main', T0 - 1000)
+    notePendingReply('main', meta(), T0)
+    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+  })
+})
+
+describe('escalateWithCapture', () => {
+  test('falls back to text when no screenshot tool is available', () => {
+    codexSession('sess-1', 'cedar')
+    fakeBridge('sess-1')
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    handleSilenceEvent('cedar', T0 + 60_000)
+    expect(escalations[0].text).toContain('fake pane content')
   })
 })

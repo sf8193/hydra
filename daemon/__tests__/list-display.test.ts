@@ -53,7 +53,14 @@ beforeEach(() => {
     lastActive: Date.now(),
     tmuxName: 'drift',
     listening: false,
-      engine: 'claude',
+    engine: 'claude',
+    // Set directly rather than relying on resolveEngine('claude') to find
+    // the real singleton — this file doesn't care which engine ran, only
+    // that formatSessionEntry can render *something*, and a global
+    // singleton is reachable (and, per bun's documented mock.module leak
+    // across test files — see factory-worktree.test.ts — sometimes
+    // clobbered) from every other test file in the same run.
+    adapter: { provider: 'claude', deliveryIsFree: true, usage: () => null } as any,
     sessionType: 'thread_owner',
   }
   registry.set(info.sessionId, info)

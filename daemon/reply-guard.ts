@@ -1,7 +1,15 @@
 // Reply guard: a session that receives a user-authored channel message but
 // never calls the `reply` tool leaves the sender staring at silence — the
-// model answered in-transcript, which the sender cannot see. This module
-// converts that silence into a cooldown-based system nudge.
+// model answered in-transcript, which the sender cannot see.
+//
+// Codex: every delivery is a priced turn, so a nudge that gets ignored (this
+// fires exactly when tmux/the turn has gone quiet — there's no turn coming to
+// act on it) just wastes one. Codex sessions skip straight to a pane capture
+// posted directly to the sender's chat.
+//
+// Claude: delivery is free (tmux buffer), so there's no cost to nudging first
+// and giving the session a chance to call `reply` itself — only escalate to a
+// pane capture if a nudge goes ignored. Keeps today's proven behavior as-is.
 //
 // The daemon polls tmux's window_activity timestamp every 20s to detect
 // idle sessions. No monitor-silence/activity options needed.
@@ -21,6 +29,8 @@ export type ReplyGuardDeps = {
   transportHas: (sessionId: string) => boolean
   transportSendOrQueue: (sessionId: string, msg: any) => void
   gatewaySend: (channelId: string, text: string, opts?: any) => Promise<any>
+  capturePaneScreenshot: (tmuxName: string) => string | null
+  capturePaneText: (tmuxName: string, lines?: number) => string | null
 }
 
 const defaultDeps: ReplyGuardDeps = {
@@ -29,6 +39,8 @@ const defaultDeps: ReplyGuardDeps = {
   transportHas: (id) => transport.has(id),
   transportSendOrQueue: (id, msg) => transport.sendOrQueue(id, msg),
   gatewaySend: (ch, text, opts) => gateway.send(ch, text, opts),
+  capturePaneScreenshot: (tmuxName) => capturePaneScreenshot(tmuxName),
+  capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
 }
 
 let deps: ReplyGuardDeps = defaultDeps
@@ -51,11 +63,11 @@ type PendingReply = {
 const pending = new Map<string, PendingReply>()
 const keyOf = (sessionId: string, chatId: string) => `${sessionId}:${chatId}`
 
-// Track nudge state per key: timestamp of last nudge + count.
+// Nudge state for the Claude path only — Codex never gets nudged (see header).
 const nudgedKeys = new Map<string, { at: number; count: number }>()
 
-const NUDGE_COOLDOWN_MS = 2 * 60_000
 const ACTIVITY_BACKSTOP_MS = 5 * 60_000
+const NUDGE_COOLDOWN_MS = 2 * 60_000
 const ESCALATION_AFTER_NUDGES = 1
 
 /** Arm the guard for a user-authored channel message delivered to a session. */
@@ -106,11 +118,16 @@ export function notePendingFromQueue(sessionId: string, queued: Array<Record<str
  * Handle a tmux silence event for a session. Called when monitor-silence
  * fires (the session's tmux pane has been quiet for the configured interval).
  *
- * If the session has a pending reply expectation that hasn't been nudged yet,
- * inject a one-shot nudge notification via the bridge transport.
+ * Codex (every delivery a priced turn): skip straight to a pane capture
+ * posted to the sender's chat — there's no turn in flight to act on a nudge
+ * anyway, so nudging first just delays the same outcome.
  *
- * Returns the number of nudges sent (0 or 1+ across all pending chats for
- * this session).
+ * Claude (delivery is free): nudge first, giving the session a chance to
+ * call `reply` itself; only escalate to a pane capture if the nudge is
+ * ignored past the cooldown.
+ *
+ * Returns the number of nudges/escalations sent (0 or 1+ across all pending
+ * chats for this session).
  */
 export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): number {
   // Resolve tmuxName → sessionId. 'main' is the control session and never
@@ -128,13 +145,13 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
   }
   if (!sessionId) return 0
 
-  let nudged = 0
+  let acted = 0
   for (const [key, p] of pending) {
     if (p.sessionId !== sessionId) continue
 
-    // Session gone (killed/crashed) — nobody left to nudge.
+    // Session gone (killed/crashed) — nobody left to check on.
+    const info = p.sessionId === 'main' ? undefined : deps.registryGet(p.sessionId)
     if (p.sessionId !== 'main') {
-      const info = deps.registryGet(p.sessionId)
       if (!info || info.deadAt) {
         pending.delete(key)
         nudgedKeys.delete(key)
@@ -146,29 +163,38 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     // re-armed from queue on reconnect.
     if (!deps.transportHas(p.sessionId)) continue
 
-    // Activity gate: only nudge if the session showed activity after
-    // delivery (meaning it processed the message but didn't reply).
-    // 5-minute wall-clock backstop: if no activity has been seen but
-    // enough time has passed, treat it as if activity was seen — prevents
-    // the guard from being permanently disarmed.
+    // Activity gate: only act if the session showed activity after delivery
+    // (meaning it processed the message but didn't reply). 5-minute
+    // wall-clock backstop: if no activity has been seen but enough time has
+    // passed, treat it as if activity was seen — prevents the guard from
+    // being permanently disarmed.
     const timeSinceDelivery = now - p.deliveredAt
     const activityGateOpen = p.activitySeenAfterDelivery || timeSinceDelivery >= ACTIVITY_BACKSTOP_MS
     if (!activityGateOpen) continue
 
-    // Cooldown: skip if nudged within the last 2 minutes.
+    const mins = Math.max(1, Math.round((now - p.deliveredAt) / 60_000))
+    const name = info?.tmuxName ?? p.sessionId
+    const isCodex = !!info?.adapter && info.adapter.deliveryIsFree === false
+
+    if (isCodex) {
+      process.stderr.write(`daemon: reply guard: ${name} (codex) silent on message ${p.messageId} in ${p.chatId}, escalating with pane capture\n`)
+      void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins)
+      pending.delete(key)
+      nudgedKeys.delete(key)
+      acted++
+      continue
+    }
+
+    // Claude path: nudge first, cooldown between nudges, escalate once ignored.
     const nudgeState = nudgedKeys.get(key)
     if (nudgeState && (now - nudgeState.at) < NUDGE_COOLDOWN_MS) continue
 
     const nudgeCount = (nudgeState?.count ?? 0) + 1
     nudgedKeys.set(key, { at: now, count: nudgeCount })
-    nudged++
-    const mins = Math.max(1, Math.round((now - p.deliveredAt) / 60_000))
-    const name = deps.registryGet(p.sessionId)?.tmuxName ?? p.sessionId
+    acted++
 
     if (nudgeCount > ESCALATION_AFTER_NUDGES) {
-      // Escalation: nudges were ignored. Capture the pane and send it
-      // directly to the user's chat so they at least see the answer.
-      process.stderr.write(`daemon: reply guard: ${name} ignored ${nudgeCount - 1} nudges, escalating with pane capture\n`)
+      process.stderr.write(`daemon: reply guard: ${name} ignored ${nudgeCount - 1} nudge(s), escalating with pane capture\n`)
       void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins)
       pending.delete(key)
       continue
@@ -185,7 +211,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
       meta: { chat_id: p.chatId, message_id: '', user: 'system', user_id: 'system', ts: new Date(now).toISOString() },
     })
   }
-  return nudged
+  return acted
 }
 
 /**
@@ -280,7 +306,7 @@ function capturePaneScreenshot(tmuxName: string): string | null {
 async function escalateWithCapture(tmuxName: string, chatId: string, user: string, messageId: string, mins: number): Promise<void> {
   const header = `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It may have answered in-transcript only. Here's what the session looks like:`
 
-  const screenshot = capturePaneScreenshot(tmuxName)
+  const screenshot = deps.capturePaneScreenshot(tmuxName)
   if (screenshot) {
     try {
       await deps.gatewaySend(chatId, header, { files: [screenshot] })
@@ -293,7 +319,7 @@ async function escalateWithCapture(tmuxName: string, chatId: string, user: strin
   }
 
   // Fallback: send as text
-  const text = capturePaneText(tmuxName, 50)
+  const text = deps.capturePaneText(tmuxName, 50)
   if (text) {
     try {
       await deps.gatewaySend(chatId, `${header}\n\`\`\`\n${text.slice(-1800)}\n\`\`\``)
@@ -320,8 +346,8 @@ export function _resetReplyGuardForTesting(): void {
   nudgedKeys.clear()
 }
 
-export const _NUDGE_COOLDOWN_MS = NUDGE_COOLDOWN_MS
 export const _ACTIVITY_BACKSTOP_MS = ACTIVITY_BACKSTOP_MS
+export const _NUDGE_COOLDOWN_MS = NUDGE_COOLDOWN_MS
 export const _ESCALATION_AFTER_NUDGES = ESCALATION_AFTER_NUDGES
 
 export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
