@@ -38,7 +38,7 @@ writeFileSync(PID_FILE, `${process.pid}\n`)
 process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
-import { PLUGIN_MANIFEST, MCP_CONFIG } from './daemon/plugin-manifest.js'
+import { PLUGIN_MANIFEST, MCP_CONFIG, startWithoutInstall } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
 import { resolveEngine } from './daemon/engines/instances.js'
 import { transport } from './daemon/bridge-transport.js'
@@ -258,6 +258,39 @@ setupPermissionHandler(gateway)
 // Bridge sync — keep plugin cache in sync with repo bridge.ts
 // ---------------------------------------------------------------------------
 
+/**
+ * Install the bridge's dependencies if they are missing.
+ *
+ * This is what the plugin's `start` script used to do on every session spawn.
+ * Doing it here costs one `bun install` per daemon boot on a cold cache and
+ * nothing thereafter, and keeps the registry off the path a session takes to
+ * reach its bridge.
+ */
+function ensureBridgeDepsInstalled(targetDir: string): void {
+  if (existsSync(join(targetDir, 'node_modules'))) return
+  process.stderr.write(`daemon: installing bridge deps in ${targetDir}\n`)
+  execSync('bun install --no-summary', { cwd: targetDir, stdio: 'pipe' })
+}
+
+/**
+ * Rewrite the plugin's `start` script so launching the bridge does not install.
+ *
+ * Only the script is touched — the rest of `package.json` is the published
+ * plugin's and stays that way, so an upstream dependency bump still lands.
+ */
+function liftInstallOutOfStartScript(targetDir: string): void {
+  const pkgPath = join(targetDir, 'package.json')
+  if (!existsSync(pkgPath)) return
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+  const start = pkg.scripts?.start
+  if (typeof start !== 'string') return
+  const lifted = startWithoutInstall(start)
+  if (lifted === start) return
+  pkg.scripts.start = lifted
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+  process.stderr.write(`daemon: lifted bun install out of ${pkgPath} start script\n`)
+}
+
 try {
   const bridgeSrc = join(import.meta.dir, 'bridge.ts')
   const discordCache = join(CLAUDE_CONFIG, 'plugins', 'cache', 'claude-plugins-official', 'discord')
@@ -270,6 +303,8 @@ try {
     writeFileSync(join(targetDir, '.mcp.json'), MCP_CONFIG)
     mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
     writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
+    ensureBridgeDepsInstalled(targetDir)
+    liftInstallOutOfStartScript(targetDir)
   }
   process.stderr.write(`daemon: synced bridge.ts + daemon-${PLATFORM}.json + .mcp.json into ${discordCache}/*/\n`)
 } catch (err) {

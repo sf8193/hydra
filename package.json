@@ -13,7 +13,7 @@
   "bin": "./bridge.ts",
   "license": "Apache-2.0",
   "scripts": {
-    "start": "bun install --no-summary && bun bridge.ts"
+    "start": "bun bridge.ts"
   },
   "type": "module"
 }
