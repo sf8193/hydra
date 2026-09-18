@@ -209,18 +209,17 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
 
   const entries: SessionEntry[] = all.map(s => ({ session: s }))
 
-  // Phase 1: post immediately without latest-message info, grouped by time
-  let sentMsg: { id: string } | undefined
-  try {
-    sentMsg = await gateway.send(msg.channelId, buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
-  } catch { return }
+  // Phase 1: post immediately without latest-message info, grouped by time.
+  // safeSend chunks over-length output — a raw gateway.send silently drops
+  // the whole list once enough sessions push it past Discord's 2000-char cap.
+  const sentIds = await safeSend(msg.channelId, buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
+  const sentMsg = sentIds[0] ? { id: sentIds[0] } : undefined
+  if (!sentMsg) return
 
   // Track for auto-refresh on lifecycle events (FILO — most recent first)
-  if (sentMsg) {
-    lastListMsgs.unshift({ channelId: msg.channelId, messageId: sentMsg.id })
-    if (lastListMsgs.length > MAX_LIST_MSGS) lastListMsgs.pop()
-    persistListMsgs()
-  }
+  lastListMsgs.unshift({ channelId: msg.channelId, messageId: sentMsg.id })
+  if (lastListMsgs.length > MAX_LIST_MSGS) lastListMsgs.pop()
+  persistListMsgs()
 
   // Phase 2: fetch latest message per thread in parallel, then edit
   const latestInfos = await Promise.all(entries.map(async (e): Promise<string | undefined> => {
