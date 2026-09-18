@@ -342,7 +342,7 @@ export async function safeEdit(
 }
 
 export async function safeSend(
-  channelId: string, text: string, opts?: { replyTo?: string },
+  channelId: string, text: string, opts?: { replyTo?: string; unfurl?: boolean },
 ): Promise<string[]> {
   const formatted = gateway.platform === 'discord' ? formatDiscordTables(text) : text
   const chunks = chunk(formatted, gateway.maxMessageLength, 'markdown')
@@ -351,6 +351,7 @@ export async function safeSend(
     try {
       const sent = await gateway.send(channelId, chunks[i], {
         ...(i === 0 && opts?.replyTo ? { replyTo: opts.replyTo } : {}),
+        ...(opts?.unfurl !== undefined ? { unfurl: opts.unfurl } : {}),
       })
       sentIds.push(sent.id)
     } catch (err) {
