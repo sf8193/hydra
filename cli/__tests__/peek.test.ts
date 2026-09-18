@@ -18,7 +18,9 @@ mock.module('child_process', () => ({
 const mockSendRequest = mock(async () => ({ ok: true as const, data: [] as Array<Record<string, string>> }))
 const mockTmuxExists = mock(() => true)
 const mockTmuxKill = mock(() => {})
+const realHelpers = await import('../helpers.js')
 mock.module('../helpers.js', () => ({
+  ...realHelpers,
   resolveSocket: () => '/tmp/fake.sock',
   sendRequest: mockSendRequest,
   shq: (s: string) => "'" + s.replace(/'/g, "'\\''") + "'",
@@ -34,9 +36,11 @@ const mockExit = mock(() => { throw new Error('exit') })
 process.exit = mockExit as any
 
 const calls = () => mockExecSync.mock.calls as unknown as [string, ...unknown[]][]
+const fileCalls = () => mockExecFileSync.mock.calls as unknown as [string, string[], ...unknown[]][]
 
 beforeEach(() => {
   mockExecSync.mockClear()
+  mockExecFileSync.mockClear()
   mockSendRequest.mockClear()
   mockTmuxExists.mockClear()
   mockTmuxKill.mockClear()
@@ -91,8 +95,8 @@ describe('peek', () => {
       expect(mockTmuxKill).toHaveBeenCalledWith('hydra-peek')
 
       // Should create new session with first window
-      const newSessionCall = calls().find(
-        c => c[0].includes('new-session') && c[0].includes('hydra-peek')
+      const newSessionCall = fileCalls().find(
+        c => c[1]?.includes('new-session') && c[1]?.includes('hydra-peek')
       )
       expect(newSessionCall).toBeDefined()
 

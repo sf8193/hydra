@@ -14,7 +14,6 @@ import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
 import type { SessionType } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
-import { withRaisedFdLimit } from '../shared/tmux-env.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -201,6 +200,16 @@ export const killsInProgress = new Set<string>()
 // Kill session
 // ---------------------------------------------------------------------------
 
+export function emitSessionDeath(info: SessionInfo): void {
+  emit('session:death', {
+    sessionId: info.sessionId,
+    threadId: info.threadId,
+    wasOwner: info.sessionType !== 'thread_guest',
+    tmuxName: info.tmuxName,
+    deadAt: info.deadAt,
+  })
+}
+
 export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
@@ -304,12 +313,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       registry.removeMember(info.threadId, info.sessionId)
     }
 
-    emit('session:death', {
-      sessionId: info.sessionId,
-      threadId: info.threadId,
-      wasOwner: info.sessionType !== 'thread_guest',
-      tmuxName: info.tmuxName,
-    })
+    emitSessionDeath(info)
 
     setTimeout(() => {
       try {

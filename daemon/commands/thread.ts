@@ -5,7 +5,7 @@ import { unlinkSync } from 'fs'
 import { gateway } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
+import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
 import type { SpawnResult } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -309,7 +309,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
         await killSession(liveInfo, 'bridge was unreachable — reattaching to this conversation', { skipWorktreeDestroy: true })
       }
       if (liveInfo.engine === 'codex') {
-        liveInfo.deadAt = Date.now()
+        liveInfo.deadAt ??= Date.now()
         registry.persist()
       }
     }
@@ -541,12 +541,7 @@ export async function handleDestroyIntercept(msg: InboundMessage, opts?: { initi
     registry.deleteThread(threadId)
     registry.persist()
     unwatchBySession(sessionId)
-    emit('session:death', {
-      sessionId,
-      threadId,
-      wasOwner: info.sessionType !== 'thread_guest',
-      tmuxName: info.tmuxName,
-    })
+    emitSessionDeath(info)
   }
   threadRegistry.delete(threadId)
 

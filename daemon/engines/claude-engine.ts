@@ -20,7 +20,7 @@ import { tmuxHasSession } from '../util.js'
 import { isKnownModel } from '../../shared/constants.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
-import { withRaisedFdLimit } from '../../shared/tmux-env.js'
+import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -125,15 +125,15 @@ export class ClaudeEngine implements EngineAdapter {
       `${claudeArgs} 2>>${shq(stderrLog)}`,
     ].join(' && ')
 
-    process.stderr.write(`daemon: spawn ${tmuxName}: running tmux new-session\n`)
+    process.stderr.write(`daemon: spawn ${tmuxName}: creating the tmux session\n`)
     process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
 
     mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
     try {
-      execFileSync('tmux', ['new-session', '-d', '-s', tmuxName, withRaisedFdLimit(inner)], { stdio: 'pipe' })
+      tmuxNewSession(['-d', '-s', tmuxName, withRaisedFdLimit(inner)])
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      process.stderr.write(`daemon: spawn ${tmuxName}: execFileSync FAILED: ${msg}\n`)
+      process.stderr.write(`daemon: spawn ${tmuxName}: tmuxNewSession FAILED: ${msg}\n`)
       throw new Error(`failed to spawn tmux session: ${msg}`)
     }
 

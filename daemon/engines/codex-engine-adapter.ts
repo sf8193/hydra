@@ -7,6 +7,7 @@ import { execFileSync, execSync } from 'child_process'
 import { mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { codexSpawnEnv, tmuxNewSession } from '../../shared/spawn-env.js'
 import type { SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
@@ -42,7 +43,7 @@ export class CodexEngineAdapter implements EngineAdapter {
         `mkdir -p ${shq(homeDir)}`,
         `ln -sf ~/.codex/auth.json ${shq(homeDir)}/auth.json`,
         `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
-      ].join(' && ')], { stdio: 'pipe' })
+      ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv() })
     } catch (err) {
       process.stderr.write(`daemon: codex MCP registration failed for ${tmuxName}: ${err}\n`)
     }
@@ -216,10 +217,8 @@ export class CodexEngineAdapter implements EngineAdapter {
       if (!tmuxHasSession(info.tmuxName)) {
         if (!this.engine.isConnected(info.sessionId)) return false
         try {
-          execFileSync('tmux', [
-            'new-session', '-d', '-s', info.tmuxName, '-n', 'hydra-anchor',
-            'while :; do sleep 3600; done',
-          ], { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
+          tmuxNewSession(['-d', '-s', info.tmuxName, '-n', 'hydra-anchor', 'while :; do sleep 3600; done'],
+            { encoding: 'utf8', timeout: 2000 })
           process.stderr.write(`daemon: codex adapter recreated tmux container for ${info.tmuxName}\n`)
         } catch (err) {
           if (!tmuxHasSession(info.tmuxName)) throw err

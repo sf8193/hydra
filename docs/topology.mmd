@@ -12,6 +12,7 @@ graph TD
   subgraph shared["Shared"]
     shared_constants["constants.ts"]
     shared_tool-definitions["tool-definitions.ts"]
+    daemon_raindrop-payload["raindrop-payload.ts"]
   end
 
   subgraph core["Core"]
@@ -55,6 +56,7 @@ graph TD
     daemon_reply-guard["reply-guard.ts"]
     daemon_phase-budget["phase-budget.ts"]
     daemon_session-health["session-health.ts"]
+    daemon_raindrop["raindrop.ts"]
   end
 
   subgraph protocols["Protocols"]
@@ -80,6 +82,7 @@ graph TD
   daemon --> daemon_bridge-server
   daemon --> daemon_commands_global
   daemon --> daemon_recovery
+  daemon --> daemon_raindrop
   daemon --> daemon_phase-budget
   daemon --> daemon_session-lifecycle
   daemon --> daemon_dashboard
@@ -141,6 +144,7 @@ graph TD
   daemon_cli-handler --> daemon_idempotency
   daemon_cli-handler --> daemon_config
   daemon_cli-handler --> daemon_access
+  daemon_cli-handler --> daemon_raindrop
   daemon_session-lifecycle --> daemon_config
   daemon_session-lifecycle --> daemon_util
   daemon_session-lifecycle --> daemon_sessions
@@ -211,6 +215,12 @@ graph TD
   daemon_session-health --> daemon_util
   daemon_session-health --> daemon_anchor-state
   daemon_session-health --> daemon_session-lifecycle
+  daemon_raindrop --> daemon_config
+  daemon_raindrop --> daemon_access
+  daemon_raindrop --> daemon_sessions
+  daemon_raindrop --> shared_constants
+  daemon_raindrop --> daemon_raindrop-payload
+  daemon_raindrop-payload --> shared_constants
   daemon_commands_global --> daemon_config
   daemon_commands_global --> daemon_sessions
   daemon_commands_global --> daemon_bridge-transport
@@ -224,6 +234,7 @@ graph TD
   daemon_commands_status --> daemon_bridge-transport
   daemon_commands_status --> daemon_util
   daemon_commands_status --> daemon_pr-watch
+  daemon_commands_status --> daemon_raindrop
   daemon_commands_thread --> daemon_config
   daemon_commands_thread --> daemon_sessions
   daemon_commands_thread --> daemon_bridge-transport

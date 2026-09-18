@@ -24,6 +24,7 @@ import {
   _MIN_IDLE_BEFORE_PROBE_S,
   _PANE_TAIL_LINES,
   _INTERCEPT_GRACE_MS,
+  probeByteTmuxName,
   type PaneProbeIO,
   type BlockingState,
 } from '../pane-probe.js'
@@ -1039,4 +1040,22 @@ describe('constants', () => {
   it('_MAX_NOTIFICATIONS is 3', () => expect(_MAX_NOTIFICATIONS).toBe(3))
   it('MIN_IDLE_BEFORE_PROBE_S is 30', () => expect(_MIN_IDLE_BEFORE_PROBE_S).toBe(30))
   it('PANE_TAIL_LINES is 8', () => expect(_PANE_TAIL_LINES).toBe(8))
+})
+
+describe('probeByteTmuxName', () => {
+  const saved = process.env.BYTE_SESSION_NAME
+
+  afterEach(() => {
+    _resetIO()
+    if (saved === undefined) delete process.env.BYTE_SESSION_NAME
+    else process.env.BYTE_SESSION_NAME = saved
+  })
+
+  // The BYTE_SESSION_NAME override is pinned on the shared helper; this wrapper
+  // only has to pass the right platform.
+  it('derives the name from the injected platform', () => {
+    delete process.env.BYTE_SESSION_NAME
+    _setIO({ ...makeTestIO(), platform: 'fixture-platform' })
+    expect(probeByteTmuxName()).toBe('fixture-platform-byte')
+  })
 })

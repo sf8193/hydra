@@ -11,7 +11,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES } from '../shared/constants.js'
+import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
@@ -26,6 +26,7 @@ import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } 
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
+import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
 import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
@@ -275,7 +276,8 @@ gateway.onMessageDelete((messageId, threadId) => {
 
 if (gateway.onReaction) {
   gateway.onReaction(async (event) => {
-    if (event.emoji !== 'hocho' && event.emoji !== '🔪') return
+    emit('reaction', event)
+    if (!isDeleteReaction(event.emoji)) return
     const access = loadAccess()
     if (!access.allowFrom.includes(event.userId)) return
     try {

@@ -3,8 +3,8 @@ import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, writeFileS
 import { join } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
-import { spawnModel, TRANSCRIBE_TMUX } from '../shared/constants.js'
-import { withRaisedFdLimit } from '../shared/tmux-env.js'
+import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName } from '../shared/constants.js'
+import { tmuxNewSession, captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 
 // ---------------------------------------------------------------------------
@@ -34,6 +34,8 @@ export type HydraConfig = {
 
 export function sourceStateDirEnv(stateDir: string): { configDir: string; spawnCwd: string; spawnCwdBlank: boolean } {
   sourceEnvFiles([join(stateDir, '.env')])
+  // The CLI must not forward these to the daemon it launches.
+  captureSpawnVars()
   return {
     configDir: process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'),
     spawnCwd: process.env.SPAWN_CWD?.trim() || homedir(),
@@ -95,7 +97,7 @@ export function resolveConfig(platform?: string): HydraConfig {
     spawnCwdBlank,
     hydraDir,
     daemonTmux: `${platform}-daemon`,
-    byteTmux: process.env.BYTE_SESSION_NAME ?? `${platform}-byte`,
+    byteTmux: byteTmuxName(platform),
     transcribeTmux: TRANSCRIBE_TMUX,
     daemonLog: process.env.HYDRA_LOG ?? join(homedir(), `hydra-${platform}-daemon.log`),
     byteLog: process.env.HYDRA_BYTE_LOG ?? join(homedir(), `hydra-${platform}-byte.log`),
@@ -154,7 +156,7 @@ export function tmuxKill(name: string): void {
 }
 
 export function tmuxSpawn(name: string, command: string): void {
-  execFileSync('tmux', ['new-session', '-d', '-s', name, withRaisedFdLimit(command)], { stdio: 'pipe', env: execEnv() })
+  tmuxNewSession(['-d', '-s', name, withRaisedFdLimit(command)])
 }
 
 export function tmuxSessionAge(name: string): number | null {
@@ -452,6 +454,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       console.log(`sessions: ${data.sessions.total} (${data.sessions.connected} connected, ${data.sessions.disconnected} disconnected)`)
       console.log(`tmux: ${data.tmux}`)
       console.log(`idempotency: ${data.idempotency.active} active keys`)
+      if (data.raindrop) console.log(`raindrop: ${data.raindrop}`)
       return
     case 'status':
       console.log(`${data.name} (${data.sessionId})`)

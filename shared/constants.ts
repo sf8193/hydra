@@ -53,23 +53,18 @@ export const CODEX_MODEL_ALIAS_PATTERN = Object.keys(CODEX_MODEL_ALIASES)
 
 /** Look up a chat alias. Returns the full model ID or undefined.
  *  Lowercases input — router regex 'i' flag handles matching, this handles lookup. */
+function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined
+}
+
 export function resolveModelAlias(alias: string): string | undefined {
-  return MODEL_ALIASES[alias.toLowerCase()]
+  const key = alias.toLowerCase()
+  return lookup(MODEL_ALIASES, key)
 }
 
 export function resolveCodexModelAlias(alias: string): string | undefined {
-  return CODEX_MODEL_ALIASES[alias.toLowerCase()]
-}
-
-/** Returns true if the model string identifies a Codex engine model. */
-export function isCodexModel(model: string): boolean {
-  const lower = model.toLowerCase()
-  return !!CODEX_MODEL_ALIASES[lower] || Object.values(CODEX_MODEL_ALIASES).some(v => v === model)
-}
-
-/** Given a model alias or ID, return which engine it belongs to. */
-export function selectCodexEngine(model: string): 'claude' | 'codex' {
-  return isCodexModel(model) ? 'codex' : 'claude'
+  const key = alias.toLowerCase()
+  return lookup(CODEX_MODEL_ALIASES, key)
 }
 
 /** Strip [1m] context-window suffix and check against known models. */
@@ -142,4 +137,43 @@ export type Capability = 'protocol_context'
 
 export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>>> = {
   protocol_context: new Set<ToolName>(['advance', 'extend_phase']),
+}
+
+export type Sentiment = 'POSITIVE' | 'NEGATIVE'
+
+export type SentimentReaction = { name: 'thumbs_up' | 'thumbs_down'; sentiment: Sentiment }
+
+export const SENTIMENT_REACTIONS: Readonly<Record<string, SentimentReaction>> = {
+  '+1': { name: 'thumbs_up', sentiment: 'POSITIVE' },
+  'thumbsup': { name: 'thumbs_up', sentiment: 'POSITIVE' },
+  '👍': { name: 'thumbs_up', sentiment: 'POSITIVE' },
+  '-1': { name: 'thumbs_down', sentiment: 'NEGATIVE' },
+  'thumbsdown': { name: 'thumbs_down', sentiment: 'NEGATIVE' },
+  '👎': { name: 'thumbs_down', sentiment: 'NEGATIVE' },
+}
+
+export const DELETE_REACTIONS: readonly string[] = ['hocho', '🔪']
+
+export function normalizeReaction(emoji: string): string {
+  return emoji.replace(/::skin-tone-\d+$/, '').replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0F}]/gu, '')
+}
+
+export function sentimentForReaction(emoji: string): SentimentReaction | undefined {
+  const bare = normalizeReaction(emoji)
+  return lookup(SENTIMENT_REACTIONS, bare)
+}
+
+export function isDeleteReaction(emoji: string): boolean {
+  return DELETE_REACTIONS.includes(normalizeReaction(emoji))
+}
+
+export function byteTmuxName(platform: string): string {
+  return process.env.BYTE_SESSION_NAME || `${platform}-byte`
+}
+
+export function canonicalModel(model: string): string | undefined {
+  if (isKnownModel(model)) return model
+  const alias = resolveCodexModelAlias(model) ?? resolveModelAlias(model)
+  if (alias) return alias
+  return Object.values(CODEX_MODEL_ALIASES).includes(model) ? model : undefined
 }

@@ -1,5 +1,5 @@
-import { describe, test, expect } from 'bun:test'
-import { resolveModelAlias, resolveCodexModelAlias, isKnownModel, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
+import { describe, test, expect, afterEach } from 'bun:test'
+import { resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
 
 describe('resolveModelAlias', () => {
   test('resolves short aliases', () => {
@@ -134,4 +134,62 @@ describe('Codex spawn command regex integration', () => {
     expect('spawn opus: topic'.match(spawnCodexModelRe)).toBeNull()
     expect('spawn spark: topic'.match(spawnCodexModelRe)).toBeNull()
   })
+})
+
+describe('prototype-key safety', () => {
+  // Plain object literals inherit from Object.prototype, so a bare index
+  // returns the constructor for 'constructor'. These feed an egress allowlist.
+  test.each(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty'])(
+    '%p is not a model', (key) => {
+      expect(isKnownModel(key)).toBe(false)
+      expect(resolveCodexModelAlias(key)).toBeUndefined()
+      expect(resolveModelAlias(key)).toBeUndefined()
+      expect(canonicalModel(key)).toBeUndefined()
+    })
+})
+
+describe('canonicalModel', () => {
+  // Case-insensitive on the codex arm only; known Claude models are an exact
+  // Set lookup, so a mis-cased one is dropped rather than corrected.
+    test('passes known claude models through unchanged', () => {
+    expect(canonicalModel('claude-opus-5[1m]')).toBe('claude-opus-5[1m]')
+    expect(canonicalModel('claude-fable-5')).toBe('claude-fable-5')
+  })
+
+  test('rejects anything uncatalogued', () => {
+    expect(canonicalModel('SSN 123-45-6789')).toBeUndefined()
+    expect(canonicalModel('claude-opus-5[1m][1m]')).toBeUndefined()
+    expect(canonicalModel('CLAUDE-OPUS-5')).toBeUndefined()
+    expect(canonicalModel('claude-opus-5[1M]')).toBeUndefined()
+  })
+})
+
+describe('byteTmuxName', () => {
+  const saved = process.env.BYTE_SESSION_NAME
+  afterEach(() => {
+    if (saved === undefined) delete process.env.BYTE_SESSION_NAME
+    else process.env.BYTE_SESSION_NAME = saved
+  })
+
+  test('an explicit name wins', () => {
+    process.env.BYTE_SESSION_NAME = 'custom-byte'
+    expect(byteTmuxName('slack')).toBe('custom-byte')
+  })
+
+  // `||` not `??`: a blank value in .env must fall through, or the daemon
+  // targets tmux session "" while the shell scripts target <platform>-byte.
+  test('a blank value falls through to the platform default', () => {
+    process.env.BYTE_SESSION_NAME = ''
+    expect(byteTmuxName('slack')).toBe('slack-byte')
+  })
+
+  test('unset falls through too', () => {
+    delete process.env.BYTE_SESSION_NAME
+    expect(byteTmuxName('discord')).toBe('discord-byte')
+  })
+})
+
+test('canonicalModel resolves a Claude chat alias, not only a codex one', () => {
+  expect(canonicalModel('opus')).toBe(MODEL_ALIASES['opus'])
+  expect(canonicalModel('sol')).toBe(CODEX_MODEL_ALIASES['sol'])
 })

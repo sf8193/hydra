@@ -29,7 +29,7 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** �
     ] }
   },
   "settings": {
-    "event_subscriptions": { "bot_events": ["app_home_opened", "app_mention", "message.channels", "message.groups", "message.im"] },
+    "event_subscriptions": { "bot_events": ["app_home_opened", "app_mention", "message.channels", "message.groups", "message.im", "reaction_added"] },
     "interactivity": { "is_enabled": true },
     "org_deploy_enabled": false,
     "socket_mode_enabled": true,
@@ -39,6 +39,8 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** �
 ```
 
 > **Use your own app — don't share one.** A Slack app is a single event stream: pointing a second daemon at the same app token splits messages unpredictably across both. One app per deployment.
+
+**Already installed?** App Manifest → add `"reaction_added"` to `settings.event_subscriptions.bot_events` → Save → Reinstall. `reactions:read` is already in the scopes.
 
 ## 2. Generate the two tokens
 
