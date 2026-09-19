@@ -18,6 +18,8 @@ flowchart TD
         transport["bridge-transport.ts<br/>session delivery"]
         lifecycle["session-lifecycle.ts<br/>spawn / resume / kill"]
         server["bridge-server.ts<br/>socket accept + death detect"]
+        thread["commands/thread.ts<br/>destroy"]
+        rd["raindrop.ts<br/>event-bus subscriber<br/>(opt-in, off by default)"]
     end
 
     subgraph health["Health Monitors"]
@@ -44,11 +46,13 @@ flowchart TD
         logs["spawn-logs/{name}-{uuid}.log"]
         dlog["~/hydra-{platform}-daemon.log"]
         alive["daemon.alive<br/>heartbeat (connectivity-aware)"]
+        rdj["raindrop-dryrun.jsonl<br/>(dryrun mode only, 0600)"]
     end
 
     subgraph external["External"]
         watchdog["launchd watchdog<br/>120s: tmux + heartbeat check"]
         mcp_logs["~/Library/Caches/claude-cli-nodejs/<br/>mcp-logs-*/*.jsonl<br/>(bridge stderr — the gold)"]
+        raindrop_api["api.raindrop.ai<br/>(opt-in, off by default)"]
     end
 
     discord --> dg
@@ -71,6 +75,14 @@ flowchart TD
 
     poll --> server
     obs -.-> dlog
+    obs -. "60s trim" .-> rdj
+    router -. "reaction" .-> rd
+    server -. "spawn / reply" .-> rd
+    lifecycle -. "death (kill / respawn / reap)" .-> rd
+    router --> thread
+    thread -. "death (destroy)" .-> rd
+    rd -. "live mode" .-> raindrop_api
+    rd -. "dryrun mode" .-> rdj
     mbc --> server
     watchdog -.-> alive
 

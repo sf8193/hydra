@@ -158,6 +158,14 @@ ENVP="PATH=$(shq "$PATH") HYDRA_MOCK_PORT=$PORT"
 # so a broken sidecar fails ONCE with its error on screen and in the log —
 # not a model-load crash-loop every watchdog tick.
 PARK_MSG="transcribe sidecar exited — parked to avoid a supervised crash-loop; inspect the error above (or $LOG), fix it, then: tmux kill-session -t $SESSION"
+if [ -f "$SCRIPT_DIR/scrub-raindrop.sh" ]; then
+  . "$SCRIPT_DIR/scrub-raindrop.sh"
+elif env | grep -q '^RAINDROP_'; then
+  echo "hydra: scrub-raindrop.sh missing and RAINDROP_ vars are set — refusing to spawn" >&2
+  exit 1
+else
+  echo "hydra: scrub-raindrop.sh missing (no RAINDROP_ vars set; continuing)" >&2
+fi
 tmux new-session -d -s "$SESSION" \
   "cd $(shq "$SRV_DIR") && $ENVP $CMD 2>&1 | tee -a $(shq "$LOG"); echo $(shq "$PARK_MSG") | tee -a $(shq "$LOG"); sleep 864000000"
 

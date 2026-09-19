@@ -1,4 +1,5 @@
 import { execSync } from 'child_process'
+import { tmuxNewSession } from '../shared/spawn-env.js'
 import { randomUUID } from 'crypto'
 import { resolveSocket, sendRequest, shq, tmuxExists, tmuxKill } from './helpers.js'
 
@@ -44,7 +45,7 @@ function buildPeekSession(sessions: SessionEntry[]): void {
   const windowName = (s: SessionEntry) => s.description ? `${s.name}: ${s.description}` : s.name
 
   // Create peek session and set window-size so linked windows expand to peek's terminal size
-  tmux(`tmux new-session -d -s ${p}`)
+  tmuxNewSession(['-d', '-s', peekName])
   tmux(`tmux set-option -t ${p} window-size largest`)
 
   // Link each session's window, tracking which ones succeed and their tmux window index

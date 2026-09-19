@@ -1,4 +1,6 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
+import { _setDeps, _resetDeps } from '../raindrop.js'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
 
 // Suppress stderr from daemon modules
@@ -153,5 +155,41 @@ describe('cli-handler', () => {
     const res = await handleCLIRequest(makeReq({ command: 'factory', params: { sub: 'frobnicate' } }))
     expect(res.ok).toBe(false)
     expect(res.error).toContain('unknown factory subcommand')
+  })
+})
+
+describe('cli-handler: raindrop in health', () => {
+  const VARS = SCRUBBED_SPAWN_VARS
+  const saved: Record<string, string | undefined> = {}
+  beforeEach(() => {
+    for (const v of VARS) { saved[v] = process.env[v]; delete process.env[v] }
+    _setDeps({ env: () => process.env })
+  })
+  afterEach(() => {
+    _resetDeps()
+    for (const v of VARS) {
+      if (saved[v] === undefined) delete process.env[v]
+      else process.env[v] = saved[v]!
+    }
+  })
+
+  test('omits the field entirely when raindrop is off', async () => {
+    delete process.env.RAINDROP_MODE
+    const res = await handleCLIRequest(makeReq({ command: 'health' }))
+    expect('raindrop' in (res.data as any)).toBe(false)
+  })
+
+  test('reports the mode and the full state-dir path, which chat never gets', async () => {
+    process.env.RAINDROP_MODE = 'dryrun'
+    const res = await handleCLIRequest(makeReq({ command: 'health' }))
+    const line = (res.data as any).raindrop as string
+    expect(line.startsWith('dryrun → ')).toBe(true)
+    expect(line).toContain('raindrop-dryrun.jsonl')
+  })
+
+  test('surfaces a misconfiguration rather than staying silent', async () => {
+    process.env.RAINDROP_MODE = 'dry-run'
+    const res = await handleCLIRequest(makeReq({ command: 'health' }))
+    expect((res.data as any).raindrop).toContain("unrecognized RAINDROP_MODE='dry-run'")
   })
 })

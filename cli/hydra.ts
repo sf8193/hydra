@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from 'crypto'
+import { codexSpawnEnv } from '../shared/spawn-env.js'
 import { resolveSocket, sendRequest, printResponse } from './helpers.js'
 import {
   lifecycleUp, lifecycleDown, lifecycleRestart,
@@ -386,7 +387,7 @@ async function main(): Promise<void> {
       try {
         execFileSync('codex', ['resume', status.codexThreadId, '--remote', `unix://${sockPath}`], {
           stdio: 'inherit',
-          env: { ...process.env, CODEX_HOME: codexHome },
+          env: codexSpawnEnv({ CODEX_HOME: codexHome }),
         })
       } catch {
         // codex --remote exits on disconnect, that's normal

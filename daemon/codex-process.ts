@@ -1,4 +1,5 @@
 import { spawn, execFileSync } from 'child_process'
+import { codexSpawnEnv } from '../shared/spawn-env.js'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
@@ -37,7 +38,7 @@ export function startCodexAppServer(options: StartCodexAppServerOptions): number
   try {
     const child = spawn('codex', args, {
       cwd: options.cwd,
-      env: { ...process.env, CODEX_HOME: home },
+      env: codexSpawnEnv({ CODEX_HOME: home }),
       detached: true,
       stdio: ['ignore', logFd, logFd],
     })

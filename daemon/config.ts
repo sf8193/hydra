@@ -4,6 +4,7 @@ import { join } from 'path'
 
 import type { ChatGateway } from '../gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
+import { captureSpawnVars } from '../shared/spawn-env.js'
 
 // ---------------------------------------------------------------------------
 // Paths & env
@@ -17,12 +18,14 @@ export const APPROVED_DIR = join(STATE_DIR, 'approved')
 export const ENV_FILE = join(STATE_DIR, '.env')
 export const SOCK_PATH = join(STATE_DIR, 'daemon.sock')
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
+export const RAINDROP_DRYRUN_FILE = join(STATE_DIR, 'raindrop-dryrun.jsonl')
 
 const LOCAL_ENV_FILE = join(import.meta.dir, '..', '.env')
 for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
   try { if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600) } catch {}
 }
 sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
+export const RAINDROP_ENV = captureSpawnVars()
 
 export const CLAUDE_CONFIG = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude-personal')
 

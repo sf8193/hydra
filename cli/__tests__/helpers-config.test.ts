@@ -2,7 +2,8 @@ import { test, expect, beforeAll, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
-import { resolveConfig, sourceStateDirEnv, buildDaemonEnvs } from '../helpers.js'
+import { resolveConfig, sourceStateDirEnv, buildDaemonEnvs, printResponse } from '../helpers.js'
+import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
 import type { HydraConfig } from '../helpers.js'
 
 let savedEnv: NodeJS.ProcessEnv
@@ -29,7 +30,7 @@ function cfg(over: Partial<HydraConfig> = {}): HydraConfig {
 
 beforeEach(() => {
   savedEnv = { ...process.env }
-  for (const k of ['CLAUDE_CONFIG_DIR', 'SPAWN_CWD', 'HYDRA_MODEL', 'BYTE_CWD']) delete process.env[k]
+  for (const k of ['CLAUDE_CONFIG_DIR', 'SPAWN_CWD', 'HYDRA_MODEL', 'BYTE_CWD', ...SCRUBBED_SPAWN_VARS]) delete process.env[k]
   stateDir = mkdtempSync(join(tmpdir(), 'hydra-sd-'))
 })
 
@@ -194,4 +195,42 @@ test('a whitespace-only SPAWN_CWD never reaches byteCwd as whitespace', () => {
   expect(r.spawnCwdBlank).toBe(true)
   expect(r.spawnCwd).toBe(homedir())
   expect(buildDaemonEnvs(cfg({ ...r, byteCwd: r.spawnCwd }))).toContain("SPAWN_CWD=''")
+})
+
+function capturedHealth(data: Record<string, unknown>): string {
+  const lines: string[] = []
+  const real = console.log
+  console.log = (...args: unknown[]) => { lines.push(args.join(' ')) }
+  try { printResponse({ ok: true, command: 'health', data }, false) } finally { console.log = real }
+  return lines.join('\n')
+}
+
+const HEALTH = {
+  sessions: { total: 1, connected: 1, disconnected: 0 },
+  tmux: 'ok',
+  idempotency: { active: 0 },
+}
+
+test('hydra health prints the raindrop line when the daemon reports one', () => {
+  expect(capturedHealth({ ...HEALTH, raindrop: 'dryrun → /tmp/x.jsonl (2 recorded, last 1m ago)' }))
+    .toContain('raindrop: dryrun → /tmp/x.jsonl (2 recorded, last 1m ago)')
+})
+
+test('hydra health prints no raindrop line when the daemon reports none', () => {
+  expect(capturedHealth(HEALTH)).not.toContain('raindrop')
+})
+
+test('sourceStateDirEnv loads the .env but keeps no RAINDROP_ value in this process', () => {
+  writeEnv(`${SCRUBBED_SPAWN_VARS.map(v => `${v}=seeded`).join('\n')}\nSPAWN_CWD=/tmp/x\n`)
+  sourceStateDirEnv(stateDir)
+  expect(process.env.SPAWN_CWD).toBe('/tmp/x')
+  for (const v of SCRUBBED_SPAWN_VARS) expect(process.env[v]).toBeUndefined()
+})
+
+
+test('resolveConfig: byteTmux honours BYTE_SESSION_NAME, and a blank one falls through', () => {
+  process.env.BYTE_SESSION_NAME = 'custom-byte'
+  expect(resolveConfig(TEST_PLATFORM).byteTmux).toBe('custom-byte')
+  process.env.BYTE_SESSION_NAME = ''
+  expect(resolveConfig(TEST_PLATFORM).byteTmux).toBe(`${TEST_PLATFORM}-byte`)
 })

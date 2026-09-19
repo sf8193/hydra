@@ -10,6 +10,7 @@ import { formatContextPercent } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../engines/instances.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
+import { raindropStatusLine } from '../raindrop.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export const daemonStartedAt = Date.now()
@@ -297,6 +298,7 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
     heartbeatAge = `${Math.round((Date.now() - hb.mtimeMs) / 1000)}s ago`
   } catch {}
 
+  const raindropLine = raindropStatusLine('chat')
   const lines = [
     `**Daemon Health**`,
     `• Uptime: ${uptimeMin}m`,
@@ -304,6 +306,7 @@ export async function handleHealthIntercept(msg: InboundMessage): Promise<void> 
     `• Heartbeat: ${heartbeatAge}`,
     `• Sessions: ${liveSessions.length} live (${connectedSessions.length} connected, ${disconnectedSessions.length} disconnected)${deadSessions.length > 0 ? `, ${deadSessions.length} dead` : ''}`,
     `• Queued messages: ${queuedMsgCount}`,
+    ...(raindropLine ? [`• Raindrop: ${raindropLine}`] : []),
   ]
 
   if (disconnectedSessions.length > 0) {

@@ -130,5 +130,5 @@ a watchdog-created server has no responsible application.
 
 ## Related
 
-- `shared/tmux-env.ts` — why every pane raises its descriptor limit, and how a
+- `shared/spawn-env.ts` — why every pane raises its descriptor limit, and how a
   low limit corrupts the diagnosis above

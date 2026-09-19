@@ -32,3 +32,4 @@ Compile-check all three entry points before committing — they are independent 
 - Cross-compilation-unit constants go in `shared/constants.ts`.
 - Late-bind runtime reads (functions, not module-scope constants) — see `spawnModel()`, `maxChunkLimit()`.
 - No daemon-internal imports in `bridge-tools.ts` (cycle guard).
+- Creating a tmux session goes through `tmuxNewSession()` in `shared/spawn-env.ts`; spawning `codex` goes through `codexSpawnEnv()`; shell entrypoints source `scrub-raindrop.sh`. Nothing else may — a test pins the exact set of files that do. A tmux server freezes its environment at first launch and hands it to every session for that server's life.

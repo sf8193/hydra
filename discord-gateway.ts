@@ -114,6 +114,7 @@ export class DiscordGateway implements ChatGateway {
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.DirectMessageReactions,
       ],
       partials: [Partials.Channel, Partials.Reaction, Partials.Message],
     })

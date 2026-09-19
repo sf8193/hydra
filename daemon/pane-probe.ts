@@ -19,6 +19,7 @@ import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { loadAccess } from './access.js'
 import { safeSend } from './util.js'
 import { transport } from './bridge-transport.js'
+import { byteTmuxName } from '../shared/constants.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -540,8 +541,8 @@ async function notifyResumePrompt(entry: ProbeEntry, now: number): Promise<void>
 // Main probe loop — called from daemon.ts setInterval
 // ---------------------------------------------------------------------------
 
-export function byteTmuxName(): string {
-  return process.env.BYTE_SESSION_NAME ?? `${io.platform}-byte`
+export function probeByteTmuxName(): string {
+  return byteTmuxName(io.platform)
 }
 
 // ---------------------------------------------------------------------------
@@ -613,7 +614,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
   }
 
   const targets: Array<{ tmuxName: string; threadId: string; isMain: boolean }> = []
-  targets.push({ tmuxName: byteTmuxName(), threadId: io.defaultChannel, isMain: true })
+  targets.push({ tmuxName: probeByteTmuxName(), threadId: io.defaultChannel, isMain: true })
 
   for (const info of io.getSessions()) {
     if (info.deadAt) continue

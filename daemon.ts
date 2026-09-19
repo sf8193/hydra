@@ -97,6 +97,9 @@ const factorySweep = sweepOrphanedBuilders().catch(err => {
   process.stderr.write(`daemon: factory sweep failed: ${err}\n`)
 })
 
+import { register as registerRaindrop } from './daemon/raindrop.js'
+registerRaindrop()
+
 import { logSubscriptions } from './daemon/event-bus.js'
 queueMicrotask(logSubscriptions)
 
@@ -218,7 +221,7 @@ import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { handleSilenceEvent, handleActivityEvent, sessionsWithPendingReplies } from './daemon/reply-guard.js'
-import { probeAllSessions, byteTmuxName } from './daemon/pane-probe.js'
+import { probeAllSessions, probeByteTmuxName } from './daemon/pane-probe.js'
 import { tmuxHasSession } from './daemon/util.js'
 
 // ---------------------------------------------------------------------------
@@ -471,9 +474,9 @@ setInterval(() => {
   const nowSec = Math.floor(Date.now() / 1000)
   for (const tmuxName of pendingNames) {
     const info = tmuxName === 'main' ? undefined : registry.findByName(tmuxName)
-    // 'main' is a logical name — its real tmux window is byteTmuxName() (e.g. slack-byte).
+    // 'main' is a logical name — its real tmux window is probeByteTmuxName() (e.g. slack-byte).
     // Query the real window, but keep passing logical 'main' to the guard so its mapping is unchanged.
-    const queryTarget = tmuxName === 'main' ? byteTmuxName() : tmuxName
+    const queryTarget = tmuxName === 'main' ? probeByteTmuxName() : tmuxName
     let lastActivitySec = 0
     try {
       lastActivitySec = parseInt(

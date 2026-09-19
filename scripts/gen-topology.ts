@@ -59,6 +59,8 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/reply-guard.ts':    { layer: 'domain',    desc: 'Reply guard: nudge sessions that go silent on user-authored messages' },
   'daemon/phase-budget.ts':   { layer: 'domain',    desc: 'Per-session max lifetime: nudge → grace → reap' },
   'daemon/session-health.ts': { layer: 'domain',    desc: 'Session health poll: crash detection, orphan detection, context alerts' },
+  'daemon/raindrop.ts':       { layer: 'domain',    desc: 'Raindrop egress: opt-in event-bus subscriber, session lifecycle metadata' },
+  'daemon/raindrop-payload.ts': { layer: 'shared',  desc: 'Raindrop wire format — egress allowlist, no daemon imports' },
   'daemon/build.ts':          { layer: 'protocols', desc: 'Build — implement/review iteration' },
   'daemon/design.ts':         { layer: 'protocols', desc: 'Design — personas, synthesis, audit' },
   'daemon/commands/global.ts':  { layer: 'commands', desc: 'spawn, kill, restart, recover' },
@@ -117,7 +119,7 @@ for (const filePath of Object.keys(LAYER_CONFIG)) {
   let content: string
   try { content = readFileSync(fullPath, 'utf8') } catch { continue }
 
-  const importRegex = /import\s+.*?from\s+['"]([^'"]+)['"]/g
+  const importRegex = /^\s*import\s+[\s\S]*?from\s+['"]([^'"]+)['"]/gm
   const sideEffectRegex = /import\s+['"]([^'"]+)['"]/g
 
   for (const regex of [importRegex, sideEffectRegex]) {
@@ -167,7 +169,9 @@ writeFileSync(join(OUT, 'topology.mmd'), mmd)
 // The template is always read from docs/; only the write target follows --out.
 const html = readFileSync(join(ROOT, 'docs', 'topology.html'), 'utf8')
 const dataScript = `const DATA = ${JSON.stringify(data)};`
-const injected = html.replace(/\/\* __TOPOLOGY_DATA__ \*\/|const DATA = .+;/, dataScript)
+const INJECTION_POINT = /\/\* __TOPOLOGY_DATA__ \*\/|const DATA = .+;/
+if (!INJECTION_POINT.test(html)) throw new Error('topology.html has no injection point — the data would ship stale')
+const injected = html.replace(INJECTION_POINT, dataScript)
 writeFileSync(join(OUT, 'topology.html'), injected)
 
 console.log(`Generated: ${nodes.length} nodes, ${dedupedEdges.length} edges`)

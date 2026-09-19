@@ -9,6 +9,7 @@ import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
+import { raindropStatusLine } from './raindrop.js'
 import { factoryListAll, factoryAcceptByTicket, factoryAbandonByTicket } from './factory.js'
 
 // ---------------------------------------------------------------------------
@@ -196,10 +197,12 @@ function handleHealth(req: CLIRequest): CLIResponse {
     tmuxRunning = result.exitCode === 0
   } catch {}
 
+  const raindropLine = raindropStatusLine('cli')
   return respond(req, true, {
     sessions: { total: sessions.length, connected, disconnected },
     tmux: tmuxRunning ? 'running' : 'not running',
     idempotency: { active: listIdempotencyEntries().length },
+    ...(raindropLine ? { raindrop: raindropLine } : {}),
   })
 }
 
