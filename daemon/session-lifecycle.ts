@@ -5,6 +5,7 @@ import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { projectDirName } from './usage.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -682,6 +683,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
     sessionType: spawnType,
+    ...(opts?.label && { label: opts.label }),
     threadUrl: url || undefined,
     engine,
     ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
@@ -923,7 +925,7 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
         // (spawnCwd, e.g. /Users/sam/trading), not the worktree the builder later
         // `cd`s to via Bash. Claude's session file captures the startup CWD and does
         // not update on shell cd — so the conversation file will be found correctly.
-        const projectDir = join(homedir(), '.claude', 'projects', data.cwd.replace(/\//g, '-'))
+        const projectDir = join(homedir(), '.claude', 'projects', projectDirName(data.cwd))
         const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
         if (existsSync(conversationFile)) return data.sessionId
       }

@@ -8,6 +8,7 @@ type HydraEvent =
   | 'hydra.session.spawn'
   | 'hydra.session.reply'
   | 'hydra.session.death'
+  | 'hydra.session.usage'
   | 'hydra.env.sweep_failed'
 
 type PropertyValue = string | number
@@ -21,6 +22,7 @@ export type SessionFacts = {
   sessionType?: string
   originType?: string
   platform?: string
+  label?: string
   project?: string
 }
 
@@ -30,6 +32,7 @@ export const SESSION_PROPERTY_KEYS = [
   'sessionType',
   'originType',
   'platform',
+  'label',
 ] as const satisfies readonly (keyof SessionFacts)[]
 
 export type EventBody = {

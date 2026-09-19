@@ -13,6 +13,7 @@ import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 import { type Access } from '../access.js'
+import { parseSessionLabel, type SessionLabel } from '../../shared/constants.js'
 
 const RESTART_PENDING_FILE = join(STATE_DIR, 'restart-pending.json')
 
@@ -58,6 +59,7 @@ async function spawnAndNotify(
   template?: { name: string; template: SpawnTemplate },
   model?: string,
   engine?: 'claude' | 'codex',
+  sessionLabel?: SessionLabel,
 ): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🚀').catch(() => {})
   const chatId = await resolveSpawnTarget(msg)
@@ -67,6 +69,7 @@ async function spawnAndNotify(
     ...(template && buildTemplateSpawnOpts(template.name, template.template, model)),
     ...(!template && { trigger: 'spawn:', ...(model && { model }) }),
     ...(engine && { engine }),
+    ...(sessionLabel && { label: sessionLabel }),
     initiator: msg.authorUsername,
   }
 
@@ -130,7 +133,8 @@ export async function handleSpawnIntercept(msg: InboundMessage, topic: string, a
     resolvedEngine = 'codex'
     cleanTopic = topic.replace(/\s*--codex\b/, '').trim()
   }
-  await spawnAndNotify(msg, cleanTopic, undefined, model, resolvedEngine)
+  const labelled = parseSessionLabel(cleanTopic)
+  await spawnAndNotify(msg, labelled.topic, undefined, model, resolvedEngine, labelled.label)
 }
 
 export async function handleTemplateSpawn(msg: InboundMessage, templateName: string, topic: string, template: SpawnTemplate, access: Access, model?: string): Promise<void> {

@@ -943,6 +943,10 @@
       "daemon_access"
     ],
     [
+      "daemon_commands_global",
+      "shared_constants"
+    ],
+    [
       "daemon_commands_status",
       "daemon_config"
     ],

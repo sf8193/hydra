@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
+import { parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
 
 describe('resolveModelAlias', () => {
   test('resolves short aliases', () => {
@@ -161,6 +161,53 @@ describe('canonicalModel', () => {
     expect(canonicalModel('claude-opus-5[1m][1m]')).toBeUndefined()
     expect(canonicalModel('CLAUDE-OPUS-5')).toBeUndefined()
     expect(canonicalModel('claude-opus-5[1M]')).toBeUndefined()
+  })
+})
+
+describe('parseSessionLabel', () => {
+  test.each(['review', 'build', 'investigate'] as const)('--%s is lifted off the topic', (label) => {
+    expect(parseSessionLabel(`fix the thing --${label}`)).toEqual({ label, topic: 'fix the thing' })
+  })
+
+  test('an unlabelled topic is returned untouched', () => {
+    expect(parseSessionLabel('fix the thing')).toEqual({ topic: 'fix the thing' })
+  })
+
+  // A hyphen is a word boundary, so --build once matched inside --build-tools
+  // and swallowed the space in front of it.
+  test.each([
+    'read --reviewer notes',
+    'ship it --build-tools now',
+    'x --build/y',
+    'see --investigate-later',
+    'path/--review/notes',
+  ])('a lookalike %p is not a label and leaves the topic intact', (topic) => {
+    expect(parseSessionLabel(topic)).toEqual({ topic })
+  })
+
+  // Two flags: the earlier one wins, and neither survives into the prompt.
+  test('with two flags the earlier one wins and both are stripped', () => {
+    expect(parseSessionLabel('--build --review foo')).toEqual({ label: 'build', topic: 'foo' })
+    expect(parseSessionLabel('--review --build foo')).toEqual({ label: 'review', topic: 'foo' })
+    expect(parseSessionLabel('a --investigate b --build c')).toEqual({ label: 'investigate', topic: 'a b c' })
+  })
+
+  test('no label flag survives into the spawned prompt', () => {
+    for (const l of ['review', 'build', 'investigate']) {
+      expect(parseSessionLabel('--build --review --investigate x').topic).not.toContain(`--${l}`)
+    }
+  })
+
+  test.each([
+    ['--review thing', 'thing'],
+    ['a --build b', 'a b'],
+    ['fix --investigate', 'fix'],
+  ])('a real flag in %p yields topic %p', (input, topic) => {
+    expect(parseSessionLabel(input).topic).toBe(topic)
+  })
+
+  test('the label never survives into the topic the session is given', () => {
+    expect(parseSessionLabel('ship it --build').topic).not.toContain('--build')
   })
 })
 

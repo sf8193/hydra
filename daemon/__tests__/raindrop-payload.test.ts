@@ -132,7 +132,7 @@ describe('raindrop-payload: egress allowlist', () => {
 
   test('the allowlist holds only non-freeform session metadata', () => {
     expect([...SESSION_PROPERTY_KEYS]).toEqual([
-      'tmuxName', 'engine', 'sessionType', 'originType', 'platform',
+      'tmuxName', 'engine', 'sessionType', 'originType', 'platform', 'label',
     ])
   })
 })

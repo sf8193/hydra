@@ -10,6 +10,7 @@ import {
   _resetDeps,
   _resetStateForTesting,
   _trackedSizeForTesting,
+  _usageCursorCountForTesting,
   post,
   factsFromRegistry,
   factsForMain,
@@ -17,6 +18,7 @@ import {
   bytePaneArgv,
   raindropStatusLine,
   defaultAllowedUsers,
+  defaultUsageFor,
   defaultProjectFor,
   projectFromGitDir,
   defaultLiveSessionIds,
@@ -25,10 +27,11 @@ import {
 } from '../raindrop.js'
 import { EVENT_ENDPOINT, SIGNAL_ENDPOINT, type SessionFacts } from '../raindrop-payload.js'
 import { mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync, readdirSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { trimRaindropDryrun, startVitalsSnapshots } from '../observability.js'
 import { registry, type SessionInfo } from '../sessions.js'
+import { projectDirName } from '../usage.js'
 import { emitSessionDeath } from '../session-lifecycle.js'
 import { PLATFORM, STATE_DIR, RAINDROP_DRYRUN_FILE } from '../config.js'
 import { SCRUBBED_SPAWN_VARS, tmuxNewSession } from '../../shared/spawn-env.js'
@@ -68,6 +71,7 @@ function stubDeps(over: Partial<RaindropDeps> = {}): void {
     recordDryRun: record,
     allowedUsers: () => new Set([DRIVER]),
     projectFor: (p) => p.split('/').pop(),
+    usageFor: () => undefined,
     env: () => process.env,
     now: () => NOW,
     ...over,
@@ -436,6 +440,64 @@ describe('raindrop: a degraded tmux sweep surfaces on both interfaces', () => {
   })
 })
 
+describe('raindrop: usage events', () => {
+  function tickOnce(): () => void {
+    const real = globalThis.setInterval
+    const fns: Array<() => void> = []
+    globalThis.setInterval = ((fn: () => void) => { fns.push(fn); return { unref() {} } }) as unknown as typeof setInterval
+    try { dispose = register() } finally { globalThis.setInterval = real }
+    return () => { for (const f of fns) f() }
+  }
+
+  test('reports the four counters for a live session', async () => {
+    stubDeps({
+      liveSessionIds: () => ['sess-1'],
+      usageFor: () => ({ totals: { inputTokens: 1, outputTokens: 2, cacheCreateTokens: 3, cacheReadTokens: 4 } }),
+    })
+    const tick = tickOnce()
+    tick()
+    await new Promise(r => setTimeout(r, 0))
+    const ev = sent.find(s => s.body.event === 'hydra.session.usage')
+    expect(ev, 'no usage event').toBeTruthy()
+    expect(ev!.body.properties.cacheReadTokens).toBe(4)
+    expect(ev!.body.properties.tmuxName).toBe('atlas')
+  })
+
+  test('one session throwing does not stop the rest of the fleet reporting', async () => {
+    stubDeps({
+      liveSessionIds: () => ['bad', 'sess-1'],
+      usageFor: (id) => { if (id === 'bad') throw new Error('transcript exploded'); return { totals: { outputTokens: 4 } } },
+      factsFor: () => facts,
+    })
+    const tick = tickOnce()
+    expect(() => tick()).not.toThrow()
+    await new Promise(r => setTimeout(r, 0))
+    const usage = sent.filter(s => s.body.event === 'hydra.session.usage')
+    expect(usage.length, 'the healthy session must still report').toBe(1)
+  })
+
+  test('a session whose totals did not move sends nothing', async () => {
+    stubDeps({ liveSessionIds: () => ['sess-1'], usageFor: () => undefined })
+    const tick = tickOnce()
+    tick()
+    await new Promise(r => setTimeout(r, 0))
+    expect(sent.find(s => s.body.event === 'hydra.session.usage')).toBeUndefined()
+  })
+
+  test('the label rides along so cost can be grouped by what it was for', async () => {
+    stubDeps({
+      liveSessionIds: () => ['sess-1'],
+      factsFor: () => ({ ...facts, label: 'review' }),
+      usageFor: () => ({ totals: { outputTokens: 9 } }),
+    })
+    const tick = tickOnce()
+    tick()
+    await new Promise(r => setTimeout(r, 0))
+    const ev = sent.find(s => s.body.event === 'hydra.session.usage')!
+    expect(ev.body.properties.label).toBe('review')
+  })
+})
+
 describe('raindrop: wire shape', () => {
   test('both events and signals go as a one-element array', async () => {
     dispose = register()
@@ -736,12 +798,12 @@ describe('raindrop: events', () => {
     dispose = register()
     emit('session:bridge-registered', { sessionId: 'wt-3', threadId: 'T-W3' })
     await tick()
-    expect('repo' in sent[0].body.properties).toBe(false)
+    expect(sent[0].body.properties.repo, 'unresolvable must bucket, not vanish').toBe('none')
     // Within the retry bound the daemon must not fork git again.
     emit('reply', { sessionId: 'wt-3', text: 'x', chatId: 'T-W3', sentIds: ['m1'] })
     await tick()
     expect(calls).toBe(1)
-    expect('repo' in sent[1].body.properties).toBe(false)
+    expect(sent[1].body.properties.repo).toBe('none')
     stubDeps({
       factsFor: factsFromRegistry,
       projectFor: () => { calls++; return 'beta' },
@@ -783,6 +845,58 @@ describe('raindrop: events', () => {
     live = []
     onSweep!()
     expect(_trackedSizeForTesting()).toBe(0)
+  })
+
+  test('a dead session leaves no usage cursor behind', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rd-cursor-'))
+    const claudeId = 'claude-cursor-1'
+    const projectDir = join(dir, 'p')
+    mkdirSync(join(homedir(), '.claude', 'projects', projectDirName(projectDir)), { recursive: true })
+    writeFileSync(
+      join(homedir(), '.claude', 'projects', projectDirName(projectDir), `${claudeId}.jsonl`),
+      JSON.stringify({ message: { usage: { output_tokens: 7 } } }) + '\n',
+    )
+    registry.set('cur-1', sessionInfo({
+      sessionId: 'cur-1', threadId: 'T-C', tmuxName: 'atlas', createdAt: 5, lastActive: 5,
+      claudeSessionId: claudeId, worktreePath: projectDir,
+    }))
+    let live = ['cur-1']
+    stubDeps({ liveSessionIds: () => live, usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+
+    const realSetInterval = globalThis.setInterval
+    const fns: Array<() => void> = []
+    globalThis.setInterval = ((fn: () => void) => { fns.push(fn); return { unref() {} } }) as unknown as typeof setInterval
+    try { dispose = register() } finally { globalThis.setInterval = realSetInterval }
+
+    for (const f of fns) f()
+    await tick()
+    expect(_usageCursorCountForTesting(), 'the real reader must have left a cursor').toBe(1)
+
+    live = []
+    registry.delete('cur-1')
+    for (const f of fns) f()
+    await tick()
+    expect(_usageCursorCountForTesting(), 'a dead session must not keep one').toBe(0)
+  })
+
+  test('each usage emission gets its own id, so they do not overwrite each other', async () => {
+    let n = 0
+    stubDeps({
+      liveSessionIds: () => ['sess-1'],
+      usageFor: () => ({ totals: { outputTokens: ++n } }),
+      now: () => NOW + n * 1000,
+    })
+    const realSetInterval = globalThis.setInterval
+    const fns: Array<() => void> = []
+    globalThis.setInterval = ((fn: () => void) => { fns.push(fn); return { unref() {} } }) as unknown as typeof setInterval
+    try { dispose = register() } finally { globalThis.setInterval = realSetInterval }
+    for (const f of fns) f()
+    await tick()
+    for (const f of fns) f()
+    await tick()
+    const ids = sent.filter(s => s.body.event === 'hydra.session.usage').map(s => s.body.event_id)
+    expect(ids.length).toBe(2)
+    expect(new Set(ids).size, `ids collided: ${ids.join(', ')}`).toBe(2)
   })
 
   test('a reply landing after the death does not resurrect the entry for good', async () => {
@@ -1489,10 +1603,17 @@ describe('raindrop: factsFromRegistry', () => {
     expect(mapped).toEqual({
       threadId: 'T-1', createdAt: 1700, tmuxName: 'atlas', engine: 'claude',
       model: 'claude-opus-5[1m]', sessionType: 'thread_owner', originType: 'spawn',
-      platform: PLATFORM, project: 'hydra',
+      platform: PLATFORM, project: 'hydra', label: undefined,
     })
     expect(JSON.stringify(mapped)).not.toContain('Acme')
     expect(JSON.stringify(mapped)).not.toContain('Kevin Liang')
+  })
+
+  test("a labelled session carries its label out of the registry", () => {
+    registry.set('reg-2', sessionInfo({ ...base, sessionId: 'reg-2', label: 'review' }))
+    try {
+      expect(factsFromRegistry('reg-2')!.label).toBe('review')
+    } finally { registry.delete('reg-2') }
   })
 
   test('an absent session maps to nothing', () => {

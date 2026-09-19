@@ -167,6 +167,20 @@ export function isDeleteReaction(emoji: string): boolean {
   return DELETE_REACTIONS.includes(normalizeReaction(emoji))
 }
 
+export const SESSION_LABELS = ['review', 'build', 'investigate'] as const
+export type SessionLabel = typeof SESSION_LABELS[number]
+
+const LABEL_FLAG = new RegExp(`(^|\\s)--(${SESSION_LABELS.join('|')})(?=\\s|$)`, 'g')
+
+export function parseSessionLabel(topic: string): { label?: SessionLabel; topic: string } {
+  const found = [...topic.matchAll(LABEL_FLAG)]
+  if (found.length === 0) return { topic }
+  return {
+    label: found[0][2] as SessionLabel,
+    topic: topic.replace(LABEL_FLAG, ' ').replace(/\s+/g, ' ').trim(),
+  }
+}
+
 export function byteTmuxName(platform: string): string {
   return process.env.BYTE_SESSION_NAME || `${platform}-byte`
 }

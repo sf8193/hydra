@@ -71,6 +71,7 @@ export type SessionInfo = {
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
   contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
+  label?: import('../shared/constants.js').SessionLabel
   capabilities?: Capability[]
   // Keys are subsystem-owned: factory owns 'factory_done', protocol owns 'advance'/'extend_phase'.
   // clearFactoryIdentity and clearProtocolOverrides are the canonical cleanup paths.
@@ -179,6 +180,7 @@ export type SpawnOpts = {
   promptPrefix?: string                                        // prepended to the generated prompt (used by templates)
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
+  label?: import('../shared/constants.js').SessionLabel  // what the session is for, for cost grouping
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
   model?: string         // per-spawn model override (falls back to spawnModel() / HYDRA_MODEL)
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace

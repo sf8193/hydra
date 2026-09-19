@@ -7,6 +7,7 @@ import { registry } from './sessions.js'
 import { on } from './event-bus.js'
 import { byteTmuxName, sentimentForReaction } from '../shared/constants.js'
 import { setSweepFailureHandler } from '../shared/spawn-env.js'
+import { latestCwd, newCursor, readUsageDelta, totalsChanged, transcriptPath, type UsageCursor } from './usage.js'
 import {
   buildEvent,
   buildSignal,
@@ -30,6 +31,7 @@ const MODE_SHAPE = /^[a-z][a-z-]{0,11}$/
 const MAIN_MODEL_TTL_MS = 10 * 60_000
 const MAIN_MODEL_RETRY_MS = 60_000
 const TRACKED_SWEEP_MS = 60_000
+const USAGE_TICK_MS = 60_000
 export const _TRACKED_MESSAGE_CAP = 1000
 
 type TrackedMessage = { eventId: string; delivered: Promise<boolean>; signalled: Set<string> }
@@ -121,6 +123,8 @@ function stale<T>(entry: Cached<T> | undefined, now: number, okMs: number, failM
 }
 
 const projectNames = new Map<string, Cached<string | undefined>>()
+const usageCursors = new Map<string, UsageCursor>()
+const sessionProjects = new Map<string, Cached<string>>()
 
 function readProjectName(repoPath: string): string | undefined {
   const now = deps.now()
@@ -169,6 +173,7 @@ export type RaindropDeps = {
   recordDryRun: (endpoint: string, body: WireBody) => void
   allowedUsers: () => Drivers
   projectFor: (repoPath: string) => string | undefined
+  usageFor: (sessionId: string) => { totals: Record<string, number> } | undefined
   env: () => Record<string, string | undefined>
   now: () => number
 }
@@ -191,6 +196,24 @@ export function factsForMain(now: number): SessionFacts {
   }
 }
 
+export const UNATTRIBUTED_REPO = 'none'
+
+function sessionProject(info: { sessionId: string; worktreeRepo?: string; worktreePath?: string; claudeSessionId?: string; sessionMetadata?: { cwd?: string } }): string {
+  const fromWorktree = info.worktreeRepo && readProjectName(info.worktreeRepo)
+  if (fromWorktree) return fromWorktree
+  const now = deps.now()
+  const cached = sessionProjects.get(info.sessionId)
+  if (!stale(cached, now, Infinity, PROJECT_RETRY_MS)) return cached!.value
+  let value = UNATTRIBUTED_REPO
+  const base = info.worktreePath ?? info.sessionMetadata?.cwd
+  if (base && info.claudeSessionId) {
+    const cwd = latestCwd(transcriptPath(base, info.claudeSessionId))
+    value = (cwd && readProjectName(cwd)) || UNATTRIBUTED_REPO
+  }
+  sessionProjects.set(info.sessionId, { value, ok: value !== UNATTRIBUTED_REPO, at: now })
+  return value
+}
+
 export function factsFromRegistry(sessionId: string): SessionFacts | undefined {
   const info = registry.get(sessionId)
   if (!info || info.headless) return undefined
@@ -201,9 +224,10 @@ export function factsFromRegistry(sessionId: string): SessionFacts | undefined {
     engine: info.engine,
     model: info.sessionMetadata?.model,
     sessionType: info.sessionType,
+    label: info.label,
     originType: info.originType,
     platform: PLATFORM,
-    project: info.worktreeRepo && readProjectName(info.worktreeRepo),
+    project: sessionProject(info),
   }
 }
 
@@ -226,6 +250,19 @@ export function defaultAllowedUsers(): Drivers {
   try { return drivableBy(loadAccess()) } catch { return new Set() }
 }
 
+// Reads only the four token counters out of the transcript; see daemon/usage.ts.
+export function defaultUsageFor(sessionId: string): { totals: Record<string, number> } | undefined {
+  const info = registry.get(sessionId)
+  if (!info?.claudeSessionId) return undefined
+  const base = info.worktreePath ?? info.sessionMetadata?.cwd
+  if (!base) return undefined
+  const next = readUsageDelta(transcriptPath(base, info.claudeSessionId), usageCursors.get(sessionId) ?? newCursor())
+  const prev = usageCursors.get(sessionId)
+  usageCursors.set(sessionId, next)
+  if (prev && !totalsChanged(prev.totals, next.totals)) return undefined
+  return { totals: { ...next.totals } }
+}
+
 const defaultDeps: RaindropDeps = {
   factsFor: factsFromRegistry,
   bytePaneCommand: readBytePaneCommand,
@@ -236,6 +273,7 @@ const defaultDeps: RaindropDeps = {
   },
   allowedUsers: defaultAllowedUsers,
   projectFor: defaultProjectFor,
+  usageFor: defaultUsageFor,
   env: () => RAINDROP_ENV,
   now: () => Date.now(),
 }
@@ -250,8 +288,12 @@ const messageEvents = new Map<string, TrackedMessage>()
 
 export function _trackedSizeForTesting(): number { return tracked.size }
 
+export function _usageCursorCountForTesting(): number { return usageCursors.size }
+
 export function _resetStateForTesting(): void {
   projectNames.clear()
+  usageCursors.clear()
+  sessionProjects.clear()
   tracked.clear()
   messageEvents.clear()
   mainModelCache = undefined
@@ -366,9 +408,26 @@ export function register(): () => void {
     })
   })
 
+  const usageTick = setInterval(() => {
+    for (const sessionId of deps.liveSessionIds()) {
+      let usage: { totals: Record<string, number> } | undefined
+      try { usage = deps.usageFor(sessionId) } catch { continue }
+      if (!usage) continue
+      const facts = deps.factsFor(sessionId)
+      if (!facts) continue
+      void track({
+        event: 'hydra.session.usage', eventId: `${sessionId}:usage:${deps.now()}`, facts,
+        threadId: facts.threadId, at: deps.now(), extra: usage.totals,
+      })
+    }
+  }, USAGE_TICK_MS)
+  usageTick.unref()
+
   const sweep = setInterval(() => {
     const live = new Set(deps.liveSessionIds())
     for (const id of tracked.keys()) if (!live.has(id)) tracked.delete(id)
+    for (const id of usageCursors.keys()) if (!live.has(id)) usageCursors.delete(id)
+    for (const id of sessionProjects.keys()) if (!live.has(id)) sessionProjects.delete(id)
   }, TRACKED_SWEEP_MS)
   sweep.unref()
 
@@ -425,5 +484,5 @@ export function register(): () => void {
     }, 'raindrop:reaction-signal', { onError }),
   ]
 
-  return () => { setSweepFailureHandler(null); clearInterval(sweep); for (const unsub of unsubs) unsub() }
+  return () => { setSweepFailureHandler(null); clearInterval(usageTick); clearInterval(sweep); for (const unsub of unsubs) unsub() }
 }
