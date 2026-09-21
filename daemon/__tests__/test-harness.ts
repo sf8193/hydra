@@ -8,7 +8,7 @@ import type { ProtocolRun } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
 import type { SessionLabel } from '../../shared/constants.js'
-import { spawnLabelFields } from '../util.js'
+import { resolveSpawnLabel } from '../util.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
 const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP, setLifecycle, resetLifecycle } = __test
@@ -295,7 +295,7 @@ export class TestHarness {
           turnState: 'idle',
           engine: 'claude',
           sessionType: spawnOpts?.joinThread ? 'thread_guest' : 'thread_owner',
-          ...spawnLabelFields(spawnOpts?.label, undefined),
+          ...resolveSpawnLabel(topic, spawnOpts?.label, spawnOpts?.inheritedLabel),
         }
         registry.set(sid, info)
         return { sessionId: sid }

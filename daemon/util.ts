@@ -126,28 +126,16 @@ export function parseDuration(s: string): number | null {
   return ms
 }
 
-// Work started on behalf of a session belongs in that session's bucket — the
-// protocol roles and the factory builder all hang off one of these.
-export function ownerLabelFields(ownerLabel: SessionLabel | undefined): { label?: SessionLabel } {
-  return spawnLabelFields(ownerLabel, undefined)
-}
-
 // The one place a spawn's cost bucket is decided; the test harness calls it too.
-// Note the precedence is opts-first — inheritLabel below is the topic-first rule.
-export function spawnLabelFields(optsLabel: SessionLabel | undefined, topicLabel: SessionLabel | undefined): { label?: SessionLabel } {
-  const label = optsLabel ?? topicLabel
+// A caller's explicit choice beats a flag typed on the topic, which beats the
+// bucket a parent or dead predecessor hands down.
+export function resolveSpawnLabel(
+  topic: string,
+  optsLabel?: SessionLabel,
+  inheritedLabel?: SessionLabel,
+): { label?: SessionLabel } {
+  const label = optsLabel ?? parseSpawnTopic(topic).label ?? inheritedLabel
   return label ? { label } : {}
-}
-
-// Topic in, bucket out. Keeping the parse inside means doSpawnSession holds no
-// part of the rule, so all of it is reachable from a test.
-export function resolveSpawnLabel(topic: string, optsLabel?: SessionLabel): { label?: SessionLabel } {
-  return spawnLabelFields(optsLabel, parseSpawnTopic(topic).label)
-}
-
-// A flag typed now is the explicit choice; otherwise inherit.
-export function inheritLabel(parent: SessionLabel | undefined, topic: string): { label?: SessionLabel } {
-  return parent && !parseSpawnTopic(topic).label ? { label: parent } : {}
 }
 
 // Order is load-bearing: loosest anchor first, and the label runs again after

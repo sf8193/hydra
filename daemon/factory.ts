@@ -24,7 +24,7 @@ import type { CompletionEvent } from './protocol-types.js'
 import reviewProto from '../protocols/review.js'
 import { registry, threadRegistry, sessionEmoji, setToolDescription, removeToolDescriptions } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
-import { safeSend, safeEdit, formatDuration, ownerLabelFields } from './util.js'
+import { safeSend, safeEdit, formatDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { defaultToolDescription } from './bridge-tools.js'
@@ -1458,7 +1458,7 @@ async function spawnBuilder(
     ...(initiator ? { initiator } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
     // The builder owns the review protocol, so every reviewer round inherits this.
-    ...ownerLabelFields(registry.get(state.pmSessionId)?.label),
+    inheritedLabel: registry.get(state.pmSessionId)?.label,
     sessionType: 'factory_builder',
   })
 

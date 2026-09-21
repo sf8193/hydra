@@ -3,7 +3,7 @@ import { registry, sessionEmoji, addCapability, removeCapability, setToolDescrip
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, ownerLabelFields, type StatusLineState } from './util.js'
+import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type StatusLineState } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { recordSessionDeath } from './observability.js'
@@ -664,7 +664,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
       model: run.params.model as string | undefined,
       // killSession deletes the dead record before this fires, and a guest has
       // no history entry to fall back on — but the owner handed it out at spawn.
-      ...ownerLabelFields(registry.get(run.ownerSessionId)?.label ?? info?.label),
+      inheritedLabel: registry.get(run.ownerSessionId)?.label ?? info?.label,
     },
   )
   if (isTerminal(run)) {
@@ -1103,13 +1103,12 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
 
   const model = (params.model as string) ?? undefined
   const engine = (params.engine as 'claude' | 'codex' | undefined) ?? undefined
-  const labelFields = ownerLabelFields(registry.get(run.ownerSessionId)?.label)
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,
     sessionType: 'thread_guest',
     model,
-    ...labelFields,
+    inheritedLabel: registry.get(run.ownerSessionId)?.label,
     ...(engine && { engine }),
     promptBuilder: (sessionId, tmuxName) => {
       let seed = run.protocol.seed(role, { ...ctx, name: tmuxName, sessionId, protocol: run.protocol }) ?? `You are ${tmuxName}, the ${role}.`
