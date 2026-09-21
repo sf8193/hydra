@@ -495,21 +495,23 @@ export function register(): () => void {
     try {
       if (live) await deps.postEvent(endpoint, wire)
       else deps.recordDryRun(endpoint, wire)
-      counters.sent++
+      counters.sent += wire.length
       counters.lastSentAt = deps.now()
       return true
     } catch (err) { onError(err); return false }
   }
 
-  const track = async (input: Omit<EventInput, 'userId' | 'omitRepo'>): Promise<boolean> => {
+  const buildTracked = (input: Omit<EventInput, 'userId' | 'omitRepo'>): EventBody | undefined => {
     const user = resolveUserId(deps.allowedUsers())
-    if (!user) return false
+    if (!user) return undefined
     const body = buildEvent({ ...input, userId: user, omitRepo: omitRepoSetting() !== 'off' })
-    if (!body) {
-      onError(new Error(`refused to build ${input.event}: event_id or user_id failed its shape gate`))
-      return false
-    }
-    return dispatch(EVENT_ENDPOINT, [body])
+    if (!body) onError(new Error(`refused to build ${input.event}: event_id or user_id failed its shape gate`))
+    return body
+  }
+
+  const track = async (input: Omit<EventInput, 'userId' | 'omitRepo'>): Promise<boolean> => {
+    const body = buildTracked(input)
+    return body ? dispatch(EVENT_ENDPOINT, [body]) : false
   }
 
   setSweepFailureHandler((reason) => {
@@ -530,6 +532,7 @@ export function register(): () => void {
     // One fleet-wide condition, reported once — the sessions themselves still
     // land in `unresolved`, which is what names CLAUDE_CONFIG_DIR to the operator.
     try { projectDirNames() } catch (err) { rootError(err) }
+    const batch: Array<{ sessionId: string; totals: TokenTotals; body: EventBody }> = []
     for (const sessionId of deps.liveSessionIds()) {
       // Facts first: a headless session would advance its cursor past spend nobody reports.
       let usage: SessionUsage | undefined
@@ -539,14 +542,23 @@ export function register(): () => void {
         if (facts) usage = deps.usageFor(sessionId)
       } catch (err) { usageError(err) }
       if (!facts || !usage) continue
-      const totals = usage.totals
-      // Centred: the tokens were burned across the interval, not at its end.
-      const inFlight = emitUsage(facts, `${sessionId}:usage:${at}`, at - USAGE_TICK_MS / 2, usage)
-        .then(ok => { if (ok) deliveredTotals.set(sessionId, totals) })
-        .catch(usageError)
-        .finally(() => { if (pendingEmits.get(sessionId) === inFlight) pendingEmits.delete(sessionId) })
-      pendingEmits.set(sessionId, inFlight)
+      const body = buildTracked({
+        event: 'hydra.session.usage', eventId: `${sessionId}:usage:${at}`, facts,
+        // Centred: the tokens were burned across the interval, not at its end.
+        threadId: facts.threadId, at: at - USAGE_TICK_MS / 2, extra: usageExtra(usage),
+      })
+      if (body) batch.push({ sessionId, totals: usage.totals, body })
     }
+    if (batch.length === 0) return
+    // All or nothing, which is what makes the retry sound: a failed batch
+    // advances no baseline, so every window in it is re-sent next tick.
+    const inFlight = dispatch(EVENT_ENDPOINT, batch.map(b => b.body))
+      .then(ok => { if (ok) for (const b of batch) deliveredTotals.set(b.sessionId, b.totals) })
+      .catch(usageError)
+      .finally(() => {
+        for (const b of batch) if (pendingEmits.get(b.sessionId) === inFlight) pendingEmits.delete(b.sessionId)
+      })
+    for (const b of batch) pendingEmits.set(b.sessionId, inFlight)
   }, USAGE_TICK_MS)
   usageTick.unref()
 
