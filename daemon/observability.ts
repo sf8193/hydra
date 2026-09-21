@@ -2,16 +2,14 @@
 // death report to the daemon log. A crashed spawn otherwise leaves no cause, no
 // stderr, and no link to its transcript.
 
-import { existsSync, readdirSync, readFileSync, statSync, fstatSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
-import { join } from 'path'
-import { homedir } from 'os'
+import { readFileSync, statSync, fstatSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { execFileSync } from 'child_process'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
 import { RAINDROP_DRYRUN_FILE } from './config.js'
+import { transcriptPathFor } from './usage.js'
 
-const PROJECTS_ROOT = join(homedir(), '.claude', 'projects')
 const VITALS_INTERVAL_MS = 60_000
 
 // Front-trim cap for the black-box spawn logs. A live session's pane output is
@@ -53,18 +51,6 @@ const correlatedSessions = new Set<string>()
 // Seconds under a minute, so a short-lived session doesn't read as "0m".
 function dur(ms: number): string {
   return ms < 60_000 ? `${Math.round(ms / 1000)}s` : formatDuration(ms)
-}
-
-// Scans project dirs rather than deriving the path from cwd — avoids depending
-// on claude's cwd→dir encoding.
-export function transcriptPathFor(claudeSessionId: string): string | undefined {
-  try {
-    for (const dir of readdirSync(PROJECTS_ROOT)) {
-      const p = join(PROJECTS_ROOT, dir, `${claudeSessionId}.jsonl`)
-      if (existsSync(p)) return p
-    }
-  } catch { /* projects dir absent */ }
-  return undefined
 }
 
 export type ConversationForensics = {
@@ -150,7 +136,7 @@ export function readConversationForensics(transcriptPath: string): ConversationF
 export function logCorrelation(info: SessionInfo): void {
   if (correlatedSessions.has(info.sessionId)) return
   correlatedSessions.add(info.sessionId)
-  const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
+  const transcript = transcriptPathFor(info.claudeSessionId)
   process.stderr.write(
     `daemon: correlate ${info.tmuxName}: hydra=${info.sessionId} ` +
     `claude=${info.claudeSessionId ?? '?'} ` +
@@ -292,7 +278,7 @@ export type AutopsyExtras = {
 
 export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: string[], now: number, sample: VitalsSample | undefined, extras?: AutopsyExtras): string {
   const { exitFileLines, stderrTail, debugTail } = extras ?? {}
-  const transcript = info.claudeSessionId ? transcriptPathFor(info.claudeSessionId) : undefined
+  const transcript = transcriptPathFor(info.claudeSessionId)
   const rss = sample ? `${sample.rssMB}MB (${dur(now - sample.at)} before death)` : 'never sampled'
   const lines = [
     `daemon: ═══ AUTOPSY ${info.tmuxName} ═══`,
