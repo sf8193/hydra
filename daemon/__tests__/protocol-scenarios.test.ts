@@ -462,7 +462,9 @@ describe('review: participants carry the owner cost bucket', () => {
     const resumeOpts = h.spawnOptsSeen.slice(before)
     expect(resumeOpts.length, 'the resume must have spawned something').toBeGreaterThan(0)
     expect(resumeOpts.at(-1)!.resumeFrom, 'and it must be the resume, not a fresh spawn').toBe('claude-resume-me')
-    expect(resumeOpts.at(-1)!.label).toBe('review')
+    const resumedSid = h.run.participants.get('critic')!
+    expect(resumedSid, 'the resume must have replaced the dead critic').not.toBe(criticSid)
+    expect(registry.get(resumedSid)?.label).toBe('review')
   })
 
   test('an unlabelled owner spawns an unlabelled critic', async () => {

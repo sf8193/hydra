@@ -4,11 +4,11 @@ import { join } from 'path'
 
 // Ratchet: the cost bucket has to stay wired into the spawn path.
 //
-// `spawnLabelFields`, `inheritLabel`, `deadSessionLabel` and `ownerLabelFields`
-// are all pure and mutation-covered, but the sites that *spread* them build an
-// object inside functions no test can invoke — doSpawnSession launches tmux.
-// Deleting any of them leaves the suite green while the label silently stops
-// reaching the registry, the wire, and every cost query built on it.
+// `resolveSpawnLabel` and `deadSessionLabel` are pure and mutation-covered, but
+// the sites that feed them build an object inside functions no test can invoke —
+// doSpawnSession launches tmux. Deleting any of them leaves the suite green
+// while the label silently stops reaching the registry, the wire, and every
+// cost query built on it.
 //
 // session-lifecycle is the one that matters: it is the sole writer of
 // SessionInfo.label, so losing it disables the feature fleet-wide. The rest are
@@ -18,17 +18,19 @@ import { join } from 'path'
 const REQUIRED_WIRING: Record<string, Record<string, number>> = {
   'session-lifecycle.ts': {
     // rawTopic, because `topic` has had the flag stripped out of it by then —
-    // resolveSpawnLabel's own tests cannot see which string it is handed.
-    'resolveSpawnLabel(rawTopic, opts?.label)': 1,
+    // resolveSpawnLabel's own tests cannot see which string it is handed. All
+    // three arguments, because dropping one silently disables that tier.
+    'resolveSpawnLabel(rawTopic, opts?.label, opts?.inheritedLabel)': 1,
     // Into the live registry entry, which is what factsFromRegistry reads.
     '...labelFields,': 1,
     // And into the durable history entry a later resume reads.
     'label: sessionLabel,': 1,
   },
-  'factory.ts': { '...ownerLabelFields(': 1 },
+  'factory.ts': { 'inheritedLabel:': 1 },
   // commonOpts (tiers 2 and 3) and tryResume (tier 1).
   'recovery.ts': { 'label: recoveredLabel': 2 },
-  'commands/thread.ts': { 'inheritLabel(': 2, 'inheritedLabelFor(': 3, 'deadSessionLabel(': 2 },
+  // Three fork paths (native, thread-reconstruct, failed-fork fallback) and respawn.
+  'commands/thread.ts': { 'inheritedLabel:': 4, 'deadSessionLabel(': 2 },
   // protocol-runner is deliberately absent: protocol-scenarios.test.ts asserts
   // the resumed and spawned critic's label end to end, so pinning the text here
   // would only add a second way to go red for the same regression.

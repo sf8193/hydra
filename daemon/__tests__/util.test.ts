@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, inheritLabel, parseSpawnTopic, safeEdit, spawnLabelFields, resolveSpawnLabel } from '../util.js'
+import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, parseSpawnTopic, safeEdit, resolveSpawnLabel } from '../util.js'
 import { parseSessionLabel } from '../../shared/constants.js'
 import { gateway } from '../config.js'
 
@@ -494,27 +494,58 @@ test('a label before the worktree prefix beats one after it', () => {
   expect(parseSpawnTopic('wt:hydra --build x').label).toBe('build')
 })
 
+// The whole cost-bucket rule: opts, then the topic's flag, then what a parent
+// or dead predecessor handed down. Production and the test harness both call
+// this one function — when the harness had its own copy, every label test
+// proved the copy and the real rule was free to break.
 describe('resolveSpawnLabel', () => {
-  // The rule end to end: nothing connected "the user typed --review" to "the
-  // spawned entry carries label: 'review'", so neutering either arm of the
-  // precedence at the call site left the whole suite green.
   test('a flag typed on the topic becomes the bucket', () => {
     expect(resolveSpawnLabel('--review fix the parser')).toEqual({ label: 'review' })
     expect(resolveSpawnLabel('fix the parser --build')).toEqual({ label: 'build' })
-  })
-
-  test('an explicit opts label beats the topic flag', () => {
-    expect(resolveSpawnLabel('--review fix it', 'build')).toEqual({ label: 'build' })
   })
 
   test('opts alone works when the topic names nothing', () => {
     expect(resolveSpawnLabel('fix it', 'investigate')).toEqual({ label: 'investigate' })
   })
 
-  test('a topic naming no bucket yields no key', () => {
+  test('an inherited bucket is used when nothing else names one', () => {
+    expect(resolveSpawnLabel('fix the bug', undefined, 'review')).toEqual({ label: 'review' })
+  })
+
+  test('an explicit opts label beats the topic flag', () => {
+    expect(resolveSpawnLabel('--review fix it', 'build')).toEqual({ label: 'build' })
+  })
+
+  test('an explicit opts label beats an inherited bucket', () => {
+    expect(resolveSpawnLabel('fix it', 'build', 'review')).toEqual({ label: 'build' })
+  })
+
+  test('a topic flag beats an inherited bucket', () => {
+    expect(resolveSpawnLabel('--build fix the bug', undefined, 'review')).toEqual({ label: 'build' })
+    expect(resolveSpawnLabel('wt:hydra --build x', undefined, 'review')).toEqual({ label: 'build' })
+  })
+
+  // The factory case: the builder's topic is `factory-builder: <spec>`, so a
+  // `--build` the operator typed at the end of the spec outranks the PM's
+  // bucket. One typed at the front of the spec sits mid-string behind the
+  // prefix, where the grammar does not look, and the PM's bucket still wins.
+  test("a flag at the end of a factory spec beats the PM's bucket", () => {
+    expect(resolveSpawnLabel('factory-builder: wire up the CSV export --build', undefined, 'review')).toEqual({ label: 'build' })
+    expect(resolveSpawnLabel('factory-builder: --build wire up the CSV export', undefined, 'review')).toEqual({ label: 'review' })
+  })
+
+  test('opts wins over both of the others', () => {
+    expect(resolveSpawnLabel('--build fix it', 'investigate', 'review')).toEqual({ label: 'investigate' })
+  })
+
+  // Spread into a SessionInfo literal, so the key has to be absent rather than
+  // present-and-undefined — the latter serialises into sessions.json.
+  test('with nothing naming a bucket, the key is absent, not undefined', () => {
     const fields = resolveSpawnLabel('fix the parser')
     expect(fields).toEqual({})
     expect('label' in fields).toBe(false)
+    expect(JSON.stringify({ ...fields })).toBe('{}')
+    expect('label' in resolveSpawnLabel('fix the parser', undefined, undefined)).toBe(false)
   })
 
   // The flag grammar composes with the other prefixes the topic can carry.
@@ -526,49 +557,6 @@ describe('resolveSpawnLabel', () => {
   // Prose must survive: the topic is the instruction the session is given.
   test('a label word in the middle of prose is not a flag', () => {
     expect(resolveSpawnLabel('compare --review and --build modes')).toEqual({})
-  })
-})
-
-describe('spawnLabelFields', () => {
-  // Production and the test harness both spread this. When the harness had its
-  // own copy, every label test proved the copy and the real rule was free to
-  // break: deleting it from the spawned SessionInfo left the suite green.
-  test('an explicit opts label wins over one typed on the topic', () => {
-    expect(spawnLabelFields('review', 'build')).toEqual({ label: 'review' })
-  })
-
-  test('the topic label is used when opts names none', () => {
-    expect(spawnLabelFields(undefined, 'build')).toEqual({ label: 'build' })
-  })
-
-  test('opts alone is enough', () => {
-    expect(spawnLabelFields('investigate', undefined)).toEqual({ label: 'investigate' })
-  })
-
-  // Spread into a SessionInfo literal, so the key has to be absent rather than
-  // present-and-undefined — the latter serialises into sessions.json.
-  test('with neither, the key is absent, not undefined', () => {
-    const fields = spawnLabelFields(undefined, undefined)
-    expect(fields).toEqual({})
-    expect('label' in fields).toBe(false)
-    expect(JSON.stringify({ ...fields })).toBe('{}')
-  })
-})
-
-describe('inheritLabel', () => {
-  // doSpawnSession resolves `opts?.label ?? parsed.label`, so opts wins — which
-  // makes this guard the only thing letting a flag typed NOW beat the bucket
-  // inherited from a parent or a dead session.
-  test('a continuation inherits the parent bucket when its topic names none', () => {
-    expect(inheritLabel('review', 'fix the bug')).toEqual({ label: 'review' })
-  })
-
-  test('a topic that names a bucket beats the inherited one', () => {
-    expect(inheritLabel('review', '--build fix the bug')).toEqual({})
-    expect(inheritLabel('review', 'wt:hydra --build x')).toEqual({})
-  })
-
-  test('no parent bucket means nothing to inherit', () => {
-    expect(inheritLabel(undefined, 'fix the bug')).toEqual({})
+    expect(resolveSpawnLabel('compare --review and --build modes', undefined, 'investigate')).toEqual({ label: 'investigate' })
   })
 })

@@ -372,7 +372,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   topic = parsed.topic || 'session'
   const worktreeTarget: string | undefined = opts?.worktree ?? parsed.worktree
   // rawTopic, not topic — the flag has been stripped out of the latter by here.
-  const labelFields = resolveSpawnLabel(rawTopic, opts?.label)
+  const labelFields = resolveSpawnLabel(rawTopic, opts?.label, opts?.inheritedLabel)
   const sessionLabel = labelFields.label
   const phaseBudgetMs = opts?.phaseBudgetMs ?? parsed.budgetMs
 

@@ -9,7 +9,7 @@ import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRes
 import type { SpawnResult } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, inheritLabel, tmuxHasSession, reportError, safeSend } from '../util.js'
+import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
@@ -120,7 +120,6 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const forkModel = model ?? (targetEngine === sourceEngine ? info.sessionMetadata?.model : undefined)
   const nativeFork = canNativeFork(sourceEngine, targetEngine, info)
-  const inheritedLabelFor = (topic: string) => inheritLabel(info.label, topic)
 
   // Missing native history, or a cross-engine continuation: start fresh and
   // reconstruct from the shared thread instead of claiming a native fork.
@@ -134,7 +133,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       const result = await doSpawnSession(forkTopic, baseChatId, undefined, {
         model: forkModel,
         engine: targetEngine,
-        ...inheritedLabelFor(forkTopic),
+        inheritedLabel: info.label,
         ephemeral: opts?.ephemeral,
         promptPrefix: `Read the parent thread for context using fetch_messages(channel="${parentThreadId}", limit=50). Reconstruct what was discussed there, then continue the work in YOUR thread.${ephemeralSuffix}`,
       })
@@ -164,7 +163,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       forkFrom: { claudeSessionId: info.claudeSessionId, parentName, codexThreadId: info.codexThreadId, codexHomeName: info.codexHomeName ?? info.tmuxName },
       model: forkModel,
       engine: targetEngine,
-      ...inheritedLabelFor(forkTopic),
+      inheritedLabel: info.label,
       ephemeral: opts?.ephemeral,
       ...(ephemeralPrefix ? { promptPrefix: ephemeralPrefix } : {}),
     })
@@ -197,7 +196,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
         promptPrefix: `Read the parent thread for context using fetch_messages(channel="${info.threadId}", limit=50), then continue in your own thread.`,
         model: forkModel,
         engine: targetEngine,
-        ...inheritedLabelFor(forkTopic),
+        inheritedLabel: info.label,
         ephemeral: opts?.ephemeral,
       })
       const e = sessionEmoji(result.name)
@@ -443,9 +442,8 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   // A template respawn layers the template's prompt/tool settings onto the
   // resurrect spawn. `trigger` is kept so the session's origin still reads as the
   // template (e.g. `factory:`) in the spawn announce + `list sessions`.
-  // Inherited only when the topic names no bucket; a template's own label wins over both.
-  const inheritedRespawn = inheritLabel(respawnLabel, resolvedTopic)
-  const extraOpts = { ...inheritedRespawn, ...(template ? buildTemplateSpawnOpts(templateName!, template) : {}), engine: respawnEngine }
+  // A template's own label wins over the dead session's bucket.
+  const extraOpts = { inheritedLabel: respawnLabel, ...(template ? buildTemplateSpawnOpts(templateName!, template) : {}), engine: respawnEngine }
 
   const result = await tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel, extraOpts)
   if (result) {

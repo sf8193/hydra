@@ -182,6 +182,7 @@ export type SpawnOpts = {
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
   label?: SessionLabel  // what the session is for, for cost grouping
+  inheritedLabel?: SessionLabel  // bucket handed down by a parent or dead predecessor; loses to `label` and to a flag on the topic
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
   model?: string         // per-spawn model override (falls back to spawnModel() / HYDRA_MODEL)
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
