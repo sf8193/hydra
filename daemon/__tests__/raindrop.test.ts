@@ -1299,6 +1299,73 @@ describe('raindrop: events', () => {
     expect(_deliveredCountForTesting(), 'and swept when it leaves the registry').toBe(0)
   })
 
+  // One request per tick, not one per session. The endpoint has always taken
+  // an array; the tick is the only producer of N events at one instant.
+  test('a tick sends every session in one request', async () => {
+    const planted = ['b1', 'b2', 'b3'].map(id => ({ id, p: growSession(id) }))
+    stubDeps({
+      liveSessionIds: () => planted.map(x => x.id), knownSessionIds: () => planted.map(x => x.id),
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+
+    const usageDispatches = sent.filter(x => x.body.event === 'hydra.session.usage')
+    expect(usageDispatches.length, 'one dispatch, not three').toBe(1)
+    expect(usageDispatches[0].raw.length, 'carrying all three events').toBe(3)
+    expect(new Set(usageDispatches[0].raw.map((b: any) => b.properties.tmuxName)).size).toBe(1)
+    expect(usageDispatches[0].raw.map((b: any) => b.event_id).sort())
+      .toEqual(planted.map(x => `${x.id}:usage:${NOW}`).sort())
+
+    // "recorded" has to keep counting events, or batching silently divides the
+    // operator's only throughput number by the batch size.
+    expect(raindropStatusLine('cli'), 'three events, not one request').toContain('3 recorded')
+  })
+
+  test('a tick with nothing to report sends no request at all', async () => {
+    const claudeId = uniqueClaudeId('quiet')
+    cleanups.push(plantTranscript(claudeId, '').cleanup)
+    registry.set('quiet-1', sessionInfo({ sessionId: 'quiet-1', threadId: 'T-q', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('quiet-1'))
+    stubDeps({
+      liveSessionIds: () => ['quiet-1'], knownSessionIds: () => ['quiet-1'],
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(sent.filter(x => x.body?.event === 'hydra.session.usage')).toEqual([])
+  })
+
+  // All-or-nothing is what makes the retry sound: one failure must not advance
+  // any baseline, or the sessions that rode along in it lose their window.
+  test('a failed batch re-sends every window in it, none of them lost', async () => {
+    const planted = ['r1', 'r2'].map(id => ({ id, p: growSession(id) }))
+    let failNext = false
+    stubDeps({
+      liveSessionIds: () => planted.map(x => x.id), knownSessionIds: () => planted.map(x => x.id),
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      recordDryRun: (endpoint, body) => {
+        if (failNext && (body as any)[0]?.event === 'hydra.session.usage') throw new Error('502')
+        record(endpoint, body)
+      },
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()   // baselines delivered for both
+
+    failNext = true
+    for (const { p } of planted) appendFileSync(p.path, usageLine('b', GROWTH))
+    fire(); await tick()   // the batch carrying both deltas fails
+
+    failNext = false
+    fire(); await tick()   // must come back, for BOTH
+
+    const last = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!
+    const deltas = last.raw.map((b: any) => b.properties.deltaOutputTokens)
+    expect(deltas.length, 'both sessions retried, not just one').toBe(2)
+    expect(deltas, 'each carrying the window the failed batch was holding')
+      .toEqual([GROWTH.output_tokens, GROWTH.output_tokens])
+  })
+
   // The read cursor moves whether or not the POST lands. Measuring the delta
   // from the read position meant a dropped send deleted that window for good —
   // 80% of a window in the reviewed repro — while cumulative silently healed.
