@@ -869,6 +869,10 @@
       "daemon_config"
     ],
     [
+      "daemon_reply-guard",
+      "daemon_usage"
+    ],
+    [
       "daemon_phase-budget",
       "daemon_sessions"
     ],

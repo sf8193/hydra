@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy } from '../observability.js'
+import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics } from '../observability.js'
 import type { SessionInfo } from '../sessions.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
@@ -267,5 +267,74 @@ describe('resumeCount lookup logic (mirrors doSpawnSession)', () => {
       fakeInfo({ sessionId: 'A', claudeSessionId: 'conv-other', deadAt: NOW - 1000 }),
     ]
     expect(lookupResumeCount(sessions, 'conv-1')).toBe(0)
+  })
+})
+
+describe('readConversationForensics', () => {
+  const TAIL_BYTES = 32 * 1024
+
+  function line(entry: unknown): string {
+    return JSON.stringify(entry) + '\n'
+  }
+
+  test('extracts full last-assistant text, its timestamp, and turn-completeness', () => {
+    const path = tmpFile('forensics-basic.jsonl')
+    const ts = '2026-09-21T21:10:00.000Z'
+    writeFileSync(path, line({
+      type: 'assistant',
+      timestamp: ts,
+      message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'the real answer, quite long and not truncated at all really' }] },
+    }))
+    const f = readConversationForensics(path)
+    expect(f?.lastAssistantFullText).toBe('the real answer, quite long and not truncated at all really')
+    expect(f?.lastAssistantTs).toBe(ts)
+    expect(f?.lastAssistantTurnComplete).toBe(true)
+    expect(f?.lastToolPending).toBe(false)
+  })
+
+  test('marks the turn incomplete when the text block is followed by an unanswered tool_use', () => {
+    const path = tmpFile('forensics-midturn.jsonl')
+    writeFileSync(path, line({
+      type: 'assistant',
+      timestamp: '2026-09-21T21:10:00.000Z',
+      message: {
+        stop_reason: 'tool_use',
+        content: [
+          { type: 'text', text: 'Let me check that...' },
+          { type: 'tool_use', id: 'tool-1', name: 'Bash' },
+        ],
+      },
+    }))
+    const f = readConversationForensics(path)
+    expect(f?.lastAssistantFullText).toBe('Let me check that...')
+    expect(f?.lastAssistantTurnComplete).toBe(false)
+    expect(f?.lastToolPending).toBe(true)
+  })
+
+  // Regression test for a real bug found in adversarial review: a tail read
+  // can start mid-line, so the old code unconditionally dropped the first
+  // line of the tail as "presumably partial" — but when the read offset
+  // happens to land exactly on a line boundary, that first line is actually
+  // complete and valid, and blindly dropping it silently loses real content
+  // (here, the very answer this function exists to find).
+  test('keeps a complete line even when the tail cut lands exactly on a line boundary', () => {
+    const path = tmpFile('forensics-boundary.jsonl')
+    const marker = { type: 'assistant', timestamp: '2026-09-21T21:10:00.000Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'MARKER: must survive the tail cut' }] } }
+    const markerLine = line(marker)
+    const markerBytes = Buffer.byteLength(markerLine, 'utf8')
+    const before = line({ type: 'other', pad: 'x'.repeat(200) }) // arbitrary content before the boundary
+    const afterBytes = TAIL_BYTES - markerBytes
+    const after = 'x'.repeat(Math.max(0, afterBytes - 1)) + '\n' // invalid JSON — parsed and skipped, just padding
+    writeFileSync(path, before + markerLine + after)
+
+    const stat = statSync(path)
+    const offset = stat.size - TAIL_BYTES
+    // Sanity-check the fixture actually exercises the boundary case before
+    // trusting the assertion below.
+    expect(offset).toBe(Buffer.byteLength(before, 'utf8'))
+
+    const f = readConversationForensics(path)
+    expect(f?.lastAssistantFullText).toBe('MARKER: must survive the tail cut')
+    expect(f?.isTail).toBe(true)
   })
 })

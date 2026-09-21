@@ -2,14 +2,25 @@
 // never calls the `reply` tool leaves the sender staring at silence — the
 // model answered in-transcript, which the sender cannot see.
 //
-// Codex: every delivery is a priced turn, so a nudge that gets ignored (this
-// fires exactly when tmux/the turn has gone quiet — there's no turn coming to
-// act on it) just wastes one. Codex sessions skip straight to a pane capture
-// posted directly to the sender's chat.
+// No nudge message — a nudge used to give the session a chance to call
+// `reply` itself, but handleSilenceEvent only fires once tmux has ALREADY
+// gone quiet for the configured interval, meaning normal completion+reply
+// already didn't happen; if the session is stuck (blocked on a tool/
+// approval), a queued chat message doesn't unstick that either. Escalation
+// itself prefers relaying the session's own real text (transcript for
+// Claude, last message event for Codex) over a screenshot whenever it's
+// available and passes the freshness/completeness checks.
 //
-// Claude: delivery is free (tmux buffer), so there's no cost to nudging first
-// and giving the session a chance to call `reply` itself — only escalate to a
-// pane capture if a nudge goes ignored. Keeps today's proven behavior as-is.
+// Removing the nudge message does NOT mean removing the grace period it
+// happened to provide, though — those are separate concerns (round-1-of-
+// round-2 review caught this coupling). ESCALATION_GRACE_MS below is a
+// silent wait, no message sent, before the FIRST user-visible escalation —
+// restoring the old nudge-cooldown's magnitude so a session mid-tool-call
+// still gets real working time before anything lands in the user's chat.
+// Skipped entirely when the caller already has certainty (isCodexTurnComplete()
+// true) — codex-bootstrap.ts's turnCompleted handler calls handleSilenceEvent
+// directly, and by then there's no ambiguity left to wait out (round-2-of-
+// round-2 review caught this one).
 //
 // The daemon polls tmux's window_activity timestamp every 20s to detect
 // idle sessions. No monitor-silence/activity options needed.
@@ -22,6 +33,8 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
+import { readConversationForensics, getLastCodexMessage, isCodexTurnComplete, type ConversationForensics } from './observability.js'
+import { transcriptPathFor } from './usage.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
@@ -31,6 +44,10 @@ export type ReplyGuardDeps = {
   gatewaySend: (channelId: string, text: string, opts?: any) => Promise<any>
   capturePaneScreenshot: (tmuxName: string) => string | null
   capturePaneText: (tmuxName: string, lines?: number) => string | null
+  transcriptPathFor: (claudeSessionId: string) => string | undefined
+  readConversationForensics: (transcriptPath: string) => ConversationForensics | null
+  getLastCodexMessage: (sessionId: string, sinceMs: number) => string | null
+  isCodexTurnComplete: (sessionId: string) => boolean
 }
 
 const defaultDeps: ReplyGuardDeps = {
@@ -41,6 +58,10 @@ const defaultDeps: ReplyGuardDeps = {
   gatewaySend: (ch, text, opts) => gateway.send(ch, text, opts),
   capturePaneScreenshot: (tmuxName) => capturePaneScreenshot(tmuxName),
   capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
+  transcriptPathFor: (claudeSessionId) => transcriptPathFor(claudeSessionId),
+  readConversationForensics: (transcriptPath) => readConversationForensics(transcriptPath),
+  getLastCodexMessage: (sessionId, sinceMs) => getLastCodexMessage(sessionId, sinceMs),
+  isCodexTurnComplete: (sessionId) => isCodexTurnComplete(sessionId),
 }
 
 let deps: ReplyGuardDeps = defaultDeps
@@ -63,12 +84,13 @@ type PendingReply = {
 const pending = new Map<string, PendingReply>()
 const keyOf = (sessionId: string, chatId: string) => `${sessionId}:${chatId}`
 
-// Nudge state for the Claude path only — Codex never gets nudged (see header).
-const nudgedKeys = new Map<string, { at: number; count: number }>()
+// First time a pending key is seen silent — a silent wait, no message sent,
+// before the FIRST escalation. Same lifecycle as the old nudgedKeys map,
+// repurposed: cleared on a fresh pending message, on settle, and on death.
+const silenceFirstSeenAt = new Map<string, number>()
 
 const ACTIVITY_BACKSTOP_MS = 5 * 60_000
-const NUDGE_COOLDOWN_MS = 2 * 60_000
-const ESCALATION_AFTER_NUDGES = 1
+const ESCALATION_GRACE_MS = 2 * 60_000
 
 /** Arm the guard for a user-authored channel message delivered to a session. */
 export function notePendingReply(sessionId: string, meta: Record<string, string>, now: number = Date.now()): void {
@@ -84,15 +106,15 @@ export function notePendingReply(sessionId: string, meta: Record<string, string>
   const existing = pending.get(key)
   if (existing && ts && existing.ts > ts) return
   pending.set(key, { sessionId, chatId, messageId, user: meta.user ?? '', ts, deliveredAt: now, activitySeenAfterDelivery: false })
-  // New message resets the nudged state — this is a fresh expectation.
-  nudgedKeys.delete(key)
+  // New message resets the grace window — this is a fresh expectation.
+  silenceFirstSeenAt.delete(key)
 }
 
 /** A successful reply to this chat settles the expectation. */
 export function clearPendingReply(sessionId: string, chatId: string): void {
   const key = keyOf(sessionId, chatId)
   pending.delete(key)
-  nudgedKeys.delete(key)
+  silenceFirstSeenAt.delete(key)
 }
 
 /** A reaction to the offending message is an acknowledgment — settle it. */
@@ -101,7 +123,7 @@ export function settlePendingOnReact(sessionId: string, chatId: string, messageI
   const p = pending.get(key)
   if (p && p.messageId === messageId) {
     pending.delete(key)
-    nudgedKeys.delete(key)
+    silenceFirstSeenAt.delete(key)
   }
 }
 
@@ -117,17 +139,12 @@ export function notePendingFromQueue(sessionId: string, queued: Array<Record<str
 /**
  * Handle a tmux silence event for a session. Called when monitor-silence
  * fires (the session's tmux pane has been quiet for the configured interval).
+ * No nudge sent (see file header) — after a silent ESCALATION_GRACE_MS wait
+ * from the first silence event, escalates with a capture (real text,
+ * preferred, or a pane screenshot as fallback), for either engine.
  *
- * Codex (every delivery a priced turn): skip straight to a pane capture
- * posted to the sender's chat — there's no turn in flight to act on a nudge
- * anyway, so nudging first just delays the same outcome.
- *
- * Claude (delivery is free): nudge first, giving the session a chance to
- * call `reply` itself; only escalate to a pane capture if the nudge is
- * ignored past the cooldown.
- *
- * Returns the number of nudges/escalations sent (0 or 1+ across all pending
- * chats for this session).
+ * Returns the number of escalations sent (0 or 1+ across all pending chats
+ * for this session).
  */
 export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): number {
   // Resolve tmuxName → sessionId. 'main' is the control session and never
@@ -154,7 +171,6 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     if (p.sessionId !== 'main') {
       if (!info || info.deadAt) {
         pending.delete(key)
-        nudgedKeys.delete(key)
         continue
       }
     }
@@ -172,44 +188,34 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     const activityGateOpen = p.activitySeenAfterDelivery || timeSinceDelivery >= ACTIVITY_BACKSTOP_MS
     if (!activityGateOpen) continue
 
+    // Grace window: no message sent, just a silent wait before the FIRST
+    // escalation — restores the working-time budget the old nudge cooldown
+    // happened to provide, without reintroducing the nudge message itself.
+    // Skipped entirely when the caller already has certainty the turn is
+    // over (codex-bootstrap.ts's turnCompleted handler calls
+    // handleSilenceEvent directly and synchronously — an entry only
+    // survives to see that call if `reply()` was never made during the now-
+    // finished turn, so there's no remaining ambiguity left to wait out;
+    // per round-2-of-round-2 review, waiting anyway just reintroduces the
+    // exact pointless-delay problem the nudge removal was fixing, for the
+    // one signal that never needed it).
+    if (!deps.isCodexTurnComplete(p.sessionId)) {
+      const firstSeen = silenceFirstSeenAt.get(key)
+      if (firstSeen === undefined) {
+        silenceFirstSeenAt.set(key, now)
+        continue
+      }
+      if (now - firstSeen < ESCALATION_GRACE_MS) continue
+    }
+
     const mins = Math.max(1, Math.round((now - p.deliveredAt) / 60_000))
     const name = info?.tmuxName ?? p.sessionId
-    const isCodex = !!info?.adapter && info.adapter.deliveryIsFree === false
 
-    if (isCodex) {
-      process.stderr.write(`daemon: reply guard: ${name} (codex) silent on message ${p.messageId} in ${p.chatId}, escalating with pane capture\n`)
-      void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins)
-      pending.delete(key)
-      nudgedKeys.delete(key)
-      acted++
-      continue
-    }
-
-    // Claude path: nudge first, cooldown between nudges, escalate once ignored.
-    const nudgeState = nudgedKeys.get(key)
-    if (nudgeState && (now - nudgeState.at) < NUDGE_COOLDOWN_MS) continue
-
-    const nudgeCount = (nudgeState?.count ?? 0) + 1
-    nudgedKeys.set(key, { at: now, count: nudgeCount })
+    process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, escalating\n`)
+    void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins, info?.claudeSessionId, p.sessionId, p.deliveredAt)
+    pending.delete(key)
+    silenceFirstSeenAt.delete(key)
     acted++
-
-    if (nudgeCount > ESCALATION_AFTER_NUDGES) {
-      process.stderr.write(`daemon: reply guard: ${name} ignored ${nudgeCount - 1} nudge(s), escalating with pane capture\n`)
-      void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins)
-      pending.delete(key)
-      continue
-    }
-
-    process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, nudging (${nudgeCount})\n`)
-    deps.transportSendOrQueue(p.sessionId, {
-      type: 'notification',
-      content: [
-        `[system] ⚠️ Reply check: the message from ${p.user} (message_id ${p.messageId}) has gone ~${mins}m with no \`reply\` sent to that chat.`,
-        `The sender cannot see your transcript — if you answered in-transcript only, send that answer now via the reply tool (chat_id ${p.chatId}).`,
-        `If a reply is imminent, you already replied in a thread or another chat, or the message needed no response, ignore this.`,
-      ].join('\n'),
-      meta: { chat_id: p.chatId, message_id: '', user: 'system', user_id: 'system', ts: new Date(now).toISOString() },
-    })
   }
   return acted
 }
@@ -303,8 +309,52 @@ function capturePaneScreenshot(tmuxName: string): string | null {
   }
 }
 
-async function escalateWithCapture(tmuxName: string, chatId: string, user: string, messageId: string, mins: number): Promise<void> {
+async function escalateWithCapture(
+  tmuxName: string, chatId: string, user: string, messageId: string, mins: number,
+  claudeSessionId?: string, sessionId?: string, deliveredAt?: number,
+): Promise<void> {
   const header = `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It may have answered in-transcript only. Here's what the session looks like:`
+
+  // Prefer the session's own clean text over a raw terminal capture. Claude:
+  // pulled straight from its transcript. Codex: no transcript file, so from
+  // the last 'message' event the daemon already saw. Either way, no reliance
+  // on the `reply` tool ever having been called — but two things can make
+  // this text a lie rather than a diagnostic aid, so both are gated on:
+  //  - staleness: text from BEFORE this pending message arrived would relay
+  //    an answer to something else entirely, claiming "it answered" when it
+  //    hasn't seen this message at all.
+  //  - incompleteness: a text block emitted mid-turn, right before a tool
+  //    call the session is still waiting on, isn't the actual answer yet.
+  let lastText: string | null = null
+  if (claudeSessionId) {
+    const transcriptPath = deps.transcriptPathFor(claudeSessionId)
+    const forensics = transcriptPath ? deps.readConversationForensics(transcriptPath) : null
+    if (
+      forensics?.lastAssistantFullText &&
+      forensics.lastAssistantTurnComplete &&
+      !forensics.lastToolPending &&
+      (deliveredAt === undefined || !forensics.lastAssistantTs || new Date(forensics.lastAssistantTs).getTime() >= deliveredAt)
+    ) {
+      lastText = forensics.lastAssistantFullText
+    }
+  } else if (sessionId && deps.isCodexTurnComplete(sessionId)) {
+    // Engine-owned signal (codex-bootstrap.ts's own turnCompleted event),
+    // deliberately NOT SessionInfo.turnState — that field is also written by
+    // daemon.ts's tmux-activity poller from raw visual silence, independent
+    // of whether Codex's actual turn has finished. Using it here would let a
+    // turn still genuinely in flight (waiting on a remote call, no terminal
+    // repaint) get relayed as if it were done, the moment the poller's
+    // coarser 45s-idle threshold fires first.
+    lastText = deps.getLastCodexMessage(sessionId, deliveredAt ?? 0)
+  }
+  if (lastText && lastText.trim()) {
+    try {
+      await deps.gatewaySend(chatId, `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It answered in-transcript only — relaying its last response:\n\n${lastText}`)
+      return
+    } catch (err) {
+      process.stderr.write(`daemon: reply guard escalation transcript-text send failed: ${err}\n`)
+    }
+  }
 
   const screenshot = deps.capturePaneScreenshot(tmuxName)
   if (screenshot) {
@@ -329,26 +379,25 @@ async function escalateWithCapture(tmuxName: string, chatId: string, user: strin
   }
 }
 
-// Clean up all pending/nudged state for a session when it dies.
+// Clean up pending state for a session when it dies.
 // Without this, entries for crashed sessions accumulate until the
 // next silence event fires for that session — which may never happen.
 on('session:death', ({ sessionId }: { sessionId: string }) => {
   for (const [key, p] of pending) {
     if (p.sessionId === sessionId) {
       pending.delete(key)
-      nudgedKeys.delete(key)
+      silenceFirstSeenAt.delete(key)
     }
   }
 }, 'reply-guard:cleanup')
 
 export function _resetReplyGuardForTesting(): void {
   pending.clear()
-  nudgedKeys.clear()
+  silenceFirstSeenAt.clear()
 }
 
 export const _ACTIVITY_BACKSTOP_MS = ACTIVITY_BACKSTOP_MS
-export const _NUDGE_COOLDOWN_MS = NUDGE_COOLDOWN_MS
-export const _ESCALATION_AFTER_NUDGES = ESCALATION_AFTER_NUDGES
+export const _ESCALATION_GRACE_MS = ESCALATION_GRACE_MS
 
 export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
   return pending

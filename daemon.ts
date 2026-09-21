@@ -467,7 +467,15 @@ startSessionHealthPoll()
 
 // Reply guard: poll window_activity timestamp every 20s.
 // Only checks sessions with pending replies — O(pending) not O(sessions).
-const MIN_IDLE_BEFORE_NUDGE_S = 45
+//
+// The turnState writes below are a coarse, tmux-visual-silence-driven proxy
+// for reply-guard's own activity gate ONLY. They are NOT the source of
+// truth for "has Codex's protocol-level turn actually finished" — that's
+// isCodexTurnComplete() in observability.ts, driven by codex-bootstrap.ts's
+// own turnCompleted/message events. Do not read turnState for anything that
+// needs to know whether a turn is really done; 45s of no terminal repaint
+// (a long-running tool, a stalled remote call) is not the same thing.
+const MIN_IDLE_BEFORE_SILENCE_S = 45
 setInterval(() => {
   const pendingNames = sessionsWithPendingReplies()
   if (pendingNames.size === 0) return
@@ -484,7 +492,7 @@ setInterval(() => {
       ) || 0
     } catch { continue }
     const secSinceActivity = nowSec - lastActivitySec
-    if (secSinceActivity < MIN_IDLE_BEFORE_NUDGE_S) {
+    if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
       if (info && info.turnState !== 'working') info.turnState = 'working'
       handleActivityEvent(tmuxName)
     } else {

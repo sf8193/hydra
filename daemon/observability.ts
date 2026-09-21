@@ -38,6 +38,45 @@ export type VitalsSample = { rssMB: number; at: number }
 // is persisted to sessions.json, and this is ephemeral diagnostic state.
 const vitalsSamples = new Map<string, VitalsSample>()
 
+// Codex has no transcript file to read back (unlike Claude's JSONL) — its
+// protocol streams message text via an event instead, so we stash the latest
+// one here for reply-guard's escalation to use as clean text instead of a
+// pane screenshot. Ephemeral, pruned alongside vitalsSamples below.
+const codexLastMessage = new Map<string, { text: string; at: number }>()
+
+export function noteCodexMessage(sessionId: string, text: string, at: number = Date.now()): void {
+  if (text.trim()) codexLastMessage.set(sessionId, { text, at })
+}
+
+// Dedicated, engine-owned signal for "has Codex's own protocol-level turn
+// actually finished" — deliberately separate from SessionInfo.turnState,
+// which the daemon.ts activity poller ALSO writes from raw tmux visual
+// silence (a coarser, unrelated purpose: driving the reply-guard activity
+// gate). Sharing that field for turn-completeness let a still-in-flight
+// Codex turn (e.g. waiting on a remote call, no terminal repaint) get
+// stomped to "idle" by the poller alone — silently reopening the exact
+// mid-turn-fragment-relay bug the completeness gate exists to close.
+// Defaults to false (not complete) when never observed: unsure means don't
+// claim confidence, same fail-safe direction as the rest of this gate.
+const codexTurnComplete = new Map<string, boolean>()
+
+export function noteCodexTurnState(sessionId: string, complete: boolean): void {
+  codexTurnComplete.set(sessionId, complete)
+}
+
+export function isCodexTurnComplete(sessionId: string): boolean {
+  return codexTurnComplete.get(sessionId) ?? false
+}
+
+// Only returns the message if it arrived after `sinceMs` — an older one
+// predates whatever prompted the caller to ask, and relaying it would claim
+// the model answered a message it never saw.
+export function getLastCodexMessage(sessionId: string, sinceMs: number): string | null {
+  const entry = codexLastMessage.get(sessionId)
+  if (!entry || entry.at < sinceMs) return null
+  return entry.text
+}
+
 // The death path (bridge-server.ts) reads a session's last sample to fold into
 // its autopsy — exposed here so buildAutopsy can take it as an argument (pure).
 export function getVitalsSample(sessionId: string): VitalsSample | undefined {
@@ -62,27 +101,59 @@ export type ConversationForensics = {
   tailApiCalls: number
   lastAssistantText: string | null
   isTail: boolean
+  // Untruncated text of the assistant's LAST text block overall (not
+  // necessarily from the same message as lastAssistantText, which only
+  // updates per-turn above — this tracks the true last one), its message's
+  // timestamp (for staleness checks against when a reply was expected), and
+  // whether that same turn ended on a completed text answer (stop_reason
+  // 'end_turn'/'stop_sequence') rather than mid tool-call ('tool_use') —
+  // relaying a "let me check X..." fragment as if it were the answer is a
+  // real failure mode, not a hypothetical one.
+  lastAssistantFullText: string | null
+  lastAssistantTs: string | null
+  // Known limitation (round-2 adversarial review): this describes the last
+  // turn that produced TEXT, not necessarily the true last turn — a later
+  // tool-only turn updates lastToolPending without touching this. A caller
+  // gating on both together can see a real, complete, on-time text answer
+  // rejected because a *subsequent* unrelated tool call is still pending.
+  // Fails safe (falls back to a working fallback, never misrepresents), so
+  // left as a precision gap rather than fixed — not worth the complexity of
+  // threading "which turn" through both fields for a safe-side miss.
+  lastAssistantTurnComplete: boolean
+}
+
+// Reads the tail of a transcript file, splitting into complete JSON lines.
+// A tail read can start mid-line; the naive fix (always drop the first
+// split element) is wrong when the byte offset happens to land exactly on a
+// line boundary — it then discards a perfectly valid line instead of a
+// partial one. Parse-and-check is the only way to tell the two apart.
+function readTailLines(fd: number, size: number, tailBytes: number): { lines: string[]; isTail: boolean } {
+  const isTail = size > tailBytes
+  const offset = Math.max(0, size - tailBytes)
+  const buf = Buffer.alloc(Math.min(size, tailBytes))
+  readSync(fd, buf, 0, buf.length, offset)
+  const rawLines = buf.toString('utf8').split('\n')
+  if (isTail && rawLines.length > 0) {
+    try { JSON.parse(rawLines[0]) } catch { rawLines.shift() } // genuinely partial — drop it; a valid first line survives
+  }
+  return { lines: rawLines.filter(l => l.trim()), isTail }
 }
 
 export function readConversationForensics(transcriptPath: string): ConversationForensics | null {
   let fd: number | undefined
   try {
-    const TAIL_BYTES = 32 * 1024
     fd = openSync(transcriptPath, 'r')
     const stat = fstatSync(fd)
-    const isTail = stat.size > TAIL_BYTES
-    const offset = Math.max(0, stat.size - TAIL_BYTES)
-    const buf = Buffer.alloc(Math.min(stat.size, TAIL_BYTES))
-    readSync(fd, buf, 0, buf.length, offset)
+    const { lines, isTail } = readTailLines(fd, stat.size, 32 * 1024)
     closeSync(fd)
     fd = undefined
-    const raw = buf.toString('utf8')
-    const lines = raw.split('\n').filter(l => l.trim())
-    if (isTail) lines.shift()
     let tailTurns = 0
     let lastStopReason: string | null = null
     let lastToolCalled: string | null = null
     let lastAssistantText: string | null = null
+    let lastAssistantFullText: string | null = null
+    let lastAssistantTs: string | null = null
+    let lastAssistantTurnComplete = false
     let tailApiCalls = 0
     const lastTurnToolIds = new Set<string>()
     const answeredToolIds = new Set<string>()
@@ -98,6 +169,7 @@ export function readConversationForensics(transcriptPath: string): ConversationF
         lastStopReason = msg.stop_reason ?? null
         lastTurnToolIds.clear()
         const content = msg.content
+        let sawTextThisTurn = false
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'tool_use') {
@@ -106,8 +178,17 @@ export function readConversationForensics(transcriptPath: string): ConversationF
             }
             if (block.type === 'text' && block.text) {
               lastAssistantText = block.text.slice(0, 200)
+              lastAssistantFullText = block.text
+              lastAssistantTs = entry.timestamp ?? null
+              sawTextThisTurn = true
             }
           }
+        }
+        // A turn can emit a text block *and* a tool_use in the same message
+        // (e.g. "Let me check that..." + a tool call) — only trust it as a
+        // real answer if this turn didn't also reach for a tool.
+        if (sawTextThisTurn) {
+          lastAssistantTurnComplete = lastTurnToolIds.size === 0 && msg.stop_reason !== 'tool_use'
         }
         if (msg.usage) tailApiCalls++
       }
@@ -126,7 +207,10 @@ export function readConversationForensics(transcriptPath: string): ConversationF
 
     const pendingIds = [...lastTurnToolIds].filter(id => !answeredToolIds.has(id))
     const lastToolPending = pendingIds.length > 0
-    return { tailTurns, lastStopReason, lastToolCalled, lastToolPending, pendingToolCount: pendingIds.length, tailApiCalls, lastAssistantText, isTail }
+    return {
+      tailTurns, lastStopReason, lastToolCalled, lastToolPending, pendingToolCount: pendingIds.length,
+      tailApiCalls, lastAssistantText, isTail, lastAssistantFullText, lastAssistantTs, lastAssistantTurnComplete,
+    }
   } catch {
     if (fd !== undefined) try { closeSync(fd) } catch {}
     return null
@@ -252,6 +336,8 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
     // (checkSessionDeath), so this never races the autopsy.
     const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }
     for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
+    for (const id of codexLastMessage.keys()) if (goneOrDead(id)) codexLastMessage.delete(id)
+    for (const id of codexTurnComplete.keys()) if (goneOrDead(id)) codexTurnComplete.delete(id)
     for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
     const live = [...registry.values()].filter(s => !s.deadAt)
     for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
