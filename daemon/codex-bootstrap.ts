@@ -15,6 +15,7 @@ import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { safeSend } from './util.js'
 import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
+import { noteCodexMessage, noteCodexTurnState } from './observability.js'
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -45,7 +46,7 @@ export function scheduleCodexSurfaceRepairs(
 // Event wiring — Codex engine events → daemon protocol dispatch
 // ---------------------------------------------------------------------------
 
-codexEngine.on('message', (sessionId: string, _text: string) => {
+codexEngine.on('message', (sessionId: string, text: string) => {
   const info = registry.get(sessionId)
   if (!info) return
   info.lastActive = Date.now()
@@ -53,6 +54,8 @@ codexEngine.on('message', (sessionId: string, _text: string) => {
     info.turnState = 'working'
     noteActivityForSession(info.tmuxName)
   }
+  noteCodexMessage(sessionId, text)
+  noteCodexTurnState(sessionId, false) // still producing — not the final answer yet
 })
 
 codexEngine.on('autoApproved', (sessionId: string, method: string) => {
@@ -66,6 +69,7 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   const info = registry.get(sessionId)
   if (!info) return
   info.turnState = 'idle'
+  noteCodexTurnState(sessionId, true)
   // The remote TUI may exit with the completed turn. Repair its tmux surface
   // immediately so the next protocol turn/keys command has somewhere to land.
   info.adapter?.ensureSurface(info)
