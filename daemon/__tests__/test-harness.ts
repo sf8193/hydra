@@ -7,6 +7,8 @@ import type { Protocol } from '../protocol-dsl.js'
 import type { ProtocolRun } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
+import type { SessionLabel } from '../../shared/constants.js'
+import { spawnLabelFields } from '../util.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
 const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP, setLifecycle, resetLifecycle } = __test
@@ -17,6 +19,7 @@ type HarnessOpts = {
   rounds?: number
   topic?: string
   strike?: boolean
+  ownerLabel?: SessionLabel
   params?: Record<string, unknown>
 }
 
@@ -26,6 +29,7 @@ export class TestHarness {
   // disposes and rethrows if the start fails.
   private _run!: ProtocolRun
   get run(): ProtocolRun { return this._run }
+  readonly spawnOptsSeen: Array<Record<string, unknown>> = []
   private readonly sessionIds: Map<string, string>
   private lastTimeoutArmedAt: number
   private readonly origGatewaySend: typeof gateway.send
@@ -173,6 +177,7 @@ export class TestHarness {
       turnState: 'idle',
       engine: 'claude',
       sessionType: 'thread_owner',
+      ...(opts.ownerLabel && { label: opts.ownerLabel }),
     })
     this.sessionIds.set(ownerRole, ownerSid)
 
@@ -275,6 +280,7 @@ export class TestHarness {
 
     setLifecycle({
       doSpawnSession: async (topic: string, _a: any, _b: any, spawnOpts: any) => {
+        harness.spawnOptsSeen.push(spawnOpts ?? {})
         if (spawnMs > 0) await new Promise<void>(r => setTimeout(r, spawnMs))
         if (opts.spawnThrows) throw new Error('mock resume spawn failed')
         const sid = `test-resumed-${crypto.randomUUID().slice(0, 8)}`
@@ -289,6 +295,7 @@ export class TestHarness {
           turnState: 'idle',
           engine: 'claude',
           sessionType: spawnOpts?.joinThread ? 'thread_guest' : 'thread_owner',
+          ...spawnLabelFields(spawnOpts?.label, undefined),
         }
         registry.set(sid, info)
         return { sessionId: sid }

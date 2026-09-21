@@ -3,6 +3,7 @@ import { join, sep } from 'path'
 import { execSync, execFileSync, execFile } from 'child_process'
 import { gateway, STATE_DIR } from './config.js'
 import { formatDiscordTables } from '../discord-table-format.js'
+import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 
 export function atomicWriteFileSync(filePath: string, data: string, mode?: number): void {
   const tmp = filePath + '.tmp'
@@ -123,6 +124,47 @@ export function parseDuration(s: string): number | null {
   const ms = n * (unit === 's' ? 1000 : unit === 'm' ? 60_000 : 3_600_000)
   if (ms <= 0 || ms > MAX_DURATION_MS) return null
   return ms
+}
+
+// Work started on behalf of a session belongs in that session's bucket — the
+// protocol roles and the factory builder all hang off one of these.
+export function ownerLabelFields(ownerLabel: SessionLabel | undefined): { label?: SessionLabel } {
+  return spawnLabelFields(ownerLabel, undefined)
+}
+
+// The one place a spawn's cost bucket is decided; the test harness calls it too.
+// Note the precedence is opts-first — inheritLabel below is the topic-first rule.
+export function spawnLabelFields(optsLabel: SessionLabel | undefined, topicLabel: SessionLabel | undefined): { label?: SessionLabel } {
+  const label = optsLabel ?? topicLabel
+  return label ? { label } : {}
+}
+
+// Topic in, bucket out. Keeping the parse inside means doSpawnSession holds no
+// part of the rule, so all of it is reachable from a test.
+export function resolveSpawnLabel(topic: string, optsLabel?: SessionLabel): { label?: SessionLabel } {
+  return spawnLabelFields(optsLabel, parseSpawnTopic(topic).label)
+}
+
+// A flag typed now is the explicit choice; otherwise inherit.
+export function inheritLabel(parent: SessionLabel | undefined, topic: string): { label?: SessionLabel } {
+  return parent && !parseSpawnTopic(topic).label ? { label: parent } : {}
+}
+
+// Order is load-bearing: loosest anchor first, and the label runs again after
+// the prefix, which occupies one of the two ends the label may sit at.
+export function parseSpawnTopic(topic: string): { topic: string; worktree?: string; label?: SessionLabel; budgetMs?: number } {
+  const budget = extractPhaseBudget(topic)
+  const before = parseSessionLabel(budget.topic)
+  const wt = extractWorktreeTarget(before.topic)
+  const after = parseSessionLabel(wt.topic)
+  return { topic: after.topic, worktree: wt.worktree, label: before.label ?? after.label, budgetMs: budget.budgetMs }
+}
+
+// Matches a bare prefix too: a topic of nothing but flags must not keep "wt:repo".
+export function extractWorktreeTarget(topic: string): { topic: string; worktree?: string } {
+  const m = topic.match(/^(?:worktree|wt):(\S+)(?:\s+|$)/)
+  if (!m) return { topic }
+  return { topic: topic.slice(m[0].length), worktree: m[1] }
 }
 
 // Strips a spawn-level `--phase-budget <dur>` flag from a topic string.

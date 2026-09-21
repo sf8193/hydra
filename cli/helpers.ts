@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, writeFileS
 import { join } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
-import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName } from '../shared/constants.js'
+import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir } from '../shared/constants.js'
 import { tmuxNewSession, captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 
@@ -37,7 +37,7 @@ export function sourceStateDirEnv(stateDir: string): { configDir: string; spawnC
   // The CLI must not forward these to the daemon it launches.
   captureSpawnVars()
   return {
-    configDir: process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'),
+    configDir: claudeConfigDir(),
     spawnCwd: process.env.SPAWN_CWD?.trim() || homedir(),
     spawnCwdBlank: process.env.SPAWN_CWD !== undefined && process.env.SPAWN_CWD.trim() === '',
   }

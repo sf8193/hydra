@@ -29,16 +29,7 @@ export function startSessionHealthPoll(): void {
         crashAlerted.add(info.sessionId)
         info.deadAt = now
         registry.persist()
-        const thread = threadRegistry.get(info.threadId)
-        if (thread) {
-          const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
-          if (histEntry) {
-            histEntry.endedAt = now
-            histEntry.messageCount = info.messageCount ?? 0
-            histEntry.claudeSessionId = info.claudeSessionId
-          }
-          threadRegistry.persist()
-        }
+        threadRegistry.closeHistoryEntry(info.threadId, info)
         process.stderr.write(`daemon: crash detected: ${info.tmuxName}\n`)
         void gateway.send(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
         refreshSessionVisual(info.threadId, { state: 'crashed' })

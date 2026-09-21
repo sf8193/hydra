@@ -100,7 +100,14 @@ export function buildModel(): string {
 // Session identity — session type + capability-based tool access
 // ---------------------------------------------------------------------------
 
+import { homedir } from 'os'
+import { join } from 'path'
 import type { ToolName } from './tool-definitions.js'
+
+// Spawned sessions launch with CLAUDE_CONFIG_DIR set to this, so transcripts land under it.
+export function claudeConfigDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+}
 export type { ToolName }
 
 export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest' | 'factory_builder'
@@ -165,6 +172,38 @@ export function sentimentForReaction(emoji: string): SentimentReaction | undefin
 
 export function isDeleteReaction(emoji: string): boolean {
   return DELETE_REACTIONS.includes(normalizeReaction(emoji))
+}
+
+export const SESSION_LABELS = ['review', 'build', 'investigate'] as const
+
+export const isSessionLabel = (name: string): name is SessionLabel =>
+  (SESSION_LABELS as readonly string[]).includes(name)
+export type SessionLabel = typeof SESSION_LABELS[number]
+
+// Leading or trailing only: the topic is a prompt, and matching anywhere ate prose out of it.
+const LABEL_ALT = SESSION_LABELS.join('|')
+const LABEL_LEADING = new RegExp('^--(' + LABEL_ALT + ')(?:\\s+|$)')
+const LABEL_TRAILING = new RegExp('\\s--(' + LABEL_ALT + ')$')
+
+export function parseSessionLabel(topic: string): { label?: SessionLabel; topic: string } {
+  let label: SessionLabel | undefined
+  let rest = topic.trim()
+  for (;;) {
+    const lead = rest.match(LABEL_LEADING)
+    if (lead) {
+      label ??= lead[1] as SessionLabel
+      rest = rest.slice(lead[0].length)
+      continue
+    }
+    const trail = rest.match(LABEL_TRAILING)
+    if (trail) {
+      label ??= trail[1] as SessionLabel
+      rest = rest.slice(0, trail.index).trim()
+      continue
+    }
+    break
+  }
+  return label ? { label, topic: rest } : { topic: rest }
 }
 
 export function byteTmuxName(platform: string): string {

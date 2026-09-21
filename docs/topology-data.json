@@ -267,6 +267,12 @@
       "desc": "Raindrop wire format — egress allowlist, no daemon imports"
     },
     {
+      "id": "daemon_usage",
+      "label": "daemon/usage.ts",
+      "layer": "core",
+      "desc": "Transcript location + incremental token-counter cursor"
+    },
+    {
       "id": "daemon_build",
       "label": "daemon/build.ts",
       "layer": "protocols",
@@ -403,6 +409,10 @@
       "shared_tool-definitions"
     ],
     [
+      "daemon_config",
+      "shared_constants"
+    ],
+    [
       "daemon_sessions",
       "daemon_config"
     ],
@@ -429,6 +439,10 @@
     [
       "daemon_util",
       "daemon_config"
+    ],
+    [
+      "daemon_util",
+      "shared_constants"
     ],
     [
       "daemon_bridge-tools",
@@ -613,6 +627,10 @@
     [
       "daemon_session-lifecycle",
       "daemon_util"
+    ],
+    [
+      "daemon_session-lifecycle",
+      "daemon_usage"
     ],
     [
       "daemon_session-lifecycle",
@@ -904,10 +922,18 @@
     ],
     [
       "daemon_raindrop",
+      "daemon_usage"
+    ],
+    [
+      "daemon_raindrop",
       "daemon_raindrop-payload"
     ],
     [
       "daemon_raindrop-payload",
+      "shared_constants"
+    ],
+    [
+      "daemon_usage",
       "shared_constants"
     ],
     [

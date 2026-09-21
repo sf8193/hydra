@@ -131,7 +131,7 @@ cat /tmp/probe.txt
 
 - **`ps` argv is inherited by children.** `caffeinate` processes show claude's argv but are not claude. Check the process tree (`pstree` or `ps -o pid,ppid,comm`), not just the name.
 
-- **Orphan detection has a 90s grace window.** The daemon polls for tmux-alive + bridge-disconnected sessions and alerts the thread after `ORPHAN_GRACE_MS` (90s). It also auto-discovers `claudeSessionId` from `~/.claude/sessions/<pid>.json` — note: this path is **hardcoded to homedir** in `session-lifecycle.ts`, not `$CLAUDE_CONFIG_DIR`. A session under a suffixed config dir has its sessionId discovered from the wrong location. If no alert has fired but the session seems mute, it may still be in its boot grace window. The `pane-probe` module (`probeAllSessions()`, 60s interval) also detects sessions stuck on login or plan mode.
+- **Orphan detection has a 90s grace window.** The daemon polls for tmux-alive + bridge-disconnected sessions and alerts the thread after `ORPHAN_GRACE_MS` (90s). It also auto-discovers `claudeSessionId` from `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` (`claudeConfigDir()` in `session-lifecycle.ts`), the same root spawned sessions are launched with — so a suffixed config dir resolves correctly. If no alert has fired but the session seems mute, it may still be in its boot grace window. The `pane-probe` module (`probeAllSessions()`, 60s interval) also detects sessions stuck on login or plan mode.
 
 - **`bun run` is lazy.** Parse/export errors surface only when a module is imported, not at launch. A broken merge boots "fine" until the crashing code path loads.
 

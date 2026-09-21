@@ -520,16 +520,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     }
     process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext: getProtocolContext(info.sessionId), resumeCount: info.resumeCount }) + '\n')
 
-    const thread = threadRegistry.get(info.threadId)
-    if (thread) {
-      const histEntry = thread.sessionHistory.find(h => h.sessionId === sessionId && !h.endedAt)
-      if (histEntry) {
-        histEntry.endedAt = Date.now()
-        histEntry.messageCount = info.messageCount ?? 0
-        histEntry.claudeSessionId = info.claudeSessionId
-      }
-      threadRegistry.persist()
-    }
+    threadRegistry.closeHistoryEntry(info.threadId, info)
 
     info.deadAt = Date.now()
     registry.persist()

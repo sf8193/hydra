@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
+import { SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
 
 describe('resolveModelAlias', () => {
   test('resolves short aliases', () => {
@@ -164,6 +164,88 @@ describe('canonicalModel', () => {
   })
 })
 
+describe('parseSessionLabel', () => {
+  test.each(['review', 'build', 'investigate'] as const)('--%s is lifted off the topic', (label) => {
+    expect(parseSessionLabel(`fix the thing --${label}`)).toEqual({ label, topic: 'fix the thing' })
+  })
+
+  // The topic becomes the prompt, so stray whitespace around a stripped flag
+  // is user-visible.
+  test.each([
+    [' --review fix the bug', 'fix the bug'],
+    ['a  --review', 'a'],
+    ['  --build   ship it  ', 'ship it'],
+  ])('%p leaves no stray whitespace in %p', (input, topic) => {
+    expect(parseSessionLabel(input).topic).toBe(topic)
+  })
+
+  test('an unlabelled topic is returned untouched', () => {
+    expect(parseSessionLabel('fix the thing')).toEqual({ topic: 'fix the thing' })
+  })
+
+  // A hyphen is a word boundary, so --build once matched inside --build-tools
+  // and swallowed the space in front of it.
+  // The leading anchor needs its own boundary: without it "--build-tools now"
+  // became label=build with topic "-tools now", and the topic is the prompt.
+  test.each([
+    '--build-tools now',
+    '--reviewer notes',
+    '--investigate-later x',
+    'ship it--build',
+  ])('a lookalike at the edges of %p is not a label', (topic) => {
+    expect(parseSessionLabel(topic)).toEqual({ topic })
+  })
+
+  test.each([
+    'read --reviewer notes',
+    'ship it --build-tools now',
+    'x --build/y',
+    'see --investigate-later',
+    'path/--review/notes',
+  ])('a lookalike %p is not a label and leaves the topic intact', (topic) => {
+    expect(parseSessionLabel(topic)).toEqual({ topic })
+  })
+
+  // Two flags is not a supported form; what matters is that neither survives
+  // into the prompt. Which one wins depends on the end they sit at — leading
+  // flags resolve left-to-right, trailing ones right-to-left.
+  test('with two flags one is chosen and both are stripped', () => {
+    expect(parseSessionLabel('--build --review foo')).toEqual({ label: 'build', topic: 'foo' })
+    expect(parseSessionLabel('--review --build foo')).toEqual({ label: 'review', topic: 'foo' })
+    // Trailing flags are consumed right-to-left, so the rightmost is chosen.
+    expect(parseSessionLabel('foo --review --build')).toEqual({ label: 'build', topic: 'foo' })
+  })
+
+  // The topic is the prompt the session is given, so a flag only counts where
+  // a flag is actually typed. Matching mid-sentence deleted words from prompts.
+  test.each([
+    'run the linter with --build and report',
+    'compare --review and --build modes',
+    'a --investigate b --build c',
+    'explain --review to me',
+  ])('a flag inside prose in %p is left alone', (topic) => {
+    expect(parseSessionLabel(topic)).toEqual({ topic })
+  })
+
+  test('no label flag survives into the spawned prompt', () => {
+    for (const l of ['review', 'build', 'investigate']) {
+      expect(parseSessionLabel('--build --review --investigate x').topic).not.toContain(`--${l}`)
+    }
+  })
+
+  test.each([
+    ['--review thing', 'thing'],
+    ['a b --build', 'a b'],
+    ['fix --investigate', 'fix'],
+  ])('a real flag in %p yields topic %p', (input, topic) => {
+    expect(parseSessionLabel(input).topic).toBe(topic)
+  })
+
+  test('the label never survives into the topic the session is given', () => {
+    expect(parseSessionLabel('ship it --build').topic).not.toContain('--build')
+  })
+})
+
 describe('byteTmuxName', () => {
   const saved = process.env.BYTE_SESSION_NAME
   afterEach(() => {
@@ -192,4 +274,21 @@ describe('byteTmuxName', () => {
 test('canonicalModel resolves a Claude chat alias, not only a codex one', () => {
   expect(canonicalModel('opus')).toBe(MODEL_ALIASES['opus'])
   expect(canonicalModel('sol')).toBe(CODEX_MODEL_ALIASES['sol'])
+})
+
+describe('SESSION_LABELS', () => {
+  // A wire contract: `label` rides on every raindrop session event, and any
+  // template named after one is auto-labelled. Adding a member changes both.
+  test('is exactly the three buckets', () => {
+    expect([...SESSION_LABELS]).toEqual(['review', 'build', 'investigate'])
+  })
+
+  test('isSessionLabel admits exactly those and nothing else', () => {
+    for (const l of SESSION_LABELS) expect(isSessionLabel(l)).toBe(true)
+    for (const n of ['fix', 'factory', 'Review', 'design', '', 'constructor']) expect(isSessionLabel(n)).toBe(false)
+  })
+
+  test('the flag grammar covers every member', () => {
+    for (const l of SESSION_LABELS) expect(parseSessionLabel(`do it --${l}`)).toEqual({ label: l, topic: 'do it' })
+  })
 })

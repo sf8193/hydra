@@ -5,7 +5,7 @@ import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
-import type { SessionType, Capability, ToolName } from '../shared/constants.js'
+import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
 import { recordPendingRetirement } from './retirement-journal.js'
 
 // ---------------------------------------------------------------------------
@@ -71,6 +71,7 @@ export type SessionInfo = {
   turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
   contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
+  label?: SessionLabel
   capabilities?: Capability[]
   // Keys are subsystem-owned: factory owns 'factory_done', protocol owns 'advance'/'extend_phase'.
   // clearFactoryIdentity and clearProtocolOverrides are the canonical cleanup paths.
@@ -147,6 +148,7 @@ export type ThreadSessionEntry = {
   codexThreadId?: string
   codexHomeName?: string
   model?: string
+  label?: SessionLabel
 }
 
 export type ThreadMetadata = {
@@ -179,6 +181,7 @@ export type SpawnOpts = {
   promptPrefix?: string                                        // prepended to the generated prompt (used by templates)
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
+  label?: SessionLabel  // what the session is for, for cost grouping
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
   model?: string         // per-spawn model override (falls back to spawnModel() / HYDRA_MODEL)
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
@@ -535,6 +538,7 @@ export class ThreadRegistry {
     respawnCount: number, sessionId: string, tmuxName: string,
     originType: 'spawn' | 'fork' | 'handoff' | 'resurrect', originFrom?: string,
     model?: string, parentChannelId?: string, claudeSessionId?: string,
+    label: SessionLabel | undefined,
   }): void {
     const now = Date.now()
     let thread = this.threads.get(threadId)
@@ -568,21 +572,24 @@ export class ThreadRegistry {
       messageCount: 0,
       model: opts.model,
       claudeSessionId: opts.claudeSessionId,
+      label: opts.label,
     })
     this.persist()
   }
 
-  recordKill(threadId: string, sessionId: string, messageCount: number, identity?: { claudeSessionId?: string; engine?: string; codexThreadId?: string; codexHomeName?: string }): void {
+  // The durable record a later resume reads; killSession drops the registry entry.
+  closeHistoryEntry(threadId: string, info: { sessionId: string; messageCount?: number; claudeSessionId?: string; engine?: string; codexThreadId?: string; codexHomeName?: string; label?: SessionLabel }): void {
     const thread = this.threads.get(threadId)
     if (!thread) return
-    const entry = thread.sessionHistory.find(h => h.sessionId === sessionId && !h.endedAt)
+    const entry = thread.sessionHistory.find(h => h.sessionId === info.sessionId && !h.endedAt)
     if (entry) {
       entry.endedAt = Date.now()
-      entry.messageCount = messageCount
-      if (identity?.claudeSessionId) entry.claudeSessionId = identity.claudeSessionId
-      if (identity?.engine) entry.engine = identity.engine as any
-      if (identity?.codexThreadId) entry.codexThreadId = identity.codexThreadId
-      if (identity?.codexHomeName) entry.codexHomeName = identity.codexHomeName
+      entry.messageCount = info.messageCount ?? 0
+      if (info.claudeSessionId) entry.claudeSessionId = info.claudeSessionId
+      if (info.engine) entry.engine = info.engine as any
+      if (info.codexThreadId) entry.codexThreadId = info.codexThreadId
+      if (info.codexHomeName) entry.codexHomeName = info.codexHomeName
+      if (info.label) entry.label = info.label
     }
     this.persist()
   }
