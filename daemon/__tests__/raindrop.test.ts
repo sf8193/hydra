@@ -11,6 +11,9 @@ import {
   _resetStateForTesting,
   _trackedSizeForTesting,
   _usageCursorCountForTesting,
+  _deliveredCountForTesting,
+  underSpawnRoot,
+  spawnRootIsBounded,
   post,
   factsFromRegistry,
   factsForMain,
@@ -22,16 +25,20 @@ import {
   defaultProjectFor,
   projectFromGitDir,
   defaultLiveSessionIds,
+  UNATTRIBUTED_REPO,
   type RaindropDeps,
   type RaindropMode,
 } from '../raindrop.js'
 import { EVENT_ENDPOINT, SIGNAL_ENDPOINT, type SessionFacts } from '../raindrop-payload.js'
-import { mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync, readdirSync } from 'fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync, readdirSync } from 'fs'
 import { homedir, tmpdir } from 'os'
+import { randomUUID } from 'crypto'
+import { mkdirSync as mkdirp, realpathSync, rmSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { trimRaindropDryrun, startVitalsSnapshots } from '../observability.js'
-import { registry, type SessionInfo } from '../sessions.js'
-import { projectDirName } from '../usage.js'
+import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
+import { plantTranscript, uniqueClaudeId } from './projects-fixture.js'
+import type { TokenTotals } from '../usage.js'
 import { emitSessionDeath } from '../session-lifecycle.js'
 import { PLATFORM, STATE_DIR, RAINDROP_DRYRUN_FILE } from '../config.js'
 import { SCRUBBED_SPAWN_VARS, tmuxNewSession } from '../../shared/spawn-env.js'
@@ -82,7 +89,10 @@ beforeEach(() => {
   stderr = []
   realStderr = process.stderr.write
   process.stderr.write = ((chunk: string) => { stderr.push(String(chunk)); return true }) as typeof process.stderr.write
-  for (const k of [...SCRUBBED_SPAWN_VARS, 'BYTE_SESSION_NAME']) savedEnv[k] = process.env[k]
+  for (const k of [...SCRUBBED_SPAWN_VARS, 'BYTE_SESSION_NAME', 'SPAWN_CWD']) savedEnv[k] = process.env[k]
+  // Every fixture cwd below lives under it — attribution is confined to the
+  // spawn root, so a test planting cwds outside one would prove nothing.
+  process.env.SPAWN_CWD = '/repos'
   process.env.RAINDROP_MODE = 'dryrun'
   delete process.env.RAINDROP_WRITE_KEY
   delete process.env.RAINDROP_USER_ID
@@ -93,7 +103,10 @@ beforeEach(() => {
   stubDeps()
 })
 
+const cleanups: Array<() => void> = []
+
 afterEach(() => {
+  while (cleanups.length) { try { cleanups.pop()!() } catch {} }
   dispose()
   process.stderr.write = realStderr
   for (const [k, v] of Object.entries(savedEnv)) {
@@ -103,6 +116,32 @@ afterEach(() => {
   _resetDeps()
   _resetStateForTesting()
 })
+
+// Stubs hand back a SessionUsage; cumulative and delta are the same here
+// because each stub represents a single tick's worth of spend.
+const zero = (): TokenTotals => ({ inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0 })
+const usageOf = (t: Partial<TokenTotals>, claudeSessionId = 'c-test', d?: Partial<TokenTotals>, coldStart = false) => ({
+  totals: { ...zero(), ...t },
+  delta: { ...zero(), ...(d ?? t) },
+  coldStart,
+  claudeSessionId,
+})
+
+const oneLine = (id: string, n: number) => JSON.stringify({ message: { id, usage: { output_tokens: n } } }) + '\n'
+
+// register() arms a usage tick and a sweep on the same 60s delay, so a capture
+// that keeps only one of them depends on registration order. Returns a fire-all.
+const intervalDelays: number[] = []
+function registerWithIntervals(): () => void {
+  const real = globalThis.setInterval
+  const fns: Array<() => void> = []
+  intervalDelays.length = 0
+  globalThis.setInterval = ((fn: () => void, ms?: number) => {
+    fns.push(fn); intervalDelays.push(ms ?? 0); return { unref() {} }
+  }) as unknown as typeof setInterval
+  try { dispose = register() } finally { globalThis.setInterval = real }
+  return () => { for (const fn of fns) fn() }
+}
 
 const DRIVER = 'U056CLXJY8P'
 const tick = () => new Promise(r => setTimeout(r, 0))
@@ -291,17 +330,20 @@ describe('raindrop: resolveUserId', () => {
 })
 
 describe('raindrop: the death event carries the time of death', () => {
-  test('emitSessionDeath forwards deadAt, so the consumer is not guessing', async () => {
+  test('emitSessionDeath forwards deadAt and the transcript id, so the consumer is not guessing', async () => {
     const seen: any[] = []
     const off = on('session:death', (e) => { seen.push(e) }, 'test:deadAt-producer')
     try {
       emitSessionDeath(sessionInfo({
-        sessionId: 's-dead', threadId: 'T-dead', tmuxName: 'atlas', deadAt: 1700,
+        sessionId: 's-dead', threadId: 'T-dead', tmuxName: 'atlas', deadAt: 1700, claudeSessionId: 'c-dead',
       }))
       emitSessionDeath(sessionInfo({ sessionId: 's-live', threadId: 'T-live', tmuxName: 'atlas' }))
     } finally { off() }
     expect(seen.map(e => e.deadAt)).toEqual([1700, undefined])
     expect(seen[0].sessionId).toBe('s-dead')
+    // killSession deletes the registry entry first, so the final usage read has
+    // only this to resolve the transcript with.
+    expect(seen[0].claudeSessionId, 'the transcript id must ride the event').toBe('c-dead')
   })
 })
 
@@ -441,32 +483,129 @@ describe('raindrop: a degraded tmux sweep surfaces on both interfaces', () => {
 })
 
 describe('raindrop: usage events', () => {
-  function tickOnce(): () => void {
-    const real = globalThis.setInterval
-    const fns: Array<() => void> = []
-    globalThis.setInterval = ((fn: () => void) => { fns.push(fn); return { unref() {} } }) as unknown as typeof setInterval
-    try { dispose = register() } finally { globalThis.setInterval = real }
-    return () => { for (const f of fns) f() }
-  }
+  const tickOnce = registerWithIntervals
+
+  test('the usage tick runs on the cadence its centring assumes', () => {
+    tickOnce()
+    // A literal, not the constant: deriving it would pass for any value.
+    expect(intervalDelays.length, 'both the usage tick and the sweep').toBeGreaterThan(1)
+    expect(intervalDelays.every(d => d === 60_000), `every interval must be 60s, got ${intervalDelays.join(', ')}`).toBe(true)
+  })
+
+  // The delta is suppressed to 0 on a first sighting, so a dashboard summing a
+  // window that spans one has to be able to see which ticks those were.
+  test('a first sighting is flagged on the wire, and the next tick is not', async () => {
+    const claudeId = uniqueClaudeId('cold')
+    const planted = plantTranscript(claudeId, oneLine('m1', 100))
+    cleanups.push(planted.cleanup)
+    registry.set('cold-1', sessionInfo({ sessionId: 'cold-1', threadId: 'T-cold', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('cold-1'))
+    stubDeps({ liveSessionIds: () => ['cold-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+
+    const fire = tickOnce()
+    fire()
+    await tick()
+    const first = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)
+    expect(first, 'no usage event on the first tick').toBeTruthy()
+    expect(first!.body.properties.coldStart, 'a fresh cursor is a cold start').toBe(1)
+    expect(first!.body.properties.deltaOutputTokens, 'and its delta is suppressed').toBe(0)
+
+    appendFileSync(planted.path, oneLine('m2', 40))
+    fire()
+    await tick()
+    const second = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)
+    expect(second!.body.properties.coldStart, 'a warm cursor is not').toBe(0)
+    expect(second!.body.properties.deltaOutputTokens, 'and its delta is real').toBe(40)
+  })
+
+  // Both sweep predicates were reversible with the suite green. They differ on
+  // purpose, so each needs the direction that keeps an entry, not just the one
+  // that drops it.
+  test('a cursor is reclaimed when its session leaves the registry without dying', async () => {
+    const claudeId = uniqueClaudeId('sweepcur')
+    cleanups.push(plantTranscript(claudeId, oneLine('s1', 11)).cleanup)
+    registry.set('sw-1', sessionInfo({ sessionId: 'sw-1', threadId: 'T-sw', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('sw-1'))
+    let known = ['sw-1']
+    stubDeps({
+      liveSessionIds: () => ['sw-1'], knownSessionIds: () => known,
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+    })
+
+    const fire = tickOnce()
+    fire()
+    await tick()
+    expect(_usageCursorCountForTesting(), 'the tick must leave a cursor to reclaim').toBe(1)
+
+    fire()
+    await tick()
+    expect(_usageCursorCountForTesting(), 'still a member, so still retained').toBe(1)
+
+    known = []
+    registry.delete('sw-1')
+    fire()
+    await tick()
+    expect(_usageCursorCountForTesting(), 'gone from the registry with no death event').toBe(0)
+  })
+
+  test('a still-live session with no transcript stays counted across a sweep', async () => {
+    registry.set('u-1', sessionInfo({ sessionId: 'u-1', threadId: 'T-u', claudeSessionId: uniqueClaudeId('never-planted') }))
+    cleanups.push(() => registry.delete('u-1'))
+    stubDeps({
+      liveSessionIds: () => ['u-1'], knownSessionIds: () => ['u-1'],
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+    })
+    expect(defaultUsageFor('u-1'), 'the fixture must not resolve').toBeUndefined()
+
+    const fire = tickOnce()
+    fire()
+    await tick()
+    // The sweep is registered right after the tick and fires on the same turn,
+    // so a liveness check that got this wrong would zero the count every time.
+    expect(raindropStatusLine('cli'), 'the only alarm for a wrong config dir').toContain('1 session with no transcript yet')
+  })
 
   test('reports the four counters for a live session', async () => {
     stubDeps({
       liveSessionIds: () => ['sess-1'],
-      usageFor: () => ({ totals: { inputTokens: 1, outputTokens: 2, cacheCreateTokens: 3, cacheReadTokens: 4 } }),
+      usageFor: () => usageOf(
+        { inputTokens: 1, outputTokens: 2, cacheCreateTokens: 3, cacheReadTokens: 4 }, 'c-abc',
+        { inputTokens: 10, outputTokens: 20, cacheCreateTokens: 30, cacheReadTokens: 40 },
+      ),
+      now: () => NOW,
     })
     const tick = tickOnce()
     tick()
     await new Promise(r => setTimeout(r, 0))
     const ev = sent.find(s => s.body.event === 'hydra.session.usage')
     expect(ev, 'no usage event').toBeTruthy()
-    expect(ev!.body.properties.cacheReadTokens).toBe(4)
     expect(ev!.body.properties.tmuxName).toBe('atlas')
+    // Named for what they are: a running lifetime total, not a per-tick delta.
+    expect(ev!.body.properties.cumulativeCacheReadTokens).toBe(4)
+    expect(ev!.body.properties.cumulativeInputTokens).toBe(1)
+    expect(ev!.body.properties.cacheReadTokens, 'the ambiguous name must be gone').toBeUndefined()
+    // A cumulative gauge cannot answer "spend during a window"; the delta can.
+    for (const [key, want] of [
+      ['cumulativeInputTokens', 1], ['cumulativeOutputTokens', 2],
+      ['cumulativeCacheCreateTokens', 3], ['cumulativeCacheReadTokens', 4],
+      ['deltaInputTokens', 10], ['deltaOutputTokens', 20],
+      ['deltaCacheCreateTokens', 30], ['deltaCacheReadTokens', 40],
+    ] as const) {
+      expect(ev!.body.properties[key], `${key} missing from the wire`).toBe(want)
+    }
+    // The tokens were burned across the interval, not at its end. Stamping the
+    // tick moment put up to a full tick of lag into every hourly bucket.
+    expect(ev!.body.timestamp, 'the emission is centred in the interval it covers')
+      .toBe(new Date(NOW - 30_000).toISOString())
+    // Resume gives one transcript several hydra session ids, so without this
+    // key no grouping of these events can produce a correct fleet total.
+    expect(ev!.body.properties.claudeSessionId, 'the unit of spend must be on the wire').toBe('c-abc')
   })
 
   test('one session throwing does not stop the rest of the fleet reporting', async () => {
     stubDeps({
       liveSessionIds: () => ['bad', 'sess-1'],
-      usageFor: (id) => { if (id === 'bad') throw new Error('transcript exploded'); return { totals: { outputTokens: 4 } } },
+      usageFor: (id) => { if (id === 'bad') throw new Error('transcript exploded'); return usageOf({ outputTokens: 4 }) },
       factsFor: () => facts,
     })
     const tick = tickOnce()
@@ -488,7 +627,7 @@ describe('raindrop: usage events', () => {
     stubDeps({
       liveSessionIds: () => ['sess-1'],
       factsFor: () => ({ ...facts, label: 'review' }),
-      usageFor: () => ({ totals: { outputTokens: 9 } }),
+      usageFor: () => usageOf({ outputTokens: 9 }),
     })
     const tick = tickOnce()
     tick()
@@ -799,20 +938,46 @@ describe('raindrop: events', () => {
     emit('session:bridge-registered', { sessionId: 'wt-3', threadId: 'T-W3' })
     await tick()
     expect(sent[0].body.properties.repo, 'unresolvable must bucket, not vanish').toBe('none')
-    // Within the retry bound the daemon must not fork git again.
+    // Within the retry bound the daemon must not fork git again. The clock has
+    // to actually advance — at zero elapsed this holds for any bound. 61s is the
+    // load-bearing literal: the bound has to outlast a usage tick, or a cwd that
+    // will never be a repo re-forks git once a minute for the daemon's life.
+    stubDeps({ factsFor: factsFromRegistry, projectFor: () => { calls++; return undefined }, now: () => NOW + 61_000 })
     emit('reply', { sessionId: 'wt-3', text: 'x', chatId: 'T-W3', sentIds: ['m1'] })
     await tick()
-    expect(calls).toBe(1)
+    expect(calls, 'a tick later, still no second fork').toBe(1)
     expect(sent[1].body.properties.repo).toBe('none')
     stubDeps({
       factsFor: factsFromRegistry,
       projectFor: () => { calls++; return 'beta' },
-      now: () => NOW + 61_000,
+      // Literals, not the constant: deriving the clock from the value under
+      // test makes the assertion pass for any value of it.
+      now: () => NOW + 301_000,
     })
     emit('reply', { sessionId: 'wt-3', text: 'x', chatId: 'T-W3', sentIds: ['m2'] })
     await tick()
     registry.delete('wt-3')
     expect(sent[2].body.properties.repo).toBe('beta')
+  })
+
+  // Computing it scans the projects root, tail-reads a transcript and forks git.
+  // The operator already said not to send it.
+  test('with the repo opted out, attribution is not computed at all', () => {
+    const claudeId = uniqueClaudeId('noattrib')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/repos/gamma' }) + '\n').cleanup)
+    registry.set('omit-1', sessionInfo({ sessionId: 'omit-1', threadId: 'T-omit', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('omit-1'))
+    let lookups = 0
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => { lookups++; return p.split('/').pop() } })
+
+    expect(factsFromRegistry('omit-1')?.project, 'the default still attributes').toBe('gamma')
+    expect(lookups).toBe(1)
+
+    process.env.RAINDROP_OMIT_REPO = '1'
+    _resetStateForTesting()
+    lookups = 0
+    expect(factsFromRegistry('omit-1')?.project).toBeUndefined()
+    expect(lookups, 'and no git fork happened for a field nobody reads').toBe(0)
   })
 
   test.each(['1', 'true', 'yes', '0'])('RAINDROP_OMIT_REPO=%p keeps the repo off the wire', async (v) => {
@@ -834,65 +999,865 @@ describe('raindrop: events', () => {
   test('a session that dies without an event is swept, not leaked', async () => {
     let live = ['sess-1']
     stubDeps({ liveSessionIds: () => live })
-    const realSetInterval = globalThis.setInterval
-    let onSweep: (() => void) | undefined
-    globalThis.setInterval = ((fn: () => void) => { onSweep = fn; return { unref() {} } }) as unknown as typeof setInterval
-    try { dispose = register() } finally { globalThis.setInterval = realSetInterval }
+    const onSweep = registerWithIntervals()
     emit('session:bridge-registered', { sessionId: 'sess-1', threadId: 'THREAD-1' })
     await tick()
     expect(_trackedSizeForTesting()).toBe(1)
     // A crash detector sets deadAt and emits nothing; the registry is the truth.
     live = []
-    onSweep!()
+    onSweep()
     expect(_trackedSizeForTesting()).toBe(0)
   })
 
+  function plant(sessionId: string, body: string): string {
+    const claudeId = uniqueClaudeId(sessionId)
+    const planted = plantTranscript(claudeId, body)
+    cleanups.push(planted.cleanup)
+    registry.set(sessionId, sessionInfo({ sessionId, threadId: `T-${sessionId}`, claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete(sessionId))
+    return planted.path
+  }
+
+  // Every live session read all-zero on its very first tick, so each one filed
+  // a usage event saying nothing had been spent.
+  test('the first tick is silent when nothing has been spent yet', () => {
+    plant('zero-1', JSON.stringify({ type: 'user' }) + '\n')
+    expect(defaultUsageFor('zero-1')).toBeUndefined()
+  })
+
+  test('the first tick still reports spend that is already on disk', () => {
+    plant('spend-1', JSON.stringify({ message: { usage: { output_tokens: 4 } } }) + '\n')
+    expect(defaultUsageFor('spend-1')?.totals.outputTokens).toBe(4)
+  })
+
+  // Without the cursor carried forward, every tick re-reads from offset 0 and
+  // re-reports the session's whole lifetime as if it were new.
+  test('an unchanged second tick is silent, and fresh spend reports the larger total', () => {
+    const path = plant('delta-1', JSON.stringify({ message: { usage: { output_tokens: 4 } } }) + '\n')
+    expect(defaultUsageFor('delta-1')?.totals.outputTokens).toBe(4)
+    expect(defaultUsageFor('delta-1'), 'nothing new must send nothing').toBeUndefined()
+    appendFileSync(path, JSON.stringify({ message: { usage: { output_tokens: 3 } } }) + '\n')
+    expect(defaultUsageFor('delta-1')?.totals.outputTokens, 'cumulative, not a delta').toBe(7)
+  })
+
+  // The silent failure mode: point the daemon at the wrong projects root and
+  // every session reports nothing while the status line still reads healthy.
+  test('a session whose transcript cannot be found is reported, not just skipped', () => {
+    registry.set('lost-1', sessionInfo({ sessionId: 'lost-1', threadId: 'T-lost', claudeSessionId: uniqueClaudeId('never-planted') }))
+    cleanups.push(() => registry.delete('lost-1'))
+    expect(defaultUsageFor('lost-1')).toBeUndefined()
+    expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
+  })
+
+  // The other silent branch: a live claude session whose transcript id has not
+  // been discovered yet is exactly what the operator signal is for.
+  test('a claude session with no transcript id yet is reported as unresolved', () => {
+    registry.set('noid-1', sessionInfo({ sessionId: 'noid-1', threadId: 'T-noid' }))
+    cleanups.push(() => registry.delete('noid-1'))
+    expect(defaultUsageFor('noid-1')).toBeUndefined()
+    expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
+  })
+
+  // A codex session never has a Claude transcript, so counting it would send
+  // the operator after a config path for a session type that has none.
+  test('a codex session with no transcript is not reported as unresolved', () => {
+    registry.set('cdx-1', sessionInfo({ sessionId: 'cdx-1', threadId: 'T-cdx', engine: 'codex' }))
+    cleanups.push(() => registry.delete('cdx-1'))
+    expect(defaultUsageFor('cdx-1')).toBeUndefined()
+    expect(raindropStatusLine('cli')).not.toContain('no transcript yet')
+  })
+
+  test('a codex session holding a transcript id is still not reported as unresolved', () => {
+    registry.set('cdx-2', sessionInfo({ sessionId: 'cdx-2', threadId: 'T-cdx2', engine: 'codex', claudeSessionId: uniqueClaudeId('never') }))
+    cleanups.push(() => registry.delete('cdx-2'))
+    expect(defaultUsageFor('cdx-2')).toBeUndefined()
+    expect(raindropStatusLine('cli')).not.toContain('no transcript yet')
+  })
+
+  test('a session already gone from the registry is not reported as unresolved', () => {
+    expect(defaultUsageFor('never-registered')).toBeUndefined()
+    expect(raindropStatusLine('cli')).not.toContain('no transcript yet')
+  })
+
+  // A crash sets deadAt and never deletes the registry record, so a
+  // membership sweep would pin this entry for the daemon's life and the status
+  // line would send the operator after a config path that is fine.
+  test('a crashed session stops being counted as unresolved', () => {
+    const info = sessionInfo({ sessionId: 'crashu-1', threadId: 'T-cu', claudeSessionId: uniqueClaudeId('crashu') })
+    registry.set('crashu-1', info)
+    cleanups.push(() => registry.delete('crashu-1'))
+    stubDeps({ liveSessionIds: () => (info.deadAt ? [] : ['crashu-1']), usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    expect(defaultUsageFor('crashu-1')).toBeUndefined()
+    expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
+
+    const fireIntervals = registerWithIntervals()
+    // crash detected: deadAt set, registry entry RETAINED, no death emitted
+    info.deadAt = NOW
+    fireIntervals()
+    expect(raindropStatusLine('cli'), 'a crashed session must not nag forever').not.toContain('no transcript yet')
+  })
+
+  test('a session that later resolves stops being counted as unresolved', () => {
+    const claudeId = uniqueClaudeId('late')
+    registry.set('late-1', sessionInfo({ sessionId: 'late-1', threadId: 'T-late', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('late-1'))
+    expect(defaultUsageFor('late-1')).toBeUndefined()
+    expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
+
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { usage: { output_tokens: 2 } } }) + '\n').cleanup)
+    expect(defaultUsageFor('late-1')?.totals.outputTokens).toBe(2)
+    expect(raindropStatusLine('cli'), 'the count must clear, not latch').not.toContain('no transcript yet')
+  })
+
+  test('a dead session stops inflating the unresolved count', () => {
+    registry.set('gone-1', sessionInfo({ sessionId: 'gone-1', threadId: 'T-gone', claudeSessionId: uniqueClaudeId('gone') }))
+    cleanups.push(() => registry.delete('gone-1'))
+    let live = ['gone-1']
+    stubDeps({ liveSessionIds: () => live, usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    expect(defaultUsageFor('gone-1')).toBeUndefined()
+    expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
+
+    const fireIntervals = registerWithIntervals()
+    // The sweep retains anything the registry still holds, so a crash-detected
+    // session keeps its facts until death fires; gone from the registry is gone.
+    live = []
+    registry.delete('gone-1')
+    fireIntervals()
+    expect(raindropStatusLine('cli'), 'a dead session must not be counted forever').not.toContain('no transcript yet')
+  })
+
+  // The tick only reads live sessions, so whatever was spent in the final
+  // minute died with the session.
+  // delta* is the field a window SUMs, so what it may claim is narrow: only a
+  // cursor that already pointed at THIS transcript knows what is new. Resume
+  // hands a fresh session an old transcript, and a restart loses the cursors —
+  // both once claimed the whole history as one tick, inflating a window ~40%.
+
+  test('the first sighting of a transcript is a baseline, not spend', () => {
+    const claudeId = uniqueClaudeId('base')
+    cleanups.push(plantTranscript(claudeId, oneLine('a', 900)).cleanup)
+    registry.set('base-1', sessionInfo({ sessionId: 'base-1', threadId: 'T-base', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('base-1'))
+    const u = defaultUsageFor('base-1')
+    expect(u?.totals.outputTokens, 'the lifetime is still reported').toBe(900)
+    expect(u?.delta.outputTokens, 'but none of it is new in this window').toBe(0)
+  })
+
+  const usageLine = (id: string, u: Record<string, number>) =>
+    JSON.stringify({ message: { id, usage: u } }) + '\n'
+  const BASELINE = { input_tokens: 100, output_tokens: 900, cache_creation_input_tokens: 200, cache_read_input_tokens: 300 }
+  const GROWTH = { input_tokens: 3, output_tokens: 25, cache_creation_input_tokens: 7, cache_read_input_tokens: 11 }
+
+  const growSession = (id: string) => {
+    const claudeId = uniqueClaudeId(id)
+    const planted = plantTranscript(claudeId, usageLine('a', BASELINE))
+    cleanups.push(planted.cleanup)
+    registry.set(id, sessionInfo({ sessionId: id, threadId: `T-${id}`, claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete(id))
+    return planted
+  }
+  const lastUsage = () => sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)
+
+  // Every counter nonzero in the BASELINE too: with zeros there, "to - from"
+  // and a bare "to" are indistinguishable, and dropping the subtraction is
+  // the ~40% window inflation this whole rule exists to prevent.
+  test('growth after a delivered baseline is the delta, on every counter', async () => {
+    const planted = growSession('grow-1')
+    stubDeps({ liveSessionIds: () => ['grow-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(lastUsage()!.body.properties.deltaOutputTokens, 'the first sighting is a baseline').toBe(0)
+    expect(lastUsage()!.body.properties.coldStart).toBe(1)
+
+    appendFileSync(planted.path, usageLine('b', GROWTH))
+    fire(); await tick()
+    const ev = lastUsage()!.body.properties
+    expect(ev.cumulativeInputTokens).toBe(103)
+    expect(ev.cumulativeOutputTokens).toBe(925)
+    expect(ev.cumulativeCacheCreateTokens).toBe(207)
+    expect(ev.cumulativeCacheReadTokens).toBe(311)
+    expect(
+      [ev.deltaInputTokens, ev.deltaOutputTokens, ev.deltaCacheCreateTokens, ev.deltaCacheReadTokens],
+      'every counter must be the growth, not just output',
+    ).toEqual([3, 25, 7, 11])
+    expect(ev.coldStart, 'and it is no longer a first sighting').toBe(0)
+  })
+
+  // Every other rotation test calls defaultUsageFor directly, so `delivered` is
+  // empty and coldStart is true for the wrong reason — the whole family passed
+  // with restartedFromZero ignored. Driving it through the tick is what makes
+  // the delivered baseline exist, which is what made it go negative.
+  test('a rotation after a delivered baseline never yields a negative delta', async () => {
+    const idA = uniqueClaudeId('rotA')
+    const idB = uniqueClaudeId('rotB')
+    const a = plantTranscript(idA, usageLine('a', { ...BASELINE, output_tokens: 500 }))
+    const b = plantTranscript(idB, usageLine('b', { ...BASELINE, output_tokens: 7 }))
+    cleanups.push(a.cleanup, b.cleanup)
+    const info = sessionInfo({ sessionId: 'rot-1', threadId: 'T-rot', claudeSessionId: idA })
+    registry.set('rot-1', info)
+    cleanups.push(() => registry.delete('rot-1'))
+    let failNext = false
+    stubDeps({
+      liveSessionIds: () => ['rot-1'], knownSessionIds: () => ['rot-1'],
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      recordDryRun: (endpoint, body) => {
+        if (failNext && (body as any)[0]?.event === 'hydra.session.usage') throw new Error('502')
+        record(endpoint, body)
+      },
+    })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(_deliveredCountForTesting(), 'a baseline was delivered').toBe(1)
+
+    // bridge-server reassigns claudeSessionId on a LIVE entry.
+    info.claudeSessionId = idB
+    failNext = true
+    fire(); await tick()
+
+    // The tick after the rotation is where the stale baseline used to be used.
+    failNext = false
+    fire(); await tick()
+
+    const deltas = sent.filter(x => x.body.event === 'hydra.session.usage')
+      .map(x => x.body.properties.deltaOutputTokens as number)
+    expect(Math.min(...deltas), `no delta may be negative, got ${deltas.join(', ')}`).toBeGreaterThanOrEqual(0)
+  })
+
+  // A kill can land mid-POST. The death read must not compute from a baseline
+  // the in-flight event is about to advance, or the same window ships twice
+  // under two event ids and the SUM double-counts it. Needs live mode: dryrun
+  // resolves instantly and cannot hold a send open across the death.
+  test('a death during an in-flight send does not report the window twice', async () => {
+    const planted = growSession('race-1')
+    let holdUsage: (() => void) | undefined
+    let usagePosts = 0
+    process.env.RAINDROP_MODE = 'live'
+    process.env.RAINDROP_WRITE_KEY = 'rk_live_test'
+    stubDeps({
+      liveSessionIds: () => ['race-1'], knownSessionIds: () => ['race-1'],
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      postEvent: async (endpoint, body) => {
+        record(endpoint, body)
+        // Hold the SECOND one: the first has to land, or there is no delivered
+        // baseline for the death read to double-count from.
+        if ((body as any)[0]?.event === 'hydra.session.usage' && ++usagePosts === 2) {
+          await new Promise<void>(r => { holdUsage = r })
+        }
+      },
+    })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()            // baseline lands, delivered = 900
+    appendFileSync(planted.path, usageLine('b', GROWTH))
+    fire(); await tick()            // carries the 25, and this POST is held open
+
+    const deathDone = (async () => {
+      emit('session:death', {
+        sessionId: 'race-1', threadId: 'T-race-1', wasOwner: true, tmuxName: 'atlas', deadAt: NOW,
+      })
+      await tick()
+    })()
+    holdUsage?.()
+    await deathDone
+    for (let n = 0; n < 5; n++) await tick()
+
+    const deltas = sent.filter(x => x.body.event === 'hydra.session.usage')
+      .map(x => x.body.properties.deltaOutputTokens as number)
+    expect(deltas.reduce((n, d) => n + d, 0),
+      `${GROWTH.output_tokens} tokens spent, deltas were [${deltas.join(', ')}]`)
+      .toBe(GROWTH.output_tokens)
+  })
+
+  test('the delivered baseline is released when its session goes', async () => {
+    const planted = growSession('rel-1')
+    let known = ['rel-1']
+    stubDeps({
+      liveSessionIds: () => ['rel-1'], knownSessionIds: () => known,
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(_deliveredCountForTesting(), 'the delivered POST left a baseline').toBe(1)
+
+    fire(); await tick()
+    expect(_deliveredCountForTesting(), 'still a registry member, still retained').toBe(1)
+
+    // A death releases it.
+    emit('session:death', { sessionId: 'rel-1', threadId: 'T-rel-1', wasOwner: true, tmuxName: 'atlas', deadAt: NOW })
+    await tick()
+    expect(_deliveredCountForTesting(), 'released on death').toBe(0)
+
+    // And so does leaving the registry without one.
+    appendFileSync(planted.path, usageLine('c', GROWTH))
+    fire(); await tick()
+    expect(_deliveredCountForTesting()).toBe(1)
+    known = []
+    registry.delete('rel-1')
+    fire(); await tick()
+    expect(_deliveredCountForTesting(), 'and swept when it leaves the registry').toBe(0)
+  })
+
+  // The read cursor moves whether or not the POST lands. Measuring the delta
+  // from the read position meant a dropped send deleted that window for good —
+  // 80% of a window in the reviewed repro — while cumulative silently healed.
+  test('a window whose send failed is re-sent, not lost', async () => {
+    const planted = growSession('retry-1')
+    let failNext = false
+    stubDeps({
+      liveSessionIds: () => ['retry-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      recordDryRun: (endpoint, body) => {
+        if (failNext && (body as any)[0]?.event === 'hydra.session.usage') throw new Error('502 from raindrop')
+        record(endpoint, body)
+      },
+    })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(lastUsage()!.body.properties.coldStart, 'baseline delivered').toBe(1)
+
+    // Spend arrives, and the POST carrying it fails.
+    failNext = true
+    appendFileSync(planted.path, usageLine('b', GROWTH))
+    fire(); await tick()
+    expect(lastUsage()!.body.properties.deltaOutputTokens, 'nothing new reached the wire').toBe(0)
+
+    // Next tick: no further spend, but the dropped window must come back.
+    failNext = false
+    fire(); await tick()
+    expect(lastUsage()!.body.properties.deltaOutputTokens, 'the dropped window is re-sent').toBe(25)
+
+    // And once delivered it is not counted a second time.
+    fire(); await tick()
+    const after = sent.filter(x => x.body.event === 'hydra.session.usage')
+    const totalDelta = after.reduce((n, e) => n + (e.body.properties.deltaOutputTokens as number), 0)
+    expect(totalDelta, 'the window is counted exactly once across the whole run').toBe(25)
+  })
+
+  // readUsageDelta has three exits and each must report the restart. A rotate
+  // to a transcript that exists but holds no complete line yet — an ordinary
+  // just-created file — takes the other two, and an unreported restart there
+  // subtracts the old high-water mark and puts a negative on the wire.
+  test.each([
+    ['an empty file', ''],
+    ['a half-written first line', '{"message":{"id":"x","usage":{"output'],
+  ])('rotating to %s never yields a negative delta', (_label, body) => {
+    const idA = uniqueClaudeId('negA')
+    const idB = uniqueClaudeId('negB')
+    cleanups.push(plantTranscript(idA, oneLine('a', 500)).cleanup)
+    cleanups.push(plantTranscript(idB, body).cleanup)
+    const info = sessionInfo({ sessionId: 'neg-1', threadId: 'T-neg', claudeSessionId: idA })
+    registry.set('neg-1', info)
+    cleanups.push(() => registry.delete('neg-1'))
+    expect(defaultUsageFor('neg-1')?.totals.outputTokens).toBe(500)
+    info.claudeSessionId = idB
+    const after = defaultUsageFor('neg-1')
+    // Suppressed is fine; a reported negative is not.
+    if (after) expect(after.delta.outputTokens, 'the restart must reach the base').toBeGreaterThanOrEqual(0)
+    expect(after?.totals.outputTokens ?? 0, 'and the totals must follow the new file').toBe(0)
+  })
+
+  // Same path, fewer bytes: the reader restarts from zero, and a base chosen by
+  // path identity alone could not see that. It emitted delta -55.
+  test('a transcript that shrinks in place never yields a negative delta', () => {
+    const claudeId = uniqueClaudeId('trunc')
+    const planted = plantTranscript(claudeId, oneLine('a', 60).repeat(3))
+    cleanups.push(planted.cleanup)
+    registry.set('tr-1', sessionInfo({ sessionId: 'tr-1', threadId: 'T-tr', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('tr-1'))
+    expect(defaultUsageFor('tr-1')?.totals.outputTokens).toBe(60)
+    writeFileSync(planted.path, oneLine('b', 5))
+    const after = defaultUsageFor('tr-1')
+    expect(after?.totals.outputTokens, 'the re-read is the new truth').toBe(5)
+    expect(after?.delta.outputTokens, 'a restart is a baseline, not negative spend').toBe(0)
+  })
+
+  // A daemon that dies mid-session never runs closeHistoryEntry, so an OPEN
+  // entry is all a later respawn has to read the bucket off.
+  test('the label lands on the history entry at spawn, before any close', () => {
+    const threadId = 'T-openlabel'
+    threadRegistry.recordSpawn(threadId, {
+      topic: 'open-label', respawnCount: 0, sessionId: 'ol-1', tmuxName: 'x', originType: 'spawn', label: 'build',
+    })
+    cleanups.push(() => threadRegistry.delete(threadId))
+    const entry = threadRegistry.get(threadId)?.sessionHistory.find(h => h.sessionId === 'ol-1')
+    expect(entry?.endedAt, 'still open — nothing has closed it').toBeUndefined()
+    expect(entry?.label).toBe('build')
+  })
+
+  // bridge-server reassigns claudeSessionId on a LIVE entry, so the same cursor
+  // can be handed a different file. The old arithmetic went 1.4 BILLION negative.
+  test('a transcript swapped under a live session never yields a negative delta', () => {
+    const idA = uniqueClaudeId('rotA')
+    const idB = uniqueClaudeId('rotB')
+    cleanups.push(plantTranscript(idA, oneLine('a', 500)).cleanup)
+    cleanups.push(plantTranscript(idB, oneLine('b', 7)).cleanup)
+    const info = sessionInfo({ sessionId: 'rot-1', threadId: 'T-rot', claudeSessionId: idA })
+    registry.set('rot-1', info)
+    cleanups.push(() => registry.delete('rot-1'))
+    defaultUsageFor('rot-1')
+    info.claudeSessionId = idB
+    const after = defaultUsageFor('rot-1')
+    expect(after?.totals.outputTokens, 'cumulative follows the new transcript').toBe(7)
+    expect(after?.delta.outputTokens, 'the new transcript is a baseline too').toBe(0)
+  })
+
+  // Resume mints a fresh hydra sessionId over the SAME transcript. 41 of 140
+  // real transcripts are bound to 2-5 session ids, so this is the norm.
+  test('a resumed session does not re-claim its predecessor spend', () => {
+    const claudeId = uniqueClaudeId('resume')
+    cleanups.push(plantTranscript(claudeId, oneLine('a', 400_000)).cleanup)
+    registry.set('res-1', sessionInfo({ sessionId: 'res-1', threadId: 'T-res', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('res-1'))
+    expect(defaultUsageFor('res-1')?.delta.outputTokens).toBe(0)
+    // the successor: new hydra sessionId, same transcript, no cursor of its own
+    registry.set('res-2', sessionInfo({ sessionId: 'res-2', threadId: 'T-res', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('res-2'))
+    const u = defaultUsageFor('res-2')
+    expect(u?.totals.outputTokens, 'the transcript lifetime is still reported').toBe(400_000)
+    expect(u?.delta.outputTokens, 'none of it was spent by the successor').toBe(0)
+  })
+
+  // The sweep keys on registry membership, not liveness. A crashed record keeps
+  // deadAt set and stays in the registry; sweeping its facts costs both the
+  // final usage event and the death event. Uses the real deps on purpose —
+  // flipping a stubbed liveSessionIds cannot tell the two predicates apart.
+  test('a crashed session keeps its facts through a sweep, with the real deps', async () => {
+    const claudeId = uniqueClaudeId('realcrash')
+    cleanups.push(plantTranscript(claudeId, oneLine('a', 21)).cleanup)
+    const info = sessionInfo({ sessionId: 'rc-1', threadId: 'T-rc', claudeSessionId: claudeId })
+    registry.set('rc-1', info)
+    cleanups.push(() => registry.delete('rc-1'))
+    stubDeps({ factsFor: factsFromRegistry, usageFor: defaultUsageFor })
+
+    const fireIntervals = registerWithIntervals()
+    emit('session:bridge-registered', { sessionId: 'rc-1', threadId: 'T-rc' })
+    await tick()
+    expect(_trackedSizeForTesting()).toBe(1)
+
+    info.deadAt = NOW
+    fireIntervals()
+    await tick()
+    expect(_trackedSizeForTesting(), 'facts must survive the sweep of a crashed session').toBe(1)
+  })
+
+  // The crash path: session-health sets deadAt and never emits, so the session
+  // leaves liveSessionIds immediately and a sweep runs in the gap. The facts
+  // and the cursor both have to survive it or the final read is discarded.
+  test('a crashed session still reports its final spend after a sweep', async () => {
+    const claudeId = uniqueClaudeId('crash')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { id: 'c', usage: { output_tokens: 55 } } }) + '\n').cleanup)
+    registry.set('crash-1', sessionInfo({ sessionId: 'crash-1', threadId: 'T-crash', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('crash-1'))
+    let live = ['crash-1']
+    stubDeps({ liveSessionIds: () => live, usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+
+    const fireIntervals = registerWithIntervals()
+    emit('session:bridge-registered', { sessionId: 'crash-1', threadId: 'T-crash' })
+    await tick()
+
+    // crash detected: deadAt set, no death emitted, sweep runs
+    live = []
+    fireIntervals()
+    await tick()
+
+    registry.delete('crash-1')
+    emit('session:death', { sessionId: 'crash-1', threadId: 'T-crash', wasOwner: true, tmuxName: 'x', deadAt: 9, claudeSessionId: claudeId })
+    await tick()
+    const events = sent.map(x => x.body.event)
+    expect(events, 'the final usage read must survive the sweep').toContain('hydra.session.usage')
+    expect(events).toContain('hydra.session.death')
+    const ids = sent.map(x => x.body.event_id)
+    expect(new Set(ids).size, `two events sharing an id overwrite: ${ids.join(', ')}`).toBe(ids.length)
+    // The final read happened at the instant of death, not the tick moment.
+    const finalUsage = sent.find(x => x.body.event === 'hydra.session.usage' && String(x.body.event_id).endsWith(':final'))
+    expect(finalUsage?.body.timestamp, 'stamped at deadAt').toBe(new Date(9).toISOString())
+  })
+
+  test('a session that never registered a bridge still releases its cursor', async () => {
+    const claudeId = uniqueClaudeId('nobridge')
+    cleanups.push(plantTranscript(claudeId, oneLine('a', 5)).cleanup)
+    registry.set('nb-1', sessionInfo({ sessionId: 'nb-1', threadId: 'T-nb', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('nb-1'))
+    // The cursor exists, but the session must NOT be live when register()
+    // runs — otherwise it seeds `tracked` and the early return never fires.
+    stubDeps({ liveSessionIds: () => [], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    expect(defaultUsageFor('nb-1')?.totals.outputTokens).toBe(5)
+    expect(_usageCursorCountForTesting()).toBe(1)
+    dispose = register()
+    // never bridge-registered, so the handler has no facts and returns early
+    emit('session:death', { sessionId: 'nb-1', threadId: 'T-nb', wasOwner: true, tmuxName: 'x', deadAt: 3, claudeSessionId: claudeId })
+    await tick()
+    expect(_usageCursorCountForTesting(), 'the early return must not skip the release').toBe(0)
+  })
+
+  test('a final read that throws still releases the cursor', async () => {
+    const claudeId = uniqueClaudeId('boomfinal')
+    cleanups.push(plantTranscript(claudeId, oneLine('a', 5)).cleanup)
+    registry.set('bf-1', sessionInfo({ sessionId: 'bf-1', threadId: 'T-bf', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('bf-1'))
+    let boom = false
+    stubDeps({
+      liveSessionIds: () => ['bf-1'],
+      factsFor: factsFromRegistry,
+      usageFor: (id: string, hint?: string) => {
+        if (boom) throw new Error('transcript vanished at death')
+        return defaultUsageFor(id, hint)
+      },
+    })
+    dispose = register()
+    emit('session:bridge-registered', { sessionId: 'bf-1', threadId: 'T-bf' })
+    await tick()
+    expect(defaultUsageFor('bf-1')?.totals.outputTokens).toBe(5)
+    expect(_usageCursorCountForTesting()).toBe(1)
+    boom = true
+    emit('session:death', { sessionId: 'bf-1', threadId: 'T-bf', wasOwner: true, tmuxName: 'x', deadAt: 3, claudeSessionId: claudeId })
+    await tick()
+    expect(_usageCursorCountForTesting(), 'a throwing read must not leak the cursor').toBe(0)
+  })
+
+  // killSession deletes the registry entry BEFORE emitting, so the handler has
+  // only what the event carries — a session that dies inside its first tick has
+  // no cursor either.
+  test('a dying session reports the spend the tick would have missed', async () => {
+    const claudeId = uniqueClaudeId('last')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { usage: { output_tokens: 11 } } }) + '\n').cleanup)
+    registry.set('last-1', sessionInfo({ sessionId: 'last-1', threadId: 'T-last', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('last-1'))
+    stubDeps({ liveSessionIds: () => ['last-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    dispose = register()
+    emit('session:bridge-registered', { sessionId: 'last-1', threadId: 'T-last' })
+    await tick()
+    registry.delete('last-1')
+    emit('session:death', { sessionId: 'last-1', threadId: 'T-last', wasOwner: true, tmuxName: 'atlas', deadAt: 5, claudeSessionId: claudeId })
+    await tick()
+    const usage = sent.filter(x => x.body.event === 'hydra.session.usage')
+    expect(usage.length, 'the final read must be emitted').toBeGreaterThan(0)
+    expect(usage[usage.length - 1].body.properties.cumulativeOutputTokens).toBe(11)
+  })
+
+  test('a usage reader that throws is counted, not silently skipped', async () => {
+    registry.set('boom-1', sessionInfo({ sessionId: 'boom-1', threadId: 'T-boom', claudeSessionId: 'c-boom' }))
+    cleanups.push(() => registry.delete('boom-1'))
+    stubDeps({
+      liveSessionIds: () => ['boom-1'],
+      usageFor: () => { throw new Error('transcript vanished mid-read') },
+      factsFor: factsFromRegistry,
+    })
+    const fireIntervals = registerWithIntervals()
+    fireIntervals()
+    await tick()
+    expect(stderr.join(''), 'the cause must reach the log').toContain('transcript vanished mid-read')
+    expect(raindropStatusLine('cli'), 'counted as a read failure, not a delivery one').toContain('1 transcript read failure')
+    expect(raindropStatusLine('cli'), 'a local read problem must not read as a send failure').not.toContain('1 write error')
+  })
+
+  // Graceful degradation: a worktree whose git lookup fails falls through to the
+  // transcript cwd rather than bucketing as none. Making the branch terminal
+  // changed the answer and nothing noticed.
+  test('a worktree whose repo lookup fails falls back to the transcript cwd', () => {
+    const claudeId = uniqueClaudeId('wtfail')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/repos/delta' }) + '\n').cleanup)
+    registry.set('wtf-1', sessionInfo({
+      sessionId: 'wtf-1', threadId: 'T-wtf', claudeSessionId: claudeId, worktreePath: '/wt/gone', worktreeRepo: '/repos/gone',
+    }))
+    cleanups.push(() => registry.delete('wtf-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => (p === '/repos/gone' ? undefined : p.split('/').pop()) })
+    expect(factsFromRegistry('wtf-1')?.project, 'must not stop at the failed worktree').toBe('delta')
+  })
+
+  // The seeding loop runs inside register(); a throw there left the daemon
+  // half-booted, and the recurring tick had the same call unguarded.
+  test('one session with broken facts does not stop the rest being seeded', async () => {
+    registry.set('ok-1', sessionInfo({ sessionId: 'ok-1', threadId: 'T-ok' }))
+    cleanups.push(() => registry.delete('ok-1'))
+    stubDeps({
+      liveSessionIds: () => ['bad-1', 'ok-1'],
+      factsFor: (id: string) => { if (id === 'bad-1') throw new Error('facts exploded'); return factsFromRegistry(id) },
+    })
+    expect(() => { dispose = register() }, 'register must not throw').not.toThrow()
+    expect(_trackedSizeForTesting(), 'the healthy session must still be seeded').toBe(1)
+  })
+
+  test('one session with broken facts does not starve the rest of the tick', async () => {
+    const claudeId = uniqueClaudeId('tickok')
+    cleanups.push(plantTranscript(claudeId, oneLine('a', 12)).cleanup)
+    registry.set('tok-1', sessionInfo({ sessionId: 'tok-1', threadId: 'T-tok', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('tok-1'))
+    stubDeps({
+      liveSessionIds: () => ['bad-1', 'tok-1'],
+      usageFor: defaultUsageFor,
+      factsFor: (id: string) => { if (id === 'bad-1') throw new Error('facts exploded'); return factsFromRegistry(id) },
+    })
+    const fireIntervals = registerWithIntervals()
+    expect(() => fireIntervals(), 'the tick must not throw out of setInterval').not.toThrow()
+    await tick()
+    expect(sent.some(x => x.body.event === 'hydra.session.usage'), 'the healthy session still reports').toBe(true)
+  })
+
+  // The capability the PR advertises: a session that started outside a repo is
+  // attributed from the cwd its transcript records, not from worktreeRepo.
+  // Deleting this whole branch previously left the entire suite green.
+  test('a session with no worktree is attributed from the transcript cwd', () => {
+    const claudeId = uniqueClaudeId('attrib')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/repos/gamma' }) + '\n').cleanup)
+    registry.set('attr-1', sessionInfo({ sessionId: 'attr-1', threadId: 'T-A', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('attr-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => (p === '/repos/gamma' ? 'gamma' : undefined) })
+    expect(factsFromRegistry('attr-1')?.project).toBe('gamma')
+  })
+
+  // A wrong CLAUDE_CONFIG_DIR is one fleet-wide condition. It has to reach the
+  // operator once with a cause, and it must NOT suppress the unresolved count —
+  // making this throw per session did exactly that, and that count is the only
+  // place the phrase "check CLAUDE_CONFIG_DIR" appears.
+  test('an unreadable projects root is named once and still feeds the unresolved alarm', async () => {
+    const saved = process.env.CLAUDE_CONFIG_DIR
+    for (const id of ['unread-1', 'unread-2']) {
+      registry.set(id, sessionInfo({ sessionId: id, threadId: `T-${id}`, claudeSessionId: `c-${id}` }))
+      cleanups.push(() => registry.delete(id))
+    }
+    stubDeps({
+      liveSessionIds: () => ['unread-1', 'unread-2'], knownSessionIds: () => ['unread-1', 'unread-2'],
+      usageFor: defaultUsageFor, factsFor: factsFromRegistry, projectFor: () => 'should-not-be-reached',
+    })
+    process.env.CLAUDE_CONFIG_DIR = join(tmpdir(), `absent-projects-root-${randomUUID()}`)
+    try {
+      expect(factsFromRegistry('unread-1')?.project, 'attribution degrades').toBe(UNATTRIBUTED_REPO)
+      expect(factsFromRegistry('unread-1')?.tmuxName, 'and the event still builds').toBeTruthy()
+      expect(() => defaultUsageFor('unread-1'), 'accounting does not throw per session').not.toThrow()
+
+      const fire = registerWithIntervals()
+      fire()
+      await tick()
+      const named = stderr.filter(l => l.includes('projects root unreadable'))
+      expect(named.length, 'one line for one fleet-wide condition, not one per session').toBe(1)
+      expect(stderr.filter(l => l.includes('transcript read failed')), 'not a per-file failure').toEqual([])
+
+      // A tick count must not masquerade as N unreadable transcripts.
+      fire()
+      await tick()
+      expect(stderr.filter(l => l.includes('projects root unreadable')).length, 'said once, not once a minute').toBe(1)
+
+      const line = raindropStatusLine('cli')
+      expect(line, 'the status line names the variable to check').toContain('check CLAUDE_CONFIG_DIR')
+      expect(line, 'and the unresolved alarm still fires').toContain('with no transcript yet')
+      expect(line, 'without inflating the per-file counter').not.toContain('transcript read failure')
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = saved
+    }
+  })
+
+  // The cwd is wherever the session wandered to, so it is the one field here
+  // that can name a checkout nobody chose to publish.
+  test('a cwd outside the spawn root is not named on the wire', () => {
+    const claudeId = uniqueClaudeId('outside')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/elsewhere/private-client' }) + '\n').cleanup)
+    registry.set('out-1', sessionInfo({ sessionId: 'out-1', threadId: 'T-O', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('out-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => p.split('/').pop() })
+    expect(factsFromRegistry('out-1')?.project).toBe(UNATTRIBUTED_REPO)
+
+    // Same transcript, same resolver — only the root moves. Without that, the
+    // assertion above passes for any reason at all.
+    process.env.SPAWN_CWD = '/elsewhere'
+    expect(factsFromRegistry('out-1')?.project).toBe('private-client')
+  })
+
+  test('with no spawn root configured nothing is attributed from a cwd', () => {
+    const claudeId = uniqueClaudeId('norootenv')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/repos/gamma' }) + '\n').cleanup)
+    registry.set('nr-1', sessionInfo({ sessionId: 'nr-1', threadId: 'T-NR', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('nr-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: () => 'gamma' })
+    delete process.env.SPAWN_CWD
+    expect(factsFromRegistry('nr-1')?.project).toBe(UNATTRIBUTED_REPO)
+  })
+
+  // The spawn root itself is the cwd of every worktree-less spawn, so the
+  // equality arm is the common case, not an edge one.
+  test('a session sitting at the spawn root is still attributed', () => {
+    const claudeId = uniqueClaudeId('atroot')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/repos' }) + '\n').cleanup)
+    registry.set('root-1', sessionInfo({ sessionId: 'root-1', threadId: 'T-R', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('root-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => p.split('/').pop() })
+    expect(factsFromRegistry('root-1')?.project).toBe('repos')
+  })
+
+  // /tmp is a symlink to /private/tmp on macOS, and a transcript records the
+  // physical path — comparing the spelled root fails closed and says nothing.
+  // Builds its own symlink rather than relying on the platform's: macOS tmpdir
+  // traverses one (/var → /private/var) and Linux does not, so asserting the
+  // difference as a precondition made this fail on the CI runner.
+  test('a root spelled through a symlink still contains its own subdirectories', () => {
+    const box = mkdtempSync(join(tmpdir(), 'spawnroot-'))
+    try {
+      const real = join(realpathSync(box), 'root')
+      const spelled = join(box, 'alias')
+      mkdirSync(real, { recursive: true })
+      symlinkSync(real, spelled)
+      expect(realpathSync(spelled), 'the alias must resolve elsewhere').toBe(real)
+
+      expect(underSpawnRoot(join(real, 'repo'), spelled), 'physical cwd, symlinked root').toBe(true)
+      expect(underSpawnRoot(join(realpathSync(box), 'elsewhere'), spelled), 'outside is still outside').toBe(false)
+      // The mirror: a cwd spelled through the alias against the physical root.
+      // Only the root side was ever exercised, so half the rule was unpinned.
+      mkdirp(join(real, "repo"), { recursive: true })
+      expect(underSpawnRoot(join(spelled, 'repo'), real), 'symlinked cwd, physical root').toBe(true)
+    } finally { rmSync(box, { recursive: true, force: true }) }
+  })
+
+  // Refusing the root turns attribution off for the whole fleet, and two of the
+  // three launchers default SPAWN_CWD to $HOME — so it has to say so.
+  test.each([undefined, () => homedir(), () => '/'])(
+    'an unbounded spawn root (%p) is named on the status line', (root) => {
+      const saved = process.env.SPAWN_CWD
+      try {
+        const value = typeof root === 'function' ? root() : root
+        if (value === undefined) delete process.env.SPAWN_CWD
+        else process.env.SPAWN_CWD = value
+        expect(raindropStatusLine('cli')).toContain('repo attribution is off')
+      } finally { process.env.SPAWN_CWD = saved }
+    })
+
+  test('a real spawn root says nothing about attribution', () => {
+    expect(raindropStatusLine('cli')).not.toContain('repo attribution is off')
+  })
+
+  test.each([
+    ['the home directory', () => homedir()],
+    ['the filesystem root', () => '/'],
+  ])('%s is refused as a spawn root, so nothing is attributed', (_case, root) => {
+    expect(spawnRootIsBounded(root()), 'not a bound').toBe(false)
+    expect(underSpawnRoot(join(root(), 'anything', 'repo'), root())).toBe(false)
+    // A real root still works, so the refusal is not blanket.
+    expect(spawnRootIsBounded('/repos')).toBe(true)
+    expect(underSpawnRoot('/repos/gamma', '/repos')).toBe(true)
+  })
+
+  // A sibling of the root is not inside it: a raw startsWith would ship this.
+  test('a sibling directory of the spawn root is not inside it', () => {
+    const claudeId = uniqueClaudeId('sibling')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/repos-private/acme' }) + '\n').cleanup)
+    registry.set('sib-1', sessionInfo({ sessionId: 'sib-1', threadId: 'T-S', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('sib-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => p.split('/').pop() })
+    expect(factsFromRegistry('sib-1')?.project).toBe(UNATTRIBUTED_REPO)
+  })
+
+  test('the latest cwd wins, so a session that moved is attributed where it is now', () => {
+    const claudeId = uniqueClaudeId('moved')
+    const body = JSON.stringify({ cwd: '/repos/old' }) + '\n' + JSON.stringify({ cwd: '/repos/new' }) + '\n'
+    cleanups.push(plantTranscript(claudeId, body).cleanup)
+    registry.set('moved-1', sessionInfo({ sessionId: 'moved-1', threadId: 'T-M', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('moved-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => p.split('/').pop() })
+    expect(factsFromRegistry('moved-1')?.project).toBe('new')
+  })
+
+  // bridge-server reassigns claudeSessionId on a LIVE registry entry, and the
+  // project cache never expires on success — so without an identity check the
+  // first answer latches for the session's life.
+  test('a project resolved from one transcript is not reused after the id changes', () => {
+    const idA = uniqueClaudeId('swapA')
+    const idB = uniqueClaudeId('swapB')
+    cleanups.push(plantTranscript(idA, JSON.stringify({ cwd: '/repos/alpha' }) + '\n').cleanup)
+    cleanups.push(plantTranscript(idB, JSON.stringify({ cwd: '/repos/beta' }) + '\n').cleanup)
+    const info = sessionInfo({ sessionId: 'swap-1', threadId: 'T-sw', claudeSessionId: idA })
+    registry.set('swap-1', info)
+    cleanups.push(() => registry.delete('swap-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => p.split('/').pop() })
+    expect(factsFromRegistry('swap-1')?.project).toBe('alpha')
+    info.claudeSessionId = idB
+    expect(factsFromRegistry('swap-1')?.project, 'must not latch the old transcript').toBe('beta')
+  })
+
+  test('a session whose transcript names no repo buckets as none', () => {
+    const claudeId = uniqueClaudeId('norepo')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ cwd: '/repos/notarepo' }) + '\n').cleanup)
+    registry.set('norepo-1', sessionInfo({ sessionId: 'norepo-1', threadId: 'T-N', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('norepo-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: () => undefined })
+    expect(factsFromRegistry('norepo-1')?.project).toBe(UNATTRIBUTED_REPO)
+  })
+
   test('a dead session leaves no usage cursor behind', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'rd-cursor-'))
-    const claudeId = 'claude-cursor-1'
-    const projectDir = join(dir, 'p')
-    mkdirSync(join(homedir(), '.claude', 'projects', projectDirName(projectDir)), { recursive: true })
-    writeFileSync(
-      join(homedir(), '.claude', 'projects', projectDirName(projectDir), `${claudeId}.jsonl`),
-      JSON.stringify({ message: { usage: { output_tokens: 7 } } }) + '\n',
-    )
+    const claudeId = uniqueClaudeId('claude-cursor')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { usage: { output_tokens: 7 } } }) + '\n').cleanup)
     registry.set('cur-1', sessionInfo({
       sessionId: 'cur-1', threadId: 'T-C', tmuxName: 'atlas', createdAt: 5, lastActive: 5,
-      claudeSessionId: claudeId, worktreePath: projectDir,
+      claudeSessionId: claudeId,
     }))
+    cleanups.push(() => registry.delete('cur-1'))
     let live = ['cur-1']
     stubDeps({ liveSessionIds: () => live, usageFor: defaultUsageFor, factsFor: factsFromRegistry })
 
-    const realSetInterval = globalThis.setInterval
-    const fns: Array<() => void> = []
-    globalThis.setInterval = ((fn: () => void) => { fns.push(fn); return { unref() {} } }) as unknown as typeof setInterval
-    try { dispose = register() } finally { globalThis.setInterval = realSetInterval }
+    const fireIntervals = registerWithIntervals()
 
-    for (const f of fns) f()
+    fireIntervals()
     await tick()
     expect(_usageCursorCountForTesting(), 'the real reader must have left a cursor').toBe(1)
 
+    // A crash sets deadAt long before session:death fires, so the session
+    // leaves liveSessionIds first. The cursor has to outlive that gap or the
+    // final read has nothing to resolve the transcript with.
     live = []
-    registry.delete('cur-1')
-    for (const f of fns) f()
+    fireIntervals()
     await tick()
-    expect(_usageCursorCountForTesting(), 'a dead session must not keep one').toBe(0)
+    expect(_usageCursorCountForTesting(), 'the cursor must survive until death is emitted').toBe(1)
+
+    registry.delete('cur-1')
+    emit('session:death', { sessionId: 'cur-1', threadId: 'T-C', wasOwner: true, tmuxName: 'atlas', deadAt: 9, claudeSessionId: claudeId })
+    await tick()
+    expect(_usageCursorCountForTesting(), 'and must be released once it has').toBe(0)
+  })
+
+  // Resolved fresh each time: a cached answer went stale as a session moved,
+  // and the git lookup behind it is already cached by repo path.
+  test('a session that moves to another repo is re-attributed immediately', () => {
+    const claudeId = uniqueClaudeId('movefast')
+    const planted = plantTranscript(claudeId, JSON.stringify({ cwd: '/repos/alpha' }) + '\n')
+    cleanups.push(planted.cleanup)
+    registry.set('mf-1', sessionInfo({ sessionId: 'mf-1', threadId: 'T-mf', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('mf-1'))
+    stubDeps({ factsFor: factsFromRegistry, projectFor: (p: string) => p.split('/').pop() })
+    expect(factsFromRegistry('mf-1')?.project).toBe('alpha')
+    appendFileSync(planted.path, JSON.stringify({ cwd: '/repos/beta' }) + '\n')
+    expect(factsFromRegistry('mf-1')?.project, 'no stale window at all').toBe('beta')
+  })
+
+  // A headless session has no facts ever; reading its transcript would advance
+  // the cursor past spend that nothing will report.
+  test('a session with no facts is skipped before its transcript is read', () => {
+    const claudeId = uniqueClaudeId('headless')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { usage: { output_tokens: 6 } } }) + '\n').cleanup)
+    registry.set('hl-1', sessionInfo({ sessionId: 'hl-1', threadId: 'T-hl', claudeSessionId: claudeId, headless: true }))
+    cleanups.push(() => registry.delete('hl-1'))
+    let read = 0
+    stubDeps({
+      liveSessionIds: () => ['hl-1'],
+      factsFor: factsFromRegistry,
+      usageFor: (id: string) => { read++; return defaultUsageFor(id) },
+    })
+    const fireIntervals = registerWithIntervals()
+    fireIntervals()
+    expect(read, 'the transcript must not be read for a session that cannot report').toBe(0)
   })
 
   test('each usage emission gets its own id, so they do not overwrite each other', async () => {
     let n = 0
     stubDeps({
       liveSessionIds: () => ['sess-1'],
-      usageFor: () => ({ totals: { outputTokens: ++n } }),
+      usageFor: () => usageOf({ outputTokens: ++n }),
       now: () => NOW + n * 1000,
     })
-    const realSetInterval = globalThis.setInterval
-    const fns: Array<() => void> = []
-    globalThis.setInterval = ((fn: () => void) => { fns.push(fn); return { unref() {} } }) as unknown as typeof setInterval
-    try { dispose = register() } finally { globalThis.setInterval = realSetInterval }
-    for (const f of fns) f()
+    const fireIntervals = registerWithIntervals()
+    fireIntervals()
     await tick()
-    for (const f of fns) f()
+    fireIntervals()
     await tick()
     const ids = sent.filter(s => s.body.event === 'hydra.session.usage').map(s => s.body.event_id)
     expect(ids.length).toBe(2)
@@ -902,10 +1867,7 @@ describe('raindrop: events', () => {
   test('a reply landing after the death does not resurrect the entry for good', async () => {
     let live = ['sess-1']
     stubDeps({ liveSessionIds: () => live })
-    const realSetInterval = globalThis.setInterval
-    let onSweep: (() => void) | undefined
-    globalThis.setInterval = ((fn: () => void) => { onSweep = fn; return { unref() {} } }) as unknown as typeof setInterval
-    try { dispose = register() } finally { globalThis.setInterval = realSetInterval }
+    const onSweep = registerWithIntervals()
     emit('session:bridge-registered', { sessionId: 'sess-1', threadId: 'THREAD-1' })
     await tick()
     emit('session:death', { sessionId: 'sess-1', threadId: 'THREAD-1', wasOwner: true, tmuxName: 'atlas' })
@@ -914,7 +1876,7 @@ describe('raindrop: events', () => {
     await tick()
     expect(_trackedSizeForTesting(), 'the late reply re-added it').toBe(1)
     live = []
-    onSweep!()
+    onSweep()
     expect(_trackedSizeForTesting(), 'and the sweep reclaims it').toBe(0)
   })
 
@@ -1724,5 +2686,75 @@ describe('raindrop: chat health never renders a path', () => {
   test('an off install renders no Raindrop line at all', async () => {
     process.env.RAINDROP_MODE = 'off'
     expect(await healthText()).not.toContain('Raindrop')
+  })
+})
+
+describe('the durable history entry a resume reads back', () => {
+  const mk = (id: string) => {
+    threadRegistry.recordSpawn(id, { sessionId: `${id}-s`, tmuxName: 'x', originType: 'spawn' } as never)
+    cleanups.push(() => threadRegistry.delete(id))
+    return `${id}-s`
+  }
+  const entryOf = (id: string) => threadRegistry.get(id)?.sessionHistory.find(h => h.sessionId === `${id}-s`)
+
+  // killSession deletes the registry record, so everything a later resume
+  // needs has to be on this entry before it closes.
+  test('closing stamps every identity field, including the cost bucket', () => {
+    const t = 'T-rk'; mk(t)
+    threadRegistry.closeHistoryEntry(t, {
+      sessionId: `${t}-s`, messageCount: 7,
+      claudeSessionId: 'c-rk', engine: 'codex', codexThreadId: 'cx-1', codexHomeName: 'home-1', label: 'build',
+    })
+    expect(entryOf(t)).toMatchObject({
+      messageCount: 7, claudeSessionId: 'c-rk', engine: 'codex',
+      codexThreadId: 'cx-1', codexHomeName: 'home-1', label: 'build',
+    })
+    expect(entryOf(t)?.endedAt).toBeTruthy()
+  })
+
+  test('a close that names no label leaves the one recorded at spawn', () => {
+    const t = 'T-keeplabel'
+    threadRegistry.recordSpawn(t, {
+      topic: 'keep', respawnCount: 0, sessionId: `${t}-s`, tmuxName: 'x', originType: 'spawn', label: 'build',
+    })
+    cleanups.push(() => threadRegistry.delete(t))
+    threadRegistry.closeHistoryEntry(t, { sessionId: `${t}-s`, messageCount: 3, claudeSessionId: 'c-keep' })
+    expect(entryOf(t)?.endedAt, 'the entry really did close').toBeTruthy()
+    expect(entryOf(t)?.label, 'a crash close must not blank the bucket').toBe('build')
+  })
+
+  // A crash closes the entry first; a later kill must not reopen it and reset
+  // what the crash recorded.
+  test('a second close does not overwrite the first', () => {
+    const t = 'T-twice'; mk(t)
+    threadRegistry.closeHistoryEntry(t, { sessionId: `${t}-s`, messageCount: 5, claudeSessionId: 'c-first', label: 'review' })
+    const closedAt = entryOf(t)!.endedAt
+    threadRegistry.closeHistoryEntry(t, { sessionId: `${t}-s`, messageCount: 0, claudeSessionId: 'c-second' })
+    expect(entryOf(t)?.endedAt, 'the close time must stand').toBe(closedAt)
+    expect(entryOf(t)?.claudeSessionId, 'and so must the recorded id').toBe('c-first')
+    expect(entryOf(t)?.messageCount).toBe(5)
+    expect(entryOf(t)?.label).toBe('review')
+  })
+
+  // This diff moved persistence into closeHistoryEntry — the two crash callers
+  // dropped their own persist() calls. Without it a crash-closed label lives
+  // only in memory and vanishes at the next daemon restart.
+  test('the closed entry reaches disk, not just the in-memory map', () => {
+    const t = 'T-disk'; mk(t)
+    threadRegistry.closeHistoryEntry(t, { sessionId: `${t}-s`, messageCount: 3, claudeSessionId: 'c-disk', label: 'investigate' })
+    const onDisk = JSON.parse(readFileSync(join(STATE_DIR, 'threads.json'), 'utf8')) as Array<{ threadId: string; sessionHistory: Array<Record<string, unknown>> }>
+    const entry = onDisk.find(x => x.threadId === t)?.sessionHistory.find(h => h.sessionId === `${t}-s`)
+    expect(entry, 'the thread must be on disk').toBeTruthy()
+    expect(entry?.label, 'and the bucket with it').toBe('investigate')
+    expect(entry?.claudeSessionId).toBe('c-disk')
+  })
+
+  test('a close with the field absent does not blank what spawn recorded', () => {
+    const t = 'T-keep'
+    threadRegistry.recordSpawn(t, { sessionId: `${t}-s`, tmuxName: 'x', originType: 'fork', claudeSessionId: 'c-from-spawn' } as never)
+    cleanups.push(() => threadRegistry.delete(t))
+    // the crash path: bridge never connected, so info carries no transcript id
+    threadRegistry.closeHistoryEntry(t, { sessionId: `${t}-s`, messageCount: 0 })
+    expect(entryOf(t)?.claudeSessionId, 'a later resume needs this').toBe('c-from-spawn')
   })
 })

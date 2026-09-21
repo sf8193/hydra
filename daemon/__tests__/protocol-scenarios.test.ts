@@ -5,6 +5,7 @@ import { CAPABILITY_TOOLS } from '../../shared/constants.js'
 import { protocol } from '../protocol-dsl.js'
 import { resolveModifier } from '../modifiers.js'
 import { getActiveRuns } from '../protocol-runner.js'
+import { registry } from '../sessions.js'
 
 // Real protocol definitions — the harness exercises them as-is
 import review from '../../protocols/review.js'
@@ -433,6 +434,43 @@ describe('review: +no-fallback', () => {
     expect(h.run._pendingFallback).toBeUndefined()
     expect(h.isTerminated).toBe(true)
     expect(h.completionEvents[0].outcome).toBe('cancelled')
+  })
+})
+
+describe('review: participants carry the owner cost bucket', () => {
+  test("a spawned critic inherits the owner's label", async () => {
+    h = await createStartedHarness(review, { rounds: 3, ownerLabel: 'review' })
+
+    const criticSid = h.run.participants.get('critic')!
+    expect(criticSid, 'a critic must actually have been spawned').toBeTruthy()
+    expect(registry.get(criticSid)?.label).toBe('review')
+  })
+
+  // The dead record is gone by the time the debounced resume fires — killSession
+  // deletes it — and a thread_guest gets no history entry to fall back on. So the
+  // resumed critic has to take the bucket from the owner, not from its corpse.
+  test('a resumed critic takes the label from the owner, not its own dead record', async () => {
+    h = await createStartedHarness(review, { rounds: 3, ownerLabel: 'review' })
+    const criticSid = h.run.participants.get('critic')!
+    const before = h.spawnOptsSeen.length
+
+    h.setSessionDead('critic', 'claude-resume-me')
+    h.disconnect('critic')
+    registry.delete(criticSid)
+    await h.tick(3_000 + 500)
+
+    const resumeOpts = h.spawnOptsSeen.slice(before)
+    expect(resumeOpts.length, 'the resume must have spawned something').toBeGreaterThan(0)
+    expect(resumeOpts.at(-1)!.resumeFrom, 'and it must be the resume, not a fresh spawn').toBe('claude-resume-me')
+    expect(resumeOpts.at(-1)!.label).toBe('review')
+  })
+
+  test('an unlabelled owner spawns an unlabelled critic', async () => {
+    h = await createStartedHarness(review, { rounds: 3 })
+
+    const criticSid = h.run.participants.get('critic')!
+    expect(registry.get(h.run.ownerSessionId)?.label).toBeUndefined()
+    expect(registry.get(criticSid)?.label).toBeUndefined()
   })
 })
 

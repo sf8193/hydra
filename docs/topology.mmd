@@ -21,6 +21,7 @@ graph TD
     daemon_bridge-transport["bridge-transport.ts"]
     daemon_util["util.ts"]
     daemon_worktree-manager["worktree-manager.ts"]
+    daemon_usage["usage.ts"]
   end
 
   subgraph tools["Tools"]
@@ -94,6 +95,7 @@ graph TD
   daemon --> daemon_session-health
   cli_hydra --> shared_constants
   shared_constants --> shared_tool-definitions
+  daemon_config --> shared_constants
   daemon_sessions --> daemon_config
   daemon_sessions --> daemon_util
   daemon_sessions --> shared_constants
@@ -101,6 +103,7 @@ graph TD
   daemon_bridge-transport --> daemon_sessions
   daemon_bridge-transport --> daemon_util
   daemon_util --> daemon_config
+  daemon_util --> shared_constants
   daemon_bridge-tools --> shared_constants
   daemon_bridge-tools --> shared_tool-definitions
   daemon_tool-surface --> daemon_sessions
@@ -147,6 +150,7 @@ graph TD
   daemon_cli-handler --> daemon_raindrop
   daemon_session-lifecycle --> daemon_config
   daemon_session-lifecycle --> daemon_util
+  daemon_session-lifecycle --> daemon_usage
   daemon_session-lifecycle --> daemon_sessions
   daemon_session-lifecycle --> daemon_bridge-transport
   daemon_session-lifecycle --> daemon_bridge-tools
@@ -219,8 +223,10 @@ graph TD
   daemon_raindrop --> daemon_access
   daemon_raindrop --> daemon_sessions
   daemon_raindrop --> shared_constants
+  daemon_raindrop --> daemon_usage
   daemon_raindrop --> daemon_raindrop-payload
   daemon_raindrop-payload --> shared_constants
+  daemon_usage --> shared_constants
   daemon_commands_global --> daemon_config
   daemon_commands_global --> daemon_sessions
   daemon_commands_global --> daemon_bridge-transport
@@ -229,7 +235,6 @@ graph TD
   daemon_commands_global --> daemon_commands_status
   daemon_commands_global --> daemon_templates
   daemon_commands_global --> daemon_access
-  daemon_commands_global --> shared_constants
   daemon_commands_status --> daemon_config
   daemon_commands_status --> daemon_sessions
   daemon_commands_status --> daemon_bridge-transport

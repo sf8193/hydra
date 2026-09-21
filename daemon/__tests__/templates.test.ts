@@ -1,5 +1,8 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { getTemplate, listTemplates, parseTemplateTopic, buildTemplateSpawnOpts } from '../templates.js'
+import { getTemplate, listTemplates, parseTemplateTopic, buildTemplateSpawnOpts, loadTemplateFile } from '../templates.js'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 // Suppress stderr (template loader writes warnings when .json files are missing)
 process.stderr.write = (() => true) as any
@@ -165,7 +168,43 @@ describe('parseTemplateTopic', () => {
 // buildTemplateSpawnOpts
 // ---------------------------------------------------------------------------
 
+describe('loadTemplateFile: the declared label', () => {
+  test('a valid label is loaded and an unknown one is refused', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hydra-tmpl-'))
+    try {
+      const path = join(dir, 'templates.local.json')
+      writeFileSync(path, JSON.stringify({
+        audit: { prompt: 'p', label: 'investigate' },
+        bogus: { prompt: 'p', label: 'acme-corp-diligence' },
+        plain: { prompt: 'p' },
+      }))
+      const { templates } = loadTemplateFile(path, null, 'templates.local.json')
+      expect(templates.audit.label).toBe('investigate')
+      expect(templates.bogus.label, 'not one of the three buckets').toBeUndefined()
+      expect(templates.bogus.prompt, 'but the rest of the template still loads').toBe('p')
+      expect(templates.plain.label).toBeUndefined()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
 describe('buildTemplateSpawnOpts', () => {
+  // Declared, not inferred from the name: a template renamed or added under a
+  // different name used to lose its cost bucket with no warning anywhere.
+  test('a template carries the label it declares, whatever it is called', () => {
+    const t = getTemplate('review')!
+    expect(t.label, 'the builtin has to declare one').toBe('review')
+    expect(buildTemplateSpawnOpts('review', t).label).toBe('review')
+    expect(buildTemplateSpawnOpts('code-review', t).label, 'the name is not the source').toBe('review')
+  })
+
+  test('a template that declares no label sets none', () => {
+    const t = getTemplate('factory')!
+    expect(t.label).toBeUndefined()
+    expect(buildTemplateSpawnOpts('factory', t).label).toBeUndefined()
+    // And a name that happens to spell a bucket does not conjure one.
+    expect(buildTemplateSpawnOpts('build', t).label).toBeUndefined()
+  })
+
   test('always includes promptPrefix', () => {
     const t = getTemplate('review')!
     const opts = buildTemplateSpawnOpts('review', t)

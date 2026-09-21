@@ -15,6 +15,7 @@ import { parsePrUrl, getWatchesBySession, restoreWatches, unwatchBySession } fro
 import type { WatchEntry } from './pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
 import { loadAccess } from './access.js'
+import { deadSessionLabel, recoveryEntry } from './recovery-selection.js'
 import type { InboundMessage } from '../gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -55,11 +56,11 @@ function toRecoverInput(info: SessionInfo, siblingWatches?: WatchEntry[], prompt
   }
 }
 
-type RecoverResult = { name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string; label?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string; label?: string }
+type RecoverResult = { name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string; displayName?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string; displayName?: string }
 
 async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string; siblingWatches?: WatchEntry[]; promptPrefix?: string; description?: string }): Promise<RecoverResult> {
   const { thread, claudeSessionId, lastTmuxName, model } = dead
-  const label = dead.description || thread.description || thread.topic
+  const displayName = dead.description || thread.description || thread.topic
 
   // Capture everything off the dead record up front: tier 1's kill deletes it, so the
   // fallback tiers (and post-cascade watch restore) can't read it later. Resolve by the
@@ -96,7 +97,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
       // Transient (stale registration, lock, FS/repo hiccup) — branch preserved. Leave the
       // dead record untouched (no kill, no spawn) so the next boot retries the reattach.
       process.stderr.write(`daemon: recover ${lastTmuxName}: worktree ${worktree.path} reattach failed transiently — deferring to next boot\n`)
-      return { name: lastTmuxName, method: 'failed', reason: `worktree temporarily unavailable (${worktree.branch}) — deferred to next boot`, threadUrl: thread.threadUrl, label }
+      return { name: lastTmuxName, method: 'failed', reason: `worktree temporarily unavailable (${worktree.branch}) — deferred to next boot`, threadUrl: thread.threadUrl, displayName }
     }
     if (st === 'branch-gone' && deadInfo) {
       // Worktree dir AND branch both gone (typically merged + pruned). Don't revive into
@@ -109,12 +110,13 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
       unwatchBySession(deadInfo.sessionId)
       registry.persist()
       process.stderr.write(`daemon: recover ${lastTmuxName}: worktree + branch ${worktree.branch} gone — skipping auto-recovery (manual recover still available)\n`)
-      return { name: lastTmuxName, method: 'failed', reason: `worktree + branch gone (${worktree.branch}, likely merged/pruned) — not auto-revived`, threadUrl: thread.threadUrl, label }
+      return { name: lastTmuxName, method: 'failed', reason: `worktree + branch gone (${worktree.branch}, likely merged/pruned) — not auto-revived`, threadUrl: thread.threadUrl, displayName }
     }
     // 'attached' → dir now exists; fall through to the cascade.
   }
 
-  const commonOpts = { preserveWorktree: true, reuseWorktree: worktree, carryOver, promptPrefix: dead.promptPrefix ?? RECOVERY_REVERIFY_GUARD }
+  const recoveredLabel = deadSessionLabel(recoveryEntry(thread.sessionHistory), deadInfo)
+  const commonOpts = { preserveWorktree: true, reuseWorktree: worktree, carryOver, promptPrefix: dead.promptPrefix ?? RECOVERY_REVERIFY_GUARD, label: recoveredLabel }
 
   // Reserve the predecessor's name for the whole cascade so a concurrent spawn can't grab
   // it (freed when the dead record is killed) and `branch -D` the worktree branch we're
@@ -134,10 +136,10 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   try {
     if (claudeSessionId) {
       // Tier 1: full resume
-      const result = await tryResume({ topic: thread.topic, threadId: thread.threadId, claudeSessionId, threadUrl: thread.threadUrl, model, worktree, preserveWorktree: true })
+      const result = await tryResume({ topic: thread.topic, threadId: thread.threadId, claudeSessionId, threadUrl: thread.threadUrl, model, worktree, preserveWorktree: true, label: recoveredLabel })
       if (result) {
         restoreOnto(result)
-        return { name: lastTmuxName, method: 'resumed', newName: result.name, threadUrl: thread.threadUrl, label }
+        return { name: lastTmuxName, method: 'resumed', newName: result.name, threadUrl: thread.threadUrl, displayName }
       }
       process.stderr.write(`daemon: recover ${lastTmuxName}: resume failed, trying fork-from-dead\n`)
 
@@ -150,7 +152,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
           model,
         })
         restoreOnto(forkResult)
-        return { name: lastTmuxName, method: 'forked', newName: forkResult.name, threadUrl: thread.threadUrl, label }
+        return { name: lastTmuxName, method: 'forked', newName: forkResult.name, threadUrl: thread.threadUrl, displayName }
       } catch {
         process.stderr.write(`daemon: recover ${lastTmuxName}: fork failed, falling back to resurrect\n`)
       }
@@ -160,7 +162,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
     const result = await tryRespawn(thread.threadId, thread.topic, lastTmuxName, model, commonOpts)
     if (result) {
       restoreOnto(result)
-      return { name: lastTmuxName, method: 'resurrected', newName: result.name, threadUrl: thread.threadUrl, label }
+      return { name: lastTmuxName, method: 'resurrected', newName: result.name, threadUrl: thread.threadUrl, displayName }
     }
 
     // Total failure: doSpawnSession deleted the dead record + its watches early (before
@@ -178,7 +180,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
       registry.persist()
       process.stderr.write(`daemon: recover ${lastTmuxName}: all tiers failed — restored dead record + ${savedWatches.length} watch(es) for manual retry\n`)
     }
-    return { name: lastTmuxName, method: 'failed', reason: 'all recovery methods failed', threadUrl: thread.threadUrl, label }
+    return { name: lastTmuxName, method: 'failed', reason: 'all recovery methods failed', threadUrl: thread.threadUrl, displayName }
   } finally {
     if (reservedName) registry.reservedNames.delete(reservedName)
   }
@@ -407,21 +409,21 @@ async function postAutoRecoverySummary(
   results: Awaited<ReturnType<typeof recoverOne>>[],
   gapMs?: number,
 ): Promise<void> {
-  const recovered = results.filter(r => r.method !== 'failed') as Array<{ name: string; method: string; newName: string; label?: string; threadUrl?: string }>
-  const failed = results.filter(r => r.method === 'failed') as Array<{ name: string; method: 'failed'; reason: string; label?: string; threadUrl?: string }>
+  const recovered = results.filter(r => r.method !== 'failed') as Array<{ name: string; method: string; newName: string; displayName?: string; threadUrl?: string }>
+  const failed = results.filter(r => r.method === 'failed') as Array<{ name: string; method: 'failed'; reason: string; displayName?: string; threadUrl?: string }>
 
   const gapStr = gapMs ? ` — ${formatGap(gapMs)} gap` : ''
   const lines = [`🔮 **Fleet recovered**${gapStr}`]
   lines.push('')
   for (const r of recovered) {
     const nameStr = r.threadUrl ? `[${r.newName}](${r.threadUrl})` : `\`${r.newName}\``
-    const desc = r.label ? ` — ${r.label}` : ''
+    const desc = r.displayName ? ` — ${r.displayName}` : ''
     const emoji = r.method === 'resumed' ? '✅' : '🔁'
     lines.push(`${emoji} ${nameStr}${desc} (${r.method})`)
   }
   for (const r of failed) {
     const nameStr = r.threadUrl ? `[${r.name}](${r.threadUrl})` : `\`${r.name}\``
-    const desc = r.label ? ` — ${r.label}` : ''
+    const desc = r.displayName ? ` — ${r.displayName}` : ''
     lines.push(`❌ ${nameStr}${desc} (${r.reason})`)
   }
   if (recovered.length > 0) {

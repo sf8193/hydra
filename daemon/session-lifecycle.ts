@@ -5,15 +5,15 @@ import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
-import { projectDirName } from './usage.js'
+import { projectDirName, projectsRoot } from './usage.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
-import { extractPhaseBudget } from './util.js'
+import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
-import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
-import type { SessionType } from '../shared/constants.js'
+import { claudeConfigDir, isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
+import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -208,6 +208,7 @@ export function emitSessionDeath(info: SessionInfo): void {
     wasOwner: info.sessionType !== 'thread_guest',
     tmuxName: info.tmuxName,
     deadAt: info.deadAt,
+    claudeSessionId: info.claudeSessionId,
   })
 }
 
@@ -255,7 +256,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     // Last-resort claudeSessionId discovery before tmux dies — if the bridge
-    // never registered it, read ~/.claude/sessions/<panePid>.json while the
+    // never registered it, read $CLAUDE_CONFIG_DIR/sessions/<panePid>.json while the
     // pane PID is still available. Without this, resume falls to tier 3 (respawn).
     if (!info.claudeSessionId && info.engine !== 'codex') {
       const discovered = discoverClaudeSessionId(info.tmuxName)
@@ -293,10 +294,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
     // Update thread metadata before deleting session
     if (info.sessionType !== 'thread_guest') {
-      threadRegistry.recordKill(info.threadId, info.sessionId, info.messageCount ?? 0, {
-        claudeSessionId: info.claudeSessionId, engine: info.engine,
-        codexThreadId: info.codexThreadId, codexHomeName: info.codexHomeName,
-      })
+      threadRegistry.closeHistoryEntry(info.threadId, info)
       registry.deleteThread(info.threadId)
     }
     registry.delete(info.sessionId)
@@ -368,22 +366,15 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // branch from a concurrent spawn's `branch -D` during the kill→persist window — so
   // doSpawnSession doesn't manage the reservation itself.
 
-  // Parse worktree:repo_name prefix early so it doesn't leak into thread names/prompts
-  let worktreeTarget: string | undefined = opts?.worktree
-  topic = topic || 'session'
-  if (!worktreeTarget) {
-    const worktreeMatch = topic.match(/^(?:worktree|wt):(\S+)\s+/)
-    if (worktreeMatch) {
-      worktreeTarget = worktreeMatch[1]
-      topic = topic.slice(worktreeMatch[0].length)
-    }
-  }
-
-  // Parse --phase-budget from the topic (works for every spawn form); an
-  // explicit opts value (bridge tool) wins over the inline flag.
-  const budgetExtract = extractPhaseBudget(topic)
-  topic = budgetExtract.topic || 'session'
-  const phaseBudgetMs = opts?.phaseBudgetMs ?? budgetExtract.budgetMs
+  // Flags come off before the topic becomes a thread name; opts beat the flag.
+  const rawTopic = topic || 'session'
+  const parsed = parseSpawnTopic(rawTopic)
+  topic = parsed.topic || 'session'
+  const worktreeTarget: string | undefined = opts?.worktree ?? parsed.worktree
+  // rawTopic, not topic — the flag has been stripped out of the latter by here.
+  const labelFields = resolveSpawnLabel(rawTopic, opts?.label)
+  const sessionLabel = labelFields.label
+  const phaseBudgetMs = opts?.phaseBudgetMs ?? parsed.budgetMs
 
   const sessionId = randomUUID()
   const tmuxName = registry.pickSessionName()
@@ -683,7 +674,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, topic, threadId: threadId!, anchorMessageId, anchorChannelId, createdAt: now, lastActive: now,
     tmuxName, listening: resolveListenState(threadId!, chatId), originType, originFrom, sessionMetadata,
     sessionType: spawnType,
-    ...(opts?.label && { label: opts.label }),
+    ...labelFields,
     threadUrl: url || undefined,
     engine,
     ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
@@ -731,6 +722,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     threadRegistry.recordSpawn(threadId!, {
       anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
       sessionId, tmuxName, originType, originFrom, model: launched.model, parentChannelId,
+      label: sessionLabel,
       ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
     })
   }
@@ -803,6 +795,7 @@ export async function tryResume(dead: {
   claudeSessionId?: string
   threadUrl?: string
   model?: string
+  label?: SessionLabel
   worktree?: { repo: string; path: string; branch: string }
   // Only recoverOne sets this: it pre-resolves the worktree dir (reattach) before the
   // cascade, so adopting the branch is safe. The manual `resume` path has no such
@@ -816,6 +809,7 @@ export async function tryResume(dead: {
       existingThreadId: dead.threadId,
       resumeFrom: dead.claudeSessionId,
       model: dead.model,
+      label: dead.label,
       preserveWorktree: dead.preserveWorktree,
       reuseWorktree: dead.preserveWorktree ? dead.worktree : undefined,
     })
@@ -914,8 +908,8 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
     const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8', timeout: 2000 }).toString().trim()
     if (!panePid) return null
 
-    // Primary: read Claude's session file at ~/.claude/sessions/<pid>.json
-    const sessionFile = join(homedir(), '.claude', 'sessions', `${panePid}.json`)
+    // Primary: read Claude's session file at $CLAUDE_CONFIG_DIR/sessions/<pid>.json
+    const sessionFile = join(claudeConfigDir(), 'sessions', `${panePid}.json`)
     try {
       const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
       if (data.sessionId && data.cwd) {
@@ -925,7 +919,7 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
         // (spawnCwd, e.g. /Users/sam/trading), not the worktree the builder later
         // `cd`s to via Bash. Claude's session file captures the startup CWD and does
         // not update on shell cd — so the conversation file will be found correctly.
-        const projectDir = join(homedir(), '.claude', 'projects', projectDirName(data.cwd))
+        const projectDir = join(projectsRoot(), projectDirName(data.cwd))
         const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
         if (existsSync(conversationFile)) return data.sessionId
       }

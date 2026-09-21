@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, statSync } from 'fs'
 import { join } from 'path'
-import { isKnownModel } from '../shared/constants.js'
+import { isKnownModel, isSessionLabel, type SessionLabel } from '../shared/constants.js'
 
 export type SpawnTemplate = {
   prompt: string
@@ -9,6 +9,7 @@ export type SpawnTemplate = {
   disallowedTools?: string[]  // Claude built-in tools to block for this template
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   sessionType?: 'master_orchestrator'  // Grant orchestrator-level tools (default: thread_owner)
+  label?: SessionLabel        // cost bucket for the sessions this template spawns
 }
 
 const FACTORY_PROMPT = `You are a senior tech lead / PM orchestrating a software feature end-to-end. You own the task from research to shipped PR. You have a team of AI agents you can spawn as workers.
@@ -102,6 +103,7 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
   review: {
     prompt: 'You are the owner of a review session. An adversarial review protocol will start automatically — a critic will challenge your work across multiple rounds. Defend your design and fix valid issues.',
     action: 'review',
+    label: 'review',
   },
   factory: {
     prompt: FACTORY_PROMPT,
@@ -119,7 +121,7 @@ type FileCache = { mtime: number; templates: Record<string, SpawnTemplate> }
 let repoCache: FileCache | null = null
 let localCache: FileCache | null = null
 
-function loadTemplateFile(path: string, cache: FileCache | null, label: string): { templates: Record<string, SpawnTemplate>; cache: FileCache | null } {
+export function loadTemplateFile(path: string, cache: FileCache | null, source: string): { templates: Record<string, SpawnTemplate>; cache: FileCache | null } {
   if (!existsSync(path)) return { templates: {}, cache: null }
 
   try {
@@ -131,41 +133,48 @@ function loadTemplateFile(path: string, cache: FileCache | null, label: string):
     for (const [name, t] of Object.entries(raw)) {
       const entry = t as Record<string, unknown>
       if (name.includes(':')) {
-        process.stderr.write(`daemon: ${label}: skipping "${name}" — template names cannot contain colons\n`)
+        process.stderr.write(`daemon: ${source}: skipping "${name}" — template names cannot contain colons\n`)
       } else if (RESERVED.has(name.toLowerCase())) {
-        process.stderr.write(`daemon: ${label}: skipping "${name}" — reserved command name\n`)
+        process.stderr.write(`daemon: ${source}: skipping "${name}" — reserved command name\n`)
       } else if (entry && typeof entry === 'object' && typeof entry.prompt === 'string') {
         const template: SpawnTemplate = { prompt: entry.prompt }
         if (typeof entry.action === 'string') {
           if (VALID_ACTIONS.has(entry.action)) {
             template.action = entry.action
           } else {
-            process.stderr.write(`daemon: ${label}: "${name}" has unknown action "${entry.action}" — ignoring it\n`)
+            process.stderr.write(`daemon: ${source}: "${name}" has unknown action "${entry.action}" — ignoring it\n`)
+          }
+        }
+        if (typeof entry.label === 'string') {
+          if (isSessionLabel(entry.label)) {
+            template.label = entry.label
+          } else {
+            process.stderr.write(`daemon: ${source}: "${name}" has unknown label "${entry.label}" — ignoring it\n`)
           }
         }
         if (typeof entry.model === 'string' && entry.model.trim()) {
           template.model = entry.model.trim()
           if (!isKnownModel(template.model)) {
-            process.stderr.write(`daemon: ${label}: WARNING "${name}" has unrecognized model "${template.model}" — may be new release or typo\n`)
+            process.stderr.write(`daemon: ${source}: WARNING "${name}" has unrecognized model "${template.model}" — may be new release or typo\n`)
           }
         }
         const builtin = BUILTIN_TEMPLATES[name.toLowerCase()]
         if (builtin?.action) {
           if (!template.action) {
-            process.stderr.write(`daemon: ${label}: WARNING "${name}" overrides builtin but omits action "${builtin.action}" — protocol will not auto-start\n`)
+            process.stderr.write(`daemon: ${source}: WARNING "${name}" overrides builtin but omits action "${builtin.action}" — protocol will not auto-start\n`)
           } else if (template.action !== builtin.action) {
-            process.stderr.write(`daemon: ${label}: "${name}" overrides builtin action "${builtin.action}" with "${template.action}"\n`)
+            process.stderr.write(`daemon: ${source}: "${name}" overrides builtin action "${builtin.action}" with "${template.action}"\n`)
           }
         }
         valid[name.toLowerCase()] = template
       } else {
-        process.stderr.write(`daemon: ${label}: skipping "${name}" — missing or non-string prompt\n`)
+        process.stderr.write(`daemon: ${source}: skipping "${name}" — missing or non-string prompt\n`)
       }
     }
     const newCache = { mtime, templates: valid }
     return { templates: valid, cache: newCache }
   } catch (err) {
-    process.stderr.write(`daemon: failed to load ${label}: ${err instanceof Error ? err.message : err}\n`)
+    process.stderr.write(`daemon: failed to load ${source}: ${err instanceof Error ? err.message : err}\n`)
     return { templates: {}, cache: null }
   }
 }
@@ -208,6 +217,7 @@ export function buildTemplateSpawnOpts(templateName: string, template: SpawnTemp
     ...(template.disallowedTools?.length && { disallowedTools: template.disallowedTools }),
     ...(template.tools?.length && { tools: template.tools }),
     ...(template.sessionType && { sessionType: template.sessionType }),
+    ...(template.label && { label: template.label }),
     trigger: `${templateName}:`,
   }
 }

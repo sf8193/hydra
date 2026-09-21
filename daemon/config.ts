@@ -5,6 +5,7 @@ import { join } from 'path'
 import type { ChatGateway } from '../gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 import { captureSpawnVars } from '../shared/spawn-env.js'
+import { claudeConfigDir } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // Paths & env
@@ -27,7 +28,7 @@ for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
 sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
 export const RAINDROP_ENV = captureSpawnVars()
 
-export const CLAUDE_CONFIG = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude-personal')
+export const CLAUDE_CONFIG = claudeConfigDir()
 
 // Read after .env sourcing — .env values must be available.
 // If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.

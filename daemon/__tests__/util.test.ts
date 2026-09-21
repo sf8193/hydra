@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, safeEdit } from '../util.js'
+import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, inheritLabel, parseSpawnTopic, safeEdit, spawnLabelFields, resolveSpawnLabel } from '../util.js'
+import { parseSessionLabel } from '../../shared/constants.js'
 import { gateway } from '../config.js'
 
 // Suppress stderr
@@ -417,5 +418,157 @@ describe('safeEdit', () => {
       expect(await safeEdit('c', 'm1', 'hi')).toBe('failed')
     }
     restore()
+  })
+})
+
+describe('extractWorktreeTarget', () => {
+  test.each([
+    ['wt:hydra fix the bug', 'hydra', 'fix the bug'],
+    ['worktree:nova ship it', 'nova', 'ship it'],
+  ])('%p yields worktree %p and topic %p', (input, worktree, topic) => {
+    expect(extractWorktreeTarget(input)).toEqual({ worktree, topic })
+  })
+
+  // The regression: the label flag used to be stripped upstream, leaving
+  // "wt:hydra", which needed trailing whitespace to match — so the worktree
+  // vanished and the session ran against the main checkout.
+  test('a bare prefix still yields the worktree, so a label-only topic cannot drop it', () => {
+    expect(extractWorktreeTarget('wt:hydra')).toEqual({ worktree: 'hydra', topic: '' })
+  })
+
+  test('the worktree survives a topic that is nothing but a label flag', () => {
+    const wt = extractWorktreeTarget('wt:hydra --review')
+    expect(wt.worktree).toBe('hydra')
+    expect(parseSessionLabel(wt.topic)).toEqual({ label: 'review', topic: '' })
+  })
+
+  test.each(['fix the bug', 'notwt:hydra thing', ''])('%p has no worktree prefix', (input) => {
+    expect(extractWorktreeTarget(input)).toEqual({ topic: input })
+  })
+})
+
+describe('parseSpawnTopic', () => {
+  // The order is the whole point: the worktree prefix is ^-anchored, so a flag
+  // sitting in front of it used to make the worktree vanish and the session run
+  // against the main checkout. Both positions must work.
+  test.each([
+    ['wt:hydra --review', 'hydra', 'review', 'session'],
+    ['--review wt:hydra fix the bug', 'hydra', 'review', 'fix the bug'],
+    ['wt:hydra fix the bug --build', 'hydra', 'build', 'fix the bug'],
+    ['--investigate worktree:nova ship it', 'nova', 'investigate', 'ship it'],
+    // Hidden from the first pass by the prefix; without the second pass the
+    // flag leaks into the prompt and the label is lost.
+    ['wt:hydra --review fix the bug', 'hydra', 'review', 'fix the bug'],
+    ['--phase-budget 30m wt:hydra fix', 'hydra', undefined, 'fix'],
+  ] as const)('%p keeps the worktree and the label', (input, worktree, label, topic) => {
+    const p = parseSpawnTopic(input)
+    expect(p.worktree).toBe(worktree)
+    expect(p.label).toBe(label)
+    expect(p.topic || 'session').toBe(topic)
+  })
+
+  test('a phase budget survives alongside a label and a worktree', () => {
+    const p = parseSpawnTopic('wt:hydra --phase-budget 30m go --review')
+    expect(p.worktree).toBe('hydra')
+    expect(p.label).toBe('review')
+    expect(p.budgetMs).toBe(30 * 60_000)
+    expect(p.topic).toBe('go')
+  })
+
+  test('an ordinary topic passes through untouched', () => {
+    expect(parseSpawnTopic('fix the bug')).toEqual({ topic: 'fix the bug', worktree: undefined, label: undefined, budgetMs: undefined })
+  })
+
+  // The topic becomes the session's prompt.
+  test('a flag inside prose is not treated as a label', () => {
+    const p = parseSpawnTopic('compare --review and --build modes')
+    expect(p.label).toBeUndefined()
+    expect(p.topic).toBe('compare --review and --build modes')
+  })
+})
+
+// Which end wins when a label sits on both sides of the worktree prefix. Not a
+// supported form, but the tie-break decides the cost bucket, so pin it.
+test('a label before the worktree prefix beats one after it', () => {
+  expect(parseSpawnTopic('--review wt:hydra --build x').label).toBe('review')
+  expect(parseSpawnTopic('wt:hydra --build x').label).toBe('build')
+})
+
+describe('resolveSpawnLabel', () => {
+  // The rule end to end: nothing connected "the user typed --review" to "the
+  // spawned entry carries label: 'review'", so neutering either arm of the
+  // precedence at the call site left the whole suite green.
+  test('a flag typed on the topic becomes the bucket', () => {
+    expect(resolveSpawnLabel('--review fix the parser')).toEqual({ label: 'review' })
+    expect(resolveSpawnLabel('fix the parser --build')).toEqual({ label: 'build' })
+  })
+
+  test('an explicit opts label beats the topic flag', () => {
+    expect(resolveSpawnLabel('--review fix it', 'build')).toEqual({ label: 'build' })
+  })
+
+  test('opts alone works when the topic names nothing', () => {
+    expect(resolveSpawnLabel('fix it', 'investigate')).toEqual({ label: 'investigate' })
+  })
+
+  test('a topic naming no bucket yields no key', () => {
+    const fields = resolveSpawnLabel('fix the parser')
+    expect(fields).toEqual({})
+    expect('label' in fields).toBe(false)
+  })
+
+  // The flag grammar composes with the other prefixes the topic can carry.
+  test('it sees through a worktree prefix and a phase budget', () => {
+    expect(resolveSpawnLabel('wt:hydra --review audit the gate')).toEqual({ label: 'review' })
+    expect(resolveSpawnLabel('--phase-budget=5m --build ship it')).toEqual({ label: 'build' })
+  })
+
+  // Prose must survive: the topic is the instruction the session is given.
+  test('a label word in the middle of prose is not a flag', () => {
+    expect(resolveSpawnLabel('compare --review and --build modes')).toEqual({})
+  })
+})
+
+describe('spawnLabelFields', () => {
+  // Production and the test harness both spread this. When the harness had its
+  // own copy, every label test proved the copy and the real rule was free to
+  // break: deleting it from the spawned SessionInfo left the suite green.
+  test('an explicit opts label wins over one typed on the topic', () => {
+    expect(spawnLabelFields('review', 'build')).toEqual({ label: 'review' })
+  })
+
+  test('the topic label is used when opts names none', () => {
+    expect(spawnLabelFields(undefined, 'build')).toEqual({ label: 'build' })
+  })
+
+  test('opts alone is enough', () => {
+    expect(spawnLabelFields('investigate', undefined)).toEqual({ label: 'investigate' })
+  })
+
+  // Spread into a SessionInfo literal, so the key has to be absent rather than
+  // present-and-undefined — the latter serialises into sessions.json.
+  test('with neither, the key is absent, not undefined', () => {
+    const fields = spawnLabelFields(undefined, undefined)
+    expect(fields).toEqual({})
+    expect('label' in fields).toBe(false)
+    expect(JSON.stringify({ ...fields })).toBe('{}')
+  })
+})
+
+describe('inheritLabel', () => {
+  // doSpawnSession resolves `opts?.label ?? parsed.label`, so opts wins — which
+  // makes this guard the only thing letting a flag typed NOW beat the bucket
+  // inherited from a parent or a dead session.
+  test('a continuation inherits the parent bucket when its topic names none', () => {
+    expect(inheritLabel('review', 'fix the bug')).toEqual({ label: 'review' })
+  })
+
+  test('a topic that names a bucket beats the inherited one', () => {
+    expect(inheritLabel('review', '--build fix the bug')).toEqual({})
+    expect(inheritLabel('review', 'wt:hydra --build x')).toEqual({})
+  })
+
+  test('no parent bucket means nothing to inherit', () => {
+    expect(inheritLabel(undefined, 'fix the bug')).toEqual({})
   })
 })
