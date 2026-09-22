@@ -83,9 +83,9 @@ describe('resolveModels', () => {
       expect(builder).toBe('claude-opus-4-8[1m]')
     })
 
-    test('alias "opus" resolves to opus-4-6', () => {
+    test('alias "opus" resolves to opus-5-5', () => {
       const { builder } = resolveModels('easy', 'opus')
-      expect(builder).toBe('claude-opus-4-6[1m]')
+      expect(builder).toBe('claude-opus-5-5[1m]')
     })
   })
 
@@ -164,9 +164,9 @@ describe('resolveModels', () => {
   })
 
   describe('no collision when different versions of same family', () => {
-    test('opus-4-6 builder vs opus-4-8 reviewer: no collision (different IDs)', () => {
+    test('opus-5-5 builder vs opus-4-8 reviewer: no collision (different IDs)', () => {
       const { builder, reviewer, warning } = resolveModels('easy', 'opus', 'opus-4-8')
-      expect(builder).toBe('claude-opus-4-6[1m]')
+      expect(builder).toBe('claude-opus-5-5[1m]')
       expect(reviewer).toBe('claude-opus-4-8[1m]')
       expect(warning).toBeUndefined()
     })
