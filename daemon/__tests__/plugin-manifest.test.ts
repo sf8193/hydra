@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { PLUGIN_MANIFEST, MCP_CONFIG } from '../plugin-manifest.js'
+import { PLUGIN_MANIFEST, MCP_CONFIG, startWithoutInstall } from '../plugin-manifest.js'
 
 /**
  * The manifest is the declaration that survives.
@@ -35,5 +35,30 @@ describe('bridge declaration', () => {
       readFileSync(join(import.meta.dir, '..', '..', '.claude-plugin', 'plugin.json'), 'utf8'),
     )
     expect(onDisk.mcpServers).toEqual(JSON.parse(PLUGIN_MANIFEST).mcpServers)
+  })
+})
+
+/**
+ * A `bun install` inside the plugin's `start` script puts the npm registry on
+ * the path every session takes to reach its bridge. A start that misses the
+ * 30s connect timeout is cached by Claude Code for 15 minutes, so the cost of a
+ * single slow install is every session spawned in that window.
+ */
+describe('bridge start script', () => {
+  test('the published install-then-run form loses only the install', () => {
+    expect(startWithoutInstall('bun install --no-summary && bun server.ts')).toBe('bun server.ts')
+  })
+
+  test('the entry file is whatever the layout named — it is never rewritten', () => {
+    expect(startWithoutInstall('bun install --no-summary && bun bridge.ts')).toBe('bun bridge.ts')
+  })
+
+  test('a start script that does not install is left alone', () => {
+    expect(startWithoutInstall('bun server.ts')).toBe('bun server.ts')
+  })
+
+  test('an install that is not the leading clause is not a prefix to strip', () => {
+    const chained = 'bun run build && bun install && bun server.ts'
+    expect(startWithoutInstall(chained)).toBe(chained)
   })
 })
