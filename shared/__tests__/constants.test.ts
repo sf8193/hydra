@@ -35,7 +35,7 @@ describe('resolveModelAlias', () => {
 describe('resolveCodexModelAlias', () => {
   test('resolves Codex aliases case-insensitively', () => {
     expect(resolveCodexModelAlias('astra')).toBe('gpt-6-astra')
-    expect(resolveCodexModelAlias('sol')).toBe('gpt-5.6-sol')
+    expect(resolveCodexModelAlias('sol')).toBe('gpt-6-sol')
     expect(resolveCodexModelAlias('Terra')).toBe('gpt-5.6-terra')
     expect(resolveCodexModelAlias('LUNA')).toBe('gpt-5.6-luna')
   })
