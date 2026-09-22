@@ -23,6 +23,7 @@ import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
+import { ensureBridgeAttached } from './spawn-verification.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -650,13 +651,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   // --- Launch via engine adapter ---
   const adapter = resolveEngine(engine)
-  const launched = await adapter.launch({
+  const launchInput = {
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools: opts?.disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom,
     threadId,
-  })
+  }
+  const launched = await adapter.launch(launchInput)
 
   const now = Date.now()
   const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
@@ -758,6 +760,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       void safeSend(chatId, spawnLine)
     }
   }
+
+  // Birth-time verification. The session is registered by now, so a bridge that
+  // arrives resolves its tool surface correctly rather than falling back to
+  // thread_owner defaults. Deliberately not awaited: the spawn is announced on
+  // the same timing it always was, and a session that turns out to have no
+  // channel is respawned within seconds — before it has done work worth keeping.
+  void ensureBridgeAttached({ adapter, launchInput, launched, sessionId, tmuxName })
+    .catch(err => process.stderr.write(`daemon: spawn ${tmuxName}: bridge verification failed: ${err}\n`))
 
   return { name: tmuxName, sessionId, threadId: threadId!, url }
 }

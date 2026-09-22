@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'crypto'
 import { execFileSync, execSync } from 'child_process'
-import { mkdirSync } from 'fs'
+import { mkdirSync, openSync, closeSync, readSync, statSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import { detectBlockingState as detectBlockingStateFn } from '../pane-probe.js'
@@ -13,6 +13,7 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult,
   ExecutionRetirementResult, StopResult,
+  AwaitBridgeInput, BridgeAttachResult,
   ContextUsage, EngineSnapshot,
 } from './engine-adapter.js'
 import { transport } from '../bridge-transport.js'
@@ -24,6 +25,48 @@ import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
+
+const BRIDGE_ATTACH_TIMEOUT_MS = 45_000
+const BRIDGE_ATTACH_POLL_MS = 500
+// Claude Code resolves MCP configs within the first second of startup and opens
+// the bridge connection a second or two later. Twelve seconds is far past both
+// on a loaded machine, so an absent declaration by then is absent for good.
+const BRIDGE_CONFIG_PROBE_MS = 12_000
+
+/**
+ * The line Claude Code writes when the bridge is in a session's MCP config.
+ *
+ * Its absence is the whole signature of the failure this guards against: the
+ * plugin loads, its skills and commands appear, and the bridge is never
+ * mentioned — not started, not skipped, not errored. Nothing else in the
+ * session reports it, which is why the debug log is the place to ask.
+ */
+const BRIDGE_MCP_MARKER = 'MCP server "plugin:discord:discord"'
+
+export function bridgeConfigured(debugLogPath: string, from: number): boolean {
+  try {
+    const fd = openSync(debugLogPath, 'r')
+    try {
+      const size = statSync(debugLogPath).size
+      // Nothing appended since the mark: unknown, not a miss. Same direction as
+      // the catch below — only positive evidence of absence convicts a spawn.
+      if (size <= from) return true
+      const buf = Buffer.alloc(size - from)
+      readSync(fd, buf, 0, buf.length, from)
+      return buf.toString('utf8').includes(BRIDGE_MCP_MARKER)
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    // No log yet, or unreadable — not evidence of a miss. Let the timeout decide.
+    return true
+  }
+}
+
+export function debugLogSize(path: string | undefined): number {
+  if (!path) return 0
+  try { return statSync(path).size } catch { return 0 }
+}
 
 function buildSpawnEnv(sessionId: string, tmuxName: string): string[] {
   return [
@@ -165,6 +208,30 @@ export class ClaudeEngine implements EngineAdapter {
       claudeSessionId: assignedClaudeSessionId,
       spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog, debugLogPath: debugLog,
     }
+  }
+
+  async awaitBridge(input: AwaitBridgeInput): Promise<BridgeAttachResult> {
+    const { sessionId, launched, debugLogFrom } = input
+    const deadline = Date.now() + BRIDGE_ATTACH_TIMEOUT_MS
+    const probeAt = Date.now() + BRIDGE_CONFIG_PROBE_MS
+    let probed = false
+
+    while (Date.now() < deadline) {
+      if (transport.has(sessionId)) return { attached: true }
+
+      // One look, once the config is long since resolved. A session whose MCP
+      // config never named the bridge cannot grow one later, so waiting out the
+      // full timeout only delays the retry.
+      if (!probed && Date.now() >= probeAt) {
+        probed = true
+        if (launched.debugLogPath && !bridgeConfigured(launched.debugLogPath, debugLogFrom)) {
+          return { attached: false, reason: 'resolution-missed' }
+        }
+      }
+
+      await new Promise(r => setTimeout(r, BRIDGE_ATTACH_POLL_MS))
+    }
+    return { attached: false, reason: 'timeout' }
   }
 
   async deliver(info: SessionInfo, text: string, _mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
