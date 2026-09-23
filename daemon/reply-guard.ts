@@ -35,6 +35,7 @@ import { gateway } from './config.js'
 import { on } from './event-bus.js'
 import { readConversationForensics, getLastCodexMessage, isCodexTurnComplete, type ConversationForensics } from './observability.js'
 import { transcriptPathFor } from './usage.js'
+import { safeSend } from './util.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
@@ -42,6 +43,10 @@ export type ReplyGuardDeps = {
   transportHas: (sessionId: string) => boolean
   transportSendOrQueue: (sessionId: string, msg: any) => void
   gatewaySend: (channelId: string, text: string, opts?: any) => Promise<any>
+  // Chunks over-length text into multiple messages instead of Discord rejecting
+  // the whole send at 2000 chars (BASE_TYPE_MAX_LENGTH) — the relay/text-fallback
+  // paths below carry unbounded session text and must not silently no-op on length.
+  safeSend: (channelId: string, text: string, opts?: any) => Promise<string[]>
   capturePaneScreenshot: (tmuxName: string) => string | null
   capturePaneText: (tmuxName: string, lines?: number) => string | null
   transcriptPathFor: (claudeSessionId: string) => string | undefined
@@ -56,6 +61,7 @@ const defaultDeps: ReplyGuardDeps = {
   transportHas: (id) => transport.has(id),
   transportSendOrQueue: (id, msg) => transport.sendOrQueue(id, msg),
   gatewaySend: (ch, text, opts) => gateway.send(ch, text, opts),
+  safeSend: (ch, text, opts) => safeSend(ch, text, opts),
   capturePaneScreenshot: (tmuxName) => capturePaneScreenshot(tmuxName),
   capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
   transcriptPathFor: (claudeSessionId) => transcriptPathFor(claudeSessionId),
@@ -349,7 +355,7 @@ async function escalateWithCapture(
   }
   if (lastText && lastText.trim()) {
     try {
-      await deps.gatewaySend(chatId, `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It answered in-transcript only — relaying its last response:\n\n${lastText}`)
+      await deps.safeSend(chatId, `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It answered in-transcript only — relaying its last response:\n\n${lastText}`)
       return
     } catch (err) {
       process.stderr.write(`daemon: reply guard escalation transcript-text send failed: ${err}\n`)
@@ -372,7 +378,7 @@ async function escalateWithCapture(
   const text = deps.capturePaneText(tmuxName, 50)
   if (text) {
     try {
-      await deps.gatewaySend(chatId, `${header}\n\`\`\`\n${text.slice(-1800)}\n\`\`\``)
+      await deps.safeSend(chatId, `${header}\n\`\`\`\n${text.slice(-1800)}\n\`\`\``)
     } catch (err) {
       process.stderr.write(`daemon: reply guard escalation text send failed: ${err}\n`)
     }

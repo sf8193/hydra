@@ -632,7 +632,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
       `tmux capture-pane -t '${safeName}' -p -S -60`,
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
     ).trimEnd()
-    await gateway.send(msg.channelId, `${header}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``, { replyTo: msg.id })
+    await safeSend(msg.channelId, `${header}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``, { replyTo: msg.id })
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'peek', `capture failed: ${err}`)
   }
