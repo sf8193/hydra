@@ -12,6 +12,7 @@ import {
   _trackedSizeForTesting,
   _usageCursorCountForTesting,
   _deliveredCountForTesting,
+  errText,
   underSpawnRoot,
   spawnRootIsBounded,
   post,
@@ -807,6 +808,34 @@ describe('raindrop: registration', () => {
     off()
     expect(Object.values(getSubscriptions()).flat().length).toBe(before)
     expect(Object.values(getSubscriptions()).flat().filter(l => l.startsWith('raindrop:'))).toEqual([])
+  })
+})
+
+describe('errText', () => {
+  // A Bun fetch abort is an Error whose stack is the empty string. `??` only
+  // falls back on null/undefined, so a POST timeout logged "send failed (1): "
+  // with no reason — observed live, 987 events in, exactly the silent failure
+  // the rest of this file exists to prevent.
+  test('an error with an empty stack still reports its message', () => {
+    const e = Object.assign(new Error('The operation timed out.'), { stack: '' })
+    expect(errText(e)).toBe('The operation timed out.')
+  })
+
+  test('a stack is preferred when there is one', () => {
+    const e = new Error('boom')
+    const stack = e.stack ?? ''
+    expect(stack, 'this runtime must give real errors a stack').not.toBe('')
+    expect(errText(e)).toBe(stack)
+  })
+
+  test('an error with neither stack nor message falls back to its name', () => {
+    const e = Object.assign(new Error(''), { stack: '' })
+    expect(errText(e)).toBe('Error')
+  })
+
+  test('a non-Error is stringified', () => {
+    expect(errText('plain string')).toBe('plain string')
+    expect(errText(undefined)).toBe('undefined')
   })
 })
 
