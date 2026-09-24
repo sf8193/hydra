@@ -18,7 +18,7 @@ import type {
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { tmuxHasSession } from '../util.js'
+import { parseContextPercent, tmuxHasSession } from '../util.js'
 import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 
@@ -183,12 +183,11 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
     // Fall back to pane-capture approach
     try {
-      const pane = execFileSync('tmux', ['capture-pane', '-t', `${info.tmuxName}:hydra-chat`, '-p', '-S', '-3'],
+      const pane = execFileSync('tmux', ['capture-pane', '-t', `${info.tmuxName}:hydra-chat`, '-p'],
         { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
-      const tail = pane.trimEnd()
-      const match = tail.match(/(\d+)%/)
-      if (!match) return null
-      return { usedTokens: 0, contextWindow: 0, percent: parseInt(match[1], 10) }
+      const percent = parseContextPercent(pane)
+      if (percent === null) return null
+      return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
   }
 
