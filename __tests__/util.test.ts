@@ -2,7 +2,7 @@
  * Unit tests for daemon/util.ts pure functions.
  *
  * Functions that depend on gateway or config (safeSend, reportError,
- * assertSendable, atomicWriteFileSync, tmuxHasSession, getContextPercent,
+ * assertSendable, atomicWriteFileSync, tmuxHasSession,
  * isAlive) are integration-level and excluded here.
  */
 
@@ -20,6 +20,7 @@ import {
   chunk,
   fallbackDescription,
   formatSpawnLine,
+  parseContextPercent,
 } from '../daemon/util.js'
 
 // ---------------------------------------------------------------------------
@@ -426,5 +427,54 @@ describe('formatSpawnLine', () => {
     expect(result).toContain('opus-5')
     expect(result).toContain('factory: from comet')
     expect(result.startsWith('> ⚡ spawned [')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// parseContextPercent
+// ---------------------------------------------------------------------------
+
+describe('parseContextPercent', () => {
+  const RULE = '─'.repeat(80)
+  // Shape of a live CC pane: conversation, input box between two rules, footer.
+  const pane = (conversation: string, footer: string) =>
+    `${conversation}\n${RULE}\n❯ \n${RULE}\n${footer}\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n`
+
+  test('README footer: ctx: N%', () => {
+    expect(parseContextPercent(pane('⏺ done', '  ctx: 88%'))).toBe(88)
+  })
+
+  test('GSD footer: progress bar then N%', () => {
+    expect(parseContextPercent(pane('⏺ done', '  ⬆ /gsd-update │ Opus 5.5 (1M context) │ hydra █░░░░░░░░░ 11%'))).toBe(11)
+  })
+
+  test('GSD critical footer with skull prefix', () => {
+    expect(parseContextPercent(pane('⏺ done', '  Opus 5.5 │ hydra 💀 ██████████ 100%'))).toBe(100)
+  })
+
+  test('percentages in conversation text never count', () => {
+    const convo = '⏺ Sales are up 34% and the 15% discount held.\n  progress █████░░░░░ 50%'
+    expect(parseContextPercent(pane(convo, '  ctx: 88%'))).toBe(88)
+  })
+
+  test('conversation % with no recognizable footer → null, not the stray number', () => {
+    expect(parseContextPercent(pane('⏺ Sales are up 34%', '  Opus 5.5 │ hydra'))).toBeNull()
+  })
+
+  test('CC auto-compact line reports remaining, not used — ignored', () => {
+    const p = `⏺ done\n${RULE}\n❯ \n${RULE}\n  ⏵⏵ bypass permissions on · Context left until auto-compact: 8%\n`
+    expect(parseContextPercent(p)).toBeNull()
+  })
+
+  test('ctx label wins over bar when both render', () => {
+    expect(parseContextPercent(pane('⏺ done', '  ctx: 42% │ █████░░░░░ 50%'))).toBe(42)
+  })
+
+  test('no input rule (not a REPL screen) → null', () => {
+    expect(parseContextPercent('Login expired · ctx: 88%\n')).toBeNull()
+  })
+
+  test('empty pane → null', () => {
+    expect(parseContextPercent('')).toBeNull()
   })
 })

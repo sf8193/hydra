@@ -496,6 +496,8 @@ echo "ctx: ${pct}%"
 ```
 The hook receives `context_window.used_percentage`, `model.id`, `cost.total_cost_usd`, and more. Restart the byte to pick up the change.
 
+The daemon reads only the footer below the input box, and recognizes two shapes there: `ctx: N%` (above) or a progress bar followed by `N%` (e.g. `█████░░░░░ 54%`, as the GSD statusline renders). Percentages anywhere else on screen — conversation text, Claude Code's own "Context left until auto-compact" line (which counts *remaining*) — are ignored. Whatever number your statusline prints is the one `usage` shows and the 70% context alert compares against; a statusline that rescales (GSD maps the auto-compact point to 100%) moves the alert with it.
+
 **Verify inbound end-to-end:** `grep -E "main bridge connected|running tmux new-session" ~/hydra-<platform>-daemon.log`
 
 ## Files

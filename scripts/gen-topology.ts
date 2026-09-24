@@ -34,7 +34,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/config.ts':         { layer: 'core',      desc: 'Env, paths, .env loading, gateway instance' },
   'daemon/sessions.ts':       { layer: 'core',      desc: 'SessionRegistry, ThreadRegistry, session catalog' },
   'daemon/bridge-transport.ts': { layer: 'core',    desc: 'BridgeConn map, message queuing, flush' },
-  'daemon/util.ts':           { layer: 'core',      desc: 'safeSend, chunk, getContextPercent, formatDuration, baseNameFromBranch' },
+  'daemon/util.ts':           { layer: 'core',      desc: 'safeSend, chunk, parseContextPercent, formatDuration, baseNameFromBranch' },
   'daemon/worktree-manager.ts': { layer: 'core',    desc: 'Git worktree create/reattach/destroy, unpushed-commit check' },
   'daemon/bridge-tools.ts':   { layer: 'tools',     desc: 'UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)' },
   'daemon/tool-surface.ts':   { layer: 'tools',     desc: 'getToolsForSession, pushToolSurface — reads SessionInfo, bridges to bridge-tools' },
