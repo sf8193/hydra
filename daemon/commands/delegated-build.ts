@@ -4,11 +4,11 @@ import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.
 import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateway.js'
 
-let proto: Awaited<ReturnType<typeof import('../../protocols/delegated-build.js')>>['default'] | null = null
+let selectProto: Awaited<ReturnType<typeof import('../../protocols/delegated-build-select.js')>>['selectDelegatedBuildProtocol'] | null = null
 
-async function getProto() {
-  if (!proto) proto = (await import('../../protocols/delegated-build.js')).default
-  return proto
+async function getProto(quick = false) {
+  if (!selectProto) selectProto = (await import('../../protocols/delegated-build-select.js')).selectDelegatedBuildProtocol
+  return selectProto(quick)
 }
 
 export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: 'claude' | 'codex', opts?: { skipClarify?: boolean }): Promise<void> {
@@ -37,10 +37,13 @@ export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds:
     return
   }
 
-  const clampedRounds = Math.max(1, Math.min(rounds, 5))
+  // Quick mode keeps the legacy cap. Rigorous delegate budgets both planned
+  // steps and review-driven fix cycles, so it needs the same practical ceiling
+  // as adversarial review.
+  const clampedRounds = Math.max(1, Math.min(rounds, opts?.skipClarify ? 5 : 20))
 
   try {
-    const p = await getProto()
+    const p = await getProto(!!opts?.skipClarify)
     await startProtocolRun(p, threadId, sessionId, { rounds: clampedRounds, task, model, engine, strike: true, skipClarify: opts?.skipClarify })
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)

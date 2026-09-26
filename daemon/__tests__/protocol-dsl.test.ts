@@ -481,6 +481,32 @@ describe('roleConfig', () => {
       decisions: { d: { phase: 'start', actor: 'a', options: ['yes', 'no'], descriptions: { yse: 'typo' } } },
     })).toThrow('description key "yse" is not a declared option')
   })
+
+  test('rejects decision event keys that are not declared options', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad', roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: { go: 'done' } }, done: { actor: 'a', on: {} } },
+      windows: {},
+      decisions: { d: { phase: 'start', actor: 'a', options: ['yes'], events: { typo: 'go' } } },
+    })).toThrow('event key "typo" is not a declared option')
+  })
+
+  test('rejects final event mappings to events absent from the decision phase', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad', roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: { go: 'done' } }, done: { actor: 'a', on: {} } },
+      windows: {},
+      decisions: { d: { phase: 'start', actor: 'a', options: ['yes'], finalEvents: { yes: 'missing' } } },
+    })).toThrow('final event "missing" is not an event on phase "start"')
+  })
+
+  test('rejects unknown phase capabilities at runtime', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad', roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: {}, capabilities: ['not_real' as any] } },
+      windows: {},
+    })).toThrow('unknown capability "not_real"')
+  })
 })
 
 describe('protocolSeed', () => {

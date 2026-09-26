@@ -9,6 +9,7 @@
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { handleReviewIntercept } from '../commands/review.js'
+import { handleDelegatedBuildIntercept } from '../commands/delegated-build.js'
 import { __test as runnerTest, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
@@ -197,6 +198,36 @@ describe('review command → run params', () => {
 
     expect(sent.some(s => s.text.includes('Unknown modifier'))).toBe(true)
     expect(getRunByThread(threadId)).toBeUndefined()
+  })
+})
+
+describe('delegate command → selected protocol', () => {
+  test('ordinary delegate starts rigorous planning', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 3, 'ship safely')
+    const run = getRunByThread(threadId)!
+    expect(run.protocol.name).toBe('delegated-build')
+    expect(run.phase).toBe('planning')
+  })
+
+  test('rigorous delegate allows up to 20 builder turns', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 50, 'large safe change')
+    expect(getRunByThread(threadId)!.rounds).toBe(20)
+  })
+
+  test('delegate! intercept selects the preserved quick protocol', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 1, 'ship quickly', undefined, undefined, { skipClarify: true })
+    const run = getRunByThread(threadId)!
+    expect(run.protocol.name).toBe('delegated-build-quick')
+    expect(run.phase).toBe('building')
+  })
+
+  test('delegate! keeps the legacy five-turn cap', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 50, 'quick change', undefined, undefined, { skipClarify: true })
+    expect(getRunByThread(threadId)!.rounds).toBe(5)
   })
 })
 

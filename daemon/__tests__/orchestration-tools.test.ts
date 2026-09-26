@@ -5,6 +5,61 @@ import { registry } from '../sessions.js'
 // Suppress stderr
 process.stderr.write = (() => true) as any
 
+test('dispatcher rejects a phase-scoped tool after capability removal', async () => {
+  const sessionId = 'scope-enforcement-session'
+  registry.set(sessionId, {
+    sessionId, tmuxName: 'scope-enforcement', topic: '', threadId: 'scope-thread',
+    createdAt: Date.now(), lastActive: Date.now(), listening: false,
+    engine: 'claude', sessionType: 'thread_owner',
+  } as any)
+  try {
+    const result = await executeTool('kill_session', { session_id: 'anything' }, sessionId)
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('not available to this session')
+  } finally {
+    registry.delete(sessionId)
+  }
+})
+
+test('Codex non-PM session is denied protocol spawn tools', async () => {
+  const sessionId = 'codex-non-pm'
+  registry.set(sessionId, {
+    sessionId, tmuxName: 'codex-non-pm', topic: '', threadId: 'codex-thread',
+    createdAt: Date.now(), lastActive: Date.now(), listening: false,
+    engine: 'codex', sessionType: 'thread_guest',
+  } as any)
+  try {
+    const result = await executeTool('kill_session', { session_id: 'anything' }, sessionId)
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('not available to this session')
+  } finally {
+    registry.delete(sessionId)
+  }
+})
+
+test('protocol PM cannot kill the builder it did not spawn', async () => {
+  const pmId = 'protocol-pm-kill-scope'
+  const builderId = 'protocol-builder-kill-scope'
+  registry.set(pmId, {
+    sessionId: pmId, tmuxName: 'protocol-pm', topic: '', threadId: 'scope-thread',
+    createdAt: Date.now(), lastActive: Date.now(), listening: false,
+    engine: 'codex', sessionType: 'thread_owner', capabilities: ['protocol_spawn'],
+  } as any)
+  registry.set(builderId, {
+    sessionId: builderId, tmuxName: 'protocol-builder', topic: '', threadId: 'scope-thread',
+    createdAt: Date.now(), lastActive: Date.now(), listening: false,
+    engine: 'claude', sessionType: 'thread_guest', originFrom: 'daemon',
+  } as any)
+  try {
+    const result = await executeTool('kill_session', { session_id: builderId }, pmId)
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('you can only kill sessions you spawned')
+  } finally {
+    registry.delete(pmId)
+    registry.delete(builderId)
+  }
+})
+
 describe('send_to_thread', () => {
   test('rejects missing target', async () => {
     const result = await executeTool('send_to_thread', { type: 'progress', text: 'hello' })
