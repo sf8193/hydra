@@ -1,11 +1,19 @@
 import { describe, test, expect } from 'bun:test'
-import { computeToolsForSession, UNIVERSAL_TOOLS } from '../bridge-tools.js'
+import { codexStaticTools, computeToolsForSession, UNIVERSAL_TOOLS } from '../bridge-tools.js'
 import { BASE_TOOLS, CAPABILITY_TOOLS } from '../../shared/constants.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
 
 describe('computeToolsForSession', () => {
+  test('Codex advertises dynamic protocol tools for daemon-side authorization', () => {
+    const names = codexStaticTools().map(t => t.name)
+    expect(names).toContain('advance')
+    expect(names).toContain('extend_phase')
+    expect(names).toContain('spawn_session')
+    expect(names).toContain('kill_session')
+  })
+
   test('master_orchestrator gets orchestrator tools but not factory_done', () => {
     const tools = computeToolsForSession('master_orchestrator', new Set())
     const names = tools.map(t => t.name)
@@ -31,6 +39,13 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('peek_session')
     expect(names).not.toContain('spawn_session')
     expect(names).not.toContain('kill_session')
+  })
+
+  test('protocol_spawn grants only spawn/kill from the orchestrator-only tools', () => {
+    const names = computeToolsForSession('thread_owner', new Set(['protocol_spawn'])).map(t => t.name)
+    expect(names).toContain('spawn_session')
+    expect(names).toContain('kill_session')
+    expect(names).not.toContain('factory_build')
   })
 
   test('factory_builder gets restricted tool set with factory_done', () => {
