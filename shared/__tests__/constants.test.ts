@@ -1,5 +1,12 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS } from '../constants.js'
+import { SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds } from '../constants.js'
+
+test('review rounds have a twenty-round default and hard cap', () => {
+  expect(normalizeReviewRounds()).toBe(20)
+  expect(normalizeReviewRounds(3)).toBe(3)
+  expect(normalizeReviewRounds(99)).toBe(20)
+  expect(normalizeReviewRounds(0)).toBe(1)
+})
 
 describe('resolveModelAlias', () => {
   test('resolves short aliases', () => {

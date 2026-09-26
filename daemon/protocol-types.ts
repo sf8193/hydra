@@ -48,6 +48,9 @@ export type CompletionEvent = {
   topic?: string
   rounds: { completed: number; requested: number }
   outcome: 'complete' | 'cancelled'
+  // Terminal FSM phase. A procedure can finish while its substantive result
+  // remains unresolved; consumers must not treat outcome=complete as approval.
+  terminalPhase?: string
   reason?: string
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
   durationMs: number

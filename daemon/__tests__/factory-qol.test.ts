@@ -6,7 +6,7 @@
 // spawn announcement.
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { __test as factoryTest, formatBuildLine, factoryAccept, factoryReview } from '../factory.js'
+import { __test as factoryTest, formatBuildLine, factoryAccept, factoryRetry, factoryReview, factoryStatus } from '../factory.js'
 import { __test as runnerTest, protocolEvents } from '../protocol-runner.js'
 import type { ProtocolRun } from '../protocol-runner.js'
 import { registry, threadRegistry } from '../sessions.js'
@@ -814,6 +814,49 @@ describe('accept', () => {
     expect(state.reviewMessageId).toBe(`msg-${reviewMsg + 1}`)
     // A normal adversarial review is the default — nothing to warn the PM about.
     expect(sent[reviewMsg].text).not.toContain('⚠️')
+  })
+
+  test('unresolved reviewer verdict blocks ordinary acceptance and labels an explicit override', async () => {
+    const pmThreadId = 'qol-pm-thread-unresolved'
+    const pm = mkPm(pmThreadId)
+    const state = mkBuild({ ticket: 'fb-unresolved', pmThreadId, builderName: 'unresolved', phase: 'reviewing' })
+
+    protocolEvents.emitComplete({
+      protocol: 'review', threadId: state.builderThreadId!,
+      rounds: { completed: 10, requested: 10 }, outcome: 'complete', terminalPhase: 'unresolved',
+      decisions: [{ phase: 'critic_turn', role: 'critic', value: 'request_changes', because: 'Blocker remains' }],
+      durationMs: 1000, summary: 'Could not verify the fix', via: 'normal',
+    })
+    await settle()
+
+    expect(state.reviewed).toBe(true)
+    expect(state.reviewResult).toBe('unresolved')
+    expect(factoryStatus(pmThreadId, state.ticket).builds[0].reviewResult).toBe('unresolved')
+    expect(factoryAccept(state.ticket, pm.sessionId)).toEqual({ error: expect.stringContaining('changes unresolved') })
+    expect(sent.find(s => s.text.includes('review complete'))?.text).toContain('changes unresolved')
+
+    expect(factoryAccept(state.ticket, pm.sessionId, true)).toEqual({ ok: true })
+    await settle()
+    expect(sent.find(s => s.text.startsWith('🏭 ✅'))?.text).toContain('explicit override: changes unresolved')
+  })
+
+  test('retry clears the previous review result before the next review', async () => {
+    const pmThreadId = 'qol-pm-thread-review-retry'
+    const pm = mkPm(pmThreadId)
+    const state = mkBuild({ ticket: 'fb-review-retry', pmThreadId, builderName: 'review-retry', phase: 'reviewing' })
+    protocolEvents.emitComplete({
+      protocol: 'review', threadId: state.builderThreadId!,
+      rounds: { completed: 1, requested: 10 }, outcome: 'complete', terminalPhase: 'complete',
+      decisions: [{ phase: 'critic_turn', role: 'critic', value: 'approve', because: 'Verified' }],
+      durationMs: 1000, summary: 'Done', via: 'normal',
+    })
+    await settle()
+    expect(state.reviewResult).toBe('approved')
+
+    expect(factoryRetry(state.ticket, 'Add one more case', pm.sessionId)).toEqual({ ok: true })
+    expect(state.reviewed).toBe(false)
+    expect(state.reviewResult).toBeUndefined()
+    expect(state.reviewSummary).toBeUndefined()
   })
 
   test('an owner-run review says so on the line the PM decides from', async () => {

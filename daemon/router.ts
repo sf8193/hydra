@@ -11,7 +11,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
-import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES } from '../shared/constants.js'
+import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
 import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
@@ -628,7 +628,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         const postModel = resolveProtocolModel(reviewMatch[3]?.toLowerCase(), msg.channelId, msg.id)
         if (postModel === false) return
         const selection = preModel ?? postModel
-        const rounds = parseInt(reviewMatch[2] ?? '3')
+        const rounds = parseInt(reviewMatch[2] ?? String(DEFAULT_REVIEW_ROUNDS))
         let topic = reviewMatch[4]?.trim()
         if (!selection && topic) {
           const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)

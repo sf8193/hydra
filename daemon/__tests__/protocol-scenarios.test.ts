@@ -23,14 +23,14 @@ afterEach(() => {
 // Review protocol scenarios
 // ---------------------------------------------------------------------------
 
-describe('review: cooperative 3-round completion', () => {
-  test('full exchange through all rounds produces complete event', async () => {
+describe('review: verdict-driven completion', () => {
+  test('request changes, conditional fixes, and critic recheck produce approval', async () => {
     h = createHarness(review, { rounds: 3, topic: 'test review' })
     expect(h.phase).toBe('critic_turn')
     expect(h.round).toBe(1)
 
     // Round 1
-    await h.advance('critic', 'Your code has a potential null dereference on line 42.')
+    await h.advance('critic', 'Your code has a potential null dereference on line 42.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     await h.advance('owner', 'Added a null check. See commit abc123.')
@@ -38,18 +38,15 @@ describe('review: cooperative 3-round completion', () => {
     expect(h.round).toBe(2)
 
     // Round 2
-    await h.advance('critic', 'The null check is good, but the error message is unclear.')
-    expect(h.phase).toBe('owner_turn')
+    await h.advance('critic', 'The null check is good, but the error message is unclear.', 'approve_with_changes')
+    expect(h.phase).toBe('apply_changes')
 
-    await h.advance('owner', 'Improved the error message with context.')
+    await h.advance('owner', 'Improved the error message with context.', 'applied')
     expect(h.phase).toBe('critic_turn')
     expect(h.round).toBe(3)
 
     // Round 3 (final)
-    await h.advance('critic', 'All issues addressed. Clean code.')
-    expect(h.phase).toBe('owner_turn')
-
-    await h.advance('owner', 'Final defense — all findings resolved.')
+    await h.advance('critic', 'All issues addressed. Clean code.', 'approve')
     expect(h.phase).toBe('cleanup')
     expect(h.round).toBe(3)
 
@@ -64,6 +61,30 @@ describe('review: cooperative 3-round completion', () => {
     expect(event.topic).toBe('test review')
     expect(event.rounds.completed).toBe(3)
     expect(event.rounds.requested).toBe(3)
+  })
+
+  test('last-round request remains unresolved after owner response', async () => {
+    h = createHarness(review, { rounds: 1 })
+    await h.advance('critic', 'Blocking issue.', 'request_changes')
+    await h.advance('owner', 'Fix attempted, but no recheck remains.')
+    expect(h.phase).toBe('unresolved')
+    expect(h.completionEvents[0].summary).toContain('Fix attempted')
+    expect(h.completionEvents[0].decisions.at(-1)?.value).toBe('request_changes')
+  })
+
+  test('last-round conditional fix cannot pass without critic recheck', async () => {
+    h = createHarness(review, { rounds: 1 })
+    await h.advance('critic', 'Fix this exact typo.', 'approve_with_changes')
+    await h.advance('owner', 'Fixed typo and ran checks.', 'applied')
+    expect(h.phase).toBe('unresolved')
+    expect(h.completionEvents[0].summary).toContain('Fixed typo')
+  })
+
+  test('owner can report conditional fixes as unable', async () => {
+    h = createHarness(review, { rounds: 2 })
+    await h.advance('critic', 'Fix upstream contract.', 'approve_with_changes')
+    await h.advance('owner', 'Cannot change upstream contract.', 'unable')
+    expect(h.phase).toBe('unresolved')
   })
 })
 
@@ -155,7 +176,7 @@ describe('review: extension chain', () => {
     expect(h.extend('critic', 'first', 5).ok).toBe(true)
     expect(h.extend('critic', 'second', 5).ok).toBe(true)
 
-    await h.advance('critic', 'Round 1 critique.')
+    await h.advance('critic', 'Round 1 critique.', 'request_changes')
     await h.advance('owner', 'Round 1 defense.')
     expect(h.round).toBe(2)
 
@@ -221,7 +242,7 @@ describe('review: disconnect and grace', () => {
     expect(h.phase).toBe('critic_turn')
     expect(h.isTerminated).toBe(false)
 
-    await h.advance('critic', 'Back online with critique.')
+    await h.advance('critic', 'Back online with critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
   })
 })
@@ -259,7 +280,7 @@ describe('review: subagent review fallback', () => {
     h = createHarness(review, { rounds: 3 })
 
     // Move to owner_turn
-    await h.advance('critic', 'Opening critique.')
+    await h.advance('critic', 'Opening critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     // Critic dies during owner_turn
@@ -282,7 +303,7 @@ describe('review: subagent review fallback', () => {
   test('critic reconnects after grace during owner_turn: deferred fallback is cancelled, live critic survives', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    await h.advance('critic', 'Opening critique.')
+    await h.advance('critic', 'Opening critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     // Critic dies during owner_turn → deferred
@@ -302,10 +323,10 @@ describe('review: subagent review fallback', () => {
     expect(h.isTerminated).toBe(false)
   })
 
-  test('critic dies during final owner_turn: pending fallback clears on cleanup (no fallback needed)', async () => {
+  test('critic dies during final owner_turn: unresolved close needs no fallback', async () => {
     h = createHarness(review, { rounds: 1 })
 
-    await h.advance('critic', 'Only critique.')
+    await h.advance('critic', 'Only critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     h.disconnect('critic')
@@ -313,10 +334,9 @@ describe('review: subagent review fallback', () => {
     await h.tick(3_000 + graceMs + 1_000)
     expect(h.run._pendingFallback).toBe('critic')
 
-    // Final round: owner advances to cleanup, not critic_turn. cleanup has no
-    // on.fallback, so the flag clears silently and the review finishes normally.
+    // Final round: owner advances to unresolved, not critic_turn. No fallback is needed.
     await h.advance('owner', 'Final defense.')
-    expect(h.phase).toBe('cleanup')
+    expect(h.phase).toBe('unresolved')
     expect(h.run._pendingFallback).toBeUndefined()
   })
 
@@ -357,7 +377,7 @@ describe('review: subagent review fallback', () => {
     h = createHarness(review, { rounds: 3 })
 
     // Move to owner_turn so the owner is the actor that dies
-    await h.advance('critic', 'Opening critique.')
+    await h.advance('critic', 'Opening critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     h.disconnect('owner')
@@ -395,7 +415,7 @@ describe('review: timeout falls back for a non-owner actor', () => {
   test('an owner that never posts still cancels — the fallback asks the owner to work', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    await h.advance('critic', 'Opening critique.')
+    await h.advance('critic', 'Opening critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     await h.tickToTimeout()
@@ -424,7 +444,7 @@ describe('review: +no-fallback', () => {
   test('a critic death during owner_turn is not deferred either — no pending fallback is armed', async () => {
     h = createHarness(review, { rounds: 3, params: { noFallback: true } })
 
-    await h.advance('critic', 'Opening critique.')
+    await h.advance('critic', 'Opening critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     h.disconnect('critic')
@@ -549,11 +569,10 @@ describe('review: +subagent direct trigger', () => {
 })
 
 describe('review: completion carries how it got there', () => {
-  test('a normal three-round review reports via normal and names no degradation', async () => {
+  test('an approved review reports via normal and names no degradation', async () => {
     h = createHarness(review, { rounds: 1 })
 
-    await h.advance('critic', 'Opening critique.')
-    await h.advance('owner', 'Defense.')
+    await h.advance('critic', 'No issues remain.', 'approve')
     expect(h.phase).toBe('cleanup')
     await h.advance('owner', '**Review Summary** — clean.')
 
@@ -617,7 +636,7 @@ describe('review: a degraded completion counts only finished rounds', () => {
   test('a fallback after one full round reports one, not two', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    await h.advance('critic', 'Round 1 critique.')
+    await h.advance('critic', 'Round 1 critique.', 'request_changes')
     await h.advance('owner', 'Round 1 defense.')
     expect(h.round).toBe(2)
 
@@ -634,8 +653,8 @@ describe('review: a degraded completion counts only finished rounds', () => {
   test('a normal completion still counts the round it closed on', async () => {
     h = createHarness(review, { rounds: 1 })
 
-    await h.advance('critic', 'Only critique.')
-    await h.advance('owner', 'Only defense.')
+    await h.advance('critic', 'No issues remain.', 'approve')
+    expect(h.phase).toBe('cleanup')
     await h.advance('owner', '**Review Summary** — clean.')
 
     expect(h.completionEvents[0].via).toBe('normal')
@@ -696,10 +715,7 @@ describe('review: closing backstop completes (not cancels)', () => {
   test('closing timeout transitions to complete', async () => {
     h = createHarness(review, { rounds: 1 })
 
-    await h.advance('critic', 'Looks good.')
-    expect(h.phase).toBe('owner_turn')
-
-    await h.advance('owner', 'Thanks.')
+    await h.advance('critic', 'Looks good.', 'approve')
     expect(h.phase).toBe('cleanup')
 
     const closingMs = h.run.protocol.windowMs('cleanup')!
@@ -718,7 +734,7 @@ describe('review: reply never advances', () => {
     await h.reply('critic', 'Just a status update, not a deliverable.')
     expect(h.phase).toBe('critic_turn')
 
-    await h.advance('critic', 'This is the actual critique.')
+    await h.advance('critic', 'This is the actual critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
   })
 })
@@ -877,8 +893,8 @@ describe('reentrancy guard (transitioningRuns)', () => {
   test('concurrent advances — second is dropped', async () => {
     h = createHarness(review, { rounds: 3 })
 
-    const p1 = h.advance('critic', 'First critique.')
-    const p2 = h.advance('critic', 'Second critique (dropped).')
+    const p1 = h.advance('critic', 'First critique.', 'request_changes')
+    const p2 = h.advance('critic', 'Second critique (dropped).', 'request_changes')
     await Promise.all([p1, p2])
 
     expect(h.phase).toBe('owner_turn')
@@ -907,8 +923,7 @@ describe('review: notifyOwnerSummary fires on cleanup entry', () => {
   test('owner receives summary format notification when cleanup begins', async () => {
     h = createHarness(review, { rounds: 1 })
 
-    await h.advance('critic', 'Critique.')
-    await h.advance('owner', 'Defense.')
+    await h.advance('critic', 'No blockers.', 'approve')
     expect(h.phase).toBe('cleanup')
 
     const notes = h.actorNotifications('owner')
@@ -955,7 +970,7 @@ describe('advance posts content to thread', () => {
     h = createHarness(review, { rounds: 3 })
 
     const msgsBefore = h.threadMessages.length
-    await h.advance('critic', 'Here is my detailed critique of the implementation.')
+    await h.advance('critic', 'Here is my detailed critique of the implementation.', 'request_changes')
 
     const newMsgs = h.threadMessages.slice(msgsBefore)
     expect(newMsgs.some(m => m.text === 'Here is my detailed critique of the implementation.')).toBe(true)
@@ -1040,8 +1055,7 @@ describe('review: backstopTimer clears only phase timers in cleanup', () => {
     h = createHarness(review, { rounds: 1 })
 
     // Complete the exchange to reach cleanup
-    await h.advance('critic', 'Looks good.')
-    await h.advance('owner', 'Thanks.')
+    await h.advance('critic', 'Looks good.', 'approve')
     expect(h.phase).toBe('cleanup')
 
     // Verify phase timers: backstopTimer sets run.timeout, clears warning/total
@@ -1166,10 +1180,10 @@ describe('PhaseInteraction.options', () => {
     expect(ia?.options).toEqual(['done'])
   })
 
-  test('review critic_turn has no options (verdict: none)', () => {
+  test('review critic_turn requires a verdict', () => {
     const ia = review.phaseInteraction('critic_turn')
-    expect(ia?.verdict).toBe('none')
-    expect(ia?.options).toBeUndefined()
+    expect(ia?.verdict).toBe('required')
+    expect(ia?.options).toEqual(['approve', 'request_changes', 'approve_with_changes'])
   })
 
   test('build implementing has no options (verdict: none)', () => {
@@ -1288,7 +1302,7 @@ describe('dynamic tool scoping', () => {
 describe('tools_update on phase transition', () => {
   test('new active actor receives tools_update with advance', async () => {
     h = createHarness(review, { rounds: 3 })
-    await h.advance('critic', 'Critique.')
+    await h.advance('critic', 'Critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     const ownerMsgs = h.actorMessages('owner')
@@ -1300,7 +1314,7 @@ describe('tools_update on phase transition', () => {
 
   test('only active actor receives tools_update on phase transition', async () => {
     h = createHarness(review, { rounds: 3 })
-    await h.advance('critic', 'Critique.')
+    await h.advance('critic', 'Critique.', 'request_changes')
 
     // After critic advances, owner_turn is active — owner should get tools, not critic
     const ownerMsgs = h.actorMessages('owner')
@@ -1327,7 +1341,7 @@ describe('tools_update on phase transition', () => {
 
   test('advance description for verdict:none is simple', async () => {
     h = createHarness(review, { rounds: 3 })
-    await h.advance('critic', 'Critique.')
+    await h.advance('critic', 'Critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
 
     const ownerMsgs = h.actorMessages('owner')
@@ -1370,8 +1384,7 @@ describe('tools_update on phase transition', () => {
 
   test('terminal transition restores owner to non-protocol tool set', async () => {
     h = createHarness(review, { rounds: 1 })
-    await h.advance('critic', 'Critique.')
-    await h.advance('owner', 'Response.')
+    await h.advance('critic', 'Approved.', 'approve')
     expect(h.phase).toBe('cleanup')
 
     await h.advance('owner', 'Summary.')
@@ -1389,7 +1402,7 @@ describe('tools_update on phase transition', () => {
 describe('tool descriptions and capability integration', () => {
   test('active actor receives advance in tools_update after transition', async () => {
     h = createHarness(review, { rounds: 3 })
-    await h.advance('critic', 'Critique.')
+    await h.advance('critic', 'Critique.', 'request_changes')
     expect(h.phase).toBe('owner_turn')
     const msgs = h.actorMessages('owner')
     const toolsUpdate = msgs.find(m => m.type === 'tools_update')
@@ -1401,7 +1414,7 @@ describe('tool descriptions and capability integration', () => {
   test('owner receives advance after becoming active actor', async () => {
     h = createHarness(review, { rounds: 3 })
     const beforeCount = h.actorMessages('owner').filter(m => m.type === 'tools_update').length
-    await h.advance('critic', 'Critique.')
+    await h.advance('critic', 'Critique.', 'request_changes')
     const msgs = h.actorMessages('owner')
     const toolsUpdates = msgs.filter(m => m.type === 'tools_update')
     const latest = toolsUpdates[toolsUpdates.length - 1]

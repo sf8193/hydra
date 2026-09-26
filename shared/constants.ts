@@ -1,4 +1,10 @@
 export const DEFAULT_MODEL = 'claude-opus-5-5[1m]'
+export const DEFAULT_REVIEW_ROUNDS = 20
+export const MAX_REVIEW_ROUNDS = 20
+
+export function normalizeReviewRounds(value?: number): number {
+  return Number.isFinite(value) ? Math.max(1, Math.min(Math.floor(value!), MAX_REVIEW_ROUNDS)) : DEFAULT_REVIEW_ROUNDS
+}
 export const TRANSCRIBE_TMUX = 'hydra-transcribe'
 
 export const KNOWN_MODELS = new Set([

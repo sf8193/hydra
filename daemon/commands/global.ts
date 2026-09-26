@@ -258,7 +258,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '',
     '**Multi-agent** (thread):',
     '• 🔨 `build [N] [model:] [task]` — implement + review cycle',
-    '• ⚔️ `review [N] [model:] [+mods] [topic]` — adversarial review',
+    '• ⚔️ `review [N] [model:] [+mods] [topic]` — verdict-driven review, up to N rounds (default/max 20)',
     '   ↳ `+s` security lens · `+subagent` skip the critic, run it yourself · `+no-fallback` cancel on critic death instead',
     '• 🔬 `spike [topic]` — single-agent deep investigation (checkpoints → decide done → report)',
     '• 🔨 `build_v2 [N] [task]` — v2 build protocol',

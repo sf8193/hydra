@@ -4,6 +4,7 @@ import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.
 import { isThreadOccupied } from '../protocol-registry.js'
 import { resolveModifiers, partitionFlagModifiers } from '../modifiers.js'
 import type { InboundMessage } from '../../gateway.js'
+import { normalizeReviewRounds } from '../../shared/constants.js'
 
 let reviewProto: Awaited<ReturnType<typeof import('../../protocols/review.js')>>['default'] | null = null
 
@@ -36,7 +37,7 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
     return
   }
 
-  const clampedRounds = Math.max(1, Math.min(rounds, 5))
+  const clampedRounds = normalizeReviewRounds(rounds)
 
   let resolvedMods: ReturnType<typeof resolveModifiers>['resolved'] | undefined
   // Flags (`+subagent`, `+no-fallback`) become run params rather than modifiers:

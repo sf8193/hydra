@@ -39,10 +39,10 @@ describe('review protocol (TypeScript DSL)', () => {
     }
   })
 
-  test('final_round goes to cleanup (no post_pass)', () => {
+  test('final_round goes to unresolved', () => {
     const result = review.machine.transition('owner_turn' as any, 'final_round' as any)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.to).toBe('cleanup')
+    if (result.ok) expect(result.to).toBe('unresolved')
   })
 
   test('fallback event transitions critic_turn to subagent_review', () => {
@@ -244,8 +244,9 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(focused).not.toContain('argue AGAINST')
   })
 
-  test('no decisions declared (modifiers replace post-pass decisions)', () => {
-    expect(Object.keys(review.decisions)).toHaveLength(0)
+  test('critic and owner decisions are declared', () => {
+    expect(review.decisions.critic_verdict.options).toEqual(['approve', 'request_changes', 'approve_with_changes'])
+    expect(review.decisions.owner_changes.options).toEqual(['applied', 'unable'])
   })
 })
 
@@ -407,7 +408,7 @@ describe('protocol DSL validation', () => {
 
 describe('phaseInteraction', () => {
   test('advance-only phase returns advance mode', () => {
-    expect(review.phaseInteraction('critic_turn')).toEqual({ verdict: 'none' })
+    expect(review.phaseInteraction('critic_turn')?.verdict).toBe('required')
     expect(review.phaseInteraction('owner_turn')).toEqual({ verdict: 'none' })
   })
 
