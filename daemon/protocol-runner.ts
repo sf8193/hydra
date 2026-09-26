@@ -37,6 +37,7 @@ export type ProtocolRun = StatusLineState & {
   params: Record<string, unknown>
   participants: Map<string, string>
   sessionToRole: Map<string, string>
+  protocolChildren: Map<string, string>
   timeout?: ReturnType<typeof setTimeout>
   _warningTimeout?: ReturnType<typeof setTimeout>
   _totalTimeout?: ReturnType<typeof setTimeout>
@@ -136,6 +137,7 @@ export async function startProtocolRun(
     params,
     participants: new Map(),
     sessionToRole: new Map(),
+    protocolChildren: new Map(),
     timeout: undefined,
     _extensions: 0,
     _phaseStartedAt: Date.now(),
@@ -257,6 +259,7 @@ function buildAdvanceSchema(ia: { verdict: 'none' | 'required' | 'optional'; opt
 
 function clearProtocolOverrides(info: SessionInfo): void {
   removeCapability(info, 'protocol_context')
+  removeCapability(info, 'protocol_spawn')
   removeToolDescriptions(info, 'advance', 'extend_phase')
   removeToolInputSchemas(info, 'advance')
 }
@@ -272,6 +275,12 @@ function setProtocolTools(run: ProtocolRun, sessionId: string): void {
     addCapability(info, 'protocol_context')
     for (const [name, desc] of Object.entries(overrides.descriptions)) setToolDescription(info, name, desc)
     for (const [name, schema] of Object.entries(overrides.schemas)) setToolInputSchema(info, name, schema)
+  }
+
+  const role = run.sessionToRole.get(sessionId)
+  const phase = run.protocol.phases[run.phase]
+  if (role === phase?.actor) {
+    for (const capability of phase.capabilities ?? []) addCapability(info, capability)
   }
 
   pushToolSurface(sessionId)
@@ -297,6 +306,25 @@ function registerParticipant(run: ProtocolRun, role: string, sessionId: string):
   run.sessionToRole.set(sessionId, role)
   sessionToRun.set(sessionId, run.id)
   setProtocolTools(run, sessionId)
+}
+
+function registerChild(run: ProtocolRun, parentSessionId: string, childSessionId: string): boolean {
+  const role = run.sessionToRole.get(parentSessionId)
+  const phase = run.protocol.phases[run.phase]
+  if (role !== phase?.actor || !phase.capabilities?.includes('protocol_spawn')) return false
+  ;(run.protocolChildren ??= new Map()).set(childSessionId, run.phase)
+  return true
+}
+
+function retireProtocolChildren(run: ProtocolRun, phase?: string): void {
+  for (const [sessionId, spawnedInPhase] of run.protocolChildren ?? []) {
+    if (phase && spawnedInPhase !== phase) continue
+    run.protocolChildren.delete(sessionId)
+    const info = registry.get(sessionId)
+    if (info && !killsInProgress.has(sessionId)) {
+      void killSession(info, 'protocol phase ended').catch(err => process.stderr.write(`daemon: protocol child cleanup failed: ${err}\n`))
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -385,8 +413,8 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // if that phase has on.fallback and fire it.
     if (run._pendingFallback && !isTerminal(run)) {
       const pending = run._pendingFallback
-      run._pendingFallback = undefined
       if (run.protocol.phases[run.phase]?.on?.fallback) {
+        run._pendingFallback = undefined
         // enterFallbackPhase commits the phase transition in its synchronous
         // prefix (before its only await, the kill) — see the "no await before the
         // transition" invariant in that function. All four call sites, including
@@ -394,9 +422,13 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
         // in effect the moment control returns here. Do not add an early await to
         // enterFallbackPhase without revisiting these call sites.
         void enterFallbackPhase(run, pending)
+      } else if (run.phase === run.protocol.cleanupPhase) {
+        // Cleanup is the normal successful off-ramp. There is no future actor
+        // phase where a deferred fallback should fire.
+        run._pendingFallback = undefined
       }
-      // If new phase also lacks on.fallback (e.g. cleanup), clear silently —
-      // the review is completing normally.
+      // Otherwise retain the marker across PM-only phases until a
+      // fallback-capable phase or terminal.
     }
 
     return { ok: true, sentIds }
@@ -823,6 +855,7 @@ function halfForPhase(run: ProtocolRun): 'top' | 'bottom' {
 
 function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   if (run.phase !== from) return false
+  retireProtocolChildren(run, from)
   run.phase = to
   run._extensions = 0
   run._phaseStartedAt = Date.now()
@@ -936,6 +969,8 @@ function clearTimers(run: ProtocolRun): void {
 }
 
 function cleanupRun(run: ProtocolRun): void {
+  retireProtocolChildren(run)
+  run._pendingFallback = undefined
   for (const sid of run.sessionToRole.keys()) sessionToRun.delete(sid)
   threadToRun.delete(run.threadId)
   runs.delete(run.id)
@@ -1083,7 +1118,10 @@ function resolveAdvanceEvent(run: ProtocolRun, verdict?: string): string | null 
   if (verdict) {
     const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
     if (!decision) return null
-    if (decision.finalEvent && run.currentRound >= run.rounds) return decision.finalEvent
+    if (run.currentRound >= run.rounds) {
+      const finalEvent = decision.finalEvents?.[verdict] ?? decision.finalEvent
+      if (finalEvent) return finalEvent
+    }
     if (!decision.events) return verdict
     return decision.events[verdict] ?? null
   }
@@ -1490,6 +1528,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
+      setRunTools, registerChild, retireProtocolChildren,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
@@ -1534,6 +1573,11 @@ function runnerHooks(name: string, protoName: string) {
     onDisconnect: onRunDisconnect,
     onReconnect: onRunReconnect,
     onAdvance: onRunAdvance,
+    onChildSpawn: (parentSessionId, childSessionId) => {
+      const runId = sessionToRun.get(parentSessionId)
+      const run = runId ? runs.get(runId) : undefined
+      return !!run && run.protocol.name === protoName && registerChild(run, parentSessionId, childSessionId)
+    },
   })
 }
 

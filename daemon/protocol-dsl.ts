@@ -2,6 +2,7 @@ import { parseDuration } from './util.js'
 import { createStateMachine, type TransitionTable } from './state-machine.js'
 import type { PhaseBehaviorFn, RunState } from './protocol-types.js'
 import { mechanicsBlock } from './prompts/mechanics.js'
+import { CAPABILITY_TOOLS, type Capability } from '../shared/constants.js'
 
 export type { PhaseBehaviorFn, RunState, BehaviorContext } from './protocol-types.js'
 export { mechanicsBlock }
@@ -25,6 +26,7 @@ type PhaseDef = {
   on: PhaseTransitions
   advanceEvent?: string
   finalAdvanceEvent?: string
+  capabilities?: readonly Capability[]
   onEnter?: PhaseBehavior[]
 }
 
@@ -88,6 +90,7 @@ export type ProtocolSpec<
     descriptions?: Partial<Record<string, string>>
     events?: Record<string, string>
     finalEvent?: string
+    finalEvents?: Partial<Record<string, string>>
   }>
   roleConfig?: Partial<Record<keyof Roles & string, Partial<RoleConfig>>>
   seed?: Partial<Record<keyof Roles, SeedFn>>
@@ -156,7 +159,7 @@ export type Protocol<
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
   ownerRole: string
-  decisions: Record<string, { phase: string; actor: string; options: readonly string[]; descriptions?: Partial<Record<string, string>>; events?: Record<string, string>; finalEvent?: string }>
+  decisions: Record<string, { phase: string; actor: string; options: readonly string[]; descriptions?: Partial<Record<string, string>>; events?: Record<string, string>; finalEvent?: string; finalEvents?: Partial<Record<string, string>> }>
   phaseInteraction: (phase: string) => PhaseInteraction | undefined
   roleConfig: (role: string) => RoleConfig
   seed: (role: string, ctx: Omit<SeedContext, 'protocol'> & { protocol?: Protocol }) => string | undefined
@@ -193,6 +196,11 @@ export function protocol<
     for (const [event, target] of Object.entries(phase.on)) {
       if (!phaseNames.includes(target)) {
         throw new Error(`protocol "${name}": phase "${phaseName}" event "${event}" → "${target}" targets an unknown phase`)
+      }
+    }
+    for (const capability of phase.capabilities ?? []) {
+      if (!(capability in CAPABILITY_TOOLS)) {
+        throw new Error(`protocol "${name}": phase "${phaseName}" declares unknown capability "${capability}"`)
       }
     }
   }
@@ -258,6 +266,16 @@ export function protocol<
         if (!dec.options.includes(key)) throw new Error(`protocol "${name}": decision "${decName}" description key "${key}" is not a declared option`)
       }
     }
+    const phaseEvents = spec.phases[dec.phase]!.on
+    for (const [kind, mapping] of [['event', dec.events], ['final event', dec.finalEvents]] as const) {
+      for (const [key, event] of Object.entries(mapping ?? {})) {
+        if (!dec.options.includes(key)) throw new Error(`protocol "${name}": decision "${decName}" ${kind} key "${key}" is not a declared option`)
+        if (!(event in phaseEvents)) throw new Error(`protocol "${name}": decision "${decName}" ${kind} "${event}" is not an event on phase "${dec.phase}"`)
+      }
+    }
+    if (dec.finalEvent && !(dec.finalEvent in phaseEvents)) {
+      throw new Error(`protocol "${name}": decision "${decName}" finalEvent "${dec.finalEvent}" is not an event on phase "${dec.phase}"`)
+    }
   }
 
   // Parse roleConfig
@@ -312,6 +330,7 @@ export function protocol<
 
       const decisionEvents = new Set(Object.values(decision.events ?? {}))
       if (decision.finalEvent) decisionEvents.add(decision.finalEvent)
+      for (const event of Object.values(decision.finalEvents ?? {})) decisionEvents.add(event)
       const advanceCoexists = phaseDef.advanceEvent && !decisionEvents.has(phaseDef.advanceEvent)
 
       if (advanceCoexists) {

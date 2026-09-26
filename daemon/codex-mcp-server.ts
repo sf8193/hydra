@@ -117,9 +117,11 @@ async function callDaemonTool(id: string, name: string, args: Record<string, unk
 const rl = createInterface({ input: process.stdin })
 
 // Import tools from the canonical source — keeps codex and claude tool sets in sync.
-// Codex sessions get advance/extend_phase statically (no dynamic tools_update path).
-import { computeToolsForSession } from './bridge-tools.js'
-const TOOLS = computeToolsForSession('thread_owner', new Set(['protocol_context'])).map(t => ({
+// Codex has no dynamic tools_update path, so advertise every phase-scoped
+// protocol tool statically. The daemon still authorizes each call against the
+// session's live capabilities before execution.
+import { codexStaticTools } from './bridge-tools.js'
+const TOOLS = codexStaticTools().map(t => ({
   name: t.name, description: t.description, inputSchema: t.inputSchema,
 }))
 

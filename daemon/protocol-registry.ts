@@ -14,6 +14,7 @@ type ProtocolHooks = {
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
   onAdvance?: (sessionId: string, content: string, verdict?: string) => Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }>
+  onChildSpawn?: (parentSessionId: string, childSessionId: string) => boolean
 }
 
 // Protocol names are plain strings — intentionally not a union type so new
@@ -76,6 +77,13 @@ export async function dispatchAdvance(sessionId: string, content: string, verdic
     }
   }
   return { ok: false, reason: 'no active protocol for this session' }
+}
+
+export function registerProtocolChild(parentSessionId: string, childSessionId: string): 'registered' | 'rejected' | 'not_protocol' {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(parentSessionId)) return hooks.onChildSpawn?.(parentSessionId, childSessionId) ? 'registered' : 'rejected'
+  }
+  return 'not_protocol'
 }
 
 export function hasProtocolContext(sessionId: string): boolean {

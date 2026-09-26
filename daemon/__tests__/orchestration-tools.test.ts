@@ -5,6 +5,22 @@ import { registry } from '../sessions.js'
 // Suppress stderr
 process.stderr.write = (() => true) as any
 
+test('dispatcher rejects a phase-scoped tool after capability removal', async () => {
+  const sessionId = 'scope-enforcement-session'
+  registry.set(sessionId, {
+    sessionId, tmuxName: 'scope-enforcement', topic: '', threadId: 'scope-thread',
+    createdAt: Date.now(), lastActive: Date.now(), listening: false,
+    engine: 'claude', sessionType: 'thread_owner',
+  } as any)
+  try {
+    const result = await executeTool('kill_session', { session_id: 'anything' }, sessionId)
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('not available to this session')
+  } finally {
+    registry.delete(sessionId)
+  }
+})
+
 describe('send_to_thread', () => {
   test('rejects missing target', async () => {
     const result = await executeTool('send_to_thread', { type: 'progress', text: 'hello' })

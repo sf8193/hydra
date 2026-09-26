@@ -69,6 +69,7 @@ function createTestRun(overrides: Partial<typeof __test extends undefined ? neve
     params: {},
     participants: new Map([['critic', 'test-critic'], ['owner', 'test-owner']]),
     sessionToRole: new Map([['test-critic', 'critic'], ['test-owner', 'owner']]),
+    protocolChildren: new Map(),
     timeout: undefined,
     disconnectTimers: new Map(),
     decisions: [],
@@ -95,6 +96,25 @@ describe('protocol runner — advance routing', () => {
     expect(run.phase).toBe('owner_turn')
     expect(run.decisions).toHaveLength(1)
     expect(run.decisions[0].value).toBe('approve')
+  })
+
+  test('final round uses the selected verdict final event', async () => {
+    const capProto = protocol('cap-routing', {
+      emoji: '🧪', display: 'Cap Routing', roles: { critic: 'Critic', owner: 'Owner' }, owner: 'owner',
+      phases: {
+        judging: { actor: 'critic', on: { again: 'judging', accept: 'done', exhaust: 'failed' } },
+        done: { actor: 'owner', on: {} }, failed: { actor: 'owner', on: {} },
+      },
+      windows: {},
+      decisions: { verdict: { phase: 'judging', actor: 'critic', options: ['approve', 'reject'], events: { approve: 'again', reject: 'again' }, finalEvents: { approve: 'accept', reject: 'exhaust' } } },
+    })
+    const approved = createTestRun({ protocol: capProto, phase: 'judging', currentRound: 3, rounds: 3 })
+    await onRunAdvance('test-critic', 'Clean pass.', 'approve')
+    expect(approved.phase).toBe('done')
+
+    const rejected = createTestRun({ protocol: capProto, phase: 'judging', currentRound: 3, rounds: 3 })
+    await onRunAdvance('test-critic', 'Still broken.', 'reject')
+    expect(rejected.phase).toBe('failed')
   })
 
   test('advance without verdict on owner_turn transitions to critic_turn', async () => {
@@ -161,6 +181,81 @@ describe('protocol runner — advance routing', () => {
 
     expect(result.ok).toBe(false)
     expect(run.decisions).toHaveLength(0)
+  })
+})
+
+describe('protocol runner — phase-scoped spawn lifecycle', () => {
+  const scopedProto = protocol('scoped-spawn', {
+    emoji: '🧪', display: 'Scoped Spawn', roles: { critic: 'Critic', owner: 'Owner' }, owner: 'owner',
+    phases: {
+      reviewing: { actor: 'critic', capabilities: ['protocol_spawn'], on: { done: 'owner_turn' }, advanceEvent: 'done' },
+      owner_turn: { actor: 'owner', on: { done: 'complete' }, advanceEvent: 'done' },
+      complete: { actor: 'owner', on: {} },
+    }, windows: {},
+  })
+
+  function session(sessionId: string) {
+    registry.set(sessionId, {
+      sessionId, topic: 'test', threadId: 'test-thread', createdAt: Date.now(), lastActive: Date.now(),
+      tmuxName: sessionId, listening: false, engine: 'claude', sessionType: 'thread_owner',
+    })
+  }
+
+  afterEach(() => {
+    for (const id of ['test-critic', 'test-owner', 'review-child']) registry.delete(id)
+    __test!.resetLifecycle()
+  })
+
+  test('only the active actor receives spawn/kill and both are cleared on phase exit', async () => {
+    session('test-critic'); session('test-owner')
+    const run = createTestRun({ protocol: scopedProto, phase: 'reviewing' })
+    __test!.setRunTools(run)
+    expect(registry.get('test-critic')?.capabilities).toContain('protocol_spawn')
+    expect(registry.get('test-owner')?.capabilities ?? []).not.toContain('protocol_spawn')
+
+    await onRunAdvance('test-critic', 'Review finished.')
+    expect(registry.get('test-critic')?.capabilities ?? []).not.toContain('protocol_spawn')
+    expect(registry.get('test-owner')?.capabilities ?? []).not.toContain('protocol_spawn')
+  })
+
+  test('children are accepted only from the active declared actor and retired on phase exit', async () => {
+    session('review-child')
+    const killed: string[] = []
+    __test!.setLifecycle({ killSession: (async (info: any) => { killed.push(info.sessionId) }) as any })
+    const run = createTestRun({ protocol: scopedProto, phase: 'reviewing' })
+
+    expect(__test!.registerChild(run, 'test-owner', 'review-child')).toBe(false)
+    expect(__test!.registerChild(run, 'test-critic', 'review-child')).toBe(true)
+    await onRunAdvance('test-critic', 'Review finished.')
+    await Promise.resolve()
+
+    expect(run.protocolChildren.size).toBe(0)
+    expect(killed).toEqual(['review-child'])
+  })
+})
+
+describe('protocol runner — deferred fallback lifecycle', () => {
+  test('marker survives ineligible phases and fires at the next fallback-capable phase', async () => {
+    const proto = protocol('persistent-fallback', {
+      emoji: '🧪', display: 'Persistent Fallback', roles: { critic: 'Critic', owner: 'Owner' }, owner: 'owner',
+      phases: {
+        owner_one: { actor: 'owner', on: { next: 'owner_two' }, advanceEvent: 'next' },
+        owner_two: { actor: 'owner', on: { next: 'critic_turn' }, advanceEvent: 'next' },
+        critic_turn: { actor: 'critic', on: { fallback: 'fallback' } },
+        fallback: { actor: 'owner', on: { done: 'complete' }, advanceEvent: 'done' },
+        complete: { actor: 'owner', on: {} },
+      }, windows: {}, fallbackDegradation: 'critic unavailable',
+      notifications: { onFallback: () => 'Owner fallback.' },
+    })
+    const run = createTestRun({ protocol: proto, phase: 'owner_one', _pendingFallback: 'critic' })
+
+    await onRunAdvance('test-owner', 'First owner phase.')
+    expect(run.phase).toBe('owner_two')
+    expect(run._pendingFallback).toBe('critic')
+
+    await onRunAdvance('test-owner', 'Second owner phase.')
+    expect(run.phase).toBe('fallback')
+    expect(run._pendingFallback).toBeUndefined()
   })
 })
 
