@@ -909,6 +909,8 @@ describe('delegated-build protocol', () => {
 
   test('prompts pin scope, review proof, and PM-only commit', () => {
     const seed = delegatedBuildProto.seed('builder', { name: 'builder', sessionId: 'b', threadId: 't', rounds: 2, task: 'x' })!
+    expect(seed).toContain('Remain idle during PM planning')
+    expect(seed).toContain('do not edit files or begin implementation until you receive the first numbered-step handoff')
     expect(seed).toContain('authorized to edit only the current numbered step')
     expect(seed).toContain('Do not commit')
     const verify = delegatedBuildProto.notifications.onTurn!({ phase: 'verifying' } as any, 'report')
