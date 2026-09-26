@@ -399,7 +399,10 @@ let counters = zeroCounters()
 function ago(at: number): string { return `${Math.round((deps.now() - at) / 60_000)}m ago` }
 
 const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' : 's'}`
-const errText = (err: unknown): string => (err instanceof Error ? (err.stack ?? err.message) : String(err))
+// `||`, not `??`: a Bun fetch abort is an Error whose stack is the empty
+// string, and `??` kept it — so a POST timeout logged its reason as nothing.
+export const errText = (err: unknown): string =>
+  (err instanceof Error ? (err.stack || err.message || err.name) : String(err))
 
 function failureVerb(active: RaindropMode): { short: string; long: string } {
   return active === 'live'

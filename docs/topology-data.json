@@ -108,7 +108,7 @@
       "id": "daemon_util",
       "label": "daemon/util.ts",
       "layer": "core",
-      "desc": "safeSend, chunk, getContextPercent, formatDuration, baseNameFromBranch"
+      "desc": "safeSend, chunk, parseContextPercent, formatDuration, baseNameFromBranch"
     },
     {
       "id": "daemon_worktree-manager",
@@ -871,6 +871,10 @@
     [
       "daemon_reply-guard",
       "daemon_usage"
+    ],
+    [
+      "daemon_reply-guard",
+      "daemon_util"
     ],
     [
       "daemon_phase-budget",

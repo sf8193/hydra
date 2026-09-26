@@ -75,15 +75,26 @@ export async function isTmuxRecentlyActive(name: string, thresholdSeconds = 60):
   } catch { return false }
 }
 
-export function getContextPercent(tmuxName: string): string {
-  try {
-    const pane = execFileSync('tmux', ['capture-pane', '-t', tmuxName, '-p'], { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
-    // Match from the last few lines only (Claude's status bar) to avoid matching percentages in conversation text
-    const lines = pane.trimEnd().split('\n')
-    const tail = lines.slice(-3).join('\n')
-    const match = tail.match(/(\d+)%/)
-    return match ? `${match[1]}%` : '?'
-  } catch { return '?' }
+// The statusLine renders below the input box's bottom rule, so only the lines
+// after the LAST full-width rule are the footer; anything above is conversation
+// text, where a stray "34%" must never read as context usage. Two footer shapes
+// count: the README's `ctx: N%` and a progress bar followed by `N%` (the GSD
+// statusline). A bare `N%` is not enough — Claude Code's own "Context left until
+// auto-compact: N%" shares the footer and reports REMAINING, not used.
+const INPUT_RULE_RE = /^\s*─{8,}\s*$/
+const CTX_LABEL_RE = /\bctx:\s*(\d+)%/
+const CTX_BAR_RE = /[█░]+\s*(\d+)%/
+
+export function parseContextPercent(pane: string): number | null {
+  const lines = pane.trimEnd().split('\n')
+  let rule = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (INPUT_RULE_RE.test(lines[i])) { rule = i; break }
+  }
+  if (rule === -1) return null
+  const footer = lines.slice(rule + 1).join('\n')
+  const match = footer.match(CTX_LABEL_RE) ?? footer.match(CTX_BAR_RE)
+  return match ? parseInt(match[1], 10) : null
 }
 
 // Strip protocol routing tags from displayed text. The machine tag

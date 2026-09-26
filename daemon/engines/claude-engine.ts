@@ -16,7 +16,7 @@ import type {
   ContextUsage, EngineSnapshot,
 } from './engine-adapter.js'
 import { transport } from '../bridge-transport.js'
-import { tmuxHasSession } from '../util.js'
+import { parseContextPercent, tmuxHasSession } from '../util.js'
 import { isKnownModel } from '../../shared/constants.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
@@ -213,12 +213,10 @@ export class ClaudeEngine implements EngineAdapter {
 
   usage(info: SessionInfo): ContextUsage | null {
     try {
-      const pane = execFileSync('tmux', ['capture-pane', '-t', info.tmuxName, '-p', '-S', '-3'],
+      const pane = execFileSync('tmux', ['capture-pane', '-t', info.tmuxName, '-p'],
         { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
-      const tail = pane.trimEnd()
-      const match = tail.match(/(\d+)%/)
-      if (!match) return null
-      const percent = parseInt(match[1], 10)
+      const percent = parseContextPercent(pane)
+      if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
   }
