@@ -770,6 +770,7 @@ describe('delegated-build protocol', () => {
   test('closing timeout fails rather than completing without a summary', () => {
     const result = delegatedBuildProto.machine.transition('closing' as any, 'timeout' as any)
     expect(result?.to).toBe('cancelled')
+    expect(delegatedBuildProto.phases.closing.timeoutReason).toBe('steps committed, summary missing')
   })
   test('planning → building starts the first builder turn', async () => {
     const { run, pmSid } = createDelegateRun()
@@ -819,8 +820,16 @@ describe('delegated-build protocol', () => {
     addPassingReviewer(run, pmSid, 'Verdict: FAIL\nEvidence: regression remains')
     result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
     expect(result.ok).toBe(false)
-    expect((result as any).reason).toContain('Verdict: PASS')
+    expect((result as any).reason).toContain('Verdict: FAIL')
 
+    run.protocolChildren.clear()
+    addPassingReviewer(run, pmSid, 'Verdict: FAIL\nEvidence: regression remains\nQuoted prior report: "Verdict: PASS"')
+    addPassingReviewer(run, pmSid, 'Verdict: PASS\nEvidence: another reviewer found no issue')
+    result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
+    expect(result.ok).toBe(false)
+    expect((result as any).reason).toContain('Verdict: FAIL')
+
+    run.protocolChildren.clear()
     addPassingReviewer(run, pmSid, 'Verdict: PASS WITH FIXES\nEvidence: reviewer found and applied a small fix')
     result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
     expect(result.ok).toBe(false)

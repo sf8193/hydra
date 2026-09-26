@@ -26,7 +26,7 @@ export default protocol('delegated-build', {
     committing: { actor: 'pm', half: 'top', on: { next_step: 'building', cap_next_step: 'cap_exhausted', complete: 'closing', timeout: 'cancelled', cancel: 'cancelled' } },
     cap_exhausted: { actor: 'pm', half: 'top', on: { cancel: 'cancelled' }, onEnter: [async (run, _prev, _content, ctx) => { await ctx.fireTransition(run, 'cancel', '', 'builder-turn budget exhausted'); return true }] },
     // A run without the owner's final summary is not a successful completion.
-    closing: { actor: 'pm', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
+    closing: { actor: 'pm', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted', timeoutReason: 'steps committed, summary missing' },
     complete: { actor: 'pm', half: 'top', on: {} }, cancelled: { actor: 'pm', half: 'top', on: {} },
   },
   windows: { planning: '15m', building: '30m', pm_build: '30m', verifying: '30m', committing: '10m', cap_exhausted: '1m', closing: '5m' },

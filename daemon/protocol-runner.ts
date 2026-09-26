@@ -466,13 +466,15 @@ function validateDelegatedBuildVerification(run: ProtocolRun, content: string): 
   if (reviewers.length === 0) {
     return 'step_passed requires a current-phase reviewer spawned with headless=true, read_thread=true, and phase_budget that returned a result'
   }
-  const hasPassingVerdict = reviewers.some(reviewer => {
-    const verdict = reviewer.result!.match(/\bverdict\s*:\s*(PASS WITH FIXES|PASS|FAIL)\b/i)?.[1]?.toUpperCase()
-    const hasEvidence = /(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*\S+/i.test(reviewer.result!)
-    return verdict === 'PASS' && hasEvidence
-  })
-  if (!hasPassingVerdict) {
-    return 'step_passed requires the reviewer result to contain `Verdict: PASS` and non-empty `Evidence:`'
+  const verdicts = reviewers.map(reviewer => ({
+    verdict: reviewer.result!.match(/(?:^|\n)[ \t]*verdict[ \t]*:[ \t]*(PASS WITH FIXES|PASS|FAIL)\b/i)?.[1]?.toUpperCase(),
+    hasEvidence: /(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*\S+/i.test(reviewer.result!),
+  }))
+  if (verdicts.some(({ verdict }) => verdict === 'FAIL')) {
+    return 'step_passed is blocked because a current-phase reviewer returned `Verdict: FAIL`'
+  }
+  if (!verdicts.some(({ verdict, hasEvidence }) => verdict === 'PASS' && hasEvidence)) {
+    return 'step_passed requires at least one reviewer result with `Verdict: PASS` and non-empty `Evidence:`'
   }
   const hasMechanicalChecks = /(?:^|\n)[ \t]*mechanical checks[ \t]*:[ \t]*\S+/i.test(content)
   const hasReviewer = /(?:^|\n)[ \t]*reviewer[ \t]*:[ \t]*\S+/i.test(content)
@@ -1457,7 +1459,7 @@ function resetTimeout(run: ProtocolRun): void {
         void enterFallbackPhase(run, actorRole, 'silence')
         return
       }
-      void fireTransition(run, 'timeout', '', 'timed out')
+      void fireTransition(run, 'timeout', '', run.protocol.phases[phase]?.timeoutReason ?? 'timed out')
     }
   }, ms)
 
@@ -1482,7 +1484,7 @@ function resetTimeout(run: ProtocolRun): void {
         void enterFallbackPhase(run, cappedActor, 'silence')
         return
       }
-      await fireTransition(run, 'timeout', '', 'total time exceeded')
+      await fireTransition(run, 'timeout', '', run.protocol.phases[run.phase]?.timeoutReason ?? 'total time exceeded')
     }, totalMs)
   }
 }

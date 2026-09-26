@@ -26,6 +26,8 @@ type PhaseDef = {
   on: PhaseTransitions
   advanceEvent?: string
   finalAdvanceEvent?: string
+  /** Cancellation reason used when this phase's timeout transition fires. */
+  timeoutReason?: string
   capabilities?: readonly Capability[]
   onEnter?: PhaseBehavior[]
 }
