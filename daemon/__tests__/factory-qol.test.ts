@@ -840,6 +840,26 @@ describe('accept', () => {
     expect(sent.find(s => s.text.startsWith('🏭 ✅'))?.text).toContain('explicit override: changes unresolved')
   })
 
+  test('owner unable after conditional approval blocks ordinary acceptance', async () => {
+    const pmThreadId = 'qol-pm-thread-unable'
+    const pm = mkPm(pmThreadId)
+    const state = mkBuild({ ticket: 'fb-unable', pmThreadId, builderName: 'unable', phase: 'reviewing' })
+
+    protocolEvents.emitComplete({
+      protocol: 'review', threadId: state.builderThreadId!,
+      rounds: { completed: 20, requested: 20 }, outcome: 'complete', terminalPhase: 'unresolved',
+      decisions: [
+        { phase: 'critic_turn', role: 'critic', value: 'approve_with_changes', because: 'Apply bounded fix' },
+        { phase: 'apply_changes', role: 'owner', value: 'unable', because: 'Upstream contract cannot change' },
+      ],
+      durationMs: 1000, summary: 'Could not apply the conditional fix', via: 'normal',
+    })
+    await settle()
+
+    expect(state.reviewResult).toBe('unresolved')
+    expect(factoryAccept(state.ticket, pm.sessionId)).toEqual({ error: expect.stringContaining('changes unresolved') })
+  })
+
   test('retry clears the previous review result before the next review', async () => {
     const pmThreadId = 'qol-pm-thread-review-retry'
     const pm = mkPm(pmThreadId)

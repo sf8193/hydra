@@ -4,6 +4,9 @@ import { SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, r
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
   expect(normalizeReviewRounds(3)).toBe(3)
+  expect(normalizeReviewRounds(20)).toBe(20)
+  expect(normalizeReviewRounds(21)).toBe(20)
+  expect(normalizeReviewRounds(50)).toBe(20)
   expect(normalizeReviewRounds(99)).toBe(20)
   expect(normalizeReviewRounds(0)).toBe(1)
 })

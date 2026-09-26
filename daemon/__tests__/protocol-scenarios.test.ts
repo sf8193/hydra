@@ -6,6 +6,7 @@ import { protocol } from '../protocol-dsl.js'
 import { resolveModifier } from '../modifiers.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import { registry } from '../sessions.js'
+import { reviewResult } from '../review-result.js'
 
 // Real protocol definitions — the harness exercises them as-is
 import review from '../../protocols/review.js'
@@ -61,6 +62,7 @@ describe('review: verdict-driven completion', () => {
     expect(event.topic).toBe('test review')
     expect(event.rounds.completed).toBe(3)
     expect(event.rounds.requested).toBe(3)
+    expect(reviewResult(event)).toBe('approved_after_changes')
   })
 
   test('last-round request remains unresolved after owner response', async () => {
@@ -80,11 +82,29 @@ describe('review: verdict-driven completion', () => {
     expect(h.completionEvents[0].summary).toContain('Fixed typo')
   })
 
-  test('owner can report conditional fixes as unable', async () => {
+  test('critic rechecks an owner unable report before deciding', async () => {
     h = createHarness(review, { rounds: 2 })
     await h.advance('critic', 'Fix upstream contract.', 'approve_with_changes')
     await h.advance('owner', 'Cannot change upstream contract.', 'unable')
+    expect(h.phase).toBe('critic_turn')
+    expect(h.round).toBe(2)
+    await h.advance('critic', 'The upstream constraint is valid; approved.', 'approve')
+    expect(h.phase).toBe('cleanup')
+  })
+
+  test('owner unable report remains unresolved when no critic recheck remains', async () => {
+    h = createHarness(review, { rounds: 1 })
+    await h.advance('critic', 'Fix upstream contract.', 'approve_with_changes')
+    await h.advance('owner', 'Cannot change upstream contract.', 'unable')
     expect(h.phase).toBe('unresolved')
+  })
+
+  test('last-round applied notification says fixes were not rechecked', async () => {
+    h = createHarness(review, { rounds: 1 })
+    await h.advance('critic', 'Fix this typo.', 'approve_with_changes')
+    await h.advance('owner', 'Fixed typo.', 'applied')
+    const notice = review.notifications.onExit!(h.run, 'complete')
+    expect(notice).toContain('fixes were applied but not rechecked')
   })
 })
 

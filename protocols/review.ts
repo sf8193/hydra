@@ -20,7 +20,7 @@ export default protocol('review', {
   phases: {
     critic_turn: { actor: 'critic', half: 'top', on: { critic_approve: 'cleanup', critic_feedback: 'owner_turn', critic_conditional: 'apply_changes', timeout: 'cancelled', cancel: 'cancelled', fallback: 'subagent_review' } },
     owner_turn:  { actor: 'owner', half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'unresolved', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
-    apply_changes: { actor: 'owner', half: 'bottom', on: { changes_applied: 'critic_turn', unable: 'unresolved', final_round: 'unresolved', timeout: 'cancelled', cancel: 'cancelled' } },
+    apply_changes: { actor: 'owner', half: 'bottom', on: { changes_applied: 'critic_turn', unable: 'critic_turn', final_round: 'unresolved', timeout: 'cancelled', cancel: 'cancelled' } },
     cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
     // The owner runs the review itself, via fresh subagents. Reached two ways,
     // both through this phase's `fallback` transition: the critic died and
@@ -81,7 +81,9 @@ export default protocol('review', {
     onExit: (run, outcome, reason) => outcome === 'cancelled'
       ? `[system] Adversarial Review cancelled: ${reason}`
       : run.phase === 'unresolved'
-        ? `[system] Adversarial Review finished with changes unresolved after ${run.currentRound} critic round${run.currentRound === 1 ? '' : 's'}. Return the findings to the caller; do not report approval.`
+        ? run.decisions.at(-1)?.phase === 'apply_changes' && run.decisions.at(-1)?.value === 'applied'
+          ? `[system] Adversarial Review finished after ${run.currentRound} critic round${run.currentRound === 1 ? '' : 's'}: the requested fixes were applied but not rechecked because the review reached its cap. Return the findings and fix report to the caller; do not report approval.`
+          : `[system] Adversarial Review finished with changes unresolved after ${run.currentRound} critic round${run.currentRound === 1 ? '' : 's'}. Return the findings to the caller; do not report approval.`
         : `[system] Adversarial Review finished after ${run.currentRound} round${run.currentRound === 1 ? '' : 's'}. Check the recorded verdict and review path.`,
     onKickoff: {
       owner: (run) => {
