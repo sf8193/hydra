@@ -4,7 +4,7 @@ import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.
 import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateway.js'
 
-let selectProto: Awaited<ReturnType<typeof import('../../protocols/delegated-build-select.js')>>['selectDelegatedBuildProtocol'] | null = null
+let selectProto: typeof import('../../protocols/delegated-build-select.js')['selectDelegatedBuildProtocol'] | null = null
 
 async function getProto(quick = false) {
   if (!selectProto) selectProto = (await import('../../protocols/delegated-build-select.js')).selectDelegatedBuildProtocol

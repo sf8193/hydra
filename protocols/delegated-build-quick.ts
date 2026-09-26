@@ -20,7 +20,7 @@ export default protocol('delegated-build-quick', {
   seed: { builder: (ctx) => protocolSeed(ctx.protocol, 'builder', ctx) + `\n\n${ctx.task ? `**Task:** ${ctx.task}` : `Read this thread for context — the PM's conversation describes what needs to be done.`}\n\nImplement the task. When done, call \`advance({ content: "summary of what you built" })\`.\n\nUse \`fetch_messages\` to read the thread if you need more context.` },
   notifications: {
     onKickoff: { pm: () => null, builder: () => null },
-    onFallback: { pm: () => `[system] The builder died and couldn't be recovered. Implement the task yourself, then call \`advance({ content: "summary" })\`.` },
+    onFallback: () => `[system] The builder died and couldn't be recovered. Implement the task yourself, then call \`advance({ content: "summary" })\`.`,
   },
   summaryFormat: (run) => [`**⚡ Delegated Build Quick Summary** (${run.rounds} round${run.rounds > 1 ? 's' : ''})`, ``, `🔬 **Synthesis** — one sentence.`, ``, `📋 **What was built** — include artifacts and review findings.`, ``, `➡️ **What's next** — what needs the human.`],
 })

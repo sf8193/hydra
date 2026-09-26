@@ -769,7 +769,9 @@ const verificationProof = 'Mechanical checks: bun test passed\nReviewer: fresh-r
 describe('delegated-build protocol', () => {
   test('closing timeout fails rather than completing without a summary', () => {
     const result = delegatedBuildProto.machine.transition('closing' as any, 'timeout' as any)
-    expect(result?.to).toBe('cancelled')
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.reason)
+    expect(result.to).toBe('cancelled')
     expect(delegatedBuildProto.phases.closing.timeoutReason).toBe('steps committed, summary missing')
   })
   test('planning → building starts the first builder turn', async () => {
