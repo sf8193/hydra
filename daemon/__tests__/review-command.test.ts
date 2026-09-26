@@ -128,6 +128,12 @@ function mkOwner(): { sessionId: string; threadId: string; msg: InboundMessage }
 }
 
 describe('review command → run params', () => {
+  test('requested round limit is capped at twenty', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 99, 'bounded review', undefined, ['subagent'])
+    expect(getRunByThread(threadId)?.rounds).toBe(20)
+  })
+
   test('+subagent becomes directSubagent and starts the run in subagent_review', async () => {
     const { threadId, msg } = mkOwner()
 

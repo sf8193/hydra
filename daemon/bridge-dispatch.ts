@@ -15,6 +15,7 @@ import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
+import { normalizeReviewRounds } from '../shared/constants.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -448,7 +449,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!name) throw new Error('name is required')
         const topic = str(args.topic)
         const reviewerModel = str(args.reviewer_model)
-        const reviewRounds = num(args.review_rounds) ?? 3
+        const reviewRounds = normalizeReviewRounds(num(args.review_rounds))
         if (!callerSessionId) throw new Error('factory_review requires a session context')
         const callerInfo = registry.get(callerSessionId)
         if (!callerInfo) throw new Error('session not found')
@@ -468,7 +469,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           reviewRounds,
         })
 
-        return { content: [{ type: 'text', text: `Review started on ${name} (${reviewRounds} rounds). Results will be delivered to your thread.` }] }
+        return { content: [{ type: 'text', text: `Review started on ${name} (up to ${reviewRounds} rounds). Results will be delivered to your thread.` }] }
       }
 
       case 'watch_pr': {

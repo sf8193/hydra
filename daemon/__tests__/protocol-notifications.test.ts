@@ -47,7 +47,7 @@ describe('protocol notifications: onExit (cancelled)', () => {
 describe('protocol notifications: onPhaseChange', () => {
   test('idle participant receives phase change notification on transition', async () => {
     h = createHarness(review, { rounds: 3 })
-    await h.advance('critic', 'Round 1 critique.')
+    await h.advance('critic', 'Round 1 critique.', 'request_changes')
 
     await h.advance('owner', 'Round 1 defense.')
     const criticNotes = h.actorNotifications('critic')

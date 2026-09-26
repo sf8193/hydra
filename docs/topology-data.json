@@ -509,6 +509,10 @@
       "daemon_dashboard"
     ],
     [
+      "daemon_bridge-dispatch",
+      "shared_constants"
+    ],
+    [
       "daemon_bridge-server",
       "daemon_config"
     ],
@@ -1051,6 +1055,10 @@
     [
       "daemon_commands_review",
       "daemon_protocol-registry"
+    ],
+    [
+      "daemon_commands_review",
+      "shared_constants"
     ],
     [
       "daemon_commands_watch",

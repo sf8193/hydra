@@ -373,7 +373,7 @@ export function protocolSeed(proto: Protocol, role: string, ctx: SeedContext): s
   const block = mechanicsBlock({
     tmuxName: ctx.name,
     role,
-    protocol: `${ctx.rounds}-round ${proto.display.toLowerCase()}`,
+    protocol: `${proto.display.toLowerCase()} (up to ${ctx.rounds} round${ctx.rounds === 1 ? '' : 's'})`,
     sessionId: ctx.sessionId,
     threadId: ctx.threadId,
     cadence: cfg.cadence,

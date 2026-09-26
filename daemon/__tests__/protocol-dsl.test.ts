@@ -39,10 +39,10 @@ describe('review protocol (TypeScript DSL)', () => {
     }
   })
 
-  test('final_round goes to cleanup (no post_pass)', () => {
+  test('final_round goes to unresolved', () => {
     const result = review.machine.transition('owner_turn' as any, 'final_round' as any)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.to).toBe('cleanup')
+    if (result.ok) expect(result.to).toBe('unresolved')
   })
 
   test('fallback event transitions critic_turn to subagent_review', () => {
@@ -230,7 +230,7 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(seed).toContain('drift')
     expect(seed).toContain('abc-123')
     expect(seed).toContain('thread-456')
-    expect(seed).toContain('3-round')
+    expect(seed).toContain('up to 3 rounds')
     expect(seed).toContain('advance(')
   })
 
@@ -244,8 +244,9 @@ describe('review protocol (TypeScript DSL)', () => {
     expect(focused).not.toContain('argue AGAINST')
   })
 
-  test('no decisions declared (modifiers replace post-pass decisions)', () => {
-    expect(Object.keys(review.decisions)).toHaveLength(0)
+  test('critic and owner decisions are declared', () => {
+    expect(review.decisions.critic_verdict.options).toEqual(['approve', 'request_changes', 'approve_with_changes'])
+    expect(review.decisions.owner_changes.options).toEqual(['applied', 'unable'])
   })
 })
 
@@ -407,7 +408,7 @@ describe('protocol DSL validation', () => {
 
 describe('phaseInteraction', () => {
   test('advance-only phase returns advance mode', () => {
-    expect(review.phaseInteraction('critic_turn')).toEqual({ verdict: 'none' })
+    expect(review.phaseInteraction('critic_turn')?.verdict).toBe('required')
     expect(review.phaseInteraction('owner_turn')).toEqual({ verdict: 'none' })
   })
 
@@ -502,6 +503,8 @@ describe('protocolSeed', () => {
   test('auto-injects protocol into SeedContext', () => {
     const seed = review.seed('critic', { name: 'x', sessionId: 'a', threadId: 't', rounds: 1 })!
     expect(seed).toContain('advance(')
+    expect(seed).toContain('adversarial review (up to 1 round)')
+    expect(seed).not.toContain('1-round adversarial review')
   })
 
   test('auto-fallback generates seed for role with advanceEvent but no explicit seed', () => {

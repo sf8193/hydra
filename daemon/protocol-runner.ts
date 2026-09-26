@@ -164,7 +164,7 @@ export async function startProtocolRun(
   // exchange to count — announcing "3 rounds" directly above a message saying
   // nobody was spawned leaves the reader to reconcile the two.
   const displayName = params.directSubagent ? 'Subagent Review' : proto.display
-  const scale = params.directSubagent ? `owner-run, no rounds` : `${rounds} round${rounds > 1 ? 's' : ''}`
+  const scale = params.directSubagent ? `owner-run, no rounds` : `up to ${rounds} round${rounds > 1 ? 's' : ''}`
   const annIds = await safeSend(threadId, `**${displayName}** — ${scale}${topicLine}`)
   run.messageIds.push(...annIds)
 
@@ -378,6 +378,9 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
       run.messageIds.push(...sentIds)
     }
 
+    // A terminal review result needs no deferred critic fallback. Clear the
+    // marker before completion, just as the non-terminal cleanup path does.
+    if (isTerminal(run)) run._pendingFallback = undefined
     await afterTransition(run, advancePhaseFrom, content)
 
     // Deferred fallback: a non-owner died during a phase without on.fallback
@@ -798,6 +801,7 @@ export async function cancelRun(run: ProtocolRun, reason: string): Promise<void>
       topic: run.params.topic as string | undefined,
       rounds: { completed: completedRoundsOf(run), requested: run.rounds },
       outcome: 'cancelled',
+      terminalPhase: run.phase,
       reason,
       decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
       durationMs: Date.now() - run.startedAt,
@@ -1456,6 +1460,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
     // normal path reaches its closing phase with the counted round genuinely done.
     rounds: { completed: via === 'normal' ? run.currentRound : completedRoundsOf(run), requested: run.rounds },
     outcome: 'complete',
+    terminalPhase: run.phase,
     decisions: run.decisions.map(d => ({ phase: d.phase, role: d.role, value: d.value, because: d.because })),
     durationMs: Date.now() - run.startedAt,
     transcriptPath,

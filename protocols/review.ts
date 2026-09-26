@@ -18,8 +18,9 @@ export default protocol('review', {
   },
 
   phases: {
-    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled', fallback: 'subagent_review' }, advanceEvent: 'critic_posted' },
-    owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
+    critic_turn: { actor: 'critic', half: 'top', on: { critic_approve: 'cleanup', critic_feedback: 'owner_turn', critic_conditional: 'apply_changes', timeout: 'cancelled', cancel: 'cancelled', fallback: 'subagent_review' } },
+    owner_turn:  { actor: 'owner', half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'unresolved', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
+    apply_changes: { actor: 'owner', half: 'bottom', on: { changes_applied: 'critic_turn', unable: 'critic_turn', final_round: 'unresolved', timeout: 'cancelled', cancel: 'cancelled' } },
     cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
     // The owner runs the review itself, via fresh subagents. Reached two ways,
     // both through this phase's `fallback` transition: the critic died and
@@ -32,12 +33,14 @@ export default protocol('review', {
     // means the review never produced a result, so it's a failure, not a success.
     subagent_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
+    unresolved:  { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },
 
   windows: {
     critic_turn: '10m',
     owner_turn: '30m',
+    apply_changes: '30m',
     cleanup: '5m',
     // Heavier than a single owner turn — spawn N subagents, wait, synthesize —
     // so the default fits the work rather than forcing extend_phase. The
@@ -54,12 +57,39 @@ export default protocol('review', {
     critic: { cadence: 'per-round', waits: true },
   },
 
+  decisions: {
+    critic_verdict: {
+      phase: 'critic_turn', actor: 'critic',
+      options: ['approve', 'request_changes', 'approve_with_changes'] as const,
+      descriptions: {
+        approve: 'no remaining changes; state what was checked',
+        request_changes: 'blocking issues and evidence; owner fixes before re-review',
+        approve_with_changes: 'specific bounded fixes to apply, then you recheck',
+      },
+      events: { approve: 'critic_approve', request_changes: 'critic_feedback', approve_with_changes: 'critic_conditional' },
+    },
+    owner_changes: {
+      phase: 'apply_changes', actor: 'owner',
+      options: ['applied', 'unable'] as const,
+      descriptions: { applied: 'list fixes and checks for critic re-review', unable: 'explain why fixes could not be applied' },
+      events: { applied: 'changes_applied', unable: 'unable' },
+      finalEvent: 'final_round',
+    },
+  },
+
   notifications: {
+    onExit: (run, outcome, reason) => outcome === 'cancelled'
+      ? `[system] Adversarial Review cancelled: ${reason}`
+      : run.phase === 'unresolved'
+        ? run.decisions.at(-1)?.phase === 'apply_changes' && run.decisions.at(-1)?.value === 'applied'
+          ? `[system] Adversarial Review finished after ${run.currentRound} critic round${run.currentRound === 1 ? '' : 's'}: the requested fixes were applied but not rechecked because the review reached its cap. Return the findings and fix report to the caller; do not report approval.`
+          : `[system] Adversarial Review finished with changes unresolved after ${run.currentRound} critic round${run.currentRound === 1 ? '' : 's'}. Return the findings to the caller; do not report approval.`
+        : `[system] Adversarial Review finished after ${run.currentRound} round${run.currentRound === 1 ? '' : 's'}. Check the recorded verdict and review path.`,
     onKickoff: {
       owner: (run) => {
         const topic = run.params.topic as string | undefined
         const lines = [
-          `[system] **Adversarial Review** — ${run.rounds} round${run.rounds > 1 ? 's' : ''}`,
+          `[system] **Adversarial Review** — up to ${run.rounds} critic round${run.rounds > 1 ? 's' : ''}; approval may close early`,
           ``,
           `You are **The Owner**. The Critic was spawned and is reading the thread to orient.`,
         ]
@@ -133,11 +163,11 @@ export default protocol('review', {
       + '\n\n' + (ctx.topic
         ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
         : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
-      ) + `\n\nPost your opening critique after orienting. The owner will defend — when a defense arrives, post your counter-argument. Repeat for ${ctx.rounds} rounds.\n\nFormat with clear headers. Be substantive and focused.`,
+      ) + `\n\nPost a verdict with evidence after orienting. Use approve only when no changes remain. Use approve_with_changes for bounded fixes you will recheck after the owner applies them; use request_changes for blocking work. Recheck every fix and issue another verdict. You may close early by approving. This review has a hard cap of ${ctx.rounds} critic turns; at the cap, a non-approval result stays unresolved.\n\nFormat with clear headers. Be substantive and focused.`,
   },
 
   summaryFormat: (run) => {
-    const roundArc = Array.from({ length: run.rounds }, (_, i) =>
+    const roundArc = Array.from({ length: run.currentRound }, (_, i) =>
       `**Round ${i + 1}️⃣:** Critic ... · Owner ...`)
 
     const modifiers = run.params.modifiers as Array<{ name: string }> | undefined
@@ -146,7 +176,7 @@ export default protocol('review', {
       : ''
 
     return [
-      `**⚔️ Review Summary** (${run.rounds} round${run.rounds > 1 ? 's' : ''}${modNote})`,
+      `**⚔️ Review Summary** (${run.currentRound} of ${run.rounds} maximum rounds${modNote})`,
       ``,
       `🔬 **Synthesis** — one sentence. The review in one breath.`,
       ...roundArc,

@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, statSync } from 'fs'
 import { join } from 'path'
-import { isKnownModel, isSessionLabel, type SessionLabel } from '../shared/constants.js'
+import { isKnownModel, isSessionLabel, DEFAULT_REVIEW_ROUNDS, type SessionLabel } from '../shared/constants.js'
 
 export type SpawnTemplate = {
   prompt: string
@@ -232,7 +232,7 @@ export async function runTemplateAction(
     case 'review': {
       const { default: reviewProto } = await import('../protocols/review.js')
       const { startProtocolRun } = await import('./protocol-runner.js')
-      await startProtocolRun(reviewProto, threadId, sessionId, { rounds: 3, topic, strike: true })
+      await startProtocolRun(reviewProto, threadId, sessionId, { rounds: DEFAULT_REVIEW_ROUNDS, topic, strike: true })
       return true
     }
     default:

@@ -21,6 +21,7 @@ import { checkUnpushedCommits } from './worktree-manager.js'
 import { getWatchesBySession, restoreWatches } from './pr-watch.js'
 import { startProtocolRun, getRunByThread, cancelRun, protocolEvents } from './protocol-runner.js'
 import type { CompletionEvent } from './protocol-types.js'
+import { reviewResult, reviewResultLabel, type ReviewResult } from './review-result.js'
 import reviewProto from '../protocols/review.js'
 import { registry, threadRegistry, sessionEmoji, setToolDescription, removeToolDescriptions } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
@@ -28,7 +29,7 @@ import { safeSend, safeEdit, formatDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { defaultToolDescription } from './bridge-tools.js'
-import { resolveModelAlias, isKnownModel } from '../shared/constants.js'
+import { resolveModelAlias, isKnownModel, normalizeReviewRounds } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
 import { on } from './event-bus.js'
 import { pushToolSurface } from './tool-surface.js'
@@ -60,6 +61,7 @@ export type FactoryBuildState = {
   retryCount: number
   createdAt: number
   reviewed: boolean
+  reviewResult?: ReviewResult
   worktree?: string
   diffGistUrl?: string  // set at factory_done time, included in review-complete notification
   prUrl?: string        // set at factory_done time for worktree builds; preferred over gist in notification
@@ -114,6 +116,7 @@ function logBuild(state: FactoryBuildState, outcome: string): void {
       outcome,
       retries: state.retryCount,
       reviewed: state.reviewed,
+      reviewResult: state.reviewResult,
       builderModel: state.builderModel ?? 'default',
       reviewerModel: state.reviewerModel ?? 'default',
       elapsed: Date.now() - state.createdAt,
@@ -802,7 +805,7 @@ export type FactoryBuildOpts = {
 
 export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?: string } | { error: string } {
   const { pmThreadId, pmSessionId, spec, builderModel, reviewerModel, worktree } = opts
-  const reviewRounds = opts.reviewRounds ?? 3
+  const reviewRounds = normalizeReviewRounds(opts.reviewRounds)
   const difficulty = opts.difficulty ?? 'easy'
   const { builder, reviewer, warning: modelWarning } = resolveModels(difficulty, builderModel, reviewerModel)
 
@@ -907,6 +910,10 @@ export function factoryRetry(
 
   transitionFactoryPhase(state, 'building')
   state.retryCount++
+  state.reviewed = false
+  state.reviewResult = undefined
+  state.reviewSummary = undefined
+  state.reviewMessageId = undefined
 
   // Send new instructions to the builder via notification
   transport.sendOrQueue(state.builderSessionId, {
@@ -958,11 +965,17 @@ export function factoryAcceptByTicket(
 function acceptCore(state: FactoryBuildState, allowUnreviewed: boolean): { ok: true } | { error: string } {
   if (state.phase !== 'awaiting_pm') return { error: `Cannot accept — build is in phase "${state.phase}", expected "awaiting_pm".` }
   if (!state.reviewed && !allowUnreviewed) return { error: 'Build was NOT adversarially reviewed (review failed or was cancelled). Pass allow_unreviewed=true to accept anyway.' }
+  if ((state.reviewResult === 'unresolved' || state.reviewResult === 'unknown') && !allowUnreviewed) {
+    return { error: `Review result is ${reviewResultLabel(state.reviewResult)}. Retry the build, or pass allow_unreviewed=true to accept explicitly.` }
+  }
 
   transitionFactoryPhase(state, 'complete')
-  logBuild(state, state.reviewed ? 'accepted' : 'accepted_unreviewed')
+  const unapprovedOverride = allowUnreviewed && (state.reviewResult === 'unresolved' || state.reviewResult === 'unknown')
+  logBuild(state, unapprovedOverride ? 'accepted_unapproved' : state.reviewed ? 'accepted' : 'accepted_unreviewed')
 
-  const reviewWarning = state.reviewed ? '' : ' (unreviewed)'
+  const reviewWarning = unapprovedOverride
+    ? ` (explicit override: ${reviewResultLabel(state.reviewResult!)})`
+    : state.reviewed ? '' : ' (unreviewed)'
   // Link to the review summary rather than reprinting it — the PM already read
   // it once, and a second copy is the noisiest message in the thread.
   const reviewUrl = state.reviewMessageId
@@ -1031,7 +1044,7 @@ function abandonCore(state: FactoryBuildState, reason?: string): { ok: true } | 
 }
 
 /** Serialize a build to a summary row (shared by factoryStatus + factoryListAll). */
-type BuildSummary = { ticket: string; phase: string; spec: string; retries: number; elapsed: number; builderName?: string; pmThreadId?: string; worktree?: string }
+type BuildSummary = { ticket: string; phase: string; spec: string; retries: number; elapsed: number; reviewed: boolean; reviewResult?: ReviewResult; builderName?: string; pmThreadId?: string; worktree?: string }
 function summarizeBuild(s: FactoryBuildState, includePmThread = false): BuildSummary {
   return {
     ticket: s.ticket,
@@ -1039,6 +1052,8 @@ function summarizeBuild(s: FactoryBuildState, includePmThread = false): BuildSum
     spec: s.spec.slice(0, 200),
     retries: s.retryCount,
     elapsed: Date.now() - s.createdAt,
+    reviewed: s.reviewed,
+    ...(s.reviewResult ? { reviewResult: s.reviewResult } : {}),
     builderName: s.builderSessionId ? registry.get(s.builderSessionId)?.tmuxName : undefined,
     ...(includePmThread ? { pmThreadId: s.pmThreadId } : {}),
     ...(s.worktree ? { worktree: s.worktree } : {}),
@@ -1102,7 +1117,7 @@ export async function factoryReview(opts: {
   reviewRounds?: number
 }): Promise<void> {
   const { callerThreadId, targetSessionId, targetThreadId, targetName, topic, reviewerModel } = opts
-  const reviewRounds = opts.reviewRounds ?? 3
+  const reviewRounds = normalizeReviewRounds(opts.reviewRounds)
 
   const unsub = protocolEvents.onceComplete(targetThreadId, (event) => {
     if (event.outcome === 'cancelled') {
@@ -1117,7 +1132,8 @@ export async function factoryReview(opts: {
     // its own work — the finding still counts, but nobody argued with it. Say so
     // in the same line that reports success, or the caller reads a self-review
     // as an adversarial one.
-    void safeSend(callerThreadId, `🔍 Review of **${targetName}** complete${reviewViaNote(event)}${summaryBlock}`)
+    const result = reviewResult(event)
+    void safeSend(callerThreadId, `🔍 Review of **${targetName}** complete — ${reviewResultLabel(result)}${reviewViaNote(event)}${summaryBlock}`)
   })
 
   try {
@@ -1580,7 +1596,7 @@ export function onBuilderDeath(sessionId: string): void {
   }
 }
 
-function onFactoryReviewComplete(builderThreadId: string, summaryText?: string, viaNote = ''): boolean {
+function onFactoryReviewComplete(builderThreadId: string, result: ReviewResult, summaryText?: string, viaNote = ''): boolean {
   const ticket = builderThreadToTicket.get(builderThreadId)
   if (!ticket) return false
 
@@ -1589,6 +1605,7 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string, 
 
   transitionFactoryPhase(state, 'awaiting_pm')
   state.reviewed = true
+  state.reviewResult = result
   if (summaryText) state.reviewSummary = summaryText
   pmReviewFailures.delete(state.pmThreadId)
   process.stderr.write(`daemon: factory: review complete for ticket ${state.ticket}, awaiting PM decision\n`)
@@ -1602,7 +1619,10 @@ function onFactoryReviewComplete(builderThreadId: string, summaryText?: string, 
     : ''
   // viaNote fires before the links: whether the review was adversarial changes
   // how the PM should read everything after it, including its own accept call.
-  void safeSend(state.pmThreadId, `🏭 🏁 ${eventLine(state)} — review complete${viaNote}${linkLabel}\n↳ factory_accept / factory_retry / factory_abandon${summaryBlock}`)
+  const actions = result === 'unresolved' || result === 'unknown'
+    ? 'factory_retry / factory_abandon (accept requires allow_unreviewed=true)'
+    : 'factory_accept / factory_retry / factory_abandon'
+  void safeSend(state.pmThreadId, `🏭 🏁 ${eventLine(state)} — review complete: ${reviewResultLabel(result)}${viaNote}${linkLabel}\n↳ ${actions}${summaryBlock}`)
     .then(ids => { if (ids[0]) state.reviewMessageId = ids[0] })
     .catch(() => {})
 
@@ -1817,8 +1837,8 @@ function factoryAdopt({ sessionId, threadId }: { sessionId: string; threadId: st
   process.stderr.write(`daemon: factory: adopted ${orphaned.length} build(s) for new PM ${newPmName} in thread ${threadId}\n`)
 }
 
-function factoryReviewComplete({ threadId, summary, viaNote }: { threadId: string; summary?: string; viaNote?: string }): void {
-  onFactoryReviewComplete(threadId, summary, viaNote)
+function factoryReviewComplete({ threadId, result, summary, viaNote }: { threadId: string; result: ReviewResult; summary?: string; viaNote?: string }): void {
+  onFactoryReviewComplete(threadId, result, summary, viaNote)
 }
 
 function factoryReviewCancelled({ threadId, reason }: { threadId: string; reason?: string }): void {
@@ -1828,7 +1848,7 @@ function factoryReviewCancelled({ threadId, reason }: { threadId: string; reason
 protocolEvents.onComplete((event: CompletionEvent) => {
   if (event.protocol !== 'review') return
   if (event.outcome === 'complete') {
-    factoryReviewComplete({ threadId: event.threadId, summary: event.summary, viaNote: reviewViaNote(event) })
+    factoryReviewComplete({ threadId: event.threadId, result: reviewResult(event), summary: event.summary, viaNote: reviewViaNote(event) })
   } else {
     factoryReviewCancelled({ threadId: event.threadId, reason: event.reason })
   }
