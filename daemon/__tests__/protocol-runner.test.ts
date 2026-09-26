@@ -4,6 +4,8 @@ import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend,
 import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import delegatedBuildProto from '../../protocols/delegated-build.js'
+import delegatedBuildQuickProto from '../../protocols/delegated-build-quick.js'
+import { selectDelegatedBuildProtocol } from '../../protocols/delegated-build-select.js'
 
 let origStderrWrite: typeof process.stderr.write
 
@@ -707,7 +709,7 @@ function createDelegateRun(overrides: Record<string, unknown> = {}) {
     protocol: delegatedBuildProto,
     threadId,
     ownerSessionId: pmSid,
-    phase: overrides.phase ?? 'clarifying',
+    phase: overrides.phase ?? 'planning',
     currentRound: 1,
     rounds: (overrides.rounds as number) ?? 3,
     startedAt: Date.now(),
@@ -732,40 +734,41 @@ function createDelegateRun(overrides: Record<string, unknown> = {}) {
 }
 
 describe('delegated-build protocol', () => {
-  test('roundPhase: clarifying → building does NOT increment round', async () => {
-    const { run, pmSid } = createDelegateRun({ phase: 'clarifying' })
+  test('planning → building starts the first builder turn', async () => {
+    const { run, pmSid } = createDelegateRun()
     expect(run.currentRound).toBe(1)
-    await onRunAdvance(pmSid, 'Here is my spec.')
+    await onRunAdvance(pmSid, 'Plan and step 1 brief.')
     expect(run.phase).toBe('building')
     expect(run.currentRound).toBe(1)
   })
 
-  test('roundPhase: reviewing → building increments round', async () => {
-    const { run, pmSid } = createDelegateRun({ phase: 'reviewing' })
+  test('request_changes consumes a builder turn', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'verifying' })
     expect(run.currentRound).toBe(1)
     await onRunAdvance(pmSid, 'Changes needed.', 'request_changes')
     expect(run.phase).toBe('building')
     expect(run.currentRound).toBe(2)
   })
 
-  test('PM approve transitions to closing', async () => {
-    const { run, pmSid } = createDelegateRun({ phase: 'reviewing' })
-    // On final round, approve goes to closing
+  test('clean step_passed at the cap still enters committing', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'verifying' })
     run.currentRound = run.rounds
-    await onRunAdvance(pmSid, 'Looks good!', 'approve')
-    expect(run.phase).toBe('closing')
+    await onRunAdvance(pmSid, 'Checks pass; reviewer PASS.', 'step_passed')
+    expect(run.phase).toBe('committing')
   })
 
-  test('PM request_changes loops back to building', async () => {
-    const { run, pmSid } = createDelegateRun({ phase: 'reviewing' })
+  test('request_changes at the cap cancels fail-closed', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'verifying' })
+    run.currentRound = run.rounds
     await onRunAdvance(pmSid, 'Fix the tests.', 'request_changes')
-    expect(run.phase).toBe('building')
+    expect(run.phase).toBe('cancelled')
   })
 
-  test('builder advance transitions to reviewing', async () => {
+  test('builder advance transitions to verifying and grants PM protocol_spawn', async () => {
     const { run, builderSid } = createDelegateRun({ phase: 'building' })
     await onRunAdvance(builderSid, 'Built the feature.')
-    expect(run.phase).toBe('reviewing')
+    expect(run.phase).toBe('verifying')
+    expect(registry.get(run.ownerSessionId)?.capabilities).toContain('protocol_spawn')
   })
 
   test('builder disconnect triggers fallback to pm_build', async () => {
@@ -785,37 +788,134 @@ describe('delegated-build protocol', () => {
     expect(phase.on.fallback).toBe('pm_build')
   })
 
-  test('skipClarify starts at building phase', () => {
-    // Verify the protocol's roundPhase is 'building' (not initialPhase 'clarifying')
-    expect(delegatedBuildProto.initialPhase).toBe('clarifying')
-    expect(delegatedBuildProto.roundPhase).toBe('building')
-    // When skipClarify is set, the run should start at roundPhase
-    const { run } = createDelegateRun({
-      phase: 'building', // simulates what startProtocolRun does with skipClarify
-      params: { skipClarify: true },
-    })
-    expect(run.phase).toBe('building')
+  test('quick protocol preserves the old graph separately', () => {
+    expect(delegatedBuildQuickProto.name).toBe('delegated-build-quick')
+    expect(delegatedBuildQuickProto.initialPhase).toBe('clarifying')
+    expect(delegatedBuildQuickProto.phases.building.on.build_done).toBe('reviewing')
+    expect(delegatedBuildProto.initialPhase).toBe('planning')
   })
 
-  test('full round cycle: clarify → build → review → build → review → approve', async () => {
-    const { run, pmSid, builderSid } = createDelegateRun({ rounds: 2 })
-    expect(run.phase).toBe('clarifying')
+  test('command selector routes delegate to rigorous and delegate! to quick', () => {
+    expect(selectDelegatedBuildProtocol(false).name).toBe('delegated-build')
+    expect(selectDelegatedBuildProtocol(true).name).toBe('delegated-build-quick')
+  })
 
-    await onRunAdvance(pmSid, 'Build a login page.')
-    expect(run.phase).toBe('building')
-    expect(run.currentRound).toBe(1)
-
-    await onRunAdvance(builderSid, 'Done — login page built.')
+  test('quick path runs the original clarify/build/review/close graph', async () => {
+    const { run, pmSid, builderSid } = createDelegateRun({ protocol: delegatedBuildQuickProto, phase: 'clarifying', rounds: 2 })
+    await onRunAdvance(pmSid, 'Quick spec.')
+    await onRunAdvance(builderSid, 'Built.')
     expect(run.phase).toBe('reviewing')
-
-    await onRunAdvance(pmSid, 'Fix the styling.', 'request_changes')
-    expect(run.phase).toBe('building')
-    expect(run.currentRound).toBe(2)
-
-    await onRunAdvance(builderSid, 'Styling fixed.')
-    expect(run.phase).toBe('reviewing')
-
+    await onRunAdvance(pmSid, 'Fix one thing.', 'request_changes')
+    await onRunAdvance(builderSid, 'Fixed.')
     await onRunAdvance(pmSid, 'Approved.', 'approve')
     expect(run.phase).toBe('closing')
+  })
+
+  test('rigorous two-step trace verifies and commits each step', async () => {
+    const { run, pmSid, builderSid } = createDelegateRun({ rounds: 2 })
+    await onRunAdvance(pmSid, 'Plan; current step 1.')
+    expect(run.phase).toBe('building')
+    await onRunAdvance(builderSid, 'Step 1 built, no commits.')
+    expect(run.phase).toBe('verifying')
+    await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+    expect(run.phase).toBe('committing')
+    await onRunAdvance(pmSid, 'Committed step 1; current step 2.', 'next_step')
+    expect(run.phase).toBe('building')
+    expect(run.currentRound).toBe(2)
+    await onRunAdvance(builderSid, 'Step 2 built, no commits.')
+    await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+    expect(run.phase).toBe('committing')
+    await onRunAdvance(pmSid, 'Committed exact reviewed step 2.', 'complete')
+    expect(run.phase).toBe('closing')
+  })
+
+  test('next_step at cap cancels, while complete at cap closes', async () => {
+    const capped = createDelegateRun({ phase: 'committing', rounds: 1 })
+    await onRunAdvance(capped.pmSid, 'Need another step.', 'next_step')
+    expect(capped.run.phase).toBe('cancelled')
+
+    const done = createDelegateRun({ phase: 'committing', rounds: 1 })
+    await onRunAdvance(done.pmSid, 'Committed reviewed step.', 'complete')
+    expect(done.run.phase).toBe('closing')
+  })
+
+  test('cap exhaustion reports the exact cancelled reason', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'verifying', rounds: 1 })
+    let completion: any
+    const listener = (event: any) => { if (event.protocol === 'delegated-build') completion = event }
+    protocolEvents.onComplete(listener)
+    try {
+      await onRunAdvance(pmSid, 'Still broken.', 'request_changes')
+      expect(completion?.outcome).toBe('cancelled')
+      expect(completion?.reason).toBe('builder-turn budget exhausted')
+    } finally {
+      protocolEvents.offComplete(listener)
+    }
+  })
+
+  test('PM self-build fallback rejoins verifying then committing', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'pm_build' })
+    await onRunAdvance(pmSid, 'Self-built current step without committing.')
+    expect(run.phase).toBe('verifying')
+    await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+    expect(run.phase).toBe('committing')
+    expect(delegatedBuildProto.fallbackDegradation).toContain('independent authorship lost')
+  })
+
+  test('actual builder fallback keeps request_changes PM-owned and enforces the cap', async () => {
+    const { run, pmSid, builderSid } = createDelegateRun({ phase: 'building', rounds: 2 })
+    __test!.setLifecycle({ killSession: async (info) => { registry.delete(info.sessionId) } })
+    try {
+      await __test!.enterFallbackPhase(run, 'builder')
+      expect(run.phase).toBe('pm_build')
+      expect(run.participants.has('builder')).toBe(false)
+      const retiredQueueSize = transport.messageQueues.get(builderSid)?.length ?? 0
+
+      await onRunAdvance(pmSid, 'PM self-build pass one.')
+      await onRunAdvance(pmSid, 'Reviewer FAIL with bounded fixes.', 'request_changes')
+      expect(run.phase).toBe('pm_build')
+      expect(run.currentRound).toBe(2)
+      expect(transport.messageQueues.get(builderSid)?.length ?? 0).toBe(retiredQueueSize)
+
+      await onRunAdvance(pmSid, 'PM fixes complete.')
+      await onRunAdvance(pmSid, 'Reviewer still FAIL.', 'request_changes')
+      expect(run.phase).toBe('cancelled')
+    } finally {
+      __test!.resetLifecycle()
+    }
+  })
+
+  test('actual builder fallback keeps next_step PM-owned and enforces the cap', async () => {
+    const { run, pmSid, builderSid } = createDelegateRun({ phase: 'building', rounds: 2 })
+    __test!.setLifecycle({ killSession: async (info) => { registry.delete(info.sessionId) } })
+    try {
+      await __test!.enterFallbackPhase(run, 'builder')
+      const retiredQueueSize = transport.messageQueues.get(builderSid)?.length ?? 0
+      await onRunAdvance(pmSid, 'PM self-built step 1.')
+      await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+      await onRunAdvance(pmSid, 'Committed step 1; next step brief.', 'next_step')
+      expect(run.phase).toBe('pm_build')
+      expect(run.currentRound).toBe(2)
+      expect(transport.messageQueues.get(builderSid)?.length ?? 0).toBe(retiredQueueSize)
+
+      await onRunAdvance(pmSid, 'PM self-built step 2.')
+      await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+      await onRunAdvance(pmSid, 'Committed step 2; more remains.', 'next_step')
+      expect(run.phase).toBe('cancelled')
+    } finally {
+      __test!.resetLifecycle()
+    }
+  })
+
+  test('prompts pin scope, review proof, and PM-only commit', () => {
+    const seed = delegatedBuildProto.seed('builder', { name: 'builder', sessionId: 'b', threadId: 't', rounds: 2, task: 'x' })!
+    expect(seed).toContain('authorized to edit only the current numbered step')
+    expect(seed).toContain('Do not commit')
+    const verify = delegatedBuildProto.notifications.onTurn!({ phase: 'verifying' } as any, 'report')
+    expect(verify).toContain('read_thread=true')
+    expect(verify).toContain('phase_budget')
+    expect(verify).toContain('PASS / PASS WITH FIXES / FAIL')
+    const commit = delegatedBuildProto.notifications.onTurn!({ phase: 'committing' } as any, 'evidence')
+    expect(commit).toContain('Commit exactly the reviewed current-step diff')
   })
 })

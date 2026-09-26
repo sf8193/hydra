@@ -1,120 +1,50 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
 
 export default protocol('delegated-build', {
-  emoji: '📋',
-  display: 'Delegated Build',
-
-  owner: 'pm',
-  roundPhase: 'building',
-  cleanupPhase: 'closing',
-  cancelPhase: 'cancelled',
-  fallbackDegradation: 'PM self-build (no delegation)',
-
-  roles: {
-    pm: 'The PM',
-    builder: 'The Builder',
-  },
-
+  emoji: '📋', display: 'Delegated Build', owner: 'pm', initialPhase: 'planning', roundPhase: 'building',
+  cleanupPhase: 'closing', cancelPhase: 'cancelled',
+  fallbackDegradation: 'delegation and independent authorship lost; fresh review and commit sequencing retained',
+  roles: { pm: 'The PM', builder: 'The Builder' },
   phases: {
-    clarifying:   { actor: 'pm',      half: 'top',    on: { spec_ready: 'building', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'spec_ready' },
-    building:     { actor: 'builder', half: 'bottom', on: { build_done: 'reviewing', timeout: 'cancelled', cancel: 'cancelled', fallback: 'pm_build' }, advanceEvent: 'build_done' },
-    reviewing:    { actor: 'pm',      half: 'top',    on: { pm_approve: 'closing', pm_changes: 'building', timeout: 'cancelled', cancel: 'cancelled' } },
-    pm_build:     { actor: 'pm',      half: 'top',    on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
-    closing:      { actor: 'pm',      half: 'top',    on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
-    complete:     { actor: 'pm',      half: 'top',    on: {} },
-    cancelled:    { actor: 'pm',      half: 'top',    on: {} },
+    planning: { actor: 'pm', half: 'top', on: { plan_ready: 'building', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'plan_ready' },
+    building: {
+      actor: 'builder', half: 'bottom',
+      on: { build_done: 'verifying', timeout: 'cancelled', cancel: 'cancelled', fallback: 'pm_build' },
+      advanceEvent: 'build_done',
+      // A real fallback retires the builder permanently. Later retries and
+      // steps still enter roundPhase so they consume the same turn budget, but
+      // immediately redirect to the PM-owned build phase before notifying.
+      onEnter: [async (run, _prev, content, ctx) => {
+        if (!run._enteredFallback) return false
+        await ctx.fireTransition(run, 'fallback', content, 'PM self-build redirect failed')
+        return true
+      }],
+    },
+    pm_build: { actor: 'pm', half: 'top', on: { build_done: 'verifying', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'build_done' },
+    verifying: { actor: 'pm', half: 'top', capabilities: ['protocol_spawn'], on: { request_changes: 'building', cap_request_changes: 'cap_exhausted', step_passed: 'committing', timeout: 'cancelled', cancel: 'cancelled' } },
+    committing: { actor: 'pm', half: 'top', on: { next_step: 'building', cap_next_step: 'cap_exhausted', complete: 'closing', timeout: 'cancelled', cancel: 'cancelled' } },
+    cap_exhausted: { actor: 'pm', half: 'top', on: { cancel: 'cancelled' }, onEnter: [async (run, _prev, _content, ctx) => { await ctx.fireTransition(run, 'cancel', '', 'builder-turn budget exhausted'); return true }] },
+    closing: { actor: 'pm', half: 'top', on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
+    complete: { actor: 'pm', half: 'top', on: {} }, cancelled: { actor: 'pm', half: 'top', on: {} },
   },
-
-  windows: {
-    clarifying: '15m',
-    building: '30m',
-    reviewing: '15m',
-    pm_build: '30m',
-    closing: '5m',
-  },
-
-  grace: {
-    pm: '2m',
-    builder: '30s',
-  },
-
+  windows: { planning: '15m', building: '30m', pm_build: '30m', verifying: '30m', committing: '10m', cap_exhausted: '1m', closing: '5m' },
+  grace: { pm: '2m', builder: '30s' },
   decisions: {
-    pm_verdict: {
-      phase: 'reviewing',
-      actor: 'pm',
-      options: ['approve', 'request_changes'] as const,
-      descriptions: { approve: 'why it ships', request_changes: 'what to fix' },
-      events: { approve: 'pm_approve', request_changes: 'pm_changes' },
-      finalEvent: 'pm_approve',
-    },
+    verification: { phase: 'verifying', actor: 'pm', options: ['step_passed', 'request_changes'] as const, descriptions: { step_passed: 'mechanical checks and fresh review passed', request_changes: 'bounded fixes required' }, events: { step_passed: 'step_passed', request_changes: 'request_changes' }, finalEvents: { step_passed: 'step_passed', request_changes: 'cap_request_changes' } },
+    commit_result: { phase: 'committing', actor: 'pm', options: ['next_step', 'complete'] as const, descriptions: { next_step: 'commit succeeded; hand off the next atomic step', complete: 'commit succeeded; all planned steps are done' }, events: { next_step: 'next_step', complete: 'complete' }, finalEvents: { next_step: 'cap_next_step', complete: 'complete' } },
   },
-
-  roleConfig: {
-    builder: { cadence: 'per-round', waits: true },
-  },
-
-  seed: {
-    builder: (ctx) => {
-      const quick = ctx.skipClarify
-      const taskLine = ctx.task
-        ? `**Task:** ${ctx.task}`
-        : `Read this thread for context — the PM's conversation describes what needs to be done.`
-      if (quick) {
-        return protocolSeed(ctx.protocol, 'builder', ctx)
-          + `\n\n${taskLine}`
-          + `\n\nImplement the task. When done, call \`advance({ content: "summary of what you built" })\`.`
-          + `\n\nUse \`fetch_messages\` to read the thread if you need more context.`
-      }
-      return protocolSeed(ctx.protocol, 'builder', ctx)
-        + `\n\nThe PM is writing a spec for you. Wait for the handoff notification — it will contain the full spec. Do not start building until you receive it.`
-        + `\n\nWhen you receive the spec, implement it. Then call \`advance({ content: "summary of what you built" })\`.`
-    },
-  },
-
+  roleConfig: { builder: { cadence: 'per-round', waits: true } },
+  seed: { builder: (ctx) => protocolSeed(ctx.protocol, 'builder', ctx) + `\n\nYou may read the full plan, but you are authorized to edit only the current numbered step in the latest PM handoff. Do not commit, amend, rebase, or push. Preserve unrelated work. Run the step's requested checks and report changed files, commands, and results with \`advance({ content: "..." })\`.` },
   notifications: {
-    onKickoff: {
-      pm: (run) => {
-        if (run.params.skipClarify) return null
-        const task = (run.params.task ?? run.params.topic ?? 'Clarify what needs to be built.') as string
-        return [
-          `[system] **Delegated Build** — clarification phase`,
-          ``,
-          `**Task:** ${task}`,
-          ``,
-          `You are the PM. Read the relevant code, ask yourself clarifying questions, and write a clear spec for the builder. When your spec is ready, call \`advance({ content: "your spec" })\` — the spec will be handed to the builder verbatim.`,
-          ``,
-          `Use \`reply()\` for conversation only — it does not advance the protocol.`,
-        ].join('\n')
-      },
-      builder: () => null,
+    onKickoff: { pm: (run) => `[system] **Delegated Build** — planning\n\n**Task:** ${run.params.task ?? 'Read the thread for the requested task.'}\n\nWrite a numbered atomic plan. For every step specify allowed files, exclusions, and executable exit criteria. Then hand off only step 1 with \`advance({ content: "plan plus current-step brief" })\`.`, builder: () => null },
+    onTurn: (run, content) => {
+      if (run.phase === 'building') return `[system] Build only the current authorized step. Do not commit. PM handoff:\n\n${content}`
+      if (run.phase === 'pm_build') return `[system] Continue in PM self-build mode. Build only the current authorized step without committing, then report changed files and checks with \`advance({ content: "..." })\`.\n\nCurrent brief or requested fixes:\n${content}`
+      if (run.phase === 'verifying') return `[system] Verify the exact current-step diff. Run the specified mechanical checks. Spawn a fresh headless reviewer with \`read_thread=true\` and a bounded \`phase_budget\`; require PASS / PASS WITH FIXES / FAIL with evidence returned via \`send_to_thread\`. Record commands, reviewer name, verdict, and evidence. Use request_changes unless clean; use step_passed only with that evidence.\n\nBuilder report:\n${content}`
+      if (run.phase === 'committing') return `[system] Commit exactly the reviewed current-step diff — no extra files or edits. Then choose complete, or next_step with the next bounded step brief.\n\nVerification evidence:\n${content}`
+      return content
     },
-    onFallback: {
-      pm: () => [
-        `[system] The builder died and couldn't be recovered. You wrote the spec — implement it yourself.`,
-        ``,
-        `Read the thread for your spec and the builder's partial work (if any). Build the feature, then call \`advance({ content: "summary" })\` when done.`,
-      ].join('\n'),
-    },
+    onFallback: () => `[system] The builder died and could not be recovered. Delegation and independent authorship are lost, but fresh review and commit sequencing remain. Self-build only the currently authorized step without committing, then call \`advance({ content: "changed files and mechanical checks" })\`; it will enter verifying.`,
   },
-
-  summaryFormat: (run) => {
-    return [
-      `**📋 Delegated Build Summary** (${run.rounds} round${run.rounds > 1 ? 's' : ''})`,
-      ``,
-      `🔬 **Synthesis** — one sentence.`,
-      ``,
-      `---`,
-      ``,
-      `📋 **Dispositions**`,
-      `- **Spec** — what the PM asked for`,
-      `- **What was built** — what the builder delivered`,
-      `- **PRs / artifacts** — links, or "none"`,
-      ``,
-      `---`,
-      ``,
-      `⚡ **Review findings** — what the PM caught and what changed.`,
-      ``,
-      `➡️ **What's next** — what happens now and what needs the human.`,
-    ]
-  },
+  summaryFormat: (run) => [`**📋 Delegated Build Summary** (${run.currentRound} builder turn${run.currentRound > 1 ? 's' : ''})`, ``, `🔬 **Synthesis** — one sentence.`, ``, `🧪 **Verification** — mechanical checks and fresh reviewer verdicts.`, ``, `📦 **Commits / artifacts** — exact reviewed step commits.`, ``, `➡️ **What's next** — what needs the human.`],
 })
