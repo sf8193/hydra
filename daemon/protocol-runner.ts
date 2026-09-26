@@ -1528,7 +1528,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
-      setRunTools, registerChild, retireProtocolChildren,
+      setRunTools, registerChild, retireProtocolChildren, enterFallbackPhase,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
@@ -1559,15 +1559,17 @@ export function getActiveRuns(): ProtocolRun[] {
 // Protocol registry integration — register v2 protocols
 // ---------------------------------------------------------------------------
 
-function runnerHooks(name: string, protoName: string) {
+function runnerHooks(name: string, protoName: string | readonly string[]) {
+  const matches = (candidate: string) => typeof protoName === 'string' ? candidate === protoName : protoName.includes(candidate)
   registerProtocol(name, {
     getByThread: (threadId) => {
       const run = getRunByThread(threadId)
-      return !!run && run.protocol.name === protoName
+      return !!run && matches(run.protocol.name)
     },
     isParticipant: (sessionId) => {
       const runId = sessionToRun.get(sessionId)
-      return !!runId && runs.get(runId)?.protocol.name === protoName
+      const run = runId ? runs.get(runId) : undefined
+      return !!run && matches(run.protocol.name)
     },
     onReply: onRunReply,
     onDisconnect: onRunDisconnect,
@@ -1576,7 +1578,7 @@ function runnerHooks(name: string, protoName: string) {
     onChildSpawn: (parentSessionId, childSessionId) => {
       const runId = sessionToRun.get(parentSessionId)
       const run = runId ? runs.get(runId) : undefined
-      return !!run && run.protocol.name === protoName && registerChild(run, parentSessionId, childSessionId)
+      return !!run && matches(run.protocol.name) && registerChild(run, parentSessionId, childSessionId)
     },
   })
 }
@@ -1587,7 +1589,7 @@ function runnerHooks(name: string, protoName: string) {
 runnerHooks('review', 'review')
 runnerHooks('build_v2', 'build')
 runnerHooks('spike_v2', 'spike')
-runnerHooks('delegated_build', 'delegated-build')
+runnerHooks('delegated_build', ['delegated-build', 'delegated-build-quick'])
 
 // Protocol context for autopsy — joins session to protocol state
 export function getProtocolContext(sessionId: string): { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null {
