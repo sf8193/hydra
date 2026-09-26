@@ -37,7 +37,10 @@ export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds:
     return
   }
 
-  const clampedRounds = Math.max(1, Math.min(rounds, 5))
+  // Quick mode keeps the legacy cap. Rigorous delegate budgets both planned
+  // steps and review-driven fix cycles, so it needs the same practical ceiling
+  // as adversarial review.
+  const clampedRounds = Math.max(1, Math.min(rounds, opts?.skipClarify ? 5 : 20))
 
   try {
     const p = await getProto(!!opts?.skipClarify)

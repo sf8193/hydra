@@ -7,7 +7,7 @@ import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { recordSessionDeath } from './observability.js'
-import { registerProtocol } from './protocol-registry.js'
+import { registerProtocol, type ProtocolChildSpawnMetadata } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { defaultToolDescription } from './bridge-tools.js'
@@ -37,7 +37,7 @@ export type ProtocolRun = StatusLineState & {
   params: Record<string, unknown>
   participants: Map<string, string>
   sessionToRole: Map<string, string>
-  protocolChildren: Map<string, string>
+  protocolChildren: Map<string, ProtocolChildRecord>
   timeout?: ReturnType<typeof setTimeout>
   _warningTimeout?: ReturnType<typeof setTimeout>
   _totalTimeout?: ReturnType<typeof setTimeout>
@@ -59,6 +59,12 @@ export type ProtocolRun = StatusLineState & {
   strike: boolean
   statusHistory: string[]
   summary?: string
+}
+
+type ProtocolChildRecord = ProtocolChildSpawnMetadata & {
+  phase: string
+  parentSessionId: string
+  result?: string
 }
 
 const MAX_EXTENSIONS_PER_PHASE = 2
@@ -308,17 +314,24 @@ function registerParticipant(run: ProtocolRun, role: string, sessionId: string):
   setProtocolTools(run, sessionId)
 }
 
-function registerChild(run: ProtocolRun, parentSessionId: string, childSessionId: string): boolean {
+function registerChild(run: ProtocolRun, parentSessionId: string, childSessionId: string, metadata: ProtocolChildSpawnMetadata): boolean {
   const role = run.sessionToRole.get(parentSessionId)
   const phase = run.protocol.phases[run.phase]
   if (role !== phase?.actor || !phase.capabilities?.includes('protocol_spawn')) return false
-  ;(run.protocolChildren ??= new Map()).set(childSessionId, run.phase)
+  ;(run.protocolChildren ??= new Map()).set(childSessionId, { phase: run.phase, parentSessionId, ...metadata })
+  return true
+}
+
+function registerChildResult(run: ProtocolRun, childSessionId: string, targetSessionId: string, text: string): boolean {
+  const child = run.protocolChildren.get(childSessionId)
+  if (!child || child.phase !== run.phase || child.parentSessionId !== targetSessionId) return false
+  child.result = text.trim()
   return true
 }
 
 function retireProtocolChildren(run: ProtocolRun, phase?: string): void {
-  for (const [sessionId, spawnedInPhase] of run.protocolChildren ?? []) {
-    if (phase && spawnedInPhase !== phase) continue
+  for (const [sessionId, child] of run.protocolChildren ?? []) {
+    if (phase && child.phase !== phase) continue
     run.protocolChildren.delete(sessionId)
     const info = registry.get(sessionId)
     if (info && !killsInProgress.has(sessionId)) {
@@ -348,6 +361,11 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
 
   if (phaseDef.actor !== role) {
     return { ok: false, reason: `not your turn (current actor: ${phaseDef.actor}, caller: ${role})` }
+  }
+
+  if (run.protocol.name === 'delegated-build' && run.phase === 'verifying' && verdict === 'step_passed') {
+    const proofError = validateDelegatedBuildVerification(run, content)
+    if (proofError) return { ok: false, reason: proofError }
   }
 
   const ia = run.protocol.phaseInteraction(run.phase)
@@ -426,15 +444,43 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
         // Cleanup is the normal successful off-ramp. There is no future actor
         // phase where a deferred fallback should fire.
         run._pendingFallback = undefined
+      } else if (!run.protocol.deferFallbackAcrossPhases) {
+        // Most protocols retain the historical phase-local behavior. Only a
+        // protocol that explicitly needs a later fallback opportunity may
+        // carry the marker through an intervening owner phase.
+        run._pendingFallback = undefined
       }
-      // Otherwise retain the marker across PM-only phases until a
-      // fallback-capable phase or terminal.
+      // Opted-in protocols retain the marker until a fallback-capable phase
+      // or terminal cleanup.
     }
 
     return { ok: true, sentIds }
   } finally {
     transitioningRuns.delete(run.id)
   }
+}
+
+function validateDelegatedBuildVerification(run: ProtocolRun, content: string): string | null {
+  const reviewers = [...(run.protocolChildren?.values() ?? [])].filter(child =>
+    child.phase === run.phase && child.headless && child.readThread && !!child.phaseBudgetMs && !!child.result)
+  if (reviewers.length === 0) {
+    return 'step_passed requires a current-phase reviewer spawned with headless=true, read_thread=true, and phase_budget that returned a result'
+  }
+  const hasPassingVerdict = reviewers.some(reviewer => {
+    const verdict = reviewer.result!.match(/\bverdict\s*:\s*(PASS WITH FIXES|PASS|FAIL)\b/i)?.[1]?.toUpperCase()
+    const hasEvidence = /(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*\S+/i.test(reviewer.result!)
+    return verdict === 'PASS' && hasEvidence
+  })
+  if (!hasPassingVerdict) {
+    return 'step_passed requires the reviewer result to contain `Verdict: PASS` and non-empty `Evidence:`'
+  }
+  const hasMechanicalChecks = /(?:^|\n)[ \t]*mechanical checks[ \t]*:[ \t]*\S+/i.test(content)
+  const hasReviewer = /(?:^|\n)[ \t]*reviewer[ \t]*:[ \t]*\S+/i.test(content)
+  const hasEvidence = /(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*\S+/i.test(content)
+  if (!hasMechanicalChecks || !hasReviewer || !hasEvidence) {
+    return 'step_passed requires non-empty structured proof fields: `Mechanical checks:`, `Reviewer:`, and `Evidence:`'
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -1575,10 +1621,16 @@ function runnerHooks(name: string, protoName: string | readonly string[]) {
     onDisconnect: onRunDisconnect,
     onReconnect: onRunReconnect,
     onAdvance: onRunAdvance,
-    onChildSpawn: (parentSessionId, childSessionId) => {
+    onChildSpawn: (parentSessionId, childSessionId, metadata) => {
       const runId = sessionToRun.get(parentSessionId)
       const run = runId ? runs.get(runId) : undefined
-      return !!run && matches(run.protocol.name) && registerChild(run, parentSessionId, childSessionId)
+      return !!run && matches(run.protocol.name) && registerChild(run, parentSessionId, childSessionId, metadata)
+    },
+    onChildResult: (childSessionId, targetSessionId, text) => {
+      for (const run of runs.values()) {
+        if (matches(run.protocol.name) && registerChildResult(run, childSessionId, targetSessionId, text)) return true
+      }
+      return false
     },
   })
 }

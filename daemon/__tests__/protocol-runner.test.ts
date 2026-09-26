@@ -6,6 +6,9 @@ import { registry } from '../sessions.js'
 import delegatedBuildProto from '../../protocols/delegated-build.js'
 import delegatedBuildQuickProto from '../../protocols/delegated-build-quick.js'
 import { selectDelegatedBuildProtocol } from '../../protocols/delegated-build-select.js'
+import reviewProto from '../../protocols/review.js'
+import buildProto from '../../protocols/build.js'
+import spikeProto from '../../protocols/spike.js'
 
 let origStderrWrite: typeof process.stderr.write
 
@@ -226,8 +229,9 @@ describe('protocol runner — phase-scoped spawn lifecycle', () => {
     __test!.setLifecycle({ killSession: (async (info: any) => { killed.push(info.sessionId) }) as any })
     const run = createTestRun({ protocol: scopedProto, phase: 'reviewing' })
 
-    expect(__test!.registerChild(run, 'test-owner', 'review-child')).toBe(false)
-    expect(__test!.registerChild(run, 'test-critic', 'review-child')).toBe(true)
+    const metadata = { headless: true, readThread: true, phaseBudgetMs: 60_000 }
+    expect(__test!.registerChild(run, 'test-owner', 'review-child', metadata)).toBe(false)
+    expect(__test!.registerChild(run, 'test-critic', 'review-child', metadata)).toBe(true)
     await onRunAdvance('test-critic', 'Review finished.')
     await Promise.resolve()
 
@@ -247,6 +251,7 @@ describe('protocol runner — deferred fallback lifecycle', () => {
         fallback: { actor: 'owner', on: { done: 'complete' }, advanceEvent: 'done' },
         complete: { actor: 'owner', on: {} },
       }, windows: {}, fallbackDegradation: 'critic unavailable',
+      deferFallbackAcrossPhases: true,
       notifications: { onFallback: () => 'Owner fallback.' },
     })
     const run = createTestRun({ protocol: proto, phase: 'owner_one', _pendingFallback: 'critic' })
@@ -257,6 +262,24 @@ describe('protocol runner — deferred fallback lifecycle', () => {
 
     await onRunAdvance('test-owner', 'Second owner phase.')
     expect(run.phase).toBe('fallback')
+    expect(run._pendingFallback).toBeUndefined()
+  })
+
+  test('review, build, and spike retain phase-local fallback behavior', async () => {
+    expect(reviewProto.deferFallbackAcrossPhases).toBe(false)
+    expect(buildProto.deferFallbackAcrossPhases).toBe(false)
+    expect(spikeProto.deferFallbackAcrossPhases).toBe(false)
+
+    const proto = protocol('phase-local-fallback', {
+      emoji: '🧪', display: 'Phase Local Fallback', roles: { worker: 'Worker', owner: 'Owner' }, owner: 'owner',
+      phases: {
+        owner_one: { actor: 'owner', on: { next: 'owner_two' }, advanceEvent: 'next' },
+        owner_two: { actor: 'owner', on: { done: 'complete' }, advanceEvent: 'done' },
+        complete: { actor: 'owner', on: {} },
+      }, windows: {},
+    })
+    const run = createTestRun({ protocol: proto, phase: 'owner_one', _pendingFallback: 'worker' })
+    await onRunAdvance('test-owner', 'Advance owner work.')
     expect(run._pendingFallback).toBeUndefined()
   })
 })
@@ -718,6 +741,7 @@ function createDelegateRun(overrides: Record<string, unknown> = {}) {
     params: overrides.params ?? {},
     participants: new Map([['pm', pmSid], ['builder', builderSid]]),
     sessionToRole: new Map([[pmSid, 'pm'], [builderSid, 'builder']]),
+    protocolChildren: new Map(),
     timeout: undefined,
     disconnectTimers: new Map(),
     decisions: [],
@@ -733,7 +757,20 @@ function createDelegateRun(overrides: Record<string, unknown> = {}) {
   return { run, pmSid, builderSid, threadId }
 }
 
+function addPassingReviewer(run: any, pmSid: string, result = 'Verdict: PASS\nEvidence: reviewed exact diff') {
+  run.protocolChildren.set(`reviewer-${Math.random()}`, {
+    phase: 'verifying', parentSessionId: pmSid, headless: true, readThread: true,
+    phaseBudgetMs: 60_000, result,
+  })
+}
+
+const verificationProof = 'Mechanical checks: bun test passed\nReviewer: fresh-reviewer\nEvidence: exact diff reviewed with no findings'
+
 describe('delegated-build protocol', () => {
+  test('closing timeout fails rather than completing without a summary', () => {
+    const result = delegatedBuildProto.machine.transition('closing' as any, 'timeout' as any)
+    expect(result?.to).toBe('cancelled')
+  })
   test('planning → building starts the first builder turn', async () => {
     const { run, pmSid } = createDelegateRun()
     expect(run.currentRound).toBe(1)
@@ -752,8 +789,9 @@ describe('delegated-build protocol', () => {
 
   test('clean step_passed at the cap still enters committing', async () => {
     const { run, pmSid } = createDelegateRun({ phase: 'verifying' })
+    addPassingReviewer(run, pmSid)
     run.currentRound = run.rounds
-    await onRunAdvance(pmSid, 'Checks pass; reviewer PASS.', 'step_passed')
+    await onRunAdvance(pmSid, verificationProof, 'step_passed')
     expect(run.phase).toBe('committing')
   })
 
@@ -762,6 +800,43 @@ describe('delegated-build protocol', () => {
     run.currentRound = run.rounds
     await onRunAdvance(pmSid, 'Fix the tests.', 'request_changes')
     expect(run.phase).toBe('cancelled')
+  })
+
+  test('step_passed is daemon-gated on qualified reviewer result and structured evidence', async () => {
+    const { run, pmSid } = createDelegateRun({ phase: 'verifying' })
+
+    let result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
+    expect(result.ok).toBe(false)
+    expect((result as any).reason).toContain('current-phase reviewer')
+
+    run.protocolChildren.set('bad-reviewer', {
+      phase: 'verifying', parentSessionId: pmSid, headless: false, readThread: true,
+      phaseBudgetMs: 60_000, result: 'Verdict: PASS\nEvidence: clean',
+    })
+    result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
+    expect(result.ok).toBe(false)
+
+    addPassingReviewer(run, pmSid, 'Verdict: FAIL\nEvidence: regression remains')
+    result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
+    expect(result.ok).toBe(false)
+    expect((result as any).reason).toContain('Verdict: PASS')
+
+    addPassingReviewer(run, pmSid, 'Verdict: PASS WITH FIXES\nEvidence: reviewer found and applied a small fix')
+    result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
+    expect(result.ok).toBe(false)
+
+    addPassingReviewer(run, pmSid)
+    result = await onRunAdvance(pmSid, 'Mechanical checks:\nReviewer: reviewer-1\nEvidence: clean', 'step_passed')
+    expect(result.ok).toBe(false)
+
+    addPassingReviewer(run, pmSid)
+    result = await onRunAdvance(pmSid, 'Checks passed.', 'step_passed')
+    expect(result.ok).toBe(false)
+    expect((result as any).reason).toContain('structured proof')
+
+    result = await onRunAdvance(pmSid, verificationProof, 'step_passed')
+    expect(result.ok).toBe(true)
+    expect(run.phase).toBe('committing')
   })
 
   test('builder advance transitions to verifying and grants PM protocol_spawn', async () => {
@@ -817,13 +892,15 @@ describe('delegated-build protocol', () => {
     expect(run.phase).toBe('building')
     await onRunAdvance(builderSid, 'Step 1 built, no commits.')
     expect(run.phase).toBe('verifying')
-    await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+    addPassingReviewer(run, pmSid)
+    await onRunAdvance(pmSid, verificationProof, 'step_passed')
     expect(run.phase).toBe('committing')
     await onRunAdvance(pmSid, 'Committed step 1; current step 2.', 'next_step')
     expect(run.phase).toBe('building')
     expect(run.currentRound).toBe(2)
     await onRunAdvance(builderSid, 'Step 2 built, no commits.')
-    await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+    addPassingReviewer(run, pmSid)
+    await onRunAdvance(pmSid, verificationProof, 'step_passed')
     expect(run.phase).toBe('committing')
     await onRunAdvance(pmSid, 'Committed exact reviewed step 2.', 'complete')
     expect(run.phase).toBe('closing')
@@ -857,7 +934,8 @@ describe('delegated-build protocol', () => {
     const { run, pmSid } = createDelegateRun({ phase: 'pm_build' })
     await onRunAdvance(pmSid, 'Self-built current step without committing.')
     expect(run.phase).toBe('verifying')
-    await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+    addPassingReviewer(run, pmSid)
+    await onRunAdvance(pmSid, verificationProof, 'step_passed')
     expect(run.phase).toBe('committing')
     expect(delegatedBuildProto.fallbackDegradation).toContain('independent authorship lost')
   })
@@ -892,14 +970,16 @@ describe('delegated-build protocol', () => {
       await __test!.enterFallbackPhase(run, 'builder')
       const retiredQueueSize = transport.messageQueues.get(builderSid)?.length ?? 0
       await onRunAdvance(pmSid, 'PM self-built step 1.')
-      await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+      addPassingReviewer(run, pmSid)
+      await onRunAdvance(pmSid, verificationProof, 'step_passed')
       await onRunAdvance(pmSid, 'Committed step 1; next step brief.', 'next_step')
       expect(run.phase).toBe('pm_build')
       expect(run.currentRound).toBe(2)
       expect(transport.messageQueues.get(builderSid)?.length ?? 0).toBe(retiredQueueSize)
 
       await onRunAdvance(pmSid, 'PM self-built step 2.')
-      await onRunAdvance(pmSid, 'Checks pass; fresh reviewer PASS.', 'step_passed')
+      addPassingReviewer(run, pmSid)
+      await onRunAdvance(pmSid, verificationProof, 'step_passed')
       await onRunAdvance(pmSid, 'Committed step 2; more remains.', 'next_step')
       expect(run.phase).toBe('cancelled')
     } finally {
@@ -916,8 +996,13 @@ describe('delegated-build protocol', () => {
     const verify = delegatedBuildProto.notifications.onTurn!({ phase: 'verifying' } as any, 'report')
     expect(verify).toContain('read_thread=true')
     expect(verify).toContain('phase_budget')
-    expect(verify).toContain('PASS / PASS WITH FIXES / FAIL')
+    expect(verify).toContain('Verdict: PASS')
+    expect(verify).toContain('Mechanical checks:')
     const commit = delegatedBuildProto.notifications.onTurn!({ phase: 'committing' } as any, 'evidence')
     expect(commit).toContain('Commit exactly the reviewed current-step diff')
+    const kickoff = delegatedBuildProto.notifications.onKickoff!.pm!({ rounds: 7, params: { task: 'x' } } as any)!
+    expect(kickoff).toContain('Builder-turn budget:')
+    expect(kickoff).toContain('7')
+    expect(kickoff).toContain('requested-fix cycle consumes one turn')
   })
 })
