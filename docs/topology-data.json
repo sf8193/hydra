@@ -273,6 +273,12 @@
       "desc": "Transcript location + incremental token-counter cursor"
     },
     {
+      "id": "daemon_usage-phase",
+      "label": "daemon/usage-phase.ts",
+      "layer": "shared",
+      "desc": "Work-phase classifier — closed phase set, tool-name vote, no imports"
+    },
+    {
       "id": "daemon_build",
       "label": "daemon/build.ts",
       "layer": "protocols",
@@ -930,6 +936,10 @@
     ],
     [
       "daemon_raindrop",
+      "daemon_usage-phase"
+    ],
+    [
+      "daemon_raindrop",
       "daemon_raindrop-payload"
     ],
     [
@@ -937,8 +947,16 @@
       "shared_constants"
     ],
     [
+      "daemon_raindrop-payload",
+      "daemon_usage-phase"
+    ],
+    [
       "daemon_usage",
       "shared_constants"
+    ],
+    [
+      "daemon_usage",
+      "daemon_usage-phase"
     ],
     [
       "daemon_commands_global",

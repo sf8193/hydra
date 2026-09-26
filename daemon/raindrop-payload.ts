@@ -1,4 +1,5 @@
 import { BASE_TOOLS, canonicalModel, SESSION_LABELS, type Sentiment } from '../shared/constants.js'
+import { USAGE_PHASES, USAGE_PHASE_SOURCES } from './usage-phase.js'
 
 const RAINDROP_API_BASE = 'https://api.raindrop.ai/v1'
 export const EVENT_ENDPOINT = `${RAINDROP_API_BASE}/events/track`
@@ -58,13 +59,17 @@ const USER_ID = /^[A-Za-z0-9._:|-]{1,64}$/
 export const EXTRA_PROPERTY_KEYS: ReadonlySet<string> = new Set([
   'cumulativeInputTokens', 'cumulativeOutputTokens', 'cumulativeCacheCreateTokens', 'cumulativeCacheReadTokens',
   'deltaInputTokens', 'deltaOutputTokens', 'deltaCacheCreateTokens', 'deltaCacheReadTokens',
-  'coldStart', 'claudeSessionId', 'providerSessionId', 'reason',
+  'coldStart', 'claudeSessionId', 'providerSessionId', 'reason', 'phase', 'phaseSource',
 ])
 
 function safeExtra(extra: Record<string, string | number> | undefined): Record<string, PropertyValue> {
   const out: Record<string, PropertyValue> = {}
   for (const [k, v] of Object.entries(extra ?? {})) {
     if (!EXTRA_PROPERTY_KEYS.has(k)) continue
+    // A closed set gets its set; the charset rule would admit any 64 chars, and
+    // the numeric path would admit any number.
+    const check = EXTRA_PROPERTY_GATES.get(k)
+    if (check) { const safe = check(typeof v === 'string' ? v : undefined); if (safe !== undefined) out[k] = safe; continue }
     if (typeof v === 'number') { if (Number.isFinite(v)) out[k] = v; continue }
     const safe = safeProperty(v)
     if (safe !== undefined) out[k] = safe
@@ -101,6 +106,13 @@ const SESSION_PROPERTY_GATES = {
 
 export const SESSION_PROPERTY_KEYS =
   Object.keys(SESSION_PROPERTY_GATES) as ReadonlyArray<keyof typeof SESSION_PROPERTY_GATES>
+
+// Same rule as SESSION_PROPERTY_GATES, for the `extra` channel: any key listed
+// here is an enum and is checked against its set, not against a charset.
+const EXTRA_PROPERTY_GATES = new Map<string, (v: string | undefined) => string | undefined>([
+  ['phase', oneOf(USAGE_PHASES)],
+  ['phaseSource', oneOf(USAGE_PHASE_SOURCES)],
+])
 
 function sessionProperties(facts: SessionFacts, omitRepo: boolean): Record<string, PropertyValue> {
   const props: Record<string, PropertyValue> = {}

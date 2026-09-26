@@ -34,3 +34,13 @@ export function plantTranscript(claudeSessionId: string, body: string): { path: 
   writeFileSync(path, body)
   return { path, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
+
+// A real transcript writes one content block per line, every line repeating the
+// turn's whole usage envelope — so a turn's tool_use blocks sit on the lines the
+// envelope dedupe throws away. Fixtures must have that shape or they test a
+// transcript format that does not exist.
+export const turnLines = (id: string, out: number, tools: readonly string[] = []): string =>
+  JSON.stringify({ message: { id, role: 'assistant', usage: { output_tokens: out } } }) + '\n'
+  + tools.map(name => JSON.stringify({
+    message: { id, role: 'assistant', usage: { output_tokens: out }, content: [{ type: 'tool_use', name }] },
+  }) + '\n').join('')
