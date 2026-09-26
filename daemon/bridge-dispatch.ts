@@ -8,7 +8,7 @@ import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
-import { dispatchAdvance, registerProtocolChild } from './protocol-registry.js'
+import { dispatchAdvance, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
@@ -230,6 +230,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'spawn_session': {
+        // Capture this before the asynchronous spawn. If the protocol ends while
+        // the child is launching, its capabilities are removed and registry
+        // lookup returns not_protocol; it is still our responsibility to reap it.
+        const protocolScopedSpawn = !!(callerSessionId && registry.get(callerSessionId)?.capabilities?.includes('protocol_spawn'))
         const worktree = args.worktree as string | undefined
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
         const model = (args.model as string | undefined)?.trim() || undefined
@@ -259,7 +263,14 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           trigger: 'spawn_session',
           initiator: spawnerName,
         })
-        if (callerSessionId && registerProtocolChild(callerSessionId, result.sessionId) === 'rejected') {
+        const childRegistration = callerSessionId
+          ? registerProtocolChild(callerSessionId, result.sessionId, {
+              headless: headless === true,
+              readThread: !!readThreadPrefix,
+              phaseBudgetMs,
+            })
+          : 'not_protocol'
+        if (protocolScopedSpawn && childRegistration !== 'registered') {
           const child = registry.get(result.sessionId)
           if (child) await killSession(child, 'protocol phase ended during spawn').catch(() => {})
           throw new Error('protocol phase ended before spawned session could be registered')
@@ -563,6 +574,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
+        }
+
+        // A reviewer result counts as complete only once it was actually posted
+        // to the parent thread; failed sends must not unlock step_passed.
+        if (msgType === 'result' && callerSessionId) {
+          registerProtocolChildResult(callerSessionId, targetSession.sessionId, text)
         }
 
         // Deliver to the target's Claude session so it actually receives the message

@@ -83,6 +83,8 @@ export type ProtocolSpec<
   // consumer can tell the caller what the result is worth without knowing
   // anything about this protocol. Required once a protocol opts into fallback.
   fallbackDegradation?: string
+  /** Keep a dead participant marker until a later fallback-capable phase. */
+  deferFallbackAcrossPhases?: boolean
   decisions?: Record<string, {
     phase: string
     actor: string
@@ -155,6 +157,7 @@ export type Protocol<
   cleanupPhase?: string
   cancelPhase?: string
   fallbackDegradation?: string
+  deferFallbackAcrossPhases: boolean
   machine: ReturnType<typeof createStateMachine<Phase, Event>>
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
@@ -354,6 +357,7 @@ export function protocol<
     cleanupPhase: spec.cleanupPhase as string | undefined,
     cancelPhase: spec.cancelPhase as string | undefined,
     fallbackDegradation: spec.fallbackDegradation,
+    deferFallbackAcrossPhases: spec.deferFallbackAcrossPhases ?? false,
     ownerRole,
     machine: createStateMachine(name, table as TransitionTable<string, string>),
     windowMs: (phase: string) => windows.get(phase),

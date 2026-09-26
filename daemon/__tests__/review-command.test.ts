@@ -210,12 +210,24 @@ describe('delegate command → selected protocol', () => {
     expect(run.phase).toBe('planning')
   })
 
+  test('rigorous delegate allows up to 20 builder turns', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 50, 'large safe change')
+    expect(getRunByThread(threadId)!.rounds).toBe(20)
+  })
+
   test('delegate! intercept selects the preserved quick protocol', async () => {
     const { threadId, msg } = mkOwner()
     await handleDelegatedBuildIntercept(msg, 1, 'ship quickly', undefined, undefined, { skipClarify: true })
     const run = getRunByThread(threadId)!
     expect(run.protocol.name).toBe('delegated-build-quick')
     expect(run.phase).toBe('building')
+  })
+
+  test('delegate! keeps the legacy five-turn cap', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 50, 'quick change', undefined, undefined, { skipClarify: true })
+    expect(getRunByThread(threadId)!.rounds).toBe(5)
   })
 })
 

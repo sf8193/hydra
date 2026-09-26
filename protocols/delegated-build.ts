@@ -4,6 +4,7 @@ export default protocol('delegated-build', {
   emoji: '📋', display: 'Delegated Build', owner: 'pm', initialPhase: 'planning', roundPhase: 'building',
   cleanupPhase: 'closing', cancelPhase: 'cancelled',
   fallbackDegradation: 'delegation and independent authorship lost; fresh review and commit sequencing retained',
+  deferFallbackAcrossPhases: true,
   roles: { pm: 'The PM', builder: 'The Builder' },
   phases: {
     planning: { actor: 'pm', half: 'top', on: { plan_ready: 'building', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'plan_ready' },
@@ -24,7 +25,8 @@ export default protocol('delegated-build', {
     verifying: { actor: 'pm', half: 'top', capabilities: ['protocol_spawn'], on: { request_changes: 'building', cap_request_changes: 'cap_exhausted', step_passed: 'committing', timeout: 'cancelled', cancel: 'cancelled' } },
     committing: { actor: 'pm', half: 'top', on: { next_step: 'building', cap_next_step: 'cap_exhausted', complete: 'closing', timeout: 'cancelled', cancel: 'cancelled' } },
     cap_exhausted: { actor: 'pm', half: 'top', on: { cancel: 'cancelled' }, onEnter: [async (run, _prev, _content, ctx) => { await ctx.fireTransition(run, 'cancel', '', 'builder-turn budget exhausted'); return true }] },
-    closing: { actor: 'pm', half: 'top', on: { summary_posted: 'complete', timeout: 'complete', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
+    // A run without the owner's final summary is not a successful completion.
+    closing: { actor: 'pm', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete: { actor: 'pm', half: 'top', on: {} }, cancelled: { actor: 'pm', half: 'top', on: {} },
   },
   windows: { planning: '15m', building: '30m', pm_build: '30m', verifying: '30m', committing: '10m', cap_exhausted: '1m', closing: '5m' },
@@ -36,11 +38,11 @@ export default protocol('delegated-build', {
   roleConfig: { builder: { cadence: 'per-round', waits: true } },
   seed: { builder: (ctx) => protocolSeed(ctx.protocol, 'builder', ctx) + `\n\nRemain idle during PM planning: do not edit files or begin implementation until you receive the first numbered-step handoff. You may read the full plan, but you are authorized to edit only the current numbered step in the latest PM handoff. Do not commit, amend, rebase, or push. Preserve unrelated work. Run the step's requested checks and report changed files, commands, and results with \`advance({ content: "..." })\`.` },
   notifications: {
-    onKickoff: { pm: (run) => `[system] **Delegated Build** — planning\n\n**Task:** ${run.params.task ?? 'Read the thread for the requested task.'}\n\nWrite a numbered atomic plan. For every step specify allowed files, exclusions, and executable exit criteria. Then hand off only step 1 with \`advance({ content: "plan plus current-step brief" })\`.`, builder: () => null },
+    onKickoff: { pm: (run) => `[system] **Delegated Build** — planning\n\n**Task:** ${run.params.task ?? 'Read the thread for the requested task.'}\n\n**Builder-turn budget:** ${run.rounds}. Every new step and every requested-fix cycle consumes one turn. Size the plan to fit this hard cap.\n\nWrite a numbered atomic plan. For every step specify allowed files, exclusions, and executable exit criteria. Then hand off only step 1 with \`advance({ content: "plan plus current-step brief" })\`.`, builder: () => null },
     onTurn: (run, content) => {
       if (run.phase === 'building') return `[system] Build only the current authorized step. Do not commit. PM handoff:\n\n${content}`
       if (run.phase === 'pm_build') return `[system] Continue in PM self-build mode. Build only the current authorized step without committing, then report changed files and checks with \`advance({ content: "..." })\`.\n\nCurrent brief or requested fixes:\n${content}`
-      if (run.phase === 'verifying') return `[system] Verify the exact current-step diff. Run the specified mechanical checks. Spawn a fresh headless reviewer with \`read_thread=true\` and a bounded \`phase_budget\`; require PASS / PASS WITH FIXES / FAIL with evidence returned via \`send_to_thread\`. Record commands, reviewer name, verdict, and evidence. Use request_changes unless clean; use step_passed only with that evidence.\n\nBuilder report:\n${content}`
+      if (run.phase === 'verifying') return `[system] Verify the exact current-step diff. Run the specified mechanical checks. Spawn a fresh headless reviewer with \`read_thread=true\` and a bounded \`phase_budget\`; require the result to begin with \`Verdict: PASS\`, \`Verdict: PASS WITH FIXES\`, or \`Verdict: FAIL\` and include evidence returned via \`send_to_thread(type="result")\`. Only PASS unlocks step_passed; PASS WITH FIXES requires applying the fixes and obtaining a fresh PASS. For step_passed, report non-empty \`Mechanical checks:\`, \`Reviewer:\`, and \`Evidence:\` fields. The daemon rejects step_passed without this proof. Use request_changes unless clean.\n\nBuilder report:\n${content}`
       if (run.phase === 'committing') return `[system] Commit exactly the reviewed current-step diff — no extra files or edits. Then choose complete, or next_step with the next bounded step brief.\n\nVerification evidence:\n${content}`
       return content
     },

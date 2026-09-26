@@ -19,7 +19,7 @@ import type {
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 import { parseContextPercent, tmuxHasSession } from '../util.js'
-import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
+import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -245,6 +245,13 @@ export class CodexEngineAdapter implements EngineAdapter {
     const action: TmuxKeyAction = opts?.raw
       ? { target, mode: 'raw', keys: keys.split(/\s+/) }
       : { target, mode: 'literal', text: keys, trailingKey: opts?.trailingKey }
+    if (info.turnState === 'working') {
+      return new Promise((resolve, reject) => {
+        queueCodexKeys(info.sessionId, action, (err) => {
+          if (err) reject(err); else resolve({ queued: true })
+        })
+      })
+    }
     await sendTmuxKeys(action)
     return { queued: false }
   }
