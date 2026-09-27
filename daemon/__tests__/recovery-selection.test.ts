@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { recoveryEntry, recoveryModel, deadSessionLabel, RESPAWN_RE } from '../recovery-selection.js'
+import { recoveryEntry, recoveryModel, deadSessionLabel, recoveryEngine, RESPAWN_RE } from '../recovery-selection.js'
 import type { ThreadSessionEntry } from '../sessions.js'
 
 test('respawn accepts model selection without breaking topics or templates', () => {
@@ -56,5 +56,23 @@ describe('deadSessionLabel', () => {
     const placeholder = entry({ sessionId: 'ph', model: 'codex-default', messageCount: 0, label: 'build' })
     const real = entry({ sessionId: 'real', label: 'review', messageCount: 4 })
     expect(deadSessionLabel(recoveryEntry([real, placeholder]), undefined)).toBe('review')
+  })
+})
+
+// B7/B11: which engine ran the dead session (PR-IDENT will stop using the id as a discriminator).
+describe('recoveryEngine', () => {
+  test('the record engine wins over the history id', () => {
+    expect(recoveryEngine({ codexThreadId: 'T' }, { engine: 'claude' })).toBe('claude')
+    expect(recoveryEngine({}, { engine: 'codex' })).toBe('codex')
+  })
+
+  test('no record engine: a history codexThreadId means Codex', () => {
+    expect(recoveryEngine({ codexThreadId: 'T' }, undefined)).toBe('codex')
+    expect(recoveryEngine({ codexThreadId: 'T' }, {})).toBe('codex')
+  })
+
+  test('otherwise Claude', () => {
+    expect(recoveryEngine({}, undefined)).toBe('claude')
+    expect(recoveryEngine(undefined, undefined)).toBe('claude')
   })
 })
