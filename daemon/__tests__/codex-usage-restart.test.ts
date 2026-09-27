@@ -200,6 +200,11 @@ describe('turnReconciled on connectAndResume', () => {
     expect((await resume(new CodexEngine(), 's', [liveTurn({ status: 'inProgress', id: 'a' }), liveTurn()])).reconciled).toEqual([])
   })
 
+  test('an unknown or missing status is not terminal', async () => {
+    expect((await resume(new CodexEngine(), 's', [liveTurn({ status: 'queued' })])).reconciled).toEqual([])
+    expect((await resume(new CodexEngine(), 's', [liveTurn({ status: undefined })])).reconciled).toEqual([])
+  })
+
   test('no turns emits nothing', async () => {
     expect((await resume(new CodexEngine(), 's', [])).reconciled).toEqual([])
   })
