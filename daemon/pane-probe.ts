@@ -27,7 +27,7 @@ const execFileAsync = promisify(execFile)
 // Types
 // ---------------------------------------------------------------------------
 
-export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit'
+export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit' | 'unknown_dialog'
 
 export type LoginStage = 'expiring' | 'blocked' | 'oauth_url' | 'success'
 
@@ -198,6 +198,7 @@ function hasLiveReplPrompt(tail: string): boolean {
 // Resume prompt: CC shows this when a session is resumed and the conversation
 // is large enough to warrant a choice. The three-option menu is unique.
 // Usage-limit dialog (/rate-limit-options): blocks all input until dismissed, even after the limit resets.
+const DIALOG_FOOTER_RE = /Enter to confirm · Esc to cancel/
 const USAGE_OPTION_A = /Stop and wait for limit to reset/
 const USAGE_OPTION_B = /Add funds to continue with extra usage/
 const USAGE_OPTION_C = /Upgrade your plan/
@@ -250,6 +251,11 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   // is intentionally not gated on liveRepl — the latch below bounds its spam.
   if (LOGIN_EXPIRING_PATTERNS.some(p => p.test(tailText))) {
     return { kind: 'login_required', planPath: null, loginStage: 'expiring', oauthUrl: null }
+  }
+  // Fallback: every CC selection dialog ends with this footer. Known kinds above
+  // get specific handling; anything else is surfaced so a new dialog can't block silently.
+  if (DIALOG_FOOTER_RE.test(tailText)) {
+    return { kind: 'unknown_dialog', planPath: null, loginStage: null, oauthUrl: null }
   }
   return null
 }
@@ -415,6 +421,26 @@ function checkWeeklyUsage(tail: string): void {
 }
 
 export function _resetWeeklyUsage(): void { weeklyUsageAlerted = 0; weeklyUsageLast = 0 }
+
+// Alert only: an unknown dialog may be a permission or confirmation where any
+// keypress is a real decision, so leave it to a human.
+async function notifyUnknownDialog(entry: ProbeEntry, now: number): Promise<void> {
+  if (entry.notifying) return
+  entry.notifying = true
+  try {
+    const name = entry.tmuxName
+    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
+    const tail = (await io.capturePaneTail(name, PANE_TAIL_LINES)) ?? ''
+    if (channelId) {
+      await io.safeSend(channelId, `> ⏸️ **${name}** is stuck on a dialog. Run: \`tmux attach -t ${name}\`\n\`\`\`\n${tail.trim()}\n\`\`\``)
+    }
+    entry.notifiedAt = now
+    entry.notifyCount++
+    process.stderr.write(`daemon: pane-probe: ${name} unknown dialog\n`)
+  } finally {
+    entry.notifying = false
+  }
+}
 
 async function extractOauthUrl(tmuxName: string): Promise<string | null> {
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES * 4)
@@ -762,6 +788,8 @@ export async function probeAllSessions(now?: number): Promise<void> {
             void notifyResumePrompt(existing, t)
           } else if (detected.kind === 'usage_limit') {
             void notifyUsageLimit(existing, t)
+          } else if (detected.kind === 'unknown_dialog') {
+            void notifyUnknownDialog(existing, t)
           } else {
             void notifyLoginRequired(existing, t)
           }

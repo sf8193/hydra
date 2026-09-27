@@ -328,6 +328,12 @@ describe('detectBlockingState (pure)', () => {
     expect(detectBlockingState('  ❯ 1. Stop and wait for limit to reset\nsomething else')).toBeNull()
   })
 
+  it('flags any other CC selection dialog as unknown_dialog', () => {
+    const tail = `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`
+    expect(detectBlockingState(tail)?.kind).toBe('unknown_dialog')
+    expect(detectBlockingState(NORMAL_SESSION_TAIL)).toBeNull()
+  })
+
   it('detects resume prompt', () => {
     const result = detectBlockingState(RESUME_PROMPT_TAIL)
     expect(result).not.toBeNull()
@@ -612,6 +618,22 @@ describe('probeAllSessions', () => {
       '> ⚠️ Claude usage at **96%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
       '> ⚠️ Claude usage at **85%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
     ])
+  })
+
+  it('alerts on an unknown dialog with the pane tail and presses no keys', async () => {
+    addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+    paneTails.set('ember', `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`)
+    windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+
+    expect(keysSent.filter(k => k.tmuxName === 'ember')).toEqual([])
+    const msg = sentMessages.find(m => m.channelId === 'thread-1')
+    expect(msg?.text).toContain('stuck on a dialog')
+    expect(msg?.text).toContain('Allow access to ~/secrets?')
   })
 
   it('respects notification cooldown', async () => {
