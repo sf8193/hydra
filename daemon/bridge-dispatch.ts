@@ -381,8 +381,11 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const info = registry.get(targetId)!
 
         // Non-main sessions can only kill sessions they spawned
+        let reason = 'session ended'
         if (callerSessionId && callerSessionId !== 'main') {
           const callerName = registry.get(callerSessionId)?.tmuxName
+          // Distinct from a human's 'session ended' so the on-kill hook can tell them apart
+          reason = `session ended by ${callerName ?? 'agent'}`
           if (info.initiator !== callerName && info.originFrom !== callerName) {
             throw new Error(`cannot kill ${info.tmuxName} — you can only kill sessions you spawned`)
           }
@@ -393,7 +396,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           }
         }
 
-        await killSession(info, 'session ended')
+        await killSession(info, reason)
         return { content: [{ type: 'text', text: `killed session ${targetId}` }] }
       }
 
