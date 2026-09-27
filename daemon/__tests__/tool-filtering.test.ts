@@ -109,7 +109,7 @@ describe('computeToolsForSession', () => {
 
   test('BASE_TOOLS sizes match design spec', () => {
     expect(BASE_TOOLS.master_orchestrator.size).toBe(22)
-    expect(BASE_TOOLS.thread_owner.size).toBe(15)
+    expect(BASE_TOOLS.thread_owner.size).toBe(16)
     expect(BASE_TOOLS.thread_guest.size).toBe(8)
     expect(BASE_TOOLS.factory_builder.size).toBe(6)
   })

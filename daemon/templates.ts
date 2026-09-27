@@ -112,7 +112,7 @@ const BUILTIN_TEMPLATES: Record<string, SpawnTemplate> = {
   },
 }
 
-const RESERVED = new Set(['spawn', 'kill', 'fork', 'resume', 'respawn', 'listen', 'pause', 'help', 'commands', 'recover', 'sessions', 'watch', 'unwatch', 'watches', 'health', 'restart', 'reconnect', 'protocols', 'templates', 'usage'])
+const RESERVED = new Set(['spawn', 'kill', 'fork', 'resume', 'respawn', 'handoff', 'listen', 'pause', 'help', 'commands', 'recover', 'sessions', 'watch', 'unwatch', 'watches', 'health', 'restart', 'reconnect', 'protocols', 'templates', 'usage'])
 const VALID_ACTIONS = new Set(['review'])
 
 const HYDRA_DIR = join(import.meta.dir, '..')

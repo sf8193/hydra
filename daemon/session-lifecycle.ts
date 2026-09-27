@@ -223,6 +223,41 @@ export function emitSessionDeath(info: SessionInfo): void {
 }
 
 // Under STATE_DIR so the test preload's temp state dir keeps `bun test` from ever running the real hook
+/**
+ * Replace a live session with a fresh one in the same thread, seeded from a
+ * handoff file the old session wrote. Same model, engine, label and worktree.
+ * The kill reason 'handed off' is not a human Kill, so the on-kill retro skips it.
+ */
+// `handoff <model>` records a model/engine switch here; the tool call that follows consumes it.
+const handoffSelections = new Map<string, { model: string; engine: 'claude' | 'codex' }>()
+export function setHandoffSelection(sessionId: string, sel: { model: string; engine: 'claude' | 'codex' } | undefined): void {
+  if (sel) handoffSelections.set(sessionId, sel); else handoffSelections.delete(sessionId)
+}
+
+/** Spawn opts for the successor: same thread/label/worktree; model+engine from `handoff <model>` if given. */
+export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts {
+  const sel = handoffSelections.get(info.sessionId)
+  handoffSelections.delete(info.sessionId)
+  const reuseWorktree = info.worktreePath && info.worktreeRepo
+    ? { repo: info.worktreeRepo, path: info.worktreePath, branch: info.worktreeBranch ?? `wt/${info.tmuxName}` }
+    : undefined
+  return {
+    existingThreadId: info.threadId,
+    handedOffFrom: info.tmuxName,
+    artifact,
+    model: sel?.model ?? info.sessionMetadata?.model,
+    engine: sel?.engine ?? info.engine,
+    inheritedLabel: info.label,
+    ...(reuseWorktree && { preserveWorktree: true, reuseWorktree }),
+  }
+}
+
+export async function handOff(info: SessionInfo, artifact: string): Promise<SpawnResult> {
+  const opts = handoffSpawnOpts(info, artifact)
+  await killSession(info, 'handed off', { skipWorktreeDestroy: true })
+  return doSpawnSession(info.topic, undefined, undefined, opts)
+}
+
 export const KILL_HOOK_PATH = join(STATE_DIR, 'hooks', 'on-kill')
 
 /**

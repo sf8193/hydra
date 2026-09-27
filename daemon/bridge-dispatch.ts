@@ -4,7 +4,7 @@ import { gateway, INBOX_DIR } from './config.js'
 import { registry, resolveSendTarget } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { doSpawnSession, killSession } from './session-lifecycle.js'
+import { doSpawnSession, handOff, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
@@ -16,6 +16,9 @@ import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 import { normalizeReviewRounds } from '../shared/constants.js'
 import { isToolAllowed } from './tool-surface.js'
+
+// Injectable for tests (same pattern as recoveryDeps): the real handOff kills and spawns.
+export const handoffDeps = { handOff }
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -348,6 +351,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           }
         })
         return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] }
+      }
+
+      case 'handoff': {
+        const path = args.path as string | undefined
+        const info = callerSessionId ? registry.get(callerSessionId) : undefined
+        if (!info) throw new Error('handoff: calling session not found')
+        let size = 0
+        try { size = path ? statSync(path).size : 0 } catch {}
+        if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
+        // Answer before acting: the kill inside handOff ends this very session.
+        setTimeout(() => {
+          handoffDeps.handOff(info, path).then(
+            r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\``),
+            err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nThe handoff file is \`${path}\` — type \`respawn\` to recover.`),
+          ).catch(() => {})
+        }, 500)
+        return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }
       }
 
       case 'set_description': {

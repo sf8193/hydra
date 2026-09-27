@@ -1414,7 +1414,7 @@ describe('tools_update on phase transition', () => {
     const latest = toolsUpdates[toolsUpdates.length - 1]
     const tools = latest.tools as Array<{ name: string }>
     expect(tools.some(t => t.name === 'advance')).toBe(false)
-    expect(tools).toHaveLength(15)
+    expect(tools).toHaveLength(16)
   })
 })
 
