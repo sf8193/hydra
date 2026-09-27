@@ -13,9 +13,19 @@ import {
   _ESCALATION_GRACE_MS,
   _setDeps,
   _resetDeps,
+  pollActivityOnce,
 } from '../reply-guard.js'
+import { probeByteTmuxName } from '../pane-probe.js'
+import { fakeAdapter } from './test-harness.js'
+import { engines } from '../engines/instances.js'
+import { withFakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../sessions.js'
-import type { ConversationForensics } from '../observability.js'
+import { claudeTurnOutcome, codexTurnOutcome, type ConversationForensics, type TurnSources } from '../observability.js'
+
+// deps.turnOutcome over fake sources; the engine switch mirrors resolveEngine.
+function turnOutcomeOver(src: TurnSources) {
+  return (i: SessionInfo, s: number) => (i.engine === 'codex' ? codexTurnOutcome : claudeTurnOutcome)(i, s, src)
+}
 
 function fakeForensics(over: Partial<ConversationForensics> = {}): ConversationForensics {
   return {
@@ -100,14 +110,16 @@ beforeEach(() => {
     safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
     capturePaneScreenshot: () => null,
     capturePaneText: () => 'fake pane content',
-    transcriptPathFor: () => undefined,
-    readConversationForensics: () => null,
-    getLastCodexMessage: () => null,
-    // Matches production's real default: false until a codex session's own
-    // events say otherwise. () => true here would wrongly bypass the grace
-    // window for every session, codex or not — a real bug this exact
-    // mistake caused mid-review.
-    isCodexTurnComplete: () => false,
+    turnOutcome: turnOutcomeOver({
+      transcriptPathFor: () => undefined,
+      readConversationForensics: () => null,
+      getLastCodexMessage: () => null,
+      // Matches production's real default: false until a codex session's own
+      // events say otherwise. () => true here would wrongly bypass the grace
+      // window for every session, codex or not — a real bug this exact
+      // mistake caused mid-review.
+      isCodexTurnComplete: () => false,
+    }),
   })
 })
 
@@ -353,10 +365,12 @@ describe('handleSilenceEvent — no nudge message, but a real grace window befor
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true, // e.g. codex-bootstrap.ts's turnCompleted just fired
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true, // e.g. codex-bootstrap.ts's turnCompleted just fired
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -424,13 +438,15 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: (claudeSessionId) => claudeSessionId === 'claude-abc' ? '/fake/path.jsonl' : undefined,
-      // Answered well AFTER the message arrived (T0), turn genuinely complete.
-      readConversationForensics: (path) => path === '/fake/path.jsonl'
-        ? fakeForensics({ lastAssistantFullText: 'the real answer the model gave', lastAssistantTs: new Date(T0 + 5000).toISOString() })
-        : null,
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: (claudeSessionId) => claudeSessionId === 'claude-abc' ? '/fake/path.jsonl' : undefined,
+        // Answered well AFTER the message arrived (T0), turn genuinely complete.
+        readConversationForensics: (path) => path === '/fake/path.jsonl'
+          ? fakeForensics({ lastAssistantFullText: 'the real answer the model gave', lastAssistantTs: new Date(T0 + 5000).toISOString() })
+          : null,
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -451,15 +467,17 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => '/fake/path.jsonl',
-      // This text is from BEFORE the pending message (T0) arrived — answers
-      // a different, earlier message. Must not be relayed as if it's current.
-      readConversationForensics: () => fakeForensics({
-        lastAssistantFullText: 'answer to an OLDER message',
-        lastAssistantTs: new Date(T0 - 5000).toISOString(),
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => '/fake/path.jsonl',
+        // This text is from BEFORE the pending message (T0) arrived — answers
+        // a different, earlier message. Must not be relayed as if it's current.
+        readConversationForensics: () => fakeForensics({
+          lastAssistantFullText: 'answer to an OLDER message',
+          lastAssistantTs: new Date(T0 - 5000).toISOString(),
+        }),
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
       }),
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -480,17 +498,19 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => '/fake/path.jsonl',
-      // Fresh timestamp, but the turn isn't done — "let me check..." before a
-      // tool call it's still waiting on. Not the actual answer.
-      readConversationForensics: () => fakeForensics({
-        lastAssistantFullText: 'Let me check that...',
-        lastAssistantTs: new Date(T0 + 5000).toISOString(),
-        lastAssistantTurnComplete: false,
-        lastToolPending: true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => '/fake/path.jsonl',
+        // Fresh timestamp, but the turn isn't done — "let me check..." before a
+        // tool call it's still waiting on. Not the actual answer.
+        readConversationForensics: () => fakeForensics({
+          lastAssistantFullText: 'Let me check that...',
+          lastAssistantTs: new Date(T0 + 5000).toISOString(),
+          lastAssistantTurnComplete: false,
+          lastToolPending: true,
+        }),
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
       }),
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -511,10 +531,12 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'the codex agent\'s last message' : null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'the codex agent\'s last message' : null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -535,11 +557,13 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      // Real getLastCodexMessage semantics: null when sinceMs is after the stash.
-      getLastCodexMessage: (_sessionId, sinceMs) => sinceMs <= T0 - 10_000 ? 'stale codex message' : null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        // Real getLastCodexMessage semantics: null when sinceMs is after the stash.
+        getLastCodexMessage: (_sessionId, sinceMs) => sinceMs <= T0 - 10_000 ? 'stale codex message' : null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -560,10 +584,12 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => '/fake/path.jsonl',
-      readConversationForensics: () => fakeForensics(), // transcript exists but has no assistant text yet
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => '/fake/path.jsonl',
+        readConversationForensics: () => fakeForensics(), // transcript exists but has no assistant text yet
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -591,14 +617,16 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      // Fresh — passes the staleness check on its own.
-      getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'mid-turn fragment' : null,
-      // The real turn is still in flight — e.g. the tmux poller stomped
-      // turnState to 'idle' from visual silence, but the actual Codex
-      // protocol turn hasn't completed.
-      isCodexTurnComplete: () => false,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        // Fresh — passes the staleness check on its own.
+        getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'mid-turn fragment' : null,
+        // The real turn is still in flight — e.g. the tmux poller stomped
+        // turnState to 'idle' from visual silence, but the actual Codex
+        // protocol turn hasn't completed.
+        isCodexTurnComplete: () => false,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -606,4 +634,132 @@ describe('escalateWithCapture', () => {
     expect(escalations[0].text).not.toContain('mid-turn fragment')
     expect(escalations[0].text).toContain('fake pane content')
   })
+})
+
+// T5 (adapter-policy): pins the 20s activity poller (F4s). Today both engines
+// read tmux window_activity of the record's tmuxName; 'main' reads the byte window.
+describe('pollActivityOnce', () => {
+  const targets: string[] = []
+  let activity: (target: string) => number
+  const windowActivity = (target: string) => { targets.push(target); return activity(target) }
+  const findByName = (name: string) => [...testSessions.values()].find(i => i.tmuxName === name)
+  const poll = (nowSec: number) => pollActivityOnce(nowSec, { windowActivity, findByName })
+  const escalatesAfterGrace = (name: string) => handleSilenceEvent(name, Date.now() + _ESCALATION_GRACE_MS)
+  // Registry records carry an adapter; its activityAt is backed by the same stub.
+  const adapter = (provider: string) => fakeAdapter({
+    provider,
+    activityAt: (i: SessionInfo) => { try { return windowActivity(i.tmuxName) } catch { return null } },
+  })
+
+  beforeEach(() => { targets.length = 0 })
+
+  for (const engine of ['claude', 'codex'] as const) {
+    test(`${engine}: active -> working + activity gate`, () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'idle', adapter: adapter(engine) })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), Date.now() - 1000)
+      activity = () => nowSec - 10
+      poll(nowSec)
+      expect(targets).toEqual(['cedar'])
+      expect(info.turnState).toBe('working')
+      expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(true)
+    })
+
+    test(`${engine}: idle -> idle + silence armed`, () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'working', adapter: adapter(engine) })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), T0)
+      activity = () => nowSec - 45
+      poll(nowSec)
+      expect(targets).toEqual(['cedar'])
+      expect(info.turnState).toBe('idle')
+      expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(false)
+      expect(escalatesAfterGrace('cedar')).toBe(1)
+    })
+  }
+
+  test("main: reads the byte window, guard keeps logical 'main'", () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    activity = () => 0
+    poll(nowSec)
+    expect(targets).toEqual([probeByteTmuxName()])
+    expect(escalatesAfterGrace('main')).toBe(1)
+  })
+
+  test('tmux throw -> skip', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: adapter('claude') })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), T0)
+    activity = () => { throw new Error('no such session') }
+    poll(nowSec)
+    expect(targets).toEqual(['cedar'])
+    expect(info.turnState).toBe('working')
+    expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(false)
+    // Silence was never armed: the first explicit silence only arms the grace window.
+    expect(escalatesAfterGrace('cedar')).toBe(0)
+  })
+
+  test('main: tmux throw -> skip (fallback path)', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    activity = () => { throw new Error('no such window') }
+    poll(nowSec)
+    expect(targets).toEqual([probeByteTmuxName()])
+    expect(escalatesAfterGrace('main')).toBe(0)
+  })
+
+  test('record without an adapter reads tmux through the fallback', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: undefined })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), Date.now() - 1000)
+    activity = () => nowSec - 10
+    poll(nowSec)
+    expect(targets).toEqual(['cedar'])
+    expect(info.turnState).toBe('working')
+  })
+
+  test('record with an adapter: the poller asks activityAt, not tmux', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: fakeAdapter({ activityAt: () => nowSec - 10 }) })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), Date.now() - 1000)
+    activity = () => 0
+    poll(nowSec)
+    expect(targets).toEqual([])
+    expect(info.turnState).toBe('working')
+  })
+
+  test('activityAt null -> skip', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: fakeAdapter({ activityAt: () => null }) })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), T0)
+    poll(nowSec)
+    expect(info.turnState).toBe('working')
+    expect(escalatesAfterGrace('cedar')).toBe(0)
+  })
+})
+
+// S5: both adapters answer activityAt with today's tmux window_activity read of
+// the record's tmuxName (Codex: ⚠ F4s, pinned), null when tmux fails.
+describe('adapter activityAt', () => {
+  for (const provider of ['claude', 'codex'] as const) {
+    test(`${provider}: window_activity of tmuxName, null on tmux failure`, () => {
+      const fake = withFakeTmux()
+      try {
+        const info = { sessionId: 's1', tmuxName: 'cedar' } as SessionInfo
+        fake.activity('cedar', 1234)
+        expect(engines[provider].activityAt(info)).toBe(1234)
+        expect(fake.calls()).toContain('display -t cedar -p #{window_activity}')
+        expect(engines[provider].activityAt({ ...info, tmuxName: 'gone' })).toBeNull()
+      } finally { fake.restore() }
+    })
+  }
 })

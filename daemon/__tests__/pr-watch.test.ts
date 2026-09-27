@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { deliverPrUpdate } from '../pr-watch.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
+import { ClaudeEngine } from '../engines/claude-engine.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -255,7 +256,7 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
       sessionId, engine: 'codex', threadId: 'thread-1', ...opts,
       adapter: {
         provider: 'codex', deliveryIsFree: false,
-        deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } },
+        deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } },
       },
     } as any)
   }
@@ -270,13 +271,13 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
     for (const id of ['pr-s1', 'pr-s2', 'pr-s3']) registry.delete(id)
   })
 
-  // Claude sessions deliver via a bridge socket, not adapter.deliver() — a
+  // Claude sessions deliver through their adapter onto the bridge socket — a
   // fake socket, not the codex mock, is what proves "delivered immediately."
   function claudeSession(sessionId: string): string[] {
     const written: string[] = []
     registry.set(sessionId, {
       sessionId, engine: 'claude', threadId: 'thread-1',
-      adapter: { provider: 'claude', deliveryIsFree: true, deliver: async () => ({ status: 'accepted' }) },
+      adapter: new ClaudeEngine(transport),
     } as any)
     transport.set(sessionId, { sessionId, socket: { write: (d: string) => { written.push(d); return true }, end() {}, destroyed: false }, buf: '' } as any)
     return written

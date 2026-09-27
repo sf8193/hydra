@@ -17,8 +17,8 @@
 // silent wait, no message sent, before the FIRST user-visible escalation —
 // restoring the old nudge-cooldown's magnitude so a session mid-tool-call
 // still gets real working time before anything lands in the user's chat.
-// Skipped entirely when the caller already has certainty (isCodexTurnComplete()
-// true) — codex-bootstrap.ts's turnCompleted handler calls handleSilenceEvent
+// Skipped entirely when the caller already has certainty (turnOutcome's
+// confirmedComplete) — codex-bootstrap.ts's turnCompleted handler calls handleSilenceEvent
 // directly, and by then there's no ambiguity left to wait out (round-2-of-
 // round-2 review caught this one).
 //
@@ -33,9 +33,9 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
-import { readConversationForensics, getLastCodexMessage, isCodexTurnComplete, type ConversationForensics } from './observability.js'
-import { transcriptPathFor } from './usage.js'
-import { safeSend } from './util.js'
+import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from './observability.js'
+import { safeSend, tmuxWindowActivity } from './util.js'
+import { probeByteTmuxName } from './pane-probe.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
@@ -49,10 +49,12 @@ export type ReplyGuardDeps = {
   safeSend: (channelId: string, text: string, opts?: any) => Promise<string[]>
   capturePaneScreenshot: (tmuxName: string) => string | null
   capturePaneText: (tmuxName: string, lines?: number) => string | null
-  transcriptPathFor: (claudeSessionId: string) => string | undefined
-  readConversationForensics: (transcriptPath: string) => ConversationForensics | null
-  getLastCodexMessage: (sessionId: string, sinceMs: number) => string | null
-  isCodexTurnComplete: (sessionId: string) => boolean
+  turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome
+}
+
+/** The adapter's answer; a record without an adapter gets today's composition over the live sources. */
+export function defaultTurnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
+  return info.adapter ? info.adapter.turnOutcome(info, sinceMs) : codexTurnOutcome(info, sinceMs, defaultTurnSources)
 }
 
 const defaultDeps: ReplyGuardDeps = {
@@ -64,10 +66,7 @@ const defaultDeps: ReplyGuardDeps = {
   safeSend: (ch, text, opts) => safeSend(ch, text, opts),
   capturePaneScreenshot: (tmuxName) => capturePaneScreenshot(tmuxName),
   capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
-  transcriptPathFor: (claudeSessionId) => transcriptPathFor(claudeSessionId),
-  readConversationForensics: (transcriptPath) => readConversationForensics(transcriptPath),
-  getLastCodexMessage: (sessionId, sinceMs) => getLastCodexMessage(sessionId, sinceMs),
-  isCodexTurnComplete: (sessionId) => isCodexTurnComplete(sessionId),
+  turnOutcome: (info, sinceMs) => defaultTurnOutcome(info, sinceMs),
 }
 
 let deps: ReplyGuardDeps = defaultDeps
@@ -205,7 +204,10 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     // per round-2-of-round-2 review, waiting anyway just reintroduces the
     // exact pointless-delay problem the nudge removal was fixing, for the
     // one signal that never needed it).
-    if (!deps.isCodexTurnComplete(p.sessionId)) {
+    // 'main' has no record: grace, and no relay (the codex flag is only ever
+    // written for registry records).
+    const outcome = info ? deps.turnOutcome(info, p.deliveredAt) : undefined
+    if (!outcome?.confirmedComplete) {
       const firstSeen = silenceFirstSeenAt.get(key)
       if (firstSeen === undefined) {
         silenceFirstSeenAt.set(key, now)
@@ -218,7 +220,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     const name = info?.tmuxName ?? p.sessionId
 
     process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, escalating\n`)
-    void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins, info?.claudeSessionId, p.sessionId, p.deliveredAt)
+    void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins, outcome)
     pending.delete(key)
     silenceFirstSeenAt.delete(key)
     acted++
@@ -317,7 +319,7 @@ function capturePaneScreenshot(tmuxName: string): string | null {
 
 async function escalateWithCapture(
   tmuxName: string, chatId: string, user: string, messageId: string, mins: number,
-  claudeSessionId?: string, sessionId?: string, deliveredAt?: number,
+  outcome?: TurnOutcome,
 ): Promise<void> {
   const header = `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It may have answered in-transcript only. Here's what the session looks like:`
 
@@ -331,28 +333,7 @@ async function escalateWithCapture(
   //    hasn't seen this message at all.
   //  - incompleteness: a text block emitted mid-turn, right before a tool
   //    call the session is still waiting on, isn't the actual answer yet.
-  let lastText: string | null = null
-  if (claudeSessionId) {
-    const transcriptPath = deps.transcriptPathFor(claudeSessionId)
-    const forensics = transcriptPath ? deps.readConversationForensics(transcriptPath) : null
-    if (
-      forensics?.lastAssistantFullText &&
-      forensics.lastAssistantTurnComplete &&
-      !forensics.lastToolPending &&
-      (deliveredAt === undefined || !forensics.lastAssistantTs || new Date(forensics.lastAssistantTs).getTime() >= deliveredAt)
-    ) {
-      lastText = forensics.lastAssistantFullText
-    }
-  } else if (sessionId && deps.isCodexTurnComplete(sessionId)) {
-    // Engine-owned signal (codex-bootstrap.ts's own turnCompleted event),
-    // deliberately NOT SessionInfo.turnState — that field is also written by
-    // daemon.ts's tmux-activity poller from raw visual silence, independent
-    // of whether Codex's actual turn has finished. Using it here would let a
-    // turn still genuinely in flight (waiting on a remote call, no terminal
-    // repaint) get relayed as if it were done, the moment the poller's
-    // coarser 45s-idle threshold fires first.
-    lastText = deps.getLastCodexMessage(sessionId, deliveredAt ?? 0)
-  }
+  const lastText = outcome?.answer() ?? null
   if (lastText && lastText.trim()) {
     try {
       await deps.safeSend(chatId, `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It answered in-transcript only — relaying its last response:\n\n${lastText}`)
@@ -407,4 +388,56 @@ export const _ESCALATION_GRACE_MS = ESCALATION_GRACE_MS
 
 export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
   return pending
+}
+
+// ---------------------------------------------------------------------------
+// Activity poller (driven by daemon.ts every 20s)
+// ---------------------------------------------------------------------------
+// Only checks sessions with pending replies — O(pending) not O(sessions).
+//
+// The turnState writes below are a coarse, tmux-visual-silence-driven proxy
+// for reply-guard's own activity gate ONLY. They are NOT the source of
+// truth for "has Codex's protocol-level turn actually finished" — that's
+// the adapter's turnOutcome().confirmedComplete, driven by codex-bootstrap.ts's
+// own turnCompleted/message events. Do not read turnState for anything that
+// needs to know whether a turn is really done; 45s of no terminal repaint
+// (a long-running tool, a stalled remote call) is not the same thing.
+const MIN_IDLE_BEFORE_SILENCE_S = 45
+
+export type PollActivityDeps = {
+  // Records without an adapter ('main', or a name not in the registry): epoch
+  // seconds of the target's tmux window activity; throws when it can't be read.
+  windowActivity: (target: string) => number
+  findByName: (tmuxName: string) => SessionInfo | undefined
+}
+
+const defaultPollDeps: PollActivityDeps = {
+  windowActivity: tmuxWindowActivity,
+  findByName: (name) => registry.findByName(name),
+}
+
+export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = defaultPollDeps): void {
+  const pendingNames = sessionsWithPendingReplies()
+  if (pendingNames.size === 0) return
+  for (const tmuxName of pendingNames) {
+    const info = tmuxName === 'main' ? undefined : pollDeps.findByName(tmuxName)
+    // 'main' is a logical name — its real tmux window is probeByteTmuxName() (e.g. slack-byte).
+    // Query the real window, but keep passing logical 'main' to the guard so its mapping is unchanged.
+    const queryTarget = tmuxName === 'main' ? probeByteTmuxName() : tmuxName
+    let lastActivitySec: number | null
+    if (info?.adapter) {
+      lastActivitySec = info.adapter.activityAt(info)
+    } else {
+      try { lastActivitySec = pollDeps.windowActivity(queryTarget) } catch { continue }
+    }
+    if (lastActivitySec === null) continue
+    const secSinceActivity = nowSec - lastActivitySec
+    if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
+      if (info && info.turnState !== 'working') info.turnState = 'working'
+      handleActivityEvent(tmuxName)
+    } else {
+      if (info && info.turnState !== 'idle') info.turnState = 'idle'
+      handleSilenceEvent(tmuxName)
+    }
+  }
 }

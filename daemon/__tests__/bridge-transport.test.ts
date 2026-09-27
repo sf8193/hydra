@@ -5,6 +5,10 @@ import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { on } from '../event-bus.js'
+import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { engines } from '../engines/instances.js'
+import { ClaudeEngine } from '../engines/claude-engine.js'
+import { fakeAdapter } from './test-harness.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -194,7 +198,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
       adapter: {
         provider: 'codex',
         deliveryIsFree: false,
-        deliver: async (_info: any, text: string) => { delivered.push(text); return { status: 'accepted', deliveryId: 'd1', stage: 'queued' } },
+        deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted', deliveryId: 'd1', stage: 'queued' } },
       },
     } as any)
   }
@@ -295,7 +299,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     // A throw is uncertain: retain on disk, but do not automatically replay.
     registry.set('s7', {
       sessionId: 's7', engine: 'codex', threadId: 'chat1',
-      adapter: { provider: 'codex', deliveryIsFree: false, deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } } },
+      adapter: { provider: 'codex', deliveryIsFree: false, deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } } },
     } as any)
     bt.sendOrQueue('s7', { type: 'notification', content: 'second real message', allowPiggyback: true })
     expect(delivered[0]).not.toContain('CI failed on PR #99')
@@ -346,7 +350,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     // since that's what "not free" actually means here.
     registry.set('s8', {
       sessionId: 's8', engine: 'claude', threadId: 'chat1',
-      adapter: { provider: 'claude', deliveryIsFree: false, deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } } },
+      adapter: fakeAdapter({ deliveryIsFree: false, isConnected: () => true, deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } } }),
     } as any)
     delivered = []
     bt.sendOrQueue('s8', { type: 'notification', content: 'routed via adapter, not bridge socket' })
@@ -364,9 +368,9 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
       sessionId: 's9', engine: 'codex', threadId: 'chat1',
       adapter: {
         provider: 'codex', deliveryIsFree: false,
-        deliver: async (_i: any, text: string) => {
+        deliver: async (_i: any, m: any) => {
           if (shouldFail) throw new Error('backstop delivery failed')
-          delivered.push(text)
+          delivered.push(m.content)
           return { status: 'accepted' }
         },
       },
@@ -456,7 +460,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
       sessionId: 's13', engine: 'codex', threadId: 'chat1',
       adapter: {
         provider: 'codex', deliveryIsFree: false,
-        deliver: async (_i: any, text: string) => { await deliverGate; delivered.push(text); return { status: 'accepted' } },
+        deliver: async (_i: any, m: any) => { await deliverGate; delivered.push(m.content); return { status: 'accepted' } },
       },
     } as any)
     delivered = []
@@ -536,11 +540,11 @@ describe('delivery outcomes and piggyback ownership', () => {
     adapter((...args) => { calls.push(args); return calls.length === 1 ? new Promise(r => { resolve = r }) : Promise.resolve({ status: 'accepted' }) })
     bt.bufferForPiggyback(sid, 'first')
     ;(bt as any).flushPiggybackStandalone(sid)
-    expect(calls[0][2]).toBe('next-turn')
+    expect(calls[0][1].deferUntilTurnComplete).toBe(true)
     bt.bufferForPiggyback(sid, 'second')
     bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
     ;(bt as any).flushPiggybackStandalone(sid)
-    expect(calls.map(c => c[1])).toEqual(['first', 'user'])
+    expect(calls.map(c => c[1].content)).toEqual(['first', 'user'])
     expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(false)
     resolve({ status: 'accepted' })
     await settle()
@@ -548,7 +552,7 @@ describe('delivery outcomes and piggyback ownership', () => {
     expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(true)
     ;(bt as any).flushPiggybackStandalone(sid)
     await settle()
-    expect(calls.map(c => c[1])).toEqual(['first', 'user', 'second'])
+    expect(calls.map(c => c[1].content)).toEqual(['first', 'user', 'second'])
   })
 
   for (const result of [{ status: 'accepted' }, { status: 'unknown', reason: 'timeout' }, { status: 'rejected', retryable: true, reason: 'busy' }]) {
@@ -614,7 +618,7 @@ describe('delivery outcomes and piggyback ownership', () => {
     expect(events[0].reason).toContain('held for manual inspection')
     bt = new BridgeTransport()
     const calls: string[] = []
-    adapter(async (_info, text) => { calls.push(text); return { status: 'accepted' } })
+    adapter(async (_info, m) => { calls.push(m.content); return { status: 'accepted' } })
     bt.bufferForPiggyback(sid, 'appended')
     ;(bt as any).flushPiggybackStandalone(sid)
     bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
@@ -653,4 +657,271 @@ test('clearing a carried prefix must not hide failure of the ordinary carrier', 
     await Promise.resolve(); await Promise.resolve()
     expect(failures).toEqual([{ sessionId: sid, status: 'unknown', reason: 'lost acknowledgement', messageId: 'user-123' }])
   } finally { unsub(); bt.clearPiggyback(sid); registry.delete(sid) }
+})
+
+// adapter-policy T2: pins today's has() answers through real adapters, so the
+// S2 move to adapter.isConnected is checked against the same matrix.
+describe('has() matrix (adapter-policy T2)', () => {
+  let bt: BridgeTransport
+  const codex = (connected: boolean) => new CodexEngineAdapter({ isConnected: () => connected } as any)
+  const put = (sessionId: string, extra: Record<string, unknown>) =>
+    registry.set(sessionId, { sessionId, threadId: 'chat1', ...extra } as any)
+  const bridge = (sessionId: string) => bt.set(sessionId, { sessionId, socket: mockSocket().socket, buf: '' })
+
+  beforeEach(() => { bt = new BridgeTransport() })
+  afterEach(() => {
+    for (const info of [...registry.values()]) if (info.sessionId.startsWith('hm-')) registry.delete(info.sessionId)
+  })
+
+  test('claude record with a bridge → true', () => {
+    put('hm-c1', { engine: 'claude', adapter: engines.claude })
+    bridge('hm-c1')
+    expect(bt.has('hm-c1')).toBe(true)
+  })
+
+  test('claude record without a bridge → false', () => {
+    put('hm-c2', { engine: 'claude', adapter: engines.claude })
+    expect(bt.has('hm-c2')).toBe(false)
+  })
+
+  test('PINNED C1 codex record, engine connected → true', () => {
+    put('hm-x1', { engine: 'codex', adapter: codex(true) })
+    expect(bt.has('hm-x1')).toBe(true)
+  })
+
+  test('PINNED C1 codex record, engine disconnected → still true', () => {
+    put('hm-x2', { engine: 'codex', adapter: codex(false) })
+    expect(bt.has('hm-x2')).toBe(true)
+  })
+
+  test('PINNED C1 codex record with deadAt, engine disconnected → still true', () => {
+    put('hm-x3', { engine: 'codex', adapter: codex(false), deadAt: Date.now() })
+    expect(bt.has('hm-x3')).toBe(true)
+  })
+
+  test('no record → bridges.has', () => {
+    expect(bt.has('hm-none')).toBe(false)
+    bridge('hm-none')
+    expect(bt.has('hm-none')).toBe(true)
+  })
+
+  test("'main' (no record) → bridges.has", () => {
+    expect(registry.get('main')).toBeUndefined()
+    expect(bt.has('main')).toBe(false)
+    bridge('main')
+    expect(bt.has('main')).toBe(true)
+  })
+})
+
+describe('engines/instances import (adapter-policy S2)', () => {
+  test('a fresh process imports instances.ts first and the Claude adapter is bound to a transport', () => {
+    // Subprocess: this file's module cache already holds bridge-transport, so
+    // only a fresh process can catch a TDZ from an import cycle.
+    const code = "const { engines } = await import('./daemon/engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
+    const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: process.env })
+    expect(r.stderr.toString()).not.toContain('Error')
+    expect(r.stdout.toString().trim()).toBe('false')
+    expect(r.exitCode).toBe(0)
+  })
+})
+
+// adapter-policy T7: pins every delivery path through sendOrQueue on a SEPARATE
+// transport, so S7's move to adapter.deliver is checked against the same bytes.
+// Claude records are bound to their own transport (new ClaudeEngine(t)); a
+// Claude adapter that wrote to the singleton instead would miss t's socket.
+describe('delivery paths (adapter-policy T7)', () => {
+  let t: BridgeTransport
+  let logged: string[]
+  const realStderr = process.stderr.write
+  const queueFile = () => join(STATE_DIR, 'message-queue.json')
+  const put = (sessionId: string, extra: Record<string, unknown>) =>
+    registry.set(sessionId, { sessionId, threadId: 'chat1', tmuxName: sessionId, ...extra } as any)
+  const claude = (sessionId: string, owner = t) => put(sessionId, { engine: 'claude', adapter: new ClaudeEngine(owner) })
+  const codexEngine = (calls: string[], opts: { queueOk?: boolean } = {}) => ({
+    isConnected: () => true,
+    queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return opts.queueOk ?? true },
+    // #378: steer returns its correlated DeliveryResult.
+    steer: async (_id: string, text: string) => { calls.push('steer:' + text); return { status: 'accepted' as const, via: 'steer' } },
+  })
+  const codex = (sessionId: string, calls: string[], opts: { queueOk?: boolean } = {}) =>
+    put(sessionId, { engine: 'codex', adapter: new CodexEngineAdapter(codexEngine(calls, opts) as any) })
+  const socketOn = (owner: BridgeTransport, sessionId: string, write: (d: string) => boolean = () => true) => {
+    const written: string[] = []
+    const socket: any = { write: (d: string) => { written.push(d); return write(d) }, end() {}, destroyed: false }
+    owner.set(sessionId, { sessionId, socket, buf: '' })
+    return { written, socket }
+  }
+  const envelope = {
+    type: 'notification', content: 'hello',
+    meta: { chat_id: 'chat1', message_id: 'm1', user: 'sam', user_id: 'u1', ts: '2026-09-26T00:00:00.000Z', downloaded_files: '/a.png' },
+    allowPiggyback: true, deferUntilTurnComplete: true,
+  }
+
+  beforeEach(() => {
+    t = new BridgeTransport()
+    logged = []
+    process.stderr.write = ((line: string) => { logged.push(line); return true }) as any
+  })
+  afterEach(() => {
+    process.stderr.write = realStderr
+    for (const info of [...registry.values()]) if (info.sessionId.startsWith('t7-')) registry.delete(info.sessionId)
+  })
+
+  test('claude, bridge present: the exact envelope is written before sendOrQueue returns', () => {
+    claude('t7-c1')
+    const { written } = socketOn(t, 't7-c1')
+    t.sendOrQueue('t7-c1', envelope)
+    // No await above: the write is synchronous.
+    expect(written).toEqual([JSON.stringify(envelope) + '\n'])
+    expect(t.messageQueues.has('t7-c1')).toBe(false)
+  })
+
+  test('claude, destroyed socket: nothing written, the envelope is re-queued', () => {
+    claude('t7-c2')
+    const { written, socket } = socketOn(t, 't7-c2')
+    socket.destroyed = true
+    t.sendOrQueue('t7-c2', envelope)
+    expect(written).toEqual([])
+    expect(t.messageQueues.get('t7-c2')).toEqual([envelope])
+    expect(logged.filter(l => l.includes('socket destroyed'))).toHaveLength(1)
+  })
+
+  test('claude, backpressure: every write goes out, logged once, nothing queued', () => {
+    claude('t7-c3')
+    const { written } = socketOn(t, 't7-c3', () => false)
+    for (let i = 0; i < 5; i++) t.sendOrQueue('t7-c3', { type: 'notification', content: `m${i}` })
+    expect(written).toHaveLength(5)
+    expect(logged.filter(l => l.includes('backpressure'))).toHaveLength(1)
+    expect(t.messageQueues.has('t7-c3')).toBe(false)
+  })
+
+  test('claude, bridge absent: enqueued and persisted byte-identically', () => {
+    claude('t7-c4')
+    t.sendOrQueue('t7-c4', envelope)
+    expect(t.messageQueues.get('t7-c4')).toEqual([envelope])
+    expect(readFileSync(queueFile(), 'utf8')).toBe(JSON.stringify({ 't7-c4': [envelope] }) + '\n')
+  })
+
+  test('claude, reload: a new transport on the same STATE_DIR restores the queue and flushes it', () => {
+    claude('t7-c5')
+    t.sendOrQueue('t7-c5', envelope)
+    const t2 = new BridgeTransport()
+    claude('t7-c5', t2) // re-bind the record to the transport that now owns it
+    expect(t2.messageQueues.get('t7-c5')).toEqual([envelope])
+    const { written } = socketOn(t2, 't7-c5')
+    t2.flushQueue('t7-c5')
+    t2.sendOrQueue('t7-c5', { type: 'notification', content: 'after reload' })
+    expect(written).toEqual([JSON.stringify(envelope) + '\n', JSON.stringify({ type: 'notification', content: 'after reload' }) + '\n'])
+  })
+
+  test('claude, capacity: the 51st message is dropped and logged once', () => {
+    claude('t7-c6')
+    for (let i = 0; i < 52; i++) t.sendOrQueue('t7-c6', { type: 'notification', content: `m${i}` })
+    const q = t.messageQueues.get('t7-c6')!
+    expect(q).toHaveLength(50)
+    expect(q[49]).toEqual({ type: 'notification', content: 'm49' })
+    expect(logged.filter(l => l.includes('message queue full for t7-c6'))).toHaveLength(1)
+  })
+
+  test('claude deliver result: written → accepted, absent → queued, destroyed → requeued (no delivery:failed)', async () => {
+    claude('t7-c7')
+    const info = registry.get('t7-c7')!
+    const msg = { type: 'notification' as const, content: 'x' }
+    expect(await info.adapter!.deliver(info, msg)).toEqual({ status: 'accepted', via: 'queued' })
+    const { socket } = socketOn(t, 't7-c7')
+    expect(await info.adapter!.deliver(info, msg)).toEqual({ status: 'accepted', via: 'bridge-socket' })
+    socket.destroyed = true
+    expect(await info.adapter!.deliver(info, msg)).toEqual({ status: 'accepted', via: 'requeued' })
+    expect(t.messageQueues.get('t7-c7')).toEqual([msg, msg])
+    const failures: unknown[] = []
+    const unsub = on('delivery:failed', e => { failures.push(e) }, 't7-c7')
+    try {
+      t.sendOrQueue('t7-c7', msg)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(failures).toEqual([])
+    } finally { unsub() }
+  })
+
+  test("'main' (no record): written when bridged, queued when not", () => {
+    expect(registry.get('main')).toBeUndefined()
+    t.sendOrQueue('main', envelope)
+    expect(t.messageQueues.get('main')).toEqual([envelope])
+    const { written } = socketOn(t, 'main')
+    t.sendOrQueue('main', { type: 'notification', content: 'live' })
+    expect(written).toEqual([JSON.stringify({ type: 'notification', content: 'live' }) + '\n'])
+  })
+
+  test('C7 codex next-turn: queueTurn has run when sendOrQueue returns', () => {
+    const calls: string[] = []
+    codex('t7-x1', calls)
+    t.sendOrQueue('t7-x1', { type: 'notification', content: 'nudge', deferUntilTurnComplete: true, meta: { downloaded_files: '/a.png' } })
+    expect(calls).toEqual(['queue:nudge\n\n[attachments: /a.png]'])
+  })
+
+  test('PINNED E1b codex non-string or empty content: no side effect, buffer untouched', async () => {
+    const calls: string[] = []
+    codex('t7-x2', calls)
+    t.bufferForPiggyback('t7-x2', 'buffered')
+    const failures: unknown[] = []
+    const unsub = on('delivery:failed', e => { failures.push(e) }, 't7-x2')
+    t.sendOrQueue('t7-x2', { type: 'notification', content: 42, allowPiggyback: true })
+    t.sendOrQueue('t7-x2', { type: 'notification', content: '', allowPiggyback: true, deferUntilTurnComplete: true })
+    t.sendOrQueue('t7-x2', { type: 'notification' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    unsub()
+    expect(calls).toEqual([])
+    expect(failures).toEqual([]) // silent: no delivery:failed for non-text
+    expect(t.messageQueues.has('t7-x2')).toBe(false)
+    t.sendOrQueue('t7-x2', { type: 'notification', content: 'real', allowPiggyback: true })
+    expect(calls).toEqual(['steer:buffered\n\n---\n\nreal'])
+  })
+
+  // #378: a non-retryable rejected carry keeps the prefix but HOLDS it (no
+  // automatic re-carry) and surfaces delivery:failed.
+  test('E1a codex rejected carry: the piggyback prefix is retained and held (#378)', async () => {
+    const calls: string[] = []
+    codex('t7-x3', calls, { queueOk: false }) // retiring: queueTurn refuses → rejected
+    t.bufferForPiggyback('t7-x3', 'buffered')
+    t.sendOrQueue('t7-x3', { type: 'notification', content: 'first', allowPiggyback: true, deferUntilTurnComplete: true })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(calls).toEqual(['queue:buffered\n\n---\n\nfirst'])
+    expect(logged.some(l => l.includes('delivery failed for t7-x3: rejected: session is retiring') && l.includes('held for manual inspection'))).toBe(true)
+    t.sendOrQueue('t7-x3', { type: 'notification', content: 'second', allowPiggyback: true })
+    expect(calls[1]).toBe('steer:second')
+    expect(JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8'))['t7-x3']).toMatchObject({ items: ['buffered'], heldReason: 'session is retiring' })
+    t.clearPiggyback('t7-x3')
+  })
+
+  // #378 fixed pinned E2: a rejected backstop flush no longer clears the buffer; it is held.
+  test('E2 codex rejected backstop flush: the buffer is retained and held (#378)', async () => {
+    let flushes = 0
+    put('t7-x4', {
+      engine: 'codex',
+      adapter: { provider: 'codex', deliveryIsFree: false, deliver: async () => { flushes++; return { status: 'rejected', retryable: false, reason: 'session is retiring' } } },
+    })
+    writeFileSync(join(STATE_DIR, 'piggyback-buffer.json'), JSON.stringify({
+      't7-x4': { items: ['overdue'], bufferedAt: Date.now() - 61 * 60_000 },
+    }))
+    const t2 = new BridgeTransport()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(flushes).toBe(1)
+    const calls: string[] = []
+    codex('t7-x4', calls)
+    t2.sendOrQueue('t7-x4', { type: 'notification', content: 'real', allowPiggyback: true })
+    expect(calls).toEqual(['steer:real']) // held content never rides automatically
+    expect(JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8'))['t7-x4']).toMatchObject({ items: ['overdue'], heldReason: 'session is retiring' })
+    t2.clearPiggyback('t7-x4')
+  })
+})
+
+// Review of S1–S2: has() short-circuits on bridges, so the adapter answer was untested.
+describe('ClaudeEngine.isConnected', () => {
+  test('true exactly when its own transport holds a bridge for the session', async () => {
+    const { ClaudeEngine } = await import('../engines/claude-engine.js')
+    const t = new BridgeTransport()
+    const claude = new ClaudeEngine(t)
+    expect(claude.isConnected({ sessionId: 'iscon', threadId: 'other' } as any)).toBe(false)
+    t.bridges.set('iscon', { socket: { destroyed: false, write: () => true } } as any)
+    expect(claude.isConnected({ sessionId: 'iscon', threadId: 'other' } as any)).toBe(true)
+  })
 })

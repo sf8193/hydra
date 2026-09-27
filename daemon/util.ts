@@ -53,6 +53,13 @@ export function tmuxHasSession(name: string): boolean {
   }
 }
 
+/** tmux window_activity (epoch seconds) of a target; 0 if unparsable. Throws if tmux fails. */
+export function tmuxWindowActivity(target: string): number {
+  return parseInt(
+    execSync(`tmux display -t '${target}' -p '#{window_activity}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim(),
+  ) || 0
+}
+
 export function isTmuxRecentlyActiveSync(name: string, thresholdSeconds = 60): boolean {
   try {
     const ts = execFileSync('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],

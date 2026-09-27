@@ -10,6 +10,7 @@ import { __test as statusTest } from '../commands/status.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
+import { fakeAdapter } from './test-harness.js'
 
 if (!statusTest) throw new Error('status.__test only available under NODE_ENV=test')
 const status = statusTest
@@ -60,7 +61,7 @@ beforeEach(() => {
     // singleton is reachable (and, per bun's documented mock.module leak
     // across test files — see factory-worktree.test.ts — sometimes
     // clobbered) from every other test file in the same run.
-    adapter: { provider: 'claude', deliveryIsFree: true, usage: () => null } as any,
+    adapter: fakeAdapter({ usage: () => null }),
     sessionType: 'thread_owner',
   }
   registry.set(info.sessionId, info)

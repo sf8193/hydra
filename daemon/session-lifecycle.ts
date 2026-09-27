@@ -5,16 +5,16 @@ import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
-import { projectDirName, projectsRoot } from './usage.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
-import { claudeConfigDir, isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
+import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
+import type { EngineAdapter } from './engines/engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -169,6 +169,12 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 // Listen state resolution: thread override → channel group → global → false
 // ---------------------------------------------------------------------------
 
+/** Tool names recorded in a spawn's sessionMetadata. Codex sessions discover
+ *  tools via their own MCP sidecar, not the daemon bridge. */
+export function spawnToolNames(adapter: EngineAdapter, spawnType: SessionType): string[] {
+  return adapter.channel === 'bridge' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : []
+}
+
 export function resolveListenState(threadId: string, channelId?: string): boolean {
   const thread = threadRegistry.get(threadId)
   return resolveListenStatePure(channelId, loadAccess(), thread?.listenOverride, thread?.parentChannelId, thread?.anchorChannelId)
@@ -258,13 +264,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     // Last-resort claudeSessionId discovery before tmux dies — if the bridge
     // never registered it, read $CLAUDE_CONFIG_DIR/sessions/<panePid>.json while the
     // pane PID is still available. Without this, resume falls to tier 3 (respawn).
-    if (!info.claudeSessionId && info.engine !== 'codex') {
-      const discovered = discoverClaudeSessionId(info.tmuxName)
-      if (discovered) {
-        info.claudeSessionId = discovered
-        process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
-      }
-    }
+    const discovered = (info.adapter ?? resolveEngine(info.engine)).refreshIdentity(info)
+    if (discovered) process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
 
     const tmuxName = info.tmuxName
     await (info.adapter ?? resolveEngine(info.engine)).stop(info)
@@ -677,8 +678,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const sessionMetadata = {
     role: 'worker' as const,
-    // Codex sessions discover tools via their own MCP sidecar, not the daemon bridge
-    tools: engine === 'claude' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : [],
+    tools: spawnToolNames(adapter, spawnType),
     model: launched.model,
     cwd: effectiveCwd,
     platform: PLATFORM,
@@ -917,44 +917,5 @@ export async function tryRespawn(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Claude session ID discovery
-// ---------------------------------------------------------------------------
-
-export function discoverClaudeSessionId(tmuxName: string): string | null {
-  try {
-    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8', timeout: 2000 }).toString().trim()
-    if (!panePid) return null
-
-    // Primary: read Claude's session file at $CLAUDE_CONFIG_DIR/sessions/<pid>.json
-    const sessionFile = join(claudeConfigDir(), 'sessions', `${panePid}.json`)
-    try {
-      const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
-      if (data.sessionId && data.cwd) {
-        // Verify the conversation file exists (Claude creates .jsonl lazily —
-        // freshly spawned sessions may not have one yet).
-        // NOTE: For fork+worktree builders, data.cwd reflects Claude's launch CWD
-        // (spawnCwd, e.g. /Users/sam/trading), not the worktree the builder later
-        // `cd`s to via Bash. Claude's session file captures the startup CWD and does
-        // not update on shell cd — so the conversation file will be found correctly.
-        const projectDir = join(projectsRoot(), projectDirName(data.cwd))
-        const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
-        if (existsSync(conversationFile)) return data.sessionId
-      }
-    } catch {}
-
-    // Fallback: scan child process environments
-    const childPids = execFileSync('pgrep', ['-P', panePid], { encoding: 'utf8', timeout: 2000 }).toString().trim().split('\n').filter(Boolean)
-    for (const childPid of childPids) {
-      const envOutput = execFileSync('ps', ['-E', '-p', childPid], { encoding: 'utf8', timeout: 2000 }).toString()
-      if (!envOutput.includes('HYDRA_SESSION_ID')) continue
-      const hydraId = envOutput.match(/HYDRA_SESSION_ID=([^\s]+)/)?.[1]
-      const candidates = [...envOutput.matchAll(/([A-Z_]*SESSION[A-Z_]*)=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g)]
-      const claudeId = candidates.find(m => m[2] !== hydraId)?.[2]
-      if (claudeId) return claudeId
-    }
-    return null
-  } catch {
-    return null
-  }
-}
+// Claude session ID discovery lives in the Claude engine; re-exported for existing importers.
+export { discoverClaudeSessionId } from './engines/claude-engine.js'

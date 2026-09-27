@@ -2,7 +2,8 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics } from '../observability.js'
+import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, claudeTurnOutcome, codexTurnOutcome, defaultTurnSources, type ConversationForensics, type TurnSources } from '../observability.js'
+import { engines } from '../engines/instances.js'
 import type { SessionInfo } from '../sessions.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
@@ -336,5 +337,142 @@ describe('readConversationForensics', () => {
     const f = readConversationForensics(path)
     expect(f?.lastAssistantFullText).toBe('MARKER: must survive the tail cut')
     expect(f?.isTail).toBe(true)
+  })
+})
+
+// T6 (adapter-policy): the reply guard's turn-outcome composition (F1s/F2s).
+describe('turnOutcome composition', () => {
+  const T = 1_000_000_000
+  const iso = (ms: number) => new Date(ms).toISOString()
+  const forensics = (over: Partial<ConversationForensics> = {}): ConversationForensics => ({
+    tailTurns: 1, lastStopReason: 'end_turn', lastToolCalled: null, lastToolPending: false,
+    pendingToolCount: 0, tailApiCalls: 1, lastAssistantText: null, isTail: false,
+    lastAssistantFullText: null, lastAssistantTs: null, lastAssistantTurnComplete: true, ...over,
+  })
+  // Production shape: transcript at claude-abc; the codex maps hold a fresh message.
+  function src(over: { flag?: boolean; f?: ConversationForensics | null; msgAt?: number } = {}): TurnSources {
+    const f = 'f' in over ? over.f ?? null : forensics({ lastAssistantFullText: 'transcript answer', lastAssistantTs: iso(T + 5000) })
+    return {
+      transcriptPathFor: (id) => id === 'claude-abc' ? '/t.jsonl' : undefined,
+      readConversationForensics: (p) => p === '/t.jsonl' ? f : null,
+      getLastCodexMessage: (sid, since) => sid === 's1' && (over.msgAt ?? T + 1000) >= since ? 'codex answer' : null,
+      isCodexTurnComplete: (sid) => sid === 's1' && (over.flag ?? false),
+    }
+  }
+  const codex = { sessionId: 's1', engine: 'codex' } as SessionInfo
+  const claude = { sessionId: 's1', engine: 'claude', claudeSessionId: 'claude-abc' } as SessionInfo
+  const codexFn = codexTurnOutcome
+  const claudeFns = [codexTurnOutcome, claudeTurnOutcome]
+
+  test('PINNED R9: Codex record holding claudeSessionId relays the transcript', () => {
+    const o = codexFn({ ...codex, claudeSessionId: 'claude-abc' }, T, src({ flag: true }))
+    expect(o.confirmedComplete).toBe(true)
+    expect(o.answer()).toBe('transcript answer')
+  })
+
+  test('PINNED R9: empty transcript does not fall through to the codex message', () => {
+    expect(codexFn({ ...codex, claudeSessionId: 'claude-abc' }, T, src({ flag: true, f: forensics() })).answer()).toBeNull()
+    expect(codexFn({ ...codex, claudeSessionId: 'claude-abc' }, T, src({ flag: true, f: null })).answer()).toBeNull()
+  })
+
+  test('PINNED R15: a stale flag from the previous turn confirms completion (skips grace)', () => {
+    // flag still true from the last turn; no message since this delivery
+    const o = codexFn(codex, T, src({ flag: true, msgAt: T - 60_000 }))
+    expect(o.confirmedComplete).toBe(true)
+    expect(o.answer()).toBeNull()
+  })
+
+  test('Codex: flag set → confirmed, relays the fresh message', () => {
+    const o = codexFn(codex, T, src({ flag: true }))
+    expect(o.confirmedComplete).toBe(true)
+    expect(o.answer()).toBe('codex answer')
+  })
+
+  test('Codex: flag unset → not confirmed, no relay even with a fresh message', () => {
+    const o = codexFn(codex, T, src({ flag: false }))
+    expect(o.confirmedComplete).toBe(false)
+    expect(o.answer()).toBeNull()
+  })
+
+  test('Codex: message text comes from getLastCodexMessage(sessionId, since)', () => {
+    const seen: Array<[string, number]> = []
+    const s = { ...src({ flag: true }), getLastCodexMessage: (sid: string, since: number) => { seen.push([sid, since]); return 'exact text' } }
+    expect(codexFn(codex, T, s).answer()).toBe('exact text')
+    expect(seen).toEqual([['s1', T]])
+  })
+
+  for (const [i, fn] of claudeFns.entries()) {
+    test(`Claude[${i}]: complete, fresh transcript → relayed; never confirmed`, () => {
+      const o = fn(claude, T, src())
+      expect(o.confirmedComplete).toBe(false)
+      expect(o.answer()).toBe('transcript answer')
+    })
+
+    test(`Claude[${i}]: incomplete or stale transcript → null`, () => {
+      expect(fn(claude, T, src({ f: forensics({ lastAssistantFullText: 'Let me check', lastAssistantTs: iso(T + 5000), lastAssistantTurnComplete: false }) })).answer()).toBeNull()
+      expect(fn(claude, T, src({ f: forensics({ lastAssistantFullText: 'Let me check', lastAssistantTs: iso(T + 5000), lastToolPending: true }) })).answer()).toBeNull()
+      expect(fn(claude, T, src({ f: forensics({ lastAssistantFullText: 'old', lastAssistantTs: iso(T - 5000) }) })).answer()).toBeNull()
+    })
+
+    test(`Claude[${i}]: no transcript, or no claudeSessionId → null`, () => {
+      expect(fn(claude, T, src({ f: null })).answer()).toBeNull()
+      expect(fn({ ...claude, claudeSessionId: 'claude-other' }, T, src()).answer()).toBeNull()
+      expect(fn({ ...claude, claudeSessionId: undefined }, T, src()).answer()).toBeNull()
+    })
+  }
+
+  // S6 exit: adapters delegate through defaultTurnSources — swapping its members
+  // gives exactly what the exported function returns over the swapped sources.
+  test('delegation: adapters answer as their exported function over swapped defaultTurnSources', () => {
+    const saved = { ...defaultTurnSources }
+    const swapped = src({ flag: true })
+    Object.assign(defaultTurnSources, swapped)
+    try {
+      const infos = [codex, { ...codex, claudeSessionId: 'claude-abc' }, claude, { ...claude, claudeSessionId: undefined }]
+      for (const [provider, fn] of [['claude', claudeTurnOutcome], ['codex', codexTurnOutcome]] as const) {
+        for (const info of infos) {
+          const a = engines[provider].turnOutcome(info, T), b = fn(info, T, swapped)
+          expect({ c: a.confirmedComplete, t: a.answer() }).toEqual({ c: b.confirmedComplete, t: b.answer() })
+        }
+      }
+      // the swap is visible (not both reading the live, empty sources)
+      expect(engines.codex.turnOutcome(codex, T).answer()).toBe('codex answer')
+      expect(engines.claude.turnOutcome(claude, T).answer()).toBe('transcript answer')
+    } finally { Object.assign(defaultTurnSources, saved) }
+  })
+})
+
+// Review of P6–S6: the reply guard's default routing and Claude never confirming.
+describe('defaultTurnOutcome routing', () => {
+  const T = Date.now()
+  test('no adapter: live-source Codex composition (flag set → confirmed, Codex text)', async () => {
+    const { defaultTurnOutcome } = await import('../reply-guard.js')
+    const saved = { ...defaultTurnSources }
+    Object.assign(defaultTurnSources, {
+      isCodexTurnComplete: () => true,
+      getLastCodexMessage: () => 'codex text',
+      transcriptPathFor: () => undefined,
+      readConversationForensics: () => null,
+    })
+    try {
+      const o = defaultTurnOutcome({ sessionId: 'nx', engine: 'codex' } as SessionInfo, T)
+      expect(o.confirmedComplete).toBe(true)
+      expect(o.answer()).toBe('codex text')
+    } finally { Object.assign(defaultTurnSources, saved) }
+  })
+
+  test('with an adapter: routed to the adapter', async () => {
+    const { defaultTurnOutcome } = await import('../reply-guard.js')
+    const answer = { confirmedComplete: true, answer: () => 'from adapter' }
+    const o = defaultTurnOutcome({ sessionId: 'a', engine: 'claude', adapter: { turnOutcome: () => answer } } as any, T)
+    expect(o).toBe(answer)
+  })
+
+  test('claudeTurnOutcome never confirms, even with the Codex flag set', () => {
+    const src: TurnSources = {
+      transcriptPathFor: () => '/t.jsonl', readConversationForensics: () => null,
+      getLastCodexMessage: () => null, isCodexTurnComplete: () => true,
+    }
+    expect(claudeTurnOutcome({ sessionId: 's1', engine: 'claude', claudeSessionId: 'c' } as SessionInfo, T, src).confirmedComplete).toBe(false)
   })
 })

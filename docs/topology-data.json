@@ -638,10 +638,6 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_usage"
-    ],
-    [
-      "daemon_session-lifecycle",
       "daemon_sessions"
     ],
     [
@@ -878,10 +874,6 @@
     ],
     [
       "daemon_reply-guard",
-      "daemon_usage"
-    ],
-    [
-      "daemon_reply-guard",
       "daemon_util"
     ],
     [
@@ -915,10 +907,6 @@
     [
       "daemon_session-health",
       "daemon_anchor-state"
-    ],
-    [
-      "daemon_session-health",
-      "daemon_session-lifecycle"
     ],
     [
       "daemon_raindrop",

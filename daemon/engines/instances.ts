@@ -1,4 +1,5 @@
 import { codexEngine } from '../codex-bootstrap.js'
+import { transport } from '../bridge-transport.js'
 import { ClaudeEngine } from './claude-engine.js'
 import { CodexEngineAdapter } from './codex-engine-adapter.js'
 import type { EngineAdapter, ProviderId } from './engine-adapter.js'
@@ -6,7 +7,7 @@ import type { EngineAdapter, ProviderId } from './engine-adapter.js'
 export { codexEngine }
 
 export const engines: Record<ProviderId, EngineAdapter> = {
-  claude: new ClaudeEngine(),
+  claude: new ClaudeEngine(transport),
   codex: new CodexEngineAdapter(codexEngine),
 }
 

@@ -3,6 +3,7 @@ import { protocol } from '../protocol-dsl.js'
 import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, startProtocolRun, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
+import { fakeAdapter as harnessFakeAdapter } from './test-harness.js'
 import delegatedBuildProto from '../../protocols/delegated-build.js'
 import delegatedBuildQuickProto from '../../protocols/delegated-build-quick.js'
 import { selectDelegatedBuildProtocol } from '../../protocols/delegated-build-select.js'
@@ -631,7 +632,7 @@ describe('protocol runner — health monitor', () => {
 })
 
 describe('health monitor — callback behavior', () => {
-  const fakeAdapter = (alive: boolean) => ({ isAlive: async () => alive, usage: () => null }) as any
+  const fakeAdapter = (alive: boolean) => harnessFakeAdapter({ isAlive: async () => alive, usage: () => null })
 
   function setupSession(sessionId: string, overrides: Record<string, unknown> = {}) {
     registry.set(sessionId, {

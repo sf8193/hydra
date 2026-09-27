@@ -322,11 +322,11 @@ function handleDeliver(req: CLIRequest): CLIResponse {
   const meta: Record<string, string> = { source: 'cli-deliver' }
   if (initiator) meta.initiator = initiator
 
-  const notification = { type: 'notification', content: message, meta }
+  const notification = { type: 'notification' as const, content: message, meta }
 
   // Codex sessions route through their adapter, not the bridge socket
   if (info.engine === 'codex' && info.adapter) {
-    void info.adapter.deliver(info, message, undefined, meta)
+    void info.adapter.deliver(info, notification)
     if (idempotencyKey) {
       registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
     }

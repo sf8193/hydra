@@ -4,20 +4,22 @@
 
 import { randomUUID } from 'crypto'
 import { execFileSync, execSync } from 'child_process'
-import { mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import { detectBlockingState as detectBlockingStateFn } from '../pane-probe.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
-  DeliveryMode, DeliveryResult,
+  DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
-  ContextUsage, EngineSnapshot,
+  ContextUsage, RecoverySource, RecoveryPlan,
 } from './engine-adapter.js'
-import { transport } from '../bridge-transport.js'
-import { parseContextPercent, tmuxHasSession } from '../util.js'
-import { isKnownModel } from '../../shared/constants.js'
+import type { BridgeTransport } from '../bridge-transport.js'
+import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
+import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
+import { projectDirName, projectsRoot } from '../usage.js'
+import { claudeTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
@@ -47,9 +49,80 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
   return ''
 }
 
+// ---------------------------------------------------------------------------
+// Claude session ID discovery
+// ---------------------------------------------------------------------------
+
+export function discoverClaudeSessionId(tmuxName: string): string | null {
+  try {
+    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8', timeout: 2000 }).toString().trim()
+    if (!panePid) return null
+
+    // Primary: read Claude's session file at $CLAUDE_CONFIG_DIR/sessions/<pid>.json
+    const sessionFile = join(claudeConfigDir(), 'sessions', `${panePid}.json`)
+    try {
+      const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
+      if (data.sessionId && data.cwd) {
+        // Verify the conversation file exists (Claude creates .jsonl lazily —
+        // freshly spawned sessions may not have one yet).
+        // NOTE: For fork+worktree builders, data.cwd reflects Claude's launch CWD
+        // (spawnCwd, e.g. /Users/sam/trading), not the worktree the builder later
+        // `cd`s to via Bash. Claude's session file captures the startup CWD and does
+        // not update on shell cd — so the conversation file will be found correctly.
+        const projectDir = join(projectsRoot(), projectDirName(data.cwd))
+        const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
+        if (existsSync(conversationFile)) return data.sessionId
+      }
+    } catch {}
+
+    // Fallback: scan child process environments
+    const childPids = execFileSync('pgrep', ['-P', panePid], { encoding: 'utf8', timeout: 2000 }).toString().trim().split('\n').filter(Boolean)
+    for (const childPid of childPids) {
+      const envOutput = execFileSync('ps', ['-E', '-p', childPid], { encoding: 'utf8', timeout: 2000 }).toString()
+      if (!envOutput.includes('HYDRA_SESSION_ID')) continue
+      const hydraId = envOutput.match(/HYDRA_SESSION_ID=([^\s]+)/)?.[1]
+      const candidates = [...envOutput.matchAll(/([A-Z_]*SESSION[A-Z_]*)=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g)]
+      const claudeId = candidates.find(m => m[2] !== hydraId)?.[2]
+      if (claudeId) return claudeId
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
   readonly deliveryIsFree = true
+  readonly channel = 'bridge' as const
+  constructor(private readonly transport: BridgeTransport) {}
+
+  // Resume relaunches with --resume and is confirmed when the bridge registers.
+  recoveryPlan(s: RecoverySource): RecoveryPlan {
+    const id = s.claudeSessionId
+    return id
+      ? { resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
+      : { resume: null, fork: null }
+  }
+
+  isConnected(info: SessionInfo): boolean {
+    return this.transport.bridges.has(info.sessionId)
+  }
+
+  refreshIdentity(info: SessionInfo): string | null {
+    if (info.claudeSessionId) return null
+    const discovered = discoverClaudeSessionId(info.tmuxName)
+    if (discovered) info.claudeSessionId = discovered
+    return discovered
+  }
+
+  activityAt(info: SessionInfo): number | null {
+    try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
+  }
+
+  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
+    return claudeTurnOutcome(info, sinceMs, defaultTurnSources)
+  }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
@@ -167,21 +240,15 @@ export class ClaudeEngine implements EngineAdapter {
     }
   }
 
-  async deliver(info: SessionInfo, text: string, _mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
-    const msg: Record<string, unknown> = {
-      type: 'notification',
-      content: text,
-      meta: { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString(), ...meta },
-    }
-    const bridge = transport.get(info.sessionId)
-    if (bridge) {
-      const ok = transport.sendToBridge(bridge, msg)
-      return ok
-        ? { status: 'accepted', via: 'bridge-socket' }
-        : { status: 'unknown', reason: 'bridge write failed, message queued' }
-    }
-    transport.sendOrQueue(info.sessionId, msg)
-    return { status: 'accepted', via: 'queued' }
+  // No await before the write: callers rely on it having happened on return.
+  async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    const r = this.transport.writeOrQueue(info.sessionId, msg)
+    return r === 'written' ? { status: 'accepted', via: 'bridge-socket' }
+      : r === 'queued' ? { status: 'accepted', via: 'queued' }
+      // sendToBridge re-queued it; the queue flushes on reconnect, as when absent.
+      // Not 'unknown': that would surface a delivery:failed warning (#378) for
+      // a message the transport still owns.
+      : { status: 'accepted', via: 'requeued' }
   }
 
   async retire(_info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
@@ -219,20 +286,6 @@ export class ClaudeEngine implements EngineAdapter {
       if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
-  }
-
-  async status(info: SessionInfo): Promise<EngineSnapshot> {
-    const alive = tmuxHasSession(info.tmuxName)
-    const connected = transport.has(info.sessionId)
-    const ctx = this.usage(info)
-    return {
-      provider: 'claude',
-      execution: alive ? (info.deadAt ? 'dead' : 'running') : 'dead',
-      connection: connected ? 'connected' : 'disconnected',
-      surface: alive ? 'present' : 'absent',
-      context: ctx,
-      turnActive: info.turnState === 'working',
-    }
   }
 
   uiTarget(info: SessionInfo): string { return info.tmuxName }

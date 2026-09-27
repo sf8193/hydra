@@ -13,15 +13,16 @@ import { registry, type SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
-  DeliveryMode, DeliveryResult,
+  DeliveryMode, DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
-  ContextUsage, EngineSnapshot,
+  ContextUsage, RecoverySource, RecoveryPlan,
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { parseContextPercent, safeSend, tmuxHasSession } from '../util.js'
+import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
+import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -46,7 +47,39 @@ export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startC
 export class CodexEngineAdapter implements EngineAdapter {
   readonly provider = 'codex' as const
   readonly deliveryIsFree = false
+  readonly channel = 'engine' as const
   constructor(private readonly engine: CodexEngine, private readonly proc = codexLaunchProcess) {}
+
+  // Launch resumes the thread in its original CODEX_HOME and takes the prompt.
+  // A stray claudeSessionId is ignored (PINNED R9; PR-IDENT).
+  recoveryPlan(s: RecoverySource): RecoveryPlan {
+    const t = s.codexThreadId
+    if (!t) return { resume: null, fork: null }
+    const home = s.codexHomeName ?? s.tmuxName
+    return {
+      resume: { kind: 'at-launch', resumeCodex: { threadId: t, homeName: home } },
+      fork: { codexThreadId: t, codexHomeName: home, parentName: s.tmuxName },
+    }
+  }
+
+  // PINNED C1: always true, as transport.has() answered before S2. Reporting
+  // this.engine.isConnected is PR-CONN (needs disconnect-time grace first).
+  isConnected(_info: SessionInfo): boolean {
+    return true
+  }
+
+  // Launch and reconnect assign the Codex thread id; nothing to discover.
+  refreshIdentity(_info: SessionInfo): string | null { return null }
+
+  // ⚠ F4s (pinned, fixed in S10): tmux window_activity of the session's current
+  // window, which after surface repair is the static anchor, not the TUI pane.
+  activityAt(info: SessionInfo): number | null {
+    try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
+  }
+
+  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
+    return codexTurnOutcome(info, sinceMs, defaultTurnSources)
+  }
 
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
   private startAppServer(input: LaunchInput, codexHomeName: string): string {
@@ -121,10 +154,15 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
-  async deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
+  async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    const text = msg.content
+    // Silent, as when sendOrQueue dropped it before reaching the adapter (PINNED E1b).
+    if (typeof text !== 'string' || !text) return { status: 'rejected', retryable: false, reason: 'non-text content' }
     if (text === '[system] keepalive') {
       return { status: 'rejected', retryable: false, reason: 'keepalive blocked for codex' }
     }
+    const mode: DeliveryMode | undefined = msg.deferUntilTurnComplete === true ? 'next-turn' : undefined
+    const meta = msg.meta
     // Enrich before transferring ownership to the queue, including while the
     // app-server connection is absent.
     let deliveryText = text
@@ -206,20 +244,6 @@ export class CodexEngineAdapter implements EngineAdapter {
       if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
-  }
-
-  async status(info: SessionInfo): Promise<EngineSnapshot> {
-    const connected = this.engine.isConnected(info.sessionId)
-    const alive = connected || tmuxHasSession(info.tmuxName)
-    const ctx = this.usage(info)
-    return {
-      provider: 'codex',
-      execution: alive ? 'running' : 'dead',
-      connection: connected ? 'connected' : 'disconnected',
-      surface: tmuxHasSession(info.tmuxName) ? 'present' : 'absent',
-      context: ctx,
-      turnActive: info.turnState === 'working',
-    }
   }
 
   uiTarget(info: SessionInfo): string { return `${info.tmuxName}:hydra-chat` }
