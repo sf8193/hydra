@@ -8,6 +8,8 @@ import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
 import { transport } from '../bridge-transport.js'
 import { engines } from '../engines/instances.js'
+import { emit } from '../event-bus.js'
+import { getIdempotencyEntry } from '../idempotency.js'
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any
@@ -243,6 +245,21 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(seen).toHaveLength(1)
     expect(JSON.stringify(seen[0])).toContain('"source":"cli-deliver"')
     expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
+    expect(getIdempotencyEntry(k)!.sessionId).toBe(info.sessionId)
+  })
+
+  // The in-flight reservation carries no sessionId, so the death handler's
+  // getBySessionId can't mistake it for a spawn key and complete it.
+  test('session dies mid-delivery → pending key untouched by the death handler, then cleared', async () => {
+    let settle!: (r: unknown) => void
+    const info = codex(() => new Promise(r => { settle = r }))
+    const k = key()
+    const pending = deliver(info.sessionId, { idempotencyKey: k })
+    emit('session:death', { sessionId: info.sessionId, threadId: info.threadId, wasOwner: true, tmuxName: info.tmuxName })
+    expect(getIdempotencyEntry(k)).toMatchObject({ status: 'pending' })
+    settle({ status: 'unknown', reason: 'session died' })
+    expect(await pending).toMatchObject({ ok: false, exitCode: 6 })
+    expect(getIdempotencyEntry(k)).toBeUndefined()
   })
 
   test('codex rejected → error with the reason, no key', async () => {

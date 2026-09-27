@@ -3,7 +3,7 @@
 // logs `attach -t <target>` instead of attaching.
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { handleCLIRequest } from '../cli-handler.js'
@@ -50,8 +50,8 @@ function seed(engine: 'claude' | 'codex', extra: Record<string, unknown> = {}): 
   return `z1${engine}${n}`
 }
 
-async function attach(name: string) {
-  const p = Bun.spawn(['bun', CLI, 'attach', name], { env: { ...process.env, HOME: home }, stdout: 'pipe', stderr: 'pipe' })
+async function attach(name: string, path = process.env.PATH) {
+  const p = Bun.spawn(['bun', CLI, 'attach', name], { env: { ...process.env, HOME: home, PATH: path }, stdout: 'pipe', stderr: 'pipe' })
   const [code, stderr] = await Promise.all([p.exited, new Response(p.stderr).text()])
   return { code, stderr, attached: fake.calls().filter(c => c.startsWith('attach')) }
 }
@@ -88,5 +88,14 @@ describe('hydra attach (Z1)', () => {
     expect((res.data as any).attachTarget).toBeUndefined()
     const verbs = [...new Set(fake.calls().map(c => c.split(' ')[0]))].sort()
     expect(verbs.filter(v => v !== 'has-session' && v !== 'capture-pane')).toEqual([])
+  })
+
+  // tmux killed by a signal leaves spawnSync's status null: attach must still fail.
+  test('tmux attach killed by a signal → exit 1', async () => {
+    const name = seed('claude'); fake.alive(name)
+    const bin = join(home, 'sigbin'); mkdirSync(bin)
+    writeFileSync(join(bin, 'tmux'), '#!/bin/sh\nkill -9 $$\n'); chmodSync(join(bin, 'tmux'), 0o755)
+    const r = await attach(name, `${bin}:${process.env.PATH}`)
+    expect(r.code).toBe(1)
   })
 })
