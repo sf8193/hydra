@@ -20,13 +20,17 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'f
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { _resetRolloutMemoForTesting, codexTotals, codexUsageTotals, findRollout, lastTokenUsage } from '../codex-rollout.js'
+import { CodexEngine } from '../codex-engine.js'
+import { codexEngine } from '../codex-bootstrap.js'
+import { getLastCodexMessage, isCodexTurnComplete } from '../observability.js'
+import { registry, type SessionInfo } from '../sessions.js'
 
 const dirs: string[] = []
 afterEach(() => { _resetRolloutMemoForTesting(); while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }) })
 
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 's10-')); dirs.push(d); return d }
 
-export const tc = (input: number, cached: number, output: number, extra: Record<string, number> = {}) => JSON.stringify({
+const tc = (input: number, cached: number, output: number, extra: Record<string, number> = {}) => JSON.stringify({
   timestamp: '2026-09-27T06:14:02.841Z', type: 'event_msg',
   payload: { type: 'token_count', info: { total_token_usage: {
     input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: output,
@@ -36,7 +40,7 @@ export const tc = (input: number, cached: number, output: number, extra: Record<
 const other = (s: string) => JSON.stringify({ type: 'response_item', payload: { type: 'message', text: s } })
 
 // A home with one rollout for `threadId`; returns the home dir and the file path.
-export function plantRollout(home: string, threadId: string, lines: string[], day = '2026/09/26'): string {
+function plantRollout(home: string, threadId: string, lines: string[], day = '2026/09/26'): string {
   const dir = join(home, 'sessions', day)
   mkdirSync(dir, { recursive: true })
   const path = join(dir, `rollout-2026-09-26T23-13-59-${threadId}.jsonl`)
@@ -138,5 +142,120 @@ describe('codexUsageTotals', () => {
     expect(read({ ...subject(home), codexThreadId: undefined as any })).toBeNull()
     expect(read(subject(home, 'absent'))).toBeNull()
     expect(read(subject(home, 't1'))).toBeNull()
+  })
+})
+
+// Part B. The resume shape is the live one recorded at the top of this file.
+const liveTurn = (over: Record<string, unknown> = {}) => ({
+  id: 'turn-1', itemsView: 'full', status: 'completed', error: null, startedAt: 1790489639, completedAt: 1790489642, durationMs: 3820,
+  items: [
+    { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'reply with the word ok' }] },
+    { type: 'agentMessage', id: 'm0', text: 'checking', phase: 'commentary' },
+    { type: 'agentMessage', id: 'm1', text: 'ok', phase: 'final_answer' },
+  ],
+  ...over,
+})
+
+// connectAndResume on `engine` against a canned thread/resume; returns what was emitted.
+async function resume(engine: any, sessionId: string, turns: any[]) {
+  const conn: any = { sessionId, threadId: null, currentTurnId: null, turnPending: false, retryTimers: new Set() }
+  const sch = engine.getScheduling(sessionId, conn)
+  conn.deferredTurnQueue = sch.deferredTurnQueue
+  conn.steerQueue = sch.steerQueue
+  const saved = { connectBase: engine.connectBase, request: engine.request, resetWatchdog: engine.resetWatchdog, startDeferredTurn: engine.startDeferredTurn }
+  engine.connectBase = async (_s: string, _p: string, threadId?: string) => { conn.threadId = threadId; engine.connections.set(sessionId, conn); return conn }
+  engine.request = async () => ({ thread: { turns } })
+  engine.resetWatchdog = () => {}
+  engine.startDeferredTurn = () => {}
+  const reconciled: any[] = []
+  let completed = 0
+  const onR = (sid: string, t: any) => { if (sid === sessionId) reconciled.push(t) }
+  const onC = (sid: string) => { if (sid === sessionId) completed++ }
+  engine.on('turnReconciled', onR)
+  engine.on('turnCompleted', onC)
+  try {
+    await engine.connectAndResume(sessionId, 'sock', 'thread-1')
+  } finally {
+    engine.off('turnReconciled', onR)
+    engine.off('turnCompleted', onC)
+    engine.connections.delete(sessionId)
+    Object.assign(engine, saved)
+  }
+  return { reconciled, completed }
+}
+
+describe('turnReconciled on connectAndResume', () => {
+  test('a terminal last turn with nothing in progress emits it, with the last agentMessage text', async () => {
+    const { reconciled } = await resume(new CodexEngine(), 's', [liveTurn({ id: 'old' }), liveTurn()])
+    expect(reconciled).toEqual([{ turnId: 'turn-1', status: 'completed', completedAt: 1790489642, lastAgentText: 'ok' }])
+  })
+
+  test.each(['interrupted', 'failed', { type: 'completed' }])('status %p is terminal', async (status) => {
+    const { reconciled } = await resume(new CodexEngine(), 's', [liveTurn({ status })])
+    expect(reconciled).toHaveLength(1)
+  })
+
+  test('an inProgress turn emits nothing, even behind a completed one', async () => {
+    expect((await resume(new CodexEngine(), 's', [liveTurn({ status: 'inProgress', completedAt: null })])).reconciled).toEqual([])
+    expect((await resume(new CodexEngine(), 's', [liveTurn({ status: 'inProgress', id: 'a' }), liveTurn()])).reconciled).toEqual([])
+  })
+
+  test('no turns emits nothing', async () => {
+    expect((await resume(new CodexEngine(), 's', [])).reconciled).toEqual([])
+  })
+
+  test('turnCompleted listeners do not fire', async () => {
+    const { reconciled, completed } = await resume(new CodexEngine(), 's', [liveTurn()])
+    expect(reconciled).toHaveLength(1)
+    expect(completed).toBe(0)
+  })
+
+  test('items not loaded: the completion is still emitted, with no text', async () => {
+    const { reconciled } = await resume(new CodexEngine(), 's', [liveTurn({ itemsView: 'notLoaded', items: [] })])
+    expect(reconciled).toEqual([{ turnId: 'turn-1', status: 'completed', completedAt: 1790489642, lastAgentText: null }])
+  })
+})
+
+describe('codex-bootstrap handles turnReconciled as observation only', () => {
+  function record(sessionId: string) {
+    const surfaces: string[] = []
+    const info = {
+      sessionId, threadId: `T-${sessionId}`, tmuxName: sessionId, engine: 'codex', sessionType: 'thread_owner', originType: 'spawn',
+      createdAt: 1, lastActive: 1, listening: true, topic: '', turnState: 'working',
+      adapter: { ensureSurface: () => { surfaces.push(sessionId); return true } },
+    } as unknown as SessionInfo
+    registry.set(sessionId, info)
+    return { info, surfaces, done: () => registry.delete(sessionId) }
+  }
+
+  test('the flag and the last message are set from the resumed turn; no side effects', async () => {
+    const r = record('recon-1')
+    try {
+      expect(isCodexTurnComplete('recon-1')).toBe(false)
+      const { completed } = await resume(codexEngine, 'recon-1', [liveTurn()])
+      expect(isCodexTurnComplete('recon-1')).toBe(true)
+      expect(getLastCodexMessage('recon-1', 1790489642 * 1000)).toBe('ok')
+      expect(getLastCodexMessage('recon-1', 1790489642 * 1000 + 1), 'dated at completedAt, not now').toBeNull()
+      expect(completed).toBe(0)
+      expect(r.surfaces, 'no surface repair').toEqual([])
+      expect(r.info.turnState, 'turnCompleted would have set idle').toBe('working')
+    } finally { r.done() }
+  })
+
+  test('items not loaded: completion recorded, no text', async () => {
+    const r = record('recon-2')
+    try {
+      await resume(codexEngine, 'recon-2', [liveTurn({ itemsView: 'notLoaded', items: [] })])
+      expect(isCodexTurnComplete('recon-2')).toBe(true)
+      expect(getLastCodexMessage('recon-2', 0)).toBeNull()
+    } finally { r.done() }
+  })
+
+  test('an in-progress resume leaves the flag unset', async () => {
+    const r = record('recon-3')
+    try {
+      await resume(codexEngine, 'recon-3', [liveTurn({ status: 'inProgress' })])
+      expect(isCodexTurnComplete('recon-3')).toBe(false)
+    } finally { r.done() }
   })
 })
