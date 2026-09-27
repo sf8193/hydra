@@ -29,7 +29,10 @@ describe('Codex model continuity', () => {
   })
   test('resuming after a missed completion drains queued work once', async () => {
     const engine = new CodexEngine() as any
-    const conn = { currentTurnId: null, deferredTurnQueue: ['next-round'] }
+    const conn = {
+      sessionId: 's', threadId: 'parent', currentTurnId: null, turnPending: false,
+      deferredTurnQueue: ['next-round'], steerQueue: [],
+    }
     engine.connectBase = async () => conn
     engine.request = async () => ({ thread: { turns: [{ id: 'previous', status: 'completed' }] } })
     const started: string[] = []
@@ -188,6 +191,7 @@ describe('CodexEngine deferred turns', () => {
     expect(started).toEqual([])
     expect(conn.deferredTurnQueue).toEqual(['ROUND_2'])
 
+    conn.turnPending = false // turn/start request has settled
     engine.handleNotification(conn, 'turn/completed', {})
     expect(started).toEqual(['ROUND_2'])
     expect(conn.deferredTurnQueue).toEqual([])
@@ -235,6 +239,320 @@ describe('CodexEngine deferred turns', () => {
     expect(attempts).toBe(1)
     expect(unknown).toBe(1)
     expect(conn.deferredTurnQueue).toEqual([])
+  })
+
+  test('keeps more than 50 queued user turns in FIFO order', () => {
+    const engine = new CodexEngine() as any
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'active',
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.reconcileBeforeDeferredDrain = () => {}
+
+    for (let i = 0; i < 75; i++) expect(engine.queueTurn('s', `msg-${i}`)).toBe(true)
+    expect(conn.deferredTurnQueue).toHaveLength(75)
+    expect(conn.deferredTurnQueue[0]).toBe('msg-0')
+    expect(conn.deferredTurnQueue[74]).toBe('msg-74')
+  })
+
+  test('reconciles a stale active turn before draining a queued comment', async () => {
+    const engine = new CodexEngine() as any
+    const started: string[] = []
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'stale',
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.request = async (_conn: any, method: string) => {
+      expect(method).toBe('thread/resume')
+      return { thread: { turns: [{ id: 'stale', status: 'completed' }] } }
+    }
+    engine.startDeferredTurn = (_conn: any, text: string) => { started.push(text) }
+
+    expect(engine.queueTurn('s', 'after-visible-completion')).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(started).toEqual(['after-visible-completion'])
+  })
+
+  test('does not clear an apparently active turn when resume omits turn history', async () => {
+    const engine = new CodexEngine() as any
+    const started: string[] = []
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'possibly-active',
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.request = async () => ({ thread: {} })
+    engine.startDeferredTurn = (_conn: any, text: string) => { started.push(text) }
+
+    engine.queueTurn('s', 'wait-for-proof')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(conn.currentTurnId).toBe('possibly-active')
+    expect(conn.deferredTurnQueue).toEqual(['wait-for-proof'])
+    expect(started).toEqual([])
+  })
+
+  test('does not let a later message overtake an explicitly rejected head', async () => {
+    const engine = new CodexEngine() as any
+    const starts: string[] = []
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.startTurn = async (_sessionId: string, text: string) => {
+      starts.push(text)
+      throw new Error('rejected (code -32000)')
+    }
+
+    engine.queueTurn('s', 'A')
+    engine.queueTurn('s', 'B')
+    await new Promise(resolve => setTimeout(resolve, 850))
+
+    expect(starts).toEqual(['A', 'A', 'A'])
+    expect(conn.deferredTurnQueue).toEqual(['A', 'B'])
+    expect(engine.scheduling.get('s').startState).toBe('stalled')
+  })
+
+  test('restores a rejected head when disconnected during retry backoff', async () => {
+    const engine = new CodexEngine() as any
+    const starts: string[] = []
+    const makeConn = () => ({
+      sessionId: 's', ws: { send() {}, close() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    })
+    const firstConn = makeConn()
+    engine.connections.set('s', firstConn)
+    engine.startTurn = async (_sessionId: string, text: string) => {
+      starts.push(text)
+      throw new Error('rejected (code -32000)')
+    }
+
+    engine.queueTurn('s', 'A')
+    engine.queueTurn('s', 'B')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    engine.disconnect('s')
+
+    const replacement = makeConn()
+    const scheduling = engine.getScheduling('s', replacement)
+    replacement.steerQueue = scheduling.steerQueue
+    replacement.deferredTurnQueue = scheduling.deferredTurnQueue
+    engine.connections.set('s', replacement)
+    engine.startTurn = async (_sessionId: string, text: string) => { starts.push(text) }
+    engine.drainDeferredTurns(replacement)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(starts).toEqual(['A', 'A', 'B'])
+    expect(replacement.deferredTurnQueue).toEqual([])
+  })
+
+  test('blocks later messages while an unknown start is being reconciled', async () => {
+    const engine = new CodexEngine() as any
+    const starts: string[] = []
+    let release!: (value: any) => void
+    const reconcile = new Promise(resolve => { release = resolve })
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.startTurn = async (_sessionId: string, text: string) => {
+      starts.push(text)
+      throw new Error('request turn/start timed out')
+    }
+    engine.request = async () => reconcile
+
+    engine.queueTurn('s', 'A')
+    await Promise.resolve()
+    engine.queueTurn('s', 'B')
+    expect(starts).toEqual(['A'])
+    expect(conn.deferredTurnQueue).toEqual(['B'])
+
+    release({ thread: { turns: [{ id: 'A-turn', status: 'inProgress' }] } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(conn.currentTurnId).toBe('A-turn')
+    expect(starts).toEqual(['A'])
+  })
+
+  test('does not resurrect a turn completed before turn/start response settles', async () => {
+    const engine = new CodexEngine() as any
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.resetWatchdog = () => {}
+    engine.request = async (_conn: any, method: string) => {
+      expect(method).toBe('turn/start')
+      engine.handleNotification(conn, 'turn/started', { turn: { id: 'A-turn' } })
+      engine.handleNotification(conn, 'turn/completed', { turn: { id: 'A-turn' } })
+      return { turn: { id: 'A-turn' } }
+    }
+
+    engine.queueTurn('s', 'A')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(conn.currentTurnId).toBeNull()
+    expect(engine.scheduling.get('s').startState).toBe('idle')
+  })
+
+  test('records an identified completion that arrives before start response and before turn/started', async () => {
+    const engine = new CodexEngine() as any
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.request = async () => {
+      engine.handleNotification(conn, 'turn/completed', { turn: { id: 'fast-turn' } })
+      return { turn: { id: 'fast-turn' } }
+    }
+
+    engine.queueTurn('s', 'fast')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(conn.currentTurnId).toBeNull()
+    expect(engine.scheduling.get('s').startState).toBe('idle')
+  })
+
+  test('does not let a stale identified completion cancel a pending new start', async () => {
+    const engine = new CodexEngine() as any
+    let resolveStart!: (value: any) => void
+    const startResponse = new Promise(resolve => { resolveStart = resolve })
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.request = async () => startResponse
+
+    engine.queueTurn('s', 'new message')
+    await Promise.resolve()
+    engine.handleNotification(conn, 'turn/completed', { turn: { id: 'old-turn' } })
+    resolveStart({ turn: { id: 'new-turn' } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(conn.currentTurnId).toBe('new-turn')
+    expect(engine.scheduling.get('s').startState).toBe('idle')
+  })
+
+  test('requeues an unknown start only after authoritative history shows it absent', async () => {
+    const engine = new CodexEngine() as any
+    const starts: string[] = []
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.startTurn = async (_sessionId: string, text: string) => {
+      starts.push(text)
+      if (starts.length === 1) throw new Error('request turn/start timed out')
+    }
+    engine.request = async () => ({ thread: { turns: [{ id: 'older', status: 'completed', items: [] }] } })
+
+    engine.queueTurn('s', 'A-not-in-history')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(starts).toEqual(['A-not-in-history', 'A-not-in-history'])
+    expect(engine.scheduling.get('s').uncertainDeferredText).toBeNull()
+  })
+
+  test('recognizes an exact quoted multiline user input on a newer committed turn', async () => {
+    const engine = new CodexEngine() as any
+    const text = 'first line\n"quoted" \\ path'
+    const starts: string[] = []
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1, lastKnownTurnId: 'old',
+    }
+    engine.connections.set('s', conn)
+    engine.startTurn = async (_sessionId: string, value: string) => {
+      starts.push(value)
+      throw new Error('request turn/start timed out')
+    }
+    engine.request = async () => ({ thread: { turns: [
+      { id: 'old', status: 'completed', items: [] },
+      { id: 'committed', status: 'completed', items: [
+        { type: 'userMessage', content: [{ type: 'inputText', text }] },
+      ] },
+    ] } })
+
+    engine.queueTurn('s', text)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(starts).toEqual([text])
+    expect(conn.deferredTurnQueue).toEqual([])
+    expect(engine.scheduling.get('s').startState).toBe('idle')
+  })
+
+  test('does not mistake matching text in an older turn for a committed unknown start', async () => {
+    const engine = new CodexEngine() as any
+    const starts: string[] = []
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1, lastKnownTurnId: 'old',
+    }
+    engine.connections.set('s', conn)
+    engine.startTurn = async (_sessionId: string, text: string) => {
+      starts.push(text)
+      if (starts.length === 1) throw new Error('request turn/start timed out')
+    }
+    engine.request = async () => ({ thread: { turns: [
+      { id: 'old', status: 'completed', items: [
+        { type: 'userMessage', content: [{ type: 'inputText', text: 'ok' }] },
+      ] },
+    ] } })
+
+    engine.queueTurn('s', 'ok')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(starts).toEqual(['ok', 'ok'])
+    expect(engine.scheduling.get('s').uncertainDeferredText).toBeNull()
+  })
+
+  test('keeps ownership uncertain when unknown-start reconciliation has no turn history', async () => {
+    const engine = new CodexEngine() as any
+    const conn = {
+      sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.startTurn = async () => { throw new Error('request turn/start timed out') }
+    engine.request = async () => ({ thread: {} })
+
+    engine.queueTurn('s', 'A')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const scheduling = engine.scheduling.get('s')
+    expect(scheduling.startState).toBe('uncertain')
+    expect(scheduling.uncertainDeferredText).toBe('A')
   })
 })
 
