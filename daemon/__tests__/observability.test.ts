@@ -441,3 +441,38 @@ describe('turnOutcome composition', () => {
     } finally { Object.assign(defaultTurnSources, saved) }
   })
 })
+
+// Review of P6–S6: the reply guard's default routing and Claude never confirming.
+describe('defaultTurnOutcome routing', () => {
+  const T = Date.now()
+  test('no adapter: live-source Codex composition (flag set → confirmed, Codex text)', async () => {
+    const { defaultTurnOutcome } = await import('../reply-guard.js')
+    const saved = { ...defaultTurnSources }
+    Object.assign(defaultTurnSources, {
+      isCodexTurnComplete: () => true,
+      getLastCodexMessage: () => 'codex text',
+      transcriptPathFor: () => undefined,
+      readConversationForensics: () => null,
+    })
+    try {
+      const o = defaultTurnOutcome({ sessionId: 'nx', engine: 'codex' } as SessionInfo, T)
+      expect(o.confirmedComplete).toBe(true)
+      expect(o.answer()).toBe('codex text')
+    } finally { Object.assign(defaultTurnSources, saved) }
+  })
+
+  test('with an adapter: routed to the adapter', async () => {
+    const { defaultTurnOutcome } = await import('../reply-guard.js')
+    const answer = { confirmedComplete: true, answer: () => 'from adapter' }
+    const o = defaultTurnOutcome({ sessionId: 'a', engine: 'claude', adapter: { turnOutcome: () => answer } } as any, T)
+    expect(o).toBe(answer)
+  })
+
+  test('claudeTurnOutcome never confirms, even with the Codex flag set', () => {
+    const src: TurnSources = {
+      transcriptPathFor: () => '/t.jsonl', readConversationForensics: () => null,
+      getLastCodexMessage: () => null, isCodexTurnComplete: () => true,
+    }
+    expect(claudeTurnOutcome({ sessionId: 's1', engine: 'claude', claudeSessionId: 'c' } as SessionInfo, T, src).confirmedComplete).toBe(false)
+  })
+})

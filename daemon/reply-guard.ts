@@ -52,6 +52,11 @@ export type ReplyGuardDeps = {
   turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome
 }
 
+/** The adapter's answer; a record without an adapter gets today's composition over the live sources. */
+export function defaultTurnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
+  return info.adapter ? info.adapter.turnOutcome(info, sinceMs) : codexTurnOutcome(info, sinceMs, defaultTurnSources)
+}
+
 const defaultDeps: ReplyGuardDeps = {
   registryGet: (id) => registry.get(id),
   registryValues: () => registry.values(),
@@ -61,10 +66,7 @@ const defaultDeps: ReplyGuardDeps = {
   safeSend: (ch, text, opts) => safeSend(ch, text, opts),
   capturePaneScreenshot: (tmuxName) => capturePaneScreenshot(tmuxName),
   capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
-  // A record without an adapter gets today's composition over the live sources.
-  turnOutcome: (info, sinceMs) => info.adapter
-    ? info.adapter.turnOutcome(info, sinceMs)
-    : codexTurnOutcome(info, sinceMs, defaultTurnSources),
+  turnOutcome: (info, sinceMs) => defaultTurnOutcome(info, sinceMs),
 }
 
 let deps: ReplyGuardDeps = defaultDeps
