@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'bun:test'
+import { engines } from '../engines/instances.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
 
@@ -10,7 +11,7 @@ test('dispatcher rejects a phase-scoped tool after capability removal', async ()
   registry.set(sessionId, {
     sessionId, tmuxName: 'scope-enforcement', topic: '', threadId: 'scope-thread',
     createdAt: Date.now(), lastActive: Date.now(), listening: false,
-    engine: 'claude', sessionType: 'thread_owner',
+    engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner',
   } as any)
   try {
     const result = await executeTool('kill_session', { session_id: 'anything' }, sessionId)
@@ -28,7 +29,7 @@ test('Codex non-PM session is denied protocol spawn tools', async () => {
   registry.set(sessionId, {
     sessionId, tmuxName: 'codex-non-pm', topic: '', threadId: 'codex-thread',
     createdAt: Date.now(), lastActive: Date.now(), listening: false,
-    engine: 'codex', sessionType: 'thread_guest',
+    engine: 'codex', adapter: engines.codex, sessionType: 'thread_guest',
   } as any)
   try {
     const result = await executeTool('kill_session', { session_id: 'anything' }, sessionId)
@@ -45,12 +46,12 @@ test('protocol PM cannot kill the builder it did not spawn', async () => {
   registry.set(pmId, {
     sessionId: pmId, tmuxName: 'protocol-pm', topic: '', threadId: 'scope-thread',
     createdAt: Date.now(), lastActive: Date.now(), listening: false,
-    engine: 'codex', sessionType: 'thread_owner', capabilities: ['protocol_spawn'],
+    engine: 'codex', adapter: engines.codex, sessionType: 'thread_owner', capabilities: ['protocol_spawn'],
   } as any)
   registry.set(builderId, {
     sessionId: builderId, tmuxName: 'protocol-builder', topic: '', threadId: 'scope-thread',
     createdAt: Date.now(), lastActive: Date.now(), listening: false,
-    engine: 'claude', sessionType: 'thread_guest', originFrom: 'daemon',
+    engine: 'claude', adapter: engines.claude, sessionType: 'thread_guest', originFrom: 'daemon',
   } as any)
   try {
     const result = await executeTool('kill_session', { session_id: builderId }, pmId)
@@ -109,7 +110,7 @@ describe('send_to_thread', () => {
       lastActive: Date.now(),
       tmuxName: 'file-test-session',
       listening: false,
-      engine: 'claude', sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
     })
     try {
       const result = await executeTool('send_to_thread', { target: 'file-test-session', type: 'progress', text: 'hello', files: ['/nonexistent'] })
@@ -129,7 +130,7 @@ describe('send_to_thread', () => {
       lastActive: Date.now(),
       tmuxName: 'orch-test-session',
       listening: false,
-      engine: 'claude', sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
     })
     try {
       const result = await executeTool('send_to_thread', { target: 'orch-test-session', type: 'result', text: 'done' })
@@ -178,14 +179,14 @@ describe('peek_session', () => {
       sessionId: childId, topic: 'child task', threadId: 'thread-child',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-child', listening: false,
-      engine: 'claude', sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
       originFrom: 'peek-parent', originType: 'spawn',
     })
     registry.set(siblingId, {
       sessionId: siblingId, topic: 'sibling task', threadId: 'thread-sibling',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-sibling', listening: false,
-      engine: 'claude', sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
       originFrom: 'peek-parent', originType: 'spawn',
     })
     try {
@@ -204,7 +205,7 @@ describe('peek_session', () => {
       sessionId: testId, topic: 'test', threadId: 'thread-peek-main',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-main-target', listening: false,
-      engine: 'claude', sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
       originFrom: 'some-other-parent',
     })
     try {
@@ -222,7 +223,7 @@ describe('peek_session', () => {
       sessionId: testId, topic: 'test', threadId: 'thread-peek',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: 'peek-test-session', listening: false,
-      engine: 'claude', sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
     })
     try {
       const result = await executeTool('peek_session', { name: 'peek-test-session', lines: 9999 })

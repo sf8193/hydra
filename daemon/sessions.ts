@@ -64,7 +64,7 @@ export type SessionInfo = {
   stderrLogPath?: string   // stderr redirect: separate file for spawn's stderr output
   debugLogPath?: string    // CC --debug-file output: internal diagnostics, written throughout session lifetime
   engine: 'claude' | 'codex'  // which backend runs this session
-  adapter?: import('./engines/engine-adapter.js').EngineAdapter // runtime instance, not persisted — reattached on load
+  adapter: import('./engines/engine-adapter.js').EngineAdapter // runtime instance, not persisted — reattached on load
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
   ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors

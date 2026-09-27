@@ -206,3 +206,24 @@ describe('sessionEmoji', () => {
     expect(sessionEmoji('unknown-name')).toBe('\uD83D\uDD39') // small blue diamond
   })
 })
+
+// contract PR-0 S0.1: adapter is required, so boot's reattach is what supplies it.
+describe('reattachAdapters', () => {
+  test("every record gets its engine's adapter; a record without an engine gets Claude's", async () => {
+    const { registry, reattachAdapters } = await import('../sessions.js')
+    const { engines, resolveEngine } = await import('../engines/instances.js')
+    // reattach walks the whole shared registry: put back what other files left there.
+    const saved = [...registry.values()].map(i => [i, i.adapter] as const)
+    const seeded = [['ra-claude', 'claude'], ['ra-codex', 'codex'], ['ra-none', undefined]] as const
+    for (const [id, engine] of seeded) registry.set(id, { ...makeInfo({ sessionId: id, threadId: id }), engine } as SessionInfo)
+    try {
+      reattachAdapters(resolveEngine)
+      expect(registry.get('ra-claude')!.adapter).toBe(engines.claude)
+      expect(registry.get('ra-codex')!.adapter).toBe(engines.codex)
+      expect(registry.get('ra-none')!.adapter).toBe(engines.claude)
+    } finally {
+      for (const [id] of seeded) registry.delete(id)
+      for (const [info, adapter] of saved) info.adapter = adapter
+    }
+  })
+})

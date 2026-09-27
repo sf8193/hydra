@@ -5,6 +5,7 @@
 // Runs the real discoverClaudeSessionId through a PATH-shim tmux and a temp
 // CLAUDE_CONFIG_DIR (see fake-tmux.ts).
 
+import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { killSession } from '../session-lifecycle.js'
 import { handleForkIntercept } from '../commands/thread.js'
@@ -73,6 +74,7 @@ function seed(engine: 'claude' | 'codex', extra: Partial<SessionInfo> = {}): Ses
     tmuxName: `hydra-t3-idd-${n}`,
     listening: false,
     engine,
+    adapter: engines[engine],
     sessionType: 'thread_owner',
     ...extra,
   }

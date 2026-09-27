@@ -92,7 +92,7 @@ try {
    try { return await request(...args) }
    catch (err) { console.error('RPC failed:', args[1], String(err)); throw err }
  }
- const { providerFor } = await import(repo + '/daemon/session-provider.ts')
+ const { resolveEngine: providerFor } = await import(repo + '/daemon/engines/instances.ts')
  assert(await providerFor('codex').interruptExecution(providerFor('codex').executionRef(info)))
  assert(!starts.some(s => s.text.startsWith('ROUND_3')))
  console.log('PASS retirement fences and discards queued handoff')

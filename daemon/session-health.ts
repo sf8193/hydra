@@ -3,7 +3,6 @@ import { transport } from './bridge-transport.js'
 import { gateway } from './config.js'
 import { tmuxHasSession } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
-import { resolveEngine } from './engines/instances.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 
@@ -44,7 +43,7 @@ export function pollSessionsOnce(now: number): void {
     // Discovery retries every poll (claudeSessionId may become available later).
     // Alert fires once per orphan episode; clears when bridge reconnects.
     if (info.sessionType !== 'thread_guest' && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
-      const discovered = (info.adapter ?? resolveEngine(info.engine)).refreshIdentity(info)
+      const discovered = info.adapter.refreshIdentity(info)
       if (discovered) {
         registry.persist()
         const thread = threadRegistry.get(info.threadId)
@@ -65,7 +64,7 @@ export function pollSessionsOnce(now: number): void {
     }
 
     // Context alert
-    const pct = formatContextPercent(info.adapter ?? resolveEngine(info.engine), info)
+    const pct = formatContextPercent(info.adapter, info)
     if (pct === '?') continue
     const num = parseInt(pct)
     if (num >= CONTEXT_ALERT_THRESHOLD && !contextAlerted.has(info.sessionId)) {

@@ -33,7 +33,7 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
-import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from './observability.js'
+import { type TurnOutcome } from './observability.js'
 import { safeSend, tmuxWindowActivity } from './util.js'
 import { probeByteTmuxName } from './pane-probe.js'
 
@@ -52,9 +52,9 @@ export type ReplyGuardDeps = {
   turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome
 }
 
-/** The adapter's answer; a record without an adapter gets today's composition over the live sources. */
+/** The adapter's answer. */
 export function defaultTurnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
-  return info.adapter ? info.adapter.turnOutcome(info, sinceMs) : codexTurnOutcome(info, sinceMs, defaultTurnSources)
+  return info.adapter.turnOutcome(info, sinceMs)
 }
 
 const defaultDeps: ReplyGuardDeps = {

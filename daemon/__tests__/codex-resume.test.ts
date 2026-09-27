@@ -220,7 +220,7 @@ function seedDead(engine: 'claude' | 'codex', extra: Partial<SessionInfo> = {}):
   const info: SessionInfo = {
     sessionId: `sess-r16-${n}`, topic: 'topic', threadId: THREAD, createdAt: Date.now() - 1e6, lastActive: Date.now(),
     tmuxName: `r16dead${n}`, listening: false, engine, sessionType: 'thread_owner', anchorChannelId: PARENT,
-    deadAt: Date.now(),
+    deadAt: Date.now(), adapter: engines[engine],
     ...(engine === 'codex' ? { codexThreadId: `T-${n}` } : { claudeSessionId: `C-${n}` }),
     ...extra,
   } as SessionInfo
@@ -275,7 +275,7 @@ describe('handleResumeIntercept — Codex', () => {
 
   test('refuses to resume into a home another session owns', async () => {
     const other = { sessionId: 'sess-r16-other', topic: 't', threadId: 'other-thread', createdAt: Date.now(), lastActive: Date.now(),
-      tmuxName: 'r16owner', listening: false, engine: 'codex', sessionType: 'thread_owner', codexThreadId: 'T-other' } as SessionInfo
+      tmuxName: 'r16owner', listening: false, engine: 'codex', adapter: engines.codex, sessionType: 'thread_owner', codexThreadId: 'T-other' } as SessionInfo
     registry.set(other.sessionId, other)
     seeded.add(other.sessionId)
     seedDead('codex', { codexHomeName: 'r16owner' })

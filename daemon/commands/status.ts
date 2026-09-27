@@ -7,7 +7,6 @@ import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { fallbackDescription, formatDuration, atomicWriteFileSync, isAlive, safeSend, safeEdit } from '../util.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
-import { resolveEngine } from '../engines/instances.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import { raindropStatusLine } from '../raindrop.js'
@@ -41,7 +40,7 @@ function formatSessionEntry(e: SessionEntry, indent?: string): string {
   const desc = s.description ?? fallbackDescription(thread?.topic ?? '')
   const duration = formatDuration(Date.now() - s.createdAt)
   const msgCount = s.messageCount ?? 0
-  const ctx = formatContextPercent(s.adapter ?? resolveEngine(s.engine), s)
+  const ctx = formatContextPercent(s.adapter, s)
   const badge = transport.has(s.sessionId) ? '' : ' ⚠️'
   const emoji = sessionEmoji(s.tmuxName)
   const url = thread?.threadUrl
@@ -256,7 +255,7 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   }
 
   void gateway.react(msg.channelId, msg.id, '📈').catch(() => {})
-  const ctx = formatContextPercent(info.adapter ?? resolveEngine(info.engine), info)
+  const ctx = formatContextPercent(info.adapter, info)
   const duration = formatDuration(Date.now() - info.createdAt)
   const msgs = info.messageCount ?? 0
   const status = transport.has(info.sessionId) ? 'connected' : 'disconnected'

@@ -3,6 +3,7 @@ import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend,
 import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
+import { engines } from '../engines/instances.js'
 import type { Protocol } from '../protocol-dsl.js'
 import type { ProtocolRun } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
@@ -104,6 +105,7 @@ export class TestHarness {
         listening: false,
         turnState: 'idle',
         engine: 'claude',
+        adapter: engines.claude,
         sessionType: role === ownerRole ? 'thread_owner' : 'thread_guest',
       }
       registry.set(sid, info)
@@ -178,6 +180,7 @@ export class TestHarness {
       listening: false,
       turnState: 'idle',
       engine: 'claude',
+      adapter: engines.claude,
       sessionType: 'thread_owner',
       ...(opts.ownerLabel && { label: opts.ownerLabel }),
     })
@@ -296,6 +299,7 @@ export class TestHarness {
           listening: false,
           turnState: 'idle',
           engine: 'claude',
+          adapter: engines.claude,
           sessionType: spawnOpts?.joinThread ? 'thread_guest' : 'thread_owner',
           ...resolveSpawnLabel(topic, spawnOpts?.label, spawnOpts?.inheritedLabel),
         }

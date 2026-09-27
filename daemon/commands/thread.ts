@@ -29,7 +29,7 @@ export function _setRecoveryDeps(custom: Partial<RecoveryDeps>): void { recovery
 export function _resetRecoveryDeps(): void { recoveryDeps = defaultRecoveryDeps }
 
 function adapterFor(info: { engine?: 'claude' | 'codex'; adapter?: any }) {
-  return info.adapter ?? resolveEngine(info.engine)
+  return info.adapter
 }
 
 async function executionAlive(info: NonNullable<ReturnType<typeof registry.get>>): Promise<boolean> {

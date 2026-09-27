@@ -445,7 +445,7 @@ describe('turnOutcome composition', () => {
 // Review of P6–S6: the reply guard's default routing and Claude never confirming.
 describe('defaultTurnOutcome routing', () => {
   const T = Date.now()
-  test('no adapter: live-source Codex composition (flag set → confirmed, Codex text)', async () => {
+  test('Codex adapter: live-source Codex composition (flag set → confirmed, Codex text)', async () => {
     const { defaultTurnOutcome } = await import('../reply-guard.js')
     const saved = { ...defaultTurnSources }
     Object.assign(defaultTurnSources, {
@@ -455,7 +455,7 @@ describe('defaultTurnOutcome routing', () => {
       readConversationForensics: () => null,
     })
     try {
-      const o = defaultTurnOutcome({ sessionId: 'nx', engine: 'codex' } as SessionInfo, T)
+      const o = defaultTurnOutcome({ sessionId: 'nx', engine: 'codex', adapter: engines.codex } as SessionInfo, T)
       expect(o.confirmedComplete).toBe(true)
       expect(o.answer()).toBe('codex text')
     } finally { Object.assign(defaultTurnSources, saved) }

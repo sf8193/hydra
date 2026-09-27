@@ -31,7 +31,6 @@ import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
 import type { TmuxKeyAction } from './engines/engine-adapter.js'
-import { resolveEngine } from './engines/instances.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
 
@@ -854,7 +853,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const text = keysMatch[1].replace(/\n/g, ' ').trim()
             if (text) {
               try {
-                const adapter = info.adapter ?? resolveEngine(info.engine)
+                const adapter = info.adapter
                 if (!adapter.ensureSurface(info)) throw new Error(`interactive surface is unavailable`)
                 // Map lowercase → canonical tmux key name (tmux is case-sensitive)
                 const TMUX_KEY_MAP = new Map<string, string>()
@@ -918,7 +917,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
               // ingress slot, so later messages cannot overtake it.
               let interrupted: Promise<unknown>
               try {
-                const interruptAdapter = info.adapter ?? resolveEngine(info.engine)
+                const interruptAdapter = info.adapter
                 interruptAdapter.ensureSurface(info)
                 // 50ms lets a TUI-keystroke interrupt (Claude) land before delivery.
                 interrupted = interruptAdapter.interrupt(info).then(() => new Promise(r => setTimeout(r, 50)))

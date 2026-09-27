@@ -3,6 +3,7 @@
 // respawn's engine/model selection, and native fork vs continuation. Every
 // executor is stubbed through recoveryDeps, so nothing is spawned.
 
+import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { handleResumeIntercept, handleRespawnIntercept, handleForkIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../commands/thread.js'
 import { RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
@@ -108,7 +109,7 @@ function seedHistory(entry: Partial<ThreadSessionEntry>, info?: Partial<SessionI
   threads.add(THREAD)
   if (info) {
     registry.set(e.sessionId, { sessionId: e.sessionId, topic: TOPIC, threadId: THREAD, createdAt: 1, lastActive: 1,
-      tmuxName: e.tmuxName, listening: false, sessionType: 'thread_owner', deadAt: 3, ...info } as SessionInfo)
+      tmuxName: e.tmuxName, listening: false, sessionType: 'thread_owner', deadAt: 3, adapter: engines[info.engine ?? 'claude'], ...info } as SessionInfo)
     seeded.add(e.sessionId)
   }
   return e
@@ -336,7 +337,7 @@ describe('handleForkIntercept', () => {
     const n = ++seq
     const info = { sessionId: `sess-t8f-${n}`, topic: TOPIC, threadId: `thread-t8f-${n}`, createdAt: 1, lastActive: 1,
       tmuxName: `t8live${n}`, listening: false, engine, sessionType: 'thread_owner', label: 'build',
-      sessionMetadata: { model: 'src-model' }, ...extra } as SessionInfo
+      sessionMetadata: { model: 'src-model' }, adapter: engines[engine], ...extra } as SessionInfo
     registry.set(info.sessionId, info)
     registry.setThread(info.threadId, info.sessionId)
     seeded.add(info.sessionId); threads.add(info.threadId)
