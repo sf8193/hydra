@@ -87,6 +87,27 @@ export type LaunchResult = {
   readonly codexThreadId?: string
 }
 
+/**
+ * Why a spawned session never got a channel back to the daemon.
+ *
+ * `resolution-missed` is knowable long before a timeout would fire: Claude Code
+ * never put the bridge in the session's MCP config at all, so no amount of
+ * waiting will produce one. `timeout` is the residual — the bridge was
+ * configured and still did not arrive.
+ */
+export type BridgeAttachFailure = 'resolution-missed' | 'timeout'
+
+export type BridgeAttachResult =
+  | { readonly attached: true }
+  | { readonly attached: false; readonly reason: BridgeAttachFailure }
+
+export type AwaitBridgeInput = {
+  readonly sessionId: string
+  readonly launched: LaunchResult
+  /** Byte offset to read the debug log from, so a retry never reads the attempt before it. */
+  readonly debugLogFrom: number
+}
+
 // ---------------------------------------------------------------------------
 // Engine adapter interface
 // ---------------------------------------------------------------------------
@@ -101,6 +122,15 @@ export interface EngineAdapter {
 
   // Lifecycle
   launch(input: LaunchInput): Promise<LaunchResult>
+  /**
+   * Wait for the launched session to be reachable from the daemon.
+   *
+   * Implemented only by engines that reach the daemon over its own bridge
+   * socket. Codex sessions talk to their own app-server sidecar and have
+   * nothing here to verify, so they leave it undefined and the spawn path
+   * treats them as reachable on launch.
+   */
+  awaitBridge?(input: AwaitBridgeInput): Promise<BridgeAttachResult>
   deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult>
   retire(info: SessionInfo, reason: string): Promise<ExecutionRetirementResult>
   stop(info: SessionInfo): Promise<StopResult>
