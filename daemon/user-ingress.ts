@@ -10,6 +10,8 @@ const tails = new Map<string, Promise<void>>()
 // ordering degrades to best-effort rather than wedging the session. Sized above
 // the 60s default transcription timeout plus download/thread-fetch time.
 export const INGRESS_WAIT_CAP_MS = 180_000
+// A `!` interrupt that never settles (engine bug) must not hold its message forever.
+export const INTERRUPT_WAIT_CAP_MS = 30_000
 
 /**
  * `before` (a `!` interrupt) is awaited inside the slot, so the message is
@@ -18,9 +20,9 @@ export const INGRESS_WAIT_CAP_MS = 180_000
 export function reserveUserIngress(
   sessionId: string,
   task: () => Promise<void>,
-  opts: { before?: Promise<unknown>; capMs?: number } = {},
+  opts: { before?: Promise<unknown>; capMs?: number; beforeCapMs?: number } = {},
 ): Promise<void> {
-  const { before, capMs = INGRESS_WAIT_CAP_MS } = opts
+  const { before, capMs = INGRESS_WAIT_CAP_MS, beforeCapMs = INTERRUPT_WAIT_CAP_MS } = opts
   // Handle an early rejection now; the slot still observes it below.
   before?.catch(() => {})
   const previous = tails.get(sessionId) ?? Promise.resolve()
@@ -31,9 +33,16 @@ export function reserveUserIngress(
   ]).finally(() => clearTimeout(timer))
   const run = capped.then(async () => {
     if (before) {
-      try { await before } catch (err) {
+      let beforeTimer: ReturnType<typeof setTimeout> | undefined
+      const timedOut = new Promise<void>(resolve => {
+        beforeTimer = setTimeout(() => {
+          process.stderr.write(`daemon: interrupt for ${sessionId} unsettled after ${beforeCapMs}ms, delivering anyway\n`)
+          resolve()
+        }, beforeCapMs)
+      })
+      try { await Promise.race([before, timedOut]) } catch (err) {
         process.stderr.write(`daemon: interrupt failed for ${sessionId}: ${err instanceof Error ? err.message : err}\n`)
-      }
+      } finally { clearTimeout(beforeTimer) }
     }
     await task()
   })

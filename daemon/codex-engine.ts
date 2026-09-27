@@ -37,6 +37,9 @@ export type CodexConn = {
   lastKnownTurnId?: string | null
 }
 
+/** How long a `!` waits for an in-flight turn/start to reveal its turn ID. */
+export const INTERRUPT_START_WAIT_MS = 5000
+
 // Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning', 'contextUsage'
 
 export function codexSocketPath(tmuxName: string): string {
@@ -75,6 +78,11 @@ export function activeTurnId(turns: any[]): string | null {
 export class CodexEngine extends EventEmitter {
   private connections = new Map<string, CodexConn>()
   private generations = new Map<string, number>()
+  /** In-flight `!` interrupts, so concurrent `!` share one RPC. Never outlives its RPC or conn. */
+  private interrupts = new Map<string, { conn: CodexConn | undefined; run: Promise<boolean> }>()
+  /** Bumped on every turn/start, so a `!` never lands on a turn started after it arrived. */
+  private startSeq = new Map<string, number>()
+  private interruptStartWaitMs = INTERRUPT_START_WAIT_MS
   private scheduling = new Map<string, {
     steerQueue: string[]
     deferredTurnQueue: string[]
@@ -212,6 +220,7 @@ export class CodexEngine extends EventEmitter {
 
     if (this.scheduling.get(sessionId)?.fenced) throw new Error(`codex-engine: session ${sessionId} is retiring`)
     conn.turnPending = true
+    this.startSeq.set(sessionId, (this.startSeq.get(sessionId) ?? 0) + 1)
     conn.messageBuffer = []
     try {
       const result = await this.request(conn, 'turn/start', {
@@ -484,13 +493,30 @@ export class CodexEngine extends EventEmitter {
    * `!` interrupt: acknowledged turn/interrupt of the active turn. Unlike
    * retirement it neither fences nor clears currentTurnId, so queued turns
    * drain only on the interrupted turn's turn/completed.
-   * ponytail: a `!` while a start is still unacknowledged (no turn ID yet)
-   * interrupts nothing; add a pending-start intent (design_v5/v6) if that
-   * window proves to matter.
+   * ponytail: bounded wait instead of the v5/v6 pending-start intent record.
+   * A `!` during a start that takes longer than INTERRUPT_START_WAIT_MS, or an
+   * uncertain start, interrupts nothing; its message still queues behind it.
    */
-  async interruptActiveTurn(sessionId: string): Promise<boolean> {
+  interruptActiveTurn(sessionId: string): Promise<boolean> {
     const conn = this.connections.get(sessionId)
-    if (!conn?.threadId || !conn.currentTurnId) return false
+    const inFlight = this.interrupts.get(sessionId)
+    // A socket replaced mid-RPC leaves that promise pending until timeout; don't share it.
+    if (inFlight && inFlight.conn === conn) return inFlight.run
+    const entry = { conn, run: this.interruptAfterStart(sessionId) }
+    entry.run = entry.run.finally(() => { if (this.interrupts.get(sessionId) === entry) this.interrupts.delete(sessionId) })
+    this.interrupts.set(sessionId, entry)
+    return entry.run
+  }
+
+  private async interruptAfterStart(sessionId: string): Promise<boolean> {
+    const seq = this.startSeq.get(sessionId)
+    const deadline = Date.now() + this.interruptStartWaitMs
+    const starting = () => !!this.connections.get(sessionId)?.turnPending || this.scheduling.get(sessionId)?.startState === 'starting'
+    while (starting() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+    // A later start (next queued turn, steer, retry) means the targeted turn is gone.
+    if (this.startSeq.get(sessionId) !== seq) return false
+    const conn = this.connections.get(sessionId)
+    if (!conn?.threadId || !conn.currentTurnId || this.scheduling.get(sessionId)?.fenced) return false
     await this.request(conn, 'turn/interrupt', { threadId: conn.threadId, turnId: conn.currentTurnId })
     return true
   }
@@ -700,8 +726,10 @@ export class CodexEngine extends EventEmitter {
   }
 
   private handleServerRequest(conn: CodexConn, id: number, method: string): void {
-    // Auto-approve — codex spawns with full sandbox_permissions, so these are rare fallbacks.
-    // TODO: integrate with daemon/permission.ts for production approval flow
+    // Auto-approve: the app-server runs with approval_policy="never" and
+    // sandbox_mode="danger-full-access" (codex-process.ts), matching Claude's
+    // --dangerously-skip-permissions, so these requests are rare fallbacks and
+    // accepting them is parity, not a missing approval flow.
     if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') {
       process.stderr.write(`codex-engine: auto-approved ${method} for ${conn.sessionId}\n`)
       this.emit('autoApproved', conn.sessionId, method)
@@ -729,7 +757,8 @@ export class CodexEngine extends EventEmitter {
         conn.lastKnownTurnId = conn.currentTurnId ?? conn.lastKnownTurnId
         if (conn.steerQueue.length > 0 && conn.currentTurnId && conn.threadId) {
           for (const text of conn.steerQueue) this.sendSteer(conn, text)
-          conn.steerQueue = []
+          // Truncate in place: conn and scheduling share this array across reconnects.
+          conn.steerQueue.length = 0
         }
         // Start turn watchdog — fires if no activity for 20 minutes
         this.resetWatchdog(conn)

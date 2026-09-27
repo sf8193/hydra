@@ -35,9 +35,12 @@ completion. Peek is deliberately irrelevant to turn ownership.
 ## Status (2026-09-26)
 
 - Step 1 (1de4661) and step 2 + step-1 review fixes (84150c9) committed.
-- Deliberate deviation: no pending-start interrupt intent (v5/v6). A `!` during
-  an unacknowledged turn/start interrupts nothing; its message waits for that
-  turn. Marked `ponytail:` in `CodexEngine.interruptActiveTurn`.
+- Deliberate deviation (2026-09-26): the v5/v6 pending-start interrupt *record*
+  was built and failed two adversarial reviews (records left unsettled on many
+  exit paths, later interrupting unrelated turns). Replaced by a bounded wait in
+  `CodexEngine.interruptActiveTurn`: wait <=5s for an in-flight start, then one
+  decision; a start-sequence guard stops it hitting a turn started after the `!`.
+  A `!` during a slower or uncertain start interrupts nothing (message still queues).
 - Known theoretical gap: reconciling on a new conn while its own
   connectAndResume is in flight could apply a stale thread/resume snapshot if
   the app-server answered out of order. Not addressed.

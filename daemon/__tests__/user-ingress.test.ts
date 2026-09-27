@@ -57,6 +57,25 @@ describe('user ingress FIFO', () => {
     expect(order).toEqual(['msg'])
   })
 
+  test('an interrupt that never settles only delays its message up to the interrupt cap', async () => {
+    const order: string[] = []
+    await reserveUserIngress('s8', async () => { order.push('msg') }, { before: new Promise(() => {}), beforeCapMs: 20 })
+    expect(order).toEqual(['msg'])
+  })
+
+  test('an interrupt that settles early leaves no stray unsettled log behind', async () => {
+    const logged: string[] = []
+    const write = process.stderr.write
+    process.stderr.write = ((line: string) => { logged.push(line); return true }) as any
+    try {
+      await reserveUserIngress('s9', async () => {}, { before: Promise.resolve(), beforeCapMs: 20 })
+      await Bun.sleep(40)
+    } finally {
+      process.stderr.write = write
+    }
+    expect(logged.filter(l => l.includes('unsettled'))).toEqual([])
+  })
+
   test('a failed interrupt still delivers the message, without an unhandled rejection', async () => {
     const unhandled: unknown[] = []
     const onUnhandled = (e: unknown) => unhandled.push(e)

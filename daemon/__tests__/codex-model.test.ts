@@ -627,3 +627,223 @@ describe('Codex adapter delivery modes', () => {
     expect(queued).toBeLessThan(launch.indexOf('this.engine.connect'))
   })
 })
+
+describe('Codex ! bounded wait for a pending start', () => {
+  function setup(h: (method: string, params: any) => any = () => ({})) {
+    const engine = new CodexEngine() as any
+    engine.interruptStartWaitMs = 300
+    const conn: any = {
+      sessionId: 's', ws: { send() {} }, threadId: 't', currentTurnId: null,
+      turnPending: false, turnWatchdog: null, nextRequestId: 1,
+      pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
+      lastUsageWarning: 0, retryTimers: new Set(), generation: 1, lastKnownTurnId: null,
+    }
+    engine.connections.set('s', conn)
+    engine.resetWatchdog = () => {}
+    const interrupts: string[] = []
+    engine.request = async (_c: any, method: string, params: any) => {
+      if (method === 'turn/interrupt') { interrupts.push(params.turnId); return {} }
+      return h(method, params)
+    }
+    return { engine, conn, interrupts }
+  }
+  const tick = (ms = 0) => new Promise(resolve => setTimeout(resolve, ms))
+
+  test('! during a pending deferred start interrupts that turn once it acks', async () => {
+    let reply!: (v: any) => void
+    const { engine, conn, interrupts } = setup(m => m === 'turn/start' ? new Promise(r => { reply = r }) : {})
+    engine.queueTurn('s', 'A')
+    engine.queueTurn('s', 'B')
+    const p = engine.interruptActiveTurn('s')
+    await tick(20)
+    reply({ turn: { id: 'A-turn' } })
+    expect(await p).toBe(true)
+    expect(interrupts).toEqual(['A-turn'])
+    // Acknowledged interrupt neither clears the turn nor drains the queue.
+    expect(conn.currentTurnId).toBe('A-turn')
+    expect(conn.deferredTurnQueue).toEqual(['B'])
+  })
+
+  test('! during a pending steer-path start (turnPending only) waits for it too', async () => {
+    let reply!: (v: any) => void
+    const { engine, interrupts } = setup(m => m === 'turn/start' ? new Promise(r => { reply = r }) : {})
+    engine.steer('s', 'A')
+    const p = engine.interruptActiveTurn('s')
+    await tick(20)
+    reply({ turn: { id: 'A-turn' } })
+    expect(await p).toBe(true)
+    expect(interrupts).toEqual(['A-turn'])
+  })
+
+  test('concurrent ! share one RPC; a ! after it settles sends its own', async () => {
+    let reply!: (v: any) => void
+    const { engine, conn, interrupts } = setup(m => m === 'turn/start' ? new Promise(r => { reply = r }) : {})
+    engine.queueTurn('s', 'A')
+    const first = engine.interruptActiveTurn('s')
+    expect(engine.interruptActiveTurn('s')).toBe(first)
+    reply({ turn: { id: 'A-turn' } })
+    await first
+    expect(interrupts).toEqual(['A-turn'])
+    conn.currentTurnId = 'B-turn'
+    expect(await engine.interruptActiveTurn('s')).toBe(true)
+    expect(interrupts).toEqual(['A-turn', 'B-turn'])
+  })
+
+  test('a completion that drains the next queued turn during the wait does not interrupt that turn', async () => {
+    const replies: Array<(v: any) => void> = []
+    const { engine, interrupts } = setup(m => m === 'turn/start' ? new Promise(r => { replies.push(r) }) : {})
+    engine.queueTurn('s', 'A')
+    engine.queueTurn('s', 'B')
+    const p = engine.interruptActiveTurn('s')
+    engine.handleNotification(engine.connections.get('s'), 'turn/completed', { turn: { id: 'A-turn' } })
+    replies[0]({ turn: { id: 'A-turn' } })        // A completed before its ack
+    await tick(10)
+    replies[1]?.({ turn: { id: 'B-turn' } })       // queue drained B
+    expect(await p).toBe(false)
+    expect(interrupts).toEqual([])
+  })
+
+  test('a fenced session: false and no RPC', async () => {
+    const { engine, conn, interrupts } = setup()
+    conn.currentTurnId = 'A-turn'
+    engine.getScheduling('s', conn).fenced = true
+    expect(await engine.interruptActiveTurn('s')).toBe(false)
+    expect(interrupts).toEqual([])
+  })
+
+  test('a stalled queue returns false immediately without waiting', async () => {
+    const { engine, conn, interrupts } = setup()
+    engine.interruptStartWaitMs = 5000
+    engine.getScheduling('s', conn).startState = 'stalled'
+    const started = Date.now()
+    expect(await engine.interruptActiveTurn('s')).toBe(false)
+    expect(Date.now() - started).toBeLessThan(200)
+    expect(interrupts).toEqual([])
+  })
+
+  test('an interrupt stuck on a replaced socket is not shared with the new connection', async () => {
+    const { engine, conn } = setup()
+    conn.currentTurnId = 'A-turn'
+    const sent: string[] = []
+    engine.request = (c: any, method: string, params: any) => {
+      if (method !== 'turn/interrupt') return Promise.resolve({})
+      sent.push(`${c.generation}:${params.turnId}`)
+      return c.generation === 1 ? new Promise(() => {}) : Promise.resolve({})
+    }
+    void engine.interruptActiveTurn('s')
+    await tick(10)
+    engine.connections.set('s', { ...conn, generation: 2, currentTurnId: 'NEW' })
+    expect(await engine.interruptActiveTurn('s')).toBe(true)
+    expect(sent).toEqual(['1:A-turn', '2:NEW'])
+  })
+
+  test('a slow poll would miss a start that acks within the wait', async () => {
+    let reply!: (v: any) => void
+    const { engine, interrupts } = setup(m => m === 'turn/start' ? new Promise(r => { reply = r }) : {})
+    engine.queueTurn('s', 'A')
+    const started = Date.now()
+    const p = engine.interruptActiveTurn('s')
+    await tick(5)
+    reply({ turn: { id: 'A-turn' } })
+    expect(await p).toBe(true)
+    expect(Date.now() - started).toBeLessThan(150)
+    expect(interrupts).toEqual(['A-turn'])
+  })
+
+  test('a start that never acks within the wait: false, no RPC, and the later turn is untouched', async () => {
+    let reply!: (v: any) => void
+    const { engine, interrupts } = setup(m => m === 'turn/start' ? new Promise(r => { reply = r }) : {})
+    engine.queueTurn('s', 'A')
+    expect(await engine.interruptActiveTurn('s')).toBe(false)
+    reply({ turn: { id: 'A-turn' } })
+    await tick(80)
+    expect(interrupts).toEqual([])
+  })
+
+  test('a failed steer-path start: false, no RPC, and a later unrelated turn is not interrupted', async () => {
+    let n = 0
+    const { engine, interrupts } = setup(m => {
+      if (m !== 'turn/start') return {}
+      if (++n === 1) throw new Error('bad (code -32000)')
+      return { turn: { id: 'later' } }
+    })
+    engine.steer('s', 'A')
+    expect(await engine.interruptActiveTurn('s')).toBe(false)
+    engine.queueTurn('s', 'B')
+    await tick(80)
+    expect(interrupts).toEqual([])
+  })
+
+  test('uncertain start is not waited on, so a turn reconciliation later finds is not interrupted', async () => {
+    let resume!: (v: any) => void
+    const { engine, interrupts } = setup(m => {
+      if (m === 'turn/start') throw new Error('request turn/start timed out')
+      if (m === 'thread/resume') return new Promise(r => { resume = r })
+      return {}
+    })
+    engine.queueTurn('s', 'A')
+    await tick()
+    expect(engine.scheduling.get('s').startState).toBe('uncertain')
+    const p = engine.interruptActiveTurn('s')
+    await tick(60)
+    resume({ thread: { turns: [{ id: 'A-turn', status: 'inProgress' }] } })
+    expect(await p).toBe(false)
+    expect(interrupts).toEqual([])
+  })
+
+  test('stuck-uncertain then an unrelated steer turn: the earlier ! never reaches it', async () => {
+    const { engine, interrupts } = setup((m, params) => {
+      if (m === 'turn/start') {
+        if (params.input[0].text === 'A') throw new Error('request turn/start timed out')
+        return { turn: { id: 'S-turn' } }
+      }
+      if (m === 'thread/resume') throw new Error('boom (code -1)')
+      return {}
+    })
+    engine.queueTurn('s', 'A')
+    await tick(10)
+    expect(await engine.interruptActiveTurn('s')).toBe(false)
+    engine.steer('s', 'S')
+    await tick(80)
+    expect(interrupts).toEqual([])
+  })
+
+  test('socket replaced by a fresh-thread connect mid-start: no interrupt reaches the new thread\'s turn', async () => {
+    const { engine, interrupts } = setup(m => m === 'turn/start' ? new Promise(() => {}) : {})
+    engine.steer('s', 'A')
+    const p = engine.interruptActiveTurn('s')
+    engine.connections.delete('s') // ws close handler path
+    engine.wsConnect = async () => ({ on() {}, send() {} })
+    engine.request = async (_c: any, m: string, params: any) => {
+      if (m === 'turn/interrupt') { interrupts.push(params.turnId); return {} }
+      if (m === 'thread/start') return { thread: { id: 't2' } }
+      if (m === 'turn/start') return { turn: { id: 'X-turn' } }
+      return {}
+    }
+    await engine.connect('s', '/x', 'm')
+    expect(await p).toBe(false)
+    engine.queueTurn('s', 'X')
+    await tick(80)
+    expect(interrupts).toEqual([])
+  })
+})
+
+describe('Codex steerQueue aliasing', () => {
+  test('turn/started drains steers without detaching conn from scheduling state', () => {
+    const engine = new CodexEngine() as any
+    const sent: any[] = []
+    const conn: any = {
+      sessionId: 's', ws: { send(v: string) { sent.push(JSON.parse(v)) } }, threadId: 't', currentTurnId: null,
+      turnPending: true, turnWatchdog: null, nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [],
+      steerQueue: ['early'], deferredTurnQueue: [], lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+    }
+    engine.connections.set('s', conn)
+    engine.resetWatchdog = () => {}
+    const scheduling = engine.getScheduling('s', conn)
+    engine.handleNotification(conn, 'turn/started', { turn: { id: 'turn-1' } })
+    expect(sent.map(m => m.method)).toEqual(['turn/steer'])
+    expect(conn.steerQueue).toBe(scheduling.steerQueue)
+    expect(conn.deferredTurnQueue).toBe(scheduling.deferredTurnQueue)
+    expect(conn.steerQueue).toEqual([])
+  })
+})

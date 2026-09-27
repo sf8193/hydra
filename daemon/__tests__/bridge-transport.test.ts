@@ -210,7 +210,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
   // exactly the shape that broke list-display.test.ts's isAlive()-filtered
   // render in CI (order-dependent: only showed up when this file ran first).
   afterEach(() => {
-    for (let i = 1; i <= 14; i++) registry.delete(`s${i}`)
+    for (let i = 1; i <= 15; i++) registry.delete(`s${i}`)
   })
 
   test('buffered content prepends onto the next allowPiggyback delivery', () => {
@@ -299,6 +299,34 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     } as any)
     bt.sendOrQueue('s7', { type: 'notification', content: 'second real message', allowPiggyback: true })
     expect(delivered[0]).toContain('CI failed on PR #99')
+  })
+
+  test('a rejected piggyback-carry DeliveryResult leaves the content buffered', async () => {
+    delivered = []
+    registry.set('s15', {
+      sessionId: 's15', engine: 'codex', threadId: 'chat1',
+      adapter: { provider: 'codex', deliveryIsFree: false, deliver: async () => ({ status: 'rejected', retryable: false, reason: 'session is retiring' }) },
+    } as any)
+    bt.bufferForPiggyback('s15', 'CI failed on PR #100')
+    bt.sendOrQueue('s15', { type: 'notification', content: 'real user message', allowPiggyback: true })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    mockCodexSession('s15')
+    bt.sendOrQueue('s15', { type: 'notification', content: 'second real message', allowPiggyback: true })
+    expect(delivered[0]).toContain('CI failed on PR #100')
+  })
+
+  test('an unknown piggyback-carry DeliveryResult also leaves the content buffered', async () => {
+    delivered = []
+    registry.set('s16', {
+      sessionId: 's16', engine: 'codex', threadId: 'chat1',
+      adapter: { provider: 'codex', deliveryIsFree: false, deliver: async () => ({ status: 'unknown', reason: 'timed out' }) },
+    } as any)
+    bt.bufferForPiggyback('s16', 'CI failed on PR #101')
+    bt.sendOrQueue('s16', { type: 'notification', content: 'real user message', allowPiggyback: true })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    mockCodexSession('s16')
+    bt.sendOrQueue('s16', { type: 'notification', content: 'second real message', allowPiggyback: true })
+    expect(delivered[0]).toContain('CI failed on PR #101')
   })
 
   test('routing is capability-based, not engine-name-based — a mismatched pair proves it', () => {
