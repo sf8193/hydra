@@ -21,6 +21,17 @@ export type BridgeConn = {
   backpressureLogged?: boolean // first stall per connection is news, the rest is volume
 }
 
+type PiggybackState = {
+  items: string[]
+  bufferedAt: number
+  attempts: number
+  timer?: ReturnType<typeof setTimeout>
+  inFlight?: number
+  heldReason?: string
+}
+
+type PiggybackDelivery = { generation: number; items: string[] }
+
 // ---------------------------------------------------------------------------
 // BridgeTransport — owns bridges + messageQueues Maps
 // ---------------------------------------------------------------------------
@@ -39,12 +50,9 @@ export class BridgeTransport {
   // turns never do. If nothing rides it out within the backstop, it flushes
   // standalone. Persisted to disk (piggybackFile) so a daemon restart mid-
   // buffer doesn't silently drop content the "never lost" guarantee promises.
-  private readonly pendingPrefix = new Map<string, string[]>()
-  private readonly bufferedAt = new Map<string, number>()
-  private readonly piggybackTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private readonly piggybackInFlight = new Map<string, object>()
-  private readonly piggybackHeld = new Map<string, string>()
-  private readonly piggybackAttempts = new Map<string, number>()
+  private readonly piggyback = new Map<string, PiggybackState>()
+  // Transport-wide: clearing/recreating a session must never reuse an old receipt.
+  private piggybackGeneration = 0
   private readonly piggybackFile: string
   // Armed once per episode from the first buffered item (see bufferForPiggyback),
   // not reset by later activity — bounds how long the OLDEST buffered item can
@@ -204,31 +212,32 @@ export class BridgeTransport {
    * activity), it flushes on its own so it's never silently lost.
    */
   bufferForPiggyback(sessionId: string, text: string): void {
-    const arr = this.pendingPrefix.get(sessionId) ?? []
-    arr.push(text)
-    this.pendingPrefix.set(sessionId, arr)
-    if (!this.bufferedAt.has(sessionId)) this.bufferedAt.set(sessionId, Date.now())
+    let state = this.piggyback.get(sessionId)
+    if (!state) {
+      state = { items: [], bufferedAt: Date.now(), attempts: 0 }
+      this.piggyback.set(sessionId, state)
+    }
+    state.items.push(text)
     this.persistPiggyback()
 
-    if (this.piggybackTimers.has(sessionId) || this.piggybackHeld.has(sessionId) || this.piggybackInFlight.has(sessionId)) return
+    if (state.timer || state.heldReason !== undefined || state.inFlight !== undefined) return
     this.armPiggybackTimer(sessionId, BridgeTransport.PIGGYBACK_BACKSTOP_MS)
   }
 
   private armPiggybackTimer(sessionId: string, delayMs: number): void {
-    if (this.piggybackHeld.has(sessionId) || this.piggybackInFlight.has(sessionId)) return
-    this.cancelPiggybackTimer(sessionId)
-    const timer = setTimeout(() => {
-      this.piggybackTimers.delete(sessionId)
+    const state = this.piggyback.get(sessionId)
+    if (!state || state.heldReason !== undefined || state.inFlight !== undefined) return
+    this.cancelPiggybackTimer(state)
+    state.timer = setTimeout(() => {
+      state.timer = undefined
       this.flushPiggybackStandalone(sessionId)
     }, Math.max(0, delayMs))
-    timer.unref?.()
-    this.piggybackTimers.set(sessionId, timer)
+    state.timer.unref?.()
   }
 
-  private cancelPiggybackTimer(sessionId: string): void {
-    const timer = this.piggybackTimers.get(sessionId)
-    if (timer) clearTimeout(timer)
-    this.piggybackTimers.delete(sessionId)
+  private cancelPiggybackTimer(state: PiggybackState): void {
+    if (state.timer) clearTimeout(state.timer)
+    state.timer = undefined
   }
 
   private reportFailure(sessionId: string, result: Exclude<DeliveryResult, { status: 'accepted' }>, messageId?: string): void {
@@ -236,56 +245,54 @@ export class BridgeTransport {
     emit('delivery:failed', { sessionId, status: result.status, reason: result.reason, ...(messageId ? { messageId } : {}) })
   }
 
-  private beginPiggyback(sessionId: string): { token: object; buffer: string[]; items: string[] } | undefined {
-    const buffer = this.pendingPrefix.get(sessionId)
-    if (!buffer?.length || this.piggybackHeld.has(sessionId) || this.piggybackInFlight.has(sessionId)) return
-    const token = {}
-    this.piggybackInFlight.set(sessionId, token)
-    this.cancelPiggybackTimer(sessionId)
-    this.piggybackAttempts.set(sessionId, (this.piggybackAttempts.get(sessionId) ?? 0) + 1)
+  private beginPiggyback(sessionId: string): PiggybackDelivery | undefined {
+    const state = this.piggyback.get(sessionId)
+    if (!state?.items.length || state.heldReason !== undefined || state.inFlight !== undefined) return
+    const generation = ++this.piggybackGeneration
+    state.inFlight = generation
+    this.cancelPiggybackTimer(state)
+    state.attempts++
     // Persist uncertainty before sending: a restart during delivery must not replay it.
-    this.piggybackHeld.set(sessionId, 'Delivery was in flight; inspect before retrying.')
+    state.heldReason = 'Delivery was in flight; inspect before retrying.'
     this.persistPiggyback()
-    return { token, buffer, items: buffer.slice() }
+    return { generation, items: state.items.slice() }
   }
 
-  private finishPiggyback(sessionId: string, prefix: { token: object; buffer: string[]; items: string[] }, result: DeliveryResult, messageId?: string): void {
+  private finishPiggyback(sessionId: string, prefix: PiggybackDelivery, result: DeliveryResult, messageId?: string): void {
+    const state = this.piggyback.get(sessionId)
     // clear/death plus a new buffer invalidates callbacks from the previous episode.
-    if (this.piggybackInFlight.get(sessionId) !== prefix.token || this.pendingPrefix.get(sessionId) !== prefix.buffer) {
+    if (!state || state.inFlight !== prefix.generation) {
       // Losing ownership of the prefix does not make its carrier's failed input
       // disappear. Report the original outcome without touching the new buffer.
       if (result.status !== 'accepted') this.reportFailure(sessionId, result, messageId)
       return
     }
-    this.piggybackInFlight.delete(sessionId)
-    this.piggybackHeld.delete(sessionId)
+    state.inFlight = undefined
+    state.heldReason = undefined
     if (result.status === 'accepted') {
-      prefix.buffer.splice(0, prefix.items.length)
-      this.piggybackAttempts.delete(sessionId)
-      if (!prefix.buffer.length) this.clearPiggyback(sessionId)
+      state.items.splice(0, prefix.items.length)
+      state.attempts = 0
+      if (!state.items.length) this.clearPiggyback(sessionId)
       else {
         this.persistPiggyback()
-        this.armPiggybackTimer(sessionId, BridgeTransport.PIGGYBACK_BACKSTOP_MS - (Date.now() - (this.bufferedAt.get(sessionId) ?? Date.now())))
+        this.armPiggybackTimer(sessionId, BridgeTransport.PIGGYBACK_BACKSTOP_MS - (Date.now() - state.bufferedAt))
       }
       return
     }
-    const retry = result.status === 'rejected' && result.retryable && (this.piggybackAttempts.get(sessionId) ?? 0) < 3
+    const retry = result.status === 'rejected' && result.retryable && state.attempts < 3
     if (retry) {
-      this.bufferedAt.set(sessionId, Date.now())
+      state.bufferedAt = Date.now()
       this.armPiggybackTimer(sessionId, BridgeTransport.PIGGYBACK_BACKSTOP_MS)
-    } else this.piggybackHeld.set(sessionId, result.reason)
+    } else state.heldReason = result.reason
     this.persistPiggyback()
     this.reportFailure(sessionId, { ...result, reason: `${result.reason}. Buffered content retained; ${retry ? 'backstop retry scheduled' : 'held for manual inspection; no automatic retry'}.` }, messageId)
   }
 
   /** Drop buffered content and invalidate any outstanding delivery callback. */
   clearPiggyback(sessionId: string): void {
-    this.pendingPrefix.delete(sessionId)
-    this.bufferedAt.delete(sessionId)
-    this.piggybackInFlight.delete(sessionId)
-    this.piggybackHeld.delete(sessionId)
-    this.piggybackAttempts.delete(sessionId)
-    this.cancelPiggybackTimer(sessionId)
+    const state = this.piggyback.get(sessionId)
+    if (state) this.cancelPiggybackTimer(state)
+    this.piggyback.delete(sessionId)
     this.persistPiggyback()
   }
 
@@ -366,8 +373,8 @@ export class BridgeTransport {
   private persistPiggyback(): void {
     try {
       const data: Record<string, { items: string[]; bufferedAt: number; heldReason?: string; attempts?: number }> = {}
-      for (const [sid, items] of this.pendingPrefix) {
-        if (items.length > 0) data[sid] = { items, bufferedAt: this.bufferedAt.get(sid) ?? Date.now(), heldReason: this.piggybackHeld.get(sid), attempts: this.piggybackAttempts.get(sid) }
+      for (const [sid, state] of this.piggyback) {
+        if (state.items.length > 0) data[sid] = { items: state.items, bufferedAt: state.bufferedAt, heldReason: state.heldReason, attempts: state.attempts }
       }
       if (Object.keys(data).length > 0) {
         atomicWriteFileSync(this.piggybackFile, JSON.stringify(data) + '\n')
@@ -388,10 +395,7 @@ export class BridgeTransport {
       const now = Date.now()
       for (const [sid, entry] of Object.entries(data)) {
         if (!registry.has(sid) || registry.get(sid)?.deadAt || entry.items.length === 0) continue
-        this.pendingPrefix.set(sid, entry.items)
-        this.bufferedAt.set(sid, entry.bufferedAt)
-        if (entry.heldReason !== undefined) this.piggybackHeld.set(sid, entry.heldReason)
-        this.piggybackAttempts.set(sid, entry.attempts ?? 0)
+        this.piggyback.set(sid, { items: entry.items, bufferedAt: entry.bufferedAt, heldReason: entry.heldReason, attempts: entry.attempts ?? 0 })
         total += entry.items.length
         sessions++
         // Re-arm with the REMAINING backstop time, not a fresh hour — an item
@@ -402,7 +406,7 @@ export class BridgeTransport {
       }
       if (total > 0) process.stderr.write(`daemon: restored ${total} buffered piggyback item(s) across ${sessions} session(s)\n`)
       // Write the restored (filtered) state back out immediately rather than
-      // just unlinking — until the next bufferForPiggyback/takePendingPrefix
+      // just unlinking — until the next bufferForPiggyback/clearPiggyback
       // call, this in-memory copy is the only one. A second crash in that
       // window would otherwise lose it a second time with nothing to recover.
       this.persistPiggyback()

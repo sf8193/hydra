@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { writeFileSync, readFileSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
@@ -541,11 +541,11 @@ describe('delivery outcomes and piggyback ownership', () => {
     bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
     ;(bt as any).flushPiggybackStandalone(sid)
     expect(calls.map(c => c[1])).toEqual(['first', 'user'])
-    expect((bt as any).piggybackTimers.has(sid)).toBe(false)
+    expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(false)
     resolve({ status: 'accepted' })
     await settle()
     expect(disk().items).toEqual(['second'])
-    expect((bt as any).piggybackTimers.has(sid)).toBe(true)
+    expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(true)
     ;(bt as any).flushPiggybackStandalone(sid)
     await settle()
     expect(calls.map(c => c[1])).toEqual(['first', 'user', 'second'])
@@ -563,7 +563,29 @@ describe('delivery outcomes and piggyback ownership', () => {
       await settle()
       expect(disk().items).toEqual(['new'])
       expect(disk().heldReason).toBeUndefined()
-      expect((bt as any).piggybackTimers.has(sid)).toBe(true)
+      expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(true)
+    })
+  }
+
+  for (const result of [{ status: 'accepted' }, { status: 'unknown', reason: 'timeout' }, { status: 'rejected', retryable: true, reason: 'busy' }]) {
+    test(`stale ${result.status} cannot settle a new delivery after clear and rebuffer`, async () => {
+      const resolvers: Array<(result: any) => void> = []
+      adapter(() => new Promise(resolve => { resolvers.push(resolve) }))
+      bt.bufferForPiggyback(sid, 'old')
+      bt.sendOrQueue(sid, { content: 'old carrier', allowPiggyback: true })
+      bt.clearPiggyback(sid)
+      bt.bufferForPiggyback(sid, 'new')
+      bt.sendOrQueue(sid, { content: 'new carrier', allowPiggyback: true })
+      const newDelivery = disk()
+      resolvers[0](result)
+      await settle()
+      expect(disk()).toEqual(newDelivery)
+      expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(false)
+      ;(bt as any).flushPiggybackStandalone(sid)
+      expect(resolvers).toHaveLength(2)
+      resolvers[1]({ status: 'accepted' })
+      await settle()
+      expect(existsSync(join(STATE_DIR, 'piggyback-buffer.json'))).toBe(false)
     })
   }
 
@@ -575,7 +597,7 @@ describe('delivery outcomes and piggyback ownership', () => {
       ;(bt as any).flushPiggybackStandalone(sid)
       await settle()
       expect(disk().attempts).toBe(attempt)
-      expect((bt as any).piggybackTimers.has(sid)).toBe(attempt < 3)
+      expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(attempt < 3)
     }
     ;(bt as any).flushPiggybackStandalone(sid)
     expect(calls).toBe(3)
@@ -599,7 +621,7 @@ describe('delivery outcomes and piggyback ownership', () => {
     await settle()
     expect(calls).toEqual(['user'])
     expect(disk().items).toEqual(['uncertain', 'appended'])
-    expect((bt as any).piggybackTimers.has(sid)).toBe(false)
+    expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(false)
   })
 
   test('restart during unresolved delivery holds persisted uncertainty', () => {
@@ -607,8 +629,8 @@ describe('delivery outcomes and piggyback ownership', () => {
     bt.bufferForPiggyback(sid, 'in flight')
     ;(bt as any).flushPiggybackStandalone(sid)
     const restarted = new BridgeTransport()
-    expect((restarted as any).piggybackHeld.has(sid)).toBe(true)
-    expect((restarted as any).piggybackTimers.has(sid)).toBe(false)
+    expect((restarted as any).piggyback.get(sid)?.heldReason).toBeDefined()
+    expect(Boolean((restarted as any).piggyback.get(sid)?.timer)).toBe(false)
     restarted.clearPiggyback(sid)
   })
 })
