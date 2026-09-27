@@ -913,3 +913,15 @@ describe('delivery paths (adapter-policy T7)', () => {
     t2.clearPiggyback('t7-x4')
   })
 })
+
+// Review of S1–S2: has() short-circuits on bridges, so the adapter answer was untested.
+describe('ClaudeEngine.isConnected', () => {
+  test('true exactly when its own transport holds a bridge for the session', async () => {
+    const { ClaudeEngine } = await import('../engines/claude-engine.js')
+    const t = new BridgeTransport()
+    const claude = new ClaudeEngine(t)
+    expect(claude.isConnected({ sessionId: 'iscon', threadId: 'other' } as any)).toBe(false)
+    t.bridges.set('iscon', { socket: { destroyed: false, write: () => true } } as any)
+    expect(claude.isConnected({ sessionId: 'iscon', threadId: 'other' } as any)).toBe(true)
+  })
+})
