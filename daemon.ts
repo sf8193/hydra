@@ -275,7 +275,7 @@ try {
     writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
     // Not awaited: boot never waits on the registry. Each dir succeeds or fails alone.
     void ensureBridgeReady(targetDir).then(
-      outcome => { if (outcome === 'installed') process.stderr.write(`daemon: installed bridge deps + lifted start script in ${targetDir}\n`) },
+      installed => { if (installed) process.stderr.write(`daemon: installed bridge deps + lifted start script in ${targetDir}\n`) },
       err => process.stderr.write(`daemon: bridge deps install failed in ${targetDir} (spawns keep installing): ${err instanceof Error ? err.message : String(err)}\n`),
     )
   }
