@@ -222,10 +222,11 @@ export function emitSessionDeath(info: SessionInfo): void {
   })
 }
 
-export const KILL_HOOK_PATH = join(homedir(), '.hydra', 'hooks', 'on-kill')
+// Under STATE_DIR so the test preload's temp state dir keeps `bun test` from ever running the real hook
+export const KILL_HOOK_PATH = join(STATE_DIR, 'hooks', 'on-kill')
 
 /**
- * User extension point: if ~/.hydra/hooks/on-kill exists, run it detached after a
+ * User extension point: if <STATE_DIR>/hooks/on-kill exists, run it detached after a
  * session dies, with the session's identity in env. Best-effort, never blocks the kill.
  */
 export function runKillHook(info: SessionInfo, reason: string, hookPath = KILL_HOOK_PATH): void {
