@@ -127,7 +127,7 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   thread_owner: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'send_to_thread', 'set_description',
-    'list_sessions', 'peek_session',
+    'list_sessions', 'peek_session', 'spawn_session', 'kill_session',
     'watch_pr', 'unwatch_pr', 'list_watches',
   ]),
   thread_guest: new Set([
