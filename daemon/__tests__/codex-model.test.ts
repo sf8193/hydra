@@ -17,8 +17,8 @@ describe('Codex model continuity', () => {
 
   test('explicit disconnect cannot trigger automatic reconnect through a synchronous close', () => {
     const engine = new CodexEngine() as any
-    const ws = Object.assign(new EventEmitter(), { close() { this.emit('close') } })
-    const conn = { ws, pendingRequests: new Map(), retryTimers: new Set(), turnWatchdog: null }
+    const ws: any = Object.assign(new EventEmitter(), { close(this: EventEmitter) { this.emit('close') } })
+    const conn: any = { ws, pendingRequests: new Map(), retryTimers: new Set(), turnWatchdog: null }
     engine.connections.set('s', conn)
     engine.attachWsHandlers(ws, conn, 's')
     let disconnected = 0
@@ -29,7 +29,7 @@ describe('Codex model continuity', () => {
   })
   test('resuming after a missed completion drains queued work once', async () => {
     const engine = new CodexEngine() as any
-    const conn = {
+    const conn: any = {
       sessionId: 's', threadId: 'parent', currentTurnId: null, turnPending: false,
       deferredTurnQueue: ['next-round'], steerQueue: [],
     }
@@ -44,7 +44,7 @@ describe('Codex model continuity', () => {
 
   test('resuming an active turn waits before delivering queued work', async () => {
     const engine = new CodexEngine() as any
-    const conn = { currentTurnId: null, deferredTurnQueue: ['next-round'] }
+    const conn: any = { currentTurnId: null, deferredTurnQueue: ['next-round'] }
     engine.connectBase = async () => conn
     engine.request = async () => ({ thread: { turns: [{ id: 'active', status: 'inProgress' }] } })
     engine.resetWatchdog = () => {}
@@ -88,7 +88,7 @@ describe('CodexEngine deferred turns', () => {
   test('interrupts only the current session turn without disconnecting it', async () => {
     const engine = new CodexEngine() as any
     const sent: any[] = []
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send(value: string) { sent.push(JSON.parse(value)) } },
       threadId: 'thread', currentTurnId: 'turn', turnPending: false, turnWatchdog: null,
       nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [], steerQueue: [],
@@ -108,7 +108,7 @@ describe('CodexEngine deferred turns', () => {
 
   test('does not report retirement success when the interrupt write fails', async () => {
     const engine = new CodexEngine() as any
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() { throw new Error('closed') }, terminate() {} },
       threadId: 'thread', currentTurnId: 'turn', turnPending: false, turnWatchdog: null,
       nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [], steerQueue: [],
@@ -126,7 +126,7 @@ describe('CodexEngine deferred turns', () => {
     const started: string[] = []
     engine.request = async () => ({})
     engine.startTurn = async (_sessionId: string, text: string) => { started.push(text) }
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'ROUND_1',
       turnPending: false, turnWatchdog: null, nextRequestId: 1, pendingRequests: new Map(),
       messageBuffer: [], steerQueue: [], deferredTurnQueue: ['ROUND_2'], lastUsageWarning: 0,
@@ -179,7 +179,7 @@ describe('CodexEngine deferred turns', () => {
     const engine = new CodexEngine() as any
     const started: string[] = []
     engine.startTurn = async (_sessionId: string, text: string) => { started.push(text) }
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: true, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [], lastUsageWarning: 0,
@@ -204,7 +204,7 @@ describe('CodexEngine deferred turns', () => {
     let stalled = 0
     engine.startTurn = async () => { attempts++; throw new Error('rejected (code -32000)') }
     engine.on('turnStalled', () => { stalled++ })
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'ROUND_1',
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: ['ROUND_2'], lastUsageWarning: 0,
@@ -225,7 +225,7 @@ describe('CodexEngine deferred turns', () => {
     let unknown = 0
     engine.startTurn = async () => { attempts++; throw new Error('request turn/start timed out') }
     engine.on('turnDeliveryUnknown', () => { unknown++ })
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -243,7 +243,7 @@ describe('CodexEngine deferred turns', () => {
 
   test('keeps more than 50 queued user turns in FIFO order', () => {
     const engine = new CodexEngine() as any
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'active',
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -261,7 +261,7 @@ describe('CodexEngine deferred turns', () => {
   test('reconciles a stale active turn before draining a queued comment', async () => {
     const engine = new CodexEngine() as any
     const started: string[] = []
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'stale',
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -282,7 +282,7 @@ describe('CodexEngine deferred turns', () => {
   test('does not clear an apparently active turn when resume omits turn history', async () => {
     const engine = new CodexEngine() as any
     const started: string[] = []
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: 'possibly-active',
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -303,7 +303,7 @@ describe('CodexEngine deferred turns', () => {
   test('does not let a later message overtake an explicitly rejected head', async () => {
     const engine = new CodexEngine() as any
     const starts: string[] = []
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -363,7 +363,7 @@ describe('CodexEngine deferred turns', () => {
     const starts: string[] = []
     let release!: (value: any) => void
     const reconcile = new Promise(resolve => { release = resolve })
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -390,7 +390,7 @@ describe('CodexEngine deferred turns', () => {
 
   test('does not resurrect a turn completed before turn/start response settles', async () => {
     const engine = new CodexEngine() as any
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -413,7 +413,7 @@ describe('CodexEngine deferred turns', () => {
 
   test('records an identified completion that arrives before start response and before turn/started', async () => {
     const engine = new CodexEngine() as any
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -436,7 +436,7 @@ describe('CodexEngine deferred turns', () => {
     const engine = new CodexEngine() as any
     let resolveStart!: (value: any) => void
     const startResponse = new Promise(resolve => { resolveStart = resolve })
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -458,7 +458,7 @@ describe('CodexEngine deferred turns', () => {
   test('requeues an unknown start only after authoritative history shows it absent', async () => {
     const engine = new CodexEngine() as any
     const starts: string[] = []
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -482,7 +482,7 @@ describe('CodexEngine deferred turns', () => {
     const engine = new CodexEngine() as any
     const text = 'first line\n"quoted" \\ path'
     const starts: string[] = []
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -511,7 +511,7 @@ describe('CodexEngine deferred turns', () => {
   test('does not mistake matching text in an older turn for a committed unknown start', async () => {
     const engine = new CodexEngine() as any
     const starts: string[] = []
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
@@ -537,7 +537,7 @@ describe('CodexEngine deferred turns', () => {
 
   test('keeps ownership uncertain when unknown-start reconciliation has no turn history', async () => {
     const engine = new CodexEngine() as any
-    const conn = {
+    const conn: any = {
       sessionId: 's', ws: { send() {} }, threadId: 'thread', currentTurnId: null,
       turnPending: false, turnWatchdog: null, nextRequestId: 1,
       pendingRequests: new Map(), messageBuffer: [], steerQueue: [], deferredTurnQueue: [],
