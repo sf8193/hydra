@@ -57,6 +57,6 @@ test.skipIf(mocked)('launch resolves when every tmux call fails', async () => {
     const adapter = new CodexEngineAdapter(engine as any) as any
     adapter.startAppServer = () => '/tmp/spawn.log'
     const result = await adapter.launch({ sessionId: 's1', tmuxName: 'codex-t', cwd: '/tmp', originalCwd: '/tmp', model: 'm', prompt: 'hi' })
-    expect(result).toMatchObject({ provider: 'codex', codexThreadId: 'thread-1' })
+    expect(result).toMatchObject({ provider: 'codex', identity: { codexThreadId: 'thread-1' } })
   })
 })

@@ -44,6 +44,13 @@ function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string):
   }
 }
 
+// A Codex resume adopts the original CODEX_HOME: the record other than the one
+// being replaced that already owns that home, if any. Pure.
+export function resumeHomeOwner(records: Iterable<SessionInfo>, resumeCodex: { homeName: string }, replacing: string | undefined): SessionInfo | undefined {
+  const home = resumeCodex.homeName
+  return [...records].find(s => s.sessionId !== replacing && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)
+}
+
 /** Process side effects of launch — injectable so tests never touch ~/.codex or spawn codex. */
 export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startCodexAppServer, stop: stopCodexAppServer }
 
@@ -61,9 +68,10 @@ export class CodexEngineAdapter implements EngineAdapter {
   // discover: launch and reconnect assign the Codex thread id.
   recoveryPlan(s: RecoverySource): RecoveryPlan {
     const t = s.codexThreadId
-    if (!t) return { resume: null, fork: null }
+    if (!t) return { generic: false, resume: null, fork: null }
     const home = s.codexHomeName ?? s.tmuxName
     return {
+      generic: false,
       resume: { kind: 'at-launch', resumeCodex: { threadId: t, homeName: home } },
       fork: { codexThreadId: t, codexHomeName: home, parentName: s.tmuxName },
     }
@@ -162,8 +170,7 @@ export class CodexEngineAdapter implements EngineAdapter {
 
     return {
       provider: 'codex', model: resolvedModel ?? 'codex-default',
-      codexThreadId, spawnLogPath,
-      ...(resumeCodex ? { codexHomeName } : {}),
+      identity: { codexThreadId, ...(resumeCodex ? { codexHomeName } : {}) }, spawnLogPath,
     }
   }
 

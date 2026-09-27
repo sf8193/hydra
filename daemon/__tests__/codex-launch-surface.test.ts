@@ -32,7 +32,7 @@ describe('CodexEngineAdapter.launch surface', () => {
     const adapter = adapterWith(log, () => true)
     const result = await adapter.launch(input)
     expect(log).toEqual(['start', 'queue', 'connect', 'surface:thread-1:connected'])
-    expect(result.codexThreadId).toBe('thread-1')
+    expect(result.identity.codexThreadId).toBe('thread-1')
   })
 
   test('a failed surface does not fail the launch', async () => {
@@ -40,6 +40,6 @@ describe('CodexEngineAdapter.launch surface', () => {
     const adapter = adapterWith(log, () => false)
     const result = await adapter.launch(input)
     expect(log).toContain('surface:thread-1:connected')
-    expect(result).toEqual({ provider: 'codex', model: 'm', codexThreadId: 'thread-1', spawnLogPath: '/tmp/spawn.log' })
+    expect(result).toEqual({ provider: 'codex', model: 'm', identity: { codexThreadId: 'thread-1' }, spawnLogPath: '/tmp/spawn.log' })
   })
 })

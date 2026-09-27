@@ -450,7 +450,7 @@ export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdap
     isConnected: (info: SessionInfo) => transport.bridges.has(info.sessionId),
     deliver: async (info: SessionInfo, msg: Record<string, unknown>) => { transport.writeOrQueue(info.sessionId, msg); return { status: 'accepted' } },
     turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }),
-    recoveryPlan: () => ({ resume: null, fork: null }),
+    recoveryPlan: () => ({ generic: true, resume: null, fork: null }),
     ...overrides,
   } as unknown as EngineAdapter
 }

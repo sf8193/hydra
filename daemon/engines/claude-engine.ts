@@ -103,8 +103,8 @@ export class ClaudeEngine implements EngineAdapter {
     const learnedId = opts?.discover ? this.discover(s) : null
     const id = s.claudeSessionId
     const plan: RecoveryPlan = id
-      ? { resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
-      : { resume: null, fork: null }
+      ? { generic: true, resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
+      : { generic: true, resume: null, fork: null }
     return learnedId ? { learnedId, ...plan } : plan
   }
 
@@ -241,7 +241,7 @@ export class ClaudeEngine implements EngineAdapter {
 
     return {
       provider: 'claude', model,
-      claudeSessionId: assignedClaudeSessionId,
+      identity: assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {},
       spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog, debugLogPath: debugLog,
     }
   }

@@ -28,12 +28,12 @@ const STAGGER_MS = 5_000
 
 // Dead, recoverable sessions for the manual `recover` command. Broader than the
 // auto-recover filter (which is thread_owner-only + excludes parked/ephemeral/headless):
-// a user may deliberately recover any dead non-guest session. Codex is excluded — the
-// recoverOne cascade would relaunch it as Claude (codex reconnects via its own path).
+// a user may deliberately recover any dead non-guest session the recoverOne cascade may
+// act on (recoveryPlan().generic: not Codex, which it would relaunch as Claude).
 function findDeadSessions(): SessionInfo[] {
   return [...registry.values()].filter(info =>
     info.sessionType !== 'thread_guest'
-    && info.engine !== 'codex'
+    && info.adapter.recoveryPlan(info).generic
     // suppressAutoRecover intentionally NOT checked — it gates only AUTOMATIC boot recovery
     // (parked awaiting_pm / branch-gone); an explicit manual `recover` overrides it.
     && !isAlive(info)
@@ -481,7 +481,7 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
     && !info.suppressAutoRecover  // e.g. awaiting_pm builder preserved by sweepOrphanedBuilders for PM peek/kill
     && !info.ephemeral
     && !info.headless
-    && info.engine !== 'codex'  // codex reconnects via reconnectCodexSessions() at boot; recoverOne would relaunch it as Claude
+    && info.adapter.recoveryPlan(info).generic  // Codex: no — its runtime's start() reconnects it at boot; recoverOne would relaunch it as Claude
     && !tmuxHasSession(info.tmuxName)
     && threadRegistry.has(info.threadId),
   )

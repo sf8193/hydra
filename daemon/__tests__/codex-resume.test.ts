@@ -68,8 +68,8 @@ describe('CodexEngineAdapter.launch', () => {
     // MCP re-registered for the NEW session id in the OLD home, then the app-server
     // (re)started there so the sidecar carries the new id.
     expect(proc.calls).toEqual([`mcp ${codexHomeDir('oldhome')} new-sid`, 'start oldhome'])
-    expect(r.codexThreadId).toBe('T-orig')
-    expect(r.codexHomeName).toBe('oldhome')
+    expect(r.identity.codexThreadId).toBe('T-orig')
+    expect(r.identity.codexHomeName).toBe('oldhome')
   })
 
   test('resumeCodex: the launch-time surface attaches the TUI to the original home', async () => {
@@ -88,8 +88,8 @@ describe('CodexEngineAdapter.launch', () => {
 
     expect(engine.calls).toEqual(['queue new-sid P0', `connect new-sid ${codexSocketPath('newname')}`])
     expect(proc.calls).toEqual([`mcp ${codexHomeDir('newname')} new-sid`, 'start newname'])
-    expect(r.codexThreadId).toBe('fresh-thread')
-    expect(r.codexHomeName).toBeUndefined()
+    expect(r.identity.codexThreadId).toBe('fresh-thread')
+    expect('codexHomeName' in r.identity).toBe(false)
   })
 })
 
@@ -127,11 +127,13 @@ function fakeAdapter(provider: 'claude' | 'codex') {
       if (provider === 'codex') {
         return {
           provider, model: 'gpt',
-          codexThreadId: input.resumeCodex?.threadId ?? (input.forkFrom?.codexThreadId ? 'forked-thread' : 'fresh-thread'),
-          ...(input.resumeCodex ? { codexHomeName: input.resumeCodex.homeName } : {}),
+          identity: {
+            codexThreadId: input.resumeCodex?.threadId ?? (input.forkFrom?.codexThreadId ? 'forked-thread' : 'fresh-thread'),
+            ...(input.resumeCodex ? { codexHomeName: input.resumeCodex.homeName } : {}),
+          },
         }
       }
-      return { provider, model: 'claude-x', claudeSessionId: input.resumeFrom ?? 'new-claude' }
+      return { provider, model: 'claude-x', identity: { claudeSessionId: input.resumeFrom ?? 'new-claude' } }
     },
     stop: async (info: SessionInfo) => {
       stops.push({ tmuxName: info.tmuxName, home: info.codexHomeName })

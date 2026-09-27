@@ -185,7 +185,7 @@ describe('recoveryPlan { discover }', () => {
     const plan = engines.claude.recoveryPlan(info)
     expect(listPanes()).toEqual([])
     expect('learnedId' in plan).toBe(false)
-    expect(plan).toEqual({ resume: null, fork: null })
+    expect(plan).toEqual({ generic: true, resume: null, fork: null })
   })
 
   test('Claude with discover and no id: learns it, writes it on the record, plans from it', () => {

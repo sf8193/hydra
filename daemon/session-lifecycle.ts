@@ -15,6 +15,7 @@ import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter } from './engines/engine-adapter.js'
+import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -498,11 +499,10 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // record being replaced owns that home —
   // launching would restart another owner's app-server. Throws before any mutation.
   if (opts?.resumeCodex) {
-    const home = opts.resumeCodex.homeName
     const replacing = threadId ? registry.getByThread(threadId) : undefined
-    const owner = [...registry.values()].find(s => s.sessionId !== replacing && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)
+    const owner = resumeHomeOwner(registry.values(), opts.resumeCodex, replacing)
     if (owner) {
-      throw new Error(`codex home ${home} is owned by ${owner.tmuxName} — cannot resume into it`)
+      throw new Error(`codex home ${opts.resumeCodex.homeName} is owned by ${owner.tmuxName} — cannot resume into it`)
     }
   }
 
@@ -690,9 +690,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...labelFields,
     threadUrl: url || undefined,
     engine,
-    ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
-    ...(launched.codexThreadId ? { codexThreadId: launched.codexThreadId } : {}),
-    ...(launched.codexHomeName ? { codexHomeName: launched.codexHomeName } : {}),
+    ...launched.identity,
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(resumeCount > 0 ? { resumeCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
@@ -737,7 +735,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       anchorMessageId, anchorChannelId, threadUrl: url || undefined, topic, respawnCount,
       sessionId, tmuxName, originType, originFrom, model: launched.model, parentChannelId,
       label: sessionLabel,
-      ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
+      claudeSessionId: launched.identity.claudeSessionId,
     })
   }
 

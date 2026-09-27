@@ -114,9 +114,9 @@ export type LaunchResult = {
   readonly exitFilePath?: string
   readonly stderrLogPath?: string
   readonly debugLogPath?: string
-  readonly claudeSessionId?: string
-  readonly codexThreadId?: string
-  readonly codexHomeName?: string
+  // The native ids the launch assigned, spread onto the record. Absent keys are
+  // omitted, never undefined.
+  readonly identity: { readonly claudeSessionId?: string; readonly codexThreadId?: string; readonly codexHomeName?: string }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +125,9 @@ export type LaunchResult = {
 
 export type RecoverySource = { tmuxName: string; claudeSessionId?: string; codexThreadId?: string; codexHomeName?: string }
 export type RecoveryPlan = {
+  // May the neutral recoverOne cascade (manual recover, boot auto-recover) act
+  // on this record? Claude: yes. Codex: no — it would relaunch it as Claude.
+  generic: boolean
   // Set only when { discover } learned the source's missing native id (and
   // wrote it onto the source); absent otherwise, never undefined.
   learnedId?: string

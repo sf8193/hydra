@@ -24,6 +24,7 @@ describe('native fork (ported from canNativeFork)', () => {
 describe('recoveryPlan', () => {
   test('Claude: resume awaits the bridge; fork from the session id', () => {
     expect(claude.recoveryPlan({ tmuxName: 'dead', claudeSessionId: 'C' })).toEqual({
+      generic: true,
       resume: { kind: 'await-bridge', resumeFrom: 'C' },
       fork: { claudeSessionId: 'C', parentName: 'dead' },
     })
@@ -31,6 +32,7 @@ describe('recoveryPlan', () => {
 
   test('Codex: resume at launch in the original home; fork with thread and home', () => {
     expect(codex.recoveryPlan({ tmuxName: 'dead', codexThreadId: 'T', codexHomeName: 'home' })).toEqual({
+      generic: false,
       resume: { kind: 'at-launch', resumeCodex: { threadId: 'T', homeName: 'home' } },
       fork: { codexThreadId: 'T', codexHomeName: 'home', parentName: 'dead' },
     })
@@ -43,12 +45,12 @@ describe('recoveryPlan', () => {
   })
 
   test('no native id → nothing to resume or fork', () => {
-    expect(claude.recoveryPlan({ tmuxName: 'dead' })).toEqual({ resume: null, fork: null })
-    expect(codex.recoveryPlan({ tmuxName: 'dead' })).toEqual({ resume: null, fork: null })
+    expect(claude.recoveryPlan({ tmuxName: 'dead' })).toEqual({ generic: true, resume: null, fork: null })
+    expect(codex.recoveryPlan({ tmuxName: 'dead' })).toEqual({ generic: false, resume: null, fork: null })
   })
 
   // PINNED R9 (PR-IDENT): Codex ignores a stray Claude id, as thread.ts did before S8.
   test('PINNED R9: Codex record with only a claudeSessionId → no plan', () => {
-    expect(codex.recoveryPlan({ tmuxName: 'dead', claudeSessionId: 'C' })).toEqual({ resume: null, fork: null })
+    expect(codex.recoveryPlan({ tmuxName: 'dead', claudeSessionId: 'C' })).toEqual({ generic: false, resume: null, fork: null })
   })
 })
