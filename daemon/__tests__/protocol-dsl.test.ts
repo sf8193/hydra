@@ -82,7 +82,7 @@ describe('review protocol (TypeScript DSL)', () => {
 
   test('onFallback frames lenses as suggestions and uses fresh subagents, not forks', () => {
     const msg = review.notifications.onFallback!(
-      { params: { topic: 'auth flow' }, currentRound: 2, rounds: 3 } as any,
+      { params: { topic: 'auth flow', autoReviewLenses: true }, currentRound: 2, rounds: 3 } as any,
       { mode: 'fallback', cause: 'death', deadRole: 'critic', deadLabel: 'The Critic', resumeAttempts: 5, completedRounds: 1 },
     )
     expect(msg).toContain('The Critic')
@@ -102,7 +102,7 @@ describe('review protocol (TypeScript DSL)', () => {
 
   test('onFallback in direct mode names the choice, not a death, and keeps the task', () => {
     const msg = review.notifications.onFallback!(
-      { params: { topic: 'auth flow' }, currentRound: 1, rounds: 3 } as any,
+      { params: { topic: 'auth flow', autoReviewLenses: true }, currentRound: 1, rounds: 3 } as any,
       { mode: 'direct' },
     )
     expect(msg).toContain('+subagent')
@@ -127,9 +127,52 @@ describe('review protocol (TypeScript DSL)', () => {
     }
   })
 
+  test('onFallback applies default Ponytail and honors both opt-outs', () => {
+    const ctx = { mode: 'direct' as const }
+    const automatic = review.notifications.onFallback!({ params: { autoReviewLenses: true }, currentRound: 1, rounds: 3 } as any, ctx)
+    expect(automatic).toContain('Required lenses')
+    expect(automatic).toContain('/ponytail review')
+
+    const noPonytail = review.notifications.onFallback!({ params: { autoReviewLenses: true, noPonytail: true }, currentRound: 1, rounds: 3 } as any, ctx)
+    expect(noPonytail).toContain('Pick the lenses')
+    expect(noPonytail).not.toContain('/ponytail review')
+
+    const noLenses = review.notifications.onFallback!({ params: { autoReviewLenses: true, noAutoLenses: true }, currentRound: 1, rounds: 3 } as any, ctx)
+    expect(noLenses).toContain('automatic lens subagents are disabled')
+    expect(noLenses).toContain('do not spawn native subagents')
+    expect(noLenses).not.toContain('/ponytail review')
+    expect(noLenses).not.toContain('Spawn one fresh subagent')
+  })
+
+  test('missing policy metadata preserves legacy optional helpers without pretending +no-lenses', () => {
+    const legacy = review.notifications.onFallback!(
+      { params: {}, currentRound: 1, rounds: 3 } as any,
+      { mode: 'direct' },
+    )
+    expect(legacy).toContain('fresh Claude Code subagents')
+    expect(legacy).toContain('Delegate useful lenses when the material warrants it')
+    expect(legacy).not.toContain('caller used `+no-lenses`')
+    expect(legacy).not.toContain('/ponytail review')
+
+    const forced = review.notifications.onFallback!(
+      { params: { modifiers: [{ type: 'seed', name: 'ponytail', target: 'critic', instructions: 'Spawn exactly ONE private helper.' }] }, currentRound: 1, rounds: 3 } as any,
+      { mode: 'direct' },
+    )
+    expect(forced).toContain('Spawn exactly ONE private helper')
+    expect(forced).not.toContain('do not spawn native subagents')
+    expect(forced).not.toContain('caller used `+no-lenses`')
+  })
+
+  test('missing policy metadata keeps the critic helper policy optional', () => {
+    const seed = review.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3 })!
+    expect(seed).toContain('Optional private sub-reviewers')
+    expect(seed).not.toContain('Private sub-reviewers disabled')
+    expect(seed).not.toContain('Default +ponytail')
+  })
+
   test('onFallback on the silence path says retired, not died — the critic was alive', () => {
     const msg = review.notifications.onFallback!(
-      { params: {}, currentRound: 1, rounds: 3 } as any,
+      { params: { autoReviewLenses: true }, currentRound: 1, rounds: 3 } as any,
       { mode: 'fallback', cause: 'silence', deadRole: 'critic', deadLabel: 'The Critic', completedRounds: 0 },
     )
     expect(msg).toContain('went silent')
@@ -481,6 +524,32 @@ describe('roleConfig', () => {
       windows: {},
       decisions: { d: { phase: 'start', actor: 'a', options: ['yes', 'no'], descriptions: { yse: 'typo' } } },
     })).toThrow('description key "yse" is not a declared option')
+  })
+
+  test('rejects decision event keys that are not declared options', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad', roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: { go: 'done' } }, done: { actor: 'a', on: {} } },
+      windows: {},
+      decisions: { d: { phase: 'start', actor: 'a', options: ['yes'], events: { typo: 'go' } } },
+    })).toThrow('event key "typo" is not a declared option')
+  })
+
+  test('rejects final event mappings to events absent from the decision phase', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad', roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: { go: 'done' } }, done: { actor: 'a', on: {} } },
+      windows: {},
+      decisions: { d: { phase: 'start', actor: 'a', options: ['yes'], finalEvents: { yes: 'missing' } } },
+    })).toThrow('final event "missing" is not an event on phase "start"')
+  })
+
+  test('rejects unknown phase capabilities at runtime', () => {
+    expect(() => protocol('bad', {
+      emoji: '🧪', display: 'Bad', roles: { a: 'A' },
+      phases: { start: { actor: 'a', on: {}, capabilities: ['not_real' as any] } },
+      windows: {},
+    })).toThrow('unknown capability "not_real"')
   })
 })
 

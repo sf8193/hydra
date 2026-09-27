@@ -259,7 +259,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '**Multi-agent** (thread):',
     '• 🔨 `build [N] [model:] [task]` — implement + review cycle',
     '• ⚔️ `review [N] [model:] [+mods] [topic]` — verdict-driven review, up to N rounds (default/max 20)',
-    '   ↳ `+s` security lens · `+subagent` skip the critic, run it yourself · `+no-fallback` cancel on critic death instead',
+    '   ↳ private lenses are automatic (including `/ponytail review`); force: `+readability`/`+r` · `+security`/`+s` · `+ponytail`; opt out: `+no-ponytail`/`+np` · `+no-lenses`/`+nl`; `+subagent` skips the critic · `+no-fallback` cancels on critic death',
     '• 🔬 `spike [topic]` — single-agent deep investigation (checkpoints → decide done → report)',
     '• 🔨 `build_v2 [N] [task]` — v2 build protocol',
     '• 🚫 `kill build` / `kill review` / `kill spike`',

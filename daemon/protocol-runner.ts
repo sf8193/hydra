@@ -7,7 +7,7 @@ import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { recordSessionDeath } from './observability.js'
-import { registerProtocol } from './protocol-registry.js'
+import { registerProtocol, type ProtocolChildSpawnMetadata } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
 import { dumpTranscript } from './transcript-dump.js'
 import { defaultToolDescription } from './bridge-tools.js'
@@ -37,6 +37,7 @@ export type ProtocolRun = StatusLineState & {
   params: Record<string, unknown>
   participants: Map<string, string>
   sessionToRole: Map<string, string>
+  protocolChildren: Map<string, ProtocolChildRecord>
   timeout?: ReturnType<typeof setTimeout>
   _warningTimeout?: ReturnType<typeof setTimeout>
   _totalTimeout?: ReturnType<typeof setTimeout>
@@ -60,7 +61,19 @@ export type ProtocolRun = StatusLineState & {
   summary?: string
 }
 
+type ProtocolChildRecord = ProtocolChildSpawnMetadata & {
+  phase: string
+  parentSessionId: string
+  result?: string
+}
+
 const MAX_EXTENSIONS_PER_PHASE = 2
+// Privacy outlives the phase record: child termination is asynchronous, so a
+// retiring helper remains restricted until killSession has actually settled.
+const privateProtocolChildren = new Set<string>()
+// Covers the interval between pre-launch protocol registration and the child
+// appearing in the session registry. Phase cleanup must not open a write window.
+const pendingPrivateProtocolChildren = new Set<string>()
 const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
 const HEALTH_CHECK_INTERVAL_MS = 30_000
@@ -136,6 +149,7 @@ export async function startProtocolRun(
     params,
     participants: new Map(),
     sessionToRole: new Map(),
+    protocolChildren: new Map(),
     timeout: undefined,
     _extensions: 0,
     _phaseStartedAt: Date.now(),
@@ -257,6 +271,7 @@ function buildAdvanceSchema(ia: { verdict: 'none' | 'required' | 'optional'; opt
 
 function clearProtocolOverrides(info: SessionInfo): void {
   removeCapability(info, 'protocol_context')
+  removeCapability(info, 'protocol_spawn')
   removeToolDescriptions(info, 'advance', 'extend_phase')
   removeToolInputSchemas(info, 'advance')
 }
@@ -272,6 +287,12 @@ function setProtocolTools(run: ProtocolRun, sessionId: string): void {
     addCapability(info, 'protocol_context')
     for (const [name, desc] of Object.entries(overrides.descriptions)) setToolDescription(info, name, desc)
     for (const [name, schema] of Object.entries(overrides.schemas)) setToolInputSchema(info, name, schema)
+  }
+
+  const role = run.sessionToRole.get(sessionId)
+  const phase = run.protocol.phases[run.phase]
+  if (role === phase?.actor) {
+    for (const capability of phase.capabilities ?? []) addCapability(info, capability)
   }
 
   pushToolSurface(sessionId)
@@ -299,6 +320,59 @@ function registerParticipant(run: ProtocolRun, role: string, sessionId: string):
   setProtocolTools(run, sessionId)
 }
 
+function registerChild(run: ProtocolRun, parentSessionId: string, childSessionId: string, metadata: ProtocolChildSpawnMetadata): boolean {
+  const role = run.sessionToRole.get(parentSessionId)
+  const phase = run.protocol.phases[run.phase]
+  if (role !== phase?.actor || !phase.capabilities?.includes('protocol_spawn')) return false
+  ;(run.protocolChildren ??= new Map()).set(childSessionId, { phase: run.phase, parentSessionId, ...metadata })
+  if (phase.privateChildren) privateProtocolChildren.add(childSessionId)
+  return true
+}
+
+function markPrivateChildLaunching(sessionId: string): void {
+  pendingPrivateProtocolChildren.add(sessionId)
+}
+
+function finishPrivateChildLaunch(sessionId: string): void {
+  pendingPrivateProtocolChildren.delete(sessionId)
+  if (!registry.has(sessionId)) privateProtocolChildren.delete(sessionId)
+}
+
+function registerChildResult(run: ProtocolRun, childSessionId: string, targetSessionId: string, text: string): boolean {
+  const child = run.protocolChildren.get(childSessionId)
+  if (!child || child.phase !== run.phase || child.parentSessionId !== targetSessionId) return false
+  child.result = text.trim()
+  return true
+}
+
+function releasePrivateChildWhenGone(sessionId: string): void {
+  if (!registry.has(sessionId)) {
+    privateProtocolChildren.delete(sessionId)
+    return
+  }
+  // A concurrent/manual kill may already own this session. Keep the privacy
+  // tombstone until registry removal proves the helper can no longer call us.
+  const timer = setTimeout(() => releasePrivateChildWhenGone(sessionId), 250)
+  timer.unref?.()
+}
+
+function retireProtocolChildren(run: ProtocolRun, phase?: string): void {
+  for (const [sessionId, child] of run.protocolChildren ?? []) {
+    if (phase && child.phase !== phase) continue
+    run.protocolChildren.delete(sessionId)
+    const info = registry.get(sessionId)
+    if (info && !killsInProgress.has(sessionId)) {
+      void killSession(info, 'protocol phase ended')
+        .catch(err => process.stderr.write(`daemon: protocol child cleanup failed: ${err}\n`))
+        .finally(() => releasePrivateChildWhenGone(sessionId))
+    } else if (info) {
+      releasePrivateChildWhenGone(sessionId)
+    } else if (!pendingPrivateProtocolChildren.has(sessionId)) {
+      privateProtocolChildren.delete(sessionId)
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Reply handler — conversational only, never advances the protocol
 // ProtocolHooks.onReply is a required interface — this stub satisfies it.
@@ -320,6 +394,16 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
 
   if (phaseDef.actor !== role) {
     return { ok: false, reason: `not your turn (current actor: ${phaseDef.actor}, caller: ${role})` }
+  }
+
+  if (run.protocol.name === 'delegated-build' && run.phase === 'verifying' && verdict === 'step_passed') {
+    const proofError = validateDelegatedBuildVerification(run, content)
+    if (proofError) return { ok: false, reason: proofError }
+  }
+
+  if (run.protocol.name === 'review' && (run.phase === 'critic_turn' || run.phase === 'subagent_review')) {
+    const lensError = validateRequestedReviewLenses(run, content)
+    if (lensError) return { ok: false, reason: lensError }
   }
 
   const ia = run.protocol.phaseInteraction(run.phase)
@@ -388,8 +472,8 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // if that phase has on.fallback and fire it.
     if (run._pendingFallback && !isTerminal(run)) {
       const pending = run._pendingFallback
-      run._pendingFallback = undefined
       if (run.protocol.phases[run.phase]?.on?.fallback) {
+        run._pendingFallback = undefined
         // enterFallbackPhase commits the phase transition in its synchronous
         // prefix (before its only await, the kill) — see the "no await before the
         // transition" invariant in that function. All four call sites, including
@@ -397,15 +481,68 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
         // in effect the moment control returns here. Do not add an early await to
         // enterFallbackPhase without revisiting these call sites.
         void enterFallbackPhase(run, pending)
+      } else if (run.phase === run.protocol.cleanupPhase) {
+        // Cleanup is the normal successful off-ramp. There is no future actor
+        // phase where a deferred fallback should fire.
+        run._pendingFallback = undefined
+      } else if (!run.protocol.deferFallbackAcrossPhases) {
+        // Most protocols retain the historical phase-local behavior. Only a
+        // protocol that explicitly needs a later fallback opportunity may
+        // carry the marker through an intervening owner phase.
+        run._pendingFallback = undefined
       }
-      // If new phase also lacks on.fallback (e.g. cleanup), clear silently —
-      // the review is completing normally.
+      // Opted-in protocols retain the marker until a fallback-capable phase
+      // or terminal cleanup.
     }
 
     return { ok: true, sentIds }
   } finally {
     transitioningRuns.delete(run.id)
   }
+}
+
+function validateDelegatedBuildVerification(run: ProtocolRun, content: string): string | null {
+  const reviewers = [...(run.protocolChildren?.values() ?? [])].filter(child =>
+    child.phase === run.phase && child.headless && child.readThread && !!child.phaseBudgetMs && !!child.result)
+  if (reviewers.length === 0) {
+    return 'step_passed requires a current-phase reviewer spawned with headless=true, read_thread=true, and phase_budget that returned a result'
+  }
+  const verdicts = reviewers.map(reviewer => ({
+    verdict: reviewer.result!.match(/(?:^|\n)[ \t]*verdict[ \t]*:[ \t]*(PASS WITH FIXES|PASS|FAIL)\b/i)?.[1]?.toUpperCase(),
+    hasEvidence: /(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*\S+/i.test(reviewer.result!),
+  }))
+  if (verdicts.some(({ verdict }) => verdict === 'FAIL')) {
+    return 'step_passed is blocked because a current-phase reviewer returned `Verdict: FAIL`'
+  }
+  if (!verdicts.some(({ verdict, hasEvidence }) => verdict === 'PASS' && hasEvidence)) {
+    return 'step_passed requires at least one reviewer result with `Verdict: PASS` and non-empty `Evidence:`'
+  }
+  const hasMechanicalChecks = /(?:^|\n)[ \t]*mechanical checks[ \t]*:[ \t]*\S+/i.test(content)
+  const hasReviewer = /(?:^|\n)[ \t]*reviewer[ \t]*:[ \t]*\S+/i.test(content)
+  const hasEvidence = /(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*\S+/i.test(content)
+  if (!hasMechanicalChecks || !hasReviewer || !hasEvidence) {
+    return 'step_passed requires non-empty structured proof fields: `Mechanical checks:`, `Reviewer:`, and `Evidence:`'
+  }
+  return null
+}
+
+function validateRequestedReviewLenses(run: ProtocolRun, content: string): string | null {
+  const requested = ((run.params.modifiers as Modifier[] | undefined) ?? []).map(mod => mod.name)
+  const ponytailRequired = requested.includes('ponytail')
+    || (run.params.autoReviewLenses === true && !run.params.noAutoLenses && !run.params.noPonytail)
+  if (!ponytailRequired) return null
+
+  const results = [...(run.protocolChildren?.values() ?? [])]
+    .filter(child => child.phase === run.phase && child.lens === 'ponytail' && child.headless && child.readThread && !!child.phaseBudgetMs && !!child.result)
+    .map(child => child.result!)
+  if (results.length === 0) {
+    if (/\+ponytail:\s*helper returned nothing\b/i.test(content)) return null
+    return '+ponytail requires a current-phase helper spawned with headless=true, read_thread=true, and phase_budget that returned a private result; if it returned nothing, visibly report `+ponytail: helper returned nothing` before advancing'
+  }
+  if (results.some(result => /^UNAVAILABLE: \/ponytail review\b/im.test(result)) && !/UNAVAILABLE: \/ponytail review\b/i.test(content)) {
+    return '+ponytail helper reported `UNAVAILABLE: /ponytail review`; surface that status in the review before advancing'
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -827,6 +964,7 @@ function halfForPhase(run: ProtocolRun): 'top' | 'bottom' {
 
 function advancePhase(run: ProtocolRun, to: string, from: string): boolean {
   if (run.phase !== from) return false
+  retireProtocolChildren(run, from)
   run.phase = to
   run._extensions = 0
   run._phaseStartedAt = Date.now()
@@ -940,6 +1078,8 @@ function clearTimers(run: ProtocolRun): void {
 }
 
 function cleanupRun(run: ProtocolRun): void {
+  retireProtocolChildren(run)
+  run._pendingFallback = undefined
   for (const sid of run.sessionToRole.keys()) sessionToRun.delete(sid)
   threadToRun.delete(run.threadId)
   runs.delete(run.id)
@@ -1087,7 +1227,10 @@ function resolveAdvanceEvent(run: ProtocolRun, verdict?: string): string | null 
   if (verdict) {
     const decision = Object.values(run.protocol.decisions).find(d => d.phase === run.phase)
     if (!decision) return null
-    if (decision.finalEvent && run.currentRound >= run.rounds) return decision.finalEvent
+    if (run.currentRound >= run.rounds) {
+      const finalEvent = decision.finalEvents?.[verdict] ?? decision.finalEvent
+      if (finalEvent) return finalEvent
+    }
     if (!decision.events) return verdict
     return decision.events[verdict] ?? null
   }
@@ -1377,7 +1520,7 @@ function resetTimeout(run: ProtocolRun): void {
         void enterFallbackPhase(run, actorRole, 'silence')
         return
       }
-      void fireTransition(run, 'timeout', '', 'timed out')
+      void fireTransition(run, 'timeout', '', run.protocol.phases[phase]?.timeoutReason ?? 'timed out')
     }
   }, ms)
 
@@ -1402,7 +1545,7 @@ function resetTimeout(run: ProtocolRun): void {
         void enterFallbackPhase(run, cappedActor, 'silence')
         return
       }
-      await fireTransition(run, 'timeout', '', 'total time exceeded')
+      await fireTransition(run, 'timeout', '', run.protocol.phases[run.phase]?.timeoutReason ?? 'total time exceeded')
     }, totalMs)
   }
 }
@@ -1495,6 +1638,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
+      privateProtocolChildren, pendingPrivateProtocolChildren, markPrivateChildLaunching, finishPrivateChildLaunch, releasePrivateChildWhenGone, registerRunnerHooks, setRunTools, registerChild, retireProtocolChildren, enterFallbackPhase,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
@@ -1525,30 +1669,59 @@ export function getActiveRuns(): ProtocolRun[] {
 // Protocol registry integration — register v2 protocols
 // ---------------------------------------------------------------------------
 
-function runnerHooks(name: string, protoName: string) {
+function runnerHooks(name: string, protoName: string | readonly string[]) {
+  const matches = (candidate: string) => typeof protoName === 'string' ? candidate === protoName : protoName.includes(candidate)
   registerProtocol(name, {
     getByThread: (threadId) => {
       const run = getRunByThread(threadId)
-      return !!run && run.protocol.name === protoName
+      return !!run && matches(run.protocol.name)
     },
     isParticipant: (sessionId) => {
       const runId = sessionToRun.get(sessionId)
-      return !!runId && runs.get(runId)?.protocol.name === protoName
+      const run = runId ? runs.get(runId) : undefined
+      return !!run && matches(run.protocol.name)
     },
     onReply: onRunReply,
     onDisconnect: onRunDisconnect,
     onReconnect: onRunReconnect,
     onAdvance: onRunAdvance,
+    onChildSpawn: (parentSessionId, childSessionId, metadata) => {
+      const runId = sessionToRun.get(parentSessionId)
+      const run = runId ? runs.get(runId) : undefined
+      return !!run && matches(run.protocol.name) && registerChild(run, parentSessionId, childSessionId, metadata)
+    },
+    childSpawnRequiresPrivate: (parentSessionId) => {
+      const runId = sessionToRun.get(parentSessionId)
+      const run = runId ? runs.get(runId) : undefined
+      if (!run || !matches(run.protocol.name)) return false
+      const role = run.sessionToRole.get(parentSessionId)
+      const phase = run.protocol.phases[run.phase]
+      return role === phase?.actor && !!phase.privateChildren
+    },
+    onPrivateChildLaunchStart: markPrivateChildLaunching,
+    onPrivateChildLaunchFinish: finishPrivateChildLaunch,
+    childRequiresPrivate: (childSessionId) => {
+      return privateProtocolChildren.has(childSessionId) || pendingPrivateProtocolChildren.has(childSessionId)
+    },
+    onChildResult: (childSessionId, targetSessionId, text) => {
+      for (const run of runs.values()) {
+        if (matches(run.protocol.name) && registerChildResult(run, childSessionId, targetSessionId, text)) return true
+      }
+      return false
+    },
   })
 }
 
 // Review has no V1 anymore, so its registry name drops the _v2 suffix — this is
 // what isThreadOccupied() surfaces to users ("A review is already in progress").
 // build/spike keep _v2 until their own V1s are removed.
-runnerHooks('review', 'review')
-runnerHooks('build_v2', 'build')
-runnerHooks('spike_v2', 'spike')
-runnerHooks('delegated_build', 'delegated-build')
+function registerRunnerHooks() {
+  runnerHooks('review', 'review')
+  runnerHooks('build_v2', 'build')
+  runnerHooks('spike_v2', 'spike')
+  runnerHooks('delegated_build', ['delegated-build', 'delegated-build-quick'])
+}
+registerRunnerHooks()
 
 // Protocol context for autopsy — joins session to protocol state
 export function getProtocolContext(sessionId: string): { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null {

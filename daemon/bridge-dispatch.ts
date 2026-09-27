@@ -8,7 +8,7 @@ import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
-import { dispatchAdvance } from './protocol-registry.js'
+import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
@@ -16,10 +16,24 @@ import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle }
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 import { normalizeReviewRounds } from '../shared/constants.js'
+import { isToolAllowed } from './tool-surface.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
 const RETRYABLE_PATTERNS = /ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|socket hang up|not connected|network/i
+const PRIVATE_HELPER_ALLOWED_TOOLS = new Set([
+  'fetch_messages', 'list_sessions', 'peek_session', 'download_attachment',
+  'set_description', 'send_to_thread',
+])
+
+function resolveProtocolSpawnMode(callerSessionId: string | undefined, requestedHeadless: boolean | undefined) {
+  const privateSpawn = !!(callerSessionId && protocolSpawnRequiresPrivate(callerSessionId))
+  return { privateSpawn, headless: privateSpawn || requestedHeadless === true, quiet: privateSpawn }
+}
+
+export const __test = process.env.NODE_ENV === 'test'
+  ? { PRIVATE_HELPER_ALLOWED_TOOLS, resolveProtocolSpawnMode }
+  : undefined
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined
@@ -56,6 +70,18 @@ export type ToolResult = { content: Array<{type: string; text: string}>; isError
 
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
   try {
+    // Bridge-server enforces this at the socket boundary. Keep the dispatcher
+    // fail-closed too: Codex advertises phase-scoped tools statically, and tests
+    // or future callers may invoke executeTool without crossing bridge-server.
+    if (callerSessionId && !isToolAllowed(callerSessionId, name)) {
+      throw new Error(`${name} is not available to this session`)
+    }
+    // A private protocol helper must not bypass send_to_thread's visibility
+    // policy through another gateway-mutating tool. Keep this centralized so
+    // every public write stays denied until the helper is fully retired.
+    if (callerSessionId && protocolChildRequiresPrivate(callerSessionId) && !PRIVATE_HELPER_ALLOWED_TOOLS.has(name)) {
+      throw new Error(`${name} is unavailable to a private protocol helper`)
+    }
     switch (name) {
       case 'reply': {
         const chat_id = args.chat_id as string
@@ -224,6 +250,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'spawn_session': {
+        // Capture this before the asynchronous spawn. If the protocol ends while
+        // the child is launching, its capabilities are removed and registry
+        // lookup returns not_protocol; it is still our responsibility to reap it.
+        const protocolScopedSpawn = !!(callerSessionId && registry.get(callerSessionId)?.capabilities?.includes('protocol_spawn'))
+        const spawnMode = resolveProtocolSpawnMode(callerSessionId, args.headless as boolean | undefined)
+        const privateProtocolSpawn = spawnMode.privateSpawn
         const worktree = args.worktree as string | undefined
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
         const model = (args.model as string | undefined)?.trim() || undefined
@@ -231,7 +263,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
         if (budgetRaw && !phaseBudgetMs) throw new Error(`invalid phase_budget "${budgetRaw}" — use e.g. "90s", "20m", "1h"`)
-        const headless = args.headless as boolean | undefined
+        const headless = spawnMode.headless
+        const lens = (args.lens as string | undefined)?.trim().toLowerCase() || undefined
+        if (lens && !/^[a-z][a-z0-9-]{0,31}$/.test(lens)) throw new Error('lens must be a lowercase name using letters, digits, or hyphens')
         const readThreadRaw = args.read_thread as boolean | number | undefined
         const spawnerName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? 'main' : 'main'
         let readThreadPrefix = ''
@@ -245,14 +279,54 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             process.stderr.write(`daemon: spawn_session read_thread requested by ${spawnerName} but spawner has no thread — ignoring\n`)
           }
         }
-        const result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
+        let preLaunchRegistration: ReturnType<typeof registerProtocolChild> | undefined
+        let allocatedSessionId: string | undefined
+        let result: Awaited<ReturnType<typeof doSpawnSession>>
+        try {
+          result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
           ...(model ? { model } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
           ...(headless ? { headless: true } : {}),
+          ...(spawnMode.quiet ? { quiet: true } : {}),
           ...(readThreadPrefix ? { promptPrefix: readThreadPrefix } : {}),
+          ...(privateProtocolSpawn ? { beforeInitialTurn: (sessionId: string) => {
+            allocatedSessionId = sessionId
+            markPrivateProtocolChildLaunching(callerSessionId!, sessionId)
+            preLaunchRegistration = registerProtocolChild(callerSessionId!, sessionId, {
+              headless: true,
+              readThread: !!readThreadPrefix,
+              phaseBudgetMs,
+              lens,
+            })
+            if (preLaunchRegistration !== 'registered') {
+              finishPrivateProtocolChildLaunch(sessionId)
+              throw new Error('protocol phase ended before spawned session could be registered')
+            }
+          } } : {}),
           trigger: 'spawn_session',
           initiator: spawnerName,
-        })
+          })
+        } catch (err) {
+          if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
+          throw err
+        }
+        // Revalidate after launch even when registration succeeded before it.
+        // The phase may have ended while the engine was starting.
+        const childRegistration = callerSessionId
+          ? registerProtocolChild(callerSessionId, result.sessionId, {
+              headless: headless === true,
+              readThread: !!readThreadPrefix,
+              phaseBudgetMs,
+              lens,
+            })
+          : 'not_protocol'
+        if (protocolScopedSpawn && childRegistration !== 'registered') {
+          const child = registry.get(result.sessionId)
+          if (child) await killSession(child, 'protocol phase ended during spawn').catch(() => {})
+          if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
+          throw new Error('protocol phase ended before spawned session could be registered')
+        }
+        if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
         return { content: [{ type: 'text', text: `session spawned (name: ${result.name}, session_id: ${result.sessionId}, thread_id: ${result.threadId}${result.url ? `, url: ${result.url}` : ''})` }] }
       }
 
@@ -312,6 +386,11 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const callerName = registry.get(callerSessionId)?.tmuxName
           if (info.initiator !== callerName && info.originFrom !== callerName) {
             throw new Error(`cannot kill ${info.tmuxName} — you can only kill sessions you spawned`)
+          }
+          // A protocol-managed participant (e.g. the review Critic) belongs to the
+          // protocol, not to whoever happened to spawn it.
+          if (isProtocolParticipant(targetId)) {
+            throw new Error(`cannot kill ${info.tmuxName} — it is a protocol participant`)
           }
         }
 
@@ -511,6 +590,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const VALID_TYPES = ['progress', 'question', 'result']
         if (!msgType || !VALID_TYPES.includes(msgType)) throw new Error(`type is required: ${VALID_TYPES.join(', ')}`)
         if (!text) throw new Error('text is required')
+        const visibility = (args.visibility as string | undefined)?.trim() || 'public'
+        if (visibility !== 'public' && visibility !== 'private') throw new Error('visibility must be "public" or "private"')
+        const isPrivate = visibility === 'private'
+        if (!isPrivate && callerSessionId && protocolChildRequiresPrivate(callerSessionId)) {
+          throw new Error('this session is a private protocol helper — use send_to_thread with visibility="private"')
+        }
         process.stderr.write(`daemon: send_to_thread [${msgType}] → ${target}\n`)
 
         // Resolve by session name only — no raw thread IDs (use reply for those)
@@ -521,6 +606,32 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         const targetSession = resolved.session
         const threadId = targetSession.threadId
+
+        // Private delivery: child → its own parent only, straight to the parent's
+        // session. Never touches the gateway, so nothing lands in any thread.
+        if (isPrivate) {
+          const sender = callerSessionId ? registry.get(callerSessionId) : undefined
+          if (!sender) throw new Error('private delivery requires a session context')
+          if (resolved.replaced) throw new Error(`no live session named "${target}" for private delivery`)
+          if (msgType === 'question') throw new Error('private delivery supports progress and result only')
+          if (files.length > 0) throw new Error('private delivery cannot attach files')
+          if (sender.initiator !== targetSession.tmuxName && sender.originFrom !== targetSession.tmuxName) {
+            throw new Error(`private delivery denied — "${target}" is not your parent session`)
+          }
+          // Private reports enter the parent's model context directly. Bound a
+          // noisy or hostile helper so one result cannot consume it wholesale.
+          const maxPrivateTextChars = 64 * 1024
+          const privateText = text.length > maxPrivateTextChars
+            ? `${text.slice(0, maxPrivateTextChars)}\n[private result truncated at ${maxPrivateTextChars} characters]`
+            : text
+          if (msgType === 'result') registerProtocolChildResult(callerSessionId!, targetSession.sessionId, privateText)
+          transport.sendOrQueue(targetSession.sessionId, {
+            type: 'notification',
+            content: `[private ${msgType} from ${sender.tmuxName}] ${privateText}`,
+            meta: { chat_id: threadId, message_id: '', user: sender.tmuxName, user_id: 'session', ts: new Date().toISOString() },
+          })
+          return { content: [{ type: 'text', text: `privately delivered to ${target}` }] }
+        }
         const redirectNote = resolved.replaced
           ? ` (delivered to ${targetSession.tmuxName}, which replaced ${resolved.replaced} in that thread)`
           : ''
@@ -552,6 +663,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
+        }
+
+        // A reviewer result counts as complete only once it was actually posted
+        // to the parent thread; failed sends must not unlock step_passed.
+        if (msgType === 'result' && callerSessionId) {
+          registerProtocolChildResult(callerSessionId, targetSession.sessionId, text)
         }
 
         // Deliver to the target's Claude session so it actually receives the message
@@ -587,7 +704,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         if (callerSessionId && callerSessionId !== 'main') {
           const caller = registry.get(callerSessionId)
-          if (caller && found.originFrom !== caller.tmuxName) {
+          if (caller && found.originFrom !== caller.tmuxName && found.initiator !== caller.tmuxName) {
             throw new Error(`peek denied — "${name}" is not a child of your session`)
           }
         }

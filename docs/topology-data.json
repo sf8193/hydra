@@ -513,6 +513,10 @@
       "shared_constants"
     ],
     [
+      "daemon_bridge-dispatch",
+      "daemon_tool-surface"
+    ],
+    [
       "daemon_bridge-server",
       "daemon_config"
     ],

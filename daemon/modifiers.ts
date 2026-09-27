@@ -153,6 +153,56 @@ register({
   instructions: SECURITY_INSTRUCTIONS,
 })
 
+export const READABILITY_INSTRUCTIONS = [
+  'Review for readability and maintainability only. Correctness and security are settled unless a readability problem actually hides a defect.',
+  '',
+  'Check for:',
+  '- Unclear or misleading names, and names that disagree with behavior',
+  '- Control flow that is hard to follow (deep nesting, tangled branches, hidden early exits)',
+  '- Unnecessary complexity: needless abstraction, indirection, flags, or duplicated logic',
+  '- Functions or modules doing too many things; mixed levels of abstraction',
+  '- Comments that restate code, or missing "why" where the reason is non-obvious',
+  '- Inconsistency with the surrounding code\'s idioms and conventions',
+  '',
+  'For each finding: cite the specific line, say what a reader would misread or struggle with, and give a concrete, smaller rewrite. Skip pure taste — if you can\'t name the comprehension cost, it\'s not a finding.',
+].join('\n')
+
+register({
+  type: 'seed',
+  name: 'readability',
+  aliases: ['r'],
+  target: 'critic',
+  instructions: READABILITY_INSTRUCTIONS,
+})
+
+// Unlike prose lenses, +ponytail is a specialized delegated workflow: the
+// critic hands one private helper the `/ponytail review` skill, verbatim.
+export const PONYTAIL_INSTRUCTIONS = [
+  'Specialized workflow — do NOT treat this as a generic prose lens and do NOT emulate it yourself.',
+  '',
+  'Spawn exactly ONE private helper for this block: `spawn_session(topic, headless=true, read_thread=true, phase_budget="10m", lens="ponytail")`. Quote this entire `+ponytail:` block verbatim in the helper\'s assignment.',
+  '',
+  'Helper assignment (quoted verbatim to the helper):',
+  '- Invoke `/ponytail review` (the ponytail:ponytail-review skill) against the review target, and follow that workflow.',
+  '- Return its structured findings ONLY via `send_to_thread(target=<parent session name>, type="result", visibility="private", text=...)`. The parent is the session that spawned you (normally the critic; in `+subagent` mode, the owner). Never post raw output publicly.',
+  '- If you cannot access or invoke `/ponytail review`, send a private result whose text starts with `UNAVAILABLE: /ponytail review` and a one-line reason. Do NOT substitute a generic review.',
+  '',
+  'Parent reviewer: deduplicate the helper\'s findings into your single top-level `advance()` critique; this lens does not replace your own review. If the helper returns `UNAVAILABLE: /ponytail review`, state that visibly in your critique — never drop the lens silently or emulate it. If the helper exits, times out, or returns no private result, do not advance silently: report `+ponytail: helper returned nothing`, then retry or explain why the requested lens could not complete.',
+].join('\n')
+
+register({
+  type: 'seed',
+  name: 'ponytail',
+  aliases: [],
+  target: 'critic',
+  instructions: PONYTAIL_INSTRUCTIONS,
+})
+
+/** Names of the named review lenses (seed modifiers aimed at the critic), for help/error text. */
+export function listLensNames(): string[] {
+  return [...new Set([...registry.values()].filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic').map(m => m.name))]
+}
+
 // Factory-as-modifier: `spawn +f: topic` / `respawn +f:` apply the factory
 // template. The template itself lives in templates.ts; this just names it.
 register({
@@ -179,4 +229,20 @@ register({
   name: 'no-fallback',
   aliases: ['nf'],
   param: 'noFallback',
+})
+
+// Review lens policy overrides. Ordinary review automatically selects useful
+// private helpers and attempts Ponytail; these flags let callers opt out.
+register({
+  type: 'flag',
+  name: 'no-lenses',
+  aliases: ['nl'],
+  param: 'noAutoLenses',
+})
+
+register({
+  type: 'flag',
+  name: 'no-ponytail',
+  aliases: ['np'],
+  param: 'noPonytail',
 })

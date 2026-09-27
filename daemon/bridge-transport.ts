@@ -183,7 +183,12 @@ export class BridgeTransport {
         const delivery = info.adapter.deliver(info, content, mode, meta)
         if (hasPrefix) {
           void delivery
-            .then(() => { this.takePendingPrefix(sessionId, carriedCount) })
+            .then(result => {
+              // 'rejected' never reached the engine; 'unknown' may not have — a
+              // later duplicate beats silent loss, so only 'accepted' consumes.
+              if (result.status === 'accepted') this.takePendingPrefix(sessionId, carriedCount)
+              else process.stderr.write(`daemon: piggyback carry ${result.status} for ${sessionId}, content stays buffered: ${result.reason}\n`)
+            })
             .catch(err => { process.stderr.write(`daemon: piggyback carry failed for ${sessionId}, content stays buffered: ${err}\n`) })
         } else {
           // Every other delivery path here logs and recovers on failure — this

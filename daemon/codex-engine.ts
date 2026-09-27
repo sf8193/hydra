@@ -34,7 +34,11 @@ export type CodexConn = {
   lastUsageWarning: number  // threshold of last warning sent (0, 50, 70)
   generation: number
   retryTimers: Set<ReturnType<typeof setTimeout>>
+  lastKnownTurnId?: string | null
 }
+
+/** How long a `!` waits for an in-flight turn/start to reveal its turn ID. */
+export const INTERRUPT_START_WAIT_MS = 5000
 
 // Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning', 'contextUsage'
 
@@ -59,6 +63,14 @@ export function parseCodexContextUsage(params: any): { usedTokens: number; conte
   return { usedTokens, contextWindow, percent: Math.min(100, Math.max(0, Math.round(usedTokens * 100 / contextWindow))) }
 }
 
+/** ID of the newest in-progress turn in a thread/resume history, if any. */
+export function activeTurnId(turns: any[]): string | null {
+  return turns.findLast((turn: any) => {
+    const status = turn?.status?.type ?? turn?.status
+    return status === 'inProgress' || status === 'active'
+  })?.id ?? null
+}
+
 // ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
@@ -66,7 +78,42 @@ export function parseCodexContextUsage(params: any): { usedTokens: number; conte
 export class CodexEngine extends EventEmitter {
   private connections = new Map<string, CodexConn>()
   private generations = new Map<string, number>()
-  private scheduling = new Map<string, { steerQueue: string[]; deferredTurnQueue: string[]; fenced: boolean }>()
+  /** In-flight `!` interrupts, so concurrent `!` share one RPC. Never outlives its RPC or conn. */
+  private interrupts = new Map<string, { conn: CodexConn | undefined; run: Promise<boolean> }>()
+  /** Bumped on every turn/start, so a `!` never lands on a turn started after it arrived. */
+  private startSeq = new Map<string, number>()
+  private interruptStartWaitMs = INTERRUPT_START_WAIT_MS
+  private scheduling = new Map<string, {
+    steerQueue: string[]
+    deferredTurnQueue: string[]
+    fenced: boolean
+    reconciling: boolean
+    startState: 'idle' | 'starting' | 'uncertain' | 'stalled'
+    completedWhileStartingTurnIds: Set<string>
+    retryingDeferred: { text: string; attempt: number } | null
+    uncertainDeferredText: string | null
+    uncertainStartAfterTurnId: string | null
+  }>()
+
+  private getScheduling(sessionId: string, conn?: CodexConn) {
+    let scheduling = this.scheduling.get(sessionId)
+    if (!scheduling) {
+      const live = conn ?? this.connections.get(sessionId)
+      scheduling = {
+        steerQueue: live?.steerQueue ?? [],
+        deferredTurnQueue: live?.deferredTurnQueue ?? [],
+        fenced: false,
+        reconciling: false,
+        startState: 'idle',
+        completedWhileStartingTurnIds: new Set(),
+        retryingDeferred: null,
+        uncertainDeferredText: null,
+        uncertainStartAfterTurnId: null,
+      }
+      this.scheduling.set(sessionId, scheduling)
+    }
+    return scheduling
+  }
 
   constructor() {
     super()
@@ -89,6 +136,7 @@ export class CodexEngine extends EventEmitter {
     const result = await this.request(conn, 'thread/start', model ? { model } : {})
     conn.threadId = result.thread?.id
     if (!conn.threadId) throw new Error('codex-engine: thread/start did not return a thread ID')
+    this.drainDeferredTurns(conn)
     return { threadId: conn.threadId, model: result.model ?? model }
   }
 
@@ -99,10 +147,25 @@ export class CodexEngine extends EventEmitter {
     // resumed thread instead of waiting forever for an event we already missed.
     const turns = result.thread?.turns
     if (Array.isArray(turns)) {
-      conn.currentTurnId = turns.findLast((turn: any) => turn.status === 'inProgress')?.id ?? null
+      conn.lastKnownTurnId = turns.at(-1)?.id ?? conn.lastKnownTurnId ?? null
+      conn.currentTurnId = activeTurnId(turns)
       if (conn.currentTurnId) this.resetWatchdog(conn)
-      else if (conn.deferredTurnQueue.length && !this.scheduling.get(sessionId)?.fenced) {
-        this.startDeferredTurn(conn, conn.deferredTurnQueue.shift()!)
+      else this.drainDeferredTurns(conn)
+      const scheduling = this.getScheduling(sessionId, conn)
+      if (scheduling.startState === 'uncertain') {
+        const uncertainText = scheduling.uncertainDeferredText
+        if (!conn.currentTurnId && uncertainText) {
+          const committed = this.findUncertainDelivery(turns, scheduling.uncertainStartAfterTurnId, uncertainText)
+          if (committed === false) scheduling.deferredTurnQueue.unshift(uncertainText)
+          else if (committed === null) return { model: result.model }
+        }
+        scheduling.uncertainDeferredText = null
+        scheduling.uncertainStartAfterTurnId = null
+        scheduling.startState = 'idle'
+        if (!conn.currentTurnId) this.drainDeferredTurns(conn)
+      } else if (scheduling.startState === 'stalled') {
+        scheduling.startState = 'idle'
+        if (!conn.currentTurnId) this.drainDeferredTurns(conn)
       }
     }
     return { model: result.model }
@@ -113,6 +176,7 @@ export class CodexEngine extends EventEmitter {
     const result = await this.request(conn, 'thread/fork', { threadId: parentThreadId, ...(model ? { model } : {}) })
     conn.threadId = result.thread?.id
     if (!conn.threadId) throw new Error('codex-engine: thread/fork did not return a thread ID')
+    this.drainDeferredTurns(conn)
     return { threadId: conn.threadId, model: result.model }
   }
 
@@ -122,8 +186,7 @@ export class CodexEngine extends EventEmitter {
     }
 
     const ws = await this.wsConnect(socketPath)
-    const scheduling = this.scheduling.get(sessionId) ?? { steerQueue: [], deferredTurnQueue: [], fenced: false }
-    this.scheduling.set(sessionId, scheduling)
+    const scheduling = this.getScheduling(sessionId)
     const generation = (this.generations.get(sessionId) ?? 0) + 1
     this.generations.set(sessionId, generation)
     const conn: CodexConn = {
@@ -131,6 +194,7 @@ export class CodexEngine extends EventEmitter {
       nextRequestId: 0, pendingRequests: new Map(),
       messageBuffer: [], steerQueue: scheduling.steerQueue, deferredTurnQueue: scheduling.deferredTurnQueue,
       turnPending: false, turnWatchdog: null, lastUsageWarning: 0, generation, retryTimers: new Set(),
+      lastKnownTurnId: null,
     }
 
     this.connections.set(sessionId, conn)
@@ -156,6 +220,7 @@ export class CodexEngine extends EventEmitter {
 
     if (this.scheduling.get(sessionId)?.fenced) throw new Error(`codex-engine: session ${sessionId} is retiring`)
     conn.turnPending = true
+    this.startSeq.set(sessionId, (this.startSeq.get(sessionId) ?? 0) + 1)
     conn.messageBuffer = []
     try {
       const result = await this.request(conn, 'turn/start', {
@@ -163,7 +228,10 @@ export class CodexEngine extends EventEmitter {
         input: [{ type: 'text', text }],
       })
       if (result?.turn?.id) {
-        conn.currentTurnId = result.turn.id
+        const scheduling = this.getScheduling(sessionId, conn)
+        const completedBeforeResponse = scheduling.completedWhileStartingTurnIds.has(result.turn.id)
+        scheduling.completedWhileStartingTurnIds.clear()
+        if (!completedBeforeResponse) conn.currentTurnId = result.turn.id
         if (this.scheduling.get(sessionId)?.fenced) {
           await this.request(conn, 'turn/interrupt', { threadId: conn.threadId, turnId: conn.currentTurnId })
           conn.currentTurnId = null
@@ -201,45 +269,179 @@ export class CodexEngine extends EventEmitter {
   }
 
   /** Deliver as a distinct future turn, never as input to the current turn. */
-  queueTurn(sessionId: string, text: string): void {
+  queueTurn(sessionId: string, text: string): boolean {
     const conn = this.connections.get(sessionId)
-    if (!conn?.threadId || this.scheduling.get(sessionId)?.fenced) return
-    if (conn.deferredTurnQueue.length >= 50) conn.deferredTurnQueue.shift()
-    conn.deferredTurnQueue.push(text)
-    if (conn.currentTurnId || conn.turnPending) return
-    const first = conn.deferredTurnQueue.shift()!
+    const scheduling = this.getScheduling(sessionId, conn)
+    if (scheduling.fenced) return false
+    // Deliberately unbounded: user messages are never silently evicted.
+    scheduling.deferredTurnQueue.push(text)
+    if (!conn?.threadId) return true
+    if (conn.currentTurnId) {
+      this.reconcileBeforeDeferredDrain(conn)
+      return true
+    }
+    this.drainDeferredTurns(conn)
+    return true
+  }
+
+  /**
+   * Single start gate. Invariant: at most one turn/start in flight; start only
+   * when startState is idle (not starting/uncertain/stalled), no reconciliation
+   * is running, and no turn is active or pending.
+   */
+  private drainDeferredTurns(conn: CodexConn): void {
+    const scheduling = this.getScheduling(conn.sessionId, conn)
+    if (scheduling.fenced || scheduling.reconciling || scheduling.startState !== 'idle' ||
+        !conn.threadId || conn.currentTurnId || conn.turnPending) return
+    const first = scheduling.deferredTurnQueue.shift()
+    if (first === undefined) return
     this.startDeferredTurn(conn, first)
   }
 
+  /**
+   * Both reconcilers share this: fetch authoritative thread history and adopt
+   * its active turn. Returns null when `conn` was replaced meanwhile (its
+   * snapshot must not overwrite the live connection's state).
+   */
+  private async resumeSnapshot(conn: CodexConn): Promise<any[] | null> {
+    const result = await this.request(conn, 'thread/resume', { threadId: conn.threadId })
+    if (this.connections.get(conn.sessionId) !== conn) return null
+    const turns = result?.thread?.turns
+    if (!Array.isArray(turns)) throw new Error('thread/resume returned no turns array')
+    conn.lastKnownTurnId = turns.at(-1)?.id ?? conn.lastKnownTurnId ?? null
+    conn.currentTurnId = activeTurnId(turns)
+    return turns
+  }
+
+  /** Reconcile app-server truth in case a completion notification was missed. */
+  private reconcileBeforeDeferredDrain(conn: CodexConn): void {
+    const scheduling = this.getScheduling(conn.sessionId)
+    if (scheduling.reconciling || scheduling.fenced || !conn.threadId) return
+    scheduling.reconciling = true
+    void this.resumeSnapshot(conn)
+      .catch(err => {
+        process.stderr.write(`codex-engine: deferred queue reconciliation failed for ${conn.sessionId}: ${err}\n`)
+      })
+      .finally(() => {
+        scheduling.reconciling = false
+        if (this.connections.get(conn.sessionId) === conn) this.drainDeferredTurns(conn)
+      })
+  }
+
+  /**
+   * Determine whether an uncertain start appears in authoritative history.
+   * Only exact user-input text on turns newer than the pre-send boundary counts.
+   * null means the supplied history cannot establish that boundary.
+   */
+  private findUncertainDelivery(turns: any[], afterTurnId: string | null, text: string): boolean | null {
+    let candidates = turns
+    if (afterTurnId) {
+      const boundary = turns.findIndex(turn => turn?.id === afterTurnId)
+      if (boundary < 0) return null
+      candidates = turns.slice(boundary + 1)
+    }
+    return candidates.some(turn => {
+      const items = Array.isArray(turn?.items) ? turn.items : []
+      return items.some((item: any) => {
+        const isUser = item?.type === 'userMessage' || item?.type === 'user_message' ||
+          (item?.type === 'message' && item?.role === 'user')
+        if (!isUser) return false
+        if (typeof item.text === 'string' && item.text === text) return true
+        if (typeof item.content === 'string') return item.content === text
+        if (!Array.isArray(item.content)) return false
+        return item.content.some((part: any) => {
+          const isText = part?.type === 'inputText' || part?.type === 'input_text' || part?.type === 'text'
+          return isText && part?.text === text
+        })
+      })
+    })
+  }
+
   private startDeferredTurn(conn: CodexConn, text: string, attempt = 0): void {
-    if (this.scheduling.get(conn.sessionId)?.fenced) return
-    void this.startTurn(conn.sessionId, text).catch(err => {
+    const scheduling = this.getScheduling(conn.sessionId, conn)
+    if (scheduling.fenced) return
+    scheduling.startState = 'starting'
+    scheduling.retryingDeferred = null
+    scheduling.uncertainStartAfterTurnId = conn.lastKnownTurnId ?? null
+    void this.startTurn(conn.sessionId, text).then(() => {
+      if (this.connections.get(conn.sessionId) !== conn || scheduling.fenced) return
+      scheduling.retryingDeferred = null
+      scheduling.startState = 'idle'
+      this.drainDeferredTurns(conn)
+    }).catch(err => {
       const current = this.connections.get(conn.sessionId)
+      // JSON-RPC error responses carry "(code N)"; timeouts/closed sockets don't,
+      // so their outcome is unknown and must be reconciled, not replayed.
       const definitelyRejected = /\(code\s+-?\d+\)/.test(String(err))
       if (!definitelyRejected) {
+        scheduling.startState = 'uncertain'
+        scheduling.uncertainDeferredText = text
         this.emit('turnDeliveryUnknown', conn.sessionId, text, err)
+        // The socket may have dropped and been replaced; reconcile on the live conn.
+        this.reconcileUnknownDeferredStart(this.connections.get(conn.sessionId) ?? conn)
         return
       }
       if (!current) return
       if (attempt < 2) {
         const delay = 250 * (attempt + 1)
         process.stderr.write(`codex-engine: deferred turn failed for ${conn.sessionId}, retrying in ${delay}ms: ${err}\n`)
+        scheduling.retryingDeferred = { text, attempt: attempt + 1 }
         const timer = setTimeout(() => {
           conn.retryTimers.delete(timer)
+          scheduling.retryingDeferred = null
           const live = this.connections.get(conn.sessionId)
-          if (live === conn && !this.scheduling.get(conn.sessionId)?.fenced && !live.currentTurnId && !live.turnPending) {
+          if (live === conn && !scheduling.fenced && !live.currentTurnId && !live.turnPending) {
             this.startDeferredTurn(live, text, attempt + 1)
-          } else if (!this.scheduling.get(conn.sessionId)?.fenced) {
-            this.scheduling.get(conn.sessionId)?.deferredTurnQueue.unshift(text)
+          } else if (!scheduling.fenced) {
+            scheduling.deferredTurnQueue.unshift(text)
+            scheduling.startState = 'idle'
+            if (live) this.drainDeferredTurns(live)
           }
         }, delay)
         ;(conn.retryTimers ??= new Set()).add(timer)
         return
       }
-      current.deferredTurnQueue.unshift(text)
+      scheduling.deferredTurnQueue.unshift(text)
+      scheduling.completedWhileStartingTurnIds.clear()
+      scheduling.retryingDeferred = null
+      scheduling.startState = 'stalled'
       process.stderr.write(`codex-engine: deferred turn failed for ${conn.sessionId} after 3 attempts: ${err}\n`)
       this.emit('turnStalled', conn.sessionId)
     })
+  }
+
+  private reconcileUnknownDeferredStart(conn: CodexConn): void {
+    const scheduling = this.getScheduling(conn.sessionId, conn)
+    if (!conn.threadId || scheduling.fenced) return
+    scheduling.reconciling = true
+    void this.resumeSnapshot(conn)
+      .then(turns => {
+        if (!turns) return
+        const uncertainText = scheduling.uncertainDeferredText
+        // An active turn immediately after an ambiguous start is assumed to be
+        // that start; replaying here would create a concurrent duplicate.
+        if (!conn.currentTurnId && uncertainText) {
+          const committed = this.findUncertainDelivery(turns, scheduling.uncertainStartAfterTurnId, uncertainText)
+          if (committed === false) scheduling.deferredTurnQueue.unshift(uncertainText)
+          else if (committed === null) throw new Error('thread history does not contain the pre-start boundary')
+        }
+        scheduling.uncertainDeferredText = null
+        scheduling.uncertainStartAfterTurnId = null
+        scheduling.completedWhileStartingTurnIds.clear()
+        scheduling.startState = 'idle'
+      })
+      .catch(err => {
+        process.stderr.write(`codex-engine: unknown deferred start reconciliation failed for ${conn.sessionId}: ${err}\n`)
+        // A reconnect's resume already reconciled; a dead socket's failure must not re-block it.
+        if (this.connections.get(conn.sessionId) !== conn) return
+        scheduling.startState = 'uncertain'
+        this.emit('turnStalled', conn.sessionId)
+      })
+      .finally(() => {
+        scheduling.reconciling = false
+        const live = this.connections.get(conn.sessionId)
+        if (live) this.drainDeferredTurns(live)
+      })
   }
 
   disconnect(sessionId: string): void {
@@ -248,6 +450,12 @@ export class CodexEngine extends EventEmitter {
     if (conn.turnWatchdog) clearTimeout(conn.turnWatchdog)
     for (const timer of conn.retryTimers) clearTimeout(timer)
     conn.retryTimers.clear()
+    const scheduling = this.getScheduling(sessionId, conn)
+    if (scheduling.retryingDeferred) {
+      scheduling.deferredTurnQueue.unshift(scheduling.retryingDeferred.text)
+      scheduling.retryingDeferred = null
+      scheduling.startState = 'idle'
+    }
     this.rejectAllPending(conn, 'disconnected')
     this.connections.delete(sessionId)
     try { conn.ws.close() } catch {}
@@ -260,11 +468,10 @@ export class CodexEngine extends EventEmitter {
   /** Fence scheduling and interrupt the active turn with server acknowledgement. */
   async retireSession(sessionId: string): Promise<boolean> {
     const conn = this.connections.get(sessionId)
-    const scheduling = this.scheduling.get(sessionId) ?? { steerQueue: [], deferredTurnQueue: [], fenced: true }
+    const scheduling = this.getScheduling(sessionId, conn)
     scheduling.fenced = true
     scheduling.steerQueue.length = 0
     scheduling.deferredTurnQueue.length = 0
-    this.scheduling.set(sessionId, scheduling)
     if (!conn) return false
     conn.steerQueue.length = 0
     conn.deferredTurnQueue.length = 0
@@ -279,6 +486,38 @@ export class CodexEngine extends EventEmitter {
       return false
     }
     conn.currentTurnId = null
+    return true
+  }
+
+  /**
+   * `!` interrupt: acknowledged turn/interrupt of the active turn. Unlike
+   * retirement it neither fences nor clears currentTurnId, so queued turns
+   * drain only on the interrupted turn's turn/completed.
+   * ponytail: bounded wait instead of the v5/v6 pending-start intent record.
+   * A `!` during a start that takes longer than INTERRUPT_START_WAIT_MS, or an
+   * uncertain start, interrupts nothing; its message still queues behind it.
+   */
+  interruptActiveTurn(sessionId: string): Promise<boolean> {
+    const conn = this.connections.get(sessionId)
+    const inFlight = this.interrupts.get(sessionId)
+    // A socket replaced mid-RPC leaves that promise pending until timeout; don't share it.
+    if (inFlight && inFlight.conn === conn) return inFlight.run
+    const entry = { conn, run: this.interruptAfterStart(sessionId) }
+    entry.run = entry.run.finally(() => { if (this.interrupts.get(sessionId) === entry) this.interrupts.delete(sessionId) })
+    this.interrupts.set(sessionId, entry)
+    return entry.run
+  }
+
+  private async interruptAfterStart(sessionId: string): Promise<boolean> {
+    const seq = this.startSeq.get(sessionId)
+    const deadline = Date.now() + this.interruptStartWaitMs
+    const starting = () => !!this.connections.get(sessionId)?.turnPending || this.scheduling.get(sessionId)?.startState === 'starting'
+    while (starting() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+    // A later start (next queued turn, steer, retry) means the targeted turn is gone.
+    if (this.startSeq.get(sessionId) !== seq) return false
+    const conn = this.connections.get(sessionId)
+    if (!conn?.threadId || !conn.currentTurnId || this.scheduling.get(sessionId)?.fenced) return false
+    await this.request(conn, 'turn/interrupt', { threadId: conn.threadId, turnId: conn.currentTurnId })
     return true
   }
 
@@ -306,13 +545,10 @@ export class CodexEngine extends EventEmitter {
       const result = await this.request(conn, 'thread/resume', { threadId })
       const thread = result?.thread
       const turns = Array.isArray(thread?.turns) ? thread.turns : []
-      const active = [...turns].reverse().find((turn: any) => {
-        const status = turn?.status?.type ?? turn?.status
-        return status === 'inProgress' || status === 'active'
-      }) ?? (thread?.status?.type === 'active' ? turns.at(-1) : undefined)
+      const activeId = activeTurnId(turns) ?? (thread?.status?.type === 'active' ? turns.at(-1)?.id : undefined)
       // A successfully resumed thread with no active turn is already terminal.
-      if (!active?.id) return true
-      await this.request(conn, 'turn/interrupt', { threadId, turnId: active.id })
+      if (!activeId) return true
+      await this.request(conn, 'turn/interrupt', { threadId, turnId: activeId })
       return true
     } finally {
       this.rejectAllPending(conn, 'cleanup connection closed')
@@ -490,8 +726,10 @@ export class CodexEngine extends EventEmitter {
   }
 
   private handleServerRequest(conn: CodexConn, id: number, method: string): void {
-    // Auto-approve — codex spawns with full sandbox_permissions, so these are rare fallbacks.
-    // TODO: integrate with daemon/permission.ts for production approval flow
+    // Auto-approve: the app-server runs with approval_policy="never" and
+    // sandbox_mode="danger-full-access" (codex-process.ts), matching Claude's
+    // --dangerously-skip-permissions, so these requests are rare fallbacks and
+    // accepting them is parity, not a missing approval flow.
     if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') {
       process.stderr.write(`codex-engine: auto-approved ${method} for ${conn.sessionId}\n`)
       this.emit('autoApproved', conn.sessionId, method)
@@ -516,9 +754,11 @@ export class CodexEngine extends EventEmitter {
           break
         }
         conn.currentTurnId = params.turn?.id ?? params.turnId ?? null
+        conn.lastKnownTurnId = conn.currentTurnId ?? conn.lastKnownTurnId
         if (conn.steerQueue.length > 0 && conn.currentTurnId && conn.threadId) {
           for (const text of conn.steerQueue) this.sendSteer(conn, text)
-          conn.steerQueue = []
+          // Truncate in place: conn and scheduling share this array across reconnects.
+          conn.steerQueue.length = 0
         }
         // Start turn watchdog — fires if no activity for 20 minutes
         this.resetWatchdog(conn)
@@ -550,16 +790,27 @@ export class CodexEngine extends EventEmitter {
         if (params.threadId && conn.threadId && params.threadId !== conn.threadId) break
         {
           const completedTurnId = params.turn?.id ?? params.turnId
+          if (completedTurnId) conn.lastKnownTurnId = completedTurnId
+          if (completedTurnId && conn.turnPending && !conn.currentTurnId) {
+            this.getScheduling(conn.sessionId, conn).completedWhileStartingTurnIds.add(completedTurnId)
+            break
+          }
           if (completedTurnId && conn.currentTurnId && completedTurnId !== conn.currentTurnId) break
         }
         if (conn.turnWatchdog) { clearTimeout(conn.turnWatchdog); conn.turnWatchdog = null }
+        {
+          const scheduling = this.getScheduling(conn.sessionId, conn)
+          const id = params.turn?.id ?? params.turnId ?? conn.currentTurnId
+          if (scheduling.startState === 'starting' && conn.turnPending && id) {
+            scheduling.completedWhileStartingTurnIds.add(id)
+          }
+        }
         conn.currentTurnId = null
         if (this.scheduling.get(conn.sessionId)?.fenced) {
           conn.deferredTurnQueue.length = 0
           conn.steerQueue.length = 0
         } else if (conn.deferredTurnQueue.length > 0) {
-          const first = conn.deferredTurnQueue.shift()!
-          this.startDeferredTurn(conn, first)
+          this.drainDeferredTurns(conn)
         } else {
           this.emit('turnCompleted', conn.sessionId)
         }

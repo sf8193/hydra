@@ -537,8 +537,9 @@ describe('progress board', () => {
     expect(driftLine).not.toContain('ctx ')
     // The decision deadline stays — coarse enough not to mislead, and its own
     // countdown is what keeps the ticker alive to refresh it. Trails the ticket,
-    // matching how adoption notices render the same deadline.
-    expect(driftLine).toMatch(/^ {2}🌊 drift · divergences #5\+#6 · awaiting_pm \(fb-55\) · decide within \d+[hd]$/)
+    // matching how adoption notices render the same deadline. Remaining time is
+    // "1d" only if rendered in the arming millisecond, else "23h 59m".
+    expect(driftLine).toMatch(/^ {2}🌊 drift · divergences #5\+#6 · awaiting_pm \(fb-55\) · decide within (1d|23h 59m)$/)
     // The build still working keeps its clock and context.
     expect(flintLine).toMatch(/flint · dashboard P2\+P3 · building · \d+[smh]/)
   })

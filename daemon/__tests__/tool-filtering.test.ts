@@ -1,11 +1,19 @@
 import { describe, test, expect } from 'bun:test'
-import { computeToolsForSession, UNIVERSAL_TOOLS } from '../bridge-tools.js'
+import { codexStaticTools, computeToolsForSession, UNIVERSAL_TOOLS } from '../bridge-tools.js'
 import { BASE_TOOLS, CAPABILITY_TOOLS } from '../../shared/constants.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
 
 describe('computeToolsForSession', () => {
+  test('Codex advertises dynamic protocol tools for daemon-side authorization', () => {
+    const names = codexStaticTools().map(t => t.name)
+    expect(names).toContain('advance')
+    expect(names).toContain('extend_phase')
+    expect(names).toContain('spawn_session')
+    expect(names).toContain('kill_session')
+  })
+
   test('master_orchestrator gets orchestrator tools but not factory_done', () => {
     const tools = computeToolsForSession('master_orchestrator', new Set())
     const names = tools.map(t => t.name)
@@ -20,7 +28,7 @@ describe('computeToolsForSession', () => {
     expect(names).not.toContain('extend_phase')
   })
 
-  test('thread_owner does NOT get orchestrator-only tools', () => {
+  test('thread_owner gets spawn/kill but not factory tools', () => {
     const tools = computeToolsForSession('thread_owner', new Set())
     const names = tools.map(t => t.name)
     expect(names).toContain('reply')
@@ -29,8 +37,16 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('set_description')
     expect(names).toContain('send_to_thread')
     expect(names).toContain('peek_session')
-    expect(names).not.toContain('spawn_session')
-    expect(names).not.toContain('kill_session')
+    expect(names).toContain('spawn_session')
+    expect(names).toContain('kill_session')
+    expect(names).not.toContain('factory_build')
+  })
+
+  test('protocol_spawn grants only spawn/kill from the orchestrator-only tools', () => {
+    const names = computeToolsForSession('thread_owner', new Set(['protocol_spawn'])).map(t => t.name)
+    expect(names).toContain('spawn_session')
+    expect(names).toContain('kill_session')
+    expect(names).not.toContain('factory_build')
   })
 
   test('factory_builder gets restricted tool set with factory_done', () => {
@@ -55,8 +71,8 @@ describe('computeToolsForSession', () => {
   test('spawn_session and kill_session only in master_orchestrator base set', () => {
     expect(BASE_TOOLS.master_orchestrator.has('spawn_session')).toBe(true)
     expect(BASE_TOOLS.master_orchestrator.has('kill_session')).toBe(true)
-    expect(BASE_TOOLS.thread_owner.has('spawn_session')).toBe(false)
-    expect(BASE_TOOLS.thread_owner.has('kill_session')).toBe(false)
+    expect(BASE_TOOLS.thread_owner.has('spawn_session')).toBe(true)
+    expect(BASE_TOOLS.thread_owner.has('kill_session')).toBe(true)
     expect(BASE_TOOLS.thread_guest.has('spawn_session')).toBe(false)
     expect(BASE_TOOLS.thread_guest.has('kill_session')).toBe(false)
   })
@@ -93,7 +109,7 @@ describe('computeToolsForSession', () => {
 
   test('BASE_TOOLS sizes match design spec', () => {
     expect(BASE_TOOLS.master_orchestrator.size).toBe(22)
-    expect(BASE_TOOLS.thread_owner.size).toBe(13)
+    expect(BASE_TOOLS.thread_owner.size).toBe(15)
     expect(BASE_TOOLS.thread_guest.size).toBe(8)
     expect(BASE_TOOLS.factory_builder.size).toBe(6)
   })

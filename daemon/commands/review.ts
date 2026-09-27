@@ -2,7 +2,7 @@ import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
-import { resolveModifiers, partitionFlagModifiers } from '../modifiers.js'
+import { resolveModifiers, partitionFlagModifiers, listLensNames } from '../modifiers.js'
 import type { InboundMessage } from '../../gateway.js'
 import { normalizeReviewRounds } from '../../shared/constants.js'
 
@@ -46,7 +46,7 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
   if (modifierNames && modifierNames.length > 0) {
     const { resolved, unknown } = resolveModifiers(modifierNames)
     if (unknown.length > 0) {
-      await gateway.send(msg.channelId, `Unknown modifier${unknown.length > 1 ? 's' : ''}: ${unknown.map(p => `\`+${p}\``).join(', ')}`, { replyTo: msg.id })
+      await gateway.send(msg.channelId, `Unknown modifier${unknown.length > 1 ? 's' : ''}: ${unknown.map(p => `\`+${p}\``).join(', ')}. Lenses are automatic. Force: ${listLensNames().map(n => `\`+${n}\``).join(' ')}. Opt out: \`+no-ponytail\` or \`+no-lenses\`.`, { replyTo: msg.id })
       return
     }
     const { params, rest } = partitionFlagModifiers(resolved)
@@ -63,12 +63,23 @@ export async function handleReviewIntercept(msg: InboundMessage, rounds: number,
     return
   }
 
+  const forcedLensNames = (resolvedMods ?? []).map(mod => mod.name)
+  if (flagParams.noAutoLenses && forcedLensNames.length > 0) {
+    await gateway.send(msg.channelId, `\`+no-lenses\` contradicts explicitly requested lenses (${forcedLensNames.map(name => `\`+${name}\``).join(' ')}). Remove the positive lenses or use \`+no-ponytail\` to disable only the default Ponytail helper.`, { replyTo: msg.id })
+    return
+  }
+  if (flagParams.noPonytail && forcedLensNames.includes('ponytail')) {
+    await gateway.send(msg.channelId, `\`+no-ponytail\` contradicts \`+ponytail\`. Pick one.`, { replyTo: msg.id })
+    return
+  }
+
   try {
     const proto = await getReviewProto()
     await startProtocolRun(proto, threadId, sessionId, {
       rounds: clampedRounds, topic, model, engine,
       modifiers: resolvedMods,
       strike: true,
+      autoReviewLenses: true,
       ...flagParams,
     })
   } catch (err) {

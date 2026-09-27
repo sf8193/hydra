@@ -649,6 +649,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const engine = opts?.engine ?? 'claude'
 
   // --- Launch via engine adapter ---
+  // Private protocol children use this hook to install their fail-closed policy
+  // before the process receives its prompt or can connect to bridge tools.
+  opts?.beforeInitialTurn?.(sessionId)
   const adapter = resolveEngine(engine)
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
@@ -737,9 +740,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   })
 
   if (isHeadless) {
-    const parentInfo = opts?.initiator ? registry.findByName(opts.initiator) : undefined
-    if (parentInfo) {
-      void safeSend(parentInfo.threadId, `${spawnLine}\n_↳ headless worker_`)
+    if (!opts?.quiet) {
+      const parentInfo = opts?.initiator ? registry.findByName(opts.initiator) : undefined
+      if (parentInfo) {
+        void safeSend(parentInfo.threadId, `${spawnLine}\n_↳ headless worker_`)
+      }
     }
   } else {
     refreshSessionVisual(threadId!, { state: respawnCount > 0 ? 'zombie' : 'live' })

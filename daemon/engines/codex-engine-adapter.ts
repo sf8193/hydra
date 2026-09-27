@@ -19,7 +19,7 @@ import type {
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 import { parseContextPercent, tmuxHasSession } from '../util.js'
-import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
+import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -54,6 +54,10 @@ export class CodexEngineAdapter implements EngineAdapter {
     process.stderr.write(`daemon: codex spawning durable app-server for ${tmuxName}\n`)
     startCodexAppServer({ homeName: codexHomeName, cwd: effectiveCwd, logPath: spawnLogPath, model })
 
+    // The launch prompt is FIFO item zero. Queue it before establishing the
+    // thread so every later user message uses the same turn scheduler.
+    this.engine.queueTurn(sessionId, prompt)
+
     // Connect to the app-server socket with retry
     const start = Date.now()
     let codexThreadId: string | null = null
@@ -84,10 +88,6 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
     process.stderr.write(`daemon: codex connected for ${tmuxName}, thread=${codexThreadId}\n`)
 
-    void this.engine.startTurn(sessionId, prompt).catch(err => {
-      process.stderr.write(`daemon: codex startTurn failed for ${tmuxName}: ${err}\n`)
-    })
-
     return {
       provider: 'codex', model: resolvedModel ?? 'codex-default',
       codexThreadId, spawnLogPath,
@@ -95,6 +95,19 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
+    // Enrich before transferring ownership to the queue, including while the
+    // app-server connection is absent.
+    let deliveryText = text
+    const downloadedFiles = meta?.downloaded_files
+    if (downloadedFiles) deliveryText += `\n\n[attachments: ${downloadedFiles}]`
+
+    if (mode === 'next-turn') {
+      const accepted = this.engine.queueTurn(info.sessionId, deliveryText)
+      return accepted
+        ? { status: 'accepted', via: 'queued-turn' }
+        : { status: 'rejected', retryable: false, reason: 'session is retiring' }
+    }
+
     // ponytail: poll up to 15s for codex connection — covers spawn race where
     // kickoff fires before WebSocket is established. Upgrade to event-driven if
     // 15s proves too short or polling is too frequent.
@@ -106,9 +119,11 @@ export class CodexEngineAdapter implements EngineAdapter {
       }
       if (!connected) {
         // Queue for delivery when connection arrives rather than dropping
-        this.engine.queueTurn(info.sessionId, text)
+        const accepted = this.engine.queueTurn(info.sessionId, deliveryText)
         process.stderr.write(`daemon: codex adapter queued message for ${info.tmuxName} (not connected after 15s)\n`)
-        return { status: 'accepted', via: 'queued-turn' }
+        return accepted
+          ? { status: 'accepted', via: 'queued-turn' }
+          : { status: 'rejected', retryable: false, reason: 'session is retiring' }
       }
     }
     if (text === '[system] keepalive') {
@@ -116,15 +131,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
     // Enrich with attachment paths so Codex can view images/files
     // (mirrors sendOrQueue's downloaded_files enrichment)
-    let steerText = text
-    const downloadedFiles = meta?.downloaded_files
-    if (downloadedFiles) steerText += `\n\n[attachments: ${downloadedFiles}]`
-
-    if (mode === 'next-turn') {
-      this.engine.queueTurn(info.sessionId, steerText)
-      return { status: 'accepted', via: 'queued-turn' }
-    }
-    this.engine.steer(info.sessionId, steerText)
+    this.engine.steer(info.sessionId, deliveryText)
     return { status: 'accepted', via: 'steer' }
   }
 
@@ -245,18 +252,17 @@ export class CodexEngineAdapter implements EngineAdapter {
     const action: TmuxKeyAction = opts?.raw
       ? { target, mode: 'raw', keys: keys.split(/\s+/) }
       : { target, mode: 'literal', text: keys, trailingKey: opts?.trailingKey }
-    if (info.turnState === 'working') {
-      return new Promise((resolve, reject) => {
-        queueCodexKeys(info.sessionId, action, (err) => {
-          if (err) reject(err); else resolve({ queued: true })
-        })
-      })
-    }
     await sendTmuxKeys(action)
     return { queued: false }
   }
 
   async interrupt(info: SessionInfo): Promise<void> {
+    // Connected: acknowledged app-server interrupt; the next queued turn still
+    // waits for the interrupted turn's completion. Otherwise fall back to the TUI.
+    if (this.engine.isConnected(info.sessionId)) {
+      await this.engine.interruptActiveTurn(info.sessionId)
+      return
+    }
     const target = `${info.tmuxName}:hydra-chat`
     Bun.spawn(['tmux', 'send-keys', '-t', target, 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
   }

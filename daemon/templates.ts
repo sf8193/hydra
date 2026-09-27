@@ -232,7 +232,7 @@ export async function runTemplateAction(
     case 'review': {
       const { default: reviewProto } = await import('../protocols/review.js')
       const { startProtocolRun } = await import('./protocol-runner.js')
-      await startProtocolRun(reviewProto, threadId, sessionId, { rounds: DEFAULT_REVIEW_ROUNDS, topic, strike: true })
+      await startProtocolRun(reviewProto, threadId, sessionId, { rounds: DEFAULT_REVIEW_ROUNDS, topic, strike: true, autoReviewLenses: true })
       return true
     }
     default:
