@@ -4,7 +4,7 @@
 // implements this interface. The adapter instance lives on SessionInfo so
 // callers just call info.adapter.deliver(...) — no dispatch logic needed.
 
-import type { SessionInfo } from '../sessions.js'
+import type { SessionInfo, SpawnOpts } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { TurnOutcome } from '../observability.js'
 export type { BlockingState } from '../pane-probe.js'
@@ -94,6 +94,19 @@ export type LaunchResult = {
 }
 
 // ---------------------------------------------------------------------------
+// Recovery
+// ---------------------------------------------------------------------------
+
+export type RecoverySource = { tmuxName: string; claudeSessionId?: string; codexThreadId?: string; codexHomeName?: string }
+export type RecoveryPlan = {
+  resume:
+    | { kind: 'await-bridge'; resumeFrom: string }                                // relaunch takes no prompt; confirmed when its bridge registers
+    | { kind: 'at-launch'; resumeCodex: { threadId: string; homeName: string } }  // launch resumes and takes the prompt
+    | null
+  fork: NonNullable<SpawnOpts['forkFrom']> | null
+}
+
+// ---------------------------------------------------------------------------
 // Engine adapter interface
 // ---------------------------------------------------------------------------
 
@@ -145,6 +158,11 @@ export interface EngineAdapter {
 
   // Boot — reconnect to surviving execution after daemon restart
   reconnect(info: SessionInfo): Promise<boolean>
+
+  // Native continuation of a gone session. Pure: spawns nothing; respawn is the
+  // neutral last tier. resume.kind says how a resume is confirmed, so callers
+  // pick the executor from the plan, not from the provider.
+  recoveryPlan(src: RecoverySource): RecoveryPlan
 }
 
 // Compat — flat serializable ref used by retirement journal persistence

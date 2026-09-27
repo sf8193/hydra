@@ -15,7 +15,7 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
-  ContextUsage,
+  ContextUsage, RecoverySource, RecoveryPlan,
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
@@ -49,6 +49,18 @@ export class CodexEngineAdapter implements EngineAdapter {
   readonly deliveryIsFree = false
   readonly channel = 'engine' as const
   constructor(private readonly engine: CodexEngine, private readonly proc = codexLaunchProcess) {}
+
+  // Launch resumes the thread in its original CODEX_HOME and takes the prompt.
+  // A stray claudeSessionId is ignored (PINNED R9; PR-IDENT).
+  recoveryPlan(s: RecoverySource): RecoveryPlan {
+    const t = s.codexThreadId
+    if (!t) return { resume: null, fork: null }
+    const home = s.codexHomeName ?? s.tmuxName
+    return {
+      resume: { kind: 'at-launch', resumeCodex: { threadId: t, homeName: home } },
+      fork: { codexThreadId: t, codexHomeName: home, parentName: s.tmuxName },
+    }
+  }
 
   // PINNED C1: always true, as transport.has() answered before S2. Reporting
   // this.engine.isConnected is PR-CONN (needs disconnect-time grace first).

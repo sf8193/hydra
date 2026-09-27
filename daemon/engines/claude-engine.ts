@@ -13,7 +13,7 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
-  ContextUsage,
+  ContextUsage, RecoverySource, RecoveryPlan,
 } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
@@ -96,6 +96,14 @@ export class ClaudeEngine implements EngineAdapter {
   readonly deliveryIsFree = true
   readonly channel = 'bridge' as const
   constructor(private readonly transport: BridgeTransport) {}
+
+  // Resume relaunches with --resume and is confirmed when the bridge registers.
+  recoveryPlan(s: RecoverySource): RecoveryPlan {
+    const id = s.claudeSessionId
+    return id
+      ? { resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
+      : { resume: null, fork: null }
+  }
 
   isConnected(info: SessionInfo): boolean {
     return this.transport.bridges.has(info.sessionId)

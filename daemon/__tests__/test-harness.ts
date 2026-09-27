@@ -449,6 +449,7 @@ export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdap
     refreshIdentity: () => null,
     activityAt: () => null,
     turnOutcome: () => ({ confirmedComplete: false, answer: () => null }),
+    recoveryPlan: () => ({ resume: null, fork: null }),
     ...overrides,
   } as unknown as EngineAdapter
 }
