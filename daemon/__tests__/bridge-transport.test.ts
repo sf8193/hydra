@@ -210,7 +210,8 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
   // exactly the shape that broke list-display.test.ts's isAlive()-filtered
   // render in CI (order-dependent: only showed up when this file ran first).
   afterEach(() => {
-    for (let i = 1; i <= 15; i++) registry.delete(`s${i}`)
+    // Every sN this file registers, not a hardcoded count that silently goes stale.
+    for (const info of [...registry.values()]) if (/^s\d+$/.test(info.sessionId)) registry.delete(info.sessionId)
   })
 
   test('buffered content prepends onto the next allowPiggyback delivery', () => {
