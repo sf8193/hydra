@@ -146,7 +146,7 @@ let duplicateMainIncumbentSocket: import('net').Socket | undefined
 
 /** Role of a registering bridge connection: 'control' (tool-only sidecar) or 'session'. */
 export function connectionRoleFor(msg: { connectionRole?: unknown }, info: SessionInfo | undefined): 'control' | 'session' {
-  return msg.connectionRole === 'control' || info?.engine === 'codex' ? 'control' : 'session'
+  return msg.connectionRole === 'control' || info?.adapter?.channel === 'engine' ? 'control' : 'session'
 }
 
 function handleBridgeMessage(conn: BridgeConn, raw: string): void {

@@ -46,6 +46,7 @@ export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startC
 export class CodexEngineAdapter implements EngineAdapter {
   readonly provider = 'codex' as const
   readonly deliveryIsFree = false
+  readonly channel = 'engine' as const
   constructor(private readonly engine: CodexEngine, private readonly proc = codexLaunchProcess) {}
 
   // PINNED C1: always true, as transport.has() answered before S2. Reporting

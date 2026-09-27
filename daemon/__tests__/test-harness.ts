@@ -443,6 +443,7 @@ export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdap
   return {
     provider: 'claude',
     deliveryIsFree: true,
+    channel: 'bridge',
     isConnected: (info: SessionInfo) => transport.bridges.has(info.sessionId),
     refreshIdentity: () => null,
     ...overrides,

@@ -96,6 +96,10 @@ export interface EngineAdapter {
   // (Codex). Callers deciding whether to buffer/piggyback low-priority
   // notifications should ask this, not special-case a provider name.
   readonly deliveryIsFree: boolean
+  // How the session's tools and traffic reach it: 'bridge' = the daemon bridge
+  // socket (Claude); 'engine' = the engine's own protocol, where any daemon-socket
+  // registration is a control-plane MCP sidecar with its own tools (Codex).
+  readonly channel: 'bridge' | 'engine'
 
   // Lifecycle
   launch(input: LaunchInput): Promise<LaunchResult>

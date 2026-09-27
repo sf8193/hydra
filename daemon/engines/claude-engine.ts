@@ -93,6 +93,7 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
   readonly deliveryIsFree = true
+  readonly channel = 'bridge' as const
   constructor(private readonly transport: BridgeTransport) {}
 
   isConnected(info: SessionInfo): boolean {

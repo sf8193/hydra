@@ -14,6 +14,7 @@ import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
+import type { EngineAdapter } from './engines/engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -170,8 +171,8 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 
 /** Tool names recorded in a spawn's sessionMetadata. Codex sessions discover
  *  tools via their own MCP sidecar, not the daemon bridge. */
-export function spawnToolNames(engine: string, spawnType: SessionType): string[] {
-  return engine === 'claude' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : []
+export function spawnToolNames(adapter: EngineAdapter, spawnType: SessionType): string[] {
+  return adapter.channel === 'bridge' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : []
 }
 
 export function resolveListenState(threadId: string, channelId?: string): boolean {
@@ -677,7 +678,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const sessionMetadata = {
     role: 'worker' as const,
-    tools: spawnToolNames(engine, spawnType),
+    tools: spawnToolNames(adapter, spawnType),
     model: launched.model,
     cwd: effectiveCwd,
     platform: PLATFORM,
