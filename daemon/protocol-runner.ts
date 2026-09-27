@@ -1638,6 +1638,7 @@ export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
       privateProtocolChildren, pendingPrivateProtocolChildren, markPrivateChildLaunching, finishPrivateChildLaunch, releasePrivateChildWhenGone, registerRunnerHooks, setRunTools, registerChild, retireProtocolChildren, enterFallbackPhase,
+      notifyNextActor, notifyActorOfTimeout, notifyParticipant,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
