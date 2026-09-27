@@ -147,7 +147,6 @@ export interface EngineAdapter {
   // (not deadAt) → piggyback buffer; else steer, or queue a turn when handoff
   // or deferUntilTurnComplete, carrying buffered content when allowPiggyback.
   deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult>
-  retire(info: SessionInfo, reason: string): Promise<ExecutionRetirementResult>
   stop(info: SessionInfo): Promise<StopResult>
 
   // Observation

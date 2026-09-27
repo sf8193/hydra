@@ -12,7 +12,7 @@ import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
-  ExecutionRetirementResult, StopResult,
+  StopResult,
   ContextUsage, RecoverySource, RecoveryPlan, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
@@ -252,10 +252,6 @@ export class ClaudeEngine implements EngineAdapter {
       // Not 'unknown': that would surface a delivery:failed warning (#378) for
       // a message the transport still owns.
       : { status: 'accepted', via: 'requeued' }
-  }
-
-  async retire(_info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
-    return { status: 'unknown', reason: 'Claude has no native retirement mechanism' }
   }
 
   async stop(info: SessionInfo): Promise<StopResult> {

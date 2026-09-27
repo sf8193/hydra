@@ -40,7 +40,3 @@ export function completePendingRetirement(ownershipGeneration: string): void {
 }
 
 export function listPendingRetirements(): PendingRetirement[] { return load() }
-
-export function hasPendingRetirementForHome(homeName: string): boolean {
-  return load().some(e => e.provider === 'codex' && e.codexHomeName === homeName)
-}

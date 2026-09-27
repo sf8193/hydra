@@ -212,7 +212,8 @@ export class CodexEngineAdapter implements EngineAdapter {
     return this.engine.steer(info.sessionId, deliveryText)
   }
 
-  async retire(info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
+  // No callers; kept for the deferred lifecycle track.
+  private async retire(info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
     try {
       await this.engine.retireSession(info.sessionId)
     } catch {}
