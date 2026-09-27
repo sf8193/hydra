@@ -19,6 +19,7 @@ import { transport, type BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
 import { projectDirName, projectsRoot } from '../usage.js'
+import { claudeTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
@@ -109,6 +110,10 @@ export class ClaudeEngine implements EngineAdapter {
 
   activityAt(info: SessionInfo): number | null {
     try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
+  }
+
+  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
+    return claudeTurnOutcome(info, sinceMs, defaultTurnSources)
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {

@@ -89,27 +89,49 @@ export type TurnSources = {
 // answer(): the session's last clean answer given after sinceMs, or null.
 export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): string | null }
 
-// Reply guard's composition (F1s/F2s). The discriminator is the presence of
-// claudeSessionId, not the engine: a Codex record holding one relays the
-// transcript and never falls through to the event path (PINNED R9). The flag is
+// The live sources. Adapters read them through this object at call time, so a
+// test can swap members and see the adapters follow.
+export const defaultTurnSources: TurnSources = {
+  transcriptPathFor: (id) => transcriptPathFor(id),
+  readConversationForensics: (p) => readConversationForensics(p),
+  getLastCodexMessage: (sid, since) => getLastCodexMessage(sid, since),
+  isCodexTurnComplete: (sid) => isCodexTurnComplete(sid),
+}
+
+type TurnInfo = Pick<SessionInfo, 'sessionId' | 'claudeSessionId'>
+
+// The transcript's last assistant text, if complete and given after sinceMs.
+function transcriptAnswer(claudeSessionId: string, sinceMs: number, src: TurnSources): string | null {
+  const transcriptPath = src.transcriptPathFor(claudeSessionId)
+  const forensics = transcriptPath ? src.readConversationForensics(transcriptPath) : null
+  if (
+    forensics?.lastAssistantFullText &&
+    forensics.lastAssistantTurnComplete &&
+    !forensics.lastToolPending &&
+    (!forensics.lastAssistantTs || new Date(forensics.lastAssistantTs).getTime() >= sinceMs)
+  ) {
+    return forensics.lastAssistantFullText
+  }
+  return null
+}
+
+// Claude has no push signal for turn end; its answer is the transcript.
+export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: TurnSources): TurnOutcome {
+  return {
+    confirmedComplete: false,
+    answer: () => info.claudeSessionId ? transcriptAnswer(info.claudeSessionId, sinceMs, src) : null,
+  }
+}
+
+// Codex (F1s/F2s). The discriminator is the presence of claudeSessionId, not the
+// engine: a Codex record holding one relays the transcript and never falls
+// through to the event path (PINNED R9, repaired in PR-IDENT). The flag is
 // stale between turns, so it can skip grace early (PINNED R15).
-export function turnOutcomeFrom(info: Pick<SessionInfo, 'sessionId' | 'claudeSessionId'>, sinceMs: number, src: TurnSources): TurnOutcome {
+export function codexTurnOutcome(info: TurnInfo, sinceMs: number, src: TurnSources): TurnOutcome {
   return {
     confirmedComplete: src.isCodexTurnComplete(info.sessionId),
     answer: () => {
-      if (info.claudeSessionId) {
-        const transcriptPath = src.transcriptPathFor(info.claudeSessionId)
-        const forensics = transcriptPath ? src.readConversationForensics(transcriptPath) : null
-        if (
-          forensics?.lastAssistantFullText &&
-          forensics.lastAssistantTurnComplete &&
-          !forensics.lastToolPending &&
-          (!forensics.lastAssistantTs || new Date(forensics.lastAssistantTs).getTime() >= sinceMs)
-        ) {
-          return forensics.lastAssistantFullText
-        }
-        return null
-      }
+      if (info.claudeSessionId) return transcriptAnswer(info.claudeSessionId, sinceMs, src)
       // Engine-owned signal (codex-bootstrap.ts's own turnCompleted event),
       // deliberately NOT SessionInfo.turnState — that field is also written by
       // the tmux-activity poller from raw visual silence, independent of

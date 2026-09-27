@@ -17,8 +17,8 @@
 // silent wait, no message sent, before the FIRST user-visible escalation —
 // restoring the old nudge-cooldown's magnitude so a session mid-tool-call
 // still gets real working time before anything lands in the user's chat.
-// Skipped entirely when the caller already has certainty (isCodexTurnComplete()
-// true) — codex-bootstrap.ts's turnCompleted handler calls handleSilenceEvent
+// Skipped entirely when the caller already has certainty (turnOutcome's
+// confirmedComplete) — codex-bootstrap.ts's turnCompleted handler calls handleSilenceEvent
 // directly, and by then there's no ambiguity left to wait out (round-2-of-
 // round-2 review caught this one).
 //
@@ -33,8 +33,7 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
-import { readConversationForensics, getLastCodexMessage, isCodexTurnComplete, turnOutcomeFrom, type ConversationForensics, type TurnOutcome } from './observability.js'
-import { transcriptPathFor } from './usage.js'
+import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from './observability.js'
 import { safeSend, tmuxWindowActivity } from './util.js'
 import { probeByteTmuxName } from './pane-probe.js'
 
@@ -50,10 +49,7 @@ export type ReplyGuardDeps = {
   safeSend: (channelId: string, text: string, opts?: any) => Promise<string[]>
   capturePaneScreenshot: (tmuxName: string) => string | null
   capturePaneText: (tmuxName: string, lines?: number) => string | null
-  transcriptPathFor: (claudeSessionId: string) => string | undefined
-  readConversationForensics: (transcriptPath: string) => ConversationForensics | null
-  getLastCodexMessage: (sessionId: string, sinceMs: number) => string | null
-  isCodexTurnComplete: (sessionId: string) => boolean
+  turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome
 }
 
 const defaultDeps: ReplyGuardDeps = {
@@ -65,10 +61,10 @@ const defaultDeps: ReplyGuardDeps = {
   safeSend: (ch, text, opts) => safeSend(ch, text, opts),
   capturePaneScreenshot: (tmuxName) => capturePaneScreenshot(tmuxName),
   capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
-  transcriptPathFor: (claudeSessionId) => transcriptPathFor(claudeSessionId),
-  readConversationForensics: (transcriptPath) => readConversationForensics(transcriptPath),
-  getLastCodexMessage: (sessionId, sinceMs) => getLastCodexMessage(sessionId, sinceMs),
-  isCodexTurnComplete: (sessionId) => isCodexTurnComplete(sessionId),
+  // A record without an adapter gets today's composition over the live sources.
+  turnOutcome: (info, sinceMs) => info.adapter
+    ? info.adapter.turnOutcome(info, sinceMs)
+    : codexTurnOutcome(info, sinceMs, defaultTurnSources),
 }
 
 let deps: ReplyGuardDeps = defaultDeps
@@ -208,7 +204,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     // one signal that never needed it).
     // 'main' has no record: grace, and no relay (the codex flag is only ever
     // written for registry records).
-    const outcome = info ? turnOutcomeFrom(info, p.deliveredAt, deps) : undefined
+    const outcome = info ? deps.turnOutcome(info, p.deliveredAt) : undefined
     if (!outcome?.confirmedComplete) {
       const firstSeen = silenceFirstSeenAt.get(key)
       if (firstSeen === undefined) {
@@ -400,7 +396,7 @@ export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
 // The turnState writes below are a coarse, tmux-visual-silence-driven proxy
 // for reply-guard's own activity gate ONLY. They are NOT the source of
 // truth for "has Codex's protocol-level turn actually finished" — that's
-// isCodexTurnComplete() in observability.ts, driven by codex-bootstrap.ts's
+// the adapter's turnOutcome().confirmedComplete, driven by codex-bootstrap.ts's
 // own turnCompleted/message events. Do not read turnState for anything that
 // needs to know whether a turn is really done; 45s of no terminal repaint
 // (a long-running tool, a stalled remote call) is not the same thing.

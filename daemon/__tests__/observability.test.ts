@@ -2,7 +2,8 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, turnOutcomeFrom, type ConversationForensics, type TurnSources } from '../observability.js'
+import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, claudeTurnOutcome, codexTurnOutcome, defaultTurnSources, type ConversationForensics, type TurnSources } from '../observability.js'
+import { engines } from '../engines/instances.js'
 import type { SessionInfo } from '../sessions.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
@@ -340,7 +341,7 @@ describe('readConversationForensics', () => {
 })
 
 // T6 (adapter-policy): the reply guard's turn-outcome composition (F1s/F2s).
-describe('turnOutcomeFrom', () => {
+describe('turnOutcome composition', () => {
   const T = 1_000_000_000
   const iso = (ms: number) => new Date(ms).toISOString()
   const forensics = (over: Partial<ConversationForensics> = {}): ConversationForensics => ({
@@ -360,8 +361,8 @@ describe('turnOutcomeFrom', () => {
   }
   const codex = { sessionId: 's1', engine: 'codex' } as SessionInfo
   const claude = { sessionId: 's1', engine: 'claude', claudeSessionId: 'claude-abc' } as SessionInfo
-  const codexFn = turnOutcomeFrom
-  const claudeFns = [turnOutcomeFrom]
+  const codexFn = codexTurnOutcome
+  const claudeFns = [codexTurnOutcome, claudeTurnOutcome]
 
   test('PINNED R9: Codex record holding claudeSessionId relays the transcript', () => {
     const o = codexFn({ ...codex, claudeSessionId: 'claude-abc' }, T, src({ flag: true }))
@@ -419,4 +420,24 @@ describe('turnOutcomeFrom', () => {
       expect(fn({ ...claude, claudeSessionId: undefined }, T, src()).answer()).toBeNull()
     })
   }
+
+  // S6 exit: adapters delegate through defaultTurnSources — swapping its members
+  // gives exactly what the exported function returns over the swapped sources.
+  test('delegation: adapters answer as their exported function over swapped defaultTurnSources', () => {
+    const saved = { ...defaultTurnSources }
+    const swapped = src({ flag: true })
+    Object.assign(defaultTurnSources, swapped)
+    try {
+      const infos = [codex, { ...codex, claudeSessionId: 'claude-abc' }, claude, { ...claude, claudeSessionId: undefined }]
+      for (const [provider, fn] of [['claude', claudeTurnOutcome], ['codex', codexTurnOutcome]] as const) {
+        for (const info of infos) {
+          const a = engines[provider].turnOutcome(info, T), b = fn(info, T, swapped)
+          expect({ c: a.confirmedComplete, t: a.answer() }).toEqual({ c: b.confirmedComplete, t: b.answer() })
+        }
+      }
+      // the swap is visible (not both reading the live, empty sources)
+      expect(engines.codex.turnOutcome(codex, T).answer()).toBe('codex answer')
+      expect(engines.claude.turnOutcome(claude, T).answer()).toBe('transcript answer')
+    } finally { Object.assign(defaultTurnSources, saved) }
+  })
 })

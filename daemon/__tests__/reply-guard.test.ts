@@ -20,7 +20,12 @@ import { fakeAdapter } from './test-harness.js'
 import { engines } from '../engines/instances.js'
 import { withFakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../sessions.js'
-import type { ConversationForensics } from '../observability.js'
+import { claudeTurnOutcome, codexTurnOutcome, type ConversationForensics, type TurnSources } from '../observability.js'
+
+// deps.turnOutcome over fake sources; the engine switch mirrors resolveEngine.
+function turnOutcomeOver(src: TurnSources) {
+  return (i: SessionInfo, s: number) => (i.engine === 'codex' ? codexTurnOutcome : claudeTurnOutcome)(i, s, src)
+}
 
 function fakeForensics(over: Partial<ConversationForensics> = {}): ConversationForensics {
   return {
@@ -105,14 +110,16 @@ beforeEach(() => {
     safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
     capturePaneScreenshot: () => null,
     capturePaneText: () => 'fake pane content',
-    transcriptPathFor: () => undefined,
-    readConversationForensics: () => null,
-    getLastCodexMessage: () => null,
-    // Matches production's real default: false until a codex session's own
-    // events say otherwise. () => true here would wrongly bypass the grace
-    // window for every session, codex or not — a real bug this exact
-    // mistake caused mid-review.
-    isCodexTurnComplete: () => false,
+    turnOutcome: turnOutcomeOver({
+      transcriptPathFor: () => undefined,
+      readConversationForensics: () => null,
+      getLastCodexMessage: () => null,
+      // Matches production's real default: false until a codex session's own
+      // events say otherwise. () => true here would wrongly bypass the grace
+      // window for every session, codex or not — a real bug this exact
+      // mistake caused mid-review.
+      isCodexTurnComplete: () => false,
+    }),
   })
 })
 
@@ -358,10 +365,12 @@ describe('handleSilenceEvent — no nudge message, but a real grace window befor
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true, // e.g. codex-bootstrap.ts's turnCompleted just fired
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true, // e.g. codex-bootstrap.ts's turnCompleted just fired
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -429,13 +438,15 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: (claudeSessionId) => claudeSessionId === 'claude-abc' ? '/fake/path.jsonl' : undefined,
-      // Answered well AFTER the message arrived (T0), turn genuinely complete.
-      readConversationForensics: (path) => path === '/fake/path.jsonl'
-        ? fakeForensics({ lastAssistantFullText: 'the real answer the model gave', lastAssistantTs: new Date(T0 + 5000).toISOString() })
-        : null,
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: (claudeSessionId) => claudeSessionId === 'claude-abc' ? '/fake/path.jsonl' : undefined,
+        // Answered well AFTER the message arrived (T0), turn genuinely complete.
+        readConversationForensics: (path) => path === '/fake/path.jsonl'
+          ? fakeForensics({ lastAssistantFullText: 'the real answer the model gave', lastAssistantTs: new Date(T0 + 5000).toISOString() })
+          : null,
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -456,15 +467,17 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => '/fake/path.jsonl',
-      // This text is from BEFORE the pending message (T0) arrived — answers
-      // a different, earlier message. Must not be relayed as if it's current.
-      readConversationForensics: () => fakeForensics({
-        lastAssistantFullText: 'answer to an OLDER message',
-        lastAssistantTs: new Date(T0 - 5000).toISOString(),
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => '/fake/path.jsonl',
+        // This text is from BEFORE the pending message (T0) arrived — answers
+        // a different, earlier message. Must not be relayed as if it's current.
+        readConversationForensics: () => fakeForensics({
+          lastAssistantFullText: 'answer to an OLDER message',
+          lastAssistantTs: new Date(T0 - 5000).toISOString(),
+        }),
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
       }),
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -485,17 +498,19 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => '/fake/path.jsonl',
-      // Fresh timestamp, but the turn isn't done — "let me check..." before a
-      // tool call it's still waiting on. Not the actual answer.
-      readConversationForensics: () => fakeForensics({
-        lastAssistantFullText: 'Let me check that...',
-        lastAssistantTs: new Date(T0 + 5000).toISOString(),
-        lastAssistantTurnComplete: false,
-        lastToolPending: true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => '/fake/path.jsonl',
+        // Fresh timestamp, but the turn isn't done — "let me check..." before a
+        // tool call it's still waiting on. Not the actual answer.
+        readConversationForensics: () => fakeForensics({
+          lastAssistantFullText: 'Let me check that...',
+          lastAssistantTs: new Date(T0 + 5000).toISOString(),
+          lastAssistantTurnComplete: false,
+          lastToolPending: true,
+        }),
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
       }),
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -516,10 +531,12 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'the codex agent\'s last message' : null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'the codex agent\'s last message' : null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -540,11 +557,13 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      // Real getLastCodexMessage semantics: null when sinceMs is after the stash.
-      getLastCodexMessage: (_sessionId, sinceMs) => sinceMs <= T0 - 10_000 ? 'stale codex message' : null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        // Real getLastCodexMessage semantics: null when sinceMs is after the stash.
+        getLastCodexMessage: (_sessionId, sinceMs) => sinceMs <= T0 - 10_000 ? 'stale codex message' : null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -565,10 +584,12 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => '/fake/path.jsonl',
-      readConversationForensics: () => fakeForensics(), // transcript exists but has no assistant text yet
-      getLastCodexMessage: () => null,
-      isCodexTurnComplete: () => true,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => '/fake/path.jsonl',
+        readConversationForensics: () => fakeForensics(), // transcript exists but has no assistant text yet
+        getLastCodexMessage: () => null,
+        isCodexTurnComplete: () => true,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
@@ -596,14 +617,16 @@ describe('escalateWithCapture', () => {
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
       capturePaneScreenshot: () => null,
       capturePaneText: () => 'fake pane content',
-      transcriptPathFor: () => undefined,
-      readConversationForensics: () => null,
-      // Fresh — passes the staleness check on its own.
-      getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'mid-turn fragment' : null,
-      // The real turn is still in flight — e.g. the tmux poller stomped
-      // turnState to 'idle' from visual silence, but the actual Codex
-      // protocol turn hasn't completed.
-      isCodexTurnComplete: () => false,
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined,
+        readConversationForensics: () => null,
+        // Fresh — passes the staleness check on its own.
+        getLastCodexMessage: (sessionId, sinceMs) => (sessionId === 'sess-1' && sinceMs <= T0) ? 'mid-turn fragment' : null,
+        // The real turn is still in flight — e.g. the tmux poller stomped
+        // turnState to 'idle' from visual silence, but the actual Codex
+        // protocol turn hasn't completed.
+        isCodexTurnComplete: () => false,
+      }),
     })
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)

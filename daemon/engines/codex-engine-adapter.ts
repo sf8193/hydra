@@ -22,6 +22,7 @@ import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer
 import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
+import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -62,6 +63,10 @@ export class CodexEngineAdapter implements EngineAdapter {
   // window, which after surface repair is the static anchor, not the TUI pane.
   activityAt(info: SessionInfo): number | null {
     try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
+  }
+
+  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
+    return codexTurnOutcome(info, sinceMs, defaultTurnSources)
   }
 
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.

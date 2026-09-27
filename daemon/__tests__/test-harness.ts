@@ -447,6 +447,7 @@ export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdap
     isConnected: (info: SessionInfo) => transport.bridges.has(info.sessionId),
     refreshIdentity: () => null,
     activityAt: () => null,
+    turnOutcome: () => ({ confirmedComplete: false, answer: () => null }),
     ...overrides,
   } as unknown as EngineAdapter
 }

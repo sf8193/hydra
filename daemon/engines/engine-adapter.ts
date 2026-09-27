@@ -6,6 +6,7 @@
 
 import type { SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
+import type { TurnOutcome } from '../observability.js'
 export type { BlockingState } from '../pane-probe.js'
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,8 @@ export interface EngineAdapter {
   // Epoch seconds of the last observable activity, or null when it can't be
   // read (the reply-guard poller then skips the session this tick).
   activityAt(info: SessionInfo): number | null
+  // Did the turn that answers a message delivered at sinceMs end, and what did it say?
+  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome
   isAlive(info: SessionInfo): Promise<boolean>
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null
