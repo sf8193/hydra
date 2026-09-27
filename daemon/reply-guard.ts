@@ -35,7 +35,8 @@ import { gateway } from './config.js'
 import { on } from './event-bus.js'
 import { readConversationForensics, getLastCodexMessage, isCodexTurnComplete, type ConversationForensics } from './observability.js'
 import { transcriptPathFor } from './usage.js'
-import { safeSend } from './util.js'
+import { safeSend, tmuxWindowActivity } from './util.js'
+import { probeByteTmuxName } from './pane-probe.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
@@ -407,4 +408,52 @@ export const _ESCALATION_GRACE_MS = ESCALATION_GRACE_MS
 
 export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
   return pending
+}
+
+// ---------------------------------------------------------------------------
+// Activity poller (driven by daemon.ts every 20s)
+// ---------------------------------------------------------------------------
+// Only checks sessions with pending replies — O(pending) not O(sessions).
+//
+// The turnState writes below are a coarse, tmux-visual-silence-driven proxy
+// for reply-guard's own activity gate ONLY. They are NOT the source of
+// truth for "has Codex's protocol-level turn actually finished" — that's
+// isCodexTurnComplete() in observability.ts, driven by codex-bootstrap.ts's
+// own turnCompleted/message events. Do not read turnState for anything that
+// needs to know whether a turn is really done; 45s of no terminal repaint
+// (a long-running tool, a stalled remote call) is not the same thing.
+const MIN_IDLE_BEFORE_SILENCE_S = 45
+
+export type PollActivityDeps = {
+  // Epoch seconds of the target's last activity; throws when it can't be read.
+  windowActivity: (target: string) => number
+  findByName: (tmuxName: string) => SessionInfo | undefined
+}
+
+const defaultPollDeps: PollActivityDeps = {
+  windowActivity: tmuxWindowActivity,
+  findByName: (name) => registry.findByName(name),
+}
+
+export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = defaultPollDeps): void {
+  const pendingNames = sessionsWithPendingReplies()
+  if (pendingNames.size === 0) return
+  for (const tmuxName of pendingNames) {
+    const info = tmuxName === 'main' ? undefined : pollDeps.findByName(tmuxName)
+    // 'main' is a logical name — its real tmux window is probeByteTmuxName() (e.g. slack-byte).
+    // Query the real window, but keep passing logical 'main' to the guard so its mapping is unchanged.
+    const queryTarget = tmuxName === 'main' ? probeByteTmuxName() : tmuxName
+    let lastActivitySec = 0
+    try {
+      lastActivitySec = pollDeps.windowActivity(queryTarget)
+    } catch { continue }
+    const secSinceActivity = nowSec - lastActivitySec
+    if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
+      if (info && info.turnState !== 'working') info.turnState = 'working'
+      handleActivityEvent(tmuxName)
+    } else {
+      if (info && info.turnState !== 'idle') info.turnState = 'idle'
+      handleSilenceEvent(tmuxName)
+    }
+  }
 }

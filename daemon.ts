@@ -10,7 +10,6 @@
 
 import { join } from 'path'
 import { copyFileSync, readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync } from 'fs'
-import { execSync } from 'child_process'
 import { connect } from 'net'
 
 // ---------------------------------------------------------------------------
@@ -220,8 +219,8 @@ import { fetchSlackThreadSummary } from './daemon/router.js'
 import { getLenses } from './daemon/lens-loader.js'
 await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
-import { handleSilenceEvent, handleActivityEvent, sessionsWithPendingReplies } from './daemon/reply-guard.js'
-import { probeAllSessions, probeByteTmuxName } from './daemon/pane-probe.js'
+import { pollActivityOnce } from './daemon/reply-guard.js'
+import { probeAllSessions } from './daemon/pane-probe.js'
 import { tmuxHasSession } from './daemon/util.js'
 
 // ---------------------------------------------------------------------------
@@ -401,7 +400,7 @@ async function backfillArtifacts(): Promise<void> {
 
 startPrWatcher()
 
-// Reply guard: polls window_activity timestamp every 20s (see below).
+// Reply guard: polls session activity every 20s (see below).
 
 // Backfill PR titles for existing watches (non-blocking)
 backfillTitles().then(n => {
@@ -465,42 +464,8 @@ void (async () => {
 import { startSessionHealthPoll } from './daemon/session-health.js'
 startSessionHealthPoll()
 
-// Reply guard: poll window_activity timestamp every 20s.
-// Only checks sessions with pending replies — O(pending) not O(sessions).
-//
-// The turnState writes below are a coarse, tmux-visual-silence-driven proxy
-// for reply-guard's own activity gate ONLY. They are NOT the source of
-// truth for "has Codex's protocol-level turn actually finished" — that's
-// isCodexTurnComplete() in observability.ts, driven by codex-bootstrap.ts's
-// own turnCompleted/message events. Do not read turnState for anything that
-// needs to know whether a turn is really done; 45s of no terminal repaint
-// (a long-running tool, a stalled remote call) is not the same thing.
-const MIN_IDLE_BEFORE_SILENCE_S = 45
-setInterval(() => {
-  const pendingNames = sessionsWithPendingReplies()
-  if (pendingNames.size === 0) return
-  const nowSec = Math.floor(Date.now() / 1000)
-  for (const tmuxName of pendingNames) {
-    const info = tmuxName === 'main' ? undefined : registry.findByName(tmuxName)
-    // 'main' is a logical name — its real tmux window is probeByteTmuxName() (e.g. slack-byte).
-    // Query the real window, but keep passing logical 'main' to the guard so its mapping is unchanged.
-    const queryTarget = tmuxName === 'main' ? probeByteTmuxName() : tmuxName
-    let lastActivitySec = 0
-    try {
-      lastActivitySec = parseInt(
-        execSync(`tmux display -t '${queryTarget}' -p '#{window_activity}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim(),
-      ) || 0
-    } catch { continue }
-    const secSinceActivity = nowSec - lastActivitySec
-    if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
-      if (info && info.turnState !== 'working') info.turnState = 'working'
-      handleActivityEvent(tmuxName)
-    } else {
-      if (info && info.turnState !== 'idle') info.turnState = 'idle'
-      handleSilenceEvent(tmuxName)
-    }
-  }
-}, 20_000)
+// Reply guard: poll session activity every 20s (see pollActivityOnce).
+setInterval(() => pollActivityOnce(Math.floor(Date.now() / 1000)), 20_000)
 
 // Pane probe: detect CC sessions stuck on interactive prompts (plan mode, login).
 // Lower cadence than reply guard — these stalls are minutes-scale.
