@@ -133,6 +133,7 @@ export async function reconnectCodexAfterDisconnect(
     if (!info || info.engine !== 'codex' || !info.codexThreadId || !info.adapter) return false
     try {
       const ok = await info.adapter.reconnect(info)
+      if (deps.get(sessionId) !== info) return false // replaced/removed meanwhile (invariant 10)
       if (!ok) continue
       delete info.deadAt
       deps.persist()

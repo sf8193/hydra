@@ -337,12 +337,26 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       const codexThread = lastSession?.codexThreadId ?? lastInfo?.codexThreadId
       const codexHome = lastSession?.codexHomeName ?? lastInfo?.codexHomeName ?? lastTmuxName
       if (codexThread) {
+        // The reservation is the lock: a held home means another resume (or spawn) is
+        // mid-launch on it; a second one would double-launch the same CODEX_HOME.
+        if (registry.reservedNames.has(codexHome)) {
+          await gateway.send(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id }).catch(() => {})
+          return
+        }
+        // Hold the home's name across the kill→launch→persist window so no concurrent
+        // spawn picks it (its launch would restart this home's app-server).
+        registry.reservedNames.add(codexHome)
         try {
           result = await doSpawnSession(thread.topic, undefined, undefined, {
             existingThreadId: thread.threadId, resumeCodex: { threadId: codexThread, homeName: codexHome },
             promptPrefix: RECOVERY_REVERIFY_GUARD, model: deadModel, engine: 'codex', label: deadLabel,
           })
-        } catch { result = null }
+        } catch (err) {
+          process.stderr.write(`daemon: codex resume of ${codexThread} in home ${codexHome} failed: ${err}\n`)
+          result = null
+        } finally {
+          registry.reservedNames.delete(codexHome)
+        }
       }
     } else {
       result = await tryResume({ topic: thread.topic, threadId: thread.threadId, claudeSessionId, threadUrl: thread.threadUrl, model: deadModel, label: deadLabel })
