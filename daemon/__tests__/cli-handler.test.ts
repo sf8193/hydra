@@ -245,7 +245,7 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
   })
 
-  test.failing('codex rejected → error with the reason, no key', async () => {
+  test('codex rejected → error with the reason, no key', async () => {
     const info = codex(async () => ({ status: 'rejected', retryable: false, reason: 'session is retiring' }))
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k })
@@ -255,13 +255,22 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
-  test.failing('codex unknown → exit 6, no key', async () => {
+  test('codex unknown → exit 6, no key', async () => {
     const info = codex(async () => ({ status: 'unknown', reason: 'steer timed out' }))
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k })
     expect(res.ok).toBe(false)
     expect(res.error).toContain('steer timed out')
     expect(res.exitCode).toBe(6)
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
+  })
+
+  test('codex deliver throws → exit 6, no key', async () => {
+    const info = codex(async () => { throw new Error('boom') })
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res).toMatchObject({ ok: false, exitCode: 6 })
+    expect(res.error).toContain('boom')
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
@@ -316,30 +325,3 @@ describe('cli-handler: deliver (Z2)', () => {
   })
 })
 
-// adapter-policy T7: the CLI's Codex branch is a name check that reports
-// 'delivered' whatever the adapter answers. Pinned until PR-DELIVER (Q3).
-describe('cli-handler: deliver (adapter-policy T7)', () => {
-  let fake: FakeTmux
-  beforeEach(() => { fake = withFakeTmux() })
-  afterEach(() => { registry.delete('t7-cli'); fake.restore() })
-
-  test('PINNED E6 codex adapter rejects → still "delivered", proof adapter, key completed', async () => {
-    const seen: unknown[][] = []
-    fake.alive('t7-cli-tmux')
-    registry.set('t7-cli', {
-      sessionId: 't7-cli', tmuxName: 't7-cli-tmux', threadId: 't7-thread', engine: 'codex', createdAt: Date.now(),
-      adapter: fakeAdapter({
-        provider: 'codex', channel: 'engine', isConnected: () => true,
-        deliver: async (...args: unknown[]) => { seen.push(args); return { status: 'rejected', retryable: false, reason: 'session is retiring' } },
-      }),
-    } as any)
-    const key = `t7-cli-${Date.now()}`
-    const res = await handleCLIRequest(makeReq({ command: 'deliver', params: { session: 't7-cli', message: 'whisper', idempotencyKey: key } }))
-    expect(res.ok).toBe(true)
-    expect(res.data).toMatchObject({ status: 'delivered', proof: 'adapter', sessionId: 't7-cli' })
-    expect(seen).toHaveLength(1)
-    expect(JSON.stringify(seen[0])).toContain('"whisper"')
-    expect(JSON.stringify(seen[0])).toContain('"source":"cli-deliver"')
-    expect(checkIdempotency(key)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
-  })
-})
