@@ -5,7 +5,7 @@ import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
 import { atomicWriteFileSync } from './util.js'
 import { emit, on } from './event-bus.js'
-import type { DeliveryResult } from './engines/engine-adapter.js'
+import type { DeliveryResult, Notification } from './engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -162,42 +162,38 @@ export class BridgeTransport {
       else this.enqueue(sessionId, msg)
       return
     }
-    // Route through the adapter for priced-turn engines — it owns delivery
-    // mechanics. Capability-based (deliveryIsFree), not a provider-name
-    // check, so this doesn't need updating for the next non-free engine.
+    // Every registered session delivers through its adapter, which owns the
+    // mechanics (Claude: writeOrQueue on its own transport; Codex: steer or
+    // queue a turn). 'main' and unregistered ids have no adapter.
     const info = registry.get(sessionId)
-    if (info?.adapter && info.adapter.deliveryIsFree === false) {
-      let content = typeof msg.content === 'string' ? msg.content : undefined
-      if (typeof content === 'string' && content) {
-        const prefix = msg.allowPiggyback === true ? this.beginPiggyback(sessionId) : undefined
-        if (prefix) content = `${prefix.items.join('\n\n')}\n\n---\n\n${content}`
-        const meta = msg.meta as Record<string, string> | undefined
-        const mode = msg.deferUntilTurnComplete === true ? 'next-turn' as const : undefined
-        const complete = (result: DeliveryResult) => {
-          if (prefix) this.finishPiggyback(sessionId, prefix, result, meta?.message_id)
-          else if (result.status !== 'accepted') this.reportFailure(sessionId, result, meta?.message_id)
-        }
-        try {
-          void info.adapter.deliver(info, content, mode, meta).then(complete, err => {
-            complete({ status: 'unknown', reason: String(err) })
-          })
-        } catch (err) {
-          complete({ status: 'unknown', reason: String(err) })
-        }
-      }
-      return
+    if (!info?.adapter) { this.writeOrQueue(sessionId, msg); return }
+    const text = typeof msg.content === 'string' && msg.content ? msg.content : undefined
+    // Only a text delivery can carry the buffer; the buffer is only ever
+    // filled for priced-turn sessions (pr-watch).
+    const prefix = text && msg.allowPiggyback === true ? this.beginPiggyback(sessionId) : undefined
+    const out: Notification = prefix
+      ? { ...(msg as Notification), content: `${prefix.items.join('\n\n')}\n\n---\n\n${text}` }
+      : msg as Notification
+    const meta = msg.meta as Record<string, string> | undefined
+    const complete = (result: DeliveryResult) => {
+      if (prefix) this.finishPiggyback(sessionId, prefix, result, meta?.message_id)
+      // Non-text content is no user input; its refusal stays silent (PINNED E1b).
+      else if (result.status !== 'accepted' && text) this.reportFailure(sessionId, result, meta?.message_id)
     }
+    try {
+      void info.adapter.deliver(info, out).then(complete, err => {
+        complete({ status: 'unknown', reason: String(err) })
+      })
+    } catch (err) {
+      complete({ status: 'unknown', reason: String(err) })
+    }
+  }
 
-    // Claude path (or disconnected codex session) — send via bridge socket or queue
+  /** Write to the session bridge, else enqueue (persisted). Synchronous; the Claude adapter's delivery. */
+  writeOrQueue(sessionId: string, msg: Record<string, unknown>): 'written' | 'queued' | 'write-failed' {
     const bridge = this.bridges.get(sessionId)
-    if (bridge) {
-      this.sendToBridge(bridge, msg)
-    } else {
-      if (msg.type === 'tools_update') {
-        process.stderr.write(`daemon: no bridge for ${sessionId}, queueing tools_update\n`)
-      }
-      this.enqueue(sessionId, msg)
-    }
+    if (!bridge) { this.enqueue(sessionId, msg); return 'queued' }
+    return this.sendToBridge(bridge, msg) ? 'written' : 'write-failed' // sendToBridge re-queues on failure
   }
 
   /**
@@ -301,7 +297,7 @@ export class BridgeTransport {
     const meta = { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() }
     const complete = (result: DeliveryResult) => this.finishPiggyback(sessionId, prefix, result)
     try {
-      void info.adapter.deliver(info, prefix.items.join('\n\n'), 'next-turn', meta).then(complete, err => {
+      void info.adapter.deliver(info, { type: 'notification', content: prefix.items.join('\n\n'), meta, deferUntilTurnComplete: true }).then(complete, err => {
         complete({ status: 'unknown', reason: String(err) })
       })
     } catch (err) {

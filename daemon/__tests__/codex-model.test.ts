@@ -614,7 +614,7 @@ describe('Codex adapter delivery modes', () => {
       queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return true },
       steer: (_id: string, text: string) => { calls.push('steer:' + text) },
     }
-    const result = await new CodexEngineAdapter(fake).deliver({ sessionId: 's', tmuxName: 'x' } as any, 'hi', 'next-turn', { downloaded_files: '/a.png' })
+    const result = await new CodexEngineAdapter(fake).deliver({ sessionId: 's', tmuxName: 'x' } as any, { type: 'notification', content: 'hi', deferUntilTurnComplete: true, meta: { downloaded_files: '/a.png' } })
     expect(calls).toEqual(['queue:hi\n\n[attachments: /a.png]'])
     expect(result).toEqual({ status: 'accepted', via: 'queued-turn' })
   })

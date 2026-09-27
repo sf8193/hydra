@@ -13,7 +13,7 @@ import { registry, type SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
-  DeliveryMode, DeliveryResult,
+  DeliveryMode, DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
   ContextUsage,
 } from './engine-adapter.js'
@@ -142,10 +142,15 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
-  async deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
+  async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    const text = msg.content
+    // Silent, as when sendOrQueue dropped it before reaching the adapter (PINNED E1b).
+    if (typeof text !== 'string' || !text) return { status: 'rejected', retryable: false, reason: 'non-text content' }
     if (text === '[system] keepalive') {
       return { status: 'rejected', retryable: false, reason: 'keepalive blocked for codex' }
     }
+    const mode: DeliveryMode | undefined = msg.deferUntilTurnComplete === true ? 'next-turn' : undefined
+    const meta = msg.meta
     // Enrich before transferring ownership to the queue, including while the
     // app-server connection is absent.
     let deliveryText = text

@@ -11,11 +11,11 @@ import { detectBlockingState as detectBlockingStateFn } from '../pane-probe.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
-  DeliveryMode, DeliveryResult,
+  DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
   ContextUsage,
 } from './engine-adapter.js'
-import { transport, type BridgeTransport } from '../bridge-transport.js'
+import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
 import { projectDirName, projectsRoot } from '../usage.js'
@@ -232,21 +232,15 @@ export class ClaudeEngine implements EngineAdapter {
     }
   }
 
-  async deliver(info: SessionInfo, text: string, _mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
-    const msg: Record<string, unknown> = {
-      type: 'notification',
-      content: text,
-      meta: { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString(), ...meta },
-    }
-    const bridge = transport.get(info.sessionId)
-    if (bridge) {
-      const ok = transport.sendToBridge(bridge, msg)
-      return ok
-        ? { status: 'accepted', via: 'bridge-socket' }
-        : { status: 'unknown', reason: 'bridge write failed, message queued' }
-    }
-    transport.sendOrQueue(info.sessionId, msg)
-    return { status: 'accepted', via: 'queued' }
+  // No await before the write: callers rely on it having happened on return.
+  async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    const r = this.transport.writeOrQueue(info.sessionId, msg)
+    return r === 'written' ? { status: 'accepted', via: 'bridge-socket' }
+      : r === 'queued' ? { status: 'accepted', via: 'queued' }
+      // sendToBridge re-queued it; the queue flushes on reconnect, as when absent.
+      // Not 'unknown': that would surface a delivery:failed warning (#378) for
+      // a message the transport still owns.
+      : { status: 'accepted', via: 'requeued' }
   }
 
   async retire(_info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {

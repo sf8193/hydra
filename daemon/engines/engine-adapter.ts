@@ -21,6 +21,13 @@ export type ProviderId = 'claude' | 'codex'
 
 export type DeliveryMode = 'steer-active' | 'next-turn'
 
+/** The envelope every delivery carries. Claude writes it to the bridge verbatim
+ *  (bridge.ts forwards meta to the model); Codex reads content/meta/defer. */
+export type Notification = Record<string, unknown> & {
+  type: 'notification'; content?: unknown; meta?: Record<string, string>
+  allowPiggyback?: boolean; deferUntilTurnComplete?: boolean
+}
+
 export type DeliveryResult =
   | { readonly status: 'accepted'; readonly via?: string }
   | { readonly status: 'rejected'; readonly retryable: boolean; readonly reason: string }
@@ -104,7 +111,10 @@ export interface EngineAdapter {
 
   // Lifecycle
   launch(input: LaunchInput): Promise<LaunchResult>
-  deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult>
+  // Deliver one notification. Claude: write to the owning transport's session
+  // bridge, else enqueue there; the write is synchronous (no await before it).
+  // Codex: steer, or queue a turn when msg.deferUntilTurnComplete.
+  deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult>
   retire(info: SessionInfo, reason: string): Promise<ExecutionRetirementResult>
   stop(info: SessionInfo): Promise<StopResult>
 

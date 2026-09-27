@@ -198,7 +198,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
       adapter: {
         provider: 'codex',
         deliveryIsFree: false,
-        deliver: async (_info: any, text: string) => { delivered.push(text); return { status: 'accepted', deliveryId: 'd1', stage: 'queued' } },
+        deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted', deliveryId: 'd1', stage: 'queued' } },
       },
     } as any)
   }
@@ -299,7 +299,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     // A throw is uncertain: retain on disk, but do not automatically replay.
     registry.set('s7', {
       sessionId: 's7', engine: 'codex', threadId: 'chat1',
-      adapter: { provider: 'codex', deliveryIsFree: false, deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } } },
+      adapter: { provider: 'codex', deliveryIsFree: false, deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } } },
     } as any)
     bt.sendOrQueue('s7', { type: 'notification', content: 'second real message', allowPiggyback: true })
     expect(delivered[0]).not.toContain('CI failed on PR #99')
@@ -350,7 +350,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     // since that's what "not free" actually means here.
     registry.set('s8', {
       sessionId: 's8', engine: 'claude', threadId: 'chat1',
-      adapter: fakeAdapter({ deliveryIsFree: false, isConnected: () => true, deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } } }),
+      adapter: fakeAdapter({ deliveryIsFree: false, isConnected: () => true, deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } } }),
     } as any)
     delivered = []
     bt.sendOrQueue('s8', { type: 'notification', content: 'routed via adapter, not bridge socket' })
@@ -368,9 +368,9 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
       sessionId: 's9', engine: 'codex', threadId: 'chat1',
       adapter: {
         provider: 'codex', deliveryIsFree: false,
-        deliver: async (_i: any, text: string) => {
+        deliver: async (_i: any, m: any) => {
           if (shouldFail) throw new Error('backstop delivery failed')
-          delivered.push(text)
+          delivered.push(m.content)
           return { status: 'accepted' }
         },
       },
@@ -460,7 +460,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
       sessionId: 's13', engine: 'codex', threadId: 'chat1',
       adapter: {
         provider: 'codex', deliveryIsFree: false,
-        deliver: async (_i: any, text: string) => { await deliverGate; delivered.push(text); return { status: 'accepted' } },
+        deliver: async (_i: any, m: any) => { await deliverGate; delivered.push(m.content); return { status: 'accepted' } },
       },
     } as any)
     delivered = []
@@ -540,11 +540,11 @@ describe('delivery outcomes and piggyback ownership', () => {
     adapter((...args) => { calls.push(args); return calls.length === 1 ? new Promise(r => { resolve = r }) : Promise.resolve({ status: 'accepted' }) })
     bt.bufferForPiggyback(sid, 'first')
     ;(bt as any).flushPiggybackStandalone(sid)
-    expect(calls[0][2]).toBe('next-turn')
+    expect(calls[0][1].deferUntilTurnComplete).toBe(true)
     bt.bufferForPiggyback(sid, 'second')
     bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
     ;(bt as any).flushPiggybackStandalone(sid)
-    expect(calls.map(c => c[1])).toEqual(['first', 'user'])
+    expect(calls.map(c => c[1].content)).toEqual(['first', 'user'])
     expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(false)
     resolve({ status: 'accepted' })
     await settle()
@@ -552,7 +552,7 @@ describe('delivery outcomes and piggyback ownership', () => {
     expect(Boolean((bt as any).piggyback.get(sid)?.timer)).toBe(true)
     ;(bt as any).flushPiggybackStandalone(sid)
     await settle()
-    expect(calls.map(c => c[1])).toEqual(['first', 'user', 'second'])
+    expect(calls.map(c => c[1].content)).toEqual(['first', 'user', 'second'])
   })
 
   for (const result of [{ status: 'accepted' }, { status: 'unknown', reason: 'timeout' }, { status: 'rejected', retryable: true, reason: 'busy' }]) {
@@ -618,7 +618,7 @@ describe('delivery outcomes and piggyback ownership', () => {
     expect(events[0].reason).toContain('held for manual inspection')
     bt = new BridgeTransport()
     const calls: string[] = []
-    adapter(async (_info, text) => { calls.push(text); return { status: 'accepted' } })
+    adapter(async (_info, m) => { calls.push(m.content); return { status: 'accepted' } })
     bt.bufferForPiggyback(sid, 'appended')
     ;(bt as any).flushPiggybackStandalone(sid)
     bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
@@ -821,6 +821,25 @@ describe('delivery paths (adapter-policy T7)', () => {
     expect(q).toHaveLength(50)
     expect(q[49]).toEqual({ type: 'notification', content: 'm49' })
     expect(logged.filter(l => l.includes('message queue full for t7-c6'))).toHaveLength(1)
+  })
+
+  test('claude deliver result: written → accepted, absent → queued, destroyed → requeued (no delivery:failed)', async () => {
+    claude('t7-c7')
+    const info = registry.get('t7-c7')!
+    const msg = { type: 'notification' as const, content: 'x' }
+    expect(await info.adapter!.deliver(info, msg)).toEqual({ status: 'accepted', via: 'queued' })
+    const { socket } = socketOn(t, 't7-c7')
+    expect(await info.adapter!.deliver(info, msg)).toEqual({ status: 'accepted', via: 'bridge-socket' })
+    socket.destroyed = true
+    expect(await info.adapter!.deliver(info, msg)).toEqual({ status: 'accepted', via: 'requeued' })
+    expect(t.messageQueues.get('t7-c7')).toEqual([msg, msg])
+    const failures: unknown[] = []
+    const unsub = on('delivery:failed', e => { failures.push(e) }, 't7-c7')
+    try {
+      t.sendOrQueue('t7-c7', msg)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(failures).toEqual([])
+    } finally { unsub() }
   })
 
   test("'main' (no record): written when bridged, queued when not", () => {
