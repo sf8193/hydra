@@ -344,3 +344,32 @@ describe('cli-handler: deliver (Z2)', () => {
   })
 })
 
+
+// The on-kill hook asks main to run /retro via `hydra deliver --session main`.
+describe('cli-handler: deliver to main', () => {
+  const deliverMain = (extra: Record<string, unknown> = {}) =>
+    handleCLIRequest(makeReq({ command: 'deliver', params: { session: 'main', message: 'retro x', initiator: 'on-kill-hook', ...extra } }))
+
+  test('main disconnected: refused without --queue, queued with it; connected: delivered to the main bridge', async () => {
+    const origHas = transport.has, origSend = transport.sendOrQueue
+    const sent: Array<[string, any]> = []
+    let connected = false
+    ;(transport as any).has = (id: string) => id === 'main' ? connected : origHas.call(transport, id)
+    ;(transport as any).sendOrQueue = (id: string, msg: any) => { sent.push([id, msg]) }
+    try {
+      const refused = await deliverMain()
+      expect(refused.ok).toBe(false)
+      expect(sent).toEqual([])
+
+      expect(((await deliverMain({ queue: true })).data as any).status).toBe('queued')
+      connected = true
+      expect(((await deliverMain()).data as any).status).toBe('delivered')
+
+      expect(sent.map(([id]) => id)).toEqual(['main', 'main'])
+      expect(sent[1][1]).toMatchObject({ type: 'notification', content: 'retro x', meta: { source: 'cli-deliver', initiator: 'on-kill-hook' } })
+    } finally {
+      ;(transport as any).has = origHas
+      ;(transport as any).sendOrQueue = origSend
+    }
+  })
+})

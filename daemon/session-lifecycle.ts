@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { execSync, execFileSync } from 'child_process'
+import { execSync, execFileSync, spawn } from 'child_process'
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
@@ -222,6 +222,38 @@ export function emitSessionDeath(info: SessionInfo): void {
   })
 }
 
+// Under STATE_DIR so the test preload's temp state dir keeps `bun test` from ever running the real hook
+export const KILL_HOOK_PATH = join(STATE_DIR, 'hooks', 'on-kill')
+
+/**
+ * User extension point: if <STATE_DIR>/hooks/on-kill exists, run it detached after a
+ * session dies, with the session's identity in env. Best-effort, never blocks the kill.
+ */
+export function runKillHook(info: SessionInfo, reason: string, hookPath = KILL_HOOK_PATH): void {
+  if (!existsSync(hookPath)) return
+  try {
+    const child = spawn(hookPath, [], {
+      detached: true,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        HYDRA_SESSION_NAME: info.tmuxName,
+        HYDRA_SESSION_ID: info.sessionId,
+        HYDRA_THREAD_ID: info.threadId,
+        HYDRA_KILL_REASON: reason,
+        HYDRA_ENGINE: info.engine ?? 'claude',
+        HYDRA_CLAUDE_SESSION_ID: info.claudeSessionId ?? '',
+        HYDRA_CODEX_HOME_NAME: info.codexHomeName ?? '',
+        HYDRA_SESSION_TYPE: info.sessionType ?? '',
+      },
+    })
+    child.on('error', err => process.stderr.write(`daemon: on-kill hook failed: ${err.message}\n`))
+    child.unref()
+  } catch (err) {
+    process.stderr.write(`daemon: on-kill hook failed: ${err instanceof Error ? err.message : err}\n`)
+  }
+}
+
 export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
@@ -313,6 +345,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     emitSessionDeath(info)
+    runKillHook(info, reason)
 
     setTimeout(() => {
       try {

@@ -287,6 +287,16 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     }
   }
 
+  // 'main' (the platform's byte session) has no registry record; it's reached by its bridge id.
+  if (session === 'main') {
+    const connected = transport.has('main')
+    if (!connected && !queue) return respond(req, false, 'main not connected — use --queue to queue for later', undefined, 4)
+    const meta: Record<string, string> = { source: 'cli-deliver', ...(initiator && { initiator }) }
+    transport.sendOrQueue('main', { type: 'notification', content: message, meta })
+    if (idempotencyKey) registerIdempotency(idempotencyKey, 'main', DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
+    return respond(req, true, { status: connected ? 'delivered' : 'queued', sessionId: 'main', sessionName: 'main' })
+  }
+
   let info = session
     ? [...registry.values()].find(s => s.tmuxName === session || s.sessionId === session)
     : undefined
