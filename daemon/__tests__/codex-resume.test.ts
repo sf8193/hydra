@@ -245,6 +245,14 @@ describe('handleResumeIntercept — Codex', () => {
     expect(registry.reservedNames.has('r16home')).toBe(false) // reservation released
   })
 
+  test('two concurrent resumes of the same thread launch once; the second is told one is in progress', async () => {
+    seedDead('codex', { codexHomeName: 'r16race' })
+    await Promise.all([handleResumeIntercept(msg()), handleResumeIntercept(msg())])
+    expect(launches).toHaveLength(1)
+    expect(sent.some(s => s.includes('already in progress'))).toBe(true)
+    expect(registry.reservedNames.has('r16race')).toBe(false)
+  })
+
   test('home defaults to the dead tmuxName when no codexHomeName was recorded', async () => {
     const dead = seedDead('codex')
     await handleResumeIntercept(msg())
