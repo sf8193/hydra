@@ -567,3 +567,63 @@ describe('parseCodexContextUsage', () => {
     expect(parseCodexContextUsage({ tokenUsage: { modelContextWindow: 100, last: { totalTokens: 150 } } })?.percent).toBe(100)
   })
 })
+
+describe('Codex ! interrupt', () => {
+  test('interrupts the active turn with acknowledgement, keeping queued work behind its completion', async () => {
+    const engine = new CodexEngine() as any
+    const conn: any = { sessionId: 's', threadId: 't', currentTurnId: 'turn-1', turnPending: false, deferredTurnQueue: ['B'], steerQueue: [] }
+    engine.connections.set('s', conn)
+    const calls: any[] = []
+    engine.request = async (_c: any, method: string, params: any) => { calls.push([method, params]); return {} }
+    engine.startDeferredTurn = () => { throw new Error('must wait for turn/completed') }
+    expect(await engine.interruptActiveTurn('s')).toBe(true)
+    expect(calls).toEqual([['turn/interrupt', { threadId: 't', turnId: 'turn-1' }]])
+    expect(conn.currentTurnId).toBe('turn-1')
+    expect(conn.deferredTurnQueue).toEqual(['B'])
+  })
+
+  test('no active turn: nothing to interrupt', async () => {
+    const engine = new CodexEngine() as any
+    engine.connections.set('s', { sessionId: 's', threadId: 't', currentTurnId: null })
+    engine.request = async () => { throw new Error('must not send') }
+    expect(await engine.interruptActiveTurn('s')).toBe(false)
+  })
+
+  test('interrupt rejection propagates so the router logs it', async () => {
+    const engine = new CodexEngine() as any
+    engine.connections.set('s', { sessionId: 's', threadId: 't', currentTurnId: 'turn-1' })
+    engine.request = async () => { throw new Error('rejected (code -32000)') }
+    await expect(engine.interruptActiveTurn('s')).rejects.toThrow('rejected')
+  })
+
+  test('adapter uses the app-server interrupt when connected', async () => {
+    const { CodexEngineAdapter } = await import('../engines/codex-engine-adapter.js')
+    const calls: string[] = []
+    const fake: any = { isConnected: () => true, interruptActiveTurn: async (id: string) => { calls.push(id); return true } }
+    await new CodexEngineAdapter(fake).interrupt({ sessionId: 's', tmuxName: 'nope' } as any)
+    expect(calls).toEqual(['s'])
+  })
+})
+
+describe('Codex adapter delivery modes', () => {
+  test('next-turn queues a distinct turn and never steers', async () => {
+    const { CodexEngineAdapter } = await import('../engines/codex-engine-adapter.js')
+    const calls: string[] = []
+    const fake: any = {
+      isConnected: () => true,
+      queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return true },
+      steer: (_id: string, text: string) => { calls.push('steer:' + text) },
+    }
+    const result = await new CodexEngineAdapter(fake).deliver({ sessionId: 's', tmuxName: 'x' } as any, 'hi', 'next-turn', { downloaded_files: '/a.png' })
+    expect(calls).toEqual(['queue:hi\n\n[attachments: /a.png]'])
+    expect(result).toEqual({ status: 'accepted', via: 'queued-turn' })
+  })
+
+  test('launch queues the prompt as FIFO item zero before connecting', () => {
+    const src = require('fs').readFileSync(require('path').join(import.meta.dir, '..', 'engines', 'codex-engine-adapter.ts'), 'utf8')
+    const launch = src.slice(src.indexOf('async launch('))
+    const queued = launch.indexOf('this.engine.queueTurn(sessionId, prompt)')
+    expect(queued).toBeGreaterThan(-1)
+    expect(queued).toBeLessThan(launch.indexOf('this.engine.connect'))
+  })
+})

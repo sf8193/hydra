@@ -257,6 +257,12 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async interrupt(info: SessionInfo): Promise<void> {
+    // Connected: acknowledged app-server interrupt; the next queued turn still
+    // waits for the interrupted turn's completion. Otherwise fall back to the TUI.
+    if (this.engine.isConnected(info.sessionId)) {
+      await this.engine.interruptActiveTurn(info.sessionId)
+      return
+    }
     const target = `${info.tmuxName}:hydra-chat`
     Bun.spawn(['tmux', 'send-keys', '-t', target, 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
   }

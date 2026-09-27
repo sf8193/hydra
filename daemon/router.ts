@@ -1,4 +1,5 @@
 import { gateway, PERMISSION_REPLY_RE, INBOX_DIR } from './config.js'
+import { reserveUserIngress } from './user-ingress.js'
 import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
@@ -203,7 +204,7 @@ function extractContextLinks(text: string): string[] {
   return links
 }
 
-async function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access): Promise<void> {
+function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access, before?: Promise<unknown>): Promise<void> {
   void gateway.typing(msg.channelId).catch(() => {})
   if (access.ackReaction) {
     void gateway.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
@@ -235,12 +236,23 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
   }
   const chatId = sessionInfo?.threadId ?? msg.channelId
 
-  const { content, meta } = await buildNotificationPayload(msg, chatId)
-  transport.sendOrQueue(targetSessionId, {
-    type: 'notification', content, allowPiggyback: true,
-    deferUntilTurnComplete: true, meta,
-  })
-  notePendingReply(targetSessionId, meta)
+  return enqueueUserMessage(msg, targetSessionId, chatId, before)
+}
+
+/**
+ * Reserve the session's ingress slot synchronously, then enrich and deliver
+ * as a distinct next turn. `before` (a `!` interrupt) is awaited inside the
+ * slot so the stripped message is admitted only after the interrupt settles.
+ */
+function enqueueUserMessage(msg: InboundMessage, targetSessionId: string, chatId: string, before?: Promise<unknown>): Promise<void> {
+  return reserveUserIngress(targetSessionId, async () => {
+    const { content, meta } = await buildNotificationPayload(msg, chatId)
+    transport.sendOrQueue(targetSessionId, {
+      type: 'notification', content, allowPiggyback: true,
+      deferUntilTurnComplete: true, meta,
+    })
+    notePendingReply(targetSessionId, meta)
+  }, { before })
 }
 
 // ---------------------------------------------------------------------------
@@ -901,19 +913,22 @@ gateway.onMessage(async (msg: InboundMessage) => {
             const stripped = msg.content.slice(1).trim()
             if (stripped) {
               void gateway.react(msg.channelId, msg.id, '⚡').catch(() => {})
+              // Capture the interrupt synchronously, before this message's
+              // ingress slot, so later messages cannot overtake it.
+              let interrupted: Promise<unknown>
               try {
                 const interruptAdapter = info.adapter ?? resolveEngine(info.engine)
                 interruptAdapter.ensureSurface(info)
-                void interruptAdapter.interrupt(info)
+                // 50ms lets a TUI-keystroke interrupt (Claude) land before delivery.
+                interrupted = interruptAdapter.interrupt(info).then(() => new Promise(r => setTimeout(r, 50)))
                 process.stderr.write(`daemon: interrupt sent to ${info.tmuxName} via ! prefix\n`)
               } catch (err) {
-                process.stderr.write(`daemon: interrupt failed for ${info.tmuxName}: ${err instanceof Error ? err.message : err}\n`)
+                interrupted = Promise.reject(err)
               }
               msg.content = stripped
-              await new Promise(r => setTimeout(r, 50))
               info.lastActive = Date.now()
               registry.debouncedPersist()
-              void deliverToSession(msg, mappedSession, access)
+              void deliverToSession(msg, mappedSession, access, interrupted)
               return
             }
           }
@@ -1025,10 +1040,5 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
   }
-  const { content, meta } = await buildNotificationPayload(msg, effectiveChatId)
-  transport.sendOrQueue(targetSessionId, {
-    type: 'notification', content, allowPiggyback: true,
-    deferUntilTurnComplete: true, meta,
-  })
-  notePendingReply(targetSessionId, meta)
+  await enqueueUserMessage(msg, targetSessionId, effectiveChatId)
 })

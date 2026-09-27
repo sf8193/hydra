@@ -361,7 +361,8 @@ export class CodexEngine extends EventEmitter {
         scheduling.startState = 'uncertain'
         scheduling.uncertainDeferredText = text
         this.emit('turnDeliveryUnknown', conn.sessionId, text, err)
-        this.reconcileUnknownDeferredStart(conn)
+        // The socket may have dropped and been replaced; reconcile on the live conn.
+        this.reconcileUnknownDeferredStart(this.connections.get(conn.sessionId) ?? conn)
         return
       }
       if (!current) return
@@ -422,12 +423,15 @@ export class CodexEngine extends EventEmitter {
       })
       .catch(err => {
         process.stderr.write(`codex-engine: unknown deferred start reconciliation failed for ${conn.sessionId}: ${err}\n`)
+        // A reconnect's resume already reconciled; a dead socket's failure must not re-block it.
+        if (this.connections.get(conn.sessionId) !== conn) return
         scheduling.startState = 'uncertain'
         this.emit('turnStalled', conn.sessionId)
       })
       .finally(() => {
         scheduling.reconciling = false
-        if (this.connections.get(conn.sessionId) === conn) this.drainDeferredTurns(conn)
+        const live = this.connections.get(conn.sessionId)
+        if (live) this.drainDeferredTurns(live)
       })
   }
 
@@ -479,6 +483,21 @@ export class CodexEngine extends EventEmitter {
       return false
     }
     conn.currentTurnId = null
+    return true
+  }
+
+  /**
+   * `!` interrupt: acknowledged turn/interrupt of the active turn. Unlike
+   * retirement it neither fences nor clears currentTurnId, so queued turns
+   * drain only on the interrupted turn's turn/completed.
+   * ponytail: a `!` while a start is still unacknowledged (no turn ID yet)
+   * interrupts nothing; add a pending-start intent (design_v5/v6) if that
+   * window proves to matter.
+   */
+  async interruptActiveTurn(sessionId: string): Promise<boolean> {
+    const conn = this.connections.get(sessionId)
+    if (!conn?.threadId || !conn.currentTurnId) return false
+    await this.request(conn, 'turn/interrupt', { threadId: conn.threadId, turnId: conn.currentTurnId })
     return true
   }
 
@@ -756,7 +775,7 @@ export class CodexEngine extends EventEmitter {
             this.getScheduling(conn.sessionId, conn).completedWhileStartingTurnIds.add(completedTurnId)
             break
           }
-          if (completedTurnId && completedTurnId !== conn.currentTurnId) break
+          if (completedTurnId && conn.currentTurnId && completedTurnId !== conn.currentTurnId) break
         }
         if (conn.turnWatchdog) { clearTimeout(conn.turnWatchdog); conn.turnWatchdog = null }
         {
