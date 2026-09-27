@@ -14,7 +14,7 @@ import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
-  ExecutionRetirementResult, StopResult,
+  StopResult,
   ContextUsage, RecoverySource, RecoveryPlan, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import { codexUsageTotals } from '../codex-rollout.js'
@@ -227,21 +227,6 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
 
     return this.engine.steer(info.sessionId, deliveryText)
-  }
-
-  // No callers; kept for the deferred lifecycle track.
-  private async retire(info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
-    try {
-      await this.engine.retireSession(info.sessionId)
-    } catch {}
-    // Also interrupt any persisted thread so it doesn't keep running after we leave
-    if (info.codexThreadId) {
-      const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
-      try {
-        await this.engine.interruptPersistedThread(sockPath, info.codexThreadId)
-      } catch {}
-    }
-    return { status: 'terminal' }
   }
 
   async stop(info: SessionInfo): Promise<StopResult> {

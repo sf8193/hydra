@@ -15,6 +15,7 @@ import { queueCodexKeys, queuedCodexKeyCount } from '../codex-key-queue.js'
 import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { engineRecords } from '../engines/boot.js'
+import { reconnectCodexSessions } from '../engines/codex-runtime.js'
 
 // The boot sweep over every Codex record in the registry.
 const sweep = (adapter: CodexEngineAdapter) => adapter.start(engineRecords(adapter))
@@ -255,6 +256,16 @@ describe('T0.7 engine events', () => {
     expect(info.deadAt).toBeUndefined()
     expect(surfaced).toBe(1)
     expect(disconnects).toEqual([])
+  })
+
+  test('boot sweep: a record whose adapter cannot reconnect is skipped with a log, not a throw', async () => {
+    const logged: string[] = []
+    const realStderr = process.stderr.write
+    process.stderr.write = ((line: string) => { logged.push(line); return true }) as any
+    const info = put({ sessionId: 't07-noreconnect', codexThreadId: 'T', adapter: { provider: 'claude', surface: () => null } as any })
+    try { await reconnectCodexSessions([info]) } finally { process.stderr.write = realStderr }
+    expect(logged.some(l => l.includes('t07-noreconnect has no reconnectable adapter (claude); skipped'))).toBe(true)
+    expect(typeof info.deadAt).toBe('number') // not reconnected: stamped as the sweep stamps any failure
   })
 
   test('disconnected, reconnect exhausted: stamps, persists, clears keys, dispatches', async () => {

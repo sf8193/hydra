@@ -20,10 +20,18 @@ import { safeSend } from '../util.js'
 import { clearCodexKeys, flushCodexKeys } from '../codex-key-queue.js'
 import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
 import { on } from '../event-bus.js'
+import type { EngineAdapter } from './engine-adapter.js'
 
 // reconnect is Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
+// A typed guard rather than instanceof: test fixtures stand in duck-typed adapters.
 type Reconnectable = { reconnect(info: SessionInfo): Promise<boolean> }
-const reconnectOf = (info: SessionInfo) => (info.adapter as unknown as Reconnectable).reconnect(info)
+const isReconnectable = (a: EngineAdapter): a is EngineAdapter & Reconnectable =>
+  typeof (a as Partial<Reconnectable>).reconnect === 'function'
+function reconnectOf(info: SessionInfo): Promise<boolean> {
+  if (isReconnectable(info.adapter)) return info.adapter.reconnect(info)
+  process.stderr.write(`codex-runtime: ${info.tmuxName} has no reconnectable adapter (${info.adapter.provider}); skipped\n`)
+  return Promise.resolve(false)
+}
 
 // ---------------------------------------------------------------------------
 // Singleton
