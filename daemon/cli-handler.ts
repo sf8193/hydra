@@ -161,6 +161,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
     tmux: tmuxAlive ? 'alive' : 'dead',
     origin: info.originType,
+    attachTarget: info.adapter.surface(info),
   })
 }
 

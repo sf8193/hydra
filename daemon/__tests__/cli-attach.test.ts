@@ -57,14 +57,14 @@ async function attach(name: string) {
 }
 
 describe('hydra attach (Z1)', () => {
-  test.failing('claude session → tmux attach to its session', async () => {
+  test('claude session → tmux attach to its session', async () => {
     const name = seed('claude'); fake.alive(name)
     const r = await attach(name)
     expect(r.attached).toEqual([`attach -t ${name}`])
     expect(r.code).toBe(0)
   })
 
-  test.failing('codex session → tmux attach to its hydra-chat window', async () => {
+  test('codex session → tmux attach to its hydra-chat window', async () => {
     const name = seed('codex', { codexThreadId: 'T-z1' }); fake.alive(name)
     const r = await attach(name)
     expect(r.attached).toEqual([`attach -t ${name}:hydra-chat`])

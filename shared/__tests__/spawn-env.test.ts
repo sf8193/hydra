@@ -279,10 +279,10 @@ test('every call that spawns codex builds its env through codexSpawnEnv', () => 
   const byFile = new Map(TS_SOURCES().map(f => [f, codexCalls(flat(f))]))
   const matched = [...byFile].filter(([, c]) => c.some(x => x.codex)).map(([f]) => f)
   expect(matched.sort(), 'an exact set, not a floor — a fourth site needs a human').toEqual([
-    'cli/hydra.ts', 'daemon/codex-process.ts', 'daemon/engines/codex-engine-adapter.ts',
+    'daemon/codex-process.ts', 'daemon/engines/codex-engine-adapter.ts',
   ])
   const codexOnly = matched.flatMap(f => byFile.get(f)!.filter(x => x.codex))
-  expect(codexOnly, 'a mis-parsed paren balance would merge or drop calls').toHaveLength(3)
+  expect(codexOnly, 'a mis-parsed paren balance would merge or drop calls').toHaveLength(2)
   for (const { call } of codexOnly) {
     expect(call).toContain('codexSpawnEnv(')
     expect(call).not.toMatch(/process\.env/)
