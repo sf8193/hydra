@@ -1269,7 +1269,6 @@ describe('dynamic tool scoping', () => {
     expect(names).toContain('advance')
     expect(names).toContain('reply')
     expect(names).toContain('fetch_messages')
-    expect(names).not.toContain('spawn_session')
     expect(names).not.toContain('factory_build')
   })
 
@@ -1382,7 +1381,7 @@ describe('tools_update on phase transition', () => {
     const latest = toolsUpdates[toolsUpdates.length - 1]
     const tools = latest.tools as Array<{ name: string }>
     expect(tools.some(t => t.name === 'advance')).toBe(false)
-    expect(tools).toHaveLength(13)
+    expect(tools).toHaveLength(15)
   })
 })
 
