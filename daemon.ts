@@ -37,7 +37,7 @@ writeFileSync(PID_FILE, `${process.pid}\n`)
 process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
-import { PLUGIN_MANIFEST, MCP_CONFIG } from './daemon/plugin-manifest.js'
+import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
 import { engines, resolveEngine } from './daemon/engines/instances.js'
 import { engineRecords } from './daemon/engines/boot.js'
@@ -273,6 +273,11 @@ try {
     writeFileSync(join(targetDir, '.mcp.json'), MCP_CONFIG)
     mkdirSync(join(targetDir, '.claude-plugin'), { recursive: true })
     writeFileSync(join(targetDir, '.claude-plugin', 'plugin.json'), PLUGIN_MANIFEST)
+    // Not awaited: boot never waits on the registry. Each dir succeeds or fails alone.
+    void ensureBridgeReady(targetDir).then(
+      outcome => { if (outcome === 'installed') process.stderr.write(`daemon: installed bridge deps + lifted start script in ${targetDir}\n`) },
+      err => process.stderr.write(`daemon: bridge deps install failed in ${targetDir} (spawns keep installing): ${err instanceof Error ? err.message : String(err)}\n`),
+    )
   }
   process.stderr.write(`daemon: synced bridge.ts + daemon-${PLATFORM}.json + .mcp.json into ${discordCache}/*/\n`)
 } catch (err) {
