@@ -8,7 +8,7 @@ import type { Protocol } from '../protocol-dsl.js'
 import type { ProtocolRun } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
-import type { EngineAdapter } from '../engines/engine-adapter.js'
+import { withoutIntents, type EngineAdapter } from '../engines/engine-adapter.js'
 import type { SessionLabel } from '../../shared/constants.js'
 import { resolveSpawnLabel } from '../util.js'
 
@@ -448,7 +448,7 @@ export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdap
     provider: 'claude',
     channel: 'bridge',
     isConnected: (info: SessionInfo) => transport.bridges.has(info.sessionId),
-    deliver: async (info: SessionInfo, msg: Record<string, unknown>) => { transport.writeOrQueue(info.sessionId, msg); return { status: 'accepted' } },
+    deliver: async (info: SessionInfo, msg: Record<string, unknown>) => { transport.writeOrQueue(info.sessionId, withoutIntents(msg)); return { status: 'accepted' } },
     turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }),
     recoveryPlan: () => ({ generic: true, resume: null, fork: null }),
     ...overrides,

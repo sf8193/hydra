@@ -274,6 +274,92 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     const onDisk = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8'))
     expect(onDisk.s14.items).toEqual(['first restart survivor'])
   })
+
+  // Review gaps closed with contract PR-0 (M17, M12, M16), restated over #378's outcomes.
+  test('a throwing carry is reported once, as held uncertain delivery (M17)', async () => {
+    put('s17', async () => { throw new Error('network blip') })
+    pb.buffer('s17', 'CI failed on PR #99')
+    const logged: string[] = []
+    const quiet = process.stderr.write
+    process.stderr.write = ((line: string) => { logged.push(line); return true }) as any
+    try {
+      bt.sendOrQueue('s17', { type: 'notification', content: 'real user message', allowPiggyback: true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+    } finally { process.stderr.write = quiet }
+    const failures = logged.filter(l => l.includes('delivery failed for s17'))
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toContain('unknown: Error: network blip. Buffered content retained; held for manual inspection')
+    pb.clear('s17')
+  })
+
+  test('a retryable backstop rejection persists its fresh window (M12)', async () => {
+    put('s18', async () => ({ status: 'rejected', retryable: true, reason: 'busy' }))
+    const staleAt = Date.now() - 61 * 60_000
+    writeFileSync(join(STATE_DIR, 'piggyback-buffer.json'), JSON.stringify({ s18: { items: ['overdue'], bufferedAt: staleAt } }))
+    const pb2 = new CodexPiggyback()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const onDisk = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8')).s18
+    expect(onDisk).toMatchObject({ items: ['overdue'], attempts: 1 })
+    expect(onDisk.heldReason).toBeUndefined()
+    expect(onDisk.bufferedAt).toBeGreaterThan(staleAt)
+    pb2.clear('s18')
+  })
+
+  test('a carry whose turn delivery throws synchronously settles as held unknown, as main did', () => {
+    put('s20', () => { throw new Error('sync failure') })
+    pb.buffer('s20', 'carried')
+    bt.sendOrQueue('s20', { type: 'notification', content: 'user', allowPiggyback: true })
+    expect(JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8')).s20).toMatchObject({ items: ['carried'], heldReason: 'Error: sync failure' })
+    pb.clear('s20')
+  })
+
+  test('attempts survive a restart, so the retry cap spans restarts', async () => {
+    put('s21', async () => ({ status: 'rejected', retryable: true, reason: 'busy' }))
+    pb.buffer('s21', 'retried')
+    ;(pb as any).flushStandalone('s21')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const pb2 = new CodexPiggyback()
+    expect((pb2 as any).state.get('s21')).toMatchObject({ items: ['retried'], attempts: 1 })
+    pb.clear('s21'); pb2.clear('s21')
+  })
+
+  test('attempts reset to 0 when a delivery is accepted', async () => {
+    let result: any = { status: 'rejected', retryable: true, reason: 'busy' }
+    put('s22', async () => result)
+    pb.buffer('s22', 'first')
+    ;(pb as any).flushStandalone('s22')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect((pb as any).state.get('s22').attempts).toBe(1)
+    result = { status: 'accepted' }
+    bt.sendOrQueue('s22', { type: 'notification', content: 'user', allowPiggyback: true })
+    pb.buffer('s22', 'second') // lands while the carry is in flight, so the state outlives the accept
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8')).s22).toMatchObject({ items: ['second'], attempts: 0 })
+    pb.clear('s22')
+  })
+
+  test('restore drops entries for dead sessions, in memory and on disk', () => {
+    registry.set('s23', { sessionId: 's23', engine: 'codex', threadId: 'chat1', deadAt: 1, adapter: codexAdapter(pb, async () => ({ status: 'accepted' })) } as any)
+    writeFileSync(join(STATE_DIR, 'piggyback-buffer.json'), JSON.stringify({ s23: { items: ['for the dead'], bufferedAt: Date.now() } }))
+    const pb2 = new CodexPiggyback()
+    expect((pb2 as any).state.has('s23')).toBe(false)
+    expect(existsSync(join(STATE_DIR, 'piggyback-buffer.json'))).toBe(false)
+  })
+
+  test('load writes back only what it restored (M16)', () => {
+    mockCodexSession('s19')
+    pb.buffer('s19', 'survivor')
+    // An entry for a session the registry doesn't know: load filters it out, so
+    // it is gone from disk only if the filtered state was written back.
+    const file = join(STATE_DIR, 'piggyback-buffer.json')
+    const before = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...before, 'pb-unregistered': { items: ['orphan'], bufferedAt: Date.now() } }))
+    const pb2 = new CodexPiggyback()
+    const onDisk = JSON.parse(readFileSync(file, 'utf8'))
+    expect(onDisk.s19.items).toEqual(['survivor'])
+    expect(onDisk['pb-unregistered']).toBeUndefined()
+    pb2.clear('s19')
+  })
 })
 
 describe('delivery outcomes and piggyback ownership', () => {
