@@ -13,15 +13,18 @@ const review = (await import('../../protocols/review.js')).default
 // ---------------------------------------------------------------------------
 
 describe('review state machine transitions (v2 DSL)', () => {
-  test('review: critic_turn -> owner_turn -> cleanup -> complete', () => {
-    const r1 = review.machine.transition('critic_turn', 'critic_posted')
+  test('review: approval closes; final feedback remains unresolved', () => {
+    const approved = review.machine.transition('critic_turn', 'critic_approve')
+    expect(approved.ok).toBe(true)
+    if (approved.ok) expect(approved.to).toBe('cleanup')
+
+    const r1 = review.machine.transition('critic_turn', 'critic_feedback')
     expect(r1.ok).toBe(true)
     if (r1.ok) expect(r1.to).toBe('owner_turn')
 
-    // v2 removed post_pass — final_round goes straight to cleanup.
     const r2 = review.machine.transition('owner_turn', 'final_round')
     expect(r2.ok).toBe(true)
-    if (r2.ok) expect(r2.to).toBe('cleanup')
+    if (r2.ok) expect(r2.to).toBe('unresolved')
 
     const r3 = review.machine.transition('cleanup', 'summary_posted')
     expect(r3.ok).toBe(true)
@@ -37,7 +40,7 @@ describe('review state machine transitions (v2 DSL)', () => {
   })
 
   test('invalid transitions rejected', () => {
-    expect(review.machine.transition('complete', 'critic_posted').ok).toBe(false)
+    expect(review.machine.transition('complete', 'critic_feedback').ok).toBe(false)
   })
 })
 

@@ -510,6 +510,10 @@
     ],
     [
       "daemon_bridge-dispatch",
+      "shared_constants"
+    ],
+    [
+      "daemon_bridge-dispatch",
       "daemon_tool-surface"
     ],
     [
@@ -1055,6 +1059,10 @@
     [
       "daemon_commands_review",
       "daemon_protocol-registry"
+    ],
+    [
+      "daemon_commands_review",
+      "shared_constants"
     ],
     [
       "daemon_commands_watch",
