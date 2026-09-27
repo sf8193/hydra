@@ -34,11 +34,11 @@ describe('ensureBridgeReady', () => {
   test('cold dir: installs once, writes the marker, lifts only the start script', async () => {
     const { ensureBridgeReady, DEPS_MARKER } = await import('../plugin-manifest.js')
     const d = dir(); const calls: string[] = []
-    expect(await ensureBridgeReady(d, okInstall(calls))).toBe('installed')
+    expect(await ensureBridgeReady(d, okInstall(calls))).toBe(true)
     expect(calls).toEqual([d])
     expect(existsSync(join(d, DEPS_MARKER))).toBe(true)
     expect(pkg(d)).toEqual({ ...PUBLISHED, scripts: { start: 'bun server.ts' } })
-    expect(await ensureBridgeReady(d, okInstall(calls))).toBe('ready')
+    expect(await ensureBridgeReady(d, okInstall(calls))).toBe(false)
     expect(calls).toHaveLength(1)
   })
 
@@ -50,7 +50,7 @@ describe('ensureBridgeReady', () => {
     expect(existsSync(join(d, DEPS_MARKER))).toBe(false)
     expect(pkg(d).scripts.start).toBe(PUBLISHED.scripts.start)
     const calls: string[] = []
-    expect(await ensureBridgeReady(d, okInstall(calls))).toBe('installed')   // partial node_modules does not count as done
+    expect(await ensureBridgeReady(d, okInstall(calls))).toBe(true)   // partial node_modules does not count as done
     expect(calls).toEqual([d])
   })
 
@@ -58,7 +58,7 @@ describe('ensureBridgeReady', () => {
     const { ensureBridgeReady } = await import('../plugin-manifest.js')
     const d = mkdtempSync(join(tmpdir(), 'hydra-bridge-ready-'))
     const calls: string[] = []
-    expect(await ensureBridgeReady(d, okInstall(calls))).toBe('skipped')
+    expect(await ensureBridgeReady(d, okInstall(calls))).toBe(false)
     expect(calls).toEqual([])
   })
 })

@@ -77,7 +77,7 @@ export type InstallRunner = (cwd: string) => Promise<void>
 
 /** Marker inside node_modules: written only after a complete install, deleted with it. */
 export const DEPS_MARKER = join('node_modules', '.hydra-deps-ok')
-export const BRIDGE_INSTALL_TIMEOUT_MS = 120_000
+const BRIDGE_INSTALL_TIMEOUT_MS = 120_000
 
 const bunInstall: InstallRunner = cwd => new Promise((resolve, reject) => {
   execFile('bun', ['install', '--no-summary'], { cwd, timeout: BRIDGE_INSTALL_TIMEOUT_MS }, (err, _stdout, stderr) => {
@@ -93,17 +93,17 @@ const bunInstall: InstallRunner = cwd => new Promise((resolve, reject) => {
  * script is lifted only after a complete install (marker present), so a failed
  * or partial install leaves the published install-on-spawn script in place and
  * is retried on the next boot. Only `scripts.start` is rewritten; the rest of
- * package.json stays upstream's.
+ * package.json stays upstream's. Resolves true only when this call ran the install.
  */
-export async function ensureBridgeReady(targetDir: string, install: InstallRunner = bunInstall): Promise<'ready' | 'installed' | 'skipped'> {
+export async function ensureBridgeReady(targetDir: string, install: InstallRunner = bunInstall): Promise<boolean> {
   const pkgPath = join(targetDir, 'package.json')
-  if (!existsSync(pkgPath)) return 'skipped'
+  if (!existsSync(pkgPath)) return false
   const marker = join(targetDir, DEPS_MARKER)
-  let outcome: 'ready' | 'installed' = 'ready'
+  let installed = false
   if (!existsSync(marker)) {
     await install(targetDir)
     writeFileSync(marker, `${new Date().toISOString()}\n`)
-    outcome = 'installed'
+    installed = true
   }
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
   const start = pkg.scripts?.start
@@ -114,5 +114,5 @@ export async function ensureBridgeReady(targetDir: string, install: InstallRunne
       writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
     }
   }
-  return outcome
+  return installed
 }
