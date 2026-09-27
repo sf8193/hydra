@@ -7,6 +7,7 @@ import { STATE_DIR } from '../config.js'
 import { on } from '../event-bus.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { engines } from '../engines/instances.js'
+import { fakeAdapter } from './test-harness.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -348,7 +349,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     // since that's what "not free" actually means here.
     registry.set('s8', {
       sessionId: 's8', engine: 'claude', threadId: 'chat1',
-      adapter: { provider: 'claude', deliveryIsFree: false, deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } } },
+      adapter: fakeAdapter({ deliveryIsFree: false, isConnected: () => true, deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } } }),
     } as any)
     delivered = []
     bt.sendOrQueue('s8', { type: 'notification', content: 'routed via adapter, not bridge socket' })
@@ -708,5 +709,17 @@ describe('has() matrix (adapter-policy T2)', () => {
     expect(bt.has('main')).toBe(false)
     bridge('main')
     expect(bt.has('main')).toBe(true)
+  })
+})
+
+describe('engines/instances import (adapter-policy S2)', () => {
+  test('a fresh process imports instances.ts first and the Claude adapter is bound to a transport', () => {
+    // Subprocess: this file's module cache already holds bridge-transport, so
+    // only a fresh process can catch a TDZ from an import cycle.
+    const code = "const { engines } = await import('./daemon/engines/instances.ts'); console.log(engines.claude.isConnected({ sessionId: 'nope' }))"
+    const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: process.env })
+    expect(r.stderr.toString()).not.toContain('Error')
+    expect(r.stdout.toString().trim()).toBe('false')
+    expect(r.exitCode).toBe(0)
   })
 })

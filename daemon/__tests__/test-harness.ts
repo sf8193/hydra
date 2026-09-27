@@ -7,6 +7,7 @@ import type { Protocol } from '../protocol-dsl.js'
 import type { ProtocolRun } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
+import type { EngineAdapter } from '../engines/engine-adapter.js'
 import type { SessionLabel } from '../../shared/constants.js'
 import { resolveSpawnLabel } from '../util.js'
 
@@ -431,4 +432,18 @@ export function createHarness(proto: Protocol, opts?: HarnessOpts): TestHarness 
 /** createHarness, but the run comes from the real startProtocolRun(). */
 export function createStartedHarness(proto: Protocol, opts?: HarnessOpts): Promise<TestHarness> {
   return TestHarness.started(proto, opts)
+}
+
+/**
+ * Shared fake EngineAdapter. Defaults are the members neutral code calls on
+ * every record; override anything else per test. isConnected defaults to the
+ * Claude answer (session bridge on the singleton transport).
+ */
+export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdapter {
+  return {
+    provider: 'claude',
+    deliveryIsFree: true,
+    isConnected: (info: SessionInfo) => transport.bridges.has(info.sessionId),
+    ...overrides,
+  } as unknown as EngineAdapter
 }

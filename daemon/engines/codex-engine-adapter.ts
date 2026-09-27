@@ -48,6 +48,12 @@ export class CodexEngineAdapter implements EngineAdapter {
   readonly deliveryIsFree = false
   constructor(private readonly engine: CodexEngine, private readonly proc = codexLaunchProcess) {}
 
+  // PINNED C1: always true, as transport.has() answered before S2. Reporting
+  // this.engine.isConnected is PR-CONN (needs disconnect-time grace first).
+  isConnected(_info: SessionInfo): boolean {
+    return true
+  }
+
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
   private startAppServer(input: LaunchInput, codexHomeName: string): string {
     const { sessionId, tmuxName, cwd: effectiveCwd, model } = input

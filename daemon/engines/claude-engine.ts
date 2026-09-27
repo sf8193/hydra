@@ -15,7 +15,7 @@ import type {
   ExecutionRetirementResult, StopResult,
   ContextUsage,
 } from './engine-adapter.js'
-import { transport } from '../bridge-transport.js'
+import { transport, type BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession } from '../util.js'
 import { isKnownModel } from '../../shared/constants.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
@@ -50,6 +50,11 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
   readonly deliveryIsFree = true
+  constructor(private readonly transport: BridgeTransport) {}
+
+  isConnected(info: SessionInfo): boolean {
+    return this.transport.bridges.has(info.sessionId)
+  }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input

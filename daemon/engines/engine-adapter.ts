@@ -104,6 +104,8 @@ export interface EngineAdapter {
   stop(info: SessionInfo): Promise<StopResult>
 
   // Observation
+  // Is a delivery channel connected? Backs transport.has().
+  isConnected(info: SessionInfo): boolean
   isAlive(info: SessionInfo): Promise<boolean>
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null

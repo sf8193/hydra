@@ -72,12 +72,9 @@ export class BridgeTransport {
 
   has(sessionId: string): boolean {
     if (this.bridges.has(sessionId)) return true
-    // Priced-turn engines (Codex, and any future non-free adapter) connect
-    // via their adapter, not the bridge socket — check the capability, not
-    // the provider name, so a new engine doesn't need this taught to it twice.
+    // Otherwise the session's adapter decides; no record (e.g. 'main') → false.
     const info = registry.get(sessionId)
-    if (info?.adapter && info.adapter.deliveryIsFree === false) return true
-    return false
+    return info?.adapter ? info.adapter.isConnected(info) : false
   }
 
   set(sessionId: string, conn: BridgeConn): void {
