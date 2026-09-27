@@ -638,10 +638,6 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_usage"
-    ],
-    [
-      "daemon_session-lifecycle",
       "daemon_sessions"
     ],
     [

@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'crypto'
 import { execFileSync, execSync } from 'child_process'
-import { mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import { detectBlockingState as detectBlockingStateFn } from '../pane-probe.js'
@@ -17,7 +17,8 @@ import type {
 } from './engine-adapter.js'
 import { transport, type BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession } from '../util.js'
-import { isKnownModel } from '../../shared/constants.js'
+import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
+import { projectDirName, projectsRoot } from '../usage.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
@@ -45,6 +46,48 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
     return `\n\nWORKTREE: Your isolated worktree is at ${worktreePath}. cd there before making any code changes.`
   }
   return ''
+}
+
+// ---------------------------------------------------------------------------
+// Claude session ID discovery
+// ---------------------------------------------------------------------------
+
+export function discoverClaudeSessionId(tmuxName: string): string | null {
+  try {
+    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8', timeout: 2000 }).toString().trim()
+    if (!panePid) return null
+
+    // Primary: read Claude's session file at $CLAUDE_CONFIG_DIR/sessions/<pid>.json
+    const sessionFile = join(claudeConfigDir(), 'sessions', `${panePid}.json`)
+    try {
+      const data = JSON.parse(readFileSync(sessionFile, 'utf8'))
+      if (data.sessionId && data.cwd) {
+        // Verify the conversation file exists (Claude creates .jsonl lazily —
+        // freshly spawned sessions may not have one yet).
+        // NOTE: For fork+worktree builders, data.cwd reflects Claude's launch CWD
+        // (spawnCwd, e.g. /Users/sam/trading), not the worktree the builder later
+        // `cd`s to via Bash. Claude's session file captures the startup CWD and does
+        // not update on shell cd — so the conversation file will be found correctly.
+        const projectDir = join(projectsRoot(), projectDirName(data.cwd))
+        const conversationFile = join(projectDir, `${data.sessionId}.jsonl`)
+        if (existsSync(conversationFile)) return data.sessionId
+      }
+    } catch {}
+
+    // Fallback: scan child process environments
+    const childPids = execFileSync('pgrep', ['-P', panePid], { encoding: 'utf8', timeout: 2000 }).toString().trim().split('\n').filter(Boolean)
+    for (const childPid of childPids) {
+      const envOutput = execFileSync('ps', ['-E', '-p', childPid], { encoding: 'utf8', timeout: 2000 }).toString()
+      if (!envOutput.includes('HYDRA_SESSION_ID')) continue
+      const hydraId = envOutput.match(/HYDRA_SESSION_ID=([^\s]+)/)?.[1]
+      const candidates = [...envOutput.matchAll(/([A-Z_]*SESSION[A-Z_]*)=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g)]
+      const claudeId = candidates.find(m => m[2] !== hydraId)?.[2]
+      if (claudeId) return claudeId
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 export class ClaudeEngine implements EngineAdapter {
