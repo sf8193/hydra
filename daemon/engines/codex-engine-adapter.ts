@@ -24,6 +24,7 @@ import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } fro
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
+import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -47,9 +48,12 @@ export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startC
 
 export class CodexEngineAdapter implements EngineAdapter {
   readonly provider = 'codex' as const
-  readonly deliveryIsFree = false
   readonly channel = 'engine' as const
-  constructor(private readonly engine: CodexEngine, private readonly proc = codexLaunchProcess) {}
+  constructor(
+    private readonly engine: CodexEngine,
+    private readonly proc = codexLaunchProcess,
+    private readonly piggyback: CodexPiggyback = codexPiggyback,
+  ) {}
 
   // Launch resumes the thread in its original CODEX_HOME and takes the prompt.
   // A stray claudeSessionId is ignored (PINNED R9; PR-IDENT).
@@ -155,14 +159,44 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
-  async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+  // Every delivery is a priced turn, so the intents decide whether it gets one.
+  deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
+    if (msg.optional === true) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'optional delivery dropped for codex' })
+    // Ride the next turn the user creates instead of paying for a standalone
+    // one, CI failures and changes-requested included — Sam's call
+    // (2026-09-15): the 1h backstop bounds the delay, no urgency carve-out.
+    // A dead session has no next turn: deliver now.
+    if (msg.lowPriority === true && !info.deadAt) {
+      this.piggyback.buffer(info.sessionId, msg.content as string)
+      return Promise.resolve({ status: 'accepted', via: 'piggyback-buffer' })
+    }
+    // Opt-IN, not opt-out: only a caller that knows it's delivering a turn the
+    // user actually created (a real message, not a liveness/procedural nudge
+    // the model may no-op on) carries buffered content along. begin() takes
+    // ownership of exactly what rides — a new item can land before delivery
+    // resolves — and finish() settles only that receipt.
+    const text = typeof msg.content === 'string' && msg.content ? msg.content : undefined
+    const prefix = text && msg.allowPiggyback === true ? this.piggyback.begin(info.sessionId) : undefined
+    if (!prefix) return this.deliverTurn(info, msg)
+    const sid = info.sessionId
+    const finish = (result: DeliveryResult) => this.piggyback.finish(sid, prefix, result)
+    try {
+      return this.deliverTurn(info, { ...msg, content: `${prefix.items.join('\n\n')}\n\n---\n\n${text}` })
+        .then(finish, err => finish({ status: 'unknown', reason: String(err) }))
+    } catch (err) {
+      return Promise.resolve(finish({ status: 'unknown', reason: String(err) }))
+    }
+  }
+
+  /** One turn's worth of delivery: steer, or queue for the next turn. */
+  async deliverTurn(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
     const text = msg.content
     // Silent, as when sendOrQueue dropped it before reaching the adapter (PINNED E1b).
     if (typeof text !== 'string' || !text) return { status: 'rejected', retryable: false, reason: 'non-text content' }
     if (text === '[system] keepalive') {
       return { status: 'rejected', retryable: false, reason: 'keepalive blocked for codex' }
     }
-    const mode: DeliveryMode | undefined = msg.deferUntilTurnComplete === true ? 'next-turn' : undefined
+    const mode: DeliveryMode | undefined = msg.deferUntilTurnComplete === true || msg.handoff === true ? 'next-turn' : undefined
     const meta = msg.meta
     // Enrich before transferring ownership to the queue, including while the
     // app-server connection is absent.

@@ -68,7 +68,7 @@ function armThenAdvance(tmuxName: string, armAt: number): number {
 }
 
 // 'main' has no registry entry (info undefined) — same as a Claude session:
-// no adapter, deliveryIsFree doesn't apply, so it always takes the nudge path.
+// no adapter, so it always takes the nudge path.
 function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): SessionInfo {
   const info: SessionInfo = {
     sessionId,
@@ -88,7 +88,7 @@ function codexSession(sessionId: string, tmuxName: string, claudeSessionId?: str
   return liveSession(sessionId, {
     tmuxName,
     engine: 'codex',
-    adapter: { provider: 'codex', deliveryIsFree: false } as any,
+    adapter: { provider: 'codex' } as any,
     claudeSessionId,
   })
 }

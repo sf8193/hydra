@@ -1314,12 +1314,10 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
         `---`,
         `${actorLabel}, your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol.${timeLine}`,
       ].join('\n')
-  const actorInfo = registry.get(sid)
-  const defer = actorInfo?.adapter?.deliveryIsFree === false
   transport.sendOrQueue(sid, {
     type: 'notification',
     content: notification,
-    ...(defer && { deferUntilTurnComplete: true }),
+    handoff: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -1334,24 +1332,21 @@ function notifyActorOfTimeout(run: ProtocolRun, actorSessionId: string | undefin
   const actorInfo = registry.get(actorSessionId)
   const actorName = actorInfo?.tmuxName
   const namePrefix = actorName ? `**${actorName}**, phase` : `Phase`
-  const defer = actorInfo?.adapter?.deliveryIsFree === false
   transport.sendOrQueue(actorSessionId, {
     type: 'notification',
     content: `[system] ⏰ ${namePrefix} "${phase}" timed out. The protocol is advancing.`,
-    ...(defer && { deferUntilTurnComplete: true }),
+    handoff: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
 
 function notifyParticipant(run: ProtocolRun, sessionId: string, content: string): void {
-  // Engines where delivery is never free (e.g. Codex: only new turns, no mid-turn
-  // steer) must defer — see EngineAdapter.deliveryIsFree.
-  const info = registry.get(sessionId)
-  const defer = info?.adapter?.deliveryIsFree === false
+  // A handoff: engines where every delivery is a priced turn (Codex) queue it
+  // for the next turn rather than steering the current one.
   transport.sendOrQueue(sessionId, {
     type: 'notification',
     content,
-    ...(defer && { deferUntilTurnComplete: true }),
+    handoff: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }

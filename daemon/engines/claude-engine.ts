@@ -15,6 +15,7 @@ import type {
   ExecutionRetirementResult, StopResult,
   ContextUsage, RecoverySource, RecoveryPlan, UsageReading, UsageSubject,
 } from './engine-adapter.js'
+import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
@@ -93,7 +94,6 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
 
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
-  readonly deliveryIsFree = true
   readonly channel = 'bridge' as const
   constructor(private readonly transport: BridgeTransport) {}
 
@@ -242,7 +242,7 @@ export class ClaudeEngine implements EngineAdapter {
 
   // No await before the write: callers rely on it having happened on return.
   async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
-    const r = this.transport.writeOrQueue(info.sessionId, msg)
+    const r = this.transport.writeOrQueue(info.sessionId, withoutIntents(msg))
     return r === 'written' ? { status: 'accepted', via: 'bridge-socket' }
       : r === 'queued' ? { status: 'accepted', via: 'queued' }
       // sendToBridge re-queued it; the queue flushes on reconnect, as when absent.

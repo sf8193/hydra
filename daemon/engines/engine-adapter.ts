@@ -22,11 +22,23 @@ export type ProviderId = 'claude' | 'codex'
 
 export type DeliveryMode = 'steer-active' | 'next-turn'
 
-/** The envelope every delivery carries. Claude writes it to the bridge verbatim
- *  (bridge.ts forwards meta to the model); Codex reads content/meta/defer. */
+/** The envelope every delivery carries. Claude writes it to the bridge minus the
+ *  intents below (bridge.ts forwards meta to the model); Codex reads
+ *  content/meta/defer and the intents. */
 export type Notification = Record<string, unknown> & {
   type: 'notification'; content?: unknown; meta?: Record<string, string>
   allowPiggyback?: boolean; deferUntilTurnComplete?: boolean
+  // Intents: what the caller wants, for the adapter to map onto its mechanics.
+  handoff?: boolean      // a protocol handoff: Codex queues it for the next turn
+  lowPriority?: boolean  // may wait for a carrier: Codex buffers it for piggyback unless deadAt
+  optional?: boolean     // droppable: Codex rejects it
+}
+
+/** The message minus the adapter-only intents — what goes on a bridge. Never mutates msg. */
+export function withoutIntents<T extends Record<string, unknown>>(msg: T): T {
+  if (!('handoff' in msg || 'lowPriority' in msg || 'optional' in msg)) return msg
+  const { handoff: _h, lowPriority: _l, optional: _o, ...wire } = msg
+  return wire as T
 }
 
 export type DeliveryResult =
@@ -119,11 +131,6 @@ export type RecoveryPlan = {
 
 export interface EngineAdapter {
   readonly provider: ProviderId
-  // true when a delivery just sits in the engine's own buffer (Claude's tmux
-  // pane) at no extra cost; false when every delivery is a priced turn
-  // (Codex). Callers deciding whether to buffer/piggyback low-priority
-  // notifications should ask this, not special-case a provider name.
-  readonly deliveryIsFree: boolean
   // How the session's tools and traffic reach it: 'bridge' = the daemon bridge
   // socket (Claude); 'engine' = the engine's own protocol, where any daemon-socket
   // registration is a control-plane MCP sidecar with its own tools (Codex).
@@ -131,9 +138,11 @@ export interface EngineAdapter {
 
   // Lifecycle
   launch(input: LaunchInput): Promise<LaunchResult>
-  // Deliver one notification. Claude: write to the owning transport's session
-  // bridge, else enqueue there; the write is synchronous (no await before it).
-  // Codex: steer, or queue a turn when msg.deferUntilTurnComplete.
+  // Deliver one notification. Claude: strip the intents, then write to the
+  // owning transport's session bridge, else enqueue there; the write is
+  // synchronous (no await before it). Codex: optional → rejected; lowPriority
+  // (not deadAt) → piggyback buffer; else steer, or queue a turn when handoff
+  // or deferUntilTurnComplete, carrying buffered content when allowPiggyback.
   deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult>
   retire(info: SessionInfo, reason: string): Promise<ExecutionRetirementResult>
   stop(info: SessionInfo): Promise<StopResult>

@@ -446,7 +446,6 @@ export function createStartedHarness(proto: Protocol, opts?: HarnessOpts): Promi
 export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdapter {
   return {
     provider: 'claude',
-    deliveryIsFree: true,
     channel: 'bridge',
     isConnected: (info: SessionInfo) => transport.bridges.has(info.sessionId),
     deliver: async (info: SessionInfo, msg: Record<string, unknown>) => { transport.writeOrQueue(info.sessionId, msg); return { status: 'accepted' } },
