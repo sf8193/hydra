@@ -14,6 +14,19 @@ type ProtocolHooks = {
   onDisconnect: (sessionId: string) => void
   onReconnect: (sessionId: string) => void
   onAdvance?: (sessionId: string, content: string, verdict?: string) => Promise<{ ok: true; sentIds: string[] } | { ok: false; reason: string }>
+  onChildSpawn?: (parentSessionId: string, childSessionId: string, metadata: ProtocolChildSpawnMetadata) => boolean
+  childSpawnRequiresPrivate?: (parentSessionId: string) => boolean
+  onPrivateChildLaunchStart?: (childSessionId: string) => void
+  onPrivateChildLaunchFinish?: (childSessionId: string) => void
+  childRequiresPrivate?: (childSessionId: string) => boolean
+  onChildResult?: (childSessionId: string, targetSessionId: string, text: string) => boolean
+}
+
+export type ProtocolChildSpawnMetadata = {
+  headless: boolean
+  readThread: boolean
+  phaseBudgetMs?: number
+  lens?: string
 }
 
 // Protocol names are plain strings — intentionally not a union type so new
@@ -76,6 +89,47 @@ export async function dispatchAdvance(sessionId: string, content: string, verdic
     }
   }
   return { ok: false, reason: 'no active protocol for this session' }
+}
+
+export function registerProtocolChild(parentSessionId: string, childSessionId: string, metadata: ProtocolChildSpawnMetadata): 'registered' | 'rejected' | 'not_protocol' {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(parentSessionId)) return hooks.onChildSpawn?.(parentSessionId, childSessionId, metadata) ? 'registered' : 'rejected'
+  }
+  return 'not_protocol'
+}
+
+export function protocolSpawnRequiresPrivate(parentSessionId: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(parentSessionId)) return hooks.childSpawnRequiresPrivate?.(parentSessionId) ?? false
+  }
+  return false
+}
+
+export function markPrivateProtocolChildLaunching(parentSessionId: string, childSessionId: string): void {
+  for (const hooks of protocols.values()) {
+    if (hooks.isParticipant(parentSessionId)) { hooks.onPrivateChildLaunchStart?.(childSessionId); return }
+  }
+}
+
+export function finishPrivateProtocolChildLaunch(childSessionId: string): void {
+  for (const hooks of protocols.values()) hooks.onPrivateChildLaunchFinish?.(childSessionId)
+}
+
+export function registerProtocolChildResult(childSessionId: string, targetSessionId: string, text: string): boolean {
+  for (const hooks of protocols.values()) {
+    if (hooks.onChildResult?.(childSessionId, targetSessionId, text)) return true
+  }
+  return false
+}
+
+export function isProtocolParticipant(sessionId: string): boolean {
+  for (const hooks of protocols.values()) if (hooks.isParticipant(sessionId)) return true
+  return false
+}
+
+export function protocolChildRequiresPrivate(childSessionId: string): boolean {
+  for (const hooks of protocols.values()) if (hooks.childRequiresPrivate?.(childSessionId)) return true
+  return false
 }
 
 export function hasProtocolContext(sessionId: string): boolean {

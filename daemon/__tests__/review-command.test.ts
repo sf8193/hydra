@@ -9,6 +9,9 @@
 
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { handleReviewIntercept } from '../commands/review.js'
+import reviewProtoForTest from '../../protocols/review.js'
+import { resolveModifier, listLensNames, READABILITY_INSTRUCTIONS, PONYTAIL_INSTRUCTIONS } from '../modifiers.js'
+import { handleDelegatedBuildIntercept } from '../commands/delegated-build.js'
 import { __test as runnerTest, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
@@ -190,13 +193,138 @@ describe('review command → run params', () => {
     expect(notes.some(n => n.includes('+security') && n.includes('attack surface'))).toBe(true)
   })
 
+  test('+readability resolves by name and alias, and rides to the critic unchanged', async () => {
+    expect(resolveModifier('readability')).toBe(resolveModifier('r'))
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['readability'])
+    const mods = getRunByThread(threadId)!.params.modifiers as Array<{ name: string; target: string; instructions: string }>
+    expect(mods.map(m => m.name)).toEqual(['readability'])
+    expect(mods[0].target).toBe('critic')
+    expect(mods[0].instructions).toBe(READABILITY_INSTRUCTIONS)
+    expect(mods[0].instructions).toContain('readability and maintainability only')
+  })
+
+  test('named lenses are discoverable', () => {
+    expect(listLensNames()).toEqual(expect.arrayContaining(['readability', 'security', 'ponytail']))
+  })
+
+  test('+readability +security both reach the critic; no other lens is added', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['readability', 'security'])
+    const mods = getRunByThread(threadId)!.params.modifiers as Array<{ name: string }>
+    expect(mods.map(m => m.name)).toEqual(['readability', 'security'])
+  })
+
+  test('+ponytail resolves (no alias), targets the critic, and propagates unchanged', async () => {
+    expect(resolveModifier('ponytail')!.aliases).toEqual([])
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['ponytail'])
+    const run = getRunByThread(threadId)!
+    const mods = run.params.modifiers as Array<{ name: string; target: string; instructions: string }>
+    expect(mods.map(m => m.name)).toEqual(['ponytail'])
+    expect(mods[0].target).toBe('critic')
+    expect(mods[0].instructions).toBe(PONYTAIL_INSTRUCTIONS)
+  })
+
+  test('+ponytail composes with readability and security', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['readability', 'ponytail', 'security'])
+    const mods = getRunByThread(threadId)!.params.modifiers as Array<{ name: string }>
+    expect(mods.map(m => m.name)).toEqual(['readability', 'ponytail', 'security'])
+  })
+
+  test('ordinary review enables automatic lenses and default Ponytail', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 3, 'auth flow')
+    const run = getRunByThread(threadId)!
+    expect(run.params.noAutoLenses).toBeUndefined()
+    expect(run.params.noPonytail).toBeUndefined()
+    expect(run.params.autoReviewLenses).toBe(true)
+    const seed = reviewProtoForTest.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, ...run.params })!
+    expect(seed).toContain('Automatic private sub-reviewers')
+    expect(seed).toContain('Default +ponytail')
+    expect(seed).toContain('/ponytail review')
+  })
+
+  test('+no-ponytail keeps automatic relevant lenses but removes default Ponytail', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['no-ponytail'])
+    const run = getRunByThread(threadId)!
+    expect(run.params.noPonytail).toBe(true)
+    const seed = reviewProtoForTest.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, ...run.params })!
+    expect(seed).toContain('Automatic private sub-reviewers')
+    expect(seed).not.toContain('Default +ponytail')
+    expect(seed).not.toContain('/ponytail review')
+  })
+
+  test('+no-lenses disables all automatic helpers', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['no-lenses'])
+    const run = getRunByThread(threadId)!
+    expect(run.params.noAutoLenses).toBe(true)
+    const seed = reviewProtoForTest.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, ...run.params })!
+    expect(seed).toContain('Private sub-reviewers disabled')
+    expect(seed).not.toContain('/ponytail review')
+  })
+
+  test('contradictory lens controls are rejected before a run starts', async () => {
+    for (const modifiers of [['no-ponytail', 'ponytail'], ['no-lenses', 'security']] as const) {
+      const { threadId, msg } = mkOwner()
+      await handleReviewIntercept(msg, 3, 'auth flow', undefined, [...modifiers])
+      expect(getRunByThread(threadId)).toBeUndefined()
+    }
+    expect(sent.some(s => s.text.includes('contradict'))).toBe(true)
+  })
+
+  test('ponytail instructions mandate the skill, private result, verbatim quoting and visible UNAVAILABLE', () => {
+    for (const s of [
+      'exactly ONE private helper', 'headless=true', 'read_thread=true', 'phase_budget', 'verbatim',
+      'Invoke `/ponytail review`', 'visibility="private"', 'Never post raw output publicly',
+      'UNAVAILABLE: /ponytail review', 'Do NOT substitute a generic review',
+      'single top-level `advance()` critique', 'state that visibly', '<parent session name>',
+      'normally the critic; in `+subagent` mode, the owner', '+ponytail: helper returned nothing',
+    ]) expect(PONYTAIL_INSTRUCTIONS).toContain(s)
+  })
+
   test('an unknown modifier is refused before any run starts', async () => {
     const { threadId, msg } = mkOwner()
 
     await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['subagent', 'nonsense'])
 
     expect(sent.some(s => s.text.includes('Unknown modifier'))).toBe(true)
+    // the refusal teaches the syntax and names the available lenses
+    expect(sent.some(s => s.text.includes('Lenses are automatic') && s.text.includes('+readability') && s.text.includes('+security') && s.text.includes('+ponytail') && s.text.includes('+no-ponytail') && s.text.includes('+no-lenses'))).toBe(true)
     expect(getRunByThread(threadId)).toBeUndefined()
+  })
+})
+
+describe('delegate command → selected protocol', () => {
+  test('ordinary delegate starts rigorous planning', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 3, 'ship safely')
+    const run = getRunByThread(threadId)!
+    expect(run.protocol.name).toBe('delegated-build')
+    expect(run.phase).toBe('planning')
+  })
+
+  test('rigorous delegate allows up to 20 builder turns', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 50, 'large safe change')
+    expect(getRunByThread(threadId)!.rounds).toBe(20)
+  })
+
+  test('delegate! intercept selects the preserved quick protocol', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 1, 'ship quickly', undefined, undefined, { skipClarify: true })
+    const run = getRunByThread(threadId)!
+    expect(run.protocol.name).toBe('delegated-build-quick')
+    expect(run.phase).toBe('building')
+  })
+
+  test('delegate! keeps the legacy five-turn cap', async () => {
+    const { threadId, msg } = mkOwner()
+    await handleDelegatedBuildIntercept(msg, 50, 'quick change', undefined, undefined, { skipClarify: true })
+    expect(getRunByThread(threadId)!.rounds).toBe(5)
   })
 })
 

@@ -124,6 +124,7 @@ export class TestHarness {
       params: { rounds, topic: opts.topic, strike: opts.strike, ...opts.params },
       participants,
       sessionToRole,
+      protocolChildren: new Map(),
       timeout: undefined,
       _warningTimeout: undefined,
       _totalTimeout: undefined,

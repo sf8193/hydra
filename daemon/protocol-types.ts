@@ -14,6 +14,8 @@ export type RunState = {
   readonly decisions: Array<{ phase: string; role: string; value: string; because: string }>
   readonly messageIds: string[]
   readonly statusHistory: string[]
+  /** Set once a participant loss moves the run onto its declared fallback path. */
+  _enteredFallback?: boolean
 }
 
 export type BehaviorContext = {

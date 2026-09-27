@@ -334,6 +334,8 @@ describe('review modifier extraction', () => {
   })
 
   test('flags compose with lens modifiers and with a bare topic', () => {
+    expect(extractModifiers('+readability +security auth flow'))
+      .toEqual({ modifiers: ['readability', 'security'], topic: 'auth flow' })
     expect(extractModifiers('+subagent +security auth flow'))
       .toEqual({ modifiers: ['subagent', 'security'], topic: 'auth flow' })
     expect(extractModifiers('+subagent')).toEqual({ modifiers: ['subagent'], topic: undefined })

@@ -127,7 +127,7 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   thread_owner: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',
     'download_attachment', 'send_to_thread', 'set_description',
-    'list_sessions', 'peek_session',
+    'list_sessions', 'peek_session', 'spawn_session', 'kill_session',
     'watch_pr', 'unwatch_pr', 'list_watches',
   ]),
   thread_guest: new Set([
@@ -142,10 +142,11 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   ]),
 }
 
-export type Capability = 'protocol_context'
+export type Capability = 'protocol_context' | 'protocol_spawn'
 
 export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>>> = {
   protocol_context: new Set<ToolName>(['advance', 'extend_phase']),
+  protocol_spawn: new Set<ToolName>(['spawn_session', 'kill_session', 'peek_session']),
 }
 
 export type Sentiment = 'POSITIVE' | 'NEGATIVE'
