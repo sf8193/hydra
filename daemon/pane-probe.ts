@@ -27,7 +27,7 @@ const execFileAsync = promisify(execFile)
 // Types
 // ---------------------------------------------------------------------------
 
-export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt'
+export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit' | 'unknown_dialog'
 
 export type LoginStage = 'expiring' | 'blocked' | 'oauth_url' | 'success'
 
@@ -197,6 +197,11 @@ function hasLiveReplPrompt(tail: string): boolean {
 
 // Resume prompt: CC shows this when a session is resumed and the conversation
 // is large enough to warrant a choice. The three-option menu is unique.
+// Usage-limit dialog (/rate-limit-options): blocks all input until dismissed, even after the limit resets.
+const DIALOG_FOOTER_RE = /Enter to confirm · Esc to cancel/
+const USAGE_OPTION_A = /Stop and wait for limit to reset/
+const USAGE_OPTION_B = /Add funds to continue with extra usage/
+const USAGE_OPTION_C = /Upgrade your plan/
 const RESUME_OPTION_A = /Resume from summary/
 const RESUME_OPTION_B = /Resume full session/
 const RESUME_OPTION_C = /Don't ask me again/
@@ -217,10 +222,14 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   if (isResumePromptOnScreen(tailText)) {
     return { kind: 'resume_prompt', planPath: null, loginStage: null, oauthUrl: null }
   }
+  const liveRepl = hasLiveReplPrompt(tailText)
+  // Dialogs replace the prompt; a bare live `❯` means this is stale scrollback (same gate as login below).
+  if (!liveRepl && isUsageLimitOnScreen(tailText)) {
+    return { kind: 'usage_limit', planPath: null, loginStage: null, oauthUrl: null }
+  }
   // Full-screen login stages fill the pane — a live REPL prompt in the tail
   // means the banner is stale scrollback, not the active screen. Gate them so
   // a resumed session at a working `❯` prompt doesn't re-trigger every cycle.
-  const liveRepl = hasLiveReplPrompt(tailText)
   // Login stages in priority order — later stages take precedence (the flow progresses)
   if (!liveRepl && LOGIN_SUCCESS_RE.test(tailText)) {
     return { kind: 'login_required', planPath: null, loginStage: 'success', oauthUrl: null }
@@ -243,6 +252,11 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   // is intentionally not gated on liveRepl — the latch below bounds its spam.
   if (LOGIN_EXPIRING_PATTERNS.some(p => p.test(tailText))) {
     return { kind: 'login_required', planPath: null, loginStage: 'expiring', oauthUrl: null }
+  }
+  // Fallback: every CC selection dialog ends with this footer. Known kinds above
+  // get specific handling; anything else is surfaced so a new dialog can't block silently.
+  if (!liveRepl && DIALOG_FOOTER_RE.test(tailText)) {
+    return { kind: 'unknown_dialog', planPath: null, loginStage: null, oauthUrl: null }
   }
   return null
 }
@@ -344,6 +358,10 @@ async function confirmAndDismissLoginSuccess(tmuxName: string): Promise<boolean>
   return io.sendKeys(tmuxName, 'Enter')
 }
 
+function isUsageLimitOnScreen(tail: string): boolean {
+  return [USAGE_OPTION_A, USAGE_OPTION_B, USAGE_OPTION_C].filter(re => re.test(tail)).length >= 2
+}
+
 function isResumePromptOnScreen(tail: string): boolean {
   return [RESUME_OPTION_A, RESUME_OPTION_B, RESUME_OPTION_C]
     .filter(re => re.test(tail)).length >= 2
@@ -355,6 +373,78 @@ async function confirmAndDismissResumePrompt(tmuxName: string): Promise<boolean>
   if (!tail || !isResumePromptOnScreen(tail)) return false
   // CC pre-selects option 1 ("Resume from summary"). Enter confirms it.
   return io.sendKeys(tmuxName, 'Enter')
+}
+
+// Esc cancels the dialog without choosing (no funds added); if the limit is
+// still active the dialog returns and the probe re-notifies under its cooldown.
+// Not gated on HYDRA_AUTO_LOGIN: dismissing spends nothing and a stale dialog
+// silently blocks every message (byte sat on one for two weeks).
+async function notifyUsageLimit(entry: ProbeEntry, now: number): Promise<void> {
+  if (entry.notifying) return
+  entry.notifying = true
+  try {
+    const name = entry.tmuxName
+    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
+    const tail = await io.capturePaneTail(name, PANE_TAIL_LINES)
+    const dismissed = !!tail && isUsageLimitOnScreen(tail) && await io.sendKeys(name, 'Escape')
+    if (channelId) {
+      await io.safeSend(channelId, dismissed
+        ? `> ⏸️ **${name}** was stuck on the usage-limit dialog — dismissed it. If the limit is still active it will come back.`
+        : `> ⏸️ **${name}** is stuck on the usage-limit dialog. Run: \`tmux attach -t ${name}\` and press Esc.`)
+    }
+    entry.notifiedAt = now
+    entry.notifyCount++
+    process.stderr.write(`daemon: pane-probe: ${name} usage-limit dialog, dismissed=${dismissed}\n`)
+  } finally {
+    entry.notifying = false
+  }
+}
+
+// Claude Code's footer shows "You've used 91% of your weekly limit · resets …"
+// once usage gets high. The limit is account-wide, so byte's pane is enough.
+// Alert once per threshold; a new "resets …" date (next weekly window) re-arms them.
+// Keyed on the date, not a drop in %, so footer jitter (91→90→91) can't re-alert.
+const WEEKLY_USAGE_RE = /You've used (\d+)% of your weekly limit(?: · resets ([^\n]*?))?\s*$/m
+const WEEKLY_USAGE_THRESHOLDS = [80, 90, 95]
+let weeklyUsageAlerted = 0
+let weeklyUsageWindow = ''
+
+function checkWeeklyUsage(tail: string): void {
+  const m = tail.match(WEEKLY_USAGE_RE)
+  if (!m) return
+  const pct = Number(m[1])
+  const window = m[2]?.trim() ?? ''
+  if (window && window !== weeklyUsageWindow) {
+    if (weeklyUsageWindow) weeklyUsageAlerted = 0
+    weeklyUsageWindow = window
+  }
+  const crossed = WEEKLY_USAGE_THRESHOLDS.filter(t => pct >= t && t > weeklyUsageAlerted).pop()
+  if (!crossed || !io.defaultChannel) return
+  weeklyUsageAlerted = crossed
+  const resets = m[2] ? ` · resets ${m[2].trim()}` : ''
+  void io.safeSend(io.defaultChannel, `> ⚠️ Claude usage at **${pct}%** of weekly limit${resets}.`)
+}
+
+export function _resetWeeklyUsage(): void { weeklyUsageAlerted = 0; weeklyUsageWindow = '' }
+
+// Alert only: an unknown dialog may be a permission or confirmation where any
+// keypress is a real decision, so leave it to a human.
+async function notifyUnknownDialog(entry: ProbeEntry, now: number): Promise<void> {
+  if (entry.notifying) return
+  entry.notifying = true
+  try {
+    const name = entry.tmuxName
+    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
+    const tail = (await io.capturePaneTail(name, PANE_TAIL_LINES)) ?? ''
+    if (channelId) {
+      await io.safeSend(channelId, `> ⏸️ **${name}** is stuck on a dialog. Run: \`tmux attach -t ${name}\`\n\`\`\`\n${tail.trim()}\n\`\`\``)
+    }
+    entry.notifiedAt = now
+    entry.notifyCount++
+    process.stderr.write(`daemon: pane-probe: ${name} unknown dialog\n`)
+  } finally {
+    entry.notifying = false
+  }
 }
 
 async function extractOauthUrl(tmuxName: string): Promise<string | null> {
@@ -650,6 +740,8 @@ export async function probeAllSessions(now?: number): Promise<void> {
       continue
     }
 
+    if (target.isMain) checkWeeklyUsage(tailText)
+
     const sessionInfo = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
     const detected = sessionInfo?.adapter
       ? sessionInfo.adapter.detectBlockingState(sessionInfo, tailText)
@@ -699,6 +791,10 @@ export async function probeAllSessions(now?: number): Promise<void> {
             void notifyPlanMode(existing, t)
           } else if (detected.kind === 'resume_prompt') {
             void notifyResumePrompt(existing, t)
+          } else if (detected.kind === 'usage_limit') {
+            void notifyUsageLimit(existing, t)
+          } else if (detected.kind === 'unknown_dialog') {
+            void notifyUnknownDialog(existing, t)
           } else {
             void notifyLoginRequired(existing, t)
           }

@@ -204,7 +204,7 @@ describe('T0.7 engine events', () => {
         [info.threadId, '⚠️ Codex needs attention: no progress for 20 minutes'],
         [info.threadId, '⚠️ Codex needs attention: turn progress is unresolved.'],
         [info.threadId, '⚠️ Codex input delivery is uncertain; retaining it while checking thread history. Error: socket lost'],
-        [info.threadId, '⚠️ Codex usage at **87%** of monthly limit.'],
+        [info.threadId, '⚠️ Codex usage at **87%** of weekly limit.'],
       ])
     } finally { (gateway as any).send = orig }
   })

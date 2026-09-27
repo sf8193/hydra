@@ -11,6 +11,7 @@ const transportMessages: Array<{ sessionId: string; msg: any }> = []
 const connectedSessions = new Set<string>()
 
 import {
+  _resetWeeklyUsage,
   detectBlockingState,
   probeAllSessions,
   getThreadIntercept,
@@ -102,6 +103,16 @@ limits. We recommend resuming from a summary.
   3. Don't ask me again
 
 Enter to confirm · Esc to cancel`
+
+const USAGE_LIMIT_TAIL = `❯ /rate-limit-options
+─────────────────────────────────────────────────────────────
+  What do you want to do?
+
+  ❯ 1. Stop and wait for limit to reset
+    2. Add funds to continue with extra usage
+    3. Upgrade your plan
+
+  Enter to confirm · Esc to cancel`
 
 const RESUME_WITH_LOGIN_EXPIRED = `● Login expired · Please run /login
 
@@ -310,6 +321,22 @@ describe('detectBlockingState (pure)', () => {
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
     expect(result!.loginStage).toBe('blocked')
+  })
+
+  it('detects the usage-limit dialog', () => {
+    expect(detectBlockingState(USAGE_LIMIT_TAIL)?.kind).toBe('usage_limit')
+    expect(detectBlockingState('  ❯ 1. Stop and wait for limit to reset\nsomething else')).toBeNull()
+  })
+
+  it('flags any other CC selection dialog as unknown_dialog', () => {
+    const tail = `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`
+    expect(detectBlockingState(tail)?.kind).toBe('unknown_dialog')
+    expect(detectBlockingState(NORMAL_SESSION_TAIL)).toBeNull()
+  })
+
+  it('ignores dialog text left in scrollback above a live prompt', () => {
+    expect(detectBlockingState(USAGE_LIMIT_TAIL + '\n❯ \n')).toBeNull()
+    expect(detectBlockingState('Pick one\n❯ 1. A\n  2. B\nEnter to confirm · Esc to cancel\n❯\n')).toBeNull()
   })
 
   it('detects resume prompt', () => {
@@ -559,6 +586,61 @@ describe('probeAllSessions', () => {
     expect(byteMsg).not.toBeUndefined()
     expect(byteMsg!.text).toContain('<@user-123>')
     expect(byteMsg!.text).toContain('all message processing is paused')
+  })
+
+  it('dismisses byte\'s usage-limit dialog with Esc and says so, without HYDRA_AUTO_LOGIN', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      paneTails.set('discord-byte', USAGE_LIMIT_TAIL)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+
+      expect(keysSent.find(k => k.tmuxName === 'discord-byte' && k.keys === 'Escape')).not.toBeUndefined()
+      const msg = sentMessages.find(m => m.channelId === 'root-channel-123')
+      expect(msg?.text).toContain('usage-limit dialog')
+      expect(msg?.text).toContain('dismissed')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
+  it('alerts once per weekly-usage threshold from byte\'s footer, re-arming after a reset', async () => {
+    _resetWeeklyUsage()
+    const footer = (pct: number, resets = 'Oct 2, 6am (America/Los_Angeles)') => `❯ \n─────\n  options_bot git:(main) claude-sonnet-5[1m] ctx:8%        You've used ${pct}% of your weekly limit · resets ${resets}\n  ⏵⏵ bypass permissions on`
+    const usageMsgs = () => sentMessages.filter(m => m.channelId === 'root-channel-123' && m.text.includes('weekly limit')).map(m => m.text)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+    // 90→89→91 is footer jitter within one window (no re-alert); a new resets date re-arms.
+    const seq: Array<[number, string?]> = [[70], [91], [90], [89], [92], [96], [10, 'Oct 9, 6am (America/Los_Angeles)'], [85, 'Oct 9, 6am (America/Los_Angeles)']]
+    for (const [i, [pct, resets]] of seq.entries()) {
+      paneTails.set('discord-byte', footer(pct, resets))
+      await probeAllSessions(T0 + i * 60_000)
+    }
+    await flush()
+    expect(usageMsgs()).toEqual([
+      '> ⚠️ Claude usage at **91%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+      '> ⚠️ Claude usage at **96%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+      '> ⚠️ Claude usage at **85%** of weekly limit · resets Oct 9, 6am (America/Los_Angeles).',
+    ])
+  })
+
+  it('alerts on an unknown dialog with the pane tail and presses no keys', async () => {
+    addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+    paneTails.set('ember', `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`)
+    windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+
+    expect(keysSent.filter(k => k.tmuxName === 'ember')).toEqual([])
+    const msg = sentMessages.find(m => m.channelId === 'thread-1')
+    expect(msg?.text).toContain('stuck on a dialog')
+    expect(msg?.text).toContain('Allow access to ~/secrets?')
   })
 
   it('respects notification cooldown', async () => {
