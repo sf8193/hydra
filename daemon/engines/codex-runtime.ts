@@ -133,7 +133,7 @@ on('delivery:failed', ({ sessionId, status, reason, messageId }) => {
 codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
   const info = registry.get(sessionId)
   if (!info) return
-  void safeSend(info.threadId, `⚠️ Codex usage at **${usedPercent}%** of monthly limit.`)
+  void safeSend(info.threadId, `⚠️ Codex usage at **${usedPercent}%** of weekly limit.`)
 })
 
 codexEngine.on('contextUsage', (sessionId: string, usage: { usedTokens: number; contextWindow: number; percent: number }) => {
