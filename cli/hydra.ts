@@ -359,7 +359,7 @@ async function main(): Promise<void> {
         process.exit(1)
       }
       const response = await sendRequest(socketPath, {
-        type: 'cli', command: 'status', id: randomUUID(), params: { name },
+        type: 'cli', command: 'status', id: randomUUID(), params: { name, attach: true },
       })
       if (!response.ok) {
         console.error(`error: ${response.error}`)

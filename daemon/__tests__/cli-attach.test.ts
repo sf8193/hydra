@@ -78,4 +78,15 @@ describe('hydra attach (Z1)', () => {
     expect(r.attached).toEqual([])
     expect(r.stderr).toContain(name)
   })
+
+  // A plain status is read-only: only has-session (tmux field) and capture-pane
+  // (context %) — never the surface repair that creates tmux or runs codex resume.
+  test('plain status on a codex session issues no mutating tmux commands', async () => {
+    const name = seed('codex', { codexThreadId: 'T-z1s' }); fake.alive(name)
+    const res = await handleCLIRequest({ type: 'cli', command: 'status', id: 'z1s', params: { name } })
+    expect(res.ok).toBe(true)
+    expect((res.data as any).attachTarget).toBeUndefined()
+    const verbs = [...new Set(fake.calls().map(c => c.split(' ')[0]))].sort()
+    expect(verbs.filter(v => v !== 'has-session' && v !== 'capture-pane')).toEqual([])
+  })
 })

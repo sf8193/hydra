@@ -161,7 +161,8 @@ function handleStatus(req: CLIRequest): CLIResponse {
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
     tmux: tmuxAlive ? 'alive' : 'dead',
     origin: info.originType,
-    attachTarget: info.adapter.surface(info),
+    // Only `hydra attach` asks: surface() may recreate tmux and relaunch the Codex TUI.
+    attachTarget: (req.params as { attach?: unknown }).attach === true ? info.adapter.surface(info) : undefined,
   })
 }
 
