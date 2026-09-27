@@ -76,7 +76,7 @@ test('turn/completed after a watchdog interrupt still drains the queue', async (
   engine.request = async () => ({ thread: { turns: [{ id: 'T', status: 'inProgress' }] } })
   engine.queueTurn('s', 'B')                          // queued behind T
   await new Promise(r => setTimeout(r, 0)); expect(conn.currentTurnId).toBe('T')
-  await new Promise(r => setTimeout(r, 20))           // watchdog fires: currentTurnId -> null
+  await new Promise(r => setTimeout(r, 20))           // watchdog acknowledges interrupt but retains currentTurnId
   engine.handleNotification(conn, 'turn/completed', { turn: { id: 'T' } })
   expect(started).toEqual(['B'])
 })

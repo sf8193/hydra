@@ -16,6 +16,7 @@ import { STATE_DIR } from './config.js'
 import { safeSend } from './util.js'
 import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
 import { noteCodexMessage, noteCodexTurnState } from './observability.js'
+import { on } from './event-bus.js'
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -80,11 +81,25 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   handleSilenceEvent(info.tmuxName)
 })
 
-codexEngine.on('turnStalled', (sessionId: string) => {
+codexEngine.on('turnStalled', (sessionId: string, reason: string) => {
   const info = registry.get(sessionId)
   if (!info) return
-  void safeSend(info.threadId, `⚠️ Turn stalled (no activity for 20 minutes) — interrupted.`)
+  void safeSend(info.threadId, `⚠️ Codex needs attention: ${reason || 'turn progress is unresolved.'}`)
 })
+
+codexEngine.on('turnDeliveryUnknown', (sessionId: string, _text: string, err: unknown) => {
+  const info = registry.get(sessionId)
+  if (!info) return
+  void safeSend(info.threadId, `⚠️ Codex input delivery is uncertain; retaining it while checking thread history. ${String(err)}`)
+})
+
+on('delivery:failed', ({ sessionId, status, reason, messageId }) => {
+  const info = registry.get(sessionId)
+  if (!info) return
+  const source = messageId ? ` (message ${messageId})` : ''
+  const outcome = status === 'unknown' ? 'delivery is uncertain; no automatic replay' : 'delivery was rejected'
+  void safeSend(info.threadId, `⚠️ Codex ${outcome}${source}: ${reason}`)
+}, 'codex-bootstrap:delivery-failed')
 
 codexEngine.on('usageWarning', (sessionId: string, usedPercent: number) => {
   const info = registry.get(sessionId)

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
+import { on } from '../event-bus.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -223,7 +224,7 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     expect(delivered[0]).toContain('real user message')
   })
 
-  test('buffered content is dropped by a delivery that does not opt in', () => {
+  test('buffered content stays buffered when a delivery does not opt in', () => {
     mockCodexSession('s2')
     bt.bufferForPiggyback('s2', 'CI failed on PR #12')
     bt.sendOrQueue('s2', { type: 'notification', content: 'automated protocol nudge' })
@@ -291,15 +292,16 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     // Delivery is in-flight (rejects on a microtask) — give it a turn to settle.
     await Promise.resolve()
     await Promise.resolve()
-    // Clearing only happens on confirmed success — a failed deliver() must not
-    // have removed the content from the buffer. Prove it by piggybacking again
-    // on a delivery that actually succeeds.
+    // A throw is uncertain: retain on disk, but do not automatically replay.
     registry.set('s7', {
       sessionId: 's7', engine: 'codex', threadId: 'chat1',
       adapter: { provider: 'codex', deliveryIsFree: false, deliver: async (_i: any, text: string) => { delivered.push(text); return { status: 'accepted' } } },
     } as any)
     bt.sendOrQueue('s7', { type: 'notification', content: 'second real message', allowPiggyback: true })
-    expect(delivered[0]).toContain('CI failed on PR #99')
+    expect(delivered[0]).not.toContain('CI failed on PR #99')
+    const retained = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8')).s7
+    expect(retained.items).toEqual(['CI failed on PR #99'])
+    expect(retained.heldReason).toBeDefined()
   })
 
   test('a rejected piggyback-carry DeliveryResult leaves the content buffered', async () => {
@@ -313,7 +315,10 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     mockCodexSession('s15')
     bt.sendOrQueue('s15', { type: 'notification', content: 'second real message', allowPiggyback: true })
-    expect(delivered[0]).toContain('CI failed on PR #100')
+    expect(delivered[0]).not.toContain('CI failed on PR #100')
+    const retained = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8')).s15
+    expect(retained.items).toEqual(['CI failed on PR #100'])
+    expect(retained.heldReason).toBeDefined()
   })
 
   test('an unknown piggyback-carry DeliveryResult also leaves the content buffered', async () => {
@@ -327,7 +332,10 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     mockCodexSession('s16')
     bt.sendOrQueue('s16', { type: 'notification', content: 'second real message', allowPiggyback: true })
-    expect(delivered[0]).toContain('CI failed on PR #101')
+    expect(delivered[0]).not.toContain('CI failed on PR #101')
+    const retained = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8')).s16
+    expect(retained.items).toEqual(['CI failed on PR #101'])
+    expect(retained.heldReason).toBeDefined()
   })
 
   test('routing is capability-based, not engine-name-based — a mismatched pair proves it', () => {
@@ -349,10 +357,8 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
   test('a failed backstop (standalone) delivery leaves content buffered, does not lose it', async () => {
     // Overdue restore trick (same as the earlier "overdue item flushes promptly"
     // test) to reach the private flushPiggybackStandalone quickly instead of
-    // waiting out the real 1h backstop — this exercises its own .catch()/re-arm
-    // path specifically, not sendOrQueue's piggyback-carry .catch() path, which
-    // is a distinct code path with its own "delete the spent timer, arm a fresh
-    // one" logic that a separate bug could hide in.
+    // waiting out the real 1h backstop. A throw may follow engine acceptance,
+    // so prove this separate delivery path retains content without replay.
     let shouldFail = true
     registry.set('s9', {
       sessionId: 's9', engine: 'codex', threadId: 'chat1',
@@ -370,14 +376,17 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
       s9: { items: ['CI failed while owner was away'], bufferedAt: staleAt },
     }))
     const bt2 = new BridgeTransport()
-    // Let the (immediately-overdue) backstop timer fire and its .catch() run.
+    // Let the overdue backstop fire and settle as unknown.
     await new Promise(resolve => setTimeout(resolve, 30))
 
-    // Content must still be there — prove it by letting a later delivery succeed.
+    // A later user delivery must not replay the uncertain retained buffer.
     delivered = []
     shouldFail = false
     bt2.sendOrQueue('s9', { type: 'notification', content: 'later real message', allowPiggyback: true })
-    expect(delivered[0]).toContain('CI failed while owner was away')
+    expect(delivered[0]).not.toContain('CI failed while owner was away')
+    const retained = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8')).s9
+    expect(retained.items).toEqual(['CI failed while owner was away'])
+    expect(retained.heldReason).toBeDefined()
   })
 
   // Attempted: proving the module-level 'session:death' listener clears the
@@ -480,4 +489,146 @@ describe('piggyback buffering (codex only, opt-in carriers)', () => {
     const onDisk = JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8'))
     expect(onDisk.s14.items).toEqual(['first restart survivor'])
   })
+})
+
+describe('delivery outcomes and piggyback ownership', () => {
+  const sid = 'transport-outcomes'
+  let bt: BridgeTransport
+  let events: any[]
+  let unsubscribe: () => void
+  const settle = async () => { await Promise.resolve(); await Promise.resolve() }
+  const disk = () => JSON.parse(readFileSync(join(STATE_DIR, 'piggyback-buffer.json'), 'utf8'))[sid]
+  function adapter(deliver: (...args: any[]) => any) {
+    registry.set(sid, { sessionId: sid, threadId: 'chat', adapter: { deliveryIsFree: false, deliver } } as any)
+  }
+  beforeEach(() => {
+    registry.delete(sid)
+    bt = new BridgeTransport()
+    events = []
+    unsubscribe = on('delivery:failed', event => { events.push(event) }, 'transport-outcome-test')
+  })
+  afterEach(() => { unsubscribe(); bt.clearPiggyback(sid); registry.delete(sid) })
+
+  for (const result of [
+    { status: 'rejected', retryable: true, reason: 'unavailable' },
+    { status: 'unknown', reason: 'lost acknowledgement' },
+  ]) {
+    test(`ordinary ${result.status} emits visible identity without retry`, async () => {
+      let calls = 0
+      adapter(async () => { calls++; return result })
+      bt.sendOrQueue(sid, { content: 'message', meta: { message_id: 'platform-123' } })
+      await settle()
+      expect(events).toEqual([{ sessionId: sid, status: result.status, reason: result.reason, messageId: 'platform-123' }])
+      expect(calls).toBe(1)
+    })
+  }
+
+  test('synchronous throw is unknown and visible', () => {
+    adapter(() => { throw new Error('sync failure') })
+    bt.sendOrQueue(sid, { content: 'message' })
+    expect(events[0].status).toBe('unknown')
+    expect(events[0].reason).toContain('sync failure')
+  })
+
+  test('one owner excludes concurrent carries and backstop, then rearms appended content', async () => {
+    let resolve!: (result: any) => void
+    const calls: any[][] = []
+    adapter((...args) => { calls.push(args); return calls.length === 1 ? new Promise(r => { resolve = r }) : Promise.resolve({ status: 'accepted' }) })
+    bt.bufferForPiggyback(sid, 'first')
+    ;(bt as any).flushPiggybackStandalone(sid)
+    expect(calls[0][2]).toBe('next-turn')
+    bt.bufferForPiggyback(sid, 'second')
+    bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
+    ;(bt as any).flushPiggybackStandalone(sid)
+    expect(calls.map(c => c[1])).toEqual(['first', 'user'])
+    expect((bt as any).piggybackTimers.has(sid)).toBe(false)
+    resolve({ status: 'accepted' })
+    await settle()
+    expect(disk().items).toEqual(['second'])
+    expect((bt as any).piggybackTimers.has(sid)).toBe(true)
+    ;(bt as any).flushPiggybackStandalone(sid)
+    await settle()
+    expect(calls.map(c => c[1])).toEqual(['first', 'user', 'second'])
+  })
+
+  for (const result of [{ status: 'accepted' }, { status: 'unknown', reason: 'timeout' }, { status: 'rejected', retryable: true, reason: 'busy' }]) {
+    test(`stale ${result.status} callback cannot mutate clear plus new buffer`, async () => {
+      let resolve!: (result: any) => void
+      adapter(() => new Promise(r => { resolve = r }))
+      bt.bufferForPiggyback(sid, 'old')
+      bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
+      bt.clearPiggyback(sid)
+      bt.bufferForPiggyback(sid, 'new')
+      resolve(result)
+      await settle()
+      expect(disk().items).toEqual(['new'])
+      expect(disk().heldReason).toBeUndefined()
+      expect((bt as any).piggybackTimers.has(sid)).toBe(true)
+    })
+  }
+
+  test('retryable backstop rejection stops at three attempts and persists held state', async () => {
+    let calls = 0
+    adapter(async () => { calls++; return { status: 'rejected', retryable: true, reason: 'busy' } })
+    bt.bufferForPiggyback(sid, 'retained')
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      ;(bt as any).flushPiggybackStandalone(sid)
+      await settle()
+      expect(disk().attempts).toBe(attempt)
+      expect((bt as any).piggybackTimers.has(sid)).toBe(attempt < 3)
+    }
+    ;(bt as any).flushPiggybackStandalone(sid)
+    expect(calls).toBe(3)
+    expect(disk().items).toEqual(['retained'])
+    expect(disk().heldReason).toBe('busy')
+    expect(events).toHaveLength(3)
+  })
+
+  test('unknown backstop is held across restart and later appends never ride automatically', async () => {
+    adapter(async () => ({ status: 'unknown', reason: 'socket lost' }))
+    bt.bufferForPiggyback(sid, 'uncertain')
+    ;(bt as any).flushPiggybackStandalone(sid)
+    await settle()
+    expect(events[0].reason).toContain('held for manual inspection')
+    bt = new BridgeTransport()
+    const calls: string[] = []
+    adapter(async (_info, text) => { calls.push(text); return { status: 'accepted' } })
+    bt.bufferForPiggyback(sid, 'appended')
+    ;(bt as any).flushPiggybackStandalone(sid)
+    bt.sendOrQueue(sid, { content: 'user', allowPiggyback: true })
+    await settle()
+    expect(calls).toEqual(['user'])
+    expect(disk().items).toEqual(['uncertain', 'appended'])
+    expect((bt as any).piggybackTimers.has(sid)).toBe(false)
+  })
+
+  test('restart during unresolved delivery holds persisted uncertainty', () => {
+    adapter(() => new Promise(() => {}))
+    bt.bufferForPiggyback(sid, 'in flight')
+    ;(bt as any).flushPiggybackStandalone(sid)
+    const restarted = new BridgeTransport()
+    expect((restarted as any).piggybackHeld.has(sid)).toBe(true)
+    expect((restarted as any).piggybackTimers.has(sid)).toBe(false)
+    restarted.clearPiggyback(sid)
+  })
+})
+
+test('clearing a carried prefix must not hide failure of the ordinary carrier', async () => {
+  const sid = 'review-cleared-carrier'
+  const bt = new BridgeTransport()
+  const failures: any[] = []
+  const unsub = on('delivery:failed', e => { if (e.sessionId === sid) failures.push(e) }, 'review-cleared-carrier')
+  let resolve!: (x: any) => void
+  registry.set(sid, { sessionId: sid, threadId: 'chat', adapter: { deliveryIsFree: false,
+    deliver: () => new Promise(r => { resolve = r }),
+  } } as any)
+  try {
+    bt.bufferForPiggyback(sid, 'old prefix')
+    bt.sendOrQueue(sid, { content: 'ordinary user message', allowPiggyback: true, meta: { message_id: 'user-123' } })
+    bt.clearPiggyback(sid)
+    bt.bufferForPiggyback(sid, 'new prefix')
+    resolve({ status: 'unknown', reason: 'lost acknowledgement' })
+    await Promise.resolve(); await Promise.resolve()
+    expect(failures).toEqual([{ sessionId: sid, status: 'unknown', reason: 'lost acknowledgement', messageId: 'user-123' }])
+  } finally { unsub(); bt.clearPiggyback(sid); registry.delete(sid) }
 })

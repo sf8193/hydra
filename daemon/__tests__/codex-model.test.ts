@@ -192,7 +192,7 @@ describe('CodexEngine deferred turns', () => {
     expect(conn.deferredTurnQueue).toEqual(['ROUND_2'])
 
     conn.turnPending = false // turn/start request has settled
-    engine.handleNotification(conn, 'turn/completed', {})
+    engine.handleNotification(conn, 'turn/completed', { turn: { id: conn.currentTurnId } })
     expect(started).toEqual(['ROUND_2'])
     expect(conn.deferredTurnQueue).toEqual([])
     if (conn.turnWatchdog) clearTimeout(conn.turnWatchdog)
@@ -211,7 +211,7 @@ describe('CodexEngine deferred turns', () => {
     }
     engine.connections.set('s', conn)
 
-    engine.handleNotification(conn, 'turn/completed', {})
+    engine.handleNotification(conn, 'turn/completed', { turn: { id: conn.currentTurnId } })
     await new Promise(resolve => setTimeout(resolve, 850))
 
     expect(attempts).toBe(3)
@@ -828,22 +828,27 @@ describe('Codex ! bounded wait for a pending start', () => {
   })
 })
 
-describe('Codex steerQueue aliasing', () => {
-  test('turn/started drains steers without detaching conn from scheduling state', () => {
+describe('Codex pending input ownership', () => {
+  test('input before turn/started stays in the shared FIFO until completion', async () => {
     const engine = new CodexEngine() as any
     const sent: any[] = []
     const conn: any = {
       sessionId: 's', ws: { send(v: string) { sent.push(JSON.parse(v)) } }, threadId: 't', currentTurnId: null,
       turnPending: true, turnWatchdog: null, nextRequestId: 1, pendingRequests: new Map(), messageBuffer: [],
-      steerQueue: ['early'], deferredTurnQueue: [], lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
+      deferredTurnQueue: [], lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
     }
     engine.connections.set('s', conn)
     engine.resetWatchdog = () => {}
     const scheduling = engine.getScheduling('s', conn)
+    expect(await engine.steer('s', 'early')).toMatchObject({ status: 'accepted', via: 'queued-turn' })
     engine.handleNotification(conn, 'turn/started', { turn: { id: 'turn-1' } })
-    expect(sent.map(m => m.method)).toEqual(['turn/steer'])
-    expect(conn.steerQueue).toBe(scheduling.steerQueue)
+    expect(sent).toEqual([])
     expect(conn.deferredTurnQueue).toBe(scheduling.deferredTurnQueue)
-    expect(conn.steerQueue).toEqual([])
+    expect(conn.deferredTurnQueue).toEqual(['early'])
+    conn.turnPending = false
+    const started: string[] = []
+    engine.startDeferredTurn = (_c: any, text: string) => started.push(text)
+    engine.handleNotification(conn, 'turn/completed', { turn: { id: 'turn-1' } })
+    expect(started).toEqual(['early'])
   })
 })

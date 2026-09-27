@@ -122,6 +122,9 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   async deliver(info: SessionInfo, text: string, mode?: DeliveryMode, meta?: Record<string, string>): Promise<DeliveryResult> {
+    if (text === '[system] keepalive') {
+      return { status: 'rejected', retryable: false, reason: 'keepalive blocked for codex' }
+    }
     // Enrich before transferring ownership to the queue, including while the
     // app-server connection is absent.
     let deliveryText = text
@@ -135,31 +138,7 @@ export class CodexEngineAdapter implements EngineAdapter {
         : { status: 'rejected', retryable: false, reason: 'session is retiring' }
     }
 
-    // ponytail: poll up to 15s for codex connection — covers spawn race where
-    // kickoff fires before WebSocket is established. Upgrade to event-driven if
-    // 15s proves too short or polling is too frequent.
-    if (!this.engine.isConnected(info.sessionId)) {
-      let connected = false
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 500))
-        if (this.engine.isConnected(info.sessionId)) { connected = true; break }
-      }
-      if (!connected) {
-        // Queue for delivery when connection arrives rather than dropping
-        const accepted = this.engine.queueTurn(info.sessionId, deliveryText)
-        process.stderr.write(`daemon: codex adapter queued message for ${info.tmuxName} (not connected after 15s)\n`)
-        return accepted
-          ? { status: 'accepted', via: 'queued-turn' }
-          : { status: 'rejected', retryable: false, reason: 'session is retiring' }
-      }
-    }
-    if (text === '[system] keepalive') {
-      return { status: 'rejected', retryable: false, reason: 'keepalive blocked for codex' }
-    }
-    // Enrich with attachment paths so Codex can view images/files
-    // (mirrors sendOrQueue's downloaded_files enrichment)
-    this.engine.steer(info.sessionId, deliveryText)
-    return { status: 'accepted', via: 'steer' }
+    return this.engine.steer(info.sessionId, deliveryText)
   }
 
   async retire(info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
