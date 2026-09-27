@@ -29,6 +29,8 @@ type PhaseDef = {
   /** Cancellation reason used when this phase's timeout transition fires. */
   timeoutReason?: string
   capabilities?: readonly Capability[]
+  /** Children spawned in this phase must report via send_to_thread(visibility="private"). */
+  privateChildren?: boolean
   onEnter?: PhaseBehavior[]
 }
 

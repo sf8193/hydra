@@ -68,6 +68,12 @@ type ProtocolChildRecord = ProtocolChildSpawnMetadata & {
 }
 
 const MAX_EXTENSIONS_PER_PHASE = 2
+// Privacy outlives the phase record: child termination is asynchronous, so a
+// retiring helper remains restricted until killSession has actually settled.
+const privateProtocolChildren = new Set<string>()
+// Covers the interval between pre-launch protocol registration and the child
+// appearing in the session registry. Phase cleanup must not open a write window.
+const pendingPrivateProtocolChildren = new Set<string>()
 const WARNING_BEFORE_TIMEOUT_MS = 2 * 60 * 1000
 const TOTAL_PHASE_CAP_FACTOR = 3
 const HEALTH_CHECK_INTERVAL_MS = 30_000
@@ -319,7 +325,17 @@ function registerChild(run: ProtocolRun, parentSessionId: string, childSessionId
   const phase = run.protocol.phases[run.phase]
   if (role !== phase?.actor || !phase.capabilities?.includes('protocol_spawn')) return false
   ;(run.protocolChildren ??= new Map()).set(childSessionId, { phase: run.phase, parentSessionId, ...metadata })
+  if (phase.privateChildren) privateProtocolChildren.add(childSessionId)
   return true
+}
+
+function markPrivateChildLaunching(sessionId: string): void {
+  pendingPrivateProtocolChildren.add(sessionId)
+}
+
+function finishPrivateChildLaunch(sessionId: string): void {
+  pendingPrivateProtocolChildren.delete(sessionId)
+  if (!registry.has(sessionId)) privateProtocolChildren.delete(sessionId)
 }
 
 function registerChildResult(run: ProtocolRun, childSessionId: string, targetSessionId: string, text: string): boolean {
@@ -329,13 +345,30 @@ function registerChildResult(run: ProtocolRun, childSessionId: string, targetSes
   return true
 }
 
+function releasePrivateChildWhenGone(sessionId: string): void {
+  if (!registry.has(sessionId)) {
+    privateProtocolChildren.delete(sessionId)
+    return
+  }
+  // A concurrent/manual kill may already own this session. Keep the privacy
+  // tombstone until registry removal proves the helper can no longer call us.
+  const timer = setTimeout(() => releasePrivateChildWhenGone(sessionId), 250)
+  timer.unref?.()
+}
+
 function retireProtocolChildren(run: ProtocolRun, phase?: string): void {
   for (const [sessionId, child] of run.protocolChildren ?? []) {
     if (phase && child.phase !== phase) continue
     run.protocolChildren.delete(sessionId)
     const info = registry.get(sessionId)
     if (info && !killsInProgress.has(sessionId)) {
-      void killSession(info, 'protocol phase ended').catch(err => process.stderr.write(`daemon: protocol child cleanup failed: ${err}\n`))
+      void killSession(info, 'protocol phase ended')
+        .catch(err => process.stderr.write(`daemon: protocol child cleanup failed: ${err}\n`))
+        .finally(() => releasePrivateChildWhenGone(sessionId))
+    } else if (info) {
+      releasePrivateChildWhenGone(sessionId)
+    } else if (!pendingPrivateProtocolChildren.has(sessionId)) {
+      privateProtocolChildren.delete(sessionId)
     }
   }
 }
@@ -366,6 +399,11 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
   if (run.protocol.name === 'delegated-build' && run.phase === 'verifying' && verdict === 'step_passed') {
     const proofError = validateDelegatedBuildVerification(run, content)
     if (proofError) return { ok: false, reason: proofError }
+  }
+
+  if (run.protocol.name === 'review' && (run.phase === 'critic_turn' || run.phase === 'subagent_review')) {
+    const lensError = validateRequestedReviewLenses(run, content)
+    if (lensError) return { ok: false, reason: lensError }
   }
 
   const ia = run.protocol.phaseInteraction(run.phase)
@@ -481,6 +519,25 @@ function validateDelegatedBuildVerification(run: ProtocolRun, content: string): 
   const hasEvidence = /(?:^|\n)[ \t]*evidence[ \t]*:[ \t]*\S+/i.test(content)
   if (!hasMechanicalChecks || !hasReviewer || !hasEvidence) {
     return 'step_passed requires non-empty structured proof fields: `Mechanical checks:`, `Reviewer:`, and `Evidence:`'
+  }
+  return null
+}
+
+function validateRequestedReviewLenses(run: ProtocolRun, content: string): string | null {
+  const requested = ((run.params.modifiers as Modifier[] | undefined) ?? []).map(mod => mod.name)
+  const ponytailRequired = requested.includes('ponytail')
+    || (run.params.autoReviewLenses === true && !run.params.noAutoLenses && !run.params.noPonytail)
+  if (!ponytailRequired) return null
+
+  const results = [...(run.protocolChildren?.values() ?? [])]
+    .filter(child => child.phase === run.phase && child.lens === 'ponytail' && child.headless && child.readThread && !!child.phaseBudgetMs && !!child.result)
+    .map(child => child.result!)
+  if (results.length === 0) {
+    if (/\+ponytail:\s*helper returned nothing\b/i.test(content)) return null
+    return '+ponytail requires a current-phase helper spawned with headless=true, read_thread=true, and phase_budget that returned a private result; if it returned nothing, visibly report `+ponytail: helper returned nothing` before advancing'
+  }
+  if (results.some(result => /^UNAVAILABLE: \/ponytail review\b/im.test(result)) && !/UNAVAILABLE: \/ponytail review\b/i.test(content)) {
+    return '+ponytail helper reported `UNAVAILABLE: /ponytail review`; surface that status in the review before advancing'
   }
   return null
 }
@@ -1576,7 +1633,7 @@ async function completeRun(run: ProtocolRun): Promise<void> {
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
-      setRunTools, registerChild, retireProtocolChildren, enterFallbackPhase,
+      privateProtocolChildren, pendingPrivateProtocolChildren, markPrivateChildLaunching, finishPrivateChildLaunch, releasePrivateChildWhenGone, registerRunnerHooks, setRunTools, registerChild, retireProtocolChildren, enterFallbackPhase,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge
@@ -1628,6 +1685,19 @@ function runnerHooks(name: string, protoName: string | readonly string[]) {
       const run = runId ? runs.get(runId) : undefined
       return !!run && matches(run.protocol.name) && registerChild(run, parentSessionId, childSessionId, metadata)
     },
+    childSpawnRequiresPrivate: (parentSessionId) => {
+      const runId = sessionToRun.get(parentSessionId)
+      const run = runId ? runs.get(runId) : undefined
+      if (!run || !matches(run.protocol.name)) return false
+      const role = run.sessionToRole.get(parentSessionId)
+      const phase = run.protocol.phases[run.phase]
+      return role === phase?.actor && !!phase.privateChildren
+    },
+    onPrivateChildLaunchStart: markPrivateChildLaunching,
+    onPrivateChildLaunchFinish: finishPrivateChildLaunch,
+    childRequiresPrivate: (childSessionId) => {
+      return privateProtocolChildren.has(childSessionId) || pendingPrivateProtocolChildren.has(childSessionId)
+    },
     onChildResult: (childSessionId, targetSessionId, text) => {
       for (const run of runs.values()) {
         if (matches(run.protocol.name) && registerChildResult(run, childSessionId, targetSessionId, text)) return true
@@ -1640,10 +1710,13 @@ function runnerHooks(name: string, protoName: string | readonly string[]) {
 // Review has no V1 anymore, so its registry name drops the _v2 suffix — this is
 // what isThreadOccupied() surfaces to users ("A review is already in progress").
 // build/spike keep _v2 until their own V1s are removed.
-runnerHooks('review', 'review')
-runnerHooks('build_v2', 'build')
-runnerHooks('spike_v2', 'spike')
-runnerHooks('delegated_build', ['delegated-build', 'delegated-build-quick'])
+function registerRunnerHooks() {
+  runnerHooks('review', 'review')
+  runnerHooks('build_v2', 'build')
+  runnerHooks('spike_v2', 'spike')
+  runnerHooks('delegated_build', ['delegated-build', 'delegated-build-quick'])
+}
+registerRunnerHooks()
 
 // Protocol context for autopsy — joins session to protocol state
 export function getProtocolContext(sessionId: string): { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null {

@@ -1,4 +1,5 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
+import { PONYTAIL_INSTRUCTIONS } from '../daemon/modifiers.js'
 
 export default protocol('review', {
   emoji: '⚔️',
@@ -18,7 +19,9 @@ export default protocol('review', {
   },
 
   phases: {
-    critic_turn: { actor: 'critic', half: 'top',    on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled', fallback: 'subagent_review' }, advanceEvent: 'critic_posted' },
+    // The critic may spawn private lens helpers (protocol_spawn). Their reports
+    // reach the critic only; the single public post is the critic's advance().
+    critic_turn: { actor: 'critic', half: 'top', capabilities: ['protocol_spawn'], privateChildren: true, on: { critic_posted: 'owner_turn', timeout: 'cancelled', cancel: 'cancelled', fallback: 'subagent_review' }, advanceEvent: 'critic_posted' },
     owner_turn:  { actor: 'owner',  half: 'bottom', on: { owner_posted: 'critic_turn', final_round: 'cleanup', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'owner_posted', finalAdvanceEvent: 'final_round' },
     cleanup:     { actor: 'owner',  half: 'top',    on: { summary_posted: 'complete', timeout: 'complete' }, advanceEvent: 'summary_posted' },
     // The owner runs the review itself, via fresh subagents. Reached two ways,
@@ -30,7 +33,7 @@ export default protocol('review', {
     // onFallback instructions below — see enterFallbackPhase in protocol-runner.
     // timeout → cancelled (not complete): unlike cleanup, hitting the window here
     // means the review never produced a result, so it's a failure, not a success.
-    subagent_review: { actor: 'owner', half: 'top', on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
+    subagent_review: { actor: 'owner', half: 'top', capabilities: ['protocol_spawn'], privateChildren: true, on: { summary_posted: 'complete', timeout: 'cancelled', cancel: 'cancelled' }, advanceEvent: 'summary_posted' },
     complete:    { actor: 'owner',  half: 'top',    on: {} },
     cancelled:   { actor: 'owner',  half: 'top',    on: {} },
   },
@@ -86,10 +89,17 @@ export default protocol('review', {
       // `review +subagent +security` quietly loses the +security.
       const lenses = ((run.params.modifiers ?? []) as Array<{ name: string; instructions?: string }>)
         .filter(m => !!m.instructions)
-      const lensBlock = lenses.length > 0
+      const helpersDisabled = run.params.noAutoLenses === true
+      const autoLenses = run.params.autoReviewLenses === true && !helpersDisabled
+      const helpersAllowed = !helpersDisabled
+      const defaultPonytail = autoLenses && !run.params.noPonytail && !lenses.some(m => m.name === 'ponytail')
+      const effectiveLenses = defaultPonytail
+        ? [...lenses, { name: 'ponytail', instructions: PONYTAIL_INSTRUCTIONS }]
+        : lenses
+      const lensBlock = effectiveLenses.length > 0
         ? [
-            `\n**Requested lenses** (${lenses.map(m => `+${m.name}`).join(' ')}) — apply these on top of the ones the material suggests:`,
-            ...lenses.map(m => `\n${m.instructions}`),
+            `\n**Required lenses** (${effectiveLenses.map(m => `+${m.name}`).join(' ')}) — delegate each one exactly as instructed:`,
+            ...effectiveLenses.map(m => `\n**+${m.name}:**\n${m.instructions}`),
           ]
         : []
 
@@ -115,11 +125,19 @@ export default protocol('review', {
       return [
         ...preamble,
         ``,
-        `**Your task:** review the work with fresh Claude Code subagents.`,
+        helpersAllowed
+          ? `**Your task:** review the work with fresh Claude Code subagents.`
+          : `**Your task:** review the work directly; automatic lens subagents are disabled.`,
         ``,
-        `1. **Pick the lenses that fit what you're reviewing.** These are suggestions, not a checklist — the material drives the choice. Code? Maybe correctness/edge cases, import & layering boundaries, conventions/golden patterns, test quality, security, resource lifecycle. A design doc or plan? More likely hidden assumptions, alternatives not considered, failure modes, second-order effects. Add lenses the material calls for; drop ones that don't apply.`,
-        `2. **Spawn one fresh subagent per chosen lens.** Tell each to re-read this thread and the specifics (the diff / doc / spec) and orient on its own — do not fork your own context into them; independence is the point. Run them in parallel.`,
-        `3. **Synthesize** their findings yourself — resolve conflicts, drop the noise, keep what's real.`,
+        helpersAllowed
+          ? `1. **Pick the lenses that fit what you're reviewing.** They are suggestions, not a checklist. ${autoLenses ? 'For substantial work, delegate relevant lenses such as correctness, readability, test quality, security, or resource lifecycle' : 'Delegate useful lenses when the material warrants it'}; do not fan out blindly. For a genuinely small change, direct review is fine except for any required lens below.`
+          : `1. **Do not spawn lens helpers.** The caller used \`+no-lenses\`; review the material directly.`,
+        helpersAllowed
+          ? `2. **Spawn one fresh subagent per chosen lens** — native subagents, or headless helpers via \`spawn_session(headless=true, read_thread=true, phase_budget="10m")\` that report with \`send_to_thread(target=<your name>, type="result", visibility="private")\` (nothing is posted to the thread; only your final \`advance()\` is). Tell each to re-read this thread and the specifics (the diff / doc / spec) and orient on its own — do not fork your own context into them; independence is the point. Run them in parallel.`
+          : `2. **Review directly** — do not spawn native subagents or headless helpers for lenses.`,
+        helpersAllowed
+          ? `3. **Synthesize** their findings yourself — resolve conflicts, drop the noise, keep what's real.`
+          : `3. **Post your own findings** after checking the material directly.`,
         topic ? `\n**Focus:** ${topic} — weight your lens choices toward this.` : '',
         ...lensBlock,
         ``,
@@ -129,11 +147,33 @@ export default protocol('review', {
   },
 
   seed: {
-    critic: (ctx) => protocolSeed(ctx.protocol, 'critic', ctx)
+    critic: (ctx) => {
+      const modifiers = (ctx.modifiers ?? []) as Array<{ name?: string }>
+      const helpersDisabled = ctx.noAutoLenses === true
+      const autoLenses = ctx.autoReviewLenses === true && !helpersDisabled
+      const helpersAllowed = !helpersDisabled
+      const defaultPonytail = autoLenses && !ctx.noPonytail && !modifiers.some(mod => mod.name === 'ponytail')
+      const helperPolicy = helpersDisabled
+        ? `**Private sub-reviewers disabled.** The caller used \`+no-lenses\`; review directly and do not spawn lens helpers.`
+        : autoLenses
+          ? `**Automatic private sub-reviewers.** For anything beyond a small change, delegate the distinct lenses the material calls for instead of reviewing everything yourself. Readability and security are common candidates, but relevance—not a fixed checklist—decides. For a small change, review directly except for required lenses.`
+          : `**Optional private sub-reviewers.** Delegate useful lenses when the material warrants it. Explicit \`+name:\` lenses are required; otherwise a small change may be reviewed directly.`
+      const helperInstructions = helpersAllowed ? `
+- Choose only relevant lenses; Do not fan out every lens. Any lens the caller explicitly requested (\`+name:\` blocks appended below) must be covered by its own helper, quoting its block verbatim.
+- Spawn each with \`spawn_session(topic, headless=true, read_thread=true, phase_budget="8m", lens="<lens-name>")\` — fresh, one distinct lens each, told to orient on the thread and diff itself.
+- Tell every helper to report ONLY via \`send_to_thread(target=<your session name>, type="result", visibility="private", text=...)\`. Public helper posts are rejected.
+- Use \`peek_session\` to check on a helper and \`kill_session\` to stop one that is stuck. Helpers are retired when your turn ends.
+- Deduplicate and verify findings yourself, then post exactly ONE critique through \`advance()\`.` : ''
+      const ponytailBlock = defaultPonytail
+        ? `\n\n---\n**Default +ponytail (required unless opted out):**\n${PONYTAIL_INSTRUCTIONS}`
+        : ''
+      return protocolSeed(ctx.protocol, 'critic', ctx)
       + '\n\n' + (ctx.topic
         ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
         : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
-      ) + `\n\nPost your opening critique after orienting. The owner will defend — when a defense arrives, post your counter-argument. Repeat for ${ctx.rounds} rounds.\n\nFormat with clear headers. Be substantive and focused.`,
+      ) + `\n\n${helperPolicy}${helperInstructions}${ponytailBlock}`
+        + `\n\nPost your opening critique after orienting. The owner will defend — when a defense arrives, post your counter-argument. Repeat for ${ctx.rounds} rounds.\n\nFormat with clear headers. Be substantive and focused.`
+    },
   },
 
   summaryFormat: (run) => {
