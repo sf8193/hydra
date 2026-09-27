@@ -222,13 +222,14 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   if (isResumePromptOnScreen(tailText)) {
     return { kind: 'resume_prompt', planPath: null, loginStage: null, oauthUrl: null }
   }
-  if (isUsageLimitOnScreen(tailText)) {
+  const liveRepl = hasLiveReplPrompt(tailText)
+  // Dialogs replace the prompt; a bare live `❯` means this is stale scrollback (same gate as login below).
+  if (!liveRepl && isUsageLimitOnScreen(tailText)) {
     return { kind: 'usage_limit', planPath: null, loginStage: null, oauthUrl: null }
   }
   // Full-screen login stages fill the pane — a live REPL prompt in the tail
   // means the banner is stale scrollback, not the active screen. Gate them so
   // a resumed session at a working `❯` prompt doesn't re-trigger every cycle.
-  const liveRepl = hasLiveReplPrompt(tailText)
   // Login stages in priority order — later stages take precedence (the flow progresses)
   if (!liveRepl && LOGIN_SUCCESS_RE.test(tailText)) {
     return { kind: 'login_required', planPath: null, loginStage: 'success', oauthUrl: null }
@@ -254,7 +255,7 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   }
   // Fallback: every CC selection dialog ends with this footer. Known kinds above
   // get specific handling; anything else is surfaced so a new dialog can't block silently.
-  if (DIALOG_FOOTER_RE.test(tailText)) {
+  if (!liveRepl && DIALOG_FOOTER_RE.test(tailText)) {
     return { kind: 'unknown_dialog', planPath: null, loginStage: null, oauthUrl: null }
   }
   return null
@@ -401,18 +402,22 @@ async function notifyUsageLimit(entry: ProbeEntry, now: number): Promise<void> {
 
 // Claude Code's footer shows "You've used 91% of your weekly limit · resets …"
 // once usage gets high. The limit is account-wide, so byte's pane is enough.
-// Alert once per threshold; a drop in percent (weekly reset) re-arms them.
+// Alert once per threshold; a new "resets …" date (next weekly window) re-arms them.
+// Keyed on the date, not a drop in %, so footer jitter (91→90→91) can't re-alert.
 const WEEKLY_USAGE_RE = /You've used (\d+)% of your weekly limit(?: · resets ([^\n]*?))?\s*$/m
 const WEEKLY_USAGE_THRESHOLDS = [80, 90, 95]
 let weeklyUsageAlerted = 0
-let weeklyUsageLast = 0
+let weeklyUsageWindow = ''
 
 function checkWeeklyUsage(tail: string): void {
   const m = tail.match(WEEKLY_USAGE_RE)
   if (!m) return
   const pct = Number(m[1])
-  if (pct < weeklyUsageLast) weeklyUsageAlerted = 0
-  weeklyUsageLast = pct
+  const window = m[2]?.trim() ?? ''
+  if (window && window !== weeklyUsageWindow) {
+    if (weeklyUsageWindow) weeklyUsageAlerted = 0
+    weeklyUsageWindow = window
+  }
   const crossed = WEEKLY_USAGE_THRESHOLDS.filter(t => pct >= t && t > weeklyUsageAlerted).pop()
   if (!crossed || !io.defaultChannel) return
   weeklyUsageAlerted = crossed
@@ -420,7 +425,7 @@ function checkWeeklyUsage(tail: string): void {
   void io.safeSend(io.defaultChannel, `> ⚠️ Claude usage at **${pct}%** of weekly limit${resets}.`)
 }
 
-export function _resetWeeklyUsage(): void { weeklyUsageAlerted = 0; weeklyUsageLast = 0 }
+export function _resetWeeklyUsage(): void { weeklyUsageAlerted = 0; weeklyUsageWindow = '' }
 
 // Alert only: an unknown dialog may be a permission or confirmation where any
 // keypress is a real decision, so leave it to a human.

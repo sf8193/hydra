@@ -334,6 +334,11 @@ describe('detectBlockingState (pure)', () => {
     expect(detectBlockingState(NORMAL_SESSION_TAIL)).toBeNull()
   })
 
+  it('ignores dialog text left in scrollback above a live prompt', () => {
+    expect(detectBlockingState(USAGE_LIMIT_TAIL + '\n❯ \n')).toBeNull()
+    expect(detectBlockingState('Pick one\n❯ 1. A\n  2. B\nEnter to confirm · Esc to cancel\n❯\n')).toBeNull()
+  })
+
   it('detects resume prompt', () => {
     const result = detectBlockingState(RESUME_PROMPT_TAIL)
     expect(result).not.toBeNull()
@@ -605,18 +610,20 @@ describe('probeAllSessions', () => {
 
   it('alerts once per weekly-usage threshold from byte\'s footer, re-arming after a reset', async () => {
     _resetWeeklyUsage()
-    const footer = (pct: number) => `❯ \n─────\n  options_bot git:(main) claude-sonnet-5[1m] ctx:8%        You've used ${pct}% of your weekly limit · resets Oct 2, 6am (America/Los_Angeles)\n  ⏵⏵ bypass permissions on`
+    const footer = (pct: number, resets = 'Oct 2, 6am (America/Los_Angeles)') => `❯ \n─────\n  options_bot git:(main) claude-sonnet-5[1m] ctx:8%        You've used ${pct}% of your weekly limit · resets ${resets}\n  ⏵⏵ bypass permissions on`
     const usageMsgs = () => sentMessages.filter(m => m.channelId === 'root-channel-123' && m.text.includes('weekly limit')).map(m => m.text)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
-    for (const [i, pct] of [70, 91, 92, 96, 10, 85].entries()) {
-      paneTails.set('discord-byte', footer(pct))
+    // 90→89→91 is footer jitter within one window (no re-alert); a new resets date re-arms.
+    const seq: Array<[number, string?]> = [[70], [91], [90], [89], [92], [96], [10, 'Oct 9, 6am (America/Los_Angeles)'], [85, 'Oct 9, 6am (America/Los_Angeles)']]
+    for (const [i, [pct, resets]] of seq.entries()) {
+      paneTails.set('discord-byte', footer(pct, resets))
       await probeAllSessions(T0 + i * 60_000)
     }
     await flush()
     expect(usageMsgs()).toEqual([
       '> ⚠️ Claude usage at **91%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
       '> ⚠️ Claude usage at **96%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
-      '> ⚠️ Claude usage at **85%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+      '> ⚠️ Claude usage at **85%** of weekly limit · resets Oct 9, 6am (America/Los_Angeles).',
     ])
   })
 
