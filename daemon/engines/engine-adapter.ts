@@ -73,6 +73,7 @@ export type LaunchInput = {
   readonly disallowedTools?: string[]
   readonly forkFrom?: { claudeSessionId?: string; codexThreadId?: string }
   readonly resumeFrom?: string
+  readonly resumeCodex?: { threadId: string; homeName: string }  // Codex: resume this thread in its original CODEX_HOME
   readonly threadId?: string
 }
 
@@ -85,6 +86,7 @@ export type LaunchResult = {
   readonly debugLogPath?: string
   readonly claudeSessionId?: string
   readonly codexThreadId?: string
+  readonly codexHomeName?: string
 }
 
 // ---------------------------------------------------------------------------

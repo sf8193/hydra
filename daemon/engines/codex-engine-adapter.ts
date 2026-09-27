@@ -8,7 +8,7 @@ import { mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { codexSpawnEnv, tmuxNewSession } from '../../shared/spawn-env.js'
-import type { SessionInfo } from '../sessions.js'
+import { registry, type SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
@@ -18,49 +18,58 @@ import type {
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { parseContextPercent, tmuxHasSession } from '../util.js'
+import { parseContextPercent, safeSend, tmuxHasSession } from '../util.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
+function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string): void {
+  const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
+  try {
+    execFileSync('bash', ['-c', [
+      `mkdir -p ${shq(homeDir)}`,
+      `ln -sf ~/.codex/auth.json ${shq(homeDir)}/auth.json`,
+      `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
+    ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv() })
+  } catch (err) {
+    process.stderr.write(`daemon: codex MCP registration failed for ${tmuxName}: ${err}\n`)
+  }
+}
+
+/** Process side effects of launch — injectable so tests never touch ~/.codex or spawn codex. */
+export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startCodexAppServer, stop: stopCodexAppServer }
+
 export class CodexEngineAdapter implements EngineAdapter {
   readonly provider = 'codex' as const
   readonly deliveryIsFree = false
-  constructor(private readonly engine: CodexEngine) {}
+  constructor(private readonly engine: CodexEngine, private readonly proc = codexLaunchProcess) {}
 
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
-  private startAppServer(input: LaunchInput): string {
+  private startAppServer(input: LaunchInput, codexHomeName: string): string {
     const { sessionId, tmuxName, cwd: effectiveCwd, model } = input
-    const codexHomeName = tmuxName
-    const homeDir = codexHomeDirFn(codexHomeName)
-
-    // Register MCP server before starting app-server
-    const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
-    try {
-      execFileSync('bash', ['-c', [
-        `mkdir -p ${shq(homeDir)}`,
-        `ln -sf ~/.codex/auth.json ${shq(homeDir)}/auth.json`,
-        `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
-      ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv() })
-    } catch (err) {
-      process.stderr.write(`daemon: codex MCP registration failed for ${tmuxName}: ${err}\n`)
-    }
+    this.proc.registerMcp(codexHomeDirFn(codexHomeName), sessionId, tmuxName)
 
     mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
     const spawnLogPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
 
-    process.stderr.write(`daemon: codex spawning durable app-server for ${tmuxName}\n`)
-    startCodexAppServer({ homeName: codexHomeName, cwd: effectiveCwd, logPath: spawnLogPath, model })
+    // Always (re)start, even when resuming onto a live app-server: a thread
+    // already loaded there keeps the MCP sidecar spawned with the OLD
+    // HYDRA_SESSION_ID (verified against codex-cli 0.157.1), so its hydra tools
+    // would act as the dead session. A restart reloads the thread from its rollout
+    // with the sidecar just registered above.
+    process.stderr.write(`daemon: codex spawning durable app-server for ${tmuxName} (home ${codexHomeName})\n`)
+    this.proc.start({ homeName: codexHomeName, cwd: effectiveCwd, logPath: spawnLogPath, model })
     return spawnLogPath
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
-    const { sessionId, tmuxName, model, prompt } = input
-    const codexHomeName = tmuxName
+    const { sessionId, tmuxName, model, prompt, resumeCodex } = input
+    // Resume reuses the ORIGINAL home: the rollout lives there, and a fresh home cannot see it.
+    const codexHomeName = resumeCodex?.homeName ?? tmuxName
     const sockPath = codexSocketPath(codexHomeName)
-    const spawnLogPath = this.startAppServer(input)
+    const spawnLogPath = this.startAppServer(input, codexHomeName)
 
     // The launch prompt is FIFO item zero. Queue it before establishing the
     // thread so every later user message uses the same turn scheduler.
@@ -73,7 +82,11 @@ export class CodexEngineAdapter implements EngineAdapter {
     let lastErr = ''
     while (Date.now() - start < 15_000) {
       try {
-        if (input.forkFrom?.codexThreadId) {
+        if (resumeCodex) {
+          const r = await this.engine.connectAndResume(sessionId, sockPath, resumeCodex.threadId)
+          codexThreadId = resumeCodex.threadId
+          resolvedModel = r.model ?? resolvedModel
+        } else if (input.forkFrom?.codexThreadId) {
           const r = await this.engine.connectAndFork(sessionId, sockPath, input.forkFrom.codexThreadId, model)
           codexThreadId = r.threadId
           resolvedModel = r.model ?? resolvedModel
@@ -91,17 +104,18 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
     if (!codexThreadId) {
       process.stderr.write(`daemon: stopping codex app-server ${tmuxName} (startup timeout: ${lastErr})\n`)
-      stopCodexAppServer(codexHomeName)
+      this.proc.stop(codexHomeName)
       throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
     }
     process.stderr.write(`daemon: codex connected for ${tmuxName}, thread=${codexThreadId}\n`)
     // Create the tmux surface now so neutral tmux-based liveness sees the session
     // before its first turn completes. Best effort: ensureSurface logs and returns false.
-    this.ensureSurface({ sessionId, tmuxName, codexThreadId } as SessionInfo)
+    this.ensureSurface({ sessionId, tmuxName, codexThreadId, codexHomeName } as SessionInfo)
 
     return {
       provider: 'codex', model: resolvedModel ?? 'codex-default',
       codexThreadId, spawnLogPath,
+      ...(resumeCodex ? { codexHomeName } : {}),
     }
   }
 
@@ -162,7 +176,11 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   async stop(info: SessionInfo): Promise<StopResult> {
     this.engine.disconnect(info.sessionId)
-    stopCodexAppServer(info.codexHomeName ?? info.tmuxName)
+    // A home another LIVE record claims (e.g. adopted by a resume) is not ours to stop.
+    // Dead records don't count, or a lingering one would leak the live owner's server.
+    const home = info.codexHomeName ?? info.tmuxName
+    const claimed = [...registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)
+    if (!claimed) this.proc.stop(home)
     try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
     return { status: 'stopped' }
   }
@@ -284,15 +302,25 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   async reconnect(info: SessionInfo): Promise<boolean> {
     const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
+    // Generation bound (invariant 10): if this record was replaced or removed while
+    // we awaited, its home may belong to a successor — touch nothing.
+    const stale = () => {
+      if (registry.get(info.sessionId) === info) return false
+      try { this.engine.disconnect(info.sessionId) } catch {}
+      process.stderr.write(`codex-adapter: abandoning stale reconnect for ${info.tmuxName}\n`)
+      return true
+    }
 
     // Check if app-server socket is reachable (survives tmux death)
     let socketLive = false
     try { socketLive = await this.engine.isSocketLive(sockPath) } catch {}
+    if (stale()) return false
     if (!socketLive && !tmuxHasSession(info.tmuxName)) return false
 
     if (info.codexThreadId) {
       try {
         const result = await this.engine.connectAndResume(info.sessionId, sockPath, info.codexThreadId)
+        if (stale()) return false
         if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
         process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (resumed)\n`)
         return true
@@ -300,16 +328,17 @@ export class CodexEngineAdapter implements EngineAdapter {
         process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
         try { this.engine.disconnect(info.sessionId) } catch {}
         await new Promise(r => setTimeout(r, 2000))
+        if (stale()) return false
       }
     }
 
     const hadPriorThread = !!info.codexThreadId
     try {
       const result = await this.engine.connect(info.sessionId, sockPath)
+      if (stale()) return false
       info.codexThreadId = result.threadId
       if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
       if (hadPriorThread) {
-        const { safeSend } = await import('../util.js')
         void safeSend(info.threadId, `⚠️ Session resumed but conversation history was lost. The agent is starting fresh.`)
       }
       process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (new thread)\n`)

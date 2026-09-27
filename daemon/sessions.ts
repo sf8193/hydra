@@ -355,6 +355,9 @@ export class SessionRegistry {
     // unpushed commits on it.
     for (const s of this.sessions.values()) {
       if (s.worktreeBranch?.startsWith('wt/')) used.add(baseNameFromBranch(s.worktreeBranch))
+      // A resumed Codex session keeps its predecessor's CODEX_HOME; a new spawn named
+      // after that home would restart the owner's app-server.
+      if (s.codexHomeName) used.add(s.codexHomeName)
     }
     // In-flight reservations cover the recovery window between deleting a dead record and
     // persisting its replacement, when the record-based reservation above doesn't yet apply.

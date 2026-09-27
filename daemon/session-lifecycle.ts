@@ -495,6 +495,18 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
+  // Codex resume adopts the original CODEX_HOME. Refuse if anything other than the
+  // record being replaced owns that home —
+  // launching would restart another owner's app-server. Throws before any mutation.
+  if (opts?.resumeCodex) {
+    const home = opts.resumeCodex.homeName
+    const replacing = threadId ? registry.getByThread(threadId) : undefined
+    const owner = [...registry.values()].find(s => s.sessionId !== replacing && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)
+    if (owner) {
+      throw new Error(`codex home ${home} is owned by ${owner.tmuxName} — cannot resume into it`)
+    }
+  }
+
   // Clean up dead session in this thread before spawning
   // Runs for all paths: existingThreadId, channel lookup, or spawn-in-dead-thread
   if (threadId && !isJoin) {
@@ -657,7 +669,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools: opts?.disallowedTools,
-    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom,
+    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex,
     threadId,
   })
 
@@ -682,6 +694,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     engine,
     ...(launched.claudeSessionId ? { claudeSessionId: launched.claudeSessionId } : {}),
     ...(launched.codexThreadId ? { codexThreadId: launched.codexThreadId } : {}),
+    ...(launched.codexHomeName ? { codexHomeName: launched.codexHomeName } : {}),
     ...(respawnCount > 0 ? { respawnCount } : {}),
     ...(resumeCount > 0 ? { resumeCount } : {}),
     ...(worktreeRepo ? { worktreeRepo, worktreePath, worktreeBranch } : {}),
