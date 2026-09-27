@@ -17,9 +17,6 @@ import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatu
 import { normalizeReviewRounds } from '../shared/constants.js'
 import { isToolAllowed } from './tool-surface.js'
 
-// Injectable for tests (same pattern as recoveryDeps): the real handOff kills and spawns.
-export const handoffDeps = { handOff }
-
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
 const RETRYABLE_PATTERNS = /ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|socket hang up|not connected|network/i
@@ -362,7 +359,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
         // Answer before acting: the kill inside handOff ends this very session.
         setTimeout(() => {
-          handoffDeps.handOff(info, path).then(
+          handOff(info, path).then(
             r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\``),
             err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
           ).catch(() => {})

@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { executeTool, handoffDeps } from '../bridge-dispatch.js'
+import { executeTool } from '../bridge-dispatch.js'
+import { handoffIO } from '../session-lifecycle.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { gateway, STATE_DIR } from '../config.js'
@@ -17,10 +18,11 @@ const mk = (id: string, name: string, threadId: string) => registry.set(id, {
 
 test('handoff tool: refuses a missing or empty file; with a file, answers first and then hands off that session', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'handoff-'))
-  const orig = { handOff: handoffDeps.handOff, send: gateway.send }
+  const orig = { ...handoffIO, send: gateway.send }
   const calls: Array<[string, string]> = []
   const sent: string[] = []
-  handoffDeps.handOff = (async (info: any, path: string) => { calls.push([info.tmuxName, path]); return { name: 'fresh' } }) as any
+  handoffIO.killSession = (async (i: any) => { registry.delete(i.sessionId) }) as any
+  handoffIO.doSpawnSession = (async (_t: string, _c?: string, _m?: string, o?: any) => { calls.push([o.handedOffFrom, o.artifact]); return { name: 'fresh', sessionId: 'ho-1b', threadId: 'ho-thread', url: '' } }) as any
   ;(gateway as any).send = async (_c: string, text: string) => { sent.push(text); return { id: 'm' } }
   mk('ho-1', 'flint', 'ho-thread')
   try {
@@ -37,7 +39,7 @@ test('handoff tool: refuses a missing or empty file; with a file, answers first 
     expect(calls).toEqual([['flint', doc]])
     expect(sent.some(t => t.includes('`flint` handed off to `fresh`'))).toBe(true)
   } finally {
-    handoffDeps.handOff = orig.handOff
+    handoffIO.killSession = orig.killSession; handoffIO.doSpawnSession = orig.doSpawnSession
     ;(gateway as any).send = orig.send
     registry.delete('ho-1')
     rmSync(dir, { recursive: true, force: true })
@@ -69,28 +71,13 @@ test('handoff command: asks the live session to write a handoff file under STATE
   }
 })
 
-test('successor opts: same thread/label/worktree + carried deliverables; `handoff <model>` switches model+engine', async () => {
-  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
-  const info = {
-    sessionId: 'ho-3', tmuxName: 'flint', threadId: 'ho-thread-3', topic: 't', engine: 'claude', label: 'build',
-    sessionMetadata: { model: 'claude-opus-5-5[1m]' }, worktreeRepo: '/r', worktreePath: '/r/wt', worktreeBranch: 'wt/flint',
-    artifacts: ['pr#1'], contextLinks: ['l'], description: 'd',
-  } as any
-  expect(handoffSpawnOpts(info, '/h.md')).toMatchObject({
-    existingThreadId: 'ho-thread-3', handedOffFrom: 'flint', artifact: '/h.md', model: 'claude-opus-5-5[1m]', engine: 'claude', inheritedLabel: 'build',
-    preserveWorktree: true, reuseWorktree: { repo: '/r', path: '/r/wt', branch: 'wt/flint' },
-    carryOver: { artifacts: ['pr#1'], contextLinks: ['l'], description: 'd' },
-  })
-  info.handoffSelection = { model: 'gpt-5.6-sol', engine: 'codex' }
-  expect(handoffSpawnOpts(info, '/h.md')).toMatchObject({ model: 'gpt-5.6-sol', engine: 'codex' })
-})
-
-test('handOff: PR watches move to the successor; a second concurrent handoff is refused', async () => {
+test('handOff: deliverables, PR watches and the `handoff <model>` choice reach the successor; a second concurrent handoff is refused', async () => {
   const { handOff, handoffIO } = await import('../session-lifecycle.js')
   const { restoreWatches, getWatchesBySession, unwatchBySession } = await import('../pr-watch.js')
   const orig = { ...handoffIO }
   mk('ho-4', 'flint', 'ho-thread-4')
   const info = registry.get('ho-4')!
+  Object.assign(info, { artifacts: ['pr#1'], description: 'd', handoffSelection: { model: 'gpt-5.6-sol', engine: 'codex' } })
   restoreWatches([{ prUrl: 'https://github.com/o/r/pull/9', sessionId: 'x', threadId: 'x', createdAt: Date.now() } as any], 'ho-4', 'ho-thread-4')
   let spawned: any
   let release!: () => void
@@ -102,7 +89,7 @@ test('handOff: PR watches move to the successor; a second concurrent handoff is 
     await expect(handOff(info, '/h.md')).rejects.toThrow('already handing off')
     release()
     expect((await first).name).toBe('fresh')
-    expect(spawned.handedOffFrom).toBe('flint')
+    expect(spawned).toMatchObject({ handedOffFrom: 'flint', carryOver: { artifacts: ['pr#1'], description: 'd' }, model: 'gpt-5.6-sol', engine: 'codex' })
     expect(getWatchesBySession('ho-4')).toEqual([])
     expect(getWatchesBySession('ho-5').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/9'])
   } finally {

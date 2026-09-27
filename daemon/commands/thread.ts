@@ -655,7 +655,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 // fresh session (via the `handoff` tool, which does the kill + successor spawn)
 // ---------------------------------------------------------------------------
 
-export function handoffRequest(artifact: string): string {
+function handoffRequest(artifact: string): string {
   return [
     `[system] Sam asked you to hand off this thread to a fresh session.`,
     `Write ${artifact} with these sections: Goal; Non-goals (what is explicitly out of scope); State (branch, last commit, current step);`,
