@@ -77,6 +77,49 @@ export function getLastCodexMessage(sessionId: string, sinceMs: number): string 
   return entry.text
 }
 
+// The four sources a turn outcome is composed from — injected so tests can fake them.
+export type TurnSources = {
+  transcriptPathFor: (claudeSessionId: string) => string | undefined
+  readConversationForensics: (transcriptPath: string) => ConversationForensics | null
+  getLastCodexMessage: (sessionId: string, sinceMs: number) => string | null
+  isCodexTurnComplete: (sessionId: string) => boolean
+}
+
+// confirmedComplete: the turn is definitely over (skip the reply guard's grace).
+// answer(): the session's last clean answer given after sinceMs, or null.
+export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): string | null }
+
+// Reply guard's composition (F1s/F2s). The discriminator is the presence of
+// claudeSessionId, not the engine: a Codex record holding one relays the
+// transcript and never falls through to the event path (PINNED R9). The flag is
+// stale between turns, so it can skip grace early (PINNED R15).
+export function turnOutcomeFrom(info: Pick<SessionInfo, 'sessionId' | 'claudeSessionId'>, sinceMs: number, src: TurnSources): TurnOutcome {
+  return {
+    confirmedComplete: src.isCodexTurnComplete(info.sessionId),
+    answer: () => {
+      if (info.claudeSessionId) {
+        const transcriptPath = src.transcriptPathFor(info.claudeSessionId)
+        const forensics = transcriptPath ? src.readConversationForensics(transcriptPath) : null
+        if (
+          forensics?.lastAssistantFullText &&
+          forensics.lastAssistantTurnComplete &&
+          !forensics.lastToolPending &&
+          (!forensics.lastAssistantTs || new Date(forensics.lastAssistantTs).getTime() >= sinceMs)
+        ) {
+          return forensics.lastAssistantFullText
+        }
+        return null
+      }
+      // Engine-owned signal (codex-bootstrap.ts's own turnCompleted event),
+      // deliberately NOT SessionInfo.turnState — that field is also written by
+      // the tmux-activity poller from raw visual silence, independent of
+      // whether Codex's actual turn has finished.
+      if (src.isCodexTurnComplete(info.sessionId)) return src.getLastCodexMessage(info.sessionId, sinceMs)
+      return null
+    },
+  }
+}
+
 // The death path (bridge-server.ts) reads a session's last sample to fold into
 // its autopsy — exposed here so buildAutopsy can take it as an argument (pure).
 export function getVitalsSample(sessionId: string): VitalsSample | undefined {

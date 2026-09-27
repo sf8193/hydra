@@ -33,7 +33,7 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
-import { readConversationForensics, getLastCodexMessage, isCodexTurnComplete, type ConversationForensics } from './observability.js'
+import { readConversationForensics, getLastCodexMessage, isCodexTurnComplete, turnOutcomeFrom, type ConversationForensics, type TurnOutcome } from './observability.js'
 import { transcriptPathFor } from './usage.js'
 import { safeSend, tmuxWindowActivity } from './util.js'
 import { probeByteTmuxName } from './pane-probe.js'
@@ -206,7 +206,10 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     // per round-2-of-round-2 review, waiting anyway just reintroduces the
     // exact pointless-delay problem the nudge removal was fixing, for the
     // one signal that never needed it).
-    if (!deps.isCodexTurnComplete(p.sessionId)) {
+    // 'main' has no record: grace, and no relay (the codex flag is only ever
+    // written for registry records).
+    const outcome = info ? turnOutcomeFrom(info, p.deliveredAt, deps) : undefined
+    if (!outcome?.confirmedComplete) {
       const firstSeen = silenceFirstSeenAt.get(key)
       if (firstSeen === undefined) {
         silenceFirstSeenAt.set(key, now)
@@ -219,7 +222,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     const name = info?.tmuxName ?? p.sessionId
 
     process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, escalating\n`)
-    void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins, info?.claudeSessionId, p.sessionId, p.deliveredAt)
+    void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins, outcome)
     pending.delete(key)
     silenceFirstSeenAt.delete(key)
     acted++
@@ -318,7 +321,7 @@ function capturePaneScreenshot(tmuxName: string): string | null {
 
 async function escalateWithCapture(
   tmuxName: string, chatId: string, user: string, messageId: string, mins: number,
-  claudeSessionId?: string, sessionId?: string, deliveredAt?: number,
+  outcome?: TurnOutcome,
 ): Promise<void> {
   const header = `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It may have answered in-transcript only. Here's what the session looks like:`
 
@@ -332,28 +335,7 @@ async function escalateWithCapture(
   //    hasn't seen this message at all.
   //  - incompleteness: a text block emitted mid-turn, right before a tool
   //    call the session is still waiting on, isn't the actual answer yet.
-  let lastText: string | null = null
-  if (claudeSessionId) {
-    const transcriptPath = deps.transcriptPathFor(claudeSessionId)
-    const forensics = transcriptPath ? deps.readConversationForensics(transcriptPath) : null
-    if (
-      forensics?.lastAssistantFullText &&
-      forensics.lastAssistantTurnComplete &&
-      !forensics.lastToolPending &&
-      (deliveredAt === undefined || !forensics.lastAssistantTs || new Date(forensics.lastAssistantTs).getTime() >= deliveredAt)
-    ) {
-      lastText = forensics.lastAssistantFullText
-    }
-  } else if (sessionId && deps.isCodexTurnComplete(sessionId)) {
-    // Engine-owned signal (codex-bootstrap.ts's own turnCompleted event),
-    // deliberately NOT SessionInfo.turnState — that field is also written by
-    // daemon.ts's tmux-activity poller from raw visual silence, independent
-    // of whether Codex's actual turn has finished. Using it here would let a
-    // turn still genuinely in flight (waiting on a remote call, no terminal
-    // repaint) get relayed as if it were done, the moment the poller's
-    // coarser 45s-idle threshold fires first.
-    lastText = deps.getLastCodexMessage(sessionId, deliveredAt ?? 0)
-  }
+  const lastText = outcome?.answer() ?? null
   if (lastText && lastText.trim()) {
     try {
       await deps.safeSend(chatId, `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It answered in-transcript only — relaying its last response:\n\n${lastText}`)
