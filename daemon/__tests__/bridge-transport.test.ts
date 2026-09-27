@@ -5,6 +5,8 @@ import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { on } from '../event-bus.js'
+import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { engines } from '../engines/instances.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -653,4 +655,58 @@ test('clearing a carried prefix must not hide failure of the ordinary carrier', 
     await Promise.resolve(); await Promise.resolve()
     expect(failures).toEqual([{ sessionId: sid, status: 'unknown', reason: 'lost acknowledgement', messageId: 'user-123' }])
   } finally { unsub(); bt.clearPiggyback(sid); registry.delete(sid) }
+})
+
+// adapter-policy T2: pins today's has() answers through real adapters, so the
+// S2 move to adapter.isConnected is checked against the same matrix.
+describe('has() matrix (adapter-policy T2)', () => {
+  let bt: BridgeTransport
+  const codex = (connected: boolean) => new CodexEngineAdapter({ isConnected: () => connected } as any)
+  const put = (sessionId: string, extra: Record<string, unknown>) =>
+    registry.set(sessionId, { sessionId, threadId: 'chat1', ...extra } as any)
+  const bridge = (sessionId: string) => bt.set(sessionId, { sessionId, socket: mockSocket().socket, buf: '' })
+
+  beforeEach(() => { bt = new BridgeTransport() })
+  afterEach(() => {
+    for (const info of [...registry.values()]) if (info.sessionId.startsWith('hm-')) registry.delete(info.sessionId)
+  })
+
+  test('claude record with a bridge → true', () => {
+    put('hm-c1', { engine: 'claude', adapter: engines.claude })
+    bridge('hm-c1')
+    expect(bt.has('hm-c1')).toBe(true)
+  })
+
+  test('claude record without a bridge → false', () => {
+    put('hm-c2', { engine: 'claude', adapter: engines.claude })
+    expect(bt.has('hm-c2')).toBe(false)
+  })
+
+  test('PINNED C1 codex record, engine connected → true', () => {
+    put('hm-x1', { engine: 'codex', adapter: codex(true) })
+    expect(bt.has('hm-x1')).toBe(true)
+  })
+
+  test('PINNED C1 codex record, engine disconnected → still true', () => {
+    put('hm-x2', { engine: 'codex', adapter: codex(false) })
+    expect(bt.has('hm-x2')).toBe(true)
+  })
+
+  test('PINNED C1 codex record with deadAt, engine disconnected → still true', () => {
+    put('hm-x3', { engine: 'codex', adapter: codex(false), deadAt: Date.now() })
+    expect(bt.has('hm-x3')).toBe(true)
+  })
+
+  test('no record → bridges.has', () => {
+    expect(bt.has('hm-none')).toBe(false)
+    bridge('hm-none')
+    expect(bt.has('hm-none')).toBe(true)
+  })
+
+  test("'main' (no record) → bridges.has", () => {
+    expect(registry.get('main')).toBeUndefined()
+    expect(bt.has('main')).toBe(false)
+    bridge('main')
+    expect(bt.has('main')).toBe(true)
+  })
 })
