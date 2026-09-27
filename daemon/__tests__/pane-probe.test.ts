@@ -103,6 +103,16 @@ limits. We recommend resuming from a summary.
 
 Enter to confirm · Esc to cancel`
 
+const USAGE_LIMIT_TAIL = `❯ /rate-limit-options
+─────────────────────────────────────────────────────────────
+  What do you want to do?
+
+  ❯ 1. Stop and wait for limit to reset
+    2. Add funds to continue with extra usage
+    3. Upgrade your plan
+
+  Enter to confirm · Esc to cancel`
+
 const RESUME_WITH_LOGIN_EXPIRED = `● Login expired · Please run /login
 
 ✱ Churned for 0s
@@ -310,6 +320,11 @@ describe('detectBlockingState (pure)', () => {
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('login_required')
     expect(result!.loginStage).toBe('blocked')
+  })
+
+  it('detects the usage-limit dialog', () => {
+    expect(detectBlockingState(USAGE_LIMIT_TAIL)?.kind).toBe('usage_limit')
+    expect(detectBlockingState('  ❯ 1. Stop and wait for limit to reset\nsomething else')).toBeNull()
   })
 
   it('detects resume prompt', () => {
@@ -559,6 +574,26 @@ describe('probeAllSessions', () => {
     expect(byteMsg).not.toBeUndefined()
     expect(byteMsg!.text).toContain('<@user-123>')
     expect(byteMsg!.text).toContain('all message processing is paused')
+  })
+
+  it('dismisses byte\'s usage-limit dialog with Esc and says so, without HYDRA_AUTO_LOGIN', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      paneTails.set('discord-byte', USAGE_LIMIT_TAIL)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+
+      expect(keysSent.find(k => k.tmuxName === 'discord-byte' && k.keys === 'Escape')).not.toBeUndefined()
+      const msg = sentMessages.find(m => m.channelId === 'root-channel-123')
+      expect(msg?.text).toContain('usage-limit dialog')
+      expect(msg?.text).toContain('dismissed')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
   })
 
   it('respects notification cooldown', async () => {

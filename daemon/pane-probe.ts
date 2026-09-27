@@ -27,7 +27,7 @@ const execFileAsync = promisify(execFile)
 // Types
 // ---------------------------------------------------------------------------
 
-export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt'
+export type BlockingKind = 'plan_mode' | 'login_required' | 'resume_prompt' | 'usage_limit'
 
 export type LoginStage = 'expiring' | 'blocked' | 'oauth_url' | 'success'
 
@@ -197,6 +197,10 @@ function hasLiveReplPrompt(tail: string): boolean {
 
 // Resume prompt: CC shows this when a session is resumed and the conversation
 // is large enough to warrant a choice. The three-option menu is unique.
+// Usage-limit dialog (/rate-limit-options): blocks all input until dismissed, even after the limit resets.
+const USAGE_OPTION_A = /Stop and wait for limit to reset/
+const USAGE_OPTION_B = /Add funds to continue with extra usage/
+const USAGE_OPTION_C = /Upgrade your plan/
 const RESUME_OPTION_A = /Resume from summary/
 const RESUME_OPTION_B = /Resume full session/
 const RESUME_OPTION_C = /Don't ask me again/
@@ -216,6 +220,9 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   // login — the resume prompt fills the tail and pushes login messages out of view.
   if (isResumePromptOnScreen(tailText)) {
     return { kind: 'resume_prompt', planPath: null, loginStage: null, oauthUrl: null }
+  }
+  if (isUsageLimitOnScreen(tailText)) {
+    return { kind: 'usage_limit', planPath: null, loginStage: null, oauthUrl: null }
   }
   // Full-screen login stages fill the pane — a live REPL prompt in the tail
   // means the banner is stale scrollback, not the active screen. Gate them so
@@ -344,6 +351,10 @@ async function confirmAndDismissLoginSuccess(tmuxName: string): Promise<boolean>
   return io.sendKeys(tmuxName, 'Enter')
 }
 
+function isUsageLimitOnScreen(tail: string): boolean {
+  return [USAGE_OPTION_A, USAGE_OPTION_B, USAGE_OPTION_C].filter(re => re.test(tail)).length >= 2
+}
+
 function isResumePromptOnScreen(tail: string): boolean {
   return [RESUME_OPTION_A, RESUME_OPTION_B, RESUME_OPTION_C]
     .filter(re => re.test(tail)).length >= 2
@@ -355,6 +366,31 @@ async function confirmAndDismissResumePrompt(tmuxName: string): Promise<boolean>
   if (!tail || !isResumePromptOnScreen(tail)) return false
   // CC pre-selects option 1 ("Resume from summary"). Enter confirms it.
   return io.sendKeys(tmuxName, 'Enter')
+}
+
+// Esc cancels the dialog without choosing (no funds added); if the limit is
+// still active the dialog returns and the probe re-notifies under its cooldown.
+// Not gated on HYDRA_AUTO_LOGIN: dismissing spends nothing and a stale dialog
+// silently blocks every message (byte sat on one for two weeks).
+async function notifyUsageLimit(entry: ProbeEntry, now: number): Promise<void> {
+  if (entry.notifying) return
+  entry.notifying = true
+  try {
+    const name = entry.tmuxName
+    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
+    const tail = await io.capturePaneTail(name, PANE_TAIL_LINES)
+    const dismissed = !!tail && isUsageLimitOnScreen(tail) && await io.sendKeys(name, 'Escape')
+    if (channelId) {
+      await io.safeSend(channelId, dismissed
+        ? `> ⏸️ **${name}** was stuck on the usage-limit dialog — dismissed it. If the limit is still active it will come back.`
+        : `> ⏸️ **${name}** is stuck on the usage-limit dialog. Run: \`tmux attach -t ${name}\` and press Esc.`)
+    }
+    entry.notifiedAt = now
+    entry.notifyCount++
+    process.stderr.write(`daemon: pane-probe: ${name} usage-limit dialog, dismissed=${dismissed}\n`)
+  } finally {
+    entry.notifying = false
+  }
 }
 
 async function extractOauthUrl(tmuxName: string): Promise<string | null> {
@@ -699,6 +735,8 @@ export async function probeAllSessions(now?: number): Promise<void> {
             void notifyPlanMode(existing, t)
           } else if (detected.kind === 'resume_prompt') {
             void notifyResumePrompt(existing, t)
+          } else if (detected.kind === 'usage_limit') {
+            void notifyUsageLimit(existing, t)
           } else {
             void notifyLoginRequired(existing, t)
           }
