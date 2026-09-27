@@ -217,7 +217,7 @@ describe('resume stamps a gone live record dead (Z5)', () => {
   }
   const skulls = () => sent.filter(s => s.startsWith('💀'))
 
-  test.failing('Claude: all tiers fail → record is dead, no later 💀 from the health poll', async () => {
+  test('Claude: all tiers fail → record is dead, no later 💀 from the health poll', async () => {
     resumeOutcome = 'null'; spawnFails = ['fork']; respawnOk = false
     const info = goneLive('claude', { claudeSessionId: 'C-z5' })
     await handleResumeIntercept(msg())
