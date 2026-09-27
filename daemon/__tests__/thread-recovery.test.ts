@@ -227,6 +227,31 @@ describe('resume stamps a gone live record dead (Z5)', () => {
     expect(skulls()).toEqual([])
   })
 
+  // The poll closed the history entry when it stamped deadAt; resume now stamps
+  // first, so it must close the entry the same way or the thread never reaches
+  // the completed lists (commands/status.ts, dashboard.ts).
+  function openEntry(info: SessionInfo) {
+    const e = threadRegistry.get(THREAD)!.sessionHistory.find(h => h.sessionId === info.sessionId)!
+    delete (e as any).endedAt
+    return e
+  }
+  const closed = (e: ThreadSessionEntry) => ({ ended: typeof e.endedAt, messageCount: e.messageCount, engine: e.engine })
+
+  test('poll baseline: a gone Claude record gets its history entry closed', () => {
+    const info = goneLive('claude', { claudeSessionId: 'C-z5p', messageCount: 7 } as any)
+    const e = openEntry(info)
+    pollSessionsOnce(Date.now())
+    expect(closed(e)).toEqual({ ended: 'number', messageCount: 7, engine: 'claude' })
+  })
+
+  test('Claude: all tiers fail → history entry closed as the poll would', async () => {
+    resumeOutcome = 'null'; spawnFails = ['fork']; respawnOk = false
+    const info = goneLive('claude', { claudeSessionId: 'C-z5h', messageCount: 7 } as any)
+    const e = openEntry(info)
+    await handleResumeIntercept(msg())
+    expect(closed(e)).toEqual({ ended: 'number', messageCount: 7, engine: 'claude' })
+  })
+
   test('Codex: all tiers fail → record is dead (unchanged)', async () => {
     spawnFails = ['resume', 'fork']; respawnOk = false
     const info = goneLive('codex', { codexThreadId: 'T-z5', codexHomeName: `z5-none-${seq}` })

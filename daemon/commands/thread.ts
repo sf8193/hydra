@@ -314,9 +314,13 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
         // rather than recreating one, and it may hold unpushed work.
         await killSession(liveInfo, 'bridge was unreachable — reattaching to this conversation', { skipWorktreeDestroy: true })
       }
-      // Gone (or just torn down): stamp it dead so the health poll doesn't
-      // announce a second death after this resume's own outcome.
-      liveInfo.deadAt ??= Date.now()
+      // Gone (or just torn down): mark it dead as the health poll would — stamp
+      // and close its history entry — so the poll doesn't announce a second
+      // death after this resume's own outcome.
+      if (!liveInfo.deadAt) {
+        liveInfo.deadAt = Date.now()
+        threadRegistry.closeHistoryEntry(liveInfo.threadId, liveInfo)
+      }
       registry.persist()
     }
   }
