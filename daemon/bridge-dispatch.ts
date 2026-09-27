@@ -364,7 +364,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         setTimeout(() => {
           handoffDeps.handOff(info, path).then(
             r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\``),
-            err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nThe handoff file is \`${path}\` — type \`respawn\` to recover.`),
+            err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
           ).catch(() => {})
         }, 500)
         return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }

@@ -69,16 +69,44 @@ test('handoff command: asks the live session to write a handoff file under STATE
   }
 })
 
-test('successor opts: same thread/label/worktree; `handoff <model>` switches model+engine once', async () => {
-  const { handoffSpawnOpts, setHandoffSelection } = await import('../session-lifecycle.js')
+test('successor opts: same thread/label/worktree + carried deliverables; `handoff <model>` switches model+engine', async () => {
+  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
   const info = {
     sessionId: 'ho-3', tmuxName: 'flint', threadId: 'ho-thread-3', topic: 't', engine: 'claude', label: 'build',
     sessionMetadata: { model: 'claude-opus-5-5[1m]' }, worktreeRepo: '/r', worktreePath: '/r/wt', worktreeBranch: 'wt/flint',
+    artifacts: ['pr#1'], contextLinks: ['l'], description: 'd',
   } as any
-  const plain = handoffSpawnOpts(info, '/h.md')
-  expect(plain).toMatchObject({ existingThreadId: 'ho-thread-3', handedOffFrom: 'flint', artifact: '/h.md', model: 'claude-opus-5-5[1m]', engine: 'claude', inheritedLabel: 'build', preserveWorktree: true, reuseWorktree: { repo: '/r', path: '/r/wt', branch: 'wt/flint' } })
-
-  setHandoffSelection('ho-3', { model: 'gpt-5.6-sol', engine: 'codex' })
+  expect(handoffSpawnOpts(info, '/h.md')).toMatchObject({
+    existingThreadId: 'ho-thread-3', handedOffFrom: 'flint', artifact: '/h.md', model: 'claude-opus-5-5[1m]', engine: 'claude', inheritedLabel: 'build',
+    preserveWorktree: true, reuseWorktree: { repo: '/r', path: '/r/wt', branch: 'wt/flint' },
+    carryOver: { artifacts: ['pr#1'], contextLinks: ['l'], description: 'd' },
+  })
+  info.handoffSelection = { model: 'gpt-5.6-sol', engine: 'codex' }
   expect(handoffSpawnOpts(info, '/h.md')).toMatchObject({ model: 'gpt-5.6-sol', engine: 'codex' })
-  expect(handoffSpawnOpts(info, '/h.md')).toMatchObject({ model: 'claude-opus-5-5[1m]', engine: 'claude' })  // consumed
+})
+
+test('handOff: PR watches move to the successor; a second concurrent handoff is refused', async () => {
+  const { handOff, handoffIO } = await import('../session-lifecycle.js')
+  const { restoreWatches, getWatchesBySession, unwatchBySession } = await import('../pr-watch.js')
+  const orig = { ...handoffIO }
+  mk('ho-4', 'flint', 'ho-thread-4')
+  const info = registry.get('ho-4')!
+  restoreWatches([{ prUrl: 'https://github.com/o/r/pull/9', sessionId: 'x', threadId: 'x', createdAt: Date.now() } as any], 'ho-4', 'ho-thread-4')
+  let spawned: any
+  let release!: () => void
+  const gate = new Promise<void>(r => { release = r })
+  handoffIO.killSession = (async (i: any) => { await gate; unwatchBySession(i.sessionId); registry.delete(i.sessionId) }) as any
+  handoffIO.doSpawnSession = (async (_t: string, _c?: string, _m?: string, o?: any) => { spawned = o; mk('ho-5', 'fresh', 'ho-thread-4'); return { name: 'fresh', sessionId: 'ho-5', threadId: 'ho-thread-4', url: '' } }) as any
+  try {
+    const first = handOff(info, '/h.md')
+    await expect(handOff(info, '/h.md')).rejects.toThrow('already handing off')
+    release()
+    expect((await first).name).toBe('fresh')
+    expect(spawned.handedOffFrom).toBe('flint')
+    expect(getWatchesBySession('ho-4')).toEqual([])
+    expect(getWatchesBySession('ho-5').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/9'])
+  } finally {
+    Object.assign(handoffIO, orig)
+    unwatchBySession('ho-5'); registry.delete('ho-4'); registry.delete('ho-5')
+  }
 })

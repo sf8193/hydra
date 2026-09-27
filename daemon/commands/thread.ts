@@ -5,7 +5,7 @@ import { mkdirSync, unlinkSync } from 'fs'
 import { gateway, STATE_DIR } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { killSession, setHandoffSelection, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
+import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
 import type { SpawnResult } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -674,11 +674,12 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   }
   const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
-  setHandoffSelection(info.sessionId, selection)
+  info.handoffSelection = selection
   transport.sendOrQueue(info.sessionId, {
     type: 'notification',
     content: handoffRequest(artifact),
     meta: { chat_id: threadId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
   void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
+  void gateway.send(msg.channelId, `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes it may be stuck — \`kill\`, then \`respawn\`._`, { replyTo: msg.id }).catch(() => {})
 }

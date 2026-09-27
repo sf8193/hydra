@@ -18,7 +18,7 @@ import type { EngineAdapter } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { unwatchBySession } from './pr-watch.js'
+import { getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
@@ -222,22 +222,9 @@ export function emitSessionDeath(info: SessionInfo): void {
   })
 }
 
-// Under STATE_DIR so the test preload's temp state dir keeps `bun test` from ever running the real hook
-/**
- * Replace a live session with a fresh one in the same thread, seeded from a
- * handoff file the old session wrote. Same model, engine, label and worktree.
- * The kill reason 'handed off' is not a human Kill, so the on-kill retro skips it.
- */
-// `handoff <model>` records a model/engine switch here; the tool call that follows consumes it.
-const handoffSelections = new Map<string, { model: string; engine: 'claude' | 'codex' }>()
-export function setHandoffSelection(sessionId: string, sel: { model: string; engine: 'claude' | 'codex' } | undefined): void {
-  if (sel) handoffSelections.set(sessionId, sel); else handoffSelections.delete(sessionId)
-}
-
-/** Spawn opts for the successor: same thread/label/worktree; model+engine from `handoff <model>` if given. */
+/** Spawn opts for the successor: same thread/label/worktree and carried deliverables; model+engine from `handoff <model>` if given. */
 export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts {
-  const sel = handoffSelections.get(info.sessionId)
-  handoffSelections.delete(info.sessionId)
+  const sel = info.handoffSelection
   const reuseWorktree = info.worktreePath && info.worktreeRepo
     ? { repo: info.worktreeRepo, path: info.worktreePath, branch: info.worktreeBranch ?? `wt/${info.tmuxName}` }
     : undefined
@@ -248,16 +235,39 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
     inheritedLabel: info.label,
+    // killSession deletes the record, so the spawn can't snapshot these itself (same as recovery.ts)
+    carryOver: { artifacts: info.artifacts, contextLinks: info.contextLinks, description: info.description },
     ...(reuseWorktree && { preserveWorktree: true, reuseWorktree }),
   }
 }
 
+// Injectable for tests (like recoveryDeps): the real ones kill tmux and spawn sessions.
+export const handoffIO = { killSession: (i: SessionInfo, r: string, o: { skipWorktreeDestroy: boolean }) => killSession(i, r, o), doSpawnSession: (t: string, c?: string, m?: string, o?: SpawnOpts) => doSpawnSession(t, c, m, o) }
+const handoffsInFlight = new Set<string>()
+
+/**
+ * Replace a live session with a fresh one in the same thread, seeded from a
+ * handoff file the old session wrote. The kill reason 'handed off' is not a
+ * human Kill, so the on-kill retro skips it. PR watches move to the successor.
+ */
 export async function handOff(info: SessionInfo, artifact: string): Promise<SpawnResult> {
-  const opts = handoffSpawnOpts(info, artifact)
-  await killSession(info, 'handed off', { skipWorktreeDestroy: true })
-  return doSpawnSession(info.topic, undefined, undefined, opts)
+  if (handoffsInFlight.has(info.sessionId) || registry.get(info.sessionId) !== info) {
+    throw new Error(`${info.tmuxName} is already handing off (or gone)`)
+  }
+  handoffsInFlight.add(info.sessionId)
+  try {
+    const opts = handoffSpawnOpts(info, artifact)
+    const watches = getWatchesBySession(info.sessionId)  // before the kill unwatches them
+    await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true })
+    const r = await handoffIO.doSpawnSession(info.topic, undefined, undefined, opts)
+    if (watches.length > 0) restoreWatches(watches, r.sessionId, r.threadId)
+    return r
+  } finally {
+    handoffsInFlight.delete(info.sessionId)
+  }
 }
 
+// Under STATE_DIR so the test preload's temp state dir keeps `bun test` from ever running the real hook
 export const KILL_HOOK_PATH = join(STATE_DIR, 'hooks', 'on-kill')
 
 /**
