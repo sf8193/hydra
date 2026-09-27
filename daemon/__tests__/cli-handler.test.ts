@@ -2,6 +2,10 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { SCRUBBED_SPAWN_VARS } from '../../shared/spawn-env.js'
 import { _setDeps, _resetDeps } from '../raindrop.js'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
+import { registry } from '../sessions.js'
+import { checkIdempotency } from '../idempotency.js'
+import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { fakeAdapter } from './test-harness.js'
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any
@@ -191,5 +195,33 @@ describe('cli-handler: raindrop in health', () => {
     process.env.RAINDROP_MODE = 'dry-run'
     const res = await handleCLIRequest(makeReq({ command: 'health' }))
     expect((res.data as any).raindrop).toContain("unrecognized RAINDROP_MODE='dry-run'")
+  })
+})
+
+// adapter-policy T7: the CLI's Codex branch is a name check that reports
+// 'delivered' whatever the adapter answers. Pinned until PR-DELIVER (Q3).
+describe('cli-handler: deliver (adapter-policy T7)', () => {
+  let fake: FakeTmux
+  beforeEach(() => { fake = withFakeTmux() })
+  afterEach(() => { registry.delete('t7-cli'); fake.restore() })
+
+  test('PINNED E6 codex adapter rejects → still "delivered", proof adapter, key completed', async () => {
+    const seen: unknown[][] = []
+    fake.alive('t7-cli-tmux')
+    registry.set('t7-cli', {
+      sessionId: 't7-cli', tmuxName: 't7-cli-tmux', threadId: 't7-thread', engine: 'codex', createdAt: Date.now(),
+      adapter: fakeAdapter({
+        provider: 'codex', deliveryIsFree: false, channel: 'engine', isConnected: () => true,
+        deliver: async (...args: unknown[]) => { seen.push(args); return { status: 'rejected', retryable: false, reason: 'session is retiring' } },
+      }),
+    } as any)
+    const key = `t7-cli-${Date.now()}`
+    const res = await handleCLIRequest(makeReq({ command: 'deliver', params: { session: 't7-cli', message: 'whisper', idempotencyKey: key } }))
+    expect(res.ok).toBe(true)
+    expect(res.data).toMatchObject({ status: 'delivered', proof: 'adapter', sessionId: 't7-cli' })
+    expect(seen).toHaveLength(1)
+    expect(JSON.stringify(seen[0])).toContain('"whisper"')
+    expect(JSON.stringify(seen[0])).toContain('"source":"cli-deliver"')
+    expect(checkIdempotency(key)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
   })
 })
