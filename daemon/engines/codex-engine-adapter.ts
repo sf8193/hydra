@@ -15,7 +15,7 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
-  ContextUsage, RecoverySource, RecoveryPlan, UsageReading, UsageSubject,
+  ContextUsage, RecoverySource, RecoveryPlan, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import { codexUsageTotals } from '../codex-rollout.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
@@ -23,7 +23,7 @@ import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer
 import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
-import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
+import { codexTurnOutcome, defaultTurnSources } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -76,12 +76,12 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   // ⚠ F4s (pinned, fixed in S10): tmux window_activity of the session's current
   // window, which after surface repair is the static anchor, not the TUI pane.
-  activityAt(info: SessionInfo): number | null {
-    try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
-  }
-
-  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
-    return codexTurnOutcome(info, sinceMs, defaultTurnSources)
+  turn(info: SessionInfo, sinceMs: number): Turn {
+    const { confirmedComplete, answer } = codexTurnOutcome(info, sinceMs, defaultTurnSources)
+    return {
+      confirmedComplete, answer,
+      get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
+    }
   }
 
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.

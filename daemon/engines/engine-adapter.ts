@@ -6,7 +6,6 @@
 
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
-import type { TurnOutcome } from '../observability.js'
 import type { TokenTotals } from '../usage.js'
 export type { BlockingState } from '../pane-probe.js'
 
@@ -73,6 +72,14 @@ export type ContextUsage = {
 // baseline (rotated transcript, Codex decrease or thread change): report no delta.
 export type UsageSubject = Pick<SessionInfo, 'sessionId' | 'tmuxName' | 'claudeSessionId' | 'codexThreadId' | 'codexHomeName'>
 export type UsageReading = { totals: TokenTotals; providerSessionId: string; cursor: unknown; restarted: boolean }
+
+// confirmedComplete: the turn is definitely over (skip the reply guard's grace).
+// answer(): the session's last clean answer given after sinceMs, or null.
+export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): string | null }
+// activityAt: epoch seconds of the last observable activity, or null when it
+// can't be read (the reply-guard poller then skips the session this tick). Read
+// on access, so a caller that only wants the outcome pays for no activity read.
+export type Turn = TurnOutcome & { readonly activityAt: number | null }
 
 /** A tmux keystroke action: raw key names, or literal text plus an optional trailing key. */
 export type TmuxKeyAction =
@@ -152,11 +159,9 @@ export interface EngineAdapter {
   // Observation
   // Is a delivery channel connected? Backs transport.has().
   isConnected(info: SessionInfo): boolean
-  // Epoch seconds of the last observable activity, or null when it can't be
-  // read (the reply-guard poller then skips the session this tick).
-  activityAt(info: SessionInfo): number | null
-  // Did the turn that answers a message delivered at sinceMs end, and what did it say?
-  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome
+  // The session's turn as seen now: last activity, and whether the turn that
+  // answers a message delivered at sinceMs ended and what it said.
+  turn(info: SessionInfo, sinceMs: number): Turn
   isAlive(info: SessionInfo): Promise<boolean>
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null

@@ -13,14 +13,15 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
   StopResult,
-  ContextUsage, RecoverySource, RecoveryPlan, UsageReading, UsageSubject,
+  ContextUsage, RecoverySource, RecoveryPlan, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
 import { drainUsage, newCursor, projectDirName, projectsRoot, transcriptPathFor, type UsageCursor } from '../usage.js'
-import { claudeTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
+import { claudeTurnOutcome } from './claude-transcript.js'
+import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
@@ -119,12 +120,12 @@ export class ClaudeEngine implements EngineAdapter {
     return this.transport.bridges.has(info.sessionId)
   }
 
-  activityAt(info: SessionInfo): number | null {
-    try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
-  }
-
-  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
-    return claudeTurnOutcome(info, sinceMs, defaultTurnSources)
+  turn(info: SessionInfo, sinceMs: number): Turn {
+    const { confirmedComplete, answer } = claudeTurnOutcome(info, sinceMs, defaultTurnSources)
+    return {
+      confirmedComplete, answer,
+      get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
+    }
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {

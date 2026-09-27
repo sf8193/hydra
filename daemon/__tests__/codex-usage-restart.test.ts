@@ -22,7 +22,7 @@ import { join } from 'path'
 import { _resetRolloutMemoForTesting, codexTotals, codexUsageTotals, findRollout, lastTokenUsage } from '../codex-rollout.js'
 import { CodexEngine } from '../codex-engine.js'
 import { codexEngine, onTurnReconciled } from '../codex-bootstrap.js'
-import { getLastCodexMessage, isCodexTurnComplete } from '../observability.js'
+import { getLastCodexMessage, isCodexTurnComplete } from '../engines/codex-observation.js'
 import { registry, type SessionInfo } from '../sessions.js'
 
 const dirs: string[] = []

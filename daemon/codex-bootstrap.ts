@@ -15,7 +15,7 @@ import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { safeSend } from './util.js'
 import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
-import { noteCodexMessage, noteCodexTurnState } from './observability.js'
+import { noteCodexMessage, noteCodexTurnState } from './engines/codex-observation.js'
 import { on } from './event-bus.js'
 
 // ---------------------------------------------------------------------------
