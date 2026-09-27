@@ -43,7 +43,7 @@ export function pollSessionsOnce(now: number): void {
     // Discovery retries every poll (claudeSessionId may become available later).
     // Alert fires once per orphan episode; clears when bridge reconnects.
     if (info.sessionType !== 'thread_guest' && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
-      const discovered = info.adapter.refreshIdentity(info)
+      const discovered = info.adapter.recoveryPlan(info, { discover: true }).learnedId
       if (discovered) {
         registry.persist()
         const thread = threadRegistry.get(info.threadId)

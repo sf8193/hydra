@@ -56,7 +56,8 @@ export class CodexEngineAdapter implements EngineAdapter {
   ) {}
 
   // Launch resumes the thread in its original CODEX_HOME and takes the prompt.
-  // A stray claudeSessionId is ignored (PINNED R9; PR-IDENT).
+  // A stray claudeSessionId is ignored (PINNED R9; PR-IDENT). Nothing to
+  // discover: launch and reconnect assign the Codex thread id.
   recoveryPlan(s: RecoverySource): RecoveryPlan {
     const t = s.codexThreadId
     if (!t) return { resume: null, fork: null }
@@ -72,9 +73,6 @@ export class CodexEngineAdapter implements EngineAdapter {
   isConnected(_info: SessionInfo): boolean {
     return true
   }
-
-  // Launch and reconnect assign the Codex thread id; nothing to discover.
-  refreshIdentity(_info: SessionInfo): string | null { return null }
 
   // ⚠ F4s (pinned, fixed in S10): tmux window_activity of the session's current
   // window, which after surface repair is the static anchor, not the TUI pane.

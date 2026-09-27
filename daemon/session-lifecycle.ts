@@ -264,13 +264,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       void gateway.edit(info.threadId, info.spawnAnnounceId, spawnLine + completionNote).catch(() => {})
     }
 
-    // Last-resort claudeSessionId discovery before tmux dies — if the bridge
-    // never registered it, read $CLAUDE_CONFIG_DIR/sessions/<panePid>.json while the
-    // pane PID is still available. Without this, resume falls to tier 3 (respawn).
-    const discovered = info.adapter.refreshIdentity(info)
-    if (discovered) process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
-
     const tmuxName = info.tmuxName
+    // Stop learns a missing native id first where the provider can (Claude: pane discovery).
     await info.adapter.stop(info)
 
     transport.disconnect(info.sessionId)

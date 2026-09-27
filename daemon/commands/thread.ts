@@ -108,7 +108,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const sourceEngine = info.engine ?? 'claude'
   const targetEngine = opts?.engine ?? sourceEngine
-  if (targetEngine === 'claude' && adapterFor(info).refreshIdentity(info)) registry.persist()
+  if (adapterFor(info).recoveryPlan(info, { discover: sourceEngine === targetEngine }).learnedId) registry.persist()
 
   const provider = adapterFor(info)
   if (!tmuxHasSession(info.tmuxName)) provider.ensureSurface(info)

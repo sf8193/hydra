@@ -118,6 +118,9 @@ export type LaunchResult = {
 
 export type RecoverySource = { tmuxName: string; claudeSessionId?: string; codexThreadId?: string; codexHomeName?: string }
 export type RecoveryPlan = {
+  // Set only when { discover } learned the source's missing native id (and
+  // wrote it onto the source); absent otherwise, never undefined.
+  learnedId?: string
   resume:
     | { kind: 'await-bridge'; resumeFrom: string }                                // relaunch takes no prompt; confirmed when its bridge registers
     | { kind: 'at-launch'; resumeCodex: { threadId: string; homeName: string } }  // launch resumes and takes the prompt
@@ -150,10 +153,6 @@ export interface EngineAdapter {
   // Observation
   // Is a delivery channel connected? Backs transport.has().
   isConnected(info: SessionInfo): boolean
-  // If the record lacks its native id and the provider can learn it from the
-  // running execution: learn it, set it on the record and return it; else null.
-  // Claude: pane discovery. Codex: null (launch and reconnect assign its id).
-  refreshIdentity(info: SessionInfo): string | null
   // Epoch seconds of the last observable activity, or null when it can't be
   // read (the reply-guard poller then skips the session this tick).
   activityAt(info: SessionInfo): number | null
@@ -181,7 +180,11 @@ export interface EngineAdapter {
   // Native continuation of a gone session. Pure: spawns nothing; respawn is the
   // neutral last tier. resume.kind says how a resume is confirmed, so callers
   // pick the executor from the plan, not from the provider.
-  recoveryPlan(src: RecoverySource): RecoveryPlan
+  // { discover }: first, if the source lacks its native id and the provider can
+  // learn it from the running execution, learn it, set it on the source and
+  // report it as learnedId. Claude: pane discovery. Codex: never (launch and
+  // reconnect assign its id).
+  recoveryPlan(src: RecoverySource, opts?: { discover?: boolean }): RecoveryPlan
 }
 
 // Compat — flat serializable ref used by retirement journal persistence

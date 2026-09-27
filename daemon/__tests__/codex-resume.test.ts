@@ -139,8 +139,7 @@ function fakeAdapter(provider: 'claude' | 'codex') {
     },
     isAlive: async () => false,
     ensureSurface: () => false,
-    refreshIdentity: () => null,
-    recoveryPlan: (s: any) => orig[provider].recoveryPlan(s),
+    recoveryPlan: (s: any, o: any) => orig[provider].recoveryPlan(s, o),
   }
 }
 

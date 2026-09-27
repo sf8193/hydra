@@ -98,22 +98,25 @@ export class ClaudeEngine implements EngineAdapter {
   constructor(private readonly transport: BridgeTransport) {}
 
   // Resume relaunches with --resume and is confirmed when the bridge registers.
-  recoveryPlan(s: RecoverySource): RecoveryPlan {
+  recoveryPlan(s: RecoverySource, opts?: { discover?: boolean }): RecoveryPlan {
+    const learnedId = opts?.discover ? this.discover(s) : null
     const id = s.claudeSessionId
-    return id
+    const plan: RecoveryPlan = id
       ? { resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
       : { resume: null, fork: null }
+    return learnedId ? { learnedId, ...plan } : plan
+  }
+
+  // Learn a missing claudeSessionId from the running pane and set it on the record.
+  private discover(s: RecoverySource): string | null {
+    if (s.claudeSessionId) return null
+    const discovered = discoverClaudeSessionId(s.tmuxName)
+    if (discovered) s.claudeSessionId = discovered
+    return discovered
   }
 
   isConnected(info: SessionInfo): boolean {
     return this.transport.bridges.has(info.sessionId)
-  }
-
-  refreshIdentity(info: SessionInfo): string | null {
-    if (info.claudeSessionId) return null
-    const discovered = discoverClaudeSessionId(info.tmuxName)
-    if (discovered) info.claudeSessionId = discovered
-    return discovered
   }
 
   activityAt(info: SessionInfo): number | null {
@@ -256,6 +259,11 @@ export class ClaudeEngine implements EngineAdapter {
   }
 
   async stop(info: SessionInfo): Promise<StopResult> {
+    // Last-resort claudeSessionId discovery before tmux dies — if the bridge
+    // never registered it, read $CLAUDE_CONFIG_DIR/sessions/<panePid>.json while the
+    // pane PID is still available. Without this, resume falls to tier 3 (respawn).
+    const discovered = this.discover(info)
+    if (discovered) process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
     try {
       execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' })
       return { status: 'stopped' }
