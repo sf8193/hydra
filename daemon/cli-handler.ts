@@ -2,7 +2,7 @@ import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, isAlive } from './util.js'
-import { formatContextPercent } from './engines/engine-adapter.js'
+import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { gateway } from './config.js'
@@ -161,6 +161,8 @@ function handleStatus(req: CLIRequest): CLIResponse {
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
     tmux: tmuxAlive ? 'alive' : 'dead',
     origin: info.originType,
+    // Only `hydra attach` asks: surface() may recreate tmux and relaunch the Codex TUI.
+    attachTarget: (req.params as { attach?: unknown }).attach === true ? info.adapter.surface(info) : undefined,
   })
 }
 
@@ -257,7 +259,7 @@ function handleFactory(req: CLIRequest): CLIResponse {
 const DELIVER_MAX_MESSAGE_BYTES = 10_000
 const DELIVER_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000
 
-function handleDeliver(req: CLIRequest): CLIResponse {
+async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   const { thread, session, message, initiator, idempotencyKey, queue } = req.params as {
     thread?: string
     session?: string
@@ -275,6 +277,11 @@ function handleDeliver(req: CLIRequest): CLIResponse {
 
   if (idempotencyKey) {
     const check = checkIdempotency(idempotencyKey)
+    // Exit 7: a delivery with this key is still awaiting its adapter — retry once
+    // it settles (it then answers 2 if it landed, or proceeds if it failed).
+    if (check.blocked && check.entry.status === 'pending') {
+      return respond(req, false, `delivery with key "${idempotencyKey}" still in flight — retry shortly`, { existing: check.entry }, 7)
+    }
     if (check.blocked) {
       return respond(req, false, `already delivered with key "${idempotencyKey}"`, { existing: check.entry }, 2)
     }
@@ -323,55 +330,41 @@ function handleDeliver(req: CLIRequest): CLIResponse {
 
   const notification = { type: 'notification' as const, content: message, meta }
 
-  // Codex sessions route through their adapter, not the bridge socket
-  if (info.engine === 'codex' && info.adapter) {
-    void info.adapter.deliver(info, notification)
-    if (idempotencyKey) {
-      registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
-    }
-    return respond(req, true, {
-      status: 'delivered',
-      proof: 'adapter',
-      sessionId: info.sessionId,
-      sessionName: info.tmuxName,
-      threadId: info.threadId,
-    })
+  // Both engines deliver through their adapter. Reserve the key just before the
+  // await so a concurrent retry is blocked; only an accepted delivery keeps it.
+  // Reserved without the sessionId so the session's death/kill bookkeeping
+  // (getBySessionId) can't pick up an in-flight deliver key.
+  if (idempotencyKey) registerIdempotency(idempotencyKey, '', DELIVER_IDEMPOTENCY_TTL_MS, 'pending')
+  let result: DeliveryResult
+  try {
+    result = await info.adapter.deliver(info, notification)
+  } catch (err) {
+    result = { status: 'unknown', reason: String(err) }
   }
 
-  // With --queue: use sendOrQueue (persists for later flush)
-  // Without: direct sendToBridge (binary outcome)
-  if (queue && !bridgeConnected) {
-    transport.sendOrQueue(info.sessionId, notification)
-    if (idempotencyKey) {
-      registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
-    }
-    return respond(req, true, {
-      status: 'queued',
-      proof: 'persisted',
-      sessionId: info.sessionId,
-      sessionName: info.tmuxName,
-      threadId: info.threadId,
-    })
+  // Today's labels, read from the adapter's result. Claude's via is where the
+  // write went: its CLI contract fails (exit 6) unless it hit the socket or the
+  // caller asked to queue.
+  const queued = queue && !bridgeConnected
+  const via = result.status === 'accepted' ? result.via : undefined
+  const fail =
+    result.status === 'rejected' ? respond(req, false, `delivery rejected: ${result.reason}`)
+    : result.status === 'unknown' ? respond(req, false, `delivery outcome unknown: ${result.reason} — transient, retry`, undefined, 6)
+    : via === 'requeued' ? respond(req, false, 'bridge write failed (socket destroyed) — transient, retry', undefined, 6)
+    : via === 'queued' && !queued ? respond(req, false, 'bridge unexpectedly absent after reachability check', undefined, 6)
+    : null
+  if (fail) {
+    if (idempotencyKey) clearIdempotency(idempotencyKey)
+    return fail
   }
 
-  const bridge = transport.get(info.sessionId)
-  if (!bridge) {
-    return respond(req, false, 'bridge unexpectedly absent after reachability check', undefined, 6)
-  }
-
-  const written = transport.sendToBridge(bridge, notification)
-
-  if (!written) {
-    return respond(req, false, 'bridge write failed (socket destroyed) — transient, retry', undefined, 6)
-  }
-
-  if (idempotencyKey) {
-    registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
-  }
-
+  if (idempotencyKey) registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
+  const [status, proof] = via === 'queued' ? ['queued', 'persisted']
+    : via === 'bridge-socket' ? ['delivered', 'socket_write']
+    : ['delivered', 'adapter']
   return respond(req, true, {
-    status: 'delivered',
-    proof: 'socket_write',
+    status,
+    proof,
     sessionId: info.sessionId,
     sessionName: info.tmuxName,
     threadId: info.threadId,
@@ -398,7 +391,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
       case 'factory': response = handleFactory(req); break
-      case 'deliver': response = handleDeliver(req); break
+      case 'deliver': response = await handleDeliver(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }

@@ -6,6 +6,10 @@ import { registry } from '../sessions.js'
 import { checkIdempotency } from '../idempotency.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { fakeAdapter } from './test-harness.js'
+import { transport } from '../bridge-transport.js'
+import { engines } from '../engines/instances.js'
+import { emit } from '../event-bus.js'
+import { getIdempotencyEntry } from '../idempotency.js'
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any
@@ -198,30 +202,145 @@ describe('cli-handler: raindrop in health', () => {
   })
 })
 
-// adapter-policy T7: the CLI's Codex branch is a name check that reports
-// 'delivered' whatever the adapter answers. Pinned until PR-DELIVER (Q3).
-describe('cli-handler: deliver (adapter-policy T7)', () => {
+// Z2: CLI deliver awaits adapter.deliver for both engines. Labels are today's:
+// Claude delivered/socket_write, queued/persisted, write failure exit 6; Codex
+// delivered/adapter. Codex rejected → error, unknown → exit 6, neither keeps a key.
+describe('cli-handler: deliver (Z2)', () => {
   let fake: FakeTmux
+  const ids: string[] = []
   beforeEach(() => { fake = withFakeTmux() })
-  afterEach(() => { registry.delete('t7-cli'); fake.restore() })
+  afterEach(() => {
+    for (const id of ids.splice(0)) { registry.delete(id); transport.bridges.delete(id) }
+    fake.restore()
+  })
 
-  test('PINNED E6 codex adapter rejects → still "delivered", proof adapter, key completed', async () => {
+  let n = 0
+  function seed(engine: 'claude' | 'codex', extra: Record<string, unknown> = {}) {
+    const sessionId = `z2-${engine}-${++n}`
+    ids.push(sessionId)
+    fake.alive(`${sessionId}-tmux`)
+    const info = { sessionId, tmuxName: `${sessionId}-tmux`, threadId: `${sessionId}-thread`, engine, createdAt: Date.now(), adapter: engines[engine], ...extra } as any
+    registry.set(sessionId, info)
+    return info
+  }
+  function codex(deliver: (...args: unknown[]) => Promise<unknown>) {
+    return seed('codex', { adapter: fakeAdapter({ provider: 'codex', channel: 'engine', isConnected: () => true, deliver }) })
+  }
+  function bridge(sessionId: string, write: () => boolean, destroyed = false) {
+    const written: string[] = []
+    transport.set(sessionId, { sessionId, socket: { destroyed, write: (l: string) => { written.push(l); return write() } } } as any)
+    return written
+  }
+  const deliver = (session: string, extra: Record<string, unknown> = {}) =>
+    handleCLIRequest(makeReq({ command: 'deliver', params: { session, message: 'whisper', ...extra } }))
+  const key = () => `z2-key-${Date.now()}-${++n}`
+  const common = (info: any) => ({ sessionId: info.sessionId, sessionName: info.tmuxName, threadId: info.threadId })
+
+  test('codex accepted → delivered/adapter, key completed', async () => {
     const seen: unknown[][] = []
-    fake.alive('t7-cli-tmux')
-    registry.set('t7-cli', {
-      sessionId: 't7-cli', tmuxName: 't7-cli-tmux', threadId: 't7-thread', engine: 'codex', createdAt: Date.now(),
-      adapter: fakeAdapter({
-        provider: 'codex', channel: 'engine', isConnected: () => true,
-        deliver: async (...args: unknown[]) => { seen.push(args); return { status: 'rejected', retryable: false, reason: 'session is retiring' } },
-      }),
-    } as any)
-    const key = `t7-cli-${Date.now()}`
-    const res = await handleCLIRequest(makeReq({ command: 'deliver', params: { session: 't7-cli', message: 'whisper', idempotencyKey: key } }))
-    expect(res.ok).toBe(true)
-    expect(res.data).toMatchObject({ status: 'delivered', proof: 'adapter', sessionId: 't7-cli' })
+    const info = codex(async (...args) => { seen.push(args); return { status: 'accepted', via: 'steer' } })
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res).toMatchObject({ ok: true, data: { status: 'delivered', proof: 'adapter', ...common(info) } })
     expect(seen).toHaveLength(1)
-    expect(JSON.stringify(seen[0])).toContain('"whisper"')
     expect(JSON.stringify(seen[0])).toContain('"source":"cli-deliver"')
-    expect(checkIdempotency(key)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
+    expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
+    expect(getIdempotencyEntry(k)!.sessionId).toBe(info.sessionId)
+  })
+
+  // The in-flight reservation carries no sessionId, so the death handler's
+  // getBySessionId can't mistake it for a spawn key and complete it.
+  test('session dies mid-delivery → pending key untouched by the death handler, then cleared', async () => {
+    let settle!: (r: unknown) => void
+    const info = codex(() => new Promise(r => { settle = r }))
+    const k = key()
+    const pending = deliver(info.sessionId, { idempotencyKey: k })
+    emit('session:death', { sessionId: info.sessionId, threadId: info.threadId, wasOwner: true, tmuxName: info.tmuxName })
+    expect(getIdempotencyEntry(k)).toMatchObject({ status: 'pending' })
+    settle({ status: 'unknown', reason: 'session died' })
+    expect(await pending).toMatchObject({ ok: false, exitCode: 6 })
+    expect(getIdempotencyEntry(k)).toBeUndefined()
+  })
+
+  test('codex rejected → error with the reason, no key', async () => {
+    const info = codex(async () => ({ status: 'rejected', retryable: false, reason: 'session is retiring' }))
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('session is retiring')
+    expect(res.exitCode).toBeUndefined()
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
+  })
+
+  test('codex unknown → exit 6, no key', async () => {
+    const info = codex(async () => ({ status: 'unknown', reason: 'steer timed out' }))
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('steer timed out')
+    expect(res.exitCode).toBe(6)
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
+  })
+
+  test('codex deliver throws → exit 6, no key', async () => {
+    const info = codex(async () => { throw new Error('boom') })
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res).toMatchObject({ ok: false, exitCode: 6 })
+    expect(res.error).toContain('boom')
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
+  })
+
+  test('a retry while the first is in flight → exit 7 "in flight"; after it lands → exit 2', async () => {
+    let release!: () => void
+    const info = codex(() => new Promise(r => { release = () => r({ status: 'accepted', via: 'steer' }) }))
+    const k = key()
+    const first = deliver(info.sessionId, { idempotencyKey: k })
+    const second = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(second).toMatchObject({ ok: false, exitCode: 7 })
+    expect(second.error).toContain('in flight')
+    release?.()
+    expect(await first).toMatchObject({ ok: true, data: { status: 'delivered' } })
+    expect(await deliver(info.sessionId, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 2 })
+  })
+
+  test('claude bridge write → delivered/socket_write, key completed', async () => {
+    const info = seed('claude')
+    const written = bridge(info.sessionId, () => true)
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k, initiator: 'op' })
+    expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: true,
+      data: { status: 'delivered', proof: 'socket_write', ...common(info) } })
+    expect(written).toHaveLength(1)
+    expect(JSON.parse(written[0])).toEqual({ type: 'notification', content: 'whisper', meta: { source: 'cli-deliver', initiator: 'op' } })
+    expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
+  })
+
+  test('claude socket destroyed → exit 6 "bridge write failed", no key', async () => {
+    const info = seed('claude')
+    bridge(info.sessionId, () => true, true)
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: false,
+      error: 'bridge write failed (socket destroyed) — transient, retry', exitCode: 6 })
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
+  })
+
+  test('claude --queue with no bridge past grace → queued/persisted, key completed', async () => {
+    const info = seed('claude', { createdAt: 1 })
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k, queue: true })
+    expect(res).toEqual({ type: 'cli-response', command: 'deliver', id: res.id, ok: true,
+      data: { status: 'queued', proof: 'persisted', ...common(info) } })
+    expect(checkIdempotency(k)).toMatchObject({ blocked: true, entry: { status: 'completed' } })
+  })
+
+  test('claude no bridge past grace without --queue → exit 4 orphaned, no key', async () => {
+    const info = seed('claude', { createdAt: 1 })
+    const k = key()
+    const res = await deliver(info.sessionId, { idempotencyKey: k })
+    expect(res).toMatchObject({ ok: false, exitCode: 4 })
+    expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 })
+

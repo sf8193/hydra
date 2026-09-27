@@ -113,7 +113,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const provider = adapterFor(info)
   if (!tmuxHasSession(info.tmuxName)) provider.surface(info)
-  if (!tmuxHasSession(info.tmuxName) && !(info.engine === 'codex' && transport.has(info.sessionId))) {
+  if (!tmuxHasSession(info.tmuxName) && !(await provider.isAlive(info))) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
     return
@@ -314,10 +314,14 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
         // rather than recreating one, and it may hold unpushed work.
         await killSession(liveInfo, 'bridge was unreachable — reattaching to this conversation', { skipWorktreeDestroy: true })
       }
-      if (liveInfo.engine === 'codex') {
-        liveInfo.deadAt ??= Date.now()
-        registry.persist()
+      // Gone (or just torn down): mark it dead as the health poll would — stamp
+      // and close its history entry — so the poll doesn't announce a second
+      // death after this resume's own outcome.
+      if (!liveInfo.deadAt) {
+        liveInfo.deadAt = Date.now()
+        threadRegistry.closeHistoryEntry(liveInfo.threadId, liveInfo)
       }
+      registry.persist()
     }
   }
 

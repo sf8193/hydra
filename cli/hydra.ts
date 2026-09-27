@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from 'crypto'
-import { codexSpawnEnv } from '../shared/spawn-env.js'
 import { resolveSocket, sendRequest, printResponse } from './helpers.js'
 import {
   lifecycleUp, lifecycleDown, lifecycleRestart,
@@ -38,7 +37,7 @@ Session management:
   hydra status <name>                  Session details
   hydra kill <name>                    Kill a session
   hydra peek [name]                    Read-only view of live sessions
-  hydra attach <name>                  Attach codex TUI to a running codex session
+  hydra attach <name>                  Attach to a running session's tmux surface
   hydra health                         Daemon diagnostics
   hydra clear-key <key>                Clear a stuck idempotency key
   hydra check-key <key>                Check if an idempotency key exists
@@ -359,40 +358,20 @@ async function main(): Promise<void> {
         console.error('error: session name required. Usage: hydra attach <name>')
         process.exit(1)
       }
-      const { codexSocketPath } = await import('../daemon/codex-engine.js')
-      const { join: pathJoin } = await import('path')
-      const { execFileSync } = await import('child_process')
       const response = await sendRequest(socketPath, {
-        type: 'cli', command: 'status', id: randomUUID(), params: { name },
+        type: 'cli', command: 'status', id: randomUUID(), params: { name, attach: true },
       })
-      const status = response.data as { engine?: string; codexThreadId?: string; codexHomeName?: string } | undefined
       if (!response.ok) {
         console.error(`error: ${response.error}`)
         process.exit(typeof response.exitCode === 'number' ? response.exitCode : 1)
       }
-      if (status?.engine !== 'codex' || !status.codexThreadId) {
-        console.error(`error: session "${name}" is not an attachable codex session`)
+      const target = (response.data as { attachTarget?: string | null } | undefined)?.attachTarget
+      if (!target) {
+        console.error(`error: session "${name}" has no attachable surface — is it still running?`)
         process.exit(1)
       }
-      const codexHomeName = status.codexHomeName ?? name
-      const sockPath = codexSocketPath(codexHomeName)
-      const { existsSync } = await import('fs')
-      if (!existsSync(sockPath)) {
-        console.error(`error: no codex socket found for "${name}" at ${sockPath}`)
-        console.error('Is this codex session still running?')
-        process.exit(1)
-      }
-      const codexHome = pathJoin(process.env.HOME!, '.codex', `hydra-${codexHomeName}`)
-      console.log(`Attaching to codex session "${name}"...`)
-      try {
-        execFileSync('codex', ['resume', status.codexThreadId, '--remote', `unix://${sockPath}`], {
-          stdio: 'inherit',
-          env: codexSpawnEnv({ CODEX_HOME: codexHome }),
-        })
-      } catch {
-        // codex --remote exits on disconnect, that's normal
-      }
-      break
+      const { spawnSync } = await import('child_process')
+      process.exit(spawnSync('tmux', ['attach', '-t', target], { stdio: 'inherit' }).status ?? 1)
     }
 
     default:
