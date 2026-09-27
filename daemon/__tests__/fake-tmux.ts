@@ -6,6 +6,7 @@
 //   alive-<name>  → `has-session -t <name>` succeeds
 //   pid-<name>    → `list-panes -t <name>` prints this pane pid
 //   pane-<name>   → `capture-pane -t <name>` prints this text
+//   activity-<name> → `display -t <name>` prints this (window_activity); absent → exit 1
 //   calls         → one line per tmux invocation (its argv)
 // pgrep always finds nothing, so discovery's child-env fallback stays inert.
 
@@ -22,6 +23,7 @@ case "$1" in
   list-panes) cat "$D/pid-$3" 2>/dev/null ;;
   has-session) [ -f "$D/alive-$3" ] ;;
   capture-pane) cat "$D/pane-$3" 2>/dev/null ;;
+  display) cat "$D/activity-$3" 2>/dev/null ;;
   *) : ;;
 esac
 `
@@ -31,6 +33,7 @@ esac
 // route it through the shim for the duration of the test, then put peek's
 // default back.
 const leaked = (childProcess.execFileSync as any).mock ? childProcess.execFileSync as any : null
+const leakedSh = (childProcess.execSync as any).mock ? childProcess.execSync as any : null
 
 export type FakeTmux = {
   dir: string
@@ -38,6 +41,7 @@ export type FakeTmux = {
   alive(name: string): void
   pid(name: string, pid: string): void
   pane(name: string, text: string): void
+  activity(name: string, epochSec: number): void
   calls(): string[]
   /** Claude's sessions/<pid>.json plus the project .jsonl that discovery requires. */
   seedClaudeSession(pid: string, sessionId: string, cwd?: string): void
@@ -63,6 +67,13 @@ export function withFakeTmux(): FakeTmux {
       return r.stdout.toString()
     })
   }
+  if (leakedSh) {
+    leakedSh.mockImplementation((cmd: string) => {
+      const r = Bun.spawnSync(['sh', '-c', cmd], { env: process.env as Record<string, string> })
+      if (r.exitCode !== 0) throw new Error(`${cmd} exited ${r.exitCode}`)
+      return r.stdout
+    })
+  }
 
   return {
     dir,
@@ -70,6 +81,7 @@ export function withFakeTmux(): FakeTmux {
     alive: name => writeFileSync(join(dir, `alive-${name}`), ''),
     pid: (name, pid) => writeFileSync(join(dir, `pid-${name}`), pid + '\n'),
     pane: (name, text) => writeFileSync(join(dir, `pane-${name}`), text),
+    activity: (name, epochSec) => writeFileSync(join(dir, `activity-${name}`), `${epochSec}\n`),
     calls: () => existsSync(join(dir, 'calls')) ? readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n').filter(Boolean) : [],
     seedClaudeSession(pid, sessionId, cwd = '/tmp/hydra-t3-project') {
       mkdirSync(join(claudeDir, 'sessions'), { recursive: true })
@@ -80,6 +92,7 @@ export function withFakeTmux(): FakeTmux {
     },
     restore() {
       if (leaked) leaked.mockImplementation(() => '')
+      if (leakedSh) leakedSh.mockImplementation(() => '')
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
       rmSync(dir, { recursive: true, force: true })
     },

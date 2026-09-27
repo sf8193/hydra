@@ -114,6 +114,9 @@ export interface EngineAdapter {
   // running execution: learn it, set it on the record and return it; else null.
   // Claude: pane discovery. Codex: null (launch and reconnect assign its id).
   refreshIdentity(info: SessionInfo): string | null
+  // Epoch seconds of the last observable activity, or null when it can't be
+  // read (the reply-guard poller then skips the session this tick).
+  activityAt(info: SessionInfo): number | null
   isAlive(info: SessionInfo): Promise<boolean>
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null

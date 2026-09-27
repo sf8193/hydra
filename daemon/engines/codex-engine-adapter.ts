@@ -19,7 +19,7 @@ import type {
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { parseContextPercent, safeSend, tmuxHasSession } from '../util.js'
+import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 
@@ -57,6 +57,12 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   // Launch and reconnect assign the Codex thread id; nothing to discover.
   refreshIdentity(_info: SessionInfo): string | null { return null }
+
+  // ⚠ F4s (pinned, fixed in S10): tmux window_activity of the session's current
+  // window, which after surface repair is the static anchor, not the TUI pane.
+  activityAt(info: SessionInfo): number | null {
+    try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
+  }
 
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
   private startAppServer(input: LaunchInput, codexHomeName: string): string {

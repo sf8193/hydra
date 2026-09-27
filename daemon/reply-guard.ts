@@ -425,7 +425,8 @@ export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
 const MIN_IDLE_BEFORE_SILENCE_S = 45
 
 export type PollActivityDeps = {
-  // Epoch seconds of the target's last activity; throws when it can't be read.
+  // Records without an adapter ('main', or a name not in the registry): epoch
+  // seconds of the target's tmux window activity; throws when it can't be read.
   windowActivity: (target: string) => number
   findByName: (tmuxName: string) => SessionInfo | undefined
 }
@@ -443,10 +444,13 @@ export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = de
     // 'main' is a logical name — its real tmux window is probeByteTmuxName() (e.g. slack-byte).
     // Query the real window, but keep passing logical 'main' to the guard so its mapping is unchanged.
     const queryTarget = tmuxName === 'main' ? probeByteTmuxName() : tmuxName
-    let lastActivitySec = 0
-    try {
-      lastActivitySec = pollDeps.windowActivity(queryTarget)
-    } catch { continue }
+    let lastActivitySec: number | null
+    if (info?.adapter) {
+      lastActivitySec = info.adapter.activityAt(info)
+    } else {
+      try { lastActivitySec = pollDeps.windowActivity(queryTarget) } catch { continue }
+    }
+    if (lastActivitySec === null) continue
     const secSinceActivity = nowSec - lastActivitySec
     if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
       if (info && info.turnState !== 'working') info.turnState = 'working'

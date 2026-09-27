@@ -16,6 +16,9 @@ import {
   pollActivityOnce,
 } from '../reply-guard.js'
 import { probeByteTmuxName } from '../pane-probe.js'
+import { fakeAdapter } from './test-harness.js'
+import { engines } from '../engines/instances.js'
+import { withFakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../sessions.js'
 import type { ConversationForensics } from '../observability.js'
 
@@ -619,13 +622,18 @@ describe('pollActivityOnce', () => {
   const findByName = (name: string) => [...testSessions.values()].find(i => i.tmuxName === name)
   const poll = (nowSec: number) => pollActivityOnce(nowSec, { windowActivity, findByName })
   const escalatesAfterGrace = (name: string) => handleSilenceEvent(name, Date.now() + _ESCALATION_GRACE_MS)
+  // Registry records carry an adapter; its activityAt is backed by the same stub.
+  const adapter = (provider: string) => fakeAdapter({
+    provider,
+    activityAt: (i: SessionInfo) => { try { return windowActivity(i.tmuxName) } catch { return null } },
+  })
 
   beforeEach(() => { targets.length = 0 })
 
   for (const engine of ['claude', 'codex'] as const) {
     test(`${engine}: active -> working + activity gate`, () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'idle' })
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'idle', adapter: adapter(engine) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), Date.now() - 1000)
       activity = () => nowSec - 10
@@ -637,7 +645,7 @@ describe('pollActivityOnce', () => {
 
     test(`${engine}: idle -> idle + silence armed`, () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'working' })
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'working', adapter: adapter(engine) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), T0)
       activity = () => nowSec - 45
@@ -661,7 +669,7 @@ describe('pollActivityOnce', () => {
 
   test('tmux throw -> skip', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working' })
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: adapter('claude') })
     fakeBridge('s1')
     notePendingReply('s1', meta(), T0)
     activity = () => { throw new Error('no such session') }
@@ -672,4 +680,42 @@ describe('pollActivityOnce', () => {
     // Silence was never armed: the first explicit silence only arms the grace window.
     expect(escalatesAfterGrace('cedar')).toBe(0)
   })
+
+  test('record with an adapter: the poller asks activityAt, not tmux', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: fakeAdapter({ activityAt: () => nowSec - 10 }) })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), Date.now() - 1000)
+    activity = () => 0
+    poll(nowSec)
+    expect(targets).toEqual([])
+    expect(info.turnState).toBe('working')
+  })
+
+  test('activityAt null -> skip', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: fakeAdapter({ activityAt: () => null }) })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), T0)
+    poll(nowSec)
+    expect(info.turnState).toBe('working')
+    expect(escalatesAfterGrace('cedar')).toBe(0)
+  })
+})
+
+// S5: both adapters answer activityAt with today's tmux window_activity read of
+// the record's tmuxName (Codex: ⚠ F4s, pinned), null when tmux fails.
+describe('adapter activityAt', () => {
+  for (const provider of ['claude', 'codex'] as const) {
+    test(`${provider}: window_activity of tmuxName, null on tmux failure`, () => {
+      const fake = withFakeTmux()
+      try {
+        const info = { sessionId: 's1', tmuxName: 'cedar' } as SessionInfo
+        fake.activity('cedar', 1234)
+        expect(engines[provider].activityAt(info)).toBe(1234)
+        expect(fake.calls()).toContain('display -t cedar -p #{window_activity}')
+        expect(engines[provider].activityAt({ ...info, tmuxName: 'gone' })).toBeNull()
+      } finally { fake.restore() }
+    })
+  }
 })
