@@ -221,9 +221,11 @@ function makeTestIO(): PaneProbeIO {
   }
 }
 
-const codexAdapter = { detectBlockingState: () => null } as any
+// Records carry an adapter, as in production (SessionInfo.adapter is required).
+const claudeAdapter = { channel: 'bridge', detectBlockingState: (_i: unknown, tail: string) => detectBlockingState(tail) } as any
+const codexAdapter = { channel: 'engine', detectBlockingState: () => null } as any
 function addSession(sessionId: string, opts: { tmuxName: string; threadId: string; deadAt?: number; engine?: string }) {
-  const adapter = opts.engine === 'codex' ? codexAdapter : undefined
+  const adapter = opts.engine === 'codex' ? codexAdapter : claudeAdapter
   registryEntries.set(sessionId, { sessionId, ...opts, adapter, createdAt: T0, lastActive: T0, listening: true })
 }
 
@@ -913,6 +915,56 @@ describe('probeAllSessions', () => {
     expect(pmMsg).not.toBeUndefined()
     expect(pmMsg!.text).toContain('lost its bridge')
     expect(pmMsg!.text).toContain('factory_abandon')
+  })
+
+  // T0.9 (contract PR-0): a Codex builder today gets no probe at all — no pane
+  // reads, no idle nudge (nor its count/cooldown), no bridgeless notice — while
+  // the main pane is still probed first.
+  describe('T0.9 Codex builder', () => {
+    const reads: string[] = []
+    const NORMAL = `✻ Wandering… (5m 3s · ↓ 1.2k tokens)\n❯\n  ctx: 15%`
+    function codexBuilder(connected: boolean) {
+      addSession('s1', { tmuxName: 'ash', threadId: 'thread-1', engine: 'codex' })
+      const info = registryEntries.get('s1')!
+      Object.assign(info, { sessionType: 'factory_builder', factoryPhase: 'building', factoryPmThreadId: 'pm-thread', factoryTicket: 'fb-1' })
+      if (connected) connectedSessions.add('s1'); else connectedSessions.delete('s1')
+      paneTails.set('ash', NORMAL)
+      windowActivity.set('ash', Math.floor(T0 / 1000) - 600)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+      return info
+    }
+    beforeEach(() => {
+      reads.length = 0
+      transportMessages.length = 0
+      const base = makeTestIO()
+      _setIO({
+        ...base,
+        async getWindowActivity(n) { reads.push(`activity:${n}`); return base.getWindowActivity(n) },
+        async capturePaneTail(n, l) { reads.push(`capture:${n}`); return base.capturePaneTail(n, l) },
+      })
+    })
+    afterEach(() => { connectedSessions.delete('s1') })
+
+    for (const connected of [true, false]) {
+      it(`${connected ? 'bridged' : 'bridgeless'}: no pane reads, no nudge, no notice; main pane probed first`, async () => {
+        codexBuilder(connected)
+        for (let i = 0; i < 4; i++) await probeAllSessions(T0 + i * (_NOTIFY_COOLDOWN_MS + 1000))
+        await flush()
+        expect(reads.filter(r => r.endsWith(':ash'))).toEqual([])
+        expect(reads[0]).toBe('activity:discord-byte')
+        expect(transportMessages).toEqual([])
+        expect(sentMessages.filter(m => m.channelId === 'pm-thread' || m.channelId === 'thread-1')).toEqual([])
+      })
+    }
+
+    it('the skipped probes spend none of the nudge budget', async () => {
+      const info = codexBuilder(true)
+      for (let i = 0; i < 4; i++) await probeAllSessions(T0 + i * (_NOTIFY_COOLDOWN_MS + 1000))
+      // The same record, now on the bridge channel, still gets its first nudge.
+      Object.assign(info, { engine: 'claude', adapter: claudeAdapter })
+      await probeAllSessions(T0 + 5 * (_NOTIFY_COOLDOWN_MS + 1000))
+      expect(transportMessages.map(m => m.sessionId)).toEqual(['s1'])
+    })
   })
 
   it('does not nudge non-builder sessions', async () => {
