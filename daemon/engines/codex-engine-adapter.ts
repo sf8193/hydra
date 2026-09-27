@@ -3,7 +3,8 @@
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
 // and the disposable tmux TUI.
 
-import { execFileSync, execSync } from 'child_process'
+import { execFile, execFileSync, execSync } from 'child_process'
+import { promisify } from 'util'
 import { mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -24,6 +25,7 @@ import { SOCK_PATH, STATE_DIR } from '../config.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
+const execFileAsync = promisify(execFile)
 
 function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string): void {
   const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
@@ -281,8 +283,30 @@ export class CodexEngineAdapter implements EngineAdapter {
     const action: TmuxKeyAction = opts?.raw
       ? { target, mode: 'raw', keys: keys.split(/\s+/) }
       : { target, mode: 'literal', text: keys, trailingKey: opts?.trailingKey }
-    await sendTmuxKeys(action)
+    await sendTmuxKeys(action, action.mode === 'literal' ? pane => this.waitForComposer(pane) : undefined)
     return { queued: false }
+  }
+
+  private async waitForComposer(target: string): Promise<void> {
+    const deadline = Date.now() + 5000
+    do {
+      // A newly created window is not necessarily a ready TUI. Inspect the live
+      // viewport at the visible cursor for Codex's composer before typing text.
+      // Menus also use ›, but hide the cursor; a prompt elsewhere is not enough.
+      // Raw keys deliberately bypass this check so dialogs remain controllable.
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
+      try {
+        const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', target,
+          '#{cursor_flag} #{cursor_x} #{cursor_y}', ';', 'capture-pane', '-p', '-t', target],
+          { timeout: Math.min(1000, remaining) })
+        const [cursor, ...lines] = stdout.split('\n')
+        const match = cursor.match(/^1 (\d+) (\d+)$/)
+        if (match && Number(match[1]) >= 2 && /^›(?: |$)/.test(lines[Number(match[2])] ?? '')) return
+      } catch { /* Missing/cold panes may become ready within the deadline. */ }
+      await new Promise(resolve => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))))
+    } while (Date.now() < deadline)
+    throw new Error(`Codex composer is not ready for ${target} after 5s; no text was sent`)
   }
 
   async interrupt(info: SessionInfo): Promise<void> {
