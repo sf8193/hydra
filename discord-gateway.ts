@@ -385,7 +385,9 @@ export class DiscordGateway implements ChatGateway {
   }
 
   async fetchChannel(id: string): Promise<ChannelInfo> {
-    const ch = await this.client.channels.fetch(id)
+    let ch = await this.client.channels.fetch(id)
+    // A cached DM can lack its recipient; the reply allowlist keys on it, so refetch rather than reject.
+    if (ch?.type === ChannelType.DM && !(ch as any).recipientId) ch = await this.client.channels.fetch(id, { force: true })
     if (!ch || !ch.isTextBased()) {
       throw new Error(`channel ${id} not found or not text-based`)
     }

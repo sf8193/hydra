@@ -92,7 +92,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const access = loadAccess()
         if (ch.isDM) {
           if (!access.allowFrom.includes(ch.recipientId)) {
-            throw new Error(`channel ${chat_id} is not allowlisted`)
+            throw new Error(`channel ${chat_id} is not allowlisted (DM recipient ${ch.recipientId || 'unknown'})`)
           }
         } else {
           const key = ch.isThread ? ch.parentId ?? ch.id : ch.id
