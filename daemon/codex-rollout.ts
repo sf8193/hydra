@@ -7,6 +7,7 @@ import { closeSync, fstatSync, openSync, readdirSync, readSync } from 'fs'
 import { join } from 'path'
 import { codexHomeDir } from './codex-process.js'
 import type { TokenTotals } from './usage.js'
+import type { UsageReading } from './engines/engine-adapter.js'
 
 const TAIL_CHUNK_BYTES = 64 * 1024
 // ponytail: fixed cap; a turn whose tool output alone exceeds this reads as null
@@ -112,7 +113,6 @@ export function codexTotals(u: Record<string, unknown>): TokenTotals | null {
 }
 
 export type CodexUsageCursor = { threadId: string; totals: TokenTotals }
-export type UsageReading = { totals: TokenTotals; providerSessionId: string; cursor: unknown; restarted: boolean }
 type CodexSubject = { tmuxName: string; codexThreadId?: string; codexHomeName?: string }
 
 const decreased = (a: TokenTotals, b: TokenTotals): boolean =>

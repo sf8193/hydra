@@ -7,6 +7,7 @@
 import type { SessionInfo, SpawnOpts } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { TurnOutcome } from '../observability.js'
+import type { TokenTotals } from '../usage.js'
 export type { BlockingState } from '../pane-probe.js'
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,12 @@ export type ContextUsage = {
   readonly contextWindow: number
   readonly percent: number
 }
+
+// Cumulative spend of the provider's own session. `cursor` is opaque adapter
+// state the caller hands back next time; `restarted` means the totals are a new
+// baseline (rotated transcript, Codex decrease or thread change): report no delta.
+export type UsageSubject = Pick<SessionInfo, 'sessionId' | 'tmuxName' | 'claudeSessionId' | 'codexThreadId' | 'codexHomeName'>
+export type UsageReading = { totals: TokenTotals; providerSessionId: string; cursor: unknown; restarted: boolean }
 
 /** A tmux keystroke action: raw key names, or literal text plus an optional trailing key. */
 export type TmuxKeyAction =
@@ -146,6 +153,9 @@ export interface EngineAdapter {
   isAlive(info: SessionInfo): Promise<boolean>
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null
+  // Spend so far, or null when it can't be read yet (Raindrop counts the session unresolved).
+  // Claude: its transcript, drained incrementally from `prev`. Codex: the rollout's last token_count.
+  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null
 
   // Surface
   uiTarget(info: SessionInfo): string

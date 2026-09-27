@@ -9,7 +9,9 @@ import { on } from './event-bus.js'
 import { byteTmuxName, sentimentForReaction } from '../shared/constants.js'
 import { setSweepFailureHandler } from '../shared/spawn-env.js'
 import { isUnder } from '../shared/path-containment.js'
-import { drainUsage, latestCwd, newCursor, projectDirNames, subtractTotals, totalsChanged, transcriptPathFor, type TokenTotals, type UsageCursor } from './usage.js'
+import { latestCwd, projectDirNames, subtractTotals, totalsChanged, transcriptPathFor, zeroTotals, type TokenTotals } from './usage.js'
+import { resolveEngine } from './engines/instances.js'
+import type { EventMap } from './event-bus.js'
 import {
   buildEvent,
   buildSignal,
@@ -127,9 +129,13 @@ function stale<T>(entry: Cached<T> | undefined, now: number, okMs: number, failM
 }
 
 const projectNames = new Map<string, Cached<string | undefined>>()
-export type SessionUsage = { totals: TokenTotals; delta: TokenTotals; claudeSessionId: string; coldStart: boolean }
+// providerSessionId: the Claude session id or the Codex thread id. claudeSessionId
+// is kept on Claude events so existing dashboards don't break.
+export type SessionUsage = { totals: TokenTotals; delta: TokenTotals; providerSessionId: string; claudeSessionId?: string; coldStart: boolean }
+// What a death event carries: killSession clears the registry entry first.
+export type UsageHint = Partial<Pick<EventMap['session:death'], 'claudeSessionId' | 'engine' | 'codexThreadId' | 'codexHomeName' | 'tmuxName'>>
 
-// Dashboard contract: LAST cumulative* per claudeSessionId for lifetime spend,
+// Dashboard contract: LAST cumulative* per providerSessionId for lifetime spend,
 // SUM delta* for a window. Spawned sessions only; see the PR for the caveats.
 export function usageExtra(u: SessionUsage): Record<string, string | number> {
   return {
@@ -144,11 +150,13 @@ export function usageExtra(u: SessionUsage): Record<string, string | number> {
     // The delta is suppressed to 0 on a first sighting, so a window that spans
     // one cannot be summed blind. Emitted rather than documented.
     coldStart: u.coldStart ? 1 : 0,
-    claudeSessionId: u.claudeSessionId,
+    providerSessionId: u.providerSessionId,
+    ...(u.claudeSessionId ? { claudeSessionId: u.claudeSessionId } : {}),
   }
 }
 
-const usageCursors = new Map<string, UsageCursor>()
+// Per session: the adapter's opaque cursor and the totals it last read.
+const usageCursors = new Map<string, { cursor: unknown; totals: TokenTotals }>()
 // How far the wire has actually accepted, which is not how far the reader got.
 const deliveredTotals = new Map<string, TokenTotals>()
 // A death mid-POST would otherwise read a baseline the in-flight event is about
@@ -206,7 +214,7 @@ export type RaindropDeps = {
   recordDryRun: (endpoint: string, body: WireBody) => void
   allowedUsers: () => Drivers
   projectFor: (repoPath: string) => string | undefined
-  usageFor: (sessionId: string, claudeSessionId?: string) => SessionUsage | undefined
+  usageFor: (sessionId: string, hint?: UsageHint) => SessionUsage | undefined
   env: () => Record<string, string | undefined>
   now: () => number
 }
@@ -292,43 +300,39 @@ export function defaultAllowedUsers(): Drivers {
   try { return drivableBy(loadAccess()) } catch { return new Set() }
 }
 
-// Reads only the four token counters out of the transcript; see daemon/usage.ts.
-export function defaultUsageFor(sessionId: string, hintedClaudeSessionId?: string): SessionUsage | undefined {
+// The engine's adapter reads the spend; see usageTotals in engine-adapter.ts.
+export function defaultUsageFor(sessionId: string, hint?: UsageHint): SessionUsage | undefined {
   const info = registry.get(sessionId)
+  // killSession clears the registry entry first, so the ids ride the event.
+  const subject = info ?? { sessionId, tmuxName: hint?.tmuxName ?? '', claudeSessionId: hint?.claudeSessionId, codexThreadId: hint?.codexThreadId, codexHomeName: hint?.codexHomeName }
+  const adapter = info?.adapter ?? resolveEngine(info?.engine ?? hint?.engine)
   const stored = usageCursors.get(sessionId)
-  // killSession clears the registry entry first, so the id rides the event.
-  const claudeSessionId = info?.claudeSessionId ?? hintedClaudeSessionId
-  const reportable = !!info && info.engine !== 'codex'
-  if (!claudeSessionId) {
-    if (reportable) unresolved.add(sessionId)
-    return undefined
-  }
-  const transcript = transcriptPathFor(claudeSessionId)
-  if (!transcript) {
-    if (reportable) unresolved.add(sessionId)
+  const r = adapter.usageTotals(subject, stored?.cursor)
+  if (!r) {
+    if (info) unresolved.add(sessionId)
     return undefined
   }
   unresolved.delete(sessionId)
-  const prev = stored ?? newCursor()
-  const next = drainUsage(transcript, prev)
-  usageCursors.set(sessionId, next)
+  const prevTotals = stored?.totals ?? zeroTotals()
+  usageCursors.set(sessionId, { cursor: r.cursor, totals: r.totals })
 
   // Measured from what was last DELIVERED, not last read: a dropped POST used
   // to take its window with it. At-least-once, so a committed-but-timed-out
   // POST lands twice under a fresh event id.
-  // A first sighting, and a transcript that restarted, both have no delivered
-  // baseline to subtract — that is what coldStart marks.
-  // Dropped, not skipped: restartedFromZero is true for one read only, so a
-  // baseline that outlives it is subtracted from a different transcript.
-  if (next.restartedFromZero === true) deliveredTotals.delete(sessionId)
+  // A first sighting, and a restart (rotated transcript, Codex decrease or new
+  // thread), both have no delivered baseline to subtract — that is what coldStart marks.
+  // Dropped, not skipped: `restarted` is true for one read only, so a
+  // baseline that outlives it is subtracted from a different session.
+  if (r.restarted) deliveredTotals.delete(sessionId)
   const sent = deliveredTotals.get(sessionId)
   const coldStart = sent === undefined
-  const base = sent ?? next.totals
-  if (!totalsChanged(prev.totals, next.totals) && !totalsChanged(base, next.totals)) return undefined
+  const base = sent ?? r.totals
+  if (!totalsChanged(prevTotals, r.totals) && !totalsChanged(base, r.totals)) return undefined
   return {
-    totals: { ...next.totals },
-    delta: subtractTotals(base, next.totals),
-    claudeSessionId,
+    totals: { ...r.totals },
+    delta: subtractTotals(base, r.totals),
+    providerSessionId: r.providerSessionId,
+    ...(adapter.provider === 'claude' ? { claudeSessionId: r.providerSessionId } : {}),
     coldStart,
   }
 }
@@ -446,7 +450,7 @@ export function raindropStatusLine(surface: 'cli' | 'chat'): string | undefined 
     detail.push(`projects root unreadable — check CLAUDE_CONFIG_DIR, last ${ago(lastRootFailureAt)}`)
   }
   if (usageUnresolved > 0) {
-    detail.push(`${plural(usageUnresolved, 'session')} with no transcript yet — a new session, or check CLAUDE_CONFIG_DIR`)
+    detail.push(`${plural(usageUnresolved, 'session')} with no transcript yet — a new session, or check CLAUDE_CONFIG_DIR (Claude) or the rollout under CODEX_HOME (Codex)`)
   }
   return `${active} → ${where} (${detail.join('; ')})`
 }
@@ -607,12 +611,13 @@ export function register(): () => void {
       await delivered
     }, 'raindrop:reply', { onError }),
 
-    on('session:death', async ({ sessionId, deadAt, claudeSessionId }) => {
+    on('session:death', async (death) => {
+      const { sessionId, deadAt } = death
       const facts = tracked.get(sessionId)
       tracked.delete(sessionId)
       await pendingEmits.get(sessionId)
       let final: SessionUsage | undefined
-      try { final = deps.usageFor(sessionId, claudeSessionId) } catch (err) { usageError(err) }
+      try { final = deps.usageFor(sessionId, death) } catch (err) { usageError(err) }
       // Before the early return — a session that never registered a bridge has no facts.
       usageCursors.delete(sessionId)
       deliveredTotals.delete(sessionId)

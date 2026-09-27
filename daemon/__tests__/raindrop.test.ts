@@ -43,6 +43,8 @@ import type { TokenTotals } from '../usage.js'
 import { emitSessionDeath } from '../session-lifecycle.js'
 import { PLATFORM, STATE_DIR, RAINDROP_DRYRUN_FILE } from '../config.js'
 import { SCRUBBED_SPAWN_VARS, tmuxNewSession } from '../../shared/spawn-env.js'
+import { _resetRolloutMemoForTesting, codexUsageTotals } from '../codex-rollout.js'
+import { fakeAdapter } from './test-harness.js'
 
 const NOT_PLATFORM = 'fixture-not-a-platform'
 
@@ -125,6 +127,7 @@ const usageOf = (t: Partial<TokenTotals>, claudeSessionId = 'c-test', d?: Partia
   totals: { ...zero(), ...t },
   delta: { ...zero(), ...(d ?? t) },
   coldStart,
+  providerSessionId: claudeSessionId,
   claudeSessionId,
 })
 
@@ -1087,20 +1090,21 @@ describe('raindrop: events', () => {
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
   })
 
-  // A codex session never has a Claude transcript, so counting it would send
-  // the operator after a config path for a session type that has none.
-  test('a codex session with no transcript is not reported as unresolved', () => {
+  // S10-lite: Codex spend is read from its rollout, so a Codex session whose
+  // rollout can't be read yet counts as unresolved, the same as Claude.
+  test('a codex session with no readable rollout is reported as unresolved', () => {
     registry.set('cdx-1', sessionInfo({ sessionId: 'cdx-1', threadId: 'T-cdx', engine: 'codex' }))
     cleanups.push(() => registry.delete('cdx-1'))
     expect(defaultUsageFor('cdx-1')).toBeUndefined()
-    expect(raindropStatusLine('cli')).not.toContain('no transcript yet')
+    expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
   })
 
-  test('a codex session holding a transcript id is still not reported as unresolved', () => {
-    registry.set('cdx-2', sessionInfo({ sessionId: 'cdx-2', threadId: 'T-cdx2', engine: 'codex', claudeSessionId: uniqueClaudeId('never') }))
+  test('a codex session holding a Claude transcript id does not report the Claude transcript', () => {
+    const claudeId = uniqueClaudeId('cdx-mixed')
+    cleanups.push(plantTranscript(claudeId, oneLine('a', 5)).cleanup)
+    registry.set('cdx-2', sessionInfo({ sessionId: 'cdx-2', threadId: 'T-cdx2', engine: 'codex', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('cdx-2'))
     expect(defaultUsageFor('cdx-2')).toBeUndefined()
-    expect(raindropStatusLine('cli')).not.toContain('no transcript yet')
   })
 
   test('a session already gone from the registry is not reported as unresolved', () => {
@@ -1597,7 +1601,7 @@ describe('raindrop: events', () => {
     stubDeps({
       liveSessionIds: () => ['bf-1'],
       factsFor: factsFromRegistry,
-      usageFor: (id: string, hint?: string) => {
+      usageFor: (id, hint) => {
         if (boom) throw new Error('transcript vanished at death')
         return defaultUsageFor(id, hint)
       },
@@ -2852,5 +2856,89 @@ describe('the durable history entry a resume reads back', () => {
     // the crash path: bridge never connected, so info carries no transcript id
     threadRegistry.closeHistoryEntry(t, { sessionId: `${t}-s`, messageCount: 0 })
     expect(entryOf(t)?.claudeSessionId, 'a later resume needs this').toBe('c-from-spawn')
+  })
+})
+
+// S10-lite A: Codex spend reaches the wire under providerSessionId.
+describe('raindrop: codex usage from the rollout', () => {
+  const tc = (input: number, cached: number, output: number) => JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: {
+    total_token_usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: 0, output_tokens: output, reasoning_output_tokens: 1 } } } }) + '\n'
+  const lastUsage = () => sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
+
+  // A Codex record whose adapter reads rollouts under a temp home instead of ~/.codex.
+  function codexSession(id: string, threadId: string, first: string) {
+    const home = mkdtempSync(join(tmpdir(), 's10-rd-'))
+    cleanups.push(() => { rmSync(home, { recursive: true, force: true }); _resetRolloutMemoForTesting() })
+    const plant = (t: string, body: string) => {
+      mkdirSync(join(home, 'sessions/2026/09/26'), { recursive: true })
+      const p = join(home, 'sessions/2026/09/26', `rollout-2026-09-26T23-13-59-${t}.jsonl`)
+      writeFileSync(p, body)
+      return p
+    }
+    const info = sessionInfo({
+      sessionId: id, threadId: `T-${id}`, engine: 'codex', codexThreadId: threadId, codexHomeName: 'h',
+      adapter: fakeAdapter({ provider: 'codex', usageTotals: (i: any, prev: unknown) => codexUsageTotals(i, prev, () => home) }),
+    })
+    registry.set(id, info)
+    cleanups.push(() => registry.delete(id))
+    stubDeps({ liveSessionIds: () => [id], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    return { info, plant, path: plant(threadId, first) }
+  }
+
+  test('a live Codex record reports its growth under providerSessionId, with no claudeSessionId', async () => {
+    const { path } = codexSession('cx-1', 'thread-a', tc(1000, 600, 50))
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(lastUsage().coldStart).toBe(1)
+    expect(lastUsage().cumulativeInputTokens, 'input excludes cached').toBe(400)
+    appendFileSync(path, tc(1500, 1000, 80))
+    fire(); await tick()
+    const ev = lastUsage()
+    expect(ev.providerSessionId).toBe('thread-a')
+    expect(ev.claudeSessionId).toBeUndefined()
+    expect(ev.engine).toBe('codex')
+    expect([ev.deltaInputTokens, ev.deltaCacheReadTokens, ev.deltaOutputTokens, ev.coldStart]).toEqual([100, 400, 30, 0])
+  })
+
+  test('a decrease after a delivered baseline is a cold start with no delta', async () => {
+    const { path } = codexSession('cx-2', 'thread-a', tc(1_460_000, 1_000_000, 900))
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    appendFileSync(path, tc(117_000, 100_000, 20))
+    fire(); await tick()
+    const ev = lastUsage()
+    expect(ev.coldStart).toBe(1)
+    expect([ev.deltaInputTokens, ev.deltaOutputTokens, ev.deltaCacheCreateTokens, ev.deltaCacheReadTokens]).toEqual([0, 0, 0, 0])
+    expect(ev.cumulativeInputTokens).toBe(17_000)
+  })
+
+  test('a thread change after a delivered baseline is a cold start with no delta', async () => {
+    const { info, plant } = codexSession('cx-3', 'thread-a', tc(100, 0, 5))
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    plant('thread-b', tc(5000, 0, 500))
+    info.codexThreadId = 'thread-b'
+    fire(); await tick()
+    const ev = lastUsage()
+    expect(ev.providerSessionId).toBe('thread-b')
+    expect([ev.coldStart, ev.deltaInputTokens, ev.deltaOutputTokens]).toEqual([1, 0, 0])
+  })
+
+  test('a Claude usage event is what it was, plus providerSessionId', async () => {
+    const claudeId = uniqueClaudeId('snap')
+    cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { id: 'm', usage: { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: 3, cache_read_input_tokens: 4 } } }) + '\n').cleanup)
+    registry.set('snap-1', sessionInfo({ sessionId: 'snap-1', threadId: 'T-snap', tmuxName: 'atlas', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('snap-1'))
+    stubDeps({ liveSessionIds: () => ['snap-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(lastUsage()).toEqual({
+      tmuxName: 'atlas', engine: 'claude', sessionType: 'thread_owner', originType: 'spawn', platform: PLATFORM, repo: UNATTRIBUTED_REPO,
+      threadId: 'T-snap',
+      cumulativeInputTokens: 1, cumulativeOutputTokens: 2, cumulativeCacheCreateTokens: 3, cumulativeCacheReadTokens: 4,
+      deltaInputTokens: 0, deltaOutputTokens: 0, deltaCacheCreateTokens: 0, deltaCacheReadTokens: 0,
+      coldStart: 1, claudeSessionId: claudeId,
+      providerSessionId: claudeId,
+    })
   })
 })
