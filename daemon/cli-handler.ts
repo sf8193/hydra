@@ -277,6 +277,11 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 
   if (idempotencyKey) {
     const check = checkIdempotency(idempotencyKey)
+    // Exit 7: a delivery with this key is still awaiting its adapter — retry once
+    // it settles (it then answers 2 if it landed, or proceeds if it failed).
+    if (check.blocked && check.entry.status === 'pending') {
+      return respond(req, false, `delivery with key "${idempotencyKey}" still in flight — retry shortly`, { existing: check.entry }, 7)
+    }
     if (check.blocked) {
       return respond(req, false, `already delivered with key "${idempotencyKey}"`, { existing: check.entry }, 2)
     }

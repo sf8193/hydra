@@ -157,7 +157,7 @@ hydra deliver --session bloom --message "check replies" --queue
 }
 ```
 
-Exit codes: `0` delivered/queued, `1` bad request, `2` idempotency hit, `3` session gone, `4` orphaned, `5` still booting, `6` bridge write failed (transient).
+Exit codes: `0` delivered/queued, `1` bad request, `2` idempotency hit, `3` session gone, `4` orphaned, `5` still booting, `6` delivery failed or outcome unknown (transient, retry), `7` a delivery with the same idempotency key is still in flight (retry shortly).
 
 ### Common Patterns
 

@@ -274,15 +274,17 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 
-  test('a second deliver with the same key while the first is in flight is blocked', async () => {
+  test('a retry while the first is in flight → exit 7 "in flight"; after it lands → exit 2', async () => {
     let release!: () => void
     const info = codex(() => new Promise(r => { release = () => r({ status: 'accepted', via: 'steer' }) }))
     const k = key()
     const first = deliver(info.sessionId, { idempotencyKey: k })
     const second = await deliver(info.sessionId, { idempotencyKey: k })
-    expect(second).toMatchObject({ ok: false, exitCode: 2 })
+    expect(second).toMatchObject({ ok: false, exitCode: 7 })
+    expect(second.error).toContain('in flight')
     release?.()
     expect(await first).toMatchObject({ ok: true, data: { status: 'delivered' } })
+    expect(await deliver(info.sessionId, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 2 })
   })
 
   test('claude bridge write → delivered/socket_write, key completed', async () => {
