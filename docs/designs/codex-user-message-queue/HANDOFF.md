@@ -32,9 +32,19 @@ completion. Peek is deliberately irrelevant to turn ownership.
 - 2026-09-26: user approved retaining `!` as the sole interrupt mechanism.
 - 2026-09-26: peer approved the final v4-v8 design after eight audit rounds.
 
+## Status (2026-09-26)
+
+- Step 1 (1de4661) and step 2 + step-1 review fixes (84150c9) committed.
+- Deliberate deviation: no pending-start interrupt intent (v5/v6). A `!` during
+  an unacknowledged turn/start interrupts nothing; its message waits for that
+  turn. Marked `ponytail:` in `CodexEngine.interruptActiveTurn`.
+- Known theoretical gap: reconciling on a new conn while its own
+  connectAndResume is in flight could apply a stale thread/resume snapshot if
+  the app-server answered out of order. Not addressed.
+- v1-v3 drafts removed (superseded by v4, see git history).
+
 ## Open items
 
-- Implementation and verification only; no product decision remains.
 - Restart/deploy of the live Hydra daemon requires a separate explicit action.
 
 ## Proposed verified-step plan
