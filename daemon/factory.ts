@@ -27,7 +27,6 @@ import { registry, threadRegistry, sessionEmoji, setToolDescription, removeToolD
 import type { SessionInfo } from './sessions.js'
 import { safeSend, safeEdit, formatDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
-import { resolveEngine } from './engines/instances.js'
 import { defaultToolDescription } from './bridge-tools.js'
 import { resolveModelAlias, isKnownModel, normalizeReviewRounds } from '../shared/constants.js'
 import { transport } from './bridge-transport.js'
@@ -195,7 +194,7 @@ export function formatBuildLine(
     line += ` · ${formatDuration(Date.now() - state.createdAt)}`
   }
   if (opts?.includeCtx && info) {
-    const ctx = formatContextPercent(info.adapter ?? resolveEngine(info.engine), info)
+    const ctx = formatContextPercent(info.adapter, info)
     if (ctx !== '?') line += ` · ctx ${ctx}`
   }
   return `${line} (${shortTicket(state.ticket)})`

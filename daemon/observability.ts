@@ -38,109 +38,9 @@ export type VitalsSample = { rssMB: number; at: number }
 // is persisted to sessions.json, and this is ephemeral diagnostic state.
 const vitalsSamples = new Map<string, VitalsSample>()
 
-// Codex has no transcript file to read back (unlike Claude's JSONL) — its
-// protocol streams message text via an event instead, so we stash the latest
-// one here for reply-guard's escalation to use as clean text instead of a
-// pane screenshot. Ephemeral, pruned alongside vitalsSamples below.
-const codexLastMessage = new Map<string, { text: string; at: number }>()
-
-export function noteCodexMessage(sessionId: string, text: string, at: number = Date.now()): void {
-  if (text.trim()) codexLastMessage.set(sessionId, { text, at })
-}
-
-// Dedicated, engine-owned signal for "has Codex's own protocol-level turn
-// actually finished" — deliberately separate from SessionInfo.turnState,
-// which the daemon.ts activity poller ALSO writes from raw tmux visual
-// silence (a coarser, unrelated purpose: driving the reply-guard activity
-// gate). Sharing that field for turn-completeness let a still-in-flight
-// Codex turn (e.g. waiting on a remote call, no terminal repaint) get
-// stomped to "idle" by the poller alone — silently reopening the exact
-// mid-turn-fragment-relay bug the completeness gate exists to close.
-// Defaults to false (not complete) when never observed: unsure means don't
-// claim confidence, same fail-safe direction as the rest of this gate.
-const codexTurnComplete = new Map<string, boolean>()
-
-export function noteCodexTurnState(sessionId: string, complete: boolean): void {
-  codexTurnComplete.set(sessionId, complete)
-}
-
-export function isCodexTurnComplete(sessionId: string): boolean {
-  return codexTurnComplete.get(sessionId) ?? false
-}
-
-// Only returns the message if it arrived after `sinceMs` — an older one
-// predates whatever prompted the caller to ask, and relaying it would claim
-// the model answered a message it never saw.
-export function getLastCodexMessage(sessionId: string, sinceMs: number): string | null {
-  const entry = codexLastMessage.get(sessionId)
-  if (!entry || entry.at < sinceMs) return null
-  return entry.text
-}
-
-// The four sources a turn outcome is composed from — injected so tests can fake them.
-export type TurnSources = {
-  transcriptPathFor: (claudeSessionId: string) => string | undefined
-  readConversationForensics: (transcriptPath: string) => ConversationForensics | null
-  getLastCodexMessage: (sessionId: string, sinceMs: number) => string | null
-  isCodexTurnComplete: (sessionId: string) => boolean
-}
-
-// confirmedComplete: the turn is definitely over (skip the reply guard's grace).
-// answer(): the session's last clean answer given after sinceMs, or null.
-export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): string | null }
-
-// The live sources. Adapters read them through this object at call time, so a
-// test can swap members and see the adapters follow.
-export const defaultTurnSources: TurnSources = {
-  transcriptPathFor: (id) => transcriptPathFor(id),
-  readConversationForensics: (p) => readConversationForensics(p),
-  getLastCodexMessage: (sid, since) => getLastCodexMessage(sid, since),
-  isCodexTurnComplete: (sid) => isCodexTurnComplete(sid),
-}
-
-type TurnInfo = Pick<SessionInfo, 'sessionId' | 'claudeSessionId'>
-
-// The transcript's last assistant text, if complete and given after sinceMs.
-function transcriptAnswer(claudeSessionId: string, sinceMs: number, src: TurnSources): string | null {
-  const transcriptPath = src.transcriptPathFor(claudeSessionId)
-  const forensics = transcriptPath ? src.readConversationForensics(transcriptPath) : null
-  if (
-    forensics?.lastAssistantFullText &&
-    forensics.lastAssistantTurnComplete &&
-    !forensics.lastToolPending &&
-    (!forensics.lastAssistantTs || new Date(forensics.lastAssistantTs).getTime() >= sinceMs)
-  ) {
-    return forensics.lastAssistantFullText
-  }
-  return null
-}
-
-// Claude has no push signal for turn end; its answer is the transcript.
-export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: TurnSources): TurnOutcome {
-  return {
-    confirmedComplete: false,
-    answer: () => info.claudeSessionId ? transcriptAnswer(info.claudeSessionId, sinceMs, src) : null,
-  }
-}
-
-// Codex (F1s/F2s). The discriminator is the presence of claudeSessionId, not the
-// engine: a Codex record holding one relays the transcript and never falls
-// through to the event path (PINNED R9, repaired in PR-IDENT). The flag is
-// stale between turns, so it can skip grace early (PINNED R15).
-export function codexTurnOutcome(info: TurnInfo, sinceMs: number, src: TurnSources): TurnOutcome {
-  return {
-    confirmedComplete: src.isCodexTurnComplete(info.sessionId),
-    answer: () => {
-      if (info.claudeSessionId) return transcriptAnswer(info.claudeSessionId, sinceMs, src)
-      // Engine-owned signal (codex-bootstrap.ts's own turnCompleted event),
-      // deliberately NOT SessionInfo.turnState — that field is also written by
-      // the tmux-activity poller from raw visual silence, independent of
-      // whether Codex's actual turn has finished.
-      if (src.isCodexTurnComplete(info.sessionId)) return src.getLastCodexMessage(info.sessionId, sinceMs)
-      return null
-    },
-  }
-}
+// Engine-owned diagnostic state registers here to be pruned on the vitals tick
+// with the same gone-or-dead test as vitalsSamples.
+export const vitalsPruners: Array<(goneOrDead: (id: string) => boolean) => void> = []
 
 // The death path (bridge-server.ts) reads a session's last sample to fold into
 // its autopsy — exposed here so buildAutopsy can take it as an argument (pure).
@@ -401,8 +301,7 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
     // (checkSessionDeath), so this never races the autopsy.
     const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }
     for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
-    for (const id of codexLastMessage.keys()) if (goneOrDead(id)) codexLastMessage.delete(id)
-    for (const id of codexTurnComplete.keys()) if (goneOrDead(id)) codexTurnComplete.delete(id)
+    for (const prune of vitalsPruners) prune(goneOrDead)
     for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
     const live = [...registry.values()].filter(s => !s.deadAt)
     for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)

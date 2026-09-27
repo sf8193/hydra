@@ -47,23 +47,9 @@ export type WatchEntry = {
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
 
-// The one place that decides whether a PR update piggybacks or fires as its
-// own turn — extracted so it's directly unit-testable against a real registry
-// entry, not just simulated by calling bufferForPiggyback/sendOrQueue
-// straight from a test (which proves the mechanism works, not that pollPr
-// actually wires into it correctly).
+// A PR update is low priority: an engine where every delivery is a priced turn
+// (Codex) may hold it for the next turn the user creates; others deliver it now.
 export function deliverPrUpdate(sessionId: string, threadId: string, content: string): void {
-  const info = registry.get(sessionId)
-  if (info && !info.deadAt && info.adapter && info.adapter.deliveryIsFree === false) {
-    // Codex: ride this out on the next turn the user creates for this
-    // session instead of paying for a standalone one, CI failures and
-    // changes-requested included — Sam's call (2026-09-15): 1h backstop
-    // bounds the delay for everything, no urgency carve-out. Backstop flushes it
-    // if it's sat unfired for too long.
-    transport.bufferForPiggyback(sessionId, content)
-    return
-  }
-
   transport.sendOrQueue(sessionId, {
     type: 'notification',
     content,
@@ -74,6 +60,7 @@ export function deliverPrUpdate(sessionId: string, threadId: string, content: st
       user_id: 'system',
       ts: new Date().toISOString(),
     },
+    lowPriority: true,
   })
 }
 

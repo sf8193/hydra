@@ -12,14 +12,16 @@ import type { BlockingState } from '../pane-probe.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
-  ExecutionRetirementResult, StopResult,
-  ContextUsage, RecoverySource, RecoveryPlan, UsageReading, UsageSubject,
+  StopResult,
+  ContextUsage, RecoverySource, RecoveryPlan, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
+import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
 import { drainUsage, newCursor, projectDirName, projectsRoot, transcriptPathFor, type UsageCursor } from '../usage.js'
-import { claudeTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
+import { claudeTurnOutcome } from './claude-transcript.js'
+import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
@@ -93,36 +95,40 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
 
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
-  readonly deliveryIsFree = true
   readonly channel = 'bridge' as const
   constructor(private readonly transport: BridgeTransport) {}
 
   // Resume relaunches with --resume and is confirmed when the bridge registers.
-  recoveryPlan(s: RecoverySource): RecoveryPlan {
+  recoveryPlan(s: RecoverySource, opts?: { discover?: boolean }): RecoveryPlan {
+    const learnedId = opts?.discover ? this.discover(s) : null
     const id = s.claudeSessionId
-    return id
-      ? { resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
-      : { resume: null, fork: null }
+    const plan: RecoveryPlan = id
+      ? { generic: true, resume: { kind: 'await-bridge', resumeFrom: id }, fork: { claudeSessionId: id, parentName: s.tmuxName } }
+      : { generic: true, resume: null, fork: null }
+    return learnedId ? { learnedId, ...plan } : plan
+  }
+
+  // Learn a missing claudeSessionId from the running pane and set it on the record.
+  private discover(s: RecoverySource): string | null {
+    if (s.claudeSessionId) return null
+    const discovered = discoverClaudeSessionId(s.tmuxName)
+    if (discovered) s.claudeSessionId = discovered
+    return discovered
   }
 
   isConnected(info: SessionInfo): boolean {
     return this.transport.bridges.has(info.sessionId)
   }
 
-  refreshIdentity(info: SessionInfo): string | null {
-    if (info.claudeSessionId) return null
-    const discovered = discoverClaudeSessionId(info.tmuxName)
-    if (discovered) info.claudeSessionId = discovered
-    return discovered
+  turn(info: SessionInfo, sinceMs: number): Turn {
+    const { confirmedComplete, answer } = claudeTurnOutcome(info, sinceMs, defaultTurnSources)
+    return {
+      confirmedComplete, answer,
+      get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
+    }
   }
 
-  activityAt(info: SessionInfo): number | null {
-    try { return tmuxWindowActivity(info.tmuxName) } catch { return null }
-  }
-
-  turnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
-    return claudeTurnOutcome(info, sinceMs, defaultTurnSources)
-  }
+  async start(_records: readonly SessionInfo[]): Promise<void> {}
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
@@ -235,14 +241,14 @@ export class ClaudeEngine implements EngineAdapter {
 
     return {
       provider: 'claude', model,
-      claudeSessionId: assignedClaudeSessionId,
+      identity: assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {},
       spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog, debugLogPath: debugLog,
     }
   }
 
   // No await before the write: callers rely on it having happened on return.
   async deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
-    const r = this.transport.writeOrQueue(info.sessionId, msg)
+    const r = this.transport.writeOrQueue(info.sessionId, withoutIntents(msg))
     return r === 'written' ? { status: 'accepted', via: 'bridge-socket' }
       : r === 'queued' ? { status: 'accepted', via: 'queued' }
       // sendToBridge re-queued it; the queue flushes on reconnect, as when absent.
@@ -251,11 +257,12 @@ export class ClaudeEngine implements EngineAdapter {
       : { status: 'accepted', via: 'requeued' }
   }
 
-  async retire(_info: SessionInfo, _reason: string): Promise<ExecutionRetirementResult> {
-    return { status: 'unknown', reason: 'Claude has no native retirement mechanism' }
-  }
-
   async stop(info: SessionInfo): Promise<StopResult> {
+    // Last-resort claudeSessionId discovery before tmux dies — if the bridge
+    // never registered it, read $CLAUDE_CONFIG_DIR/sessions/<panePid>.json while the
+    // pane PID is still available. Without this, resume falls to tier 3 (respawn).
+    const discovered = this.discover(info)
+    if (discovered) process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
     try {
       execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' })
       return { status: 'stopped' }
@@ -298,9 +305,7 @@ export class ClaudeEngine implements EngineAdapter {
     return { totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next, restarted: next.restartedFromZero === true }
   }
 
-  uiTarget(info: SessionInfo): string { return info.tmuxName }
-
-  ensureSurface(info: SessionInfo): boolean { return tmuxHasSession(info.tmuxName) }
+  surface(info: SessionInfo): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }
 
   async sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
     if (opts?.raw) {

@@ -14,6 +14,7 @@
 // reachable by wrong routes: an already-dead session that gets killed anyway
 // still ends up destroyed, so these check for the absence of the wasted kill.
 
+import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { handleThreadKillIntercept } from '../commands/thread.js'
 import { registry, threadRegistry } from '../sessions.js'
@@ -107,7 +108,8 @@ function seedSession(opts: { deadAt?: number; initiator?: string } = {}): Sessio
     lastActive: Date.now(),
     tmuxName: 'drift',
     listening: false,
-      engine: 'claude',
+    engine: 'claude',
+    adapter: engines.claude,
     sessionType: 'thread_owner',
     anchorChannelId: PARENT,
     anchorMessageId: ANCHOR,

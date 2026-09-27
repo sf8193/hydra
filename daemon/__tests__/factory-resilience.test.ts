@@ -5,6 +5,7 @@
 // next session in the thread adopts the orphans, and destruction happens only
 // when someone explicitly asks for it.
 
+import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import {
   __test as factoryTest,
@@ -141,7 +142,8 @@ function mkSession(opts: {
     lastActive: Date.now(),
     tmuxName: opts.tmuxName,
     listening: false,
-      engine: 'claude',
+    engine: 'claude',
+    adapter: engines.claude,
     sessionType: opts.sessionType ?? 'thread_owner',
     ...(opts.deadAt ? { deadAt: opts.deadAt } : {}),
   }

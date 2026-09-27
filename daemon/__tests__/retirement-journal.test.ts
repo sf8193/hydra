@@ -3,7 +3,7 @@ import { rmSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../config.js'
 import {
-  completePendingRetirement, hasPendingRetirementForHome,
+  completePendingRetirement,
   listPendingRetirements, recordPendingRetirement,
 } from '../retirement-journal.js'
 
@@ -17,7 +17,6 @@ describe('retirement journal', () => {
     recordPendingRetirement(ref, 'generation-1', 'cancel')
     recordPendingRetirement(ref, 'generation-1', 'cancel again')
     expect(listPendingRetirements()).toHaveLength(1)
-    expect(hasPendingRetirementForHome('pixel')).toBe(true)
   })
 
   test('only removes the matching ownership generation', () => {

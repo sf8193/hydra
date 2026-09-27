@@ -5,7 +5,6 @@ import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type StatusLineState } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
-import { resolveEngine } from './engines/instances.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol, type ProtocolChildSpawnMetadata } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
@@ -1315,12 +1314,10 @@ function notifyNextActor(run: ProtocolRun, prevContent: string): void {
         `---`,
         `${actorLabel}, your turn. Use \`${advancePattern}\` to post your response. Use \`reply()\` for conversation only — it does not advance the protocol.${timeLine}`,
       ].join('\n')
-  const actorInfo = registry.get(sid)
-  const defer = actorInfo?.adapter?.deliveryIsFree === false
   transport.sendOrQueue(sid, {
     type: 'notification',
     content: notification,
-    ...(defer && { deferUntilTurnComplete: true }),
+    handoff: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -1335,24 +1332,21 @@ function notifyActorOfTimeout(run: ProtocolRun, actorSessionId: string | undefin
   const actorInfo = registry.get(actorSessionId)
   const actorName = actorInfo?.tmuxName
   const namePrefix = actorName ? `**${actorName}**, phase` : `Phase`
-  const defer = actorInfo?.adapter?.deliveryIsFree === false
   transport.sendOrQueue(actorSessionId, {
     type: 'notification',
     content: `[system] ⏰ ${namePrefix} "${phase}" timed out. The protocol is advancing.`,
-    ...(defer && { deferUntilTurnComplete: true }),
+    handoff: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
 
 function notifyParticipant(run: ProtocolRun, sessionId: string, content: string): void {
-  // Engines where delivery is never free (e.g. Codex: only new turns, no mid-turn
-  // steer) must defer — see EngineAdapter.deliveryIsFree.
-  const info = registry.get(sessionId)
-  const defer = info?.adapter?.deliveryIsFree === false
+  // A handoff: engines where every delivery is a priced turn (Codex) queue it
+  // for the next turn rather than steering the current one.
   transport.sendOrQueue(sessionId, {
     type: 'notification',
     content,
-    ...(defer && { deferUntilTurnComplete: true }),
+    handoff: true,
     meta: { chat_id: run.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
 }
@@ -1480,7 +1474,7 @@ function resetTimeout(run: ProtocolRun): void {
       sendWarning()
       function sendWarning() {
         if (run.phase !== phase) return
-        const ctx = info ? formatContextPercent(info.adapter ?? resolveEngine(info.engine), info) : '?'
+        const ctx = info ? formatContextPercent(info.adapter, info) : '?'
         const advanceCall = `Call \`${formatAdvanceUsagePattern(run.protocol, phase)}\``
         const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
         const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
@@ -1639,6 +1633,7 @@ export const __test = process.env.NODE_ENV === 'test'
   ? {
       runs, threadToRun, sessionToRun, resetTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR, HEALTH_CHECK_INTERVAL_MS, IDLE_NUDGE_MS, IDLE_ESCALATE_MS, startHealthMonitor, runHealthCheck,
       privateProtocolChildren, pendingPrivateProtocolChildren, markPrivateChildLaunching, finishPrivateChildLaunch, releasePrivateChildWhenGone, registerRunnerHooks, setRunTools, registerChild, retireProtocolChildren, enterFallbackPhase,
+      notifyNextActor, notifyActorOfTimeout, notifyParticipant,
       setLifecycle(overrides: { doSpawnSession?: typeof _doSpawnSession; waitForBridge?: typeof _waitForBridge; killSession?: typeof _killSession }) {
         if (overrides.doSpawnSession) doSpawnSession = overrides.doSpawnSession
         if (overrides.waitForBridge) waitForBridge = overrides.waitForBridge

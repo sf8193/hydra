@@ -6,6 +6,7 @@
 // fresh ids. Only messages to this file's threads are asserted — the registry
 // is a process-wide singleton.
 
+import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { pollSessionsOnce } from '../session-health.js'
 import { registry, threadRegistry } from '../sessions.js'
@@ -67,6 +68,7 @@ function seed(extra: Partial<SessionInfo> & { ageMs: number }): SessionInfo {
     tmuxName: `hydra-t3-sh-${n}`,
     listening: false,
     engine: 'claude',
+    adapter: engines[rest.engine ?? 'claude'],
     sessionType: 'thread_owner',
     ...rest,
   }
@@ -156,7 +158,9 @@ describe('orphan detection', () => {
   })
 
   test('C4: Codex orphan never asks tmux for the pane', () => {
-    const info = seed({ ageMs: OLD, engine: 'codex' })
+    // The real Codex adapter, disconnected, so the orphan branch is reached (its isConnected is a constant true).
+    const adapter = Object.assign(Object.create(engines.codex), { isConnected: () => false })
+    const info = seed({ ageMs: OLD, engine: 'codex', adapter })
     tmux.alive(info.tmuxName); tmux.pid(info.tmuxName, PID); tmux.seedClaudeSession(PID, SID)
     pollSessionsOnce(NOW)
     expect(tmux.calls().filter(c => c.startsWith('list-panes'))).toEqual([])

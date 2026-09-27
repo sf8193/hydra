@@ -3,7 +3,6 @@ import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, isAlive } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
-import { resolveEngine } from './engines/instances.js'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { gateway } from './config.js'
@@ -128,7 +127,7 @@ function handleList(req: CLIRequest): CLIResponse {
     threadId: s.threadId,
     description: s.description ?? (s.topic ? fallbackDescription(s.topic) : ''),
     url: (s.lastReplyId ? gateway.getMessageUrl(s.threadId, s.lastReplyId) : '') || s.threadUrl || '',
-    context: formatContextPercent(s.adapter ?? resolveEngine(s.engine), s),
+    context: formatContextPercent(s.adapter, s),
     running_for: formatDuration(Date.now() - s.createdAt),
     status: transport.has(s.sessionId) ? 'connected' : 'disconnected',
     ...(s.initiator && { initiator: s.initiator }),
@@ -157,7 +156,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
     description: info.description,
     threadId: info.threadId,
     url: info.threadUrl,
-    context: formatContextPercent(info.adapter ?? resolveEngine(info.engine), info),
+    context: formatContextPercent(info.adapter, info),
     running_for: formatDuration(Date.now() - info.createdAt),
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
     tmux: tmuxAlive ? 'alive' : 'dead',

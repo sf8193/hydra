@@ -1,22 +1,37 @@
 /**
- * Codex Engine Bootstrap — initializes the CodexEngine singleton and wires
- * its events into the daemon's protocol dispatch system.
+ * Codex runtime — the CodexEngine singleton, its events wired into the daemon
+ * at module init, and the boot sweep the Codex adapter's start() runs.
  *
  * Codex app-servers outlive their replaceable tmux TUIs. This module owns the
  * engine event plumbing and reconnects transiently lost daemon connections.
+ * Its listeners bind their dependencies (registry, reply guard, safeSend,
+ * dispatchDisconnect) at import, as before, so an event that arrives before
+ * start() behaves exactly as one after it.
  */
 
-import { CodexEngine, type ReconciledTurn } from './codex-engine.js'
-import { registry, threadRegistry } from './sessions.js'
-import { dispatchDisconnect } from './protocol-registry.js'
-import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
+import { CodexEngine, type ReconciledTurn } from '../codex-engine.js'
+import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
+import { dispatchDisconnect } from '../protocol-registry.js'
+import { handleSilenceEvent, noteActivityForSession } from '../reply-guard.js'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
-import { safeSend } from './util.js'
-import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
-import { noteCodexMessage, noteCodexTurnState } from './observability.js'
-import { on } from './event-bus.js'
+import { STATE_DIR } from '../config.js'
+import { safeSend } from '../util.js'
+import { clearCodexKeys, flushCodexKeys } from '../codex-key-queue.js'
+import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
+import { on } from '../event-bus.js'
+import type { EngineAdapter } from './engine-adapter.js'
+
+// reconnect is Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
+// A typed guard rather than instanceof: test fixtures stand in duck-typed adapters.
+type Reconnectable = { reconnect(info: SessionInfo): Promise<boolean> }
+const isReconnectable = (a: EngineAdapter): a is EngineAdapter & Reconnectable =>
+  typeof (a as Partial<Reconnectable>).reconnect === 'function'
+function reconnectOf(info: SessionInfo): Promise<boolean> {
+  if (isReconnectable(info.adapter)) return info.adapter.reconnect(info)
+  process.stderr.write(`codex-runtime: ${info.tmuxName} has no reconnectable adapter (${info.adapter.provider}); skipped\n`)
+  return Promise.resolve(false)
+}
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -30,7 +45,7 @@ export function scheduleCodexSurfaceRepairs(
   sessionId: string,
   deps = {
     get: (id: string) => registry.get(id),
-    ensure: (info: NonNullable<ReturnType<typeof registry.get>>) => info.adapter?.ensureSurface(info) ?? false,
+    ensure: (info: NonNullable<ReturnType<typeof registry.get>>) => !!info.adapter && info.adapter.surface(info) !== null,
     schedule: (fn: () => void, delay: number) => setTimeout(fn, delay),
   },
 ): void {
@@ -73,7 +88,7 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   noteCodexTurnState(sessionId, true)
   // The remote TUI may exit with the completed turn. Repair its tmux surface
   // immediately so the next protocol turn/keys command has somewhere to land.
-  info.adapter?.ensureSurface(info)
+  info.adapter?.surface(info)
   // The remote TUI may disappear just after turn/completed. Recheck after that
   // teardown window; the provider is idempotent when the surface stayed alive.
   scheduleCodexSurfaceRepairs(sessionId)
@@ -161,12 +176,12 @@ export async function reconnectCodexAfterDisconnect(
     const info = deps.get(sessionId)
     if (!info || info.engine !== 'codex' || !info.codexThreadId || !info.adapter) return false
     try {
-      const ok = await info.adapter.reconnect(info)
+      const ok = await reconnectOf(info)
       if (deps.get(sessionId) !== info) return false // replaced/removed meanwhile (invariant 10)
       if (!ok) continue
       delete info.deadAt
       deps.persist()
-      info.adapter.ensureSurface(info)
+      info.adapter.surface(info)
       process.stderr.write(`codex-bootstrap: restored app-server connection for ${info.tmuxName}\n`)
       return true
     } catch (err) {
@@ -194,14 +209,15 @@ codexEngine.on('disconnected', (sessionId: string) => {
 // Reconnection — on daemon startup, reconnect persisted codex sessions
 // ---------------------------------------------------------------------------
 
-export async function reconnectCodexSessions(): Promise<void> {
-  const codexSessions = [...registry.values()].filter(s => s.engine === 'codex' && !s.deadAt)
+// records: the Codex records at boot. Only live ones reconnect, one at a time.
+export async function reconnectCodexSessions(records: readonly SessionInfo[]): Promise<void> {
+  const codexSessions = records.filter(s => !s.deadAt)
   if (codexSessions.length === 0) return
 
   let reconnected = 0
   for (const info of codexSessions) {
     if (!info.adapter) continue
-    const connected = await info.adapter.reconnect(info)
+    const connected = await reconnectOf(info)
 
     if (!connected) {
       info.deadAt = Date.now()
@@ -214,7 +230,7 @@ export async function reconnectCodexSessions(): Promise<void> {
         entry.model = info.sessionMetadata?.model
         threadRegistry.persist()
       }
-      info.adapter.ensureSurface(info)
+      info.adapter.surface(info)
       reconnected++
     }
   }

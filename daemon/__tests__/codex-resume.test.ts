@@ -68,15 +68,15 @@ describe('CodexEngineAdapter.launch', () => {
     // MCP re-registered for the NEW session id in the OLD home, then the app-server
     // (re)started there so the sidecar carries the new id.
     expect(proc.calls).toEqual([`mcp ${codexHomeDir('oldhome')} new-sid`, 'start oldhome'])
-    expect(r.codexThreadId).toBe('T-orig')
-    expect(r.codexHomeName).toBe('oldhome')
+    expect(r.identity.codexThreadId).toBe('T-orig')
+    expect(r.identity.codexHomeName).toBe('oldhome')
   })
 
   test('resumeCodex: the launch-time surface attaches the TUI to the original home', async () => {
     const engine = fakeEngine(), proc = fakeProc()
     const adapter = new CodexEngineAdapter(engine as any, proc as any) as any
     const seen: any[] = []
-    adapter.ensureSurface = (info: any) => { seen.push({ home: info.codexHomeName ?? info.tmuxName, thread: info.codexThreadId }); return true }
+    adapter.surface = (info: any) => { seen.push({ home: info.codexHomeName ?? info.tmuxName, thread: info.codexThreadId }); return `${info.tmuxName}:hydra-chat` }
     await adapter.launch({ ...baseInput, resumeCodex: { threadId: 'T-orig', homeName: 'oldhome' } })
     expect(seen).toEqual([{ home: 'oldhome', thread: 'T-orig' }])
   })
@@ -88,8 +88,8 @@ describe('CodexEngineAdapter.launch', () => {
 
     expect(engine.calls).toEqual(['queue new-sid P0', `connect new-sid ${codexSocketPath('newname')}`])
     expect(proc.calls).toEqual([`mcp ${codexHomeDir('newname')} new-sid`, 'start newname'])
-    expect(r.codexThreadId).toBe('fresh-thread')
-    expect(r.codexHomeName).toBeUndefined()
+    expect(r.identity.codexThreadId).toBe('fresh-thread')
+    expect('codexHomeName' in r.identity).toBe(false)
   })
 })
 
@@ -110,6 +110,7 @@ const stopProc = { ...fakeProc(), stop: (home: string) => { homeStops.push(home)
 const realStopAdapter = new CodexEngineAdapter(fakeEngine() as any, stopProc as any)
 let failCodexResume = false
 let failClaudeResume = false
+let claudeLearnsNoId = false
 const connected = new Set<string>()
 
 const orig: Record<string, any> = {}
@@ -127,20 +128,21 @@ function fakeAdapter(provider: 'claude' | 'codex') {
       if (provider === 'codex') {
         return {
           provider, model: 'gpt',
-          codexThreadId: input.resumeCodex?.threadId ?? (input.forkFrom?.codexThreadId ? 'forked-thread' : 'fresh-thread'),
-          ...(input.resumeCodex ? { codexHomeName: input.resumeCodex.homeName } : {}),
+          identity: {
+            codexThreadId: input.resumeCodex?.threadId ?? (input.forkFrom?.codexThreadId ? 'forked-thread' : 'fresh-thread'),
+            ...(input.resumeCodex ? { codexHomeName: input.resumeCodex.homeName } : {}),
+          },
         }
       }
-      return { provider, model: 'claude-x', claudeSessionId: input.resumeFrom ?? 'new-claude' }
+      return { provider, model: 'claude-x', identity: claudeLearnsNoId ? {} : { claudeSessionId: input.resumeFrom ?? 'new-claude' } }
     },
     stop: async (info: SessionInfo) => {
       stops.push({ tmuxName: info.tmuxName, home: info.codexHomeName })
       return provider === 'codex' ? realStopAdapter.stop(info) : { status: 'stopped' }
     },
     isAlive: async () => false,
-    ensureSurface: () => false,
-    refreshIdentity: () => null,
-    recoveryPlan: (s: any) => orig[provider].recoveryPlan(s),
+    surface: () => null,
+    recoveryPlan: (s: any, o: any) => orig[provider].recoveryPlan(s, o),
   }
 }
 
@@ -194,7 +196,7 @@ beforeEach(() => {
   origStderr = process.stderr.write
   process.stderr.write = (() => true) as any
   sent = []; launches = []; stops = []; homeStops = []; pickedDuringLaunch = undefined
-  failCodexResume = false; failClaudeResume = false
+  failCodexResume = false; failClaudeResume = false; claudeLearnsNoId = false
 })
 
 afterEach(() => {
@@ -220,7 +222,7 @@ function seedDead(engine: 'claude' | 'codex', extra: Partial<SessionInfo> = {}):
   const info: SessionInfo = {
     sessionId: `sess-r16-${n}`, topic: 'topic', threadId: THREAD, createdAt: Date.now() - 1e6, lastActive: Date.now(),
     tmuxName: `r16dead${n}`, listening: false, engine, sessionType: 'thread_owner', anchorChannelId: PARENT,
-    deadAt: Date.now(),
+    deadAt: Date.now(), adapter: engines[engine],
     ...(engine === 'codex' ? { codexThreadId: `T-${n}` } : { claudeSessionId: `C-${n}` }),
     ...extra,
   } as SessionInfo
@@ -275,7 +277,7 @@ describe('handleResumeIntercept — Codex', () => {
 
   test('refuses to resume into a home another session owns', async () => {
     const other = { sessionId: 'sess-r16-other', topic: 't', threadId: 'other-thread', createdAt: Date.now(), lastActive: Date.now(),
-      tmuxName: 'r16owner', listening: false, engine: 'codex', sessionType: 'thread_owner', codexThreadId: 'T-other' } as SessionInfo
+      tmuxName: 'r16owner', listening: false, engine: 'codex', adapter: engines.codex, sessionType: 'thread_owner', codexThreadId: 'T-other' } as SessionInfo
     registry.set(other.sessionId, other)
     seeded.add(other.sessionId)
     seedDead('codex', { codexHomeName: 'r16owner' })
@@ -333,6 +335,27 @@ describe('handleResumeIntercept — Claude (pinned, unchanged)', () => {
     expect(announced()).toContain('resumed — full context restored')
   })
 
+  // The spawn record spreads identity and recordSpawn takes identity.claudeSessionId:
+  // an assigned id lands on both; an unlearned one is absent from both (as persisted).
+  for (const learns of [true, false]) {
+    test(`spawn record and history entry ${learns ? 'carry' : 'omit'} claudeSessionId`, async () => {
+      claudeLearnsNoId = !learns
+      const dead = seedDead('claude')
+      await handleResumeIntercept(msg())
+      const liveId = registry.getByThread(THREAD)!
+      expect(liveId).not.toBe(dead.sessionId)
+      const live = registry.get(liveId)!
+      const entry = JSON.parse(JSON.stringify(threadRegistry.get(THREAD)!.sessionHistory.find(e => e.sessionId === liveId)))
+      if (learns) {
+        expect(live.claudeSessionId).toBe(dead.claudeSessionId!)
+        expect(entry.claudeSessionId).toBe(dead.claudeSessionId!)
+      } else {
+        expect('claudeSessionId' in live).toBe(false)
+        expect('claudeSessionId' in entry).toBe(false)
+      }
+    })
+  }
+
   test('tier 1 failure falls to fork-from-dead', async () => {
     failClaudeResume = true
     const dead = seedDead('claude')
@@ -384,11 +407,11 @@ describe('stale Codex reconnect', () => {
   })
 
   test('reconnectCodexAfterDisconnect: replaced record is not revived or given a surface', async () => {
-    const { reconnectCodexAfterDisconnect } = await import('../codex-bootstrap.js')
+    const { reconnectCodexAfterDisconnect } = await import('../engines/codex-runtime.js')
     let current: any
     let ensured = 0, persisted = 0, failed = 0
     const A: any = { sessionId: 'sid', engine: 'codex', tmuxName: 'r16a', codexThreadId: 'T', deadAt: 1,
-      adapter: { reconnect: async () => { current = { ...A, deadAt: 2 }; return true }, ensureSurface: () => { ensured++; return true } } }
+      adapter: { reconnect: async () => { current = { ...A, deadAt: 2 }; return true }, surface: () => { ensured++; return 'r16a:hydra-chat' } } }
     current = A
     const ok = await reconnectCodexAfterDisconnect('sid', {
       get: () => current, wait: async () => {}, persist: () => { persisted++ }, failed: () => { failed++; return true },

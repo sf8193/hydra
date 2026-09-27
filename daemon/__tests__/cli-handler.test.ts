@@ -211,7 +211,7 @@ describe('cli-handler: deliver (adapter-policy T7)', () => {
     registry.set('t7-cli', {
       sessionId: 't7-cli', tmuxName: 't7-cli-tmux', threadId: 't7-thread', engine: 'codex', createdAt: Date.now(),
       adapter: fakeAdapter({
-        provider: 'codex', deliveryIsFree: false, channel: 'engine', isConnected: () => true,
+        provider: 'codex', channel: 'engine', isConnected: () => true,
         deliver: async (...args: unknown[]) => { seen.push(args); return { status: 'rejected', retryable: false, reason: 'session is retiring' } },
       }),
     } as any)

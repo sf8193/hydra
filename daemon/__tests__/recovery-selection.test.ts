@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { recoveryEntry, recoveryModel, deadSessionLabel, recoveryEngine, RESPAWN_RE } from '../recovery-selection.js'
+import { recoveryEntry, recoveryModel, deadSessionLabel, RESPAWN_RE } from '../recovery-selection.js'
+import { recoveryEngine } from '../engines/history.js'
 import type { ThreadSessionEntry } from '../sessions.js'
 
 test('respawn accepts model selection without breaking topics or templates', () => {

@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { engines } from '../engines/instances.js'
 import { emit, getSubscriptions, on } from '../event-bus.js'
 import {
   register,
@@ -184,6 +185,7 @@ function sessionInfo(over: Partial<SessionInfo> & { sessionId: string }): Sessio
     threadId: 'T', tmuxName: 'x', engine: 'claude', sessionType: 'thread_owner',
     originType: 'spawn', createdAt: 1, lastActive: 1, listening: true, topic: '',
     ...over,
+    adapter: over.adapter ?? engines[over.engine ?? 'claude'], // what the no-adapter fallback resolved
   }
 }
 

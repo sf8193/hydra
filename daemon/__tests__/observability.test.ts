@@ -2,7 +2,9 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, claudeTurnOutcome, codexTurnOutcome, defaultTurnSources, type ConversationForensics, type TurnSources } from '../observability.js'
+import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, type ConversationForensics } from '../observability.js'
+import { claudeTurnOutcome } from '../engines/claude-transcript.js'
+import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../engines/codex-observation.js'
 import { engines } from '../engines/instances.js'
 import type { SessionInfo } from '../sessions.js'
 
@@ -431,13 +433,33 @@ describe('turnOutcome composition', () => {
       const infos = [codex, { ...codex, claudeSessionId: 'claude-abc' }, claude, { ...claude, claudeSessionId: undefined }]
       for (const [provider, fn] of [['claude', claudeTurnOutcome], ['codex', codexTurnOutcome]] as const) {
         for (const info of infos) {
-          const a = engines[provider].turnOutcome(info, T), b = fn(info, T, swapped)
+          const a = engines[provider].turn(info, T), b = fn(info, T, swapped)
           expect({ c: a.confirmedComplete, t: a.answer() }).toEqual({ c: b.confirmedComplete, t: b.answer() })
         }
       }
       // the swap is visible (not both reading the live, empty sources)
-      expect(engines.codex.turnOutcome(codex, T).answer()).toBe('codex answer')
-      expect(engines.claude.turnOutcome(claude, T).answer()).toBe('transcript answer')
+      expect(engines.codex.turn(codex, T).answer()).toBe('codex answer')
+      expect(engines.claude.turn(claude, T).answer()).toBe('transcript answer')
+    } finally { Object.assign(defaultTurnSources, saved) }
+  })
+
+  // answer() stays lazy: turn() reads no transcript or Codex message until asked.
+  test('adapters: turn() reads nothing until answer() is called', () => {
+    const saved = { ...defaultTurnSources }
+    let reads = 0
+    Object.assign(defaultTurnSources, {
+      ...src({ flag: true }),
+      readConversationForensics: () => { reads++; return null },
+      getLastCodexMessage: () => { reads++; return null },
+    })
+    try {
+      for (const [provider, info] of [['claude', claude], ['codex', claude], ['codex', codex]] as const) {
+        reads = 0
+        const t = engines[provider].turn(info, T)
+        expect(reads).toBe(0)
+        t.answer()
+        expect(reads).toBe(1)
+      }
     } finally { Object.assign(defaultTurnSources, saved) }
   })
 })
@@ -445,7 +467,7 @@ describe('turnOutcome composition', () => {
 // Review of P6–S6: the reply guard's default routing and Claude never confirming.
 describe('defaultTurnOutcome routing', () => {
   const T = Date.now()
-  test('no adapter: live-source Codex composition (flag set → confirmed, Codex text)', async () => {
+  test('Codex adapter: live-source Codex composition (flag set → confirmed, Codex text)', async () => {
     const { defaultTurnOutcome } = await import('../reply-guard.js')
     const saved = { ...defaultTurnSources }
     Object.assign(defaultTurnSources, {
@@ -455,7 +477,7 @@ describe('defaultTurnOutcome routing', () => {
       readConversationForensics: () => null,
     })
     try {
-      const o = defaultTurnOutcome({ sessionId: 'nx', engine: 'codex' } as SessionInfo, T)
+      const o = defaultTurnOutcome({ sessionId: 'nx', engine: 'codex', adapter: engines.codex } as SessionInfo, T)
       expect(o.confirmedComplete).toBe(true)
       expect(o.answer()).toBe('codex text')
     } finally { Object.assign(defaultTurnSources, saved) }
@@ -464,7 +486,7 @@ describe('defaultTurnOutcome routing', () => {
   test('with an adapter: routed to the adapter', async () => {
     const { defaultTurnOutcome } = await import('../reply-guard.js')
     const answer = { confirmedComplete: true, answer: () => 'from adapter' }
-    const o = defaultTurnOutcome({ sessionId: 'a', engine: 'claude', adapter: { turnOutcome: () => answer } } as any, T)
+    const o = defaultTurnOutcome({ sessionId: 'a', engine: 'claude', adapter: { turn: () => answer } } as any, T)
     expect(o).toBe(answer)
   })
 

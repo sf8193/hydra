@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { CODEX_SURFACE_REPAIR_DELAYS_MS, reconnectCodexAfterDisconnect, scheduleCodexSurfaceRepairs } from '../codex-bootstrap.js'
+import { CODEX_SURFACE_REPAIR_DELAYS_MS, reconnectCodexAfterDisconnect, scheduleCodexSurfaceRepairs } from '../engines/codex-runtime.js'
 
 describe('delayed Codex surface repair', () => {
   test('rechecks after the TUI teardown window', () => {
@@ -37,7 +37,7 @@ describe('Codex app-server reconnect', () => {
     let failed = 0
     const fakeAdapter = {
       reconnect: async () => { attempts++; if (attempts === 1) throw new Error('transient close'); return true },
-      ensureSurface: () => { ensured++; return true },
+      surface: () => { ensured++; return 'ember:hydra-chat' },
     }
     const info = { sessionId: 'sid', engine: 'codex', tmuxName: 'ember', codexHomeName: 'ember', codexThreadId: 'thread-1', deadAt: 1, adapter: fakeAdapter } as any
     const restored = await reconnectCodexAfterDisconnect('sid', {
@@ -59,7 +59,7 @@ describe('Codex app-server reconnect', () => {
     let failed = 0
     const fakeAdapter = {
       reconnect: async () => { attempts++; throw new Error('server gone') },
-      ensureSurface: () => true,
+      surface: () => 'ember:hydra-chat',
     }
     const info = { sessionId: 'sid', engine: 'codex', tmuxName: 'ember', codexHomeName: 'ember', codexThreadId: 'thread-1', adapter: fakeAdapter } as any
     const restored = await reconnectCodexAfterDisconnect('sid', {

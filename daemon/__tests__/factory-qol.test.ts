@@ -5,6 +5,7 @@
 // record of itself — no duplicated summary, no orphaned thread, no orphaned
 // spawn announcement.
 
+import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { __test as factoryTest, formatBuildLine, factoryAccept, factoryRetry, factoryReview, factoryStatus } from '../factory.js'
 import { __test as runnerTest, protocolEvents } from '../protocol-runner.js'
@@ -144,7 +145,8 @@ function mkSession(opts: { tmuxName: string; threadId: string; sessionId?: strin
     lastActive: Date.now(),
     tmuxName: opts.tmuxName,
     listening: false,
-      engine: 'claude',
+    engine: 'claude',
+    adapter: engines.claude,
     sessionType: 'thread_owner',
   }
   registry.set(sessionId, info)
@@ -1082,7 +1084,8 @@ describe('factoryReview result delivery', () => {
           lastActive: Date.now(),
           tmuxName: `critic-${suffix}`,
           listening: false,
-      engine: 'claude',
+          engine: 'claude',
+          adapter: engines.claude,
           turnState: 'idle',
         } as SessionInfo)
         trackedSessions.add(sessionId)

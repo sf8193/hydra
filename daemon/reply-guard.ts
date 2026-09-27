@@ -18,7 +18,7 @@
 // restoring the old nudge-cooldown's magnitude so a session mid-tool-call
 // still gets real working time before anything lands in the user's chat.
 // Skipped entirely when the caller already has certainty (turnOutcome's
-// confirmedComplete) — codex-bootstrap.ts's turnCompleted handler calls handleSilenceEvent
+// confirmedComplete) — codex-runtime.ts's turnCompleted handler calls handleSilenceEvent
 // directly, and by then there's no ambiguity left to wait out (round-2-of-
 // round-2 review caught this one).
 //
@@ -33,7 +33,7 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
-import { codexTurnOutcome, defaultTurnSources, type TurnOutcome } from './observability.js'
+import type { TurnOutcome } from './engines/engine-adapter.js'
 import { safeSend, tmuxWindowActivity } from './util.js'
 import { probeByteTmuxName } from './pane-probe.js'
 
@@ -52,9 +52,9 @@ export type ReplyGuardDeps = {
   turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome
 }
 
-/** The adapter's answer; a record without an adapter gets today's composition over the live sources. */
+/** The adapter's answer. */
 export function defaultTurnOutcome(info: SessionInfo, sinceMs: number): TurnOutcome {
-  return info.adapter ? info.adapter.turnOutcome(info, sinceMs) : codexTurnOutcome(info, sinceMs, defaultTurnSources)
+  return info.adapter.turn(info, sinceMs)
 }
 
 const defaultDeps: ReplyGuardDeps = {
@@ -197,7 +197,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     // escalation — restores the working-time budget the old nudge cooldown
     // happened to provide, without reintroducing the nudge message itself.
     // Skipped entirely when the caller already has certainty the turn is
-    // over (codex-bootstrap.ts's turnCompleted handler calls
+    // over (codex-runtime.ts's turnCompleted handler calls
     // handleSilenceEvent directly and synchronously — an entry only
     // survives to see that call if `reply()` was never made during the now-
     // finished turn, so there's no remaining ambiguity left to wait out;
@@ -398,7 +398,7 @@ export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
 // The turnState writes below are a coarse, tmux-visual-silence-driven proxy
 // for reply-guard's own activity gate ONLY. They are NOT the source of
 // truth for "has Codex's protocol-level turn actually finished" — that's
-// the adapter's turnOutcome().confirmedComplete, driven by codex-bootstrap.ts's
+// the adapter's turn().confirmedComplete, driven by codex-runtime.ts's
 // own turnCompleted/message events. Do not read turnState for anything that
 // needs to know whether a turn is really done; 45s of no terminal repaint
 // (a long-running tool, a stalled remote call) is not the same thing.
@@ -426,7 +426,7 @@ export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = de
     const queryTarget = tmuxName === 'main' ? probeByteTmuxName() : tmuxName
     let lastActivitySec: number | null
     if (info?.adapter) {
-      lastActivitySec = info.adapter.activityAt(info)
+      lastActivitySec = info.adapter.turn(info, 0).activityAt
     } else {
       try { lastActivitySec = pollDeps.windowActivity(queryTarget) } catch { continue }
     }

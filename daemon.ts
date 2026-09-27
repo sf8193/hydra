@@ -39,7 +39,8 @@ process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
-import { resolveEngine } from './daemon/engines/instances.js'
+import { engines, resolveEngine } from './daemon/engines/instances.js'
+import { engineRecords } from './daemon/engines/boot.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
@@ -74,13 +75,13 @@ if (existsSync(SOCK_PATH)) {
 startBridgeServer()
 initEphemeralTimers()
 
-// Reconnect persisted codex sessions to their app-server sockets
-import { reconnectCodexSessions } from './daemon/codex-bootstrap.js'
-reconnectCodexSessions().then(() => {
-  process.stderr.write('daemon: codex reconnection sweep complete\n')
-}).catch(err => {
-  process.stderr.write(`daemon: codex reconnection failed: ${err}\n`)
-})
+// Start each engine over its persisted records (Codex reconnects its sessions to
+// their app-server sockets). Not awaited; each start logs its own outcome.
+for (const adapter of Object.values(engines)) {
+  adapter.start(engineRecords(adapter)).catch(err => {
+    process.stderr.write(`daemon: ${adapter.provider} start failed: ${err}\n`)
+  })
+}
 
 // Sweep orphaned factory builders left by previous daemon instance
 import { sweepOrphanedBuilders } from './daemon/factory.js'

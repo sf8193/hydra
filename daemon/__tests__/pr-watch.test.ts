@@ -3,6 +3,7 @@ import { deliverPrUpdate } from '../pr-watch.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
+import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -254,10 +255,11 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
     delivered = []
     registry.set(sessionId, {
       sessionId, engine: 'codex', threadId: 'thread-1', ...opts,
-      adapter: {
-        provider: 'codex', deliveryIsFree: false,
-        deliver: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } },
-      },
+      // A real Codex adapter (it owns the piggyback buffer) with only its
+      // one-turn delivery faked.
+      adapter: Object.assign(new CodexEngineAdapter({} as any), {
+        deliverTurn: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } },
+      }),
     } as any)
   }
 

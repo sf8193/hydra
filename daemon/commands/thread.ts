@@ -16,7 +16,8 @@ import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
-import { recoveryEntry, recoveryModel, deadSessionLabel, recoveryEngine } from '../recovery-selection.js'
+import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-selection.js'
+import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, classifyReachability } from '../session-reachability.js'
@@ -29,7 +30,7 @@ export function _setRecoveryDeps(custom: Partial<RecoveryDeps>): void { recovery
 export function _resetRecoveryDeps(): void { recoveryDeps = defaultRecoveryDeps }
 
 function adapterFor(info: { engine?: 'claude' | 'codex'; adapter?: any }) {
-  return info.adapter ?? resolveEngine(info.engine)
+  return info.adapter
 }
 
 async function executionAlive(info: NonNullable<ReturnType<typeof registry.get>>): Promise<boolean> {
@@ -108,10 +109,10 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const sourceEngine = info.engine ?? 'claude'
   const targetEngine = opts?.engine ?? sourceEngine
-  if (targetEngine === 'claude' && adapterFor(info).refreshIdentity(info)) registry.persist()
+  if (adapterFor(info).recoveryPlan(info, { discover: sourceEngine === targetEngine }).learnedId) registry.persist()
 
   const provider = adapterFor(info)
-  if (!tmuxHasSession(info.tmuxName)) provider.ensureSurface(info)
+  if (!tmuxHasSession(info.tmuxName)) provider.surface(info)
   if (!tmuxHasSession(info.tmuxName) && !(info.engine === 'codex' && transport.has(info.sessionId))) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
@@ -296,7 +297,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
     if (liveInfo) {
       const reachability = await reachabilityOf(liveInfo)
       if (blocksRecovery(reachability)) {
-        const surfaceReady = adapterFor(liveInfo).ensureSurface(liveInfo)
+        const surfaceReady = adapterFor(liveInfo).surface(liveInfo) !== null
         void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
         const note = reachability === 'starting'
           ? `Session **${liveInfo.tmuxName}** is still starting up — give its bridge a moment to connect.`
@@ -600,7 +601,8 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   }
 
   const adapter = adapterFor(info)
-  if (!adapter.ensureSurface(info)) {
+  const target = adapter.surface(info)
+  if (target === null) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `**${name}** interactive surface unavailable`, { replyTo: msg.id }).catch(() => {})
     return
@@ -617,7 +619,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   if (hasFreeze()) {
     const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
     try {
-      const safeName = adapter.uiTarget(info).replace(/'/g, "'\\''")
+      const safeName = target.replace(/'/g, "'\\''")
       execSync(
         `tmux capture-pane -t '${safeName}' -e -p | freeze -o '${outPath}' --language bash`,
         { stdio: 'pipe', timeout: 10000 },
@@ -633,7 +635,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 
   // Fallback: text capture
   try {
-    const safeName = adapter.uiTarget(info).replace(/'/g, "'\\''")
+    const safeName = target.replace(/'/g, "'\\''")
     const text = execSync(
       `tmux capture-pane -t '${safeName}' -p -S -60`,
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },

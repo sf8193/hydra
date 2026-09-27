@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
+import { engines } from '../engines/instances.js'
 import { protocol } from '../protocol-dsl.js'
 import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, startProtocolRun, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
@@ -203,7 +204,7 @@ describe('protocol runner — phase-scoped spawn lifecycle', () => {
   function session(sessionId: string) {
     registry.set(sessionId, {
       sessionId, topic: 'test', threadId: 'test-thread', createdAt: Date.now(), lastActive: Date.now(),
-      tmuxName: sessionId, listening: false, engine: 'claude', sessionType: 'thread_owner',
+      tmuxName: sessionId, listening: false, engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner',
     })
   }
 
@@ -720,12 +721,12 @@ function createDelegateRun(overrides: Record<string, unknown> = {}) {
   const builderSid = `test-builder-${Math.random().toString(36).slice(2, 8)}`
   registry.set(pmSid, {
     sessionId: pmSid, topic: 'delegate pm', threadId, createdAt: Date.now(),
-    lastActive: Date.now(), tmuxName: 'pm', listening: false, engine: 'claude',
+    lastActive: Date.now(), tmuxName: 'pm', listening: false, engine: 'claude', adapter: engines.claude,
     turnState: 'idle', sessionType: 'thread_owner',
   })
   registry.set(builderSid, {
     sessionId: builderSid, topic: 'delegate builder', threadId, createdAt: Date.now(),
-    lastActive: Date.now(), tmuxName: 'builder', listening: false, engine: 'claude',
+    lastActive: Date.now(), tmuxName: 'builder', listening: false, engine: 'claude', adapter: engines.claude,
     turnState: 'idle', sessionType: 'thread_guest',
   })
   const run = {

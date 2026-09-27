@@ -20,7 +20,9 @@ import { fakeAdapter } from './test-harness.js'
 import { engines } from '../engines/instances.js'
 import { withFakeTmux } from './fake-tmux.js'
 import type { SessionInfo } from '../sessions.js'
-import { claudeTurnOutcome, codexTurnOutcome, type ConversationForensics, type TurnSources } from '../observability.js'
+import type { ConversationForensics } from '../observability.js'
+import { claudeTurnOutcome } from '../engines/claude-transcript.js'
+import { codexTurnOutcome, type TurnSources } from '../engines/codex-observation.js'
 
 // deps.turnOutcome over fake sources; the engine switch mirrors resolveEngine.
 function turnOutcomeOver(src: TurnSources) {
@@ -68,7 +70,7 @@ function armThenAdvance(tmuxName: string, armAt: number): number {
 }
 
 // 'main' has no registry entry (info undefined) — same as a Claude session:
-// no adapter, deliveryIsFree doesn't apply, so it always takes the nudge path.
+// no adapter, so it always takes the nudge path.
 function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): SessionInfo {
   const info: SessionInfo = {
     sessionId,
@@ -88,7 +90,7 @@ function codexSession(sessionId: string, tmuxName: string, claudeSessionId?: str
   return liveSession(sessionId, {
     tmuxName,
     engine: 'codex',
-    adapter: { provider: 'codex', deliveryIsFree: false } as any,
+    adapter: { provider: 'codex' } as any,
     claudeSessionId,
   })
 }
@@ -645,10 +647,10 @@ describe('pollActivityOnce', () => {
   const findByName = (name: string) => [...testSessions.values()].find(i => i.tmuxName === name)
   const poll = (nowSec: number) => pollActivityOnce(nowSec, { windowActivity, findByName })
   const escalatesAfterGrace = (name: string) => handleSilenceEvent(name, Date.now() + _ESCALATION_GRACE_MS)
-  // Registry records carry an adapter; its activityAt is backed by the same stub.
+  // Registry records carry an adapter; its turn().activityAt is backed by the same stub.
   const adapter = (provider: string) => fakeAdapter({
     provider,
-    activityAt: (i: SessionInfo) => { try { return windowActivity(i.tmuxName) } catch { return null } },
+    turn: (i: SessionInfo) => ({ get activityAt() { try { return windowActivity(i.tmuxName) } catch { return null } }, confirmedComplete: false, answer: () => null }),
   })
 
   beforeEach(() => { targets.length = 0 })
@@ -727,7 +729,7 @@ describe('pollActivityOnce', () => {
 
   test('record with an adapter: the poller asks activityAt, not tmux', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: fakeAdapter({ activityAt: () => nowSec - 10 }) })
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: fakeAdapter({ turn: () => ({ activityAt: nowSec - 10, confirmedComplete: false, answer: () => null }) }) })
     fakeBridge('s1')
     notePendingReply('s1', meta(), Date.now() - 1000)
     activity = () => 0
@@ -738,7 +740,7 @@ describe('pollActivityOnce', () => {
 
   test('activityAt null -> skip', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: fakeAdapter({ activityAt: () => null }) })
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: fakeAdapter({ turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }) }) })
     fakeBridge('s1')
     notePendingReply('s1', meta(), T0)
     poll(nowSec)
@@ -756,9 +758,9 @@ describe('adapter activityAt', () => {
       try {
         const info = { sessionId: 's1', tmuxName: 'cedar' } as SessionInfo
         fake.activity('cedar', 1234)
-        expect(engines[provider].activityAt(info)).toBe(1234)
+        expect(engines[provider].turn(info, 0).activityAt).toBe(1234)
         expect(fake.calls()).toContain('display -t cedar -p #{window_activity}')
-        expect(engines[provider].activityAt({ ...info, tmuxName: 'gone' })).toBeNull()
+        expect(engines[provider].turn({ ...info, tmuxName: 'gone' }, 0).activityAt).toBeNull()
       } finally { fake.restore() }
     })
   }

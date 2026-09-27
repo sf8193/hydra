@@ -1,14 +1,12 @@
 import type { ThreadSessionEntry } from './sessions.js'
 import type { SessionLabel } from '../shared/constants.js'
+import { isForeignPlaceholder } from './engines/history.js'
 
 export const RESPAWN_RE = /^(?:respawn|\/respawn)(?:\s+([a-z][\w.-]*))?(?:\s+((?:\+\w+\s*)+))?(?::\s*([\s\S]*))?$/i
 
-// A legacy respawn accidentally passed the Codex placeholder to Claude. Such
-// a zero-message replacement never established a usable conversation.
+// The entry to recover from: the last one that is not a foreign placeholder.
 export function recoveryEntry(history: ThreadSessionEntry[]): ThreadSessionEntry | undefined {
-  return history.findLast(entry => !(entry.model === 'codex-default'
-    && entry.engine !== 'codex' && !entry.codexThreadId && entry.messageCount === 0))
-    ?? history.at(-1)
+  return history.findLast(entry => !isForeignPlaceholder(entry)) ?? history.at(-1)
 }
 
 // A clean kill deletes the record, so history is the only durable copy.
@@ -21,13 +19,4 @@ export function deadSessionLabel(
 
 export function recoveryModel(model?: string): string | undefined {
   return model === 'codex-default' ? undefined : model
-}
-
-// Which engine ran the dead session: the live record's engine, else a history
-// codexThreadId means Codex, else Claude. (Uses the id as a discriminator — PR-IDENT.)
-export function recoveryEngine(
-  entry: Pick<ThreadSessionEntry, 'codexThreadId'> | undefined,
-  info: { engine?: 'claude' | 'codex' } | undefined,
-): 'claude' | 'codex' {
-  return info?.engine ?? (entry?.codexThreadId ? 'codex' : 'claude')
 }

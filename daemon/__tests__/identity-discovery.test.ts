@@ -5,6 +5,7 @@
 // Runs the real discoverClaudeSessionId through a PATH-shim tmux and a temp
 // CLAUDE_CONFIG_DIR (see fake-tmux.ts).
 
+import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { killSession } from '../session-lifecycle.js'
 import { handleForkIntercept } from '../commands/thread.js'
@@ -73,6 +74,7 @@ function seed(engine: 'claude' | 'codex', extra: Partial<SessionInfo> = {}): Ses
     tmuxName: `hydra-t3-idd-${n}`,
     listening: false,
     engine,
+    adapter: engines[engine],
     sessionType: 'thread_owner',
     ...extra,
   }
@@ -173,5 +175,39 @@ describe('G2: handleForkIntercept discovers only for Claude→Claude', () => {
     expect(info.claudeSessionId).toBeUndefined()
     expect(registryPersists).toBe(0)
     expect(sent.some(t => t.includes('Cannot fork'))).toBe(true)
+  })
+})
+
+// contract PR-0 S0.3: discovery is recoveryPlan's opt-in; absent keys stay absent (peer #5).
+describe('recoveryPlan { discover }', () => {
+  test('Claude without discover never asks tmux; the plan has no learnedId key', () => {
+    const info = seed('claude')
+    const plan = engines.claude.recoveryPlan(info)
+    expect(listPanes()).toEqual([])
+    expect('learnedId' in plan).toBe(false)
+    expect(plan).toEqual({ generic: true, resume: null, fork: null })
+  })
+
+  test('Claude with discover and no id: learns it, writes it on the record, plans from it', () => {
+    const info = seed('claude')
+    const plan = engines.claude.recoveryPlan(info, { discover: true })
+    expect(plan.learnedId).toBe(SID)
+    expect(info.claudeSessionId).toBe(SID)
+    expect(plan.fork).toEqual({ claudeSessionId: SID, parentName: info.tmuxName })
+  })
+
+  test('Claude with discover and an id already: no discovery, no learnedId key', () => {
+    const info = seed('claude', { claudeSessionId: 'already-known' })
+    const plan = engines.claude.recoveryPlan(info, { discover: true })
+    expect(listPanes()).toEqual([])
+    expect('learnedId' in plan).toBe(false)
+  })
+
+  test('Codex with discover: never discovers, no learnedId key', () => {
+    const info = seed('codex', { adapter: fakeCodexAdapter(), codexThreadId: 'T1' })
+    const plan = info.adapter.recoveryPlan(info, { discover: true })
+    expect(listPanes()).toEqual([])
+    expect('learnedId' in plan).toBe(false)
+    expect(info.claudeSessionId).toBeUndefined()
   })
 })
