@@ -17,9 +17,9 @@ function adapterWith(log: string[], surface: (info: any, engine: any) => boolean
   const engine = fakeEngine(log)
   const adapter = new CodexEngineAdapter(engine as any) as any
   adapter.startAppServer = () => { log.push('start'); return '/tmp/spawn.log' }
-  adapter.ensureSurface = (info: any) => {
+  adapter.surface = (info: any) => {
     log.push(`surface:${info.codexThreadId}:${engine.isConnected() ? 'connected' : 'disconnected'}`)
-    return surface(info, engine)
+    return surface(info, engine) ? `${info.tmuxName}:hydra-chat` : null
   }
   return adapter
 }

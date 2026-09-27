@@ -30,7 +30,7 @@ export function scheduleCodexSurfaceRepairs(
   sessionId: string,
   deps = {
     get: (id: string) => registry.get(id),
-    ensure: (info: NonNullable<ReturnType<typeof registry.get>>) => info.adapter?.ensureSurface(info) ?? false,
+    ensure: (info: NonNullable<ReturnType<typeof registry.get>>) => !!info.adapter && info.adapter.surface(info) !== null,
     schedule: (fn: () => void, delay: number) => setTimeout(fn, delay),
   },
 ): void {
@@ -73,7 +73,7 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   noteCodexTurnState(sessionId, true)
   // The remote TUI may exit with the completed turn. Repair its tmux surface
   // immediately so the next protocol turn/keys command has somewhere to land.
-  info.adapter?.ensureSurface(info)
+  info.adapter?.surface(info)
   // The remote TUI may disappear just after turn/completed. Recheck after that
   // teardown window; the provider is idempotent when the surface stayed alive.
   scheduleCodexSurfaceRepairs(sessionId)
@@ -166,7 +166,7 @@ export async function reconnectCodexAfterDisconnect(
       if (!ok) continue
       delete info.deadAt
       deps.persist()
-      info.adapter.ensureSurface(info)
+      info.adapter.surface(info)
       process.stderr.write(`codex-bootstrap: restored app-server connection for ${info.tmuxName}\n`)
       return true
     } catch (err) {
@@ -214,7 +214,7 @@ export async function reconnectCodexSessions(): Promise<void> {
         entry.model = info.sessionMetadata?.model
         threadRegistry.persist()
       }
-      info.adapter.ensureSurface(info)
+      info.adapter.surface(info)
       reconnected++
     }
   }

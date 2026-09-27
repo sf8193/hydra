@@ -303,9 +303,7 @@ export class ClaudeEngine implements EngineAdapter {
     return { totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next, restarted: next.restartedFromZero === true }
   }
 
-  uiTarget(info: SessionInfo): string { return info.tmuxName }
-
-  ensureSurface(info: SessionInfo): boolean { return tmuxHasSession(info.tmuxName) }
+  surface(info: SessionInfo): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }
 
   async sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
     if (opts?.raw) {

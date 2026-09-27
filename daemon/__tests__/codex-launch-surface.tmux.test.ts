@@ -29,17 +29,17 @@ async function withIsolatedPath(fakes: Record<string, string>, fn: (dir: string)
 }
 
 // F3: the TUI window must be current, so callers targeting the bare session hit it.
-test.skipIf(!hasTmux || mocked)('ensureSurface leaves hydra-chat as the current window', async () => {
+test.skipIf(!hasTmux || mocked)('surface leaves hydra-chat as the current window', async () => {
   await withIsolatedPath({ codex: '#!/bin/sh\nexec sleep 30\n' }, dir => {
     const adapter = new CodexEngineAdapter({ isConnected: () => true } as any)
-    expect(adapter.ensureSurface({ sessionId: 's', tmuxName: 'r1-surface', codexThreadId: 't' } as any)).toBe(true)
+    expect(adapter.surface({ sessionId: 's', tmuxName: 'r1-surface', codexThreadId: 't' } as any)).toBe('r1-surface:hydra-chat')
     const sock = join(dir, `tmux-${process.getuid!()}`, 'default')
     const current = execFileSync('tmux', ['-S', sock, 'display-message', '-p', '-t', 'r1-surface', '#{window_name}'],
       { encoding: 'utf8', stdio: 'pipe' }).trim()
     expect(current).toBe('hydra-chat')
     const windows = execFileSync('tmux', ['-S', sock, 'list-windows', '-t', 'r1-surface', '-F', '#{window_name}'],
       { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n')
-    expect(adapter.ensureSurface({ sessionId: 's', tmuxName: 'r1-surface', codexThreadId: 't' } as any)).toBe(true)
+    expect(adapter.surface({ sessionId: 's', tmuxName: 'r1-surface', codexThreadId: 't' } as any)).toBe('r1-surface:hydra-chat')
     expect(execFileSync('tmux', ['-S', sock, 'list-windows', '-t', 'r1-surface', '-F', '#{window_name}'],
       { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n')).toEqual(windows)
   })

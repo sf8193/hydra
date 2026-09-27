@@ -854,7 +854,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
             if (text) {
               try {
                 const adapter = info.adapter
-                if (!adapter.ensureSurface(info)) throw new Error(`interactive surface is unavailable`)
+                const target = adapter.surface(info)
+                if (target === null) throw new Error(`interactive surface is unavailable`)
                 // Map lowercase → canonical tmux key name (tmux is case-sensitive)
                 const TMUX_KEY_MAP = new Map<string, string>()
                 for (const k of [
@@ -874,7 +875,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 }
                 const resolved = tokens.map(resolveKey)
                 const allKeyNames = resolved.every((r): r is string => r !== null)
-                const target = adapter.uiTarget(info)
                 let action: TmuxKeyAction = allKeyNames
                   ? { target, mode: 'raw', keys: resolved }
                   : { target, mode: 'literal', text }
@@ -918,7 +918,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
               let interrupted: Promise<unknown>
               try {
                 const interruptAdapter = info.adapter
-                interruptAdapter.ensureSurface(info)
+                interruptAdapter.surface(info)
                 // 50ms lets a TUI-keystroke interrupt (Claude) land before delivery.
                 interrupted = interruptAdapter.interrupt(info).then(() => new Promise(r => setTimeout(r, 50)))
                 process.stderr.write(`daemon: interrupt requested for ${info.tmuxName} via ! prefix\n`)

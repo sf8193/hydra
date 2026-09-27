@@ -170,8 +170,9 @@ export interface EngineAdapter {
   usageTotals(info: UsageSubject, prev: unknown): UsageReading | null
 
   // Surface
-  uiTarget(info: SessionInfo): string
-  ensureSurface(info: SessionInfo): boolean
+  // Ensure the interactive surface exists (Codex may recreate its tmux container
+  // and TUI), then return its tmux target, or null when it's unavailable.
+  surface(info: SessionInfo): string | null
   sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }>
   interrupt(info: SessionInfo): Promise<void>
 

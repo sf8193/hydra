@@ -76,7 +76,7 @@ describe('CodexEngineAdapter.launch', () => {
     const engine = fakeEngine(), proc = fakeProc()
     const adapter = new CodexEngineAdapter(engine as any, proc as any) as any
     const seen: any[] = []
-    adapter.ensureSurface = (info: any) => { seen.push({ home: info.codexHomeName ?? info.tmuxName, thread: info.codexThreadId }); return true }
+    adapter.surface = (info: any) => { seen.push({ home: info.codexHomeName ?? info.tmuxName, thread: info.codexThreadId }); return `${info.tmuxName}:hydra-chat` }
     await adapter.launch({ ...baseInput, resumeCodex: { threadId: 'T-orig', homeName: 'oldhome' } })
     expect(seen).toEqual([{ home: 'oldhome', thread: 'T-orig' }])
   })
@@ -138,7 +138,7 @@ function fakeAdapter(provider: 'claude' | 'codex') {
       return provider === 'codex' ? realStopAdapter.stop(info) : { status: 'stopped' }
     },
     isAlive: async () => false,
-    ensureSurface: () => false,
+    surface: () => null,
     recoveryPlan: (s: any, o: any) => orig[provider].recoveryPlan(s, o),
   }
 }
@@ -387,7 +387,7 @@ describe('stale Codex reconnect', () => {
     let current: any
     let ensured = 0, persisted = 0, failed = 0
     const A: any = { sessionId: 'sid', engine: 'codex', tmuxName: 'r16a', codexThreadId: 'T', deadAt: 1,
-      adapter: { reconnect: async () => { current = { ...A, deadAt: 2 }; return true }, ensureSurface: () => { ensured++; return true } } }
+      adapter: { reconnect: async () => { current = { ...A, deadAt: 2 }; return true }, surface: () => { ensured++; return 'r16a:hydra-chat' } } }
     current = A
     const ok = await reconnectCodexAfterDisconnect('sid', {
       get: () => current, wait: async () => {}, persist: () => { persisted++ }, failed: () => { failed++; return true },

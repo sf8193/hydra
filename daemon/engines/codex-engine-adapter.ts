@@ -147,8 +147,8 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
     process.stderr.write(`daemon: codex connected for ${tmuxName}, thread=${codexThreadId}\n`)
     // Create the tmux surface now so neutral tmux-based liveness sees the session
-    // before its first turn completes. Best effort: ensureSurface logs and returns false.
-    this.ensureSurface({ sessionId, tmuxName, codexThreadId, codexHomeName } as SessionInfo)
+    // before its first turn completes. Best effort: surface logs and returns null.
+    this.surface({ sessionId, tmuxName, codexThreadId, codexHomeName } as SessionInfo)
 
     return {
       provider: 'codex', model: resolvedModel ?? 'codex-default',
@@ -284,16 +284,15 @@ export class CodexEngineAdapter implements EngineAdapter {
     return codexUsageTotals(info, prev)
   }
 
-  uiTarget(info: SessionInfo): string { return `${info.tmuxName}:hydra-chat` }
-
-  ensureSurface(info: SessionInfo): boolean {
-    if (!info.codexThreadId) return false
+  surface(info: SessionInfo): string | null {
+    const target = `${info.tmuxName}:hydra-chat`
+    if (!info.codexThreadId) return null
     try {
       // A remote Codex TUI can take its tmux session down when the attached turn
       // finishes even though the daemon-owned app-server and socket remain live.
       // Recreate a durable container around that live engine.
       if (!tmuxHasSession(info.tmuxName)) {
-        if (!this.engine.isConnected(info.sessionId)) return false
+        if (!this.engine.isConnected(info.sessionId)) return null
         try {
           tmuxNewSession(['-d', '-s', info.tmuxName, '-n', 'hydra-anchor', 'while :; do sleep 3600; done'],
             { encoding: 'utf8', timeout: 2000 })
@@ -304,7 +303,7 @@ export class CodexEngineAdapter implements EngineAdapter {
       }
       const windows = execFileSync('tmux', ['list-windows', '-t', info.tmuxName, '-F', '#{window_name}'],
         { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
-      if (windows.split('\n').includes('hydra-chat')) return true
+      if (windows.split('\n').includes('hydra-chat')) return target
       const homeName = info.codexHomeName ?? info.tmuxName
       const codexHome = join(homedir(), '.codex', `hydra-${homeName}`)
       const socket = codexSocketPath(homeName)
@@ -312,10 +311,10 @@ export class CodexEngineAdapter implements EngineAdapter {
       execFileSync('tmux', ['new-window', '-n', 'hydra-chat', '-t', info.tmuxName, command],
         { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
       process.stderr.write(`daemon: codex adapter recreated TUI for ${info.tmuxName}\n`)
-      return true
+      return target
     } catch (err) {
       process.stderr.write(`daemon: codex adapter could not ensure TUI for ${info.tmuxName}: ${err}\n`)
-      return false
+      return null
     }
   }
 

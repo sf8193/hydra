@@ -111,7 +111,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
   if (adapterFor(info).recoveryPlan(info, { discover: sourceEngine === targetEngine }).learnedId) registry.persist()
 
   const provider = adapterFor(info)
-  if (!tmuxHasSession(info.tmuxName)) provider.ensureSurface(info)
+  if (!tmuxHasSession(info.tmuxName)) provider.surface(info)
   if (!tmuxHasSession(info.tmuxName) && !(info.engine === 'codex' && transport.has(info.sessionId))) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
@@ -296,7 +296,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
     if (liveInfo) {
       const reachability = await reachabilityOf(liveInfo)
       if (blocksRecovery(reachability)) {
-        const surfaceReady = adapterFor(liveInfo).ensureSurface(liveInfo)
+        const surfaceReady = adapterFor(liveInfo).surface(liveInfo) !== null
         void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
         const note = reachability === 'starting'
           ? `Session **${liveInfo.tmuxName}** is still starting up — give its bridge a moment to connect.`
@@ -600,7 +600,8 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   }
 
   const adapter = adapterFor(info)
-  if (!adapter.ensureSurface(info)) {
+  const target = adapter.surface(info)
+  if (target === null) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `**${name}** interactive surface unavailable`, { replyTo: msg.id }).catch(() => {})
     return
@@ -617,7 +618,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   if (hasFreeze()) {
     const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
     try {
-      const safeName = adapter.uiTarget(info).replace(/'/g, "'\\''")
+      const safeName = target.replace(/'/g, "'\\''")
       execSync(
         `tmux capture-pane -t '${safeName}' -e -p | freeze -o '${outPath}' --language bash`,
         { stdio: 'pipe', timeout: 10000 },
@@ -633,7 +634,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 
   // Fallback: text capture
   try {
-    const safeName = adapter.uiTarget(info).replace(/'/g, "'\\''")
+    const safeName = target.replace(/'/g, "'\\''")
     const text = execSync(
       `tmux capture-pane -t '${safeName}' -p -S -60`,
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
