@@ -8,13 +8,14 @@ import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
-import { dispatchAdvance } from './protocol-registry.js'
+import { dispatchAdvance, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
+import { isToolAllowed } from './tool-surface.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -55,6 +56,12 @@ export type ToolResult = { content: Array<{type: string; text: string}>; isError
 
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
   try {
+    // Bridge-server enforces this at the socket boundary. Keep the dispatcher
+    // fail-closed too: Codex advertises phase-scoped tools statically, and tests
+    // or future callers may invoke executeTool without crossing bridge-server.
+    if (callerSessionId && !isToolAllowed(callerSessionId, name)) {
+      throw new Error(`${name} is not available to this session`)
+    }
     switch (name) {
       case 'reply': {
         const chat_id = args.chat_id as string
@@ -223,6 +230,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'spawn_session': {
+        // Capture this before the asynchronous spawn. If the protocol ends while
+        // the child is launching, its capabilities are removed and registry
+        // lookup returns not_protocol; it is still our responsibility to reap it.
+        const protocolScopedSpawn = !!(callerSessionId && registry.get(callerSessionId)?.capabilities?.includes('protocol_spawn'))
         const worktree = args.worktree as string | undefined
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
         const model = (args.model as string | undefined)?.trim() || undefined
@@ -252,6 +263,18 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           trigger: 'spawn_session',
           initiator: spawnerName,
         })
+        const childRegistration = callerSessionId
+          ? registerProtocolChild(callerSessionId, result.sessionId, {
+              headless: headless === true,
+              readThread: !!readThreadPrefix,
+              phaseBudgetMs,
+            })
+          : 'not_protocol'
+        if (protocolScopedSpawn && childRegistration !== 'registered') {
+          const child = registry.get(result.sessionId)
+          if (child) await killSession(child, 'protocol phase ended during spawn').catch(() => {})
+          throw new Error('protocol phase ended before spawned session could be registered')
+        }
         return { content: [{ type: 'text', text: `session spawned (name: ${result.name}, session_id: ${result.sessionId}, thread_id: ${result.threadId}${result.url ? `, url: ${result.url}` : ''})` }] }
       }
 
@@ -551,6 +574,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           throw new Error(`send failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
+        }
+
+        // A reviewer result counts as complete only once it was actually posted
+        // to the parent thread; failed sends must not unlock step_passed.
+        if (msgType === 'result' && callerSessionId) {
+          registerProtocolChildResult(callerSessionId, targetSession.sessionId, text)
         }
 
         // Deliver to the target's Claude session so it actually receives the message

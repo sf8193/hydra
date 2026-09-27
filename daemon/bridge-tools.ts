@@ -34,3 +34,9 @@ export function computeToolsForSession(type: SessionType, capabilities: Set<Capa
     return { ...t, ...(desc ? { description: desc } : {}), ...(schema ? { inputSchema: schema } : {}) }
   })
 }
+
+/** Codex MCP cannot accept tools_update, so advertise the union of dynamic
+ * protocol tools and enforce the live subset at the daemon boundary. */
+export function codexStaticTools(): typeof UNIVERSAL_TOOLS {
+  return computeToolsForSession('thread_owner', new Set(['protocol_context', 'protocol_spawn']))
+}
