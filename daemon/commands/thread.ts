@@ -113,7 +113,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const provider = adapterFor(info)
   if (!tmuxHasSession(info.tmuxName)) provider.surface(info)
-  if (!tmuxHasSession(info.tmuxName) && !(info.engine === 'codex' && transport.has(info.sessionId))) {
+  if (!tmuxHasSession(info.tmuxName) && !(await provider.isAlive(info))) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
     return

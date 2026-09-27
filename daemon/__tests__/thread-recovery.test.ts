@@ -413,7 +413,7 @@ describe('handleForkIntercept', () => {
     expect(refused(info)).toBe(true)
   })
 
-  test.failing('Z4 Codex with connection, socket and tmux all gone → refused, nothing spawned', async () => {
+  test('Z4 Codex with connection, socket and tmux all gone → refused, nothing spawned', async () => {
     const info = live('codex', { codexThreadId: 'T-src', codexHomeName: `z4-none-${seq}` }); dead(info)
     await handleForkIntercept(forkMsg(info))
     expect(fns()).toEqual([])
