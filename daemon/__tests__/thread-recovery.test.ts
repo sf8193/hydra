@@ -3,7 +3,9 @@
 // respawn's engine/model selection, and native fork vs continuation. Every
 // executor is stubbed through recoveryDeps, so nothing is spawned.
 
-import { engines } from '../engines/instances.js'
+import { engines, codexEngine } from '../engines/instances.js'
+import { rmSync } from 'fs'
+import { join } from 'path'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { handleResumeIntercept, handleRespawnIntercept, handleForkIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../commands/thread.js'
 import { RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
@@ -397,6 +399,34 @@ describe('handleForkIntercept', () => {
     await handleForkIntercept(forkMsg(info))
     expect(fns()).toEqual(['spawn:fresh'])
     expect(sent.some(s => s.includes('session not forkable yet'))).toBe(true)
+  })
+
+  // Z4: the fork guard asks the adapter whether the source is alive. Claude:
+  // tmux. Codex: app-server connection, then socket, then tmux.
+  const dead = (info: SessionInfo) => rmSync(join(tmux.dir, `alive-${info.tmuxName}`))
+  const refused = (info: SessionInfo) => sent.some(s => s.includes(`Cannot fork — **${info.tmuxName}** is no longer running.`))
+
+  test('Z4 Claude with tmux gone → refused, nothing spawned', async () => {
+    const info = live('claude', { claudeSessionId: 'C-src' }); dead(info)
+    await handleForkIntercept(forkMsg(info))
+    expect(fns()).toEqual([])
+    expect(refused(info)).toBe(true)
+  })
+
+  test.failing('Z4 Codex with connection, socket and tmux all gone → refused, nothing spawned', async () => {
+    const info = live('codex', { codexThreadId: 'T-src', codexHomeName: `z4-none-${seq}` }); dead(info)
+    await handleForkIntercept(forkMsg(info))
+    expect(fns()).toEqual([])
+    expect(refused(info)).toBe(true)
+  })
+
+  test('Z4 Codex with tmux gone but the app-server connected → still forks', async () => {
+    const info = live('codex', { codexThreadId: 'T-src' }); dead(info)
+    const orig = codexEngine.isConnected
+    codexEngine.isConnected = ((sid: string) => sid === info.sessionId) as any
+    try { await handleForkIntercept(forkMsg(info)) } finally { codexEngine.isConnected = orig }
+    expect(fns()).toEqual(['spawn:fork'])
+    expect(refused(info)).toBe(false)
   })
 
   test('native fork failure falls back to a fresh spawn reading the thread', async () => {
