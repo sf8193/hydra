@@ -30,10 +30,10 @@ export class CodexEngineAdapter implements EngineAdapter {
   readonly deliveryIsFree = false
   constructor(private readonly engine: CodexEngine) {}
 
-  async launch(input: LaunchInput): Promise<LaunchResult> {
-    const { sessionId, tmuxName, cwd: effectiveCwd, model, prompt } = input
+  // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
+  private startAppServer(input: LaunchInput): string {
+    const { sessionId, tmuxName, cwd: effectiveCwd, model } = input
     const codexHomeName = tmuxName
-    const sockPath = codexSocketPath(codexHomeName)
     const homeDir = codexHomeDirFn(codexHomeName)
 
     // Register MCP server before starting app-server
@@ -53,6 +53,14 @@ export class CodexEngineAdapter implements EngineAdapter {
 
     process.stderr.write(`daemon: codex spawning durable app-server for ${tmuxName}\n`)
     startCodexAppServer({ homeName: codexHomeName, cwd: effectiveCwd, logPath: spawnLogPath, model })
+    return spawnLogPath
+  }
+
+  async launch(input: LaunchInput): Promise<LaunchResult> {
+    const { sessionId, tmuxName, model, prompt } = input
+    const codexHomeName = tmuxName
+    const sockPath = codexSocketPath(codexHomeName)
+    const spawnLogPath = this.startAppServer(input)
 
     // The launch prompt is FIFO item zero. Queue it before establishing the
     // thread so every later user message uses the same turn scheduler.
@@ -87,6 +95,9 @@ export class CodexEngineAdapter implements EngineAdapter {
       throw new Error(`codex socket not ready after 15s (last: ${lastErr})`)
     }
     process.stderr.write(`daemon: codex connected for ${tmuxName}, thread=${codexThreadId}\n`)
+    // Create the tmux surface now so neutral tmux-based liveness sees the session
+    // before its first turn completes. Best effort: ensureSurface logs and returns false.
+    this.ensureSurface({ sessionId, tmuxName, codexThreadId } as SessionInfo)
 
     return {
       provider: 'codex', model: resolvedModel ?? 'codex-default',
@@ -237,7 +248,7 @@ export class CodexEngineAdapter implements EngineAdapter {
       const codexHome = join(homedir(), '.codex', `hydra-${homeName}`)
       const socket = codexSocketPath(homeName)
       const command = `export CODEX_HOME=${shq(codexHome)} && codex resume ${shq(info.codexThreadId)} --remote ${shq(`unix://${socket}`)}`
-      execFileSync('tmux', ['new-window', '-d', '-n', 'hydra-chat', '-t', info.tmuxName, command],
+      execFileSync('tmux', ['new-window', '-n', 'hydra-chat', '-t', info.tmuxName, command],
         { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
       process.stderr.write(`daemon: codex adapter recreated TUI for ${info.tmuxName}\n`)
       return true

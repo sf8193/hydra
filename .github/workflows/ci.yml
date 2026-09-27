@@ -49,11 +49,15 @@ jobs:
             echo "::notice::ceiling can drop to $COUNT — update .tsc-baseline"
           fi
 
+      - name: Install tmux
+        run: sudo apt-get install -y tmux
+
       - name: Run tests
         env:
           DISCORD_BOT_TOKEN: test-token
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: |
           mkdir -p ~/.claude/channels/discord
-          bun test --path-ignore-patterns 'daemon/__tests__/pane-probe.test.ts'
+          bun test --path-ignore-patterns 'daemon/__tests__/pane-probe.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-launch-surface.tmux.test.ts'
           bun test daemon/__tests__/pane-probe.test.ts
+          bun test daemon/__tests__/codex-launch-surface.tmux.test.ts
