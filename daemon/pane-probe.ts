@@ -618,10 +618,11 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
   for (const info of io.getSessions()) {
     if (info.deadAt) continue
-    // Skip engines that don't support pane probing yet — avoids wasted tmux captures.
-    // When Codex pane probing is implemented in the adapter, remove this guard —
-    // the adapter dispatch at line ~660 (detectBlockingState) already handles it.
-    if (info.engine === 'codex') continue
+    // Probing is for bridge-channel sessions: its idle nudge is a bridge
+    // notification and its abort notice is about a lost bridge. A provider on its
+    // own engine channel (Codex) is never a target, so it spends no tmux reads
+    // and no nudge budget. Checked before the target is added.
+    if (info.adapter.channel !== 'bridge') continue
     targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
   }
 
