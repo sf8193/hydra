@@ -7,6 +7,10 @@
  * Code has two ways of finding it, and only one of them is reliable.
  */
 
+import { execFile } from 'child_process'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { join } from 'path'
+
 const PLUGIN_VERSION = '0.0.4'
 
 /**
@@ -67,4 +71,48 @@ export const MCP_CONFIG = JSON.stringify({ mcpServers: { discord: BRIDGE_SERVER 
  */
 export function startWithoutInstall(start: string): string {
   return start.replace(/^\s*bun\s+install\b[^&|;]*&&\s*/, '')
+}
+
+export type InstallRunner = (cwd: string) => Promise<void>
+
+/** Marker inside node_modules: written only after a complete install, deleted with it. */
+export const DEPS_MARKER = join('node_modules', '.hydra-deps-ok')
+export const BRIDGE_INSTALL_TIMEOUT_MS = 120_000
+
+const bunInstall: InstallRunner = cwd => new Promise((resolve, reject) => {
+  execFile('bun', ['install', '--no-summary'], { cwd, timeout: BRIDGE_INSTALL_TIMEOUT_MS }, (err, _stdout, stderr) => {
+    if (err) reject(new Error(`${err.message}${stderr ? `\n${String(stderr).trim()}` : ''}`))
+    else resolve()
+  })
+})
+
+/**
+ * Make a plugin-cache dir launch its bridge without installing on every spawn.
+ *
+ * Async and bounded, so a slow registry never blocks daemon boot. The start
+ * script is lifted only after a complete install (marker present), so a failed
+ * or partial install leaves the published install-on-spawn script in place and
+ * is retried on the next boot. Only `scripts.start` is rewritten; the rest of
+ * package.json stays upstream's.
+ */
+export async function ensureBridgeReady(targetDir: string, install: InstallRunner = bunInstall): Promise<'ready' | 'installed' | 'skipped'> {
+  const pkgPath = join(targetDir, 'package.json')
+  if (!existsSync(pkgPath)) return 'skipped'
+  const marker = join(targetDir, DEPS_MARKER)
+  let outcome: 'ready' | 'installed' = 'ready'
+  if (!existsSync(marker)) {
+    await install(targetDir)
+    writeFileSync(marker, `${new Date().toISOString()}\n`)
+    outcome = 'installed'
+  }
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+  const start = pkg.scripts?.start
+  if (typeof start === 'string') {
+    const lifted = startWithoutInstall(start)
+    if (lifted !== start) {
+      pkg.scripts.start = lifted
+      writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+    }
+  }
+  return outcome
 }
