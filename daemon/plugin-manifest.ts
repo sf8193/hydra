@@ -49,3 +49,22 @@ export const PLUGIN_MANIFEST = JSON.stringify({
 }, null, 2)
 
 export const MCP_CONFIG = JSON.stringify({ mcpServers: { discord: BRIDGE_SERVER } }, null, 2)
+
+/**
+ * The bridge start script, with its dependency install removed.
+ *
+ * The published plugin's `start` is `bun install --no-summary && bun server.ts`,
+ * so every session spawn reaches the npm registry before the bridge can speak
+ * MCP. A slow or unreachable registry burns the 30s connect timeout, and Claude
+ * Code then caches that failure for 15 minutes — so one bad start leaves every
+ * session spawned in that window bridgeless, with no attempt logged. Dependency
+ * installation is a setup concern, and the daemon's plugin-cache sync already
+ * owns making that directory correct; it runs once at boot instead.
+ *
+ * The script is rewritten rather than replaced because the entry file differs by
+ * layout — `server.ts` in the plugin cache, `bridge.ts` in this repo — and the
+ * rest of the published `package.json` (name, deps, bin) stays upstream's.
+ */
+export function startWithoutInstall(start: string): string {
+  return start.replace(/^\s*bun\s+install\b[^&|;]*&&\s*/, '')
+}
