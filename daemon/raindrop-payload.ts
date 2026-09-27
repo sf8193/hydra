@@ -58,7 +58,7 @@ const USER_ID = /^[A-Za-z0-9._:|-]{1,64}$/
 export const EXTRA_PROPERTY_KEYS: ReadonlySet<string> = new Set([
   'cumulativeInputTokens', 'cumulativeOutputTokens', 'cumulativeCacheCreateTokens', 'cumulativeCacheReadTokens',
   'deltaInputTokens', 'deltaOutputTokens', 'deltaCacheCreateTokens', 'deltaCacheReadTokens',
-  'coldStart', 'claudeSessionId', 'reason',
+  'coldStart', 'claudeSessionId', 'providerSessionId', 'reason',
 ])
 
 function safeExtra(extra: Record<string, string | number> | undefined): Record<string, PropertyValue> {

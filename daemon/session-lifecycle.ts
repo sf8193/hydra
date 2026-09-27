@@ -215,6 +215,9 @@ export function emitSessionDeath(info: SessionInfo): void {
     tmuxName: info.tmuxName,
     deadAt: info.deadAt,
     claudeSessionId: info.claudeSessionId,
+    engine: info.engine,
+    codexThreadId: info.codexThreadId,
+    codexHomeName: info.codexHomeName,
   })
 }
 

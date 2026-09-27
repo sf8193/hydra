@@ -145,7 +145,7 @@ describe('raindrop-payload: extra is a declared channel, not an open one', () =>
   // counter to usageExtra without listing it here dropped it silently.
   test('every key usageExtra produces is on the allowlist', () => {
     const produced = Object.keys(usageExtra({
-      totals: zero(), delta: zero(), claudeSessionId: 'c-1', coldStart: false,
+      totals: zero(), delta: zero(), providerSessionId: 'c-1', claudeSessionId: 'c-1', coldStart: false,
     }))
     expect(produced.length, 'the producer must actually produce keys').toBeGreaterThan(8)
     for (const key of produced) {
@@ -155,7 +155,7 @@ describe('raindrop-payload: extra is a declared channel, not an open one', () =>
 
   test('the allowlist holds nothing beyond the producers', () => {
     const produced = new Set(Object.keys(usageExtra({
-      totals: zero(), delta: zero(), claudeSessionId: 'c-1', coldStart: false,
+      totals: zero(), delta: zero(), providerSessionId: 'c-1', claudeSessionId: 'c-1', coldStart: false,
     })))
     // `reason` is the sweep-failure producer's, not usageExtra's.
     const extras = [...EXTRA_PROPERTY_KEYS].filter(k => !produced.has(k))

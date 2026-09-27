@@ -43,7 +43,8 @@ export type CodexConn = {
 /** How long a `!` waits for an in-flight turn/start to reveal its turn ID. */
 export const INTERRUPT_START_WAIT_MS = 5000
 
-// Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning', 'contextUsage'
+// Event types: 'message', 'turnCompleted', 'disconnected', 'usageWarning', 'contextUsage',
+// 'turnReconciled' (read-only: the last terminal turn seen on resume, never a turnCompleted)
 
 export function codexSocketPath(tmuxName: string): string {
   return join(process.env.HOME!, '.codex', `hydra-${tmuxName}`, 'app-server-control', 'app-server-control.sock')
@@ -72,6 +73,23 @@ export function activeTurnId(turns: any[]): string | null {
     const status = turn?.status?.type ?? turn?.status
     return status === 'inProgress' || status === 'active'
   })?.id ?? null
+}
+
+export type ReconciledTurn = { turnId: string; status: string; completedAt: number | null; lastAgentText: string | null }
+const TERMINAL_TURN = new Set(['completed', 'interrupted', 'failed'])
+
+/** The last turn of a thread/resume history when it is terminal and nothing is
+ *  in progress, else null. Text comes from its last agentMessage item; resume
+ *  returns items with itemsView "full" (live-checked on codex-cli 0.157.1), and a
+ *  "notLoaded" turn has none, so its text is null. completedAt is epoch seconds. */
+export function reconciledTurn(turns: any[]): ReconciledTurn | null {
+  if (activeTurnId(turns)) return null
+  const last = turns.at(-1)
+  const status = last?.status?.type ?? last?.status
+  if (typeof last?.id !== 'string' || !TERMINAL_TURN.has(status)) return null
+  const items = Array.isArray(last.items) ? last.items : []
+  const text = items.findLast((i: any) => i?.type === 'agentMessage' && typeof i.text === 'string' && i.text.trim())?.text ?? null
+  return { turnId: last.id, status, completedAt: typeof last.completedAt === 'number' ? last.completedAt : null, lastAgentText: text }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +168,11 @@ export class CodexEngine extends EventEmitter {
     if (Array.isArray(turns)) {
       conn.lastKnownTurnId = turns.at(-1)?.id ?? conn.lastKnownTurnId ?? null
       conn.currentTurnId = activeTurnId(turns)
+      // Observation only (S10-lite B): a completion missed while the socket was
+      // down is reported, but never as turnCompleted, whose listeners repair
+      // surfaces, flush keys and drain.
+      const reconciled = reconciledTurn(turns)
+      if (reconciled) this.emit('turnReconciled', sessionId, reconciled)
       if (conn.currentTurnId) this.resetWatchdog(conn)
       else this.drainDeferredTurns(conn)
       const scheduling = this.getScheduling(sessionId, conn)

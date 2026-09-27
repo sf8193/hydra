@@ -6,7 +6,7 @@
  * engine event plumbing and reconnects transiently lost daemon connections.
  */
 
-import { CodexEngine } from './codex-engine.js'
+import { CodexEngine, type ReconciledTurn } from './codex-engine.js'
 import { registry, threadRegistry } from './sessions.js'
 import { dispatchDisconnect } from './protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
@@ -80,6 +80,20 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   flushCodexKeys(sessionId)
   handleSilenceEvent(info.tmuxName)
 })
+
+// After a restart or reconnect: record what thread/resume says the last turn
+// did, for the reply guard. Observation only — no surface repair, key flush or
+// silence handling; the scheduler stays RPC-owned.
+export function onTurnReconciled(sessionId: string, t: ReconciledTurn): void {
+  if (!registry.get(sessionId)) return
+  noteCodexTurnState(sessionId, true)
+  // completedAt is epoch SECONDS, so `at` is floored: a turn that finished less
+  // than 1s after the message was delivered reads as older than it and is
+  // deliberately not relayed — erring toward never relaying a stale answer.
+  // No completedAt → at 0: an answer of unknown age is never relayed as new.
+  if (t.lastAgentText) noteCodexMessage(sessionId, t.lastAgentText, t.completedAt ? t.completedAt * 1000 : 0)
+}
+codexEngine.on('turnReconciled', onTurnReconciled)
 
 codexEngine.on('turnStalled', (sessionId: string, reason: string) => {
   const info = registry.get(sessionId)

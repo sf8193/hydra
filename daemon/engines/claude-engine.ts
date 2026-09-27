@@ -13,12 +13,12 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
   ExecutionRetirementResult, StopResult,
-  ContextUsage, RecoverySource, RecoveryPlan,
+  ContextUsage, RecoverySource, RecoveryPlan, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
-import { projectDirName, projectsRoot } from '../usage.js'
+import { drainUsage, newCursor, projectDirName, projectsRoot, transcriptPathFor, type UsageCursor } from '../usage.js'
 import { claudeTurnOutcome, defaultTurnSources, type TurnOutcome } from '../observability.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
@@ -286,6 +286,16 @@ export class ClaudeEngine implements EngineAdapter {
       if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
+  }
+
+  // Reads only the four token counters out of the transcript; see daemon/usage.ts.
+  // A drain that can't stat the file throws: a transcript that quietly stops being
+  // readable would otherwise report zero forever.
+  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null {
+    const transcript = transcriptPathFor(info.claudeSessionId)
+    if (!transcript) return null
+    const next = drainUsage(transcript, (prev as UsageCursor | undefined) ?? newCursor())
+    return { totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next, restarted: next.restartedFromZero === true }
   }
 
   uiTarget(info: SessionInfo): string { return info.tmuxName }
