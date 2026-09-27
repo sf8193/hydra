@@ -30,7 +30,7 @@ import { notePendingReply } from './reply-guard.js'
 import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
-import { queueCodexKeys, sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
+import { sendTmuxKeys, type TmuxKeyAction } from './codex-key-queue.js'
 import { resolveEngine } from './engines/instances.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
@@ -204,7 +204,8 @@ function extractContextLinks(text: string): string[] {
   return links
 }
 
-function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access, before?: Promise<unknown>): Promise<void> {
+async function deliverToSession(msg: InboundMessage, targetSessionId: string, access: Access, before?: Promise<unknown>): Promise<void> {
+  // Nothing here may yield before enqueueUserMessage: its ingress slot is reserved synchronously.
   void gateway.typing(msg.channelId).catch(() => {})
   if (access.ackReaction) {
     void gateway.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
@@ -921,7 +922,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 interruptAdapter.ensureSurface(info)
                 // 50ms lets a TUI-keystroke interrupt (Claude) land before delivery.
                 interrupted = interruptAdapter.interrupt(info).then(() => new Promise(r => setTimeout(r, 50)))
-                process.stderr.write(`daemon: interrupt sent to ${info.tmuxName} via ! prefix\n`)
+                process.stderr.write(`daemon: interrupt requested for ${info.tmuxName} via ! prefix\n`)
               } catch (err) {
                 interrupted = Promise.reject(err)
               }

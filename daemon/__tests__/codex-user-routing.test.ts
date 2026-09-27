@@ -16,8 +16,10 @@ describe('Codex user-message routing ratchet', () => {
   })
 
   test('deliverToSession reserves synchronously (no await before the slot)', () => {
-    expect(source).toMatch(/\nfunction deliverToSession\(/)
-    expect(source).not.toMatch(/async function deliverToSession\(/)
+    const start = source.indexOf('function deliverToSession(')
+    const body = source.slice(start, source.indexOf('return enqueueUserMessage(', start))
+    expect(start).toBeGreaterThan(-1)
+    expect(body).not.toMatch(/\bawait\b/)
   })
 
   test('both router paths use the shared helper', () => {

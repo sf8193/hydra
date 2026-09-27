@@ -208,3 +208,14 @@ test('a stale reconcile failing after reconnect does not re-block the queue', as
   expect(engine.getScheduling('s').startState).toBe('idle')
   expect(engine.getScheduling('s').deferredTurnQueue).toEqual(['B'])
 })
+
+test('resume recognises every in-progress status shape, so queued work waits', async () => {
+  for (const status of ['inProgress', { type: 'inProgress' }, 'active', { type: 'active' }]) {
+    const { engine, started, conn } = queueEngine()
+    engine.queueTurn('s', 'B')
+    engine.request = async () => ({ thread: { turns: [{ id: 'A', status }] } })
+    await engine.connectAndResume('s', 'sock', 't')
+    expect(conn.currentTurnId).toBe('A')
+    expect(started).toEqual([])
+  }
+})

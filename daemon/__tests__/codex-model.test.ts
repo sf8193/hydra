@@ -133,7 +133,7 @@ describe('CodexEngine deferred turns', () => {
       retryTimers: new Set(), generation: 1,
     }
     engine.connections.set('s', conn)
-    engine.scheduling.set('s', { steerQueue: conn.steerQueue, deferredTurnQueue: conn.deferredTurnQueue, fenced: false })
+    engine.getScheduling('s', conn)
 
     expect(await engine.retireSession('s')).toBe(true)
     engine.handleNotification(conn, 'turn/completed', { turn: { id: 'ROUND_1' } })
@@ -232,7 +232,7 @@ describe('CodexEngine deferred turns', () => {
       lastUsageWarning: 0, retryTimers: new Set(), generation: 1,
     }
     engine.connections.set('s', conn)
-    engine.scheduling.set('s', { steerQueue: conn.steerQueue, deferredTurnQueue: conn.deferredTurnQueue, fenced: false })
+    engine.getScheduling('s', conn)
 
     engine.queueTurn('s', 'ROUND_2')
     await new Promise(resolve => setTimeout(resolve, 10))
