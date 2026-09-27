@@ -14,6 +14,7 @@ import type { SessionInfo, ThreadSessionEntry } from '../sessions.js'
 import { gateway } from '../config.js'
 import type { InboundMessage } from '../../gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { pollSessionsOnce } from '../session-health.js'
 
 const THREAD = 'thread-t8'
 const PARENT = 'parent-t8'
@@ -196,6 +197,50 @@ describe('resume tier matrix — Claude', () => {
     expect(logged()).toContain(TIER1_FAIL)
     expect(logged()).toContain(TIER2_FAIL)
     expect(respawnArgs()[4]).toEqual({ engine: 'claude', label: 'build' })
+  })
+})
+
+// Z5: resume stamps deadAt on a gone live record before the cascade, for any
+// engine. Without it a Claude record stays un-dead after "all recovery methods
+// failed", and the health poll then posts a second 💀 telling the user to resume.
+describe('resume stamps a gone live record dead (Z5)', () => {
+  let tmux: FakeTmux
+  beforeEach(() => { tmux = withFakeTmux() })
+  afterEach(() => { tmux.restore() })
+
+  function goneLive(engine: 'claude' | 'codex', extra: Partial<SessionInfo>): SessionInfo {
+    const e = seedHistory({ ...extra })
+    const info = { sessionId: e.sessionId, topic: TOPIC, threadId: THREAD, createdAt: 1, lastActive: 1,
+      tmuxName: e.tmuxName, listening: false, sessionType: 'thread_owner', engine, adapter: engines[engine], ...extra } as SessionInfo
+    registry.set(info.sessionId, info); registry.setThread(THREAD, info.sessionId); seeded.add(info.sessionId)
+    return info
+  }
+  const skulls = () => sent.filter(s => s.startsWith('💀'))
+
+  test.failing('Claude: all tiers fail → record is dead, no later 💀 from the health poll', async () => {
+    resumeOutcome = 'null'; spawnFails = ['fork']; respawnOk = false
+    const info = goneLive('claude', { claudeSessionId: 'C-z5' })
+    await handleResumeIntercept(msg())
+    expect(sent.some(s => s.includes('all recovery methods failed'))).toBe(true)
+    expect(info.deadAt).toBeNumber()
+    pollSessionsOnce(Date.now())
+    expect(skulls()).toEqual([])
+  })
+
+  test('Codex: all tiers fail → record is dead (unchanged)', async () => {
+    spawnFails = ['resume', 'fork']; respawnOk = false
+    const info = goneLive('codex', { codexThreadId: 'T-z5', codexHomeName: `z5-none-${seq}` })
+    await handleResumeIntercept(msg())
+    expect(sent.some(s => s.includes('all recovery methods failed'))).toBe(true)
+    expect(info.deadAt).toBeNumber()
+  })
+
+  test('Claude: a reachable record is left alone, not stamped', async () => {
+    const info = goneLive('claude', { claudeSessionId: 'C-z5r', createdAt: Date.now() })
+    tmux.alive(info.tmuxName)
+    await handleResumeIntercept(msg())
+    expect(sent.some(s => s.includes('still starting up'))).toBe(true)
+    expect(info.deadAt).toBeUndefined()
   })
 })
 
