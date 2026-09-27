@@ -5,7 +5,7 @@ import { unlinkSync } from 'fs'
 import { gateway } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { killSession, doSpawnSession, discoverClaudeSessionId, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
+import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
 import type { SpawnResult } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -102,13 +102,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const sourceEngine = info.engine ?? 'claude'
   const targetEngine = opts?.engine ?? sourceEngine
-  if (sourceEngine === 'claude' && targetEngine === 'claude' && !info.claudeSessionId) {
-    const discovered = discoverClaudeSessionId(info.tmuxName)
-    if (discovered) {
-      info.claudeSessionId = discovered
-      registry.persist()
-    }
-  }
+  if (targetEngine === 'claude' && adapterFor(info).refreshIdentity(info)) registry.persist()
 
   const provider = adapterFor(info)
   if (!tmuxHasSession(info.tmuxName)) provider.ensureSurface(info)

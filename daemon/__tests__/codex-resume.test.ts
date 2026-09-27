@@ -139,6 +139,7 @@ function fakeAdapter(provider: 'claude' | 'codex') {
     },
     isAlive: async () => false,
     ensureSurface: () => false,
+    refreshIdentity: () => null,
   }
 }
 

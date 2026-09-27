@@ -5,7 +5,6 @@ import { tmuxHasSession } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { discoverClaudeSessionId } from './session-lifecycle.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
@@ -45,19 +44,16 @@ export function pollSessionsOnce(now: number): void {
     // Discovery retries every poll (claudeSessionId may become available later).
     // Alert fires once per orphan episode; clears when bridge reconnects.
     if (info.sessionType !== 'thread_guest' && !info.deadAt && !info.headless && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
-      if (!info.claudeSessionId && info.engine !== 'codex') {
-        const discovered = discoverClaudeSessionId(info.tmuxName)
-        if (discovered) {
-          info.claudeSessionId = discovered
-          registry.persist()
-          const thread = threadRegistry.get(info.threadId)
-          if (thread) {
-            const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
-            if (histEntry) histEntry.claudeSessionId = discovered
-            threadRegistry.persist()
-          }
-          process.stderr.write(`daemon: orphan ${info.tmuxName}: discovered claudeSessionId=${discovered}\n`)
+      const discovered = (info.adapter ?? resolveEngine(info.engine)).refreshIdentity(info)
+      if (discovered) {
+        registry.persist()
+        const thread = threadRegistry.get(info.threadId)
+        if (thread) {
+          const histEntry = thread.sessionHistory.find((h: any) => h.sessionId === info.sessionId && !h.endedAt)
+          if (histEntry) histEntry.claudeSessionId = discovered
+          threadRegistry.persist()
         }
+        process.stderr.write(`daemon: orphan ${info.tmuxName}: discovered claudeSessionId=${discovered}\n`)
       }
       if (!orphanAlerted.has(info.sessionId)) {
         orphanAlerted.add(info.sessionId)

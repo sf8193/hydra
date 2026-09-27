@@ -54,6 +54,9 @@ export class CodexEngineAdapter implements EngineAdapter {
     return true
   }
 
+  // Launch and reconnect assign the Codex thread id; nothing to discover.
+  refreshIdentity(_info: SessionInfo): string | null { return null }
+
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
   private startAppServer(input: LaunchInput, codexHomeName: string): string {
     const { sessionId, tmuxName, cwd: effectiveCwd, model } = input

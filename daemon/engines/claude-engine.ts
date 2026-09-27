@@ -99,6 +99,13 @@ export class ClaudeEngine implements EngineAdapter {
     return this.transport.bridges.has(info.sessionId)
   }
 
+  refreshIdentity(info: SessionInfo): string | null {
+    if (info.claudeSessionId) return null
+    const discovered = discoverClaudeSessionId(info.tmuxName)
+    if (discovered) info.claudeSessionId = discovered
+    return discovered
+  }
+
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
     const effectiveCwd = input.cwd

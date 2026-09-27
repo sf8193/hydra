@@ -14,7 +14,6 @@ import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
-import { discoverClaudeSessionId } from './engines/claude-engine.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { unwatchBySession } from './pr-watch.js'
@@ -258,13 +257,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     // Last-resort claudeSessionId discovery before tmux dies — if the bridge
     // never registered it, read $CLAUDE_CONFIG_DIR/sessions/<panePid>.json while the
     // pane PID is still available. Without this, resume falls to tier 3 (respawn).
-    if (!info.claudeSessionId && info.engine !== 'codex') {
-      const discovered = discoverClaudeSessionId(info.tmuxName)
-      if (discovered) {
-        info.claudeSessionId = discovered
-        process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
-      }
-    }
+    const discovered = (info.adapter ?? resolveEngine(info.engine)).refreshIdentity(info)
+    if (discovered) process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
 
     const tmuxName = info.tmuxName
     await (info.adapter ?? resolveEngine(info.engine)).stop(info)
@@ -918,4 +912,4 @@ export async function tryRespawn(
 }
 
 // Claude session ID discovery lives in the Claude engine; re-exported for existing importers.
-export { discoverClaudeSessionId }
+export { discoverClaudeSessionId } from './engines/claude-engine.js'

@@ -913,10 +913,6 @@
       "daemon_anchor-state"
     ],
     [
-      "daemon_session-health",
-      "daemon_session-lifecycle"
-    ],
-    [
       "daemon_raindrop",
       "daemon_config"
     ],

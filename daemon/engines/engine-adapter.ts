@@ -106,6 +106,10 @@ export interface EngineAdapter {
   // Observation
   // Is a delivery channel connected? Backs transport.has().
   isConnected(info: SessionInfo): boolean
+  // If the record lacks its native id and the provider can learn it from the
+  // running execution: learn it, set it on the record and return it; else null.
+  // Claude: pane discovery. Codex: null (launch and reconnect assign its id).
+  refreshIdentity(info: SessionInfo): string | null
   isAlive(info: SessionInfo): Promise<boolean>
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null
