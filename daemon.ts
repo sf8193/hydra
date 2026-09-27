@@ -40,6 +40,7 @@ import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbea
 import { PLUGIN_MANIFEST, MCP_CONFIG } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
 import { engines, resolveEngine } from './daemon/engines/instances.js'
+import { engineRecords } from './daemon/engines/boot.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
@@ -77,7 +78,7 @@ initEphemeralTimers()
 // Start each engine over its persisted records (Codex reconnects its sessions to
 // their app-server sockets). Not awaited; each start logs its own outcome.
 for (const adapter of Object.values(engines)) {
-  adapter.start([...registry.values()].filter(r => r.adapter === adapter)).catch(err => {
+  adapter.start(engineRecords(adapter)).catch(err => {
     process.stderr.write(`daemon: ${adapter.provider} start failed: ${err}\n`)
   })
 }

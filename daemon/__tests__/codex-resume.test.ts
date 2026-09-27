@@ -110,6 +110,7 @@ const stopProc = { ...fakeProc(), stop: (home: string) => { homeStops.push(home)
 const realStopAdapter = new CodexEngineAdapter(fakeEngine() as any, stopProc as any)
 let failCodexResume = false
 let failClaudeResume = false
+let claudeLearnsNoId = false
 const connected = new Set<string>()
 
 const orig: Record<string, any> = {}
@@ -133,7 +134,7 @@ function fakeAdapter(provider: 'claude' | 'codex') {
           },
         }
       }
-      return { provider, model: 'claude-x', identity: { claudeSessionId: input.resumeFrom ?? 'new-claude' } }
+      return { provider, model: 'claude-x', identity: claudeLearnsNoId ? {} : { claudeSessionId: input.resumeFrom ?? 'new-claude' } }
     },
     stop: async (info: SessionInfo) => {
       stops.push({ tmuxName: info.tmuxName, home: info.codexHomeName })
@@ -195,7 +196,7 @@ beforeEach(() => {
   origStderr = process.stderr.write
   process.stderr.write = (() => true) as any
   sent = []; launches = []; stops = []; homeStops = []; pickedDuringLaunch = undefined
-  failCodexResume = false; failClaudeResume = false
+  failCodexResume = false; failClaudeResume = false; claudeLearnsNoId = false
 })
 
 afterEach(() => {
@@ -333,6 +334,27 @@ describe('handleResumeIntercept — Claude (pinned, unchanged)', () => {
     expect(launches[0].input.resumeCodex).toBeUndefined()
     expect(announced()).toContain('resumed — full context restored')
   })
+
+  // The spawn record spreads identity and recordSpawn takes identity.claudeSessionId:
+  // an assigned id lands on both; an unlearned one is absent from both (as persisted).
+  for (const learns of [true, false]) {
+    test(`spawn record and history entry ${learns ? 'carry' : 'omit'} claudeSessionId`, async () => {
+      claudeLearnsNoId = !learns
+      const dead = seedDead('claude')
+      await handleResumeIntercept(msg())
+      const liveId = registry.getByThread(THREAD)!
+      expect(liveId).not.toBe(dead.sessionId)
+      const live = registry.get(liveId)!
+      const entry = JSON.parse(JSON.stringify(threadRegistry.get(THREAD)!.sessionHistory.find(e => e.sessionId === liveId)))
+      if (learns) {
+        expect(live.claudeSessionId).toBe(dead.claudeSessionId!)
+        expect(entry.claudeSessionId).toBe(dead.claudeSessionId!)
+      } else {
+        expect('claudeSessionId' in live).toBe(false)
+        expect('claudeSessionId' in entry).toBe(false)
+      }
+    })
+  }
 
   test('tier 1 failure falls to fork-from-dead', async () => {
     failClaudeResume = true

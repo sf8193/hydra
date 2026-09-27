@@ -1,20 +1,23 @@
 // T0.7: pins the Codex runtime's boot sweep, its engine-event effects and the
 // persisted-liveness classification, before they move out of codex-bootstrap.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway, STATE_DIR } from '../config.js'
 import { registry, threadRegistry, SessionRegistry, type SessionInfo } from '../sessions.js'
-import { codexEngine } from '../engines/instances.js'
+import { codexEngine, engines } from '../engines/instances.js'
+import type { EngineAdapter } from '../engines/engine-adapter.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { getLastCodexMessage, isCodexTurnComplete, noteCodexTurnState } from '../engines/codex-observation.js'
 import { notePendingReply, _pendingForTesting } from '../reply-guard.js'
 import { queueCodexKeys, queuedCodexKeyCount } from '../codex-key-queue.js'
 import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { engineRecords } from '../engines/boot.js'
 
 // The boot sweep over every Codex record in the registry.
-const sweep = (adapter: CodexEngineAdapter) => adapter.start([...registry.values()].filter(r => r.adapter === adapter))
+const sweep = (adapter: CodexEngineAdapter) => adapter.start(engineRecords(adapter))
 
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms))
 const ids: string[] = []
@@ -52,6 +55,15 @@ afterEach(() => {
 })
 
 describe('T0.7 boot sweep', () => {
+  test('engineRecords: each engine gets exactly the records it is the adapter of', () => {
+    const claudeRec = put({ sessionId: 't07-er-claude', engine: 'claude', adapter: engines.claude })
+    const codexRec = put({ sessionId: 't07-er-codex', adapter: engines.codex })
+    const codexDead = put({ sessionId: 't07-er-codex-dead', adapter: engines.codex, deadAt: 1 })
+    const mine = (a: EngineAdapter) => engineRecords(a).filter(r => ids.includes(r.sessionId))
+    expect(mine(engines.codex)).toEqual([codexRec, codexDead])
+    expect(mine(engines.claude)).toEqual([claudeRec])
+  })
+
   // Fake engine: socket live per home, resume records its start/end order.
   function engineFor(live: Set<string>, order: string[]) {
     return {
@@ -194,6 +206,32 @@ describe('T0.7 engine events', () => {
         [info.threadId, '⚠️ Codex usage at **87%** of monthly limit.'],
       ])
     } finally { (gateway as any).send = orig }
+  })
+
+  // delivery:failed is an event-bus listener; other test files' _resetForTesting()
+  // drops module-level listeners for the rest of a shared process, so this runs fresh.
+  test('delivery:failed: a notice to the session thread, none without a record', () => {
+    const code = [
+      "const { gateway } = await import('./daemon/config.ts')",
+      "const { registry } = await import('./daemon/sessions.ts')",
+      "await import('./daemon/engines/codex-runtime.ts')",
+      "const { emit } = await import('./daemon/event-bus.ts')",
+      "const sent = []; gateway.send = async (c, text) => { sent.push([c, text]); return { id: 'x', channelId: c } }",
+      "registry.set('t07-fail', { sessionId: 't07-fail', threadId: 'th-t07-fail', tmuxName: 't07-fail', engine: 'codex' })",
+      "emit('delivery:failed', { sessionId: 't07-fail', status: 'rejected', reason: 'busy', messageId: 'm-1' })",
+      "emit('delivery:failed', { sessionId: 't07-fail', status: 'unknown', reason: 'lost ack' })",
+      "emit('delivery:failed', { sessionId: 't07-nobody', status: 'rejected', reason: 'no record' })",
+      "await new Promise(r => setTimeout(r, 0)); console.log(JSON.stringify(sent)); process.exit(0)",
+    ].join('; ')
+    const dir = mkdtempSync(join(tmpdir(), 'hydra-test-t07fail-'))
+    try {
+      const r = Bun.spawnSync(['bun', '-e', code], { cwd: join(import.meta.dir, '..', '..'), env: { ...process.env, HYDRA_STATE_DIR: dir, DISCORD_STATE_DIR: dir } })
+      const sent = JSON.parse(r.stdout.toString().trim().split('\n').at(-1)!)
+      expect(sent).toEqual([
+        ['th-t07-fail', '⚠️ Codex delivery was rejected (message m-1): busy'],
+        ['th-t07-fail', '⚠️ Codex delivery is uncertain; no automatic replay: lost ack'],
+      ])
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   test('contextUsage: stored with updatedAt, persisted, sampled to the log', async () => {
