@@ -2,7 +2,7 @@ import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
 import { execSync, execFileSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
-import { registry, threadRegistry } from './sessions.js'
+import { registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
 import { spawnModel } from '../shared/constants.js'
@@ -144,6 +144,11 @@ let duplicateMainIncumbentSocket: import('net').Socket | undefined
 // Bridge protocol handler
 // ---------------------------------------------------------------------------
 
+/** Role of a registering bridge connection: 'control' (tool-only sidecar) or 'session'. */
+export function connectionRoleFor(msg: { connectionRole?: unknown }, info: SessionInfo | undefined): 'control' | 'session' {
+  return msg.connectionRole === 'control' || info?.engine === 'codex' ? 'control' : 'session'
+}
+
 function handleBridgeMessage(conn: BridgeConn, raw: string): void {
   let msg: any
   try {
@@ -163,7 +168,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // Existing Codex MCP processes may predate the explicit role field. Codex
       // session traffic uses codexEngine, so daemon-socket registrations for a
       // Codex record are control-plane connections by definition.
-      conn.connectionRole = msg.connectionRole === 'control' || info?.engine === 'codex' ? 'control' : 'session'
+      conn.connectionRole = connectionRoleFor(msg, info)
       if (info) {
         const resolved = claudeSessionId || discoverClaudeSessionId(info.tmuxName)
         if (resolved) {

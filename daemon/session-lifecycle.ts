@@ -168,6 +168,12 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 // Listen state resolution: thread override → channel group → global → false
 // ---------------------------------------------------------------------------
 
+/** Tool names recorded in a spawn's sessionMetadata. Codex sessions discover
+ *  tools via their own MCP sidecar, not the daemon bridge. */
+export function spawnToolNames(engine: string, spawnType: SessionType): string[] {
+  return engine === 'claude' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : []
+}
+
 export function resolveListenState(threadId: string, channelId?: string): boolean {
   const thread = threadRegistry.get(threadId)
   return resolveListenStatePure(channelId, loadAccess(), thread?.listenOverride, thread?.parentChannelId, thread?.anchorChannelId)
@@ -671,8 +677,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const sessionMetadata = {
     role: 'worker' as const,
-    // Codex sessions discover tools via their own MCP sidecar, not the daemon bridge
-    tools: engine === 'claude' ? computeToolsForSession(spawnType, new Set()).map(t => t.name) : [],
+    tools: spawnToolNames(engine, spawnType),
     model: launched.model,
     cwd: effectiveCwd,
     platform: PLATFORM,
