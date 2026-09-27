@@ -36,8 +36,13 @@ describe('modifier registry', () => {
 })
 
 describe('flag modifiers', () => {
-  test('subagent and no-fallback resolve, by name and by alias, to the params they set', () => {
-    for (const [names, param] of [[['subagent', 'sa'], 'directSubagent'], [['no-fallback', 'nf'], 'noFallback']] as const) {
+  test('review flags resolve, by name and alias, to the params they set', () => {
+    for (const [names, param] of [
+      [['subagent', 'sa'], 'directSubagent'],
+      [['no-fallback', 'nf'], 'noFallback'],
+      [['no-lenses', 'nl'], 'noAutoLenses'],
+      [['no-ponytail', 'np'], 'noPonytail'],
+    ] as const) {
       for (const name of names) {
         const mod = resolveModifier(name)
         expect(mod).toBeDefined()
@@ -49,14 +54,14 @@ describe('flag modifiers', () => {
 
   test('flag names reach listModifierKeys — that is what the router regex is built from', () => {
     const keys = listModifierKeys()
-    for (const key of ['subagent', 'sa', 'no-fallback', 'nf']) expect(keys).toContain(key)
+    for (const key of ['subagent', 'sa', 'no-fallback', 'nf', 'no-lenses', 'nl', 'no-ponytail', 'np']) expect(keys).toContain(key)
   })
 
   test('partitionFlagModifiers turns flags into params and leaves lens modifiers alone', () => {
-    const { resolved } = resolveModifiers(['subagent', 'security', 'no-fallback'])
+    const { resolved } = resolveModifiers(['subagent', 'security', 'no-fallback', 'no-ponytail'])
     const { params, rest } = partitionFlagModifiers(resolved)
 
-    expect(params).toEqual({ directSubagent: true, noFallback: true })
+    expect(params).toEqual({ directSubagent: true, noFallback: true, noPonytail: true })
     expect(rest).toHaveLength(1)
     expect(rest[0].name).toBe('security')
   })

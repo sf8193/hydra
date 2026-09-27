@@ -1125,6 +1125,7 @@ export async function factoryReview(opts: {
       rounds: reviewRounds,
       topic,
       model: reviewerModel,
+      autoReviewLenses: true,
     })
   } catch (err) {
     unsub()
@@ -1518,6 +1519,7 @@ async function doBuilderDoneAsync(state: FactoryBuildState, args: FactoryDoneArg
     rounds: state.reviewRounds,
     topic: state.spec,
     model: state.reviewerModel,
+    autoReviewLenses: true,
   })
     .catch(err => {
       const errMsg = err instanceof Error ? err.message : String(err)
