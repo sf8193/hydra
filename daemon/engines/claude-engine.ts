@@ -13,7 +13,7 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult,
   ExecutionRetirementResult, StopResult,
-  ContextUsage, EngineSnapshot,
+  ContextUsage,
 } from './engine-adapter.js'
 import { transport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession } from '../util.js'
@@ -219,20 +219,6 @@ export class ClaudeEngine implements EngineAdapter {
       if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
-  }
-
-  async status(info: SessionInfo): Promise<EngineSnapshot> {
-    const alive = tmuxHasSession(info.tmuxName)
-    const connected = transport.has(info.sessionId)
-    const ctx = this.usage(info)
-    return {
-      provider: 'claude',
-      execution: alive ? (info.deadAt ? 'dead' : 'running') : 'dead',
-      connection: connected ? 'connected' : 'disconnected',
-      surface: alive ? 'present' : 'absent',
-      context: ctx,
-      turnActive: info.turnState === 'working',
-    }
   }
 
   uiTarget(info: SessionInfo): string { return info.tmuxName }

@@ -47,14 +47,10 @@ export type ContextUsage = {
   readonly percent: number
 }
 
-export type EngineSnapshot = {
-  readonly provider: ProviderId
-  readonly execution: 'running' | 'idle' | 'dead' | 'unknown'
-  readonly connection: 'connected' | 'disconnected' | 'connecting'
-  readonly surface: 'present' | 'absent' | 'repairable'
-  readonly context: ContextUsage | null
-  readonly turnActive: boolean
-}
+/** A tmux keystroke action: raw key names, or literal text plus an optional trailing key. */
+export type TmuxKeyAction =
+  | { target: string; mode: 'raw'; keys: string[] }
+  | { target: string; mode: 'literal'; text: string; trailingKey?: string }
 
 // ---------------------------------------------------------------------------
 // Launch
@@ -111,7 +107,6 @@ export interface EngineAdapter {
   isAlive(info: SessionInfo): Promise<boolean>
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null
-  status(info: SessionInfo): Promise<EngineSnapshot>
 
   // Surface
   uiTarget(info: SessionInfo): string

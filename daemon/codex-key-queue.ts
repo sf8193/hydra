@@ -1,15 +1,15 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 
+import type { TmuxKeyAction } from './engines/engine-adapter.js'
+
 const execFileAsync = promisify(execFile)
 const MAX_QUEUED_ACTIONS = 20
 type QueuedAction = { action: TmuxKeyAction; settled?: (error?: Error) => void }
 const queues = new Map<string, QueuedAction[]>()
 const inFlight = new Map<string, Promise<void>>()
 
-export type TmuxKeyAction =
-  | { target: string; mode: 'raw'; keys: string[] }
-  | { target: string; mode: 'literal'; text: string; trailingKey?: string }
+export type { TmuxKeyAction } from './engines/engine-adapter.js'
 
 export function queueCodexKeys(sessionId: string, action: TmuxKeyAction, settled?: (error?: Error) => void): number {
   const queue = queues.get(sessionId) ?? []

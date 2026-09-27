@@ -198,7 +198,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         break
       }
 
-      if (sessionId !== 'main' && info?.engine !== 'codex' && trackRegistration(sessionId)) {
+      if (sessionId !== 'main' && trackRegistration(sessionId)) {
         if (info) {
           process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
           try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}

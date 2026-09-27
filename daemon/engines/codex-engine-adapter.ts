@@ -15,7 +15,7 @@ import type {
   EngineAdapter, LaunchInput, LaunchResult,
   DeliveryMode, DeliveryResult,
   ExecutionRetirementResult, StopResult,
-  ContextUsage, EngineSnapshot,
+  ContextUsage,
 } from './engine-adapter.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
@@ -206,20 +206,6 @@ export class CodexEngineAdapter implements EngineAdapter {
       if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
     } catch { return null }
-  }
-
-  async status(info: SessionInfo): Promise<EngineSnapshot> {
-    const connected = this.engine.isConnected(info.sessionId)
-    const alive = connected || tmuxHasSession(info.tmuxName)
-    const ctx = this.usage(info)
-    return {
-      provider: 'codex',
-      execution: alive ? 'running' : 'dead',
-      connection: connected ? 'connected' : 'disconnected',
-      surface: tmuxHasSession(info.tmuxName) ? 'present' : 'absent',
-      context: ctx,
-      turnActive: info.turnState === 'working',
-    }
   }
 
   uiTarget(info: SessionInfo): string { return `${info.tmuxName}:hydra-chat` }
