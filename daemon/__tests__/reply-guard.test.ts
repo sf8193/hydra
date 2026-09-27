@@ -13,7 +13,9 @@ import {
   _ESCALATION_GRACE_MS,
   _setDeps,
   _resetDeps,
+  pollActivityOnce,
 } from '../reply-guard.js'
+import { probeByteTmuxName } from '../pane-probe.js'
 import type { SessionInfo } from '../sessions.js'
 import type { ConversationForensics } from '../observability.js'
 
@@ -605,5 +607,69 @@ describe('escalateWithCapture', () => {
     armThenAdvance('cedar', T0 + 60_000)
     expect(escalations[0].text).not.toContain('mid-turn fragment')
     expect(escalations[0].text).toContain('fake pane content')
+  })
+})
+
+// T5 (adapter-policy): pins the 20s activity poller (F4s). Today both engines
+// read tmux window_activity of the record's tmuxName; 'main' reads the byte window.
+describe('pollActivityOnce', () => {
+  const targets: string[] = []
+  let activity: (target: string) => number
+  const windowActivity = (target: string) => { targets.push(target); return activity(target) }
+  const findByName = (name: string) => [...testSessions.values()].find(i => i.tmuxName === name)
+  const poll = (nowSec: number) => pollActivityOnce(nowSec, { windowActivity, findByName })
+  const escalatesAfterGrace = (name: string) => handleSilenceEvent(name, Date.now() + _ESCALATION_GRACE_MS)
+
+  beforeEach(() => { targets.length = 0 })
+
+  for (const engine of ['claude', 'codex'] as const) {
+    test(`${engine}: active -> working + activity gate`, () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'idle' })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), Date.now() - 1000)
+      activity = () => nowSec - 10
+      poll(nowSec)
+      expect(targets).toEqual(['cedar'])
+      expect(info.turnState).toBe('working')
+      expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(true)
+    })
+
+    test(`${engine}: idle -> idle + silence armed`, () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'working' })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), T0)
+      activity = () => nowSec - 45
+      poll(nowSec)
+      expect(targets).toEqual(['cedar'])
+      expect(info.turnState).toBe('idle')
+      expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(false)
+      expect(escalatesAfterGrace('cedar')).toBe(1)
+    })
+  }
+
+  test("main: reads the byte window, guard keeps logical 'main'", () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    activity = () => 0
+    poll(nowSec)
+    expect(targets).toEqual([probeByteTmuxName()])
+    expect(escalatesAfterGrace('main')).toBe(1)
+  })
+
+  test('tmux throw -> skip', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working' })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), T0)
+    activity = () => { throw new Error('no such session') }
+    poll(nowSec)
+    expect(targets).toEqual(['cedar'])
+    expect(info.turnState).toBe('working')
+    expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(false)
+    // Silence was never armed: the first explicit silence only arms the grace window.
+    expect(escalatesAfterGrace('cedar')).toBe(0)
   })
 })
