@@ -21,7 +21,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { _resetRolloutMemoForTesting, codexTotals, codexUsageTotals, findRollout, lastTokenUsage } from '../codex-rollout.js'
 import { CodexEngine } from '../codex-engine.js'
-import { codexEngine } from '../codex-bootstrap.js'
+import { codexEngine, onTurnReconciled } from '../codex-bootstrap.js'
 import { getLastCodexMessage, isCodexTurnComplete } from '../observability.js'
 import { registry, type SessionInfo } from '../sessions.js'
 
@@ -84,6 +84,9 @@ describe('rollout tail', () => {
     const home = tmp()
     plantRollout(home, 'other-thread', [tc(1, 0, 1)], '2026/09/27')
     const mine = plantRollout(home, 't1', [tc(2, 0, 1)])
+    // Decoys that contain the suffix but don't end with it; both sort ahead of the real file.
+    writeFileSync(join(home, 'sessions/2026/09/26', 'rollout-x-t1extra.jsonl'), tc(9, 0, 9) + '\n')
+    writeFileSync(join(home, 'sessions/2026/09/26', 'rollout-x-t1.jsonl.tmp'), tc(9, 0, 9) + '\n')
     expect(findRollout(home, 't1')).toBe(mine)
     expect(findRollout(home, 'missing')).toBeUndefined()
   })
@@ -123,6 +126,14 @@ describe('codexUsageTotals', () => {
     const p = plantRollout(home, 't1', [tc(1_460_000, 1_000_000, 900)])
     const a = read(subject(home))!
     appendFileSync(p, tc(117_000, 100_000, 20) + '\n')
+    expect(read(subject(home), a.cursor)?.restarted).toBe(true)
+  })
+
+  test('a drop in cached_input_tokens alone is a restart', () => {
+    const home = tmp()
+    const p = plantRollout(home, 't1', [tc(1000, 800, 5)])
+    const a = read(subject(home))!
+    appendFileSync(p, tc(1000, 100, 5) + '\n')
     expect(read(subject(home), a.cursor)?.restarted).toBe(true)
   })
 
@@ -254,6 +265,12 @@ describe('codex-bootstrap handles turnReconciled as observation only', () => {
       expect(isCodexTurnComplete('recon-2')).toBe(true)
       expect(getLastCodexMessage('recon-2', 0)).toBeNull()
     } finally { r.done() }
+  })
+
+  test('an unregistered session is ignored', () => {
+    onTurnReconciled('recon-unregistered', { turnId: 't', status: 'completed', completedAt: 1790489642, lastAgentText: 'ok' })
+    expect(isCodexTurnComplete('recon-unregistered')).toBe(false)
+    expect(getLastCodexMessage('recon-unregistered', 0)).toBeNull()
   })
 
   test('an in-progress resume leaves the flag unset', async () => {

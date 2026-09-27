@@ -87,6 +87,9 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
 export function onTurnReconciled(sessionId: string, t: ReconciledTurn): void {
   if (!registry.get(sessionId)) return
   noteCodexTurnState(sessionId, true)
+  // completedAt is epoch SECONDS, so `at` is floored: a turn that finished less
+  // than 1s after the message was delivered reads as older than it and is
+  // deliberately not relayed — erring toward never relaying a stale answer.
   // No completedAt → at 0: an answer of unknown age is never relayed as new.
   if (t.lastAgentText) noteCodexMessage(sessionId, t.lastAgentText, t.completedAt ? t.completedAt * 1000 : 0)
 }

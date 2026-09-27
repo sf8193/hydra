@@ -1105,6 +1105,7 @@ describe('raindrop: events', () => {
     registry.set('cdx-2', sessionInfo({ sessionId: 'cdx-2', threadId: 'T-cdx2', engine: 'codex', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('cdx-2'))
     expect(defaultUsageFor('cdx-2')).toBeUndefined()
+    expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
   })
 
   test('a session already gone from the registry is not reported as unresolved', () => {
