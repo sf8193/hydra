@@ -393,6 +393,29 @@ async function notifyUsageLimit(entry: ProbeEntry, now: number): Promise<void> {
   }
 }
 
+// Claude Code's footer shows "You've used 91% of your weekly limit · resets …"
+// once usage gets high. The limit is account-wide, so byte's pane is enough.
+// Alert once per threshold; a drop in percent (weekly reset) re-arms them.
+const WEEKLY_USAGE_RE = /You've used (\d+)% of your weekly limit(?: · resets ([^\n]*?))?\s*$/m
+const WEEKLY_USAGE_THRESHOLDS = [80, 90, 95]
+let weeklyUsageAlerted = 0
+let weeklyUsageLast = 0
+
+function checkWeeklyUsage(tail: string): void {
+  const m = tail.match(WEEKLY_USAGE_RE)
+  if (!m) return
+  const pct = Number(m[1])
+  if (pct < weeklyUsageLast) weeklyUsageAlerted = 0
+  weeklyUsageLast = pct
+  const crossed = WEEKLY_USAGE_THRESHOLDS.filter(t => pct >= t && t > weeklyUsageAlerted).pop()
+  if (!crossed || !io.defaultChannel) return
+  weeklyUsageAlerted = crossed
+  const resets = m[2] ? ` · resets ${m[2].trim()}` : ''
+  void io.safeSend(io.defaultChannel, `> ⚠️ Claude usage at **${pct}%** of weekly limit${resets}.`)
+}
+
+export function _resetWeeklyUsage(): void { weeklyUsageAlerted = 0; weeklyUsageLast = 0 }
+
 async function extractOauthUrl(tmuxName: string): Promise<string | null> {
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES * 4)
   if (!tail) return null
@@ -685,6 +708,8 @@ export async function probeAllSessions(now?: number): Promise<void> {
       clearState(key, 0, 'gone') // capture failed — force-clear
       continue
     }
+
+    if (target.isMain) checkWeeklyUsage(tailText)
 
     const sessionInfo = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
     const detected = sessionInfo?.adapter

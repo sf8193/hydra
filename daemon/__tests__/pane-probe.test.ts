@@ -11,6 +11,7 @@ const transportMessages: Array<{ sessionId: string; msg: any }> = []
 const connectedSessions = new Set<string>()
 
 import {
+  _resetWeeklyUsage,
   detectBlockingState,
   probeAllSessions,
   getThreadIntercept,
@@ -594,6 +595,23 @@ describe('probeAllSessions', () => {
     } finally {
       if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
     }
+  })
+
+  it('alerts once per weekly-usage threshold from byte\'s footer, re-arming after a reset', async () => {
+    _resetWeeklyUsage()
+    const footer = (pct: number) => `❯ \n─────\n  options_bot git:(main) claude-sonnet-5[1m] ctx:8%        You've used ${pct}% of your weekly limit · resets Oct 2, 6am (America/Los_Angeles)\n  ⏵⏵ bypass permissions on`
+    const usageMsgs = () => sentMessages.filter(m => m.channelId === 'root-channel-123' && m.text.includes('weekly limit')).map(m => m.text)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+    for (const [i, pct] of [70, 91, 92, 96, 10, 85].entries()) {
+      paneTails.set('discord-byte', footer(pct))
+      await probeAllSessions(T0 + i * 60_000)
+    }
+    await flush()
+    expect(usageMsgs()).toEqual([
+      '> ⚠️ Claude usage at **91%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+      '> ⚠️ Claude usage at **96%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+      '> ⚠️ Claude usage at **85%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+    ])
   })
 
   it('respects notification cooldown', async () => {
