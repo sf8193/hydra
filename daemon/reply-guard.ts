@@ -18,7 +18,7 @@
 // restoring the old nudge-cooldown's magnitude so a session mid-tool-call
 // still gets real working time before anything lands in the user's chat.
 // Skipped entirely when the caller already has certainty (turnOutcome's
-// confirmedComplete) — codex-bootstrap.ts's turnCompleted handler calls handleSilenceEvent
+// confirmedComplete) — codex-runtime.ts's turnCompleted handler calls handleSilenceEvent
 // directly, and by then there's no ambiguity left to wait out (round-2-of-
 // round-2 review caught this one).
 //
@@ -197,7 +197,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     // escalation — restores the working-time budget the old nudge cooldown
     // happened to provide, without reintroducing the nudge message itself.
     // Skipped entirely when the caller already has certainty the turn is
-    // over (codex-bootstrap.ts's turnCompleted handler calls
+    // over (codex-runtime.ts's turnCompleted handler calls
     // handleSilenceEvent directly and synchronously — an entry only
     // survives to see that call if `reply()` was never made during the now-
     // finished turn, so there's no remaining ambiguity left to wait out;
@@ -398,7 +398,7 @@ export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
 // The turnState writes below are a coarse, tmux-visual-silence-driven proxy
 // for reply-guard's own activity gate ONLY. They are NOT the source of
 // truth for "has Codex's protocol-level turn actually finished" — that's
-// the adapter's turn().confirmedComplete, driven by codex-bootstrap.ts's
+// the adapter's turn().confirmedComplete, driven by codex-runtime.ts's
 // own turnCompleted/message events. Do not read turnState for anything that
 // needs to know whether a turn is really done; 45s of no terminal repaint
 // (a long-running tool, a stalled remote call) is not the same thing.

@@ -12,10 +12,9 @@ import { notePendingReply, _pendingForTesting } from '../reply-guard.js'
 import { queueCodexKeys, queuedCodexKeyCount } from '../codex-key-queue.js'
 import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
-import { reconnectCodexSessions } from '../codex-bootstrap.js'
 
 // The boot sweep over every Codex record in the registry.
-const sweep = (_adapter: CodexEngineAdapter) => reconnectCodexSessions()
+const sweep = (adapter: CodexEngineAdapter) => adapter.start([...registry.values()].filter(r => r.adapter === adapter))
 
 const tick = (ms = 0) => new Promise(r => setTimeout(r, ms))
 const ids: string[] = []
@@ -104,6 +103,31 @@ describe('T0.7 boot sweep', () => {
     expect(n).toBe(1)
     await tick(10)
     expect(disconnects).toEqual([])
+  })
+})
+
+// S0.7: start() owns the logging daemon.ts:79-83 did, and never rejects.
+describe('Codex start: outcome logging', () => {
+  async function stderrOf(fn: () => Promise<unknown>): Promise<string[]> {
+    const lines: string[] = [], orig = process.stderr.write
+    process.stderr.write = ((l: string) => { lines.push(String(l)); return true }) as any
+    try { await fn() } finally { process.stderr.write = orig }
+    return lines
+  }
+
+  test('a rejecting sweep resolves start and logs the failure', async () => {
+    const adapter = new CodexEngineAdapter({} as any) as any
+    const info = put({ sessionId: 't07-throw', adapter })
+    adapter.reconnect = async () => { throw new Error('boom') }
+    let settled = 'pending'
+    const lines = await stderrOf(() => adapter.start([info]).then(() => { settled = 'resolved' }, () => { settled = 'rejected' }))
+    expect(settled).toBe('resolved')
+    expect(lines).toContain('daemon: codex reconnection failed: Error: boom\n')
+  })
+
+  test('a finished sweep logs completion, also with no records', async () => {
+    const adapter = new CodexEngineAdapter({} as any)
+    expect(await stderrOf(() => adapter.start([]))).toEqual(['daemon: codex reconnection sweep complete\n'])
   })
 })
 

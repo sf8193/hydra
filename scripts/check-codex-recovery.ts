@@ -37,7 +37,7 @@ Object.assign(gateway, {
 })
 const { registry, threadRegistry } = await import(repo + '/daemon/sessions.ts')
 const { doSpawnSession, killSession } = await import(repo + '/daemon/session-lifecycle.ts')
-const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/daemon/codex-bootstrap.ts')
+const { codexEngine, reconnectCodexAfterDisconnect } = await import(repo + '/daemon/engines/codex-runtime.ts')
 const { handleResumeIntercept, handleRespawnIntercept } = await import(repo + '/daemon/commands/thread.ts')
 const { codexHomeDir, stopCodexAppServer } = await import(repo + '/daemon/codex-process.ts')
 const starts: {id: string, text: string}[] = []

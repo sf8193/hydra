@@ -147,6 +147,9 @@ export interface EngineAdapter {
   readonly channel: 'bridge' | 'engine'
 
   // Lifecycle
+  // Boot, once, over this provider's persisted records; never rejects. Claude:
+  // nothing to do. Codex: reconnect the live records to their app-servers.
+  start(records: readonly SessionInfo[]): Promise<void>
   launch(input: LaunchInput): Promise<LaunchResult>
   // Deliver one notification. Claude: strip the intents, then write to the
   // owning transport's session bridge, else enqueue there; the write is
@@ -178,9 +181,6 @@ export interface EngineAdapter {
 
   // Probe — detect and resolve blocking TUI states
   detectBlockingState(info: SessionInfo, tailText: string): BlockingState | null
-
-  // Boot — reconnect to surviving execution after daemon restart
-  reconnect(info: SessionInfo): Promise<boolean>
 
   // Native continuation of a gone session. Pure: spawns nothing; respawn is the
   // neutral last tier. resume.kind says how a resume is confirmed, so callers

@@ -1,22 +1,29 @@
 /**
- * Codex Engine Bootstrap — initializes the CodexEngine singleton and wires
- * its events into the daemon's protocol dispatch system.
+ * Codex runtime — the CodexEngine singleton, its events wired into the daemon
+ * at module init, and the boot sweep the Codex adapter's start() runs.
  *
  * Codex app-servers outlive their replaceable tmux TUIs. This module owns the
  * engine event plumbing and reconnects transiently lost daemon connections.
+ * Its listeners bind their dependencies (registry, reply guard, safeSend,
+ * dispatchDisconnect) at import, as before, so an event that arrives before
+ * start() behaves exactly as one after it.
  */
 
-import { CodexEngine, type ReconciledTurn } from './codex-engine.js'
-import { registry, threadRegistry } from './sessions.js'
-import { dispatchDisconnect } from './protocol-registry.js'
-import { handleSilenceEvent, noteActivityForSession } from './reply-guard.js'
+import { CodexEngine, type ReconciledTurn } from '../codex-engine.js'
+import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
+import { dispatchDisconnect } from '../protocol-registry.js'
+import { handleSilenceEvent, noteActivityForSession } from '../reply-guard.js'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
-import { safeSend } from './util.js'
-import { clearCodexKeys, flushCodexKeys } from './codex-key-queue.js'
-import { noteCodexMessage, noteCodexTurnState } from './engines/codex-observation.js'
-import { on } from './event-bus.js'
+import { STATE_DIR } from '../config.js'
+import { safeSend } from '../util.js'
+import { clearCodexKeys, flushCodexKeys } from '../codex-key-queue.js'
+import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
+import { on } from '../event-bus.js'
+
+// reconnect is Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
+type Reconnectable = { reconnect(info: SessionInfo): Promise<boolean> }
+const reconnectOf = (info: SessionInfo) => (info.adapter as unknown as Reconnectable).reconnect(info)
 
 // ---------------------------------------------------------------------------
 // Singleton
@@ -161,7 +168,7 @@ export async function reconnectCodexAfterDisconnect(
     const info = deps.get(sessionId)
     if (!info || info.engine !== 'codex' || !info.codexThreadId || !info.adapter) return false
     try {
-      const ok = await info.adapter.reconnect(info)
+      const ok = await reconnectOf(info)
       if (deps.get(sessionId) !== info) return false // replaced/removed meanwhile (invariant 10)
       if (!ok) continue
       delete info.deadAt
@@ -194,14 +201,15 @@ codexEngine.on('disconnected', (sessionId: string) => {
 // Reconnection — on daemon startup, reconnect persisted codex sessions
 // ---------------------------------------------------------------------------
 
-export async function reconnectCodexSessions(): Promise<void> {
-  const codexSessions = [...registry.values()].filter(s => s.engine === 'codex' && !s.deadAt)
+// records: the Codex records at boot. Only live ones reconnect, one at a time.
+export async function reconnectCodexSessions(records: readonly SessionInfo[]): Promise<void> {
+  const codexSessions = records.filter(s => !s.deadAt)
   if (codexSessions.length === 0) return
 
   let reconnected = 0
   for (const info of codexSessions) {
     if (!info.adapter) continue
-    const connected = await info.adapter.reconnect(info)
+    const connected = await reconnectOf(info)
 
     if (!connected) {
       info.deadAt = Date.now()

@@ -21,7 +21,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { _resetRolloutMemoForTesting, codexTotals, codexUsageTotals, findRollout, lastTokenUsage } from '../codex-rollout.js'
 import { CodexEngine } from '../codex-engine.js'
-import { codexEngine, onTurnReconciled } from '../codex-bootstrap.js'
+import { codexEngine, onTurnReconciled } from '../engines/codex-runtime.js'
 import { getLastCodexMessage, isCodexTurnComplete } from '../engines/codex-observation.js'
 import { registry, type SessionInfo } from '../sessions.js'
 
@@ -233,7 +233,7 @@ describe('turnReconciled on connectAndResume', () => {
   })
 })
 
-describe('codex-bootstrap handles turnReconciled as observation only', () => {
+describe('codex-runtime handles turnReconciled as observation only', () => {
   function record(sessionId: string) {
     const surfaces: string[] = []
     const info = {

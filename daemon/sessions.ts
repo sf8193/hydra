@@ -7,6 +7,7 @@ import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
 import { recordPendingRetirement } from './retirement-journal.js'
+import { classifyPersisted } from './engines/boot.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -77,10 +78,6 @@ export type SessionInfo = {
   // clearFactoryIdentity and clearProtocolOverrides are the canonical cleanup paths.
   toolDescriptions?: Partial<Record<ToolName, string>>
   toolInputSchemas?: Partial<Record<ToolName, object>>
-}
-
-export function deferPersistedLivenessToProvider(info: Pick<SessionInfo, 'engine' | 'codexThreadId'>, tmuxAlive: boolean): boolean {
-  return !tmuxAlive && info.engine === 'codex' && !!info.codexThreadId
 }
 
 export function addCapability(info: SessionInfo, cap: Capability): void {
@@ -465,7 +462,7 @@ export class SessionRegistry {
           tmuxAlive = true
         } catch {}
 
-        if (tmuxAlive || deferPersistedLivenessToProvider(info, tmuxAlive)) {
+        if (classifyPersisted(info, tmuxAlive) === 'live') {
           delete info.deadAt
           restored++
         } else {

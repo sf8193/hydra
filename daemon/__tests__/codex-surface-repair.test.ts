@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { CODEX_SURFACE_REPAIR_DELAYS_MS, reconnectCodexAfterDisconnect, scheduleCodexSurfaceRepairs } from '../codex-bootstrap.js'
+import { CODEX_SURFACE_REPAIR_DELAYS_MS, reconnectCodexAfterDisconnect, scheduleCodexSurfaceRepairs } from '../engines/codex-runtime.js'
 
 describe('delayed Codex surface repair', () => {
   test('rechecks after the TUI teardown window', () => {

@@ -1,7 +1,7 @@
 // daemon/engines/codex-observation.ts
 //
 // What the daemon observes of a Codex turn: its last message and whether the
-// protocol-level turn finished, both pushed by codex-bootstrap's events.
+// protocol-level turn finished, both pushed by codex-runtime's events.
 
 import { readConversationForensics, vitalsPruners } from '../observability.js'
 import { transcriptPathFor } from '../usage.js'
@@ -78,7 +78,7 @@ export function codexTurnOutcome(info: TurnInfo, sinceMs: number, src: TurnSourc
     confirmedComplete: src.isCodexTurnComplete(info.sessionId),
     answer: () => {
       if (info.claudeSessionId) return transcriptAnswer(info.claudeSessionId, sinceMs, src)
-      // Engine-owned signal (codex-bootstrap.ts's own turnCompleted event),
+      // Engine-owned signal (codex-runtime.ts's own turnCompleted event),
       // deliberately NOT SessionInfo.turnState — that field is also written by
       // the tmux-activity poller from raw visual silence, independent of
       // whether Codex's actual turn has finished.

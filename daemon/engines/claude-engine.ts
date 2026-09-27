@@ -128,6 +128,8 @@ export class ClaudeEngine implements EngineAdapter {
     }
   }
 
+  async start(_records: readonly SessionInfo[]): Promise<void> {}
+
   async launch(input: LaunchInput): Promise<LaunchResult> {
     const { sessionId, tmuxName, model } = input
     const effectiveCwd = input.cwd

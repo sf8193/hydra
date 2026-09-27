@@ -1,4 +1,4 @@
-import { codexEngine } from '../codex-bootstrap.js'
+import { codexEngine } from './codex-runtime.js'
 import { transport } from '../bridge-transport.js'
 import { ClaudeEngine } from './claude-engine.js'
 import { CodexEngineAdapter } from './codex-engine-adapter.js'

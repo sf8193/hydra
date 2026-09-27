@@ -25,6 +25,7 @@ import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
+import { reconnectCodexSessions } from './codex-runtime.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -82,6 +83,15 @@ export class CodexEngineAdapter implements EngineAdapter {
       confirmedComplete, answer,
       get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
     }
+  }
+
+  // The boot sweep, with the completion and failure logging daemon.ts did.
+  start(records: readonly SessionInfo[]): Promise<void> {
+    return reconnectCodexSessions(records).then(() => {
+      process.stderr.write('daemon: codex reconnection sweep complete\n')
+    }).catch(err => {
+      process.stderr.write(`daemon: codex reconnection failed: ${err}\n`)
+    })
   }
 
   // Registers the MCP sidecar and starts the durable app-server; returns the spawn log path.
@@ -266,7 +276,7 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   usage(info: SessionInfo): ContextUsage | null {
-    // Prefer structured usage from codex-bootstrap's contextUsage event
+    // Prefer structured usage from codex-runtime's contextUsage event
     if (info.contextUsage) {
       return { usedTokens: info.contextUsage.usedTokens, contextWindow: info.contextUsage.contextWindow, percent: info.contextUsage.percent }
     }
@@ -364,6 +374,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     return null
   }
 
+  // Boot and disconnect recovery (codex-runtime); not part of EngineAdapter.
   async reconnect(info: SessionInfo): Promise<boolean> {
     const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
     // Generation bound (invariant 10): if this record was replaced or removed while
