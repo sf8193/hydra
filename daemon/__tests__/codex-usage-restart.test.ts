@@ -70,6 +70,7 @@ describe('rollout tail', () => {
     const p = plantRollout(tmp(), 't1', [tc(10, 5, 1)])
     appendFileSync(p, tc(99, 5, 9))
     expect(lastTokenUsage(p)?.input_tokens).toBe(10)
+    expect(lastTokenUsage(p, 5)?.input_tokens, 'a first chunk with no newline is still the partial line').toBe(10)
   })
 
   test('no token_count gives null', () => {
@@ -264,6 +265,15 @@ describe('codex-bootstrap handles turnReconciled as observation only', () => {
       await resume(codexEngine, 'recon-2', [liveTurn({ itemsView: 'notLoaded', items: [] })])
       expect(isCodexTurnComplete('recon-2')).toBe(true)
       expect(getLastCodexMessage('recon-2', 0)).toBeNull()
+    } finally { r.done() }
+  })
+
+  test('no completedAt: the text is recorded at 0, never relayed as new', () => {
+    const r = record('recon-4')
+    try {
+      onTurnReconciled('recon-4', { turnId: 't', status: 'completed', completedAt: null, lastAgentText: 'ok' })
+      expect(getLastCodexMessage('recon-4', 0)).toBe('ok')
+      expect(getLastCodexMessage('recon-4', 1)).toBeNull()
     } finally { r.done() }
   })
 
