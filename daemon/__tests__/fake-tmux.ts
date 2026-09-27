@@ -32,8 +32,7 @@ esac
 // process with an execFileSync that returns ''. When that leak is present,
 // route it through the shim for the duration of the test, then put peek's
 // default back.
-const leaked = (childProcess.execFileSync as any).mock ? childProcess.execFileSync as any : null
-const leakedSh = (childProcess.execSync as any).mock ? childProcess.execSync as any : null
+// Checked per call, not at import: peek's mock may be installed after this module loads.
 
 export type FakeTmux = {
   dir: string
@@ -49,6 +48,8 @@ export type FakeTmux = {
 }
 
 export function withFakeTmux(): FakeTmux {
+  const leaked = (childProcess.execFileSync as any).mock ? childProcess.execFileSync as any : null
+  const leakedSh = (childProcess.execSync as any).mock ? childProcess.execSync as any : null
   const dir = mkdtempSync(join(tmpdir(), 'hydra-faketmux-'))
   const claudeDir = join(dir, 'claude-config')
   writeFileSync(join(dir, 'tmux'), TMUX); chmodSync(join(dir, 'tmux'), 0o755)

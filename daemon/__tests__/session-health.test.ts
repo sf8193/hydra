@@ -155,6 +155,24 @@ describe('orphan detection', () => {
     expect(history(info).claudeSessionId).toBe(SID)
   })
 
+  test('C4: Codex orphan never asks tmux for the pane', () => {
+    const info = seed({ ageMs: OLD, engine: 'codex' })
+    tmux.alive(info.tmuxName); tmux.pid(info.tmuxName, PID); tmux.seedClaudeSession(PID, SID)
+    pollSessionsOnce(NOW)
+    expect(tmux.calls().filter(c => c.startsWith('list-panes'))).toEqual([])
+    expect(info.claudeSessionId).toBeUndefined()
+    expect(to(info, '⚠️')).toHaveLength(1)
+  })
+
+  test('C4: discovery persists the registry', () => {
+    let n = 0; const p = registry.persist; (registry as any).persist = () => { n++ }
+    const info = seed({ ageMs: OLD })
+    tmux.alive(info.tmuxName); tmux.pid(info.tmuxName, PID); tmux.seedClaudeSession(PID, SID)
+    pollSessionsOnce(NOW)
+    ;(registry as any).persist = p
+    expect(n).toBe(1)
+  })
+
   test('headless and guest sessions are never orphans', () => {
     const headless = seed({ ageMs: OLD, headless: true, claudeSessionId: 'k1' })
     const guest = seed({ ageMs: OLD, sessionType: 'thread_guest', claudeSessionId: 'k2' })

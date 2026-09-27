@@ -101,6 +101,8 @@ describe('G1: killSession discovers a missing Claude id', () => {
     await killSession(info, 'session ended')
 
     expect(listPanes()).toEqual([`list-panes -t ${info.tmuxName} -F #{pane_pid}`])
+    const c = tmux.calls()
+    expect(c.findIndex(x => x.startsWith('list-panes'))).toBeLessThan(c.findIndex(x => x.startsWith('kill-session')))
     expect(info.claudeSessionId).toBe(SID)
     expect(stderr.join('')).toContain(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${SID}`)
     const entry = threadRegistry.get(info.threadId)!.sessionHistory.find(h => h.sessionId === info.sessionId)!
@@ -154,6 +156,13 @@ describe('G2: handleForkIntercept discovers only for Claude→Claude', () => {
     await handleForkIntercept(forkMsg(info))
 
     expect(info.claudeSessionId).toBe(SID)
+  })
+
+  test('Codex→Claude: no discovery', async () => {
+    const info = seed('codex', { adapter: fakeCodexAdapter() })
+    await handleForkIntercept(forkMsg(info), undefined, undefined, { engine: 'claude' })
+    expect(listPanes()).toEqual([])
+    expect(info.claudeSessionId).toBeUndefined()
   })
 
   test('Claude→Codex: no discovery', async () => {
