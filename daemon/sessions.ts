@@ -47,6 +47,7 @@ export type SessionInfo = {
   worktreeRepo?: string
   worktreePath?: string
   worktreeBranch?: string
+  handoffSelection?: { model: string; engine: 'claude' | 'codex' }  // set by `handoff <model>`, read by the handoff tool; dies with the record
   deadAt?: number
   contextLinks?: string[]
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies

@@ -13,7 +13,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
 import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
-import { handleThreadKillIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
+import { handleThreadKillIntercept, handleHandoffIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
 import { handleBuildV2Intercept, handleCancelBuildV2Intercept } from './commands/build-v2.js'
 import { handleDelegatedBuildIntercept } from './commands/delegated-build.js'
@@ -545,6 +545,15 @@ gateway.onMessage(async (msg: InboundMessage) => {
       } else {
         void handleRespawnIntercept(msg, respawnTopic, undefined, selection)
       }
+      return
+    }
+
+    // "handoff" / "handoff <model>" — fresh session in this thread, optionally on another model
+    const handoffMatch = msg.content.match(/^(?:handoff|\/handoff)(?:\s+([a-z][\w.-]*))?\s*$/i)
+    if (handoffMatch && msg.isThread) {
+      const selection = resolveProtocolModel(handoffMatch[1], msg.channelId, msg.id)
+      if (selection === false) return
+      void handleHandoffIntercept(msg, selection)
       return
     }
 

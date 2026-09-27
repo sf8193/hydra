@@ -4,7 +4,7 @@ import { gateway, INBOX_DIR } from './config.js'
 import { registry, resolveSendTarget } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { doSpawnSession, killSession } from './session-lifecycle.js'
+import { doSpawnSession, handOff, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
@@ -348,6 +348,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           }
         })
         return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] }
+      }
+
+      case 'handoff': {
+        const path = args.path as string | undefined
+        const info = callerSessionId ? registry.get(callerSessionId) : undefined
+        if (!info) throw new Error('handoff: calling session not found')
+        let size = 0
+        try { size = path ? statSync(path).size : 0 } catch {}
+        if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
+        // Answer before acting: the kill inside handOff ends this very session.
+        setTimeout(() => {
+          handOff(info, path).then(
+            r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\``),
+            err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
+          ).catch(() => {})
+        }, 500)
+        return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }
       }
 
       case 'set_description': {

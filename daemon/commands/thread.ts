@@ -1,8 +1,8 @@
 import { execSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { unlinkSync } from 'fs'
-import { gateway } from '../config.js'
+import { mkdirSync, unlinkSync } from 'fs'
+import { gateway, STATE_DIR } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
@@ -648,4 +648,38 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'peek', `capture failed: ${err}`)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Handoff — ask the live session to write its state, then hand the thread to a
+// fresh session (via the `handoff` tool, which does the kill + successor spawn)
+// ---------------------------------------------------------------------------
+
+function handoffRequest(artifact: string): string {
+  return [
+    `[system] Sam asked you to hand off this thread to a fresh session.`,
+    `Write ${artifact} with these sections: Goal; Non-goals (what is explicitly out of scope); State (branch, last commit, current step);`,
+    `Decisions & constraints (including rejected ideas); Open questions for Sam; Next action.`,
+    `Then call the handoff tool with path="${artifact}". Do nothing else after that.`,
+  ].join(' ')
+}
+
+export async function handleHandoffIntercept(msg: InboundMessage, selection?: { model: string; engine: 'claude' | 'codex' }): Promise<void> {
+  const threadId = msg.effectiveThreadId ?? msg.channelId
+  const liveId = msg.isThread ? registry.getByThread(threadId) : undefined
+  const info = liveId ? registry.get(liveId) : undefined
+  if (!info) {
+    await reportError(msg.channelId, msg.id, 'handoff', 'no live session in this thread', 'Use `respawn` to start one from the thread history.')
+    return
+  }
+  const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
+  mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
+  info.handoffSelection = selection
+  transport.sendOrQueue(info.sessionId, {
+    type: 'notification',
+    content: handoffRequest(artifact),
+    meta: { chat_id: threadId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
+  })
+  void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
+  void gateway.send(msg.channelId, `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes it may be stuck — \`kill\`, then \`respawn\`._`, { replyTo: msg.id }).catch(() => {})
 }
