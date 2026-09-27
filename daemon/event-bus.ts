@@ -10,6 +10,7 @@
 //   declare module './event-bus' { interface EventMap { 'my:event': { ... } } }
 
 export interface EventMap {
+  'delivery:failed': { sessionId: string; status: 'rejected' | 'unknown'; reason: string; messageId?: string }
   'reply': { sessionId: string; text: string; chatId: string; sentIds: string[] }
   'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string }
   // Fires on every successful bridge registration, including reconnects —
