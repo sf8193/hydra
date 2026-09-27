@@ -704,6 +704,27 @@ describe('pollActivityOnce', () => {
     expect(escalatesAfterGrace('cedar')).toBe(0)
   })
 
+  test('main: tmux throw -> skip (fallback path)', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    fakeBridge('main')
+    notePendingReply('main', meta(), T0)
+    activity = () => { throw new Error('no such window') }
+    poll(nowSec)
+    expect(targets).toEqual([probeByteTmuxName()])
+    expect(escalatesAfterGrace('main')).toBe(0)
+  })
+
+  test('record without an adapter reads tmux through the fallback', () => {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: undefined })
+    fakeBridge('s1')
+    notePendingReply('s1', meta(), Date.now() - 1000)
+    activity = () => nowSec - 10
+    poll(nowSec)
+    expect(targets).toEqual(['cedar'])
+    expect(info.turnState).toBe('working')
+  })
+
   test('record with an adapter: the poller asks activityAt, not tmux', () => {
     const nowSec = Math.floor(Date.now() / 1000)
     const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: fakeAdapter({ activityAt: () => nowSec - 10 }) })
