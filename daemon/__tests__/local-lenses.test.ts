@@ -32,3 +32,22 @@ test('default: true lenses join automatic-lens runs once; +no-lenses and non-aut
   expect(names(withDefaultLenses({ autoReviewLenses: true, noAutoLenses: true }))).toEqual([])
   expect(names(withDefaultLenses({}))).toEqual([])
 })
+
+test('names outside the spawn lens= shape are skipped; CRLF headers and True/yes parse; taken aliases are dropped with a warning', () => {
+  const errs: string[] = []
+  const origWrite = process.stderr.write
+  process.stderr.write = ((s: string) => { errs.push(String(s)); return true }) as any
+  try {
+    put('My_Perf.md', 'Perf.\n')
+    put('crlf.md', '---\r\naliases: s, cr\r\ndefault: True\r\n---\r\nCRLF lens.\r\n')
+    put('yes.md', '---\ndefault: yes\n---\nYes lens.\n')
+    expect(resolveModifier('My_Perf')).toBeUndefined()
+    expect(resolveModifier('crlf')).toMatchObject({ instructions: 'CRLF lens.', aliases: ['cr'] })   // 's' belongs to +security
+    expect(resolveModifier('s')?.name).toBe('security')
+    expect((withDefaultLenses({ autoReviewLenses: true }).modifiers as any[]).map(m => m.name).sort()).toEqual(['crlf', 'yes'])
+    expect(errs.join('')).toContain('skipping My_Perf.md')
+    expect(errs.join('')).toContain('alias "s" ignored')
+  } finally {
+    process.stderr.write = origWrite
+  }
+})

@@ -83,24 +83,32 @@ export const LOCAL_LENSES_DIR = join(STATE_DIR, 'lenses')
 
 export type LocalLens = SeedModifier & { isDefault: boolean }
 
+// Same shape spawn_session accepts for `lens=` (bridge-dispatch), so every local lens can tag its helper.
+const LENS_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/
+const warned = new Set<string>()
+const warnOnce = (msg: string) => { if (!warned.has(msg)) { warned.add(msg); process.stderr.write(`daemon: lens: ${msg}\n`) } }
+
 export function localLenses(): LocalLens[] {
   let files: string[]
   try { files = readdirSync(LOCAL_LENSES_DIR).filter(f => f.endsWith('.md')) } catch { return [] }
+  const taken = new Set(registry.keys())
   return files.flatMap(file => {
+    const name = file.slice(0, -3)
+    if (!LENS_NAME_RE.test(name)) { warnOnce(`skipping ${file}: name must match ${LENS_NAME_RE}`); return [] }
+    if (taken.has(name)) { warnOnce(`skipping ${file}: "${name}" is already a modifier`); return [] }
     let raw: string
     try { raw = readFileSync(join(LOCAL_LENSES_DIR, file), 'utf8') } catch { return [] }
-    const fm = raw.match(/^---\n([\s\S]*?)\n---\n?/)
-    const meta = (key: string) => fm?.[1].match(new RegExp(`^${key}:\\s*(.*)$`, 'm'))?.[1].trim()
+    const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+    const meta = (key: string) => fm?.[1].match(new RegExp(`^${key}:\\s*(.*?)\\s*$`, 'mi'))?.[1]
     const instructions = (fm ? raw.slice(fm[0].length) : raw).trim()
-    if (!instructions) return []
-    return [{
-      type: 'seed' as const,
-      name: file.slice(0, -3),
-      aliases: (meta('aliases') ?? '').split(',').map(a => a.trim()).filter(Boolean),
-      target: 'critic',
-      instructions,
-      isDefault: meta('default') === 'true',
-    }]
+    if (!instructions) { warnOnce(`skipping ${file}: no instructions`); return [] }
+    taken.add(name)
+    const aliases = (meta('aliases') ?? '').split(',').map(a => a.trim()).filter(Boolean).filter(a => {
+      if (taken.has(a)) { warnOnce(`${file}: alias "${a}" ignored, already taken`); return false }
+      taken.add(a)
+      return true
+    })
+    return [{ type: 'seed' as const, name, aliases, target: 'critic', instructions, isDefault: /^(true|yes)$/i.test(meta('default') ?? '') }]
   })
 }
 
