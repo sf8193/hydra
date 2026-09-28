@@ -12,7 +12,6 @@ import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { fakeCodexAdapter } from './test-harness.js'
 import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurnState } from '../engines/codex-observation.js'
 import { notePendingReply, _pendingForTesting } from '../reply-guard.js'
-import { queueCodexKeys, queuedCodexKeyCount } from '../codex-key-queue.js'
 import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { engineRecords } from '../engines/boot.js'
@@ -180,12 +179,10 @@ describe('T0.7 engine events', () => {
     rmSync(log)
   })
 
-  test('turnCompleted: idle, complete, surface now, keys flushed, silence handled', async () => {
+  test('turnCompleted: idle, complete, surface now, silence handled', async () => {
     let surfaced = 0
     const info = put({ sessionId: 't07-done', adapter: { surface: () => { surfaced++; return null } } as any })
     noteCodexTurnState('t07-done', false)
-    const settled: Array<Error | undefined> = []
-    queueCodexKeys('t07-done', { target: 't07-done:hydra-chat', mode: 'raw', keys: ['Enter'] }, e => { settled.push(e) })
     const gone = put({ sessionId: 't07-done-dead', deadAt: 1, adapter: { surface: () => null } as any })
     notePendingReply(gone.sessionId, { chat_id: 'c-done', message_id: 'm', user: 'u' })
 
@@ -193,10 +190,6 @@ describe('T0.7 engine events', () => {
     expect(isCodexWorking('t07-done')).toBe(false)
     expect(isCodexTurnComplete('t07-done')).toBe(true)
     expect(surfaced).toBe(1)
-    expect(queuedCodexKeyCount('t07-done')).toBe(0)
-    for (let i = 0; i < 40 && !settled.length; i++) await tick(50)
-    expect(settled).toEqual([undefined])
-    expect(fake.calls()).toContain('send-keys -t t07-done:hydra-chat Enter')
 
     codexEngine.emit('turnCompleted', gone.sessionId)
     expect([..._pendingForTesting().values()].some(p => p.sessionId === gone.sessionId)).toBe(false)
@@ -282,18 +275,14 @@ describe('T0.7 engine events', () => {
     expect(typeof info.deadAt).toBe('number') // not reconnected: stamped as the sweep stamps any failure
   })
 
-  test('disconnected, reconnect exhausted: stamps, persists, clears keys, dispatches', async () => {
+  test('disconnected, reconnect exhausted: stamps, persists, dispatches', async () => {
     let reconnects = 0
     const info = put({ sessionId: 't07-dc-fail', codexThreadId: 'T',
       adapter: { reconnect: async () => { reconnects++; return false }, surface: () => null } as any })
-    const settled: Array<Error | undefined> = []
-    queueCodexKeys('t07-dc-fail', { target: 'x', mode: 'raw', keys: ['Enter'] }, e => { settled.push(e) })
     const { n } = await counting(registry, async () => { codexEngine.emit('disconnected', 't07-dc-fail'); await tick(2800) })
     expect(reconnects).toBe(3)
     expect(typeof info.deadAt).toBe('number')
     expect(n).toBe(1)
-    expect(queuedCodexKeyCount('t07-dc-fail')).toBe(0)
-    expect(settled.map(e => e?.message)).toEqual(['key action cancelled because the session disconnected'])
     expect(disconnects).toEqual(['t07-dc-fail'])
   }, 8000)
 })
