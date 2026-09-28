@@ -217,8 +217,6 @@ if ('homeSpawnHandler' in gateway) {
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import { fetchSlackThreadSummary } from './daemon/router.js'
-import { getLenses } from './daemon/lens-loader.js'
-await getLenses().catch(err => process.stderr.write(`daemon: lens preload failed: ${err}\n`))
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
