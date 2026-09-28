@@ -47,4 +47,5 @@ jobs:
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: |
           mkdir -p ~/.claude/channels/discord
-          bun test --isolate
+          ( while true; do sleep 20; echo "=== ps $(date +%T)"; ps -eo pid,ppid,etime,stat,pcpu,args --sort=-pcpu | head -25; done ) &
+          for i in 1 2 3; do echo "### RUN $i"; bun test --isolate 2>&1 | grep -E '^\(fail\)|dangling| pass$| fail$|Ran ' || true; done
