@@ -7,7 +7,9 @@
 
 import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
-import { killSession } from '../session-lifecycle.js'
+import { discoverClaudeSessionId, killSession } from '../session-lifecycle.js'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { handleForkIntercept } from '../commands/thread.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
@@ -172,6 +174,27 @@ describe('G2: handleForkIntercept discovers only for Claude→Claude', () => {
     expect(info.claudeSessionId).toBeUndefined()
     expect(registryPersists).toBe(0)
     expect(sent.some(t => t.includes('Cannot fork'))).toBe(true)
+  })
+})
+
+describe('discovery fallback: the status file that names the tmux session', () => {
+  const statusFile = (tmuxField: string, pid = process.pid) => {
+    const dir = join(process.env.CLAUDE_CONFIG_DIR!, 'sessions')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${pid}.json`), JSON.stringify({ pid, sessionId: SID, status: 'idle', tmux: tmuxField }))
+  }
+  test('no <panePid>.json (claude is a child of the pane shell): found by its tmux field', () => {
+    const name = 'hydra-t3-idd-fallback'
+    tmux.pid(name, PID) // pane pid has no session file
+    statusFile(`${name}:@1.%2`)
+    expect(discoverClaudeSessionId(name)).toBe(SID)
+  })
+  test('another session\'s status file, or none, is not a match', () => {
+    const name = 'hydra-t3-idd-fallback'
+    tmux.pid(name, PID)
+    expect(discoverClaudeSessionId(name)).toBeNull()
+    statusFile('someone-else:@1.%2')
+    expect(discoverClaudeSessionId(name)).toBeNull()
   })
 })
 

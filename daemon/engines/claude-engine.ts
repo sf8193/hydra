@@ -21,6 +21,7 @@ import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util
 import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
 import { drainUsage, newCursor, projectDirName, projectsRoot, transcriptPathFor, type UsageCursor } from '../usage.js'
 import { claudeTurnOutcome } from './claude-transcript.js'
+import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
@@ -77,17 +78,8 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
       }
     } catch {}
 
-    // Fallback: scan child process environments
-    const childPids = execFileSync('pgrep', ['-P', panePid], { encoding: 'utf8', timeout: 2000 }).toString().trim().split('\n').filter(Boolean)
-    for (const childPid of childPids) {
-      const envOutput = execFileSync('ps', ['-E', '-p', childPid], { encoding: 'utf8', timeout: 2000 }).toString()
-      if (!envOutput.includes('HYDRA_SESSION_ID')) continue
-      const hydraId = envOutput.match(/HYDRA_SESSION_ID=([^\s]+)/)?.[1]
-      const candidates = [...envOutput.matchAll(/([A-Z_]*SESSION[A-Z_]*)=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g)]
-      const claudeId = candidates.find(m => m[2] !== hydraId)?.[2]
-      if (claudeId) return claudeId
-    }
-    return null
+    // Fallback (Claude is a child of the pane's shell, so no <panePid>.json): the status file that names this tmux session.
+    return readClaudeStatus(tmuxName)?.sessionId ?? null
   } catch {
     return null
   }
