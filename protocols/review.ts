@@ -186,12 +186,18 @@ export default protocol('review', {
       const helperPolicy = helpersDisabled
         ? `**Private sub-reviewers disabled.** The caller used \`+no-lenses\`; review directly and do not spawn lens helpers.`
         : autoLenses
-          ? `**Automatic private sub-reviewers.** For anything beyond a small change, delegate the distinct lenses the material calls for instead of reviewing everything yourself. Readability and security are common candidates, but relevance—not a fixed checklist—decides. For a small change, review directly except for required lenses.`
+          ? `**Staged fresh passes.** Each round, run ONE fresh pass for the current stage in a native subagent ${NATIVE_SUBAGENT}, then verify the owner's fixes yourself. Stages go big → small:
+1. **Architecture** — boundaries, contracts, is this the right shape (use the \`+architecture:\` block below if present).
+2. **Correctness / edge cases** — if the repo under review has \`.claude/commands/review.md\` (or \`.claude/skills/review/SKILL.md\`), paste that file's procedure into the subagent's assignment; otherwise a correctness review. Other requested lenses (e.g. \`+security:\`) run here too, each in its own subagent.
+3. **Simplify** — \`+ponytail:\` (and readability).`
           : `**Optional private sub-reviewers.** Delegate useful lenses when the material warrants it. Explicit \`+name:\` lenses are required; otherwise a small change may be reviewed directly.`
-      const helperInstructions = helpersAllowed ? `
-- Choose only relevant lenses; Do not fan out every lens. Any lens the caller explicitly requested (\`+name:\` blocks appended below) is required: run it in its own native subagent, quoting its block verbatim.
-- Use native subagents ${NATIVE_SUBAGENT} — fresh, one distinct lens each, given the review target (PR/diff/files) and the relevant thread excerpt inline — subagents may not have the chat tools. Run them in parallel and wait for their answers; do not poll other sessions' panes.
-- Deduplicate and verify findings yourself, then post exactly ONE critique through \`advance()\`, with a \`+<lens>:\` section for every required lens (\`advance()\` is refused without them). If a lens subagent failed, write \`+<lens>: helper returned nothing\`.` : ''
+      const helperInstructions = !helpersAllowed ? '' : !autoLenses
+        ? `\n- Run each required \`+name:\` lens in its own native subagent ${NATIVE_SUBAGENT}, quoting its block verbatim, and include a \`+<lens>:\` section per lens in your critique.`
+        : `
+- Give every fresh-pass subagent only: the whole PR diff (or how to get it), a one-line purpose, and your **Settled** list (rebutted / accepted tradeoffs / deferred, each with its one-line reason). NOT the debate or your open findings — independence is the point. Tell it: don't re-raise a settled item without new evidence, and tag any finding that needs a change of shape as **⬆ architectural**.
+- Move to the next stage only when the current stage's pass is clean — and when it is, run the next stage in the same turn (don't spend a round on a clean stage); post when a stage has findings or stage 3 is clean. You track the current stage; the \`Stage N:\` line in each critique records it. After a ⬆ architectural fix, go back to stage 1. Run subagents in parallel where a stage has several; wait for their answers; do not poll other sessions' panes.
+- Each critique: your verification of the owner's fixes, the pass's findings under a \`+<lens>:\` section per lens it ran, a line \`Stage N: clean\` or \`Stage N: <k> findings\`, and the updated **Settled** list.
+- \`approve\` only after \`Stage 3: clean\` with no code change since, or — when the last round was debate only — \`No code changed since last clean pass\`. Every required lens must have had its section in some round. \`advance()\` enforces both.`
       const ponytailBlock = defaultPonytail
         ? `\n\n---\n**Default +ponytail (required unless opted out):**\n${PONYTAIL_INSTRUCTIONS}`
         : ''

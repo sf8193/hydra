@@ -280,81 +280,81 @@ describe('private delivery', () => {
 describe('critic prompt', () => {
   test('describes lens selection and private synthesis; keeps +lens modifiers', () => {
     const seed = reviewProto.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, autoReviewLenses: true })!
-    for (const s of ['distinct lens', 'exactly ONE critique', 'Do not fan out every lens', 'native subagent', 'Agent tool', 'spawn_agent', 'do not poll', 'small change']) {
+    for (const s of ['native subagent', 'Agent tool', 'spawn_agent', 'do not poll', 'one-line purpose', 'Architecture', 'Correctness', 'Simplify']) {
       expect(seed).toContain(s)
     }
     expect(seed).not.toContain('spawn_session(')
-    expect(seed).toContain('`+name:` blocks appended below')
-    expect(seed).toContain('own native subagent, quoting its block verbatim')
-    expect(seed).toContain('`+<lens>:` section for every required lens')
+    
+    expect(seed).toContain('Stage 3: clean')
+    expect(seed).toContain('.claude/commands/review.md')
+    expect(seed).toContain('⬆ architectural')
+    expect(seed).toContain('Settled')
+    expect(seed).toContain('run the next stage in the same turn')
   })
 })
 
-describe('required lens sections gate', () => {
+describe('staged review gate', () => {
   const seedMod = (name: string) => ({ type: 'seed', name, aliases: [], target: 'critic', instructions: name })
-
-  test('default Ponytail is enforced unless an opt-out is present', async () => {
+  const staged = (mods: string[] = []) => {
     const run = reviewRun()
     delete run.params.noPonytail
     run.params.autoReviewLenses = true
-    expect((await onRunAdvance('rh-critic', 'Critique.', 'request_changes')).ok).toBe(false)
-    // The gate holds for every verdict, including an early approval.
-    expect((await onRunAdvance('rh-critic', 'Critique.', 'approve')).ok).toBe(false)
-    expect((await onRunAdvance('rh-critic', '### +ponytail\n- cut X', 'request_changes')).ok).toBe(true)
+    run.params.modifiers = mods.map(seedMod)
+    return run
+  }
 
-    const optedOut = reviewRun()
-    optedOut.params.autoReviewLenses = true
-    optedOut.params.noPonytail = true
-    expect((await onRunAdvance('rh-critic', 'Critique.', 'request_changes')).ok).toBe(true)
+  test('non-approve rounds need no lens sections (lenses run in their stage)', async () => {
+    staged(['architecture'])
+    expect((await onRunAdvance('rh-critic', 'Stage 1: 2 findings', 'request_changes')).ok).toBe(true)
   })
 
-  test('+no-lenses removes the default Ponytail gate', async () => {
-    const run = reviewRun()
-    delete run.params.noPonytail
-    run.params.autoReviewLenses = true
+  test('approve needs every required lens reported in some round; coverage accumulates across rounds', async () => {
+    const run = staged(['architecture'])
+    const early = await onRunAdvance('rh-critic', 'Stage 3: clean', 'approve')
+    expect(early.ok).toBe(false)
+    expect((early as any).reason).toContain('+architecture:')
+    expect((early as any).reason).toContain('+ponytail:')
+    expect((await onRunAdvance('rh-critic', '+architecture: boundary X leaks\nStage 1: 1 findings', 'request_changes')).ok).toBe(true)
+    run.phase = 'critic_turn'
+    expect((await onRunAdvance('rh-critic', '+ponytail: nothing to cut\nStage 3: 1 findings', 'request_changes')).ok).toBe(true)
+    run.phase = 'critic_turn'
+    expect(run.params.coveredLenses.sort()).toEqual(['architecture', 'ponytail'])
+    expect((await onRunAdvance('rh-critic', 'Fixes verified.\nStage 3: clean', 'approve')).ok).toBe(true)
+  })
+
+  test('approve needs a clean stage-3 fresh pass, or a debate-only close', async () => {
+    const run = staged()
+    run.params.coveredLenses = ['ponytail']
+    const denied = await onRunAdvance('rh-critic', 'All fixed, LGTM.', 'approve')
+    expect(denied.ok).toBe(false)
+    expect((denied as any).reason).toContain('Stage 3: clean')
+    expect((await onRunAdvance('rh-critic', 'Owner rebutted both points; conceded.\nNo code changed since last clean pass', 'approve')).ok).toBe(true)
+  })
+
+  test('+no-lenses: no lens or stage requirement', async () => {
+    const run = staged()
     run.params.noAutoLenses = true
-    expect((await onRunAdvance('rh-critic', 'Critique.', 'request_changes')).ok).toBe(true)
+    expect((await onRunAdvance('rh-critic', 'LGTM.', 'approve')).ok).toBe(true)
   })
 
-  test('every required lens (explicit or default) needs its own section; one lens cannot cover another', async () => {
-    const run = reviewRun()
-    run.params.modifiers = [seedMod('architecture'), seedMod('ponytail')]
-    const denied = await onRunAdvance('rh-critic', '**+ponytail:** nothing to cut', 'request_changes')
+  test('+subagent single pass: every required lens in the one summary', async () => {
+    const run = reviewRun('subagent_review')
+    run.params.modifiers = [seedMod('security'), seedMod('architecture')]
+    const denied = await onRunAdvance('rh-owner', 'Summary.\n+security: none')
     expect(denied.ok).toBe(false)
     expect((denied as any).reason).toContain('+architecture:')
-    expect((denied as any).reason).not.toContain('+ponytail:')
-    expect((await onRunAdvance('rh-critic', '+ponytail: nothing to cut\n\n## +architecture\nBoundary X leaks.', 'request_changes')).ok).toBe(true)
+    expect((await onRunAdvance('rh-owner', 'Summary.\n+security: none\n+architecture: helper returned nothing')).ok).toBe(true)
   })
 
-  test('a failed lens subagent may be disclosed instead', async () => {
-    const run = reviewRun()
-    run.params.modifiers = [seedMod('ponytail')]
-    expect((await onRunAdvance('rh-critic', 'Critique: helper failed.', 'request_changes')).ok).toBe(false)
-    expect((await onRunAdvance('rh-critic', '+ponytail: helper returned nothing — timed out.', 'request_changes')).ok).toBe(true)
-  })
-
-  test('+subagent: the owner summary is held to the same sections', async () => {
-    const run = reviewRun('subagent_review')
-    run.params.modifiers = [seedMod('security')]
-    expect((await onRunAdvance('rh-owner', 'Summary.')).ok).toBe(false)
-    expect((await onRunAdvance('rh-owner', 'Summary.\n+security: no findings')).ok).toBe(true)
-  })
-
-  test('accepts common markdown section forms, including the refusal message\'s own form', async () => {
-    for (const form of ['`+security:` none', '- **+security:** none', '1. +security: none', '> +security: none', '### +security', '__+security__: none']) {
-      const run = reviewRun()
+  test('section forms: common markdown accepted, mid-sentence and longer names rejected', async () => {
+    for (const [form, ok] of [
+      ['`+security:` none', true], ['- **+security:** none', true], ['1. +security: none', true], ['> +security: none', true],
+      ['### +security', true], ['__+security__: none', true], ['### +security-review', false], ['I skipped the +security lens.', false],
+    ] as const) {
+      const run = reviewRun('subagent_review')
       run.params.modifiers = [seedMod('security')]
-      expect((await onRunAdvance('rh-critic', `Critique.\n${form}`, 'request_changes')).ok).toBe(true)
+      expect([form, (await onRunAdvance('rh-owner', `Summary.\n${form}`)).ok]).toEqual([form, ok])
     }
-    const run = reviewRun()
-    run.params.modifiers = [seedMod('security')]
-    expect((await onRunAdvance('rh-critic', '### +security-review\nx', 'request_changes')).ok).toBe(false)   // a longer name is not this lens
-  })
-
-  test('a mention mid-sentence is not a section', async () => {
-    const run = reviewRun()
-    run.params.modifiers = [seedMod('security')]
-    expect((await onRunAdvance('rh-critic', 'I skipped the +security lens.', 'request_changes')).ok).toBe(false)
   })
 })
 
