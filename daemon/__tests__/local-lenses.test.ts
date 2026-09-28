@@ -44,7 +44,7 @@ test('names outside the spawn lens= shape are skipped; CRLF headers and True/yes
     expect(resolveModifier('My_Perf')).toBeUndefined()
     expect(resolveModifier('crlf')).toMatchObject({ instructions: 'CRLF lens.', aliases: ['cr'] })   // 's' belongs to +security
     expect(resolveModifier('s')?.name).toBe('security')
-    expect((withDefaultLenses({ autoReviewLenses: true }).modifiers as any[]).map(m => m.name).sort()).toEqual(['crlf', 'yes'])
+    expect(((withDefaultLenses({ autoReviewLenses: true }) as any).modifiers as any[]).map(m => m.name).sort()).toEqual(['crlf', 'yes'])
     expect(errs.join('')).toContain('skipping My_Perf.md')
     expect(errs.join('')).toContain('alias "s" ignored')
   } finally {
