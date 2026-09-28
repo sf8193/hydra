@@ -4,9 +4,13 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, w
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 
-// HYDRA_CODEX_ROOT: tests point this at a temp dir (test-setup.ts).
+// ~/.codex — or HYDRA_CODEX_ROOT, which tests point at a temp dir (test-setup.ts).
+export function codexRoot(): string {
+  return process.env.HYDRA_CODEX_ROOT ?? join(homedir(), '.codex')
+}
+
 export function codexHomeDir(homeName: string): string {
-  return join(process.env.HYDRA_CODEX_ROOT ?? join(homedir(), '.codex'), `hydra-${homeName}`)
+  return join(codexRoot(), `hydra-${homeName}`)
 }
 
 export function codexPidPath(homeName: string): string {

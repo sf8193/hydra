@@ -8,7 +8,7 @@ import { resolveSocket, sendRequest, shq, tmuxExists, tmuxKill } from './helpers
 export const peekIO = {
   execSync: execSync as (cmd: string, opts?: object) => string | Buffer,
   tmuxNewSession, resolveSocket, sendRequest, tmuxExists, tmuxKill,
-  exit: (code: number): void => { process.exit(code) },
+  exit: (code: number): never => process.exit(code),
 }
 
 type SessionEntry = {
