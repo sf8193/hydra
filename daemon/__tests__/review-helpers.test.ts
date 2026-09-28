@@ -289,6 +289,7 @@ describe('critic prompt', () => {
     expect(seed).toContain('.claude/commands/review.md')
     expect(seed).toContain('⬆ architectural')
     expect(seed).toContain('Settled')
+    expect(seed).toContain('run the next stage in the same turn')
   })
 })
 
