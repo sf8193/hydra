@@ -299,6 +299,15 @@ export function runKillHook(info: SessionInfo, reason: string, hookPath = KILL_H
   }
 }
 
+/** Claude session ids whose scratchpads a kill of info cleans: its own, plus a thread owner's handoff chain; never a live session's. */
+export function scratchSessionIds(info: SessionInfo, sessions: Iterable<SessionInfo>, history: readonly { claudeSessionId?: string }[]): string[] {
+  const ids = new Set<string>()
+  if (info.claudeSessionId) ids.add(info.claudeSessionId)
+  if (info.sessionType !== 'thread_guest') for (const h of history) if (h.claudeSessionId) ids.add(h.claudeSessionId)
+  for (const s of sessions) if (s !== info && !s.deadAt && s.claudeSessionId) ids.delete(s.claudeSessionId)
+  return [...ids]
+}
+
 export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
@@ -369,9 +378,11 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       })
     }
 
-    // Worktrees the session made itself under its scratchpad: same rule.
-    if (info.claudeSessionId && !opts?.skipWorktreeDestroy) {
-      void cleanScratchWorktrees(sessionScratchpads(info.claudeSessionId)).then(({ removed, kept }) => {
+    // Worktrees the session — and, for a thread owner, its handoff predecessors, whose
+    // worktrees a handoff deliberately kept for it — made under their scratchpads: same rule.
+    const scratchIds = !opts?.skipWorktreeDestroy ? scratchSessionIds(info, registry.values(), threadRegistry.get(info.threadId)?.sessionHistory ?? []) : []
+    if (scratchIds.length) {
+      void cleanScratchWorktrees(scratchIds.flatMap(id => sessionScratchpads(id))).then(({ removed, kept }) => {
         if (removed.length) process.stderr.write(`daemon: ${info.tmuxName}: removed ${removed.length} scratchpad worktree(s)\n`)
         if (kept.length) {
           process.stderr.write(`daemon: ${info.tmuxName}: kept scratchpad worktree(s): ${kept.map(k => `${k.path} (${k.reason})`).join(', ')}\n`)

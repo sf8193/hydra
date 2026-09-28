@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { cleanScratchWorktrees, sessionScratchpads } from '../worktree-manager.js'
+import { scratchSessionIds } from '../session-lifecycle.js'
 
 const root = mkdtempSync(join(tmpdir(), 'scratch-wt-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -72,5 +73,25 @@ describe('scratchpad worktree cleanup', () => {
   test('another session\'s scratchpad is never touched', () => {
     mkdirSync(join(root, 'proj', 'other', 'scratchpad'), { recursive: true })
     expect(sessionScratchpads('sess-2', root)).toEqual([])
+  })
+})
+
+describe('whose scratchpads a kill cleans', () => {
+  const rec = (over: Record<string, unknown>) => ({ sessionId: 'x', tmuxName: 'x', threadId: 't', sessionType: 'thread_owner', ...over }) as any
+  const history = [{ claudeSessionId: 'pred-1' }, {}, { claudeSessionId: 'pred-2' }, { claudeSessionId: 'me' }]
+
+  test('a thread owner: itself plus its handoff predecessors', () => {
+    const me = rec({ claudeSessionId: 'me' })
+    expect(scratchSessionIds(me, [me], history).sort()).toEqual(['me', 'pred-1', 'pred-2'])
+  })
+
+  test('never a live session\'s scratchpad (e.g. a still-running predecessor id)', () => {
+    const me = rec({ claudeSessionId: 'me' }), other = rec({ sessionId: 'y', claudeSessionId: 'pred-2' })
+    expect(scratchSessionIds(me, [me, other], history).sort()).toEqual(['me', 'pred-1'])
+  })
+
+  test('a guest: only its own', () => {
+    const guest = rec({ claudeSessionId: 'g', sessionType: 'thread_guest' })
+    expect(scratchSessionIds(guest, [guest], history)).toEqual(['g'])
   })
 })
