@@ -83,7 +83,8 @@ export const LOCAL_LENSES_DIR = join(STATE_DIR, 'lenses')
 
 export type LocalLens = SeedModifier & { isDefault: boolean }
 
-// Same shape spawn_session accepts for `lens=` (bridge-dispatch), so every local lens can tag its helper.
+// Lens names become `+name` tokens the router matches and the review gate builds a
+// regex from (protocol-runner validateRequestedReviewLenses) — keep them to this shape.
 const LENS_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/
 const warned = new Set<string>()
 const warnOnce = (msg: string) => { if (!warned.has(msg)) { warned.add(msg); process.stderr.write(`daemon: lens: ${msg}\n`) } }
@@ -114,6 +115,19 @@ export function localLenses(): LocalLens[] {
 
 export function resolveModifier(name: string): Modifier | undefined {
   return registry.get(name) ?? localLenses().find(l => l.name === name || l.aliases.includes(name))
+}
+
+/**
+ * The lenses a review run must cover: every requested lens (explicit + local defaults)
+ * plus ponytail by default when automatic lenses run. Single owner for the critic
+ * prompt, the +subagent prompt and the advance() gate.
+ */
+export function requiredLenses(params: { [key: string]: unknown }): string[] {
+  const names = ((params.modifiers as Modifier[] | undefined) ?? [])
+    .filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic')
+    .map(m => m.name)
+  const autoPonytail = params.autoReviewLenses === true && !params.noAutoLenses && !params.noPonytail
+  return [...new Set(autoPonytail ? [...names, 'ponytail'] : names)]
 }
 
 /**
@@ -229,17 +243,20 @@ register({
 
 // Unlike prose lenses, +ponytail is a specialized delegated workflow: the
 // critic hands one private helper the `/ponytail review` skill, verbatim.
+/** How to start a native subagent on each engine — one wording for every lens prompt. */
+export const NATIVE_SUBAGENT = '(Claude: the Agent tool; Codex: spawn_agent, then wait_agent)'
+
 export const PONYTAIL_INSTRUCTIONS = [
   'Specialized workflow — do NOT treat this as a generic prose lens and do NOT emulate it yourself.',
   '',
-  'Spawn exactly ONE private helper for this block: `spawn_session(topic, headless=true, read_thread=true, phase_budget="10m", lens="ponytail")`. Quote this entire `+ponytail:` block verbatim in the helper\'s assignment.',
+  `Run exactly ONE native subagent for this block ${NATIVE_SUBAGENT}. Quote this entire \`+ponytail:\` block verbatim in its assignment, with the review target inline.`,
   '',
-  'Helper assignment (quoted verbatim to the helper):',
-  '- Invoke `/ponytail review` (the ponytail:ponytail-review skill) against the review target, and follow that workflow.',
-  '- Return its structured findings ONLY via `send_to_thread(target=<parent session name>, type="result", visibility="private", text=...)`. The parent is the session that spawned you (normally the critic; in `+subagent` mode, the owner). Never post raw output publicly.',
-  '- If you cannot access or invoke `/ponytail review`, send a private result whose text starts with `UNAVAILABLE: /ponytail review` and a one-line reason. Do NOT substitute a generic review.',
+  'Subagent assignment (quoted verbatim):',
+  '- Invoke `/ponytail review` (the ponytail-review skill) against the review target, and follow that workflow.',
+  '- Return its structured findings as your final answer.',
+  '- If you cannot access or invoke `/ponytail review`, answer with a line starting `UNAVAILABLE: /ponytail review` and a one-line reason. Do NOT substitute a generic review.',
   '',
-  'Parent reviewer: deduplicate the helper\'s findings into your single top-level `advance()` critique; this lens does not replace your own review. If the helper returns `UNAVAILABLE: /ponytail review`, state that visibly in your critique — never drop the lens silently or emulate it. If the helper exits, times out, or returns no private result, do not advance silently: report `+ponytail: helper returned nothing`, then retry or explain why the requested lens could not complete.',
+  'Parent reviewer: deduplicate the findings into your single top-level `advance()` critique, under a `+ponytail:` section; this lens does not replace your own review. If the subagent answered `UNAVAILABLE: /ponytail review`, state that visibly in that section — never drop the lens silently or emulate it. If it failed or returned nothing, write `+ponytail: helper returned nothing`.',
 ].join('\n')
 
 register({

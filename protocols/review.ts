@@ -1,5 +1,5 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
-import { PONYTAIL_INSTRUCTIONS } from '../daemon/modifiers.js'
+import { NATIVE_SUBAGENT, PONYTAIL_INSTRUCTIONS, requiredLenses } from '../daemon/modifiers.js'
 
 export default protocol('review', {
   emoji: '⚔️',
@@ -122,7 +122,7 @@ export default protocol('review', {
       const helpersDisabled = run.params.noAutoLenses === true
       const autoLenses = run.params.autoReviewLenses === true && !helpersDisabled
       const helpersAllowed = !helpersDisabled
-      const defaultPonytail = autoLenses && !run.params.noPonytail && !lenses.some(m => m.name === 'ponytail')
+      const defaultPonytail = requiredLenses(run.params).includes('ponytail') && !lenses.some(m => m.name === 'ponytail')
       const effectiveLenses = defaultPonytail
         ? [...lenses, { name: 'ponytail', instructions: PONYTAIL_INSTRUCTIONS }]
         : lenses
@@ -163,7 +163,7 @@ export default protocol('review', {
           ? `1. **Pick the lenses that fit what you're reviewing.** They are suggestions, not a checklist. ${autoLenses ? 'For substantial work, delegate relevant lenses such as correctness, readability, test quality, security, or resource lifecycle' : 'Delegate useful lenses when the material warrants it'}; do not fan out blindly. For a genuinely small change, direct review is fine except for any required lens below.`
           : `1. **Do not spawn lens helpers.** The caller used \`+no-lenses\`; review the material directly.`,
         helpersAllowed
-          ? `2. **Spawn one fresh subagent per chosen lens** — native subagents, or headless helpers via \`spawn_session(headless=true, read_thread=true, phase_budget="10m")\` that report with \`send_to_thread(target=<your name>, type="result", visibility="private")\` (nothing is posted to the thread; only your final \`advance()\` is). Tell each to re-read this thread and the specifics (the diff / doc / spec) and orient on its own — do not fork your own context into them; independence is the point. Run them in parallel.`
+          ? `2. **Run one fresh native subagent per chosen lens** ${NATIVE_SUBAGENT}. Nothing is posted to the thread; only your final \`advance()\` is. Give each the review target (the diff / doc / spec) and the relevant thread excerpt inline — subagents may not have the chat tools — and let it orient on its own; do not fork your own context into them, independence is the point. Run them in parallel; include a \`+<lens>:\` section per required lens in your summary.`
           : `2. **Review directly** — do not spawn native subagents or headless helpers for lenses.`,
         helpersAllowed
           ? `3. **Synthesize** their findings yourself — resolve conflicts, drop the noise, keep what's real.`
@@ -182,18 +182,16 @@ export default protocol('review', {
       const helpersDisabled = ctx.noAutoLenses === true
       const autoLenses = ctx.autoReviewLenses === true && !helpersDisabled
       const helpersAllowed = !helpersDisabled
-      const defaultPonytail = autoLenses && !ctx.noPonytail && !modifiers.some(mod => mod.name === 'ponytail')
+      const defaultPonytail = requiredLenses(ctx).includes('ponytail') && !modifiers.some(mod => mod.name === 'ponytail')
       const helperPolicy = helpersDisabled
         ? `**Private sub-reviewers disabled.** The caller used \`+no-lenses\`; review directly and do not spawn lens helpers.`
         : autoLenses
           ? `**Automatic private sub-reviewers.** For anything beyond a small change, delegate the distinct lenses the material calls for instead of reviewing everything yourself. Readability and security are common candidates, but relevance—not a fixed checklist—decides. For a small change, review directly except for required lenses.`
           : `**Optional private sub-reviewers.** Delegate useful lenses when the material warrants it. Explicit \`+name:\` lenses are required; otherwise a small change may be reviewed directly.`
       const helperInstructions = helpersAllowed ? `
-- Choose only relevant lenses; Do not fan out every lens. Any lens the caller explicitly requested (\`+name:\` blocks appended below) must be covered by its own helper, quoting its block verbatim.
-- Spawn each with \`spawn_session(topic, headless=true, read_thread=true, phase_budget="8m", lens="<lens-name>")\` — fresh, one distinct lens each, told to orient on the thread and diff itself.
-- Tell every helper to report ONLY via \`send_to_thread(target=<your session name>, type="result", visibility="private", text=...)\`. Public helper posts are rejected.
-- Use \`peek_session\` to check on a helper and \`kill_session\` to stop one that is stuck. Helpers are retired when your turn ends.
-- Deduplicate and verify findings yourself, then post exactly ONE critique through \`advance()\`.` : ''
+- Choose only relevant lenses; Do not fan out every lens. Any lens the caller explicitly requested (\`+name:\` blocks appended below) is required: run it in its own native subagent, quoting its block verbatim.
+- Use native subagents ${NATIVE_SUBAGENT} — fresh, one distinct lens each, given the review target (PR/diff/files) and the relevant thread excerpt inline — subagents may not have the chat tools. Run them in parallel and wait for their answers; do not poll other sessions' panes.
+- Deduplicate and verify findings yourself, then post exactly ONE critique through \`advance()\`, with a \`+<lens>:\` section for every required lens (\`advance()\` is refused without them). If a lens subagent failed, write \`+<lens>: helper returned nothing\`.` : ''
       const ponytailBlock = defaultPonytail
         ? `\n\n---\n**Default +ponytail (required unless opted out):**\n${PONYTAIL_INSTRUCTIONS}`
         : ''

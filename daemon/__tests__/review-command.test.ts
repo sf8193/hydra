@@ -282,14 +282,14 @@ describe('review command → run params', () => {
     expect(sent.some(s => s.text.includes('contradict'))).toBe(true)
   })
 
-  test('ponytail instructions mandate the skill, private result, verbatim quoting and visible UNAVAILABLE', () => {
+  test('ponytail instructions mandate one native subagent running the skill, verbatim quoting and visible UNAVAILABLE', () => {
     for (const s of [
-      'exactly ONE private helper', 'headless=true', 'read_thread=true', 'phase_budget', 'verbatim',
-      'Invoke `/ponytail review`', 'visibility="private"', 'Never post raw output publicly',
+      'exactly ONE native subagent', 'Agent tool', 'spawn_agent', 'verbatim',
+      'Invoke `/ponytail review`', 'final answer',
       'UNAVAILABLE: /ponytail review', 'Do NOT substitute a generic review',
-      'single top-level `advance()` critique', 'state that visibly', '<parent session name>',
-      'normally the critic; in `+subagent` mode, the owner', '+ponytail: helper returned nothing',
+      'single top-level `advance()` critique', '`+ponytail:` section', 'state that visibly', '+ponytail: helper returned nothing',
     ]) expect(PONYTAIL_INSTRUCTIONS).toContain(s)
+    expect(PONYTAIL_INSTRUCTIONS).not.toContain('spawn_session(')
   })
 
   test('an unknown modifier is refused before any run starts', async () => {

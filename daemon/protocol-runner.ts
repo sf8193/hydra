@@ -14,7 +14,7 @@ import { pushToolSurface } from './tool-surface.js'
 import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
-import { withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
+import { requiredLenses, withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -526,23 +526,16 @@ function validateDelegatedBuildVerification(run: ProtocolRun, content: string): 
   return null
 }
 
+// Lens helpers are the reviewer's own native subagents, which Hydra can't observe,
+// so the gate is on the output: one `+<lens>` section per required lens.
+// ponytail: trusts the reviewer not to write a section it didn't delegate; same trust as its own review.
 function validateRequestedReviewLenses(run: ProtocolRun, content: string): string | null {
-  const requested = ((run.params.modifiers as Modifier[] | undefined) ?? []).map(mod => mod.name)
-  const ponytailRequired = requested.includes('ponytail')
-    || (run.params.autoReviewLenses === true && !run.params.noAutoLenses && !run.params.noPonytail)
-  if (!ponytailRequired) return null
-
-  const results = [...(run.protocolChildren?.values() ?? [])]
-    .filter(child => child.phase === run.phase && child.lens === 'ponytail' && child.headless && child.readThread && !!child.phaseBudgetMs && !!child.result)
-    .map(child => child.result!)
-  if (results.length === 0) {
-    if (/\+ponytail:\s*helper returned nothing\b/i.test(content)) return null
-    return '+ponytail requires a current-phase helper spawned with headless=true, read_thread=true, and phase_budget that returned a private result; if it returned nothing, visibly report `+ponytail: helper returned nothing` before advancing'
-  }
-  if (results.some(result => /^UNAVAILABLE: \/ponytail review\b/im.test(result)) && !/UNAVAILABLE: \/ponytail review\b/i.test(content)) {
-    return '+ponytail helper reported `UNAVAILABLE: /ponytail review`; surface that status in the review before advancing'
-  }
-  return null
+  // A section line: optional markdown lead (#, >, *, _, `, bullets, "1.") then `+name` not followed by more lens-name chars.
+  const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const missing = requiredLenses(run.params).filter(name =>
+    !new RegExp(`(^|\\n)[\\s#>*_\`-]*(\\d+\\.\\s*)?[*_\`]*\\+${esc(name)}(?![a-z0-9-])`, 'i').test(content))
+  if (missing.length === 0) return null
+  return `missing lens section${missing.length > 1 ? 's' : ''}: ${missing.map(n => `+${n}:`).join(', ')}. Run each required lens in its own native subagent and report it under a "+<lens>:" section (or "+<lens>: helper returned nothing") before advancing`
 }
 
 // ---------------------------------------------------------------------------
