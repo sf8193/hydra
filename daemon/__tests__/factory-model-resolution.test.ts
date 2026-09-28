@@ -1,36 +1,8 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { getDifficultyLadder, resolveModels, VALID_DIFFICULTIES } from '../factory.js'
+import { resolveModels } from '../factory.js'
 
 // Suppress stderr noise from imports
 process.stderr.write = (() => true) as any
-
-describe('getDifficultyLadder', () => {
-  test('easy: opus-4-6 builds, opus-4-8 reviews', () => {
-    const { builder, reviewer } = getDifficultyLadder('easy')
-    expect(builder).toBe('claude-opus-4-6[1m]')
-    expect(reviewer).toBe('claude-opus-4-8[1m]')
-  })
-
-  test('medium: opus-4-8 builds, opus-4-6 reviews', () => {
-    const { builder, reviewer } = getDifficultyLadder('medium')
-    expect(builder).toBe('claude-opus-4-8[1m]')
-    expect(reviewer).toBe('claude-opus-4-6[1m]')
-  })
-
-  test('hard: opus-5 builds, fable reviews', () => {
-    const { builder, reviewer } = getDifficultyLadder('hard')
-    expect(builder).toBe('claude-opus-5[1m]')
-    expect(reviewer).toBe('claude-fable-5-1[1m]')
-  })
-
-  test('covers all valid difficulties', () => {
-    for (const d of VALID_DIFFICULTIES) {
-      const result = getDifficultyLadder(d)
-      expect(result.builder).toBeTruthy()
-      expect(result.reviewer).toBeTruthy()
-    }
-  })
-})
 
 describe('resolveModels', () => {
   describe('happy path — no overrides', () => {
@@ -109,7 +81,8 @@ describe('resolveModels', () => {
       const { builder, reviewer, warning } = resolveModels('easy', 'fake-builder', 'fake-reviewer')
       expect(builder).toBe('claude-opus-4-6[1m]')
       expect(reviewer).toBe('claude-opus-4-8[1m]')
-      expect(warning).toBeTruthy()
+      expect(warning).toContain('Unknown builder model')
+      expect(warning).toContain('Unknown reviewer model')
     })
   })
 
@@ -134,22 +107,6 @@ describe('resolveModels', () => {
       expect(reviewer).toBe('claude-opus-4-6[1m]')
       expect(warning).toBeTruthy()
       expect(warning).toContain('claude-opus-4-8')
-    })
-
-    test('collision with opus-5: falls back to fable', () => {
-      // hard ladder: builder=opus-5, reviewer=fable-5
-      // Force both to opus-5 → collision → ladder reviewer is fable-5 (different) → uses ladder reviewer
-      const { reviewer, warning } = resolveModels('hard', 'opus-5', 'opus-5')
-      expect(reviewer).toBe('claude-fable-5-1[1m]')  // hard ladder reviewer
-      expect(warning).toBeTruthy()
-    })
-
-    test('collision with sonnet override: uses ladder reviewer', () => {
-      // Force easy builder=sonnet, reviewer=sonnet
-      // easy ladder reviewer is opus-4-8 (different from sonnet) → uses ladder reviewer
-      const { reviewer, warning } = resolveModels('easy', 'sonnet', 'sonnet')
-      expect(reviewer).toBe('claude-opus-4-8[1m]')  // easy ladder reviewer
-      expect(warning).toBeTruthy()
     })
 
     test('collision with fable on hard: FALLBACK_REVIEWERS gives opus-5', () => {

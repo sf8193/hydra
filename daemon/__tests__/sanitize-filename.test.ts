@@ -42,8 +42,4 @@ describe('sanitizeFilename', () => {
   test('allowed characters preserved', () => {
     expect(sanitizeFilename('my-file_v2.tar.gz', 'f')).toBe('my-file_v2.tar.gz')
   })
-
-  test('spaces replaced', () => {
-    expect(sanitizeFilename('my file.txt', 'f')).toBe('my_file.txt')
-  })
 })

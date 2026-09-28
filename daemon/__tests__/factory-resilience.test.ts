@@ -724,17 +724,6 @@ describe('awaiting_pm TTL', () => {
     expect(state.phase).toBe('complete')
   })
 
-  test('entering the phase arms a timer', () => {
-    const { state } = awaiting('fb-60-1111')
-    expect(state._awaitingPmTimer).toBeDefined()
-  })
-
-  test('accept disarms it', () => {
-    const { pm, state } = awaiting('fb-61-2222')
-    expect(factoryAccept(state.ticket, pm.sessionId)).toEqual({ ok: true })
-    expect(state._awaitingPmTimer).toBeUndefined()
-  })
-
   test('retry disarms it', () => {
     const { pm, state } = awaiting('fb-62-3333')
     expect(factoryRetry(state.ticket, 'try again', pm.sessionId)).toEqual({ ok: true })

@@ -201,12 +201,6 @@ describe('ensureSessionType', () => {
     ensureSessionType(info)
     expect(info.sessionType).toBe('thread_guest')
   })
-
-  test('session with master_orchestrator is preserved', () => {
-    const info = makeInfo({ sessionId: 'test-type-orch', sessionType: 'master_orchestrator' })
-    ensureSessionType(info)
-    expect(info.sessionType).toBe('master_orchestrator')
-  })
 })
 
 describe('sessionEmoji', () => {

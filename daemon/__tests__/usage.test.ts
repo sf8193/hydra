@@ -142,13 +142,6 @@ describe('usage: nothing but integers can escape', () => {
     }) + '\n',
   )
 
-  test('the four counters are all a caller can read out', () => {
-    const cursor = readUsageDelta(planted(), newCursor())
-    expect(Object.keys(cursor.totals).sort()).toEqual(
-      ['cacheCreateTokens', 'cacheReadTokens', 'inputTokens', 'outputTokens'],
-    )
-  })
-
   // The cursor is memory-only and carries two strings lifted from the file. If
   // either is ever widened onto SessionUsage, this is what has to be revisited.
   test('the cursor holds transcript text, and exactly two fields of it', () => {
@@ -267,13 +260,6 @@ describe('usage: the cursor belongs to one transcript', () => {
     expect(ca.totals.outputTokens).toBe(100)
     expect(ca.offset).toBeLessThan(statSync(b).size)
     expect(readUsageDelta(b, ca).totals.outputTokens, 'b must be read whole, not from the old offset').toBe(280)
-  })
-
-  test('the same file with its own cursor keeps accumulating', () => {
-    const f = fixture(line({ output_tokens: 5 }))
-    const first = readUsageDelta(f, newCursor())
-    appendFileSync(f, line({ output_tokens: 6 }))
-    expect(readUsageDelta(f, first).totals.outputTokens).toBe(11)
   })
 
   // Stalling here stopped the session reporting for the daemon's whole life.

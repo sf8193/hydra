@@ -85,30 +85,23 @@ describe('auto-refreshing /list display', () => {
     expect(status.trackedListMsgs()).toHaveLength(1)
   })
 
-  test('a rate-limit does not retire the display', async () => {
-    status.setTrackedListMsgs([{ channelId: 'c1', messageId: 'm1' }])
-    editImpl = async () => { throw Object.assign(new Error('rate limited'), { code: 429 }) }
-
-    await status.refreshListDisplay()
-
-    // Forgetting it here is permanent — the display would never refresh again.
-    expect(status.trackedListMsgs()).toHaveLength(1)
-  })
-
-  test('an over-length rejection does not retire the display', async () => {
-    // What made this reachable: enough live sessions that the render exceeds
-    // the platform limit, which a deep link per row (non-empty on Discord as
-    // of this PR) roughly halves. safeEdit's own truncation is covered in
+  test('a rate-limit or over-length rejection does not retire the display', async () => {
+    // Over-length became reachable with enough live sessions that the render
+    // exceeds the platform limit, which a deep link per row (non-empty on
+    // Discord) roughly halves. safeEdit's own truncation is covered in
     // util.test.ts — reaching it through here would need a live tmux session
     // per row, since isAlive gates what the list renders. This asserts the
-    // part that is status.ts's to get right: the rejection must not be read
-    // as "the message is gone".
-    status.setTrackedListMsgs([{ channelId: 'c1', messageId: 'm1' }])
-    editImpl = async () => { throw Object.assign(new Error('Invalid Form Body'), { code: 50035 }) }
+    // part that is status.ts's to get right: neither rejection may be read as
+    // "the message is gone". Forgetting it is permanent — the display would
+    // never refresh again.
+    for (const [message, code] of [['rate limited', 429], ['Invalid Form Body', 50035]] as const) {
+      status.setTrackedListMsgs([{ channelId: 'c1', messageId: 'm1' }])
+      editImpl = async () => { throw Object.assign(new Error(message), { code }) }
 
-    await status.refreshListDisplay()
+      await status.refreshListDisplay()
 
-    expect(status.trackedListMsgs()).toHaveLength(1)
+      expect(status.trackedListMsgs(), `code ${code}`).toHaveLength(1)
+    }
   })
 
   test('a deleted message is the one case worth forgetting', async () => {

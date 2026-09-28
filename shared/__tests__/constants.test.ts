@@ -175,7 +175,7 @@ describe('canonicalModel', () => {
 })
 
 describe('parseSessionLabel', () => {
-  test.each(['review', 'build', 'investigate'] as const)('--%s is lifted off the topic', (label) => {
+  test.each([...SESSION_LABELS])('--%s is lifted off the topic', (label) => {
     expect(parseSessionLabel(`fix the thing --${label}`)).toEqual({ label, topic: 'fix the thing' })
   })
 
@@ -250,10 +250,6 @@ describe('parseSessionLabel', () => {
   ])('a real flag in %p yields topic %p', (input, topic) => {
     expect(parseSessionLabel(input).topic).toBe(topic)
   })
-
-  test('the label never survives into the topic the session is given', () => {
-    expect(parseSessionLabel('ship it --build').topic).not.toContain('--build')
-  })
 })
 
 describe('byteTmuxName', () => {
@@ -296,9 +292,5 @@ describe('SESSION_LABELS', () => {
   test('isSessionLabel admits exactly those and nothing else', () => {
     for (const l of SESSION_LABELS) expect(isSessionLabel(l)).toBe(true)
     for (const n of ['fix', 'factory', 'Review', 'design', '', 'constructor']) expect(isSessionLabel(n)).toBe(false)
-  })
-
-  test('the flag grammar covers every member', () => {
-    for (const l of SESSION_LABELS) expect(parseSessionLabel(`do it --${l}`)).toEqual({ label: l, topic: 'do it' })
   })
 })

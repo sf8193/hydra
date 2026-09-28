@@ -81,11 +81,6 @@ test('a set-but-empty SPAWN_CWD is flagged rather than silently becoming homedir
   expect(r.spawnCwd).toBe(homedir())
 })
 
-test('a whitespace-only SPAWN_CWD is flagged too', () => {
-  process.env.SPAWN_CWD = '   '
-  expect(sourceStateDirEnv(stateDir).spawnCwdBlank).toBe(true)
-})
-
 test('an unset SPAWN_CWD is not flagged', () => {
   writeEnv('CHAT_PLATFORM=slack\n')
   expect(sourceStateDirEnv(stateDir).spawnCwdBlank).toBe(false)

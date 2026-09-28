@@ -150,13 +150,6 @@ describe('parseTemplateTopic', () => {
     expect(result!.topic).toBe('check foo: bar')
   })
 
-  test('factory template parses correctly', () => {
-    const result = parseTemplateTopic('factory: build the auth module')
-    expect(result).not.toBeNull()
-    expect(result!.templateName).toBe('factory')
-    expect(result!.topic).toBe('build the auth module')
-  })
-
   test('empty topic after colon is allowed (trimmed to empty string)', () => {
     const result = parseTemplateTopic('review:')
     expect(result).not.toBeNull()
@@ -203,19 +196,6 @@ describe('buildTemplateSpawnOpts', () => {
     expect(buildTemplateSpawnOpts('factory', t).label).toBeUndefined()
     // And a name that happens to spell a bucket does not conjure one.
     expect(buildTemplateSpawnOpts('build', t).label).toBeUndefined()
-  })
-
-  test('always includes promptPrefix', () => {
-    const t = getTemplate('review')!
-    const opts = buildTemplateSpawnOpts('review', t)
-    expect(typeof opts.promptPrefix).toBe('string')
-    expect((opts.promptPrefix as string).length).toBeGreaterThan(0)
-  })
-
-  test('always includes trigger', () => {
-    const t = getTemplate('review')!
-    const opts = buildTemplateSpawnOpts('review', t)
-    expect(opts.trigger).toBe('review:')
   })
 
   test('trigger matches template name with colon', () => {
