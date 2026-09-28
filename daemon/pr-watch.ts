@@ -197,7 +197,7 @@ async function ghApi(endpoint: string): Promise<any> {
   }
 }
 
-function maxId(items: any[] | null): number {
+export function maxId(items: any[] | null): number {
   if (!items || !Array.isArray(items) || items.length === 0) return 0
   return Math.max(...items.map((i: any) => i.id ?? 0))
 }
