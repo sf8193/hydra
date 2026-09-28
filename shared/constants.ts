@@ -80,6 +80,13 @@ export function isKnownModel(id: string): boolean {
   return KNOWN_MODELS.has(id.replace(/\[1m\]$/, ''))
 }
 
+/** Context window of a launch model: `[1m]` = 1M, any other known model = 200k, unknown or missing = null.
+ *  ponytail: a mid-session /model switch is not seen; the context-% disagreement log would show it. */
+export function contextWindowOf(model: string | undefined): number | null {
+  if (!model || !isKnownModel(model)) return null
+  return model.endsWith('[1m]') ? 1_000_000 : 200_000
+}
+
 // Late-bound (reads env per call, not frozen at import time). Intentional behavioral
 // change from the original SPAWN_MODEL constant — consistent with maxChunkLimit().
 export function spawnModel(): string {

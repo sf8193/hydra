@@ -18,8 +18,8 @@ import type {
 import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
-import { claudeConfigDir, isKnownModel } from '../../shared/constants.js'
-import { drainUsage, newCursor, projectDirName, projectsRoot, transcriptPathFor, type UsageCursor } from '../usage.js'
+import { claudeConfigDir, contextWindowOf, isKnownModel } from '../../shared/constants.js'
+import { drainUsage, lastContextTokens, newCursor, projectDirName, projectsRoot, transcriptPathFor, type UsageCursor } from '../usage.js'
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
@@ -84,6 +84,10 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
     return null
   }
 }
+
+// The pane's `ctx:` number is cross-checked against the transcript at most this often per session.
+const CONTEXT_CHECK_EVERY_MS = 10 * 60_000
+const lastContextCheckAt = new Map<string, number>()
 
 // ponytail: a genuinely silent Claude turn longer than this (no spinner repaint) reads not-working.
 export const CLAUDE_WORKING_SILENCE_S = 10 * 60
@@ -284,13 +288,34 @@ export class ClaudeEngine implements EngineAdapter {
     } catch { return '' }
   }
 
+  // From the transcript: the last turn's context tokens over the window the session was launched with. The id comes
+  // from the status file (a /clear starts a new transcript; the stored id goes stale). The pane's `ctx:` number is
+  // the fallback (unknown model, no transcript yet) and is cross-checked, at most every CONTEXT_CHECK_EVERY_MS.
   usage(info: SessionInfo): ContextUsage | null {
+    const window = contextWindowOf(info.sessionMetadata?.model)
+    const path = window ? transcriptPathFor(readClaudeStatus(info.tmuxName)?.sessionId ?? info.claudeSessionId) : undefined
+    const used = path ? lastContextTokens(path) : null
+    if (!window || used === null) {
+      const pane = this.panePercent(info)
+      return pane === null ? null : { usedTokens: 0, contextWindow: 0, percent: pane }
+    }
+    const percent = Math.min(100, Math.round(used * 100 / window))
+    const now = Date.now()
+    if (now - (lastContextCheckAt.get(info.tmuxName) ?? 0) >= CONTEXT_CHECK_EVERY_MS) {
+      lastContextCheckAt.set(info.tmuxName, now)
+      const pane = this.panePercent(info)
+      if (pane !== null && Math.abs(pane - percent) >= 2) {
+        process.stderr.write(`daemon: context %: ${info.tmuxName} transcript says ${percent}% (${used}/${window}), pane says ${pane}%\n`)
+      }
+    }
+    return { usedTokens: used, contextWindow: window, percent }
+  }
+
+  private panePercent(info: SessionInfo): number | null {
     try {
       const pane = execFileSync('tmux', ['capture-pane', '-t', info.tmuxName, '-p'],
         { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
-      const percent = parseContextPercent(pane)
-      if (percent === null) return null
-      return { usedTokens: 0, contextWindow: 0, percent }
+      return parseContextPercent(pane)
     } catch { return null }
   }
 

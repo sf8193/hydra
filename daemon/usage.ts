@@ -85,6 +85,28 @@ function readCwdFrom(path: string, from: number, size: number): string | undefin
   return undefined
 }
 
+// Tokens in context after the latest model turn: its input plus both cache counters (output is not in the next prompt).
+// The tail is bounded; a turn line longer than it reads null. Skips synthetic (`<...>` model) and sidechain lines.
+const CONTEXT_TAIL_BYTES = 256 * 1024
+export function lastContextTokens(path: string): number | null {
+  let text: string
+  try {
+    const size = statSync(path).size
+    const from = Math.max(0, size - CONTEXT_TAIL_BYTES)
+    text = readRange(path, from, size - from).toString('utf8')
+  } catch { return null }
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"usage"')) continue
+    let o: { isSidechain?: unknown; message?: { model?: unknown; usage?: Record<string, unknown> } }
+    try { o = JSON.parse(lines[i]) } catch { continue }
+    const m = o.message
+    if (!m?.usage || o.isSidechain === true || typeof m.model !== 'string' || m.model.startsWith('<')) continue
+    return int(m.usage.input_tokens) + int(m.usage.cache_creation_input_tokens) + int(m.usage.cache_read_input_tokens)
+  }
+  return null
+}
+
 export const subtractTotals = (from: TokenTotals, to: TokenTotals): TokenTotals => ({
   inputTokens: to.inputTokens - from.inputTokens,
   outputTokens: to.outputTokens - from.outputTokens,
