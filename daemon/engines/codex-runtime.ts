@@ -17,7 +17,6 @@ import { appendFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../config.js'
 import { safeSend } from '../util.js'
-import { clearCodexKeys, flushCodexKeys } from '../codex-key-queue.js'
 import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
 import { codexPiggyback } from './codex-piggyback.js'
 import { refreshSessionVisual } from '../anchor-state.js'
@@ -90,7 +89,6 @@ codexEngine.on('turnCompleted', (sessionId: string) => {
   // The remote TUI may disappear just after turn/completed. Recheck after that
   // teardown window; the provider is idempotent when the surface stayed alive.
   scheduleCodexSurfaceRepairs(sessionId)
-  flushCodexKeys(sessionId)
   handleSilenceEvent(info.tmuxName)
 })
 
@@ -169,7 +167,6 @@ export function finaliseCodexDeath(info: SessionInfo): void {
   info.deadAt = Date.now()
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
-  clearCodexKeys(info.sessionId)
   codexPiggyback.clear(info.sessionId)
   const { queued, unknown } = codexEngine.discardSession(info.sessionId)
   process.stderr.write(`codex-bootstrap: ${info.tmuxName} is dead (app-server unreachable); dropped ${queued} queued, ${unknown} unknown\n`)
@@ -226,7 +223,6 @@ export async function reconnectCodexAfterDisconnect(
   reconnecting.delete(sessionId)
   const info = deps.get(sessionId)
   if (info && !info.deadAt) deps.finalise(info)
-  clearCodexKeys(sessionId)
   deps.failed(sessionId)
   return false
 }
