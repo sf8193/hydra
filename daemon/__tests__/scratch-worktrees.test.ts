@@ -5,7 +5,7 @@ import { describe, test, expect, afterAll } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { cleanScratchWorktrees, sessionScratchpads } from '../worktree-manager.js'
+import { cleanScratchWorktrees, createWorktree, destroyWorktree, sessionScratchpads } from '../worktree-manager.js'
 import { scratchSessionIds } from '../session-lifecycle.js'
 
 const root = mkdtempSync(join(tmpdir(), 'scratch-wt-'))
@@ -93,5 +93,47 @@ describe('whose scratchpads a kill cleans', () => {
   test('a guest: only its own', () => {
     const guest = rec({ claudeSessionId: 'g', sessionType: 'thread_guest' })
     expect(scratchSessionIds(guest, [guest], history)).toEqual(['g'])
+  })
+})
+
+describe('Hydra worktrees: kept work is never destroyed later', () => {
+  function workspace() {
+    const base = mkdtempSync(join(root, 'ws-')), remote = join(base, 'remote.git'), repo = join(base, 'app')
+    run('git', 'init', '-q', '--bare', remote)
+    run('git', 'init', '-q', '-b', 'main', repo)
+    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init')
+    git(repo, 'remote', 'add', 'origin', remote)
+    git(repo, 'push', '-q', '-u', 'origin', 'main')
+    return { base, repo }
+  }
+  const commit = (wt: string, m: string) => git(wt, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', m)
+
+  test('a name reused after its worktree was kept: createWorktree refuses instead of deleting the commit', async () => {
+    const { base, repo } = workspace()
+    const cfg = { repoName: 'app', spawnCwd: base, branchName: 'wt/vale', dirSuffix: 'app-vale' }
+    const first = await createWorktree(cfg)
+    commit(first.worktreePath, 'unpushed work')
+    const sha = git(first.worktreePath, 'rev-parse', 'HEAD')
+    expect(await destroyWorktree(repo, first.worktreePath, cfg.branchName)).toContain('unpushed')
+    await expect(createWorktree(cfg)).rejects.toThrow(/kept from an earlier session/)
+    expect(git(repo, 'cat-file', '-t', sha)).toBe('commit')
+    expect(git(repo, 'rev-parse', cfg.branchName)).toBe(sha)
+  })
+
+  test('destroyWorktree keeps uncommitted changes and work on a branch the session switched to', async () => {
+    const { base, repo } = workspace()
+    const dirty = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/d', dirSuffix: 'app-d' })
+    writeFileSync(join(dirty.worktreePath, 'wip.txt'), 'x')
+    expect(await destroyWorktree(repo, dirty.worktreePath, 'wt/d')).toBe('uncommitted changes')
+    expect(existsSync(dirty.worktreePath)).toBe(true)
+
+    const switched = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/s', dirSuffix: 'app-s' })
+    git(switched.worktreePath, 'switch', '-q', '-c', 'feature')
+    commit(switched.worktreePath, 'on another branch')
+    expect(await destroyWorktree(repo, switched.worktreePath, 'wt/s')).toBe('1 unpushed commit(s)')
+
+    const clean = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/c', dirSuffix: 'app-c' })
+    expect(await destroyWorktree(repo, clean.worktreePath, 'wt/c')).toBeNull()
+    expect(existsSync(clean.worktreePath)).toBe(false)
   })
 })

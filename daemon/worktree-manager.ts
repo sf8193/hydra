@@ -75,6 +75,36 @@ export function resolveAndValidateRepo(repoName: string, spawnCwd: string): stri
 }
 
 // ---------------------------------------------------------------------------
+// The one "nothing to lose" guard — every path that deletes a worktree or branch
+// asks it first: no uncommitted/untracked changes, no rebase/merge/cherry-pick/
+// revert/bisect in progress, HEAD and the named branch fully on a remote.
+// Gitignored files (node_modules, build output) are disposable. Returns why the
+// work is at risk (unverifiable counts as at risk), or null when it's safe to delete.
+// ---------------------------------------------------------------------------
+
+export async function workAtRisk(repoDir: string, worktreePath: string, branch?: string): Promise<string | null> {
+  try {
+    if (existsSync(worktreePath)) {
+      const git = (...args: string[]) => execAsync('git', ['-C', worktreePath, ...args], { timeout: 10_000 }).then(r => r.stdout.trim())
+      if (await git('status', '--porcelain')) return 'uncommitted changes'
+      const gitDir = await git('rev-parse', '--absolute-git-dir') // all these markers are per-worktree
+      const midOp = ['rebase-merge', 'rebase-apply', 'sequencer', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'].filter(f => existsSync(join(gitDir, f)))
+      if (midOp.length) return `operation in progress (${midOp.join(', ')})`
+      const unpushed = Number(await git('rev-list', '--count', 'HEAD', '--not', '--remotes'))
+      if (unpushed > 0) return `${unpushed} unpushed commit(s)`
+    }
+    if (branch) {
+      const n = await checkUnpushedCommits(repoDir, branch)
+      if (n > 0) return `${n} unpushed commit(s) on ${branch}`
+      if (n < 0) return `could not verify ${branch}`
+    }
+    return null
+  } catch (err) {
+    return `could not verify (${err instanceof Error ? err.message.split('\n')[0] : err})`
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
 
@@ -92,7 +122,10 @@ export async function createWorktree(config: WorktreeConfig): Promise<WorktreeRe
   // Serialize per-repo so concurrent spawns/recoveries on the same repo don't race the
   // worktree admin lock.
   const baseBranch = await withRepoLock(repoDir, async () => {
-    // Clean up stale worktree/branch from previous runs
+    // Clean up stale worktree/branch from previous runs — unless they hold work (a
+    // killed session's worktree is kept then, and its name may be reused).
+    const risk = await workAtRisk(repoDir, wtDir, branchName)
+    if (risk) throw new Error(`worktree ${wtDir} / branch ${branchName} was kept from an earlier session (${risk}) — remove it or spawn under another name`)
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'remove', wtDir, '--force'], { timeout: 10_000 }) } catch {}
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'prune'], { timeout: 5_000 }) } catch {}
     try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branchName], { timeout: 5_000 }) } catch {}
@@ -176,17 +209,23 @@ export async function reattachWorktree(repoDir: string, worktreePath: string, br
 /**
  * Destroy a worktree: run cleanup hook, remove worktree, prune, delete branch.
  * Best-effort — logs failures but doesn't throw. Safe to call if already gone.
+ * Work at risk (see workAtRisk) is kept, not destroyed: returns why, else null.
  */
-export async function destroyWorktree(repoDir: string, worktreePath: string, branch: string): Promise<void> {
+export async function destroyWorktree(repoDir: string, worktreePath: string, branch: string): Promise<string | null> {
   // Serialize per-repo so a destroy can't race a concurrent add/reattach on the same repo.
-  await withRepoLock(repoDir, async () => {
+  return withRepoLock(repoDir, async () => {
+    const risk = await workAtRisk(repoDir, worktreePath, branch)
+    if (risk) {
+      process.stderr.write(`daemon: worktree: kept ${worktreePath} (${branch}): ${risk}\n`)
+      return risk
+    }
     // Skip if worktree dir is already gone
     if (!existsSync(worktreePath)) {
       process.stderr.write(`daemon: worktree: ${worktreePath} already gone, skipping destroy\n`)
       // Still try to prune + delete branch (may be orphaned)
       try { await execAsync('git', ['-C', repoDir, 'worktree', 'prune'], { timeout: 5_000 }) } catch {}
       try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branch], { timeout: 5_000 }) } catch {}
-      return
+      return null
     }
 
     // Run cleanup hook if present
@@ -224,6 +263,7 @@ export async function destroyWorktree(repoDir: string, worktreePath: string, bra
       await execAsync('git', ['-C', repoDir, 'branch', '-D', branch], { timeout: 5_000 })
       process.stderr.write(`daemon: worktree: deleted branch ${branch}\n`)
     } catch {}
+    return null
   })
 }
 
@@ -329,18 +369,14 @@ export async function cleanScratchWorktrees(dirs: string[]): Promise<{ removed: 
   const kept: Array<{ path: string; reason: string }> = []
   for (const wt of dirs.flatMap(worktreesIn)) {
     try {
-      const git = (...args: string[]) => execAsync('git', ['-C', wt, ...args], { timeout: 10_000 }).then(r => r.stdout.trim())
-      if (await git('status', '--porcelain')) { kept.push({ path: wt, reason: 'uncommitted changes' }); continue }
-      const gitDir = await git('rev-parse', '--absolute-git-dir') // all these markers are per-worktree
-      const midOp = ['rebase-merge', 'rebase-apply', 'sequencer', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'].filter(f => existsSync(join(gitDir, f)))
-      if (midOp.length) { kept.push({ path: wt, reason: `operation in progress (${midOp.join(', ')})` }); continue }
-      const unpushed = Number(await git('rev-list', '--count', 'HEAD', '--not', '--remotes'))
-      if (unpushed > 0) { kept.push({ path: wt, reason: `${unpushed} unpushed commit(s)` }); continue }
-      const repo = dirname(resolve(wt, await git('rev-parse', '--git-common-dir')))
+      const risk = await workAtRisk(wt, wt)
+      if (risk) { if (existsSync(wt)) kept.push({ path: wt, reason: risk }); continue } // gone meanwhile: another kill got it
+      const commonDir = (await execAsync('git', ['-C', wt, 'rev-parse', '--git-common-dir'], { timeout: 10_000 })).stdout.trim()
+      const repo = dirname(resolve(wt, commonDir))
       await withRepoLock(repo, () => execAsync('git', ['-C', repo, 'worktree', 'remove', wt], { timeout: 10_000 }))
       removed.push(wt)
     } catch (err) {
-      kept.push({ path: wt, reason: `could not verify (${err instanceof Error ? err.message.split('\n')[0] : err})` })
+      if (existsSync(wt)) kept.push({ path: wt, reason: `could not verify (${err instanceof Error ? err.message.split('\n')[0] : err})` })
     }
   }
   return { removed, kept }

@@ -23,7 +23,7 @@ import { loadAccess } from './access.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
-import { createWorktree, destroyWorktree, checkUnpushedCommits, cleanScratchWorktrees, sessionScratchpads } from './worktree-manager.js'
+import { createWorktree, destroyWorktree, cleanScratchWorktrees, sessionScratchpads } from './worktree-manager.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -366,16 +366,10 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
 
       // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort).
-      // Work that isn't on a remote is kept, never destroyed.
+      // Work at risk (uncommitted, mid-operation, not on a remote) is kept, never destroyed.
       void (async () => {
-        const unpushed = await checkUnpushedCommits(info.worktreeRepo!, branch)
-        if (unpushed !== 0) {
-          const why = unpushed > 0 ? `has ${unpushed} unpushed commit(s)` : `couldn't be checked for unpushed commits`
-          process.stderr.write(`daemon: worktree ${info.tmuxName}: ${branch} ${why}; kept ${info.worktreePath}\n`)
-          void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` ${why} — kept at \`${info.worktreePath}\`. Remove it once the work is safe.`).catch(() => {})
-          return
-        }
-        await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch)
+        const kept = await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch)
+        if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${info.worktreePath}\` (branch \`${branch}\`) kept: ${kept}. Remove it once the work is safe — a new spawn can't reuse this name until then.`).catch(() => {})
       })().catch(err => {
         process.stderr.write(`daemon: worktree cleanup failed for ${info.tmuxName}: ${err}\n`)
       })
