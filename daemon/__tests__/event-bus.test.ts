@@ -60,7 +60,7 @@ describe('event-bus', () => {
         emit('session:death', { sessionId: 'inner', threadId: '', wasOwner: false, tmuxName: '' })
       }
     }, 'test:reentrant-a')
-    on('session:death', ({ sessionId }) => calls.push(`B:${sessionId}`), 'test:reentrant-b')
+    on('session:death', ({ sessionId }) => void calls.push(`B:${sessionId}`), 'test:reentrant-b')
     emit('session:death', { sessionId: 'outer', threadId: '', wasOwner: true, tmuxName: '' })
     expect(calls).toEqual(['A:outer', 'A:inner', 'B:inner', 'B:outer'])
   })
@@ -76,8 +76,8 @@ describe('event-bus', () => {
   test('different events are independent', () => {
     const completions: string[] = []
     const cancellations: string[] = []
-    on('review:complete', ({ threadId }) => completions.push(threadId), 'test:complete')
-    on('review:cancelled', ({ threadId }) => cancellations.push(threadId), 'test:cancel')
+    on('review:complete', ({ threadId }) => void completions.push(threadId), 'test:complete')
+    on('review:cancelled', ({ threadId }) => void cancellations.push(threadId), 'test:cancel')
     emit('review:complete', { threadId: 'thread-1' })
     expect(completions).toEqual(['thread-1'])
     expect(cancellations).toEqual([])

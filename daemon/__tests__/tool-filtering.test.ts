@@ -177,7 +177,7 @@ describe('computeToolsForSession', () => {
   })
 
   test('all tool names in constants reference UNIVERSAL_TOOLS', () => {
-    const universalNames = new Set(UNIVERSAL_TOOLS.map(t => t.name))
+    const universalNames = new Set<string>(UNIVERSAL_TOOLS.map(t => t.name))
     for (const [, tools] of Object.entries(BASE_TOOLS)) {
       for (const name of tools as Iterable<string>) expect(universalNames.has(name)).toBe(true)
     }

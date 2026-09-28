@@ -304,7 +304,7 @@ export class TestHarness {
           ...resolveSpawnLabel(topic, spawnOpts?.label, spawnOpts?.inheritedLabel),
         }
         registry.set(sid, info)
-        return { sessionId: sid }
+        return { name: info.tmuxName, sessionId: sid, threadId: info.threadId, url: '' }
       },
       waitForBridge: async (_sid: string, _timeoutMs: number) => {
         if (waitMs > 0) await new Promise<void>(r => setTimeout(r, waitMs))

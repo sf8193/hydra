@@ -57,7 +57,7 @@ export type ProtocolRun = StatusLineState & {
   // removed only on reconnect, replacement, retirement or run cleanup (an expired
   // grace timer's entry stays, so repeat reports of the same death are ignored).
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
-  decisions: Array<{ phase: string; role: string; value: string; because: string }>
+  decisions: Array<{ phase: string; role: string; value: string; because: string; context?: string }>
   strike: boolean
   statusHistory: string[]
   summary?: string
@@ -238,23 +238,21 @@ function getRunAndRole(sessionId: string): { run: ProtocolRun; role: string } | 
   return { run, role }
 }
 
-function describePhaseTools(run: ProtocolRun, sessionId: string): { descriptions: Record<string, string>; schemas: Record<string, object> } | null {
+function describePhaseTools(run: ProtocolRun, sessionId: string): { descriptions: { advance: string; extend_phase: string }; schemas: { advance: object } } | null {
   const role = run.sessionToRole.get(sessionId)
   if (!role) return null
   if (run.protocol.phases[run.phase]?.actor !== role) return null
   const ia = run.protocol.phaseInteraction(run.phase)
   if (!ia) return null
-  const descriptions: Record<string, string> = {
-    advance: formatAdvanceUsagePattern(run.protocol, run.phase),
-  }
-  const schemas: Record<string, object> = {
-    advance: buildAdvanceSchema(ia),
-  }
   const remaining = MAX_EXTENSIONS_PER_PHASE - run._extensions
-  if (remaining > 0) {
-    descriptions.extend_phase = `Request more time in the current protocol phase (${remaining} remaining). Resets the idle timeout.`
-  } else {
-    descriptions.extend_phase = `All extensions used (${MAX_EXTENSIONS_PER_PHASE}/${MAX_EXTENSIONS_PER_PHASE}). No more extensions available this phase.`
+  const descriptions = {
+    advance: formatAdvanceUsagePattern(run.protocol, run.phase),
+    extend_phase: remaining > 0
+      ? `Request more time in the current protocol phase (${remaining} remaining). Resets the idle timeout.`
+      : `All extensions used (${MAX_EXTENSIONS_PER_PHASE}/${MAX_EXTENSIONS_PER_PHASE}). No more extensions available this phase.`,
+  }
+  const schemas = {
+    advance: buildAdvanceSchema(ia),
   }
   return { descriptions, schemas }
 }
@@ -288,8 +286,9 @@ function setProtocolTools(run: ProtocolRun, sessionId: string): void {
   const overrides = describePhaseTools(run, sessionId)
   if (overrides) {
     addCapability(info, 'protocol_context')
-    for (const [name, desc] of Object.entries(overrides.descriptions)) setToolDescription(info, name, desc)
-    for (const [name, schema] of Object.entries(overrides.schemas)) setToolInputSchema(info, name, schema)
+    setToolDescription(info, 'advance', overrides.descriptions.advance)
+    setToolDescription(info, 'extend_phase', overrides.descriptions.extend_phase)
+    setToolInputSchema(info, 'advance', overrides.schemas.advance)
   }
 
   const role = run.sessionToRole.get(sessionId)
@@ -1471,6 +1470,7 @@ function resetTimeout(run: ProtocolRun): void {
 
   const ms = run.protocol.windowMs(run.phase)
   if (!ms) return
+  const windowMs: number = ms // hoisted sendWarning() below doesn't see the narrowing on `ms`
 
   const phase = run.phase
   const actorRole = run.protocol.phases[phase]?.actor
@@ -1495,9 +1495,9 @@ function resetTimeout(run: ProtocolRun): void {
         const ctx = info ? formatContextPercent(info.adapter, info) : '?'
         const advanceCall = `Call \`${formatAdvanceUsagePattern(run.protocol, phase)}\``
         const elapsed = Math.round((Date.now() - run._phaseStartedAt) / 60_000)
-        const totalMs = ms * TOTAL_PHASE_CAP_FACTOR
+        const totalMs = windowMs * TOTAL_PHASE_CAP_FACTOR
         const totalRemaining = Math.max(0, Math.round((run._phaseStartedAt + totalMs - Date.now()) / 60_000))
-        const urgency = elapsed > ms / 60_000 ? ` Phase has been running ${elapsed}m — ${totalRemaining}m until hard limit.` : ''
+        const urgency = elapsed > windowMs / 60_000 ? ` Phase has been running ${elapsed}m — ${totalRemaining}m until hard limit.` : ''
         transport.sendOrQueue(actorSessionId!, {
           type: 'notification',
           content: `[system] ⏰ Phase timeout in 2 minutes. ${advanceCall} or call extend_phase(reason: "...", minutes: N) if you need more time.${urgency} (context: ${ctx})`,

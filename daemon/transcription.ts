@@ -113,7 +113,7 @@ export function mergeTranscripts(originalContent: string, transcripts: Transcrip
 export async function transcribeFile(path: string, contentType?: string | null): Promise<string | null> {
   // Size check BEFORE reading: the cap must protect daemon memory too, and
   // gateway-reported attachment sizes aren't always present or truthful.
-  let bytes: Buffer
+  let bytes: Buffer<ArrayBuffer>
   try {
     const size = (await stat(path)).size
     if (size > transcribeMaxBytes()) {

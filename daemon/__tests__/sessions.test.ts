@@ -14,7 +14,7 @@ function makeInfo(overrides: Partial<SessionInfo> = {}): SessionInfo {
     tmuxName: 'spark',
     listening: false,
     ...overrides,
-  }
+  } as SessionInfo // deliberately partial: no engine/adapter/sessionType, like a pre-backfill persisted record
 }
 
 function makeThread(overrides: Partial<ThreadMetadata> = {}): ThreadMetadata {
@@ -177,7 +177,7 @@ describe('ThreadRegistry', () => {
 describe('ensureSessionType', () => {
   test('session without sessionType gets thread_owner by default', () => {
     const info = makeInfo({ sessionId: 'test-type-owner' })
-    delete info.sessionType
+    delete (info as Partial<SessionInfo>).sessionType // simulate a legacy record
     ensureSessionType(info)
     expect(info.sessionType).toBe('thread_owner')
   })

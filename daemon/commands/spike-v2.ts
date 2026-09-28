@@ -5,7 +5,7 @@ import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateway.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 
-let spikeProto: Awaited<ReturnType<typeof import('../../protocols/spike.js')>>['default'] | null = null
+let spikeProto: typeof import('../../protocols/spike.js')['default'] | null = null
 
 async function getSpikeProto() {
   if (!spikeProto) spikeProto = (await import('../../protocols/spike.js')).default

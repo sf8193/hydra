@@ -1,9 +1,14 @@
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { computeToolsForSession, UNIVERSAL_TOOLS } from './bridge-tools.js'
-import { BASE_TOOLS, CAPABILITY_TOOLS } from '../shared/constants.js'
+import { computeToolsForSession, type SessionTool } from './bridge-tools.js'
+import { BASE_TOOLS as TYPED_BASE_TOOLS, CAPABILITY_TOOLS as TYPED_CAPABILITY_TOOLS } from '../shared/constants.js'
+import type { SessionType, Capability } from '../shared/constants.js'
 
-export function getToolsForSession(sessionId: string): typeof UNIVERSAL_TOOLS {
+// Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
+const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<string>>> = TYPED_BASE_TOOLS
+const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<string>>> = TYPED_CAPABILITY_TOOLS
+
+export function getToolsForSession(sessionId: string): SessionTool[] {
   if (sessionId === 'main') {
     return computeToolsForSession('master_orchestrator', new Set())
   }

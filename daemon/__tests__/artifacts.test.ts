@@ -336,7 +336,7 @@ describe('assembleContextLines', () => {
 // local bounded helper. We verify the eviction contract by checking observable
 // side-effects (title lookup miss → fallback render).
 
-import { cachePrTitle, cacheSlackChannel, cacheSlackThread, renderArtifactLink, renderContextLink } from '../artifacts.js'
+import { cachePrTitle, cacheSlackChannel, cacheSlackThread } from '../artifacts.js'
 
 describe('cache eviction', () => {
   test('cachePrTitle evicts oldest entries when cap is reached', () => {

@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import { mechanicsBlock } from '../prompts/mechanics.js'
 
-const mech = { threadId: 't', sessionId: 's' }
+const mech = { threadId: 't', sessionId: 's', tmuxName: 'm' }
 
 describe('mechanicsBlock — pool roles must supply orient', () => {
   test('per-phase cadence without orient throws', () => {
