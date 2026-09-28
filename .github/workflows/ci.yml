@@ -1,8 +1,8 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [sf/ci-debug-403]
 
 jobs:
   bisect:
