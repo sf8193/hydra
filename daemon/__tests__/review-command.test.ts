@@ -247,7 +247,7 @@ describe('review command → run params', () => {
     expect(run.params.noPonytail).toBeUndefined()
     expect(run.params.autoReviewLenses).toBe(true)
     const seed = reviewProtoForTest.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, ...run.params })!
-    expect(seed).toContain('Automatic private sub-reviewers')
+    expect(seed).toContain('Staged fresh passes')
     expect(seed).toContain('Default +ponytail')
     expect(seed).toContain('/ponytail review')
   })
@@ -258,7 +258,7 @@ describe('review command → run params', () => {
     const run = getRunByThread(threadId)!
     expect(run.params.noPonytail).toBe(true)
     const seed = reviewProtoForTest.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, ...run.params })!
-    expect(seed).toContain('Automatic private sub-reviewers')
+    expect(seed).toContain('Staged fresh passes')
     expect(seed).not.toContain('Default +ponytail')
     expect(seed).not.toContain('/ponytail review')
   })

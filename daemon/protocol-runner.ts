@@ -402,7 +402,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
   }
 
   if (run.protocol.name === 'review' && (run.phase === 'critic_turn' || run.phase === 'subagent_review')) {
-    const lensError = validateRequestedReviewLenses(run, content)
+    const lensError = validateRequestedReviewLenses(run, content, verdict)
     if (lensError) return { ok: false, reason: lensError }
   }
 
@@ -527,15 +527,34 @@ function validateDelegatedBuildVerification(run: ProtocolRun, content: string): 
 }
 
 // Lens helpers are the reviewer's own native subagents, which Hydra can't observe,
-// so the gate is on the output: one `+<lens>` section per required lens.
+// so the gate is on the output: `+<lens>` sections, and on approve the staged loop's close-out line.
 // ponytail: trusts the reviewer not to write a section it didn't delegate; same trust as its own review.
-function validateRequestedReviewLenses(run: ProtocolRun, content: string): string | null {
+function lensSection(name: string): RegExp {
   // A section line: optional markdown lead (#, >, *, _, `, bullets, "1.") then `+name` not followed by more lens-name chars.
-  const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const missing = requiredLenses(run.params).filter(name =>
-    !new RegExp(`(^|\\n)[\\s#>*_\`-]*(\\d+\\.\\s*)?[*_\`]*\\+${esc(name)}(?![a-z0-9-])`, 'i').test(content))
-  if (missing.length === 0) return null
-  return `missing lens section${missing.length > 1 ? 's' : ''}: ${missing.map(n => `+${n}:`).join(', ')}. Run each required lens in its own native subagent and report it under a "+<lens>:" section (or "+<lens>: helper returned nothing") before advancing`
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|\\n)[\\s#>*_\`-]*(\\d+\\.\\s*)?[*_\`]*\\+${esc}(?![a-z0-9-])`, 'i')
+}
+
+function validateRequestedReviewLenses(run: ProtocolRun, content: string, verdict?: string): string | null {
+  const required = requiredLenses(run.params)
+  const lensHint = 'Run each required lens in its own native subagent and report it under a "+<lens>:" section (or "+<lens>: helper returned nothing")'
+  // +subagent is a single pass: every lens in this one summary.
+  if (run.phase === 'subagent_review') {
+    const missing = required.filter(n => !lensSection(n).test(content))
+    return missing.length ? `missing lens section${missing.length > 1 ? 's' : ''}: ${missing.map(n => `+${n}:`).join(', ')}. ${lensHint} before advancing` : null
+  }
+  // Critic: lenses run in their stage, so coverage accumulates across rounds and is checked at approve.
+  const covered = new Set<string>((run.params.coveredLenses as string[] | undefined) ?? [])
+  for (const n of required) if (lensSection(n).test(content)) covered.add(n)
+  run.params.coveredLenses = [...covered]
+  if (verdict !== 'approve') return null
+  const missing = required.filter(n => !covered.has(n))
+  if (missing.length) return `cannot approve: lens${missing.length > 1 ? 'es' : ''} never reported: ${missing.map(n => `+${n}:`).join(', ')}. ${lensHint}`
+  const staged = run.params.autoReviewLenses === true && !run.params.noAutoLenses
+  if (staged && !/Stage 3:\s*clean|No code changed since last clean pass/i.test(content)) {
+    return 'cannot approve yet: the staged loop needs a fresh "Stage 3: clean" pass with no code change since (or "No code changed since last clean pass" after a debate-only round)'
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
