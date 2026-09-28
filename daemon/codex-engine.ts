@@ -13,6 +13,7 @@
 import WebSocket from 'ws'
 import { EventEmitter } from 'events'
 import { join } from 'path'
+import { codexHomeDir } from './codex-process.js'
 import type { DeliveryResult } from './engines/engine-adapter.js'
 
 class CodexRpcError extends Error {
@@ -49,7 +50,7 @@ export const INTERRUPT_START_WAIT_MS = 5000
 // 'turnReconciled' (read-only: the last terminal turn seen on resume, never a turnCompleted)
 
 export function codexSocketPath(tmuxName: string): string {
-  return join(process.env.HOME!, '.codex', `hydra-${tmuxName}`, 'app-server-control', 'app-server-control.sock')
+  return join(codexHomeDir(tmuxName), 'app-server-control', 'app-server-control.sock')
 }
 
 export function selectDefaultCodexModel(result: unknown): string | undefined {

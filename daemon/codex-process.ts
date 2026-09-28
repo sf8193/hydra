@@ -4,8 +4,9 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, w
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 
+// HYDRA_CODEX_ROOT: tests point this at a temp dir (test-setup.ts).
 export function codexHomeDir(homeName: string): string {
-  return join(homedir(), '.codex', `hydra-${homeName}`)
+  return join(process.env.HYDRA_CODEX_ROOT ?? join(homedir(), '.codex'), `hydra-${homeName}`)
 }
 
 export function codexPidPath(homeName: string): string {
@@ -21,6 +22,7 @@ export type StartCodexAppServerOptions = {
 
 /** Start an app-server independently of tmux so the presentation surface is disposable. */
 export function startCodexAppServer(options: StartCodexAppServerOptions): number {
+  if (process.env.NODE_ENV === 'test') throw new Error('refusing to start a real codex app-server under bun test — give the adapter a fake process')
   // Idempotent: a prior spawn for this home may still be running (retry, crash-restart
   // race). Clear it first so its PID doesn't survive as an untracked orphan once this
   // call's pid file overwrite makes it unreachable via the normal stop path.

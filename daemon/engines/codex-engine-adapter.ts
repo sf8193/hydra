@@ -306,7 +306,7 @@ export class CodexEngineAdapter implements EngineAdapter {
       // Never start a TUI against a dead server; the anchor alone would let this through.
       if (!this.engine.isConnected(info.sessionId)) return null
       const homeName = info.codexHomeName ?? info.tmuxName
-      const codexHome = join(homedir(), '.codex', `hydra-${homeName}`)
+      const codexHome = codexHomeDirFn(homeName)
       const socket = codexSocketPath(homeName)
       const command = `export CODEX_HOME=${shq(codexHome)} && codex resume ${shq(info.codexThreadId)} --remote ${shq(`unix://${socket}`)}`
       execFileSync('tmux', ['new-window', '-n', 'hydra-chat', '-t', info.tmuxName, command],

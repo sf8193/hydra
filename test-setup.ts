@@ -23,7 +23,7 @@
 // debugging something, silently reproducing the exact bug this file exists to prevent. So this
 // is a hard guard, not just a convention: refuse to isolate to anything under ~/.claude/channels
 // (any platform, not just the current CHAT_PLATFORM), full stop, even if explicitly requested.
-import { lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os'
 import { join, resolve } from 'path'
 import { isUnder } from './shared/path-containment.js'
@@ -94,6 +94,15 @@ process.env.HYDRA_STATE_DIR = dir
 // Claude's config dir too, or planted transcript fixtures land in the live ~/.claude/projects.
 process.env.CLAUDE_CONFIG_DIR = join(dir, 'claude')
 delete process.env.DISCORD_STATE_DIR
+
+// Real processes too. A private tmux server, so no test can see or kill the developer's
+// live sessions (a harness session named 'owner' once probed the real server). A throwaway
+// Codex root, so no test can find or stop a real app-server by home name; starting one
+// is refused outright (codex-process.ts), after a test leaked hydra-newname for a day.
+process.env.TMUX_TMPDIR = join(dir, 'tmux')
+mkdirSync(process.env.TMUX_TMPDIR, { recursive: true })
+delete process.env.TMUX
+process.env.HYDRA_CODEX_ROOT = join(dir, 'codex')
 if (!explicit) {
   // Best-effort: bun fires 'exit' unreliably here, so also sweep day-old dirs on the way in.
   process.on('exit', () => { try { rmSync(dir, { recursive: true, force: true }) } catch {} })
