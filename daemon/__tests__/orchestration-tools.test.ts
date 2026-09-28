@@ -2,11 +2,13 @@ import { describe, test, expect } from 'bun:test'
 import { engines } from '../engines/instances.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
+import { withFakeTmux } from './fake-tmux.js'
+import { fakeAdapter } from './test-harness.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
 
-test('dispatcher rejects a phase-scoped tool after capability removal', async () => {
+test('dispatcher rejects a phase-scoped tool for a session without the capability', async () => {
   const sessionId = 'scope-enforcement-session'
   registry.set(sessionId, {
     sessionId, tmuxName: 'scope-enforcement', topic: '', threadId: 'scope-thread',
@@ -14,11 +16,9 @@ test('dispatcher rejects a phase-scoped tool after capability removal', async ()
     engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner',
   } as any)
   try {
-    const result = await executeTool('kill_session', { session_id: 'anything' }, sessionId)
+    const result = await executeTool('advance', { content: 'x' }, sessionId)
     expect(result.isError).toBe(true)
-    // A concurrent registry cleanup can remove this synthetic caller before
-    // dispatch reaches the target lookup. Both outcomes are fail-closed.
-    expect(result.content[0].text).toMatch(/not available to this session|session not found/)
+    expect(result.content[0].text).toContain('advance is not available to this session')
   } finally {
     registry.delete(sessionId)
   }
@@ -34,7 +34,7 @@ test('Codex non-PM session is denied protocol spawn tools', async () => {
   try {
     const result = await executeTool('kill_session', { session_id: 'anything' }, sessionId)
     expect(result.isError).toBe(true)
-    expect(result.content[0].text).toMatch(/not available to this session|session not found/)
+    expect(result.content[0].text).toContain('kill_session is not available to this session')
   } finally {
     registry.delete(sessionId)
   }
@@ -91,6 +91,7 @@ describe('send_to_thread', () => {
   test('rejects missing text', async () => {
     const result = await executeTool('send_to_thread', { target: 'cedar', type: 'progress' })
     expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('text is required')
   })
 
   test('rejects unknown session name with helpful error', async () => {
@@ -112,10 +113,17 @@ describe('send_to_thread', () => {
       listening: false,
       engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
     })
+    const { gateway } = await import('../config.js')
+    const real = gateway.send
+    const sent: string[] = []
+    gateway.send = (async (channelId: string) => { sent.push(channelId); return { id: 'm1' } }) as any
     try {
       const result = await executeTool('send_to_thread', { target: 'file-test-session', type: 'progress', text: 'hello', files: ['/nonexistent'] })
       expect(result.isError).toBe(true)
+      expect(result.content[0].text).toContain('ENOENT')
+      expect(sent).toEqual([])
     } finally {
+      gateway.send = real
       registry.delete(testId)
     }
   })
@@ -132,14 +140,16 @@ describe('send_to_thread', () => {
       listening: false,
       engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
     })
+    const { gateway } = await import('../config.js')
+    const real = gateway.send
+    const sent: string[] = []
+    gateway.send = (async (channelId: string) => { sent.push(channelId); return { id: 'm1' } }) as any
     try {
       const result = await executeTool('send_to_thread', { target: 'orch-test-session', type: 'result', text: 'done' })
-      if (result.isError) {
-        expect(result.content[0].text).not.toContain('target is required')
-        expect(result.content[0].text).not.toContain('type is required')
-        expect(result.content[0].text).not.toContain('no session named')
-      }
+      expect(result.isError).toBeFalsy()
+      expect(sent).toEqual(['resolved-thread-123'])
     } finally {
+      gateway.send = real
       registry.delete(testId)
     }
   })
@@ -225,12 +235,17 @@ describe('peek_session', () => {
       tmuxName: 'peek-test-session', listening: false,
       engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
     })
+    const fake = withFakeTmux()
+    fake.alive('peek-test-session')
+    const seen: number[] = []
+    const info = registry.get(testId)!
+    info.adapter = fakeAdapter({ usage: () => undefined, peek: (_s: unknown, n: number) => { seen.push(n); return 'out' } }) as any
     try {
       const result = await executeTool('peek_session', { name: 'peek-test-session', lines: 9999 })
-      const text = result.content[0].text
-      expect(text).not.toContain('invalid')
-      expect(text).not.toContain('out of range')
+      expect(result.isError).toBeFalsy()
+      expect(seen).toEqual([500])
     } finally {
+      fake.restore()
       registry.delete(testId)
     }
   })
@@ -245,14 +260,20 @@ describe('list_sessions', () => {
   })
 
   test('includes lineage fields in output format', async () => {
-    // list_sessions filters by isAlive (requires tmux), so we check live sessions
-    const result = await executeTool('list_sessions', {})
-    const parsed = JSON.parse(result.content[0].text) as any[]
-    // Every entry should have the lineage fields
-    for (const entry of parsed) {
-      expect(entry).toHaveProperty('origin_type')
-      expect(entry).toHaveProperty('origin_from')
-      expect(entry).toHaveProperty('thread_id')
+    const testId = `list-lineage-${Date.now()}`
+    registry.set(testId, {
+      sessionId: testId, topic: 'test', threadId: 'thread-list',
+      createdAt: Date.now(), lastActive: Date.now(),
+      tmuxName: 'list-lineage', listening: false,
+      engine: 'claude', adapter: fakeAdapter({ usage: () => undefined, isAlive: () => true }) as any, sessionType: 'thread_owner' as const,
+      originFrom: 'list-parent', originType: 'spawn',
+    })
+    try {
+      const parsed = JSON.parse((await executeTool('list_sessions', {})).content[0].text) as any[]
+      expect(parsed.length).toBeGreaterThanOrEqual(1)
+      expect(parsed.find(e => e.name === 'list-lineage')).toMatchObject({ origin_type: 'spawn', origin_from: 'list-parent', thread_id: 'thread-list' })
+    } finally {
+      registry.delete(testId)
     }
   })
 })
