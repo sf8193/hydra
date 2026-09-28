@@ -7,6 +7,7 @@ import { claudeTurnOutcome } from '../engines/claude-transcript.js'
 import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../engines/codex-observation.js'
 import { engines } from '../engines/instances.js'
 import type { SessionInfo } from '../sessions.js'
+import { nextResumeCount } from '../session-lifecycle.js'
 
 const tmp = mkdtempSync(join(tmpdir(), 'obs-test-'))
 const paths: string[] = []
@@ -214,19 +215,12 @@ describe('buildAutopsy', () => {
   })
 })
 
-describe('resumeCount lookup logic (mirrors doSpawnSession)', () => {
-  function lookupResumeCount(sessions: Partial<SessionInfo>[], resumeFrom: string): number {
-    const predecessor = (sessions as SessionInfo[])
-      .filter(s => s.claudeSessionId === resumeFrom && s.deadAt)
-      .sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
-    return predecessor ? (predecessor.resumeCount ?? 0) + 1 : 0
-  }
-
+describe('nextResumeCount (doSpawnSession resume lookup)', () => {
   test('first resume of a conversation returns 1', () => {
     const sessions = [
       fakeInfo({ sessionId: 'A', claudeSessionId: 'conv-1', deadAt: NOW - 1000 }),
     ]
-    expect(lookupResumeCount(sessions, 'conv-1')).toBe(1)
+    expect(nextResumeCount(sessions, 'conv-1')).toBe(1)
   })
 
   test('second resume climbs to 2 (not pinned at 1)', () => {
@@ -234,7 +228,7 @@ describe('resumeCount lookup logic (mirrors doSpawnSession)', () => {
       fakeInfo({ sessionId: 'A', claudeSessionId: 'conv-1', deadAt: NOW - 2000 }),
       fakeInfo({ sessionId: 'B', claudeSessionId: 'conv-1', deadAt: NOW - 1000, resumeCount: 1 }),
     ]
-    expect(lookupResumeCount(sessions, 'conv-1')).toBe(2)
+    expect(nextResumeCount(sessions, 'conv-1')).toBe(2)
   })
 
   test('fifth resume reaches 5', () => {
@@ -245,7 +239,7 @@ describe('resumeCount lookup logic (mirrors doSpawnSession)', () => {
       fakeInfo({ sessionId: 'D', claudeSessionId: 'conv-1', deadAt: NOW - 2000, resumeCount: 3 }),
       fakeInfo({ sessionId: 'E', claudeSessionId: 'conv-1', deadAt: NOW - 1000, resumeCount: 4 }),
     ]
-    expect(lookupResumeCount(sessions, 'conv-1')).toBe(5)
+    expect(nextResumeCount(sessions, 'conv-1')).toBe(5)
   })
 
   test('picks most recent dead session when multiple share the conversation id', () => {
@@ -255,21 +249,21 @@ describe('resumeCount lookup logic (mirrors doSpawnSession)', () => {
       fakeInfo({ sessionId: 'C', claudeSessionId: 'conv-1', deadAt: NOW - 2000, resumeCount: 99 }),
     ]
     // B is most recent → should use B's count (1), not C's (99)
-    expect(lookupResumeCount(sessions, 'conv-1')).toBe(2)
+    expect(nextResumeCount(sessions, 'conv-1')).toBe(2)
   })
 
   test('ignores live sessions (no deadAt)', () => {
     const sessions = [
       fakeInfo({ sessionId: 'live', claudeSessionId: 'conv-1', resumeCount: 10 }),
     ]
-    expect(lookupResumeCount(sessions, 'conv-1')).toBe(0)
+    expect(nextResumeCount(sessions, 'conv-1')).toBe(0)
   })
 
   test('returns 0 when no matching conversation exists', () => {
     const sessions = [
       fakeInfo({ sessionId: 'A', claudeSessionId: 'conv-other', deadAt: NOW - 1000 }),
     ]
-    expect(lookupResumeCount(sessions, 'conv-1')).toBe(0)
+    expect(nextResumeCount(sessions, 'conv-1')).toBe(0)
   })
 })
 
