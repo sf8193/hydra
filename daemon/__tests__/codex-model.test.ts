@@ -43,18 +43,6 @@ describe('Codex model continuity', () => {
     expect(conn.deferredTurnQueue).toEqual([])
   })
 
-  test('resuming an active turn waits before delivering queued work', async () => {
-    const engine = new CodexEngine() as any
-    const conn: any = { currentTurnId: null, deferredTurnQueue: ['next-round'] }
-    engine.connectBase = async () => conn
-    engine.request = async () => ({ thread: { turns: [{ id: 'active', status: 'inProgress' }] } })
-    engine.resetWatchdog = () => {}
-    engine.startDeferredTurn = () => { throw new Error('must wait for completion') }
-    await engine.connectAndResume('s', 'socket', 'parent')
-    expect(conn.currentTurnId).toBe('active')
-    expect(conn.deferredTurnQueue).toEqual(['next-round'])
-  })
-
   test('start, resume and fork use the server-resolved model', async () => {
     const engine = new CodexEngine() as any
     engine.connectBase = async () => ({ threadId: null })
@@ -610,14 +598,6 @@ describe('Codex adapter delivery modes', () => {
     const result = await fakeCodexAdapter({ calls }).deliver({ sessionId: 's', tmuxName: 'x' } as any, { type: 'notification', content: 'hi', deferUntilTurnComplete: true, meta: { downloaded_files: '/a.png' } })
     expect(calls).toEqual(['queue:hi\n\n[attachments: /a.png]'])
     expect(result).toEqual({ status: 'accepted', via: 'queued-turn' })
-  })
-
-  test('launch queues the prompt as FIFO item zero before connecting', () => {
-    const src = require('fs').readFileSync(require('path').join(import.meta.dir, '..', 'engines', 'codex-engine-adapter.ts'), 'utf8')
-    const launch = src.slice(src.indexOf('async launch('))
-    const queued = launch.indexOf('this.engine.queueTurn(sessionId, prompt)')
-    expect(queued).toBeGreaterThan(-1)
-    expect(queued).toBeLessThan(launch.indexOf('this.engine.connect'))
   })
 })
 

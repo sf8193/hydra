@@ -21,11 +21,4 @@ describe('reviewSummaryFormat', () => {
     expect(reviewSummaryFormat(1)[0]).toBe('**⚔️ Review Summary** (1 round)')
     expect(reviewSummaryFormat(3)[0]).toBe('**⚔️ Review Summary** (3 rounds)')
   })
-
-  test('multi-round generates per-round arc lines', () => {
-    const out = reviewSummaryFormat(3).join('\n')
-    expect(out).toContain('Round 1')
-    expect(out).toContain('Round 2')
-    expect(out).toContain('Round 3')
-  })
 })

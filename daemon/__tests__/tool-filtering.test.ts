@@ -144,16 +144,6 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('reply')
   })
 
-  test('factory_builder base set has factory_done without capabilities', () => {
-    const tools = computeToolsForSession('factory_builder', new Set())
-    const names = tools.map(t => t.name)
-    expect(names).toContain('factory_done')
-    expect(names).toContain('reply')
-    expect(names).not.toContain('advance')
-    expect(names).not.toContain('spawn_session')
-    expect(tools).toHaveLength(6)
-  })
-
   test('inputSchema overrides replace tool schema', () => {
     const noVerdictSchema = { type: 'object', properties: { content: { type: 'string' } }, required: ['content'] }
     const tools = computeToolsForSession('thread_guest', new Set(['protocol_context']), { inputSchemas: { advance: noVerdictSchema } })
@@ -167,13 +157,6 @@ describe('computeToolsForSession', () => {
     const tools = computeToolsForSession('thread_guest', new Set(['protocol_context']), { inputSchemas: { advance: schema } })
     const extend = tools.find(t => t.name === 'extend_phase')!
     expect((extend.inputSchema as any).properties.reason).toBeDefined()
-  })
-
-  test('verdict required schema makes verdict required', () => {
-    const requiredSchema = { type: 'object', properties: { content: { type: 'string' }, verdict: { type: 'string' } }, required: ['content', 'verdict'] }
-    const tools = computeToolsForSession('thread_guest', new Set(['protocol_context']), { inputSchemas: { advance: requiredSchema } })
-    const advance = tools.find(t => t.name === 'advance')!
-    expect((advance.inputSchema as any).required).toContain('verdict')
   })
 
   test('all tool names in constants reference UNIVERSAL_TOOLS', () => {

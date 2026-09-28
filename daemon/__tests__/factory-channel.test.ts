@@ -28,19 +28,11 @@ describe('resolveBuilderChannel', () => {
   })
 
   test('returns undefined when neither source has a channel', () => {
+    // The old bug: registry has no anchorChannelId, threadRegistry has no parent.
+    // Must be undefined (falls back to DEFAULT_SESSION_CHANNEL), never the PM's thread.
     const reg = { get: () => undefined }
     const threads = { get: () => undefined }
     expect(resolveBuilderChannel('pm-1', 'thread-1', reg, threads)).toBeUndefined()
-  })
-
-  test('never returns the PM thread ID itself', () => {
-    const pmThreadId = 'thread-pm-999'
-    // Simulate the old bug: registry has no anchorChannelId, threadRegistry has no parent
-    const reg = { get: () => undefined }
-    const threads = { get: () => undefined }
-    const result = resolveBuilderChannel('pm-1', pmThreadId, reg, threads)
-    // Must be undefined (falls back to DEFAULT_SESSION_CHANNEL), never the PM's thread
-    expect(result).not.toBe(pmThreadId)
   })
 
   test('anchorChannelId takes priority over parentChannelId', () => {
