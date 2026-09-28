@@ -1,4 +1,5 @@
-import { describe, test, expect, afterEach } from 'bun:test'
+import { describe, test, expect, afterEach, beforeEach, spyOn } from 'bun:test'
+import { engines } from '../engines/instances.js'
 import { createHarness, createStartedHarness, TestHarness, TOTAL_PHASE_CAP_FACTOR, WARNING_BEFORE_TIMEOUT_MS } from './test-harness.js'
 import { computeToolsForSession } from '../bridge-tools.js'
 import { CAPABILITY_TOOLS } from '../../shared/constants.js'
@@ -15,7 +16,14 @@ import spike from '../../protocols/spike.js'
 
 let h: TestHarness
 
+// Harness sessions use tmuxName = role ('owner', 'critic', ...), which no real
+// tmux has. Without this, the 30s health monitor probes `tmux has-session`,
+// finds nothing, and cancels the run.
+let aliveSpy: ReturnType<typeof spyOn>
+beforeEach(() => { aliveSpy = spyOn(engines.claude, 'isAlive').mockReturnValue(true) })
+
 afterEach(() => {
+  aliveSpy.mockRestore()
   h?.dispose()
   h = undefined as any
 })

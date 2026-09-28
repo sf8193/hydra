@@ -3,6 +3,14 @@ import { tmuxNewSession } from '../shared/spawn-env.js'
 import { randomUUID } from 'crypto'
 import { resolveSocket, sendRequest, shq, tmuxExists, tmuxKill } from './helpers.js'
 
+// Everything peek touches outside itself — tests swap these fields (and restore
+// them) instead of mock.module()ing child_process for the whole test run.
+export const peekIO = {
+  execSync: execSync as (cmd: string, opts?: object) => string | Buffer,
+  tmuxNewSession, resolveSocket, sendRequest, tmuxExists, tmuxKill,
+  exit: (code: number): void => { process.exit(code) },
+}
+
 type SessionEntry = {
   name: string
   description?: string
@@ -10,11 +18,11 @@ type SessionEntry = {
   tmuxTarget?: string
 }
 
-const tmux = (cmd: string) => execSync(cmd, { stdio: 'pipe' })
-const tmuxRead = (cmd: string) => execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+const tmux = (cmd: string) => peekIO.execSync(cmd, { stdio: 'pipe' })
+const tmuxRead = (cmd: string) => String(peekIO.execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })).trim()
 
 async function getLiveSessions(socketPath: string): Promise<SessionEntry[]> {
-  const response = await sendRequest(socketPath, {
+  const response = await peekIO.sendRequest(socketPath, {
     type: 'cli', command: 'list', id: randomUUID(), params: {},
   })
   if (!response.ok) return []
@@ -23,15 +31,15 @@ async function getLiveSessions(socketPath: string): Promise<SessionEntry[]> {
 }
 
 function attachSession(session: SessionEntry): void {
-  if (!tmuxExists(session.name)) {
+  if (!peekIO.tmuxExists(session.name)) {
     console.error(`error: tmux session "${session.name}" not found`)
-    process.exit(1)
+    peekIO.exit(1)
   }
   const target = session.tmuxTarget ?? session.name
   try { tmux(`tmux select-window -t ${shq(target)}`) } catch {}
   console.log(`\x1b[2m(detach: ctrl+b d)\x1b[0m`)
   try {
-    execSync(`tmux attach-session -t ${shq(session.name)}`, { stdio: 'inherit' })
+    peekIO.execSync(`tmux attach-session -t ${shq(session.name)}`, { stdio: 'inherit' })
   } catch {}
 }
 
@@ -40,18 +48,18 @@ function buildPeekSession(sessions: SessionEntry[]): void {
   const p = shq(peekName)
 
   // Kill existing peek session
-  tmuxKill(peekName)
+  peekIO.tmuxKill(peekName)
 
   const windowName = (s: SessionEntry) => s.description ? `${s.name}: ${s.description}` : s.name
 
   // Create peek session and set window-size so linked windows expand to peek's terminal size
-  tmuxNewSession(['-d', '-s', peekName])
+  peekIO.tmuxNewSession(['-d', '-s', peekName])
   tmux(`tmux set-option -t ${p} window-size largest`)
 
   // Link each session's window, tracking which ones succeed and their tmux window index
   const linked: Array<{ session: SessionEntry; windowIndex: string }> = []
   for (const s of sessions) {
-    if (!tmuxExists(s.name)) continue
+    if (!peekIO.tmuxExists(s.name)) continue
     try {
       tmux(`tmux link-window -s ${shq(s.tmuxTarget ?? `${s.name}:0`)} -t ${p}`)
       const idx = tmuxRead(`tmux list-windows -t ${p} -F '#{window_index}' | tail -1`)
@@ -65,9 +73,9 @@ function buildPeekSession(sessions: SessionEntry[]): void {
   }
 
   if (linked.length === 0) {
-    tmuxKill(peekName)
+    peekIO.tmuxKill(peekName)
     console.log('no live tmux sessions to peek')
-    process.exit(0)
+    peekIO.exit(0)
   }
 
   // Rename windows using the tracked indices (avoids index/name mismatch)
@@ -100,24 +108,24 @@ function buildPeekSession(sessions: SessionEntry[]): void {
   // from the peek client has no effect on agent behavior.
   console.log(`\x1b[2m(${linked.length} sessions · sorted by most recent)\x1b[0m`)
   try {
-    execSync(`tmux attach-session -t ${p} \\; choose-tree -wf '#{==:#{session_name},hydra-peek}'`, { stdio: 'inherit' })
+    peekIO.execSync(`tmux attach-session -t ${p} \\; choose-tree -wf '#{==:#{session_name},hydra-peek}'`, { stdio: 'inherit' })
   } catch (err) {
     process.stderr.write(`peek: attach failed: ${err instanceof Error ? err.message : String(err)}\n`)
   } finally {
     for (const { session } of linked) {
       try { tmux(`tmux set-option -u -t ${shq(session.name)} window-size`) } catch {}
     }
-    tmuxKill(peekName)
+    peekIO.tmuxKill(peekName)
   }
 }
 
 export async function peek(args: string[], daemonName?: string): Promise<void> {
-  const socketPath = resolveSocket(daemonName)
+  const socketPath = peekIO.resolveSocket(daemonName)
   const sessions = await getLiveSessions(socketPath)
 
   if (sessions.length === 0) {
     console.log('no live sessions')
-    process.exit(0)
+    peekIO.exit(0)
   }
 
   // hydra peek <name> — attach to specific session
@@ -126,7 +134,7 @@ export async function peek(args: string[], daemonName?: string): Promise<void> {
     if (!target) {
       console.error(`error: no live session named "${args[0]}"`)
       console.error(`live: ${sessions.map(s => s.name).join(', ')}`)
-      process.exit(1)
+      peekIO.exit(1)
       return
     }
     attachSession(target)

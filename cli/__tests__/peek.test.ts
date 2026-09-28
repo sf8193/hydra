@@ -1,46 +1,33 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test'
-import * as realChildProcess from 'child_process'
+import { describe, test, expect, mock, beforeEach, afterAll } from 'bun:test'
+import { peek, peekIO } from '../peek.js'
 
-// Mock child_process before importing peek. Bun's mock.module replaces the
-// module for the whole test process (leaks across files, not just this one),
-// so spread the real module first — otherwise any other file that imports an
-// export this mock doesn't list (e.g. util.ts's `execFile`) gets a
-// "not found" SyntaxError depending on file execution order.
+// peek reaches the outside world only through peekIO: swap its fields here and
+// put them back after, instead of mock.module()ing child_process for the whole
+// test run (which leaked into every other file).
+const realIO = { ...peekIO }
 const mockExecSync = mock(() => '')
-const mockExecFileSync = mock(() => '')
-mock.module('child_process', () => ({
-  ...realChildProcess,
-  execSync: mockExecSync,
-  execFileSync: mockExecFileSync,
-}))
-
-// Mock helpers to avoid real socket/tmux calls
+const mockTmuxNewSession = mock((_args: string[]) => {})
 const mockSendRequest = mock(async () => ({ ok: true as const, data: [] as Array<Record<string, string>> }))
 const mockTmuxExists = mock(() => true)
 const mockTmuxKill = mock(() => {})
-const realHelpers = await import('../helpers.js')
-mock.module('../helpers.js', () => ({
-  ...realHelpers,
+const mockExit = mock(() => { throw new Error('exit') })
+Object.assign(peekIO, {
+  execSync: mockExecSync,
+  tmuxNewSession: mockTmuxNewSession,
   resolveSocket: () => '/tmp/fake.sock',
   sendRequest: mockSendRequest,
-  shq: (s: string) => "'" + s.replace(/'/g, "'\\''") + "'",
   tmuxExists: mockTmuxExists,
   tmuxKill: mockTmuxKill,
-}))
-
-// Now import peek (uses mocked modules)
-const { peek } = await import('../peek.js')
-
-// Capture process.exit calls
-const mockExit = mock(() => { throw new Error('exit') })
-process.exit = mockExit as any
+  exit: mockExit,
+})
+afterAll(() => { Object.assign(peekIO, realIO) })
 
 const calls = () => mockExecSync.mock.calls as unknown as [string, ...unknown[]][]
-const fileCalls = () => mockExecFileSync.mock.calls as unknown as [string, string[], ...unknown[]][]
+const newSessionCalls = () => mockTmuxNewSession.mock.calls as unknown as [string[]][]
 
 beforeEach(() => {
   mockExecSync.mockClear()
-  mockExecFileSync.mockClear()
+  mockTmuxNewSession.mockClear()
   mockSendRequest.mockClear()
   mockTmuxExists.mockClear()
   mockTmuxKill.mockClear()
@@ -95,9 +82,7 @@ describe('peek', () => {
       expect(mockTmuxKill).toHaveBeenCalledWith('hydra-peek')
 
       // Should create new session with first window
-      const newSessionCall = fileCalls().find(
-        c => c[1]?.includes('new-session') && c[1]?.includes('hydra-peek')
-      )
+      const newSessionCall = newSessionCalls().find(c => c[0].includes('hydra-peek'))
       expect(newSessionCall).toBeDefined()
 
       // Should link-window for each session
