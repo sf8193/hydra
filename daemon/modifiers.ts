@@ -2,6 +2,10 @@
 // Modifier registry — composable `+name` modifiers for protocol runs
 // ---------------------------------------------------------------------------
 
+import { readdirSync, readFileSync } from 'fs'
+import { join } from 'path'
+import { STATE_DIR } from './config.js'
+
 export type SeedModifier = {
   type: 'seed'
   name: string
@@ -71,8 +75,48 @@ function register(mod: Modifier): void {
   }
 }
 
+// Local lenses: <STATE_DIR>/lenses/<name>.md — uncommitted, read on every lookup
+// so a new file works without a restart. The body is the lens instructions.
+// Optional frontmatter: `aliases: a, b` and `default: true` (auto-included in
+// every review that runs automatic lenses). Built-in names win on a clash.
+export const LOCAL_LENSES_DIR = join(STATE_DIR, 'lenses')
+
+export type LocalLens = SeedModifier & { isDefault: boolean }
+
+export function localLenses(): LocalLens[] {
+  let files: string[]
+  try { files = readdirSync(LOCAL_LENSES_DIR).filter(f => f.endsWith('.md')) } catch { return [] }
+  return files.flatMap(file => {
+    let raw: string
+    try { raw = readFileSync(join(LOCAL_LENSES_DIR, file), 'utf8') } catch { return [] }
+    const fm = raw.match(/^---\n([\s\S]*?)\n---\n?/)
+    const meta = (key: string) => fm?.[1].match(new RegExp(`^${key}:\\s*(.*)$`, 'm'))?.[1].trim()
+    const instructions = (fm ? raw.slice(fm[0].length) : raw).trim()
+    if (!instructions) return []
+    return [{
+      type: 'seed' as const,
+      name: file.slice(0, -3),
+      aliases: (meta('aliases') ?? '').split(',').map(a => a.trim()).filter(Boolean),
+      target: 'critic',
+      instructions,
+      isDefault: meta('default') === 'true',
+    }]
+  })
+}
+
 export function resolveModifier(name: string): Modifier | undefined {
-  return registry.get(name)
+  return registry.get(name) ?? localLenses().find(l => l.name === name || l.aliases.includes(name))
+}
+
+/**
+ * Add local `default: true` lenses to a run's requested modifiers wherever automatic
+ * lenses run (+no-lenses opts out), so every path — critic seed and subagent fallback — sees them.
+ */
+export function withDefaultLenses<P extends { [key: string]: unknown }>(params: P): P {
+  if (params.autoReviewLenses !== true || params.noAutoLenses) return params
+  const mods = (params.modifiers as Modifier[] | undefined) ?? []
+  const extra = localLenses().filter(l => l.isDefault && !mods.some(m => m.name === l.name))
+  return extra.length > 0 ? { ...params, modifiers: [...mods, ...extra] } : params
 }
 
 export function resolveModifiers(names: string[]): { resolved: Modifier[]; unknown: string[] } {
@@ -80,7 +124,7 @@ export function resolveModifiers(names: string[]): { resolved: Modifier[]; unkno
   const resolved: Modifier[] = []
   const unknown: string[] = []
   for (const name of names) {
-    const mod = registry.get(name)
+    const mod = resolveModifier(name)
     if (mod) {
       if (!seen.has(mod.name)) { resolved.push(mod); seen.add(mod.name) }
     } else {
@@ -91,7 +135,7 @@ export function resolveModifiers(names: string[]): { resolved: Modifier[]; unkno
 }
 
 export function listModifierKeys(): string[] {
-  return [...registry.keys()]
+  return [...registry.keys(), ...localLenses().flatMap(l => [l.name, ...l.aliases])]
 }
 
 // Split resolved modifiers into the run params their flags set and the
@@ -200,7 +244,7 @@ register({
 
 /** Names of the named review lenses (seed modifiers aimed at the critic), for help/error text. */
 export function listLensNames(): string[] {
-  return [...new Set([...registry.values()].filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic').map(m => m.name))]
+  return [...new Set([...registry.values(), ...localLenses()].filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic').map(m => m.name))]
 }
 
 // Factory-as-modifier: `spawn +f: topic` / `respawn +f:` apply the factory

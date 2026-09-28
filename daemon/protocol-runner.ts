@@ -14,7 +14,7 @@ import { pushToolSurface } from './tool-surface.js'
 import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
-import type { Modifier, SeedModifier } from './modifiers.js'
+import { withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -132,6 +132,7 @@ export async function startProtocolRun(
   params: { rounds?: number; topic?: string; model?: string; [key: string]: unknown } = {},
 ): Promise<ProtocolRun> {
   if (threadToRun.has(threadId)) throw new Error(`A ${proto.display} is already running in this thread`)
+  params = withDefaultLenses(params)
 
   const id = crypto.randomUUID()
   const rounds = (params.rounds as number) ?? 3
