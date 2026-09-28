@@ -7,7 +7,7 @@ import type { InboundMessage } from '../../gateway.js'
 import { normalizeReviewRounds } from '../../shared/constants.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 
-let reviewProto: Awaited<ReturnType<typeof import('../../protocols/review.js')>>['default'] | null = null
+let reviewProto: typeof import('../../protocols/review.js')['default'] | null = null
 
 async function getReviewProto() {
   if (!reviewProto) reviewProto = (await import('../../protocols/review.js')).default

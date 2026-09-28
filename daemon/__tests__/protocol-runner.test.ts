@@ -341,7 +341,8 @@ describe('protocol runner — timeout transitions', () => {
     // closing timeout → complete (not cancelled, so completeRun semantics)
     const result = testProto.machine.transition('closing' as any, 'timeout' as any)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.to).toBe('complete')
+    if (!result.ok) throw new Error('unreachable: asserted ok above')
+    expect(result.to).toBe('complete')
     expect(result.to).not.toBe('cancelled')
   })
 })
@@ -423,7 +424,7 @@ describe('protocol runner — seed rendering', () => {
 // ---------------------------------------------------------------------------
 
 describe('spike protocol structure', () => {
-  let spike: Awaited<ReturnType<typeof import('../../protocols/spike.js')>>['default']
+  let spike: typeof import('../../protocols/spike.js')['default']
 
   test('spike protocol loads', async () => {
     spike = (await import('../../protocols/spike.js')).default

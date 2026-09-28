@@ -322,7 +322,7 @@ export type AutopsyExtras = {
   exitFileLines?: string[]
   stderrTail?: string[]
   debugTail?: string[]
-  protocolContext?: { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string }
+  protocolContext?: { protocol: string; phase: string; round: string; advanceCalled: boolean; role: string } | null
   resumeCount?: number
 }
 

@@ -7,8 +7,9 @@ describe('modifier registry', () => {
     expect(mod).toBeDefined()
     expect(mod!.type).toBe('seed')
     expect(mod!.name).toBe('security')
-    expect(mod!.target).toBe('critic')
-    expect(mod!.instructions).toContain('attack surface')
+    if (mod?.type !== 'seed') throw new Error('unreachable: asserted seed above')
+    expect(mod.target).toBe('critic')
+    expect(mod.instructions).toContain('attack surface')
   })
 
   test('security modifier resolves by alias', () => {

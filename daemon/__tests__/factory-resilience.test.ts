@@ -387,7 +387,7 @@ describe('auto-adopt on bridge registration', () => {
     expect(notice).toBeDefined()
     expect(String(notice!.content)).toContain('New PM: glyph')
     expect(String(notice!.content)).toContain('send_to_thread(target="glyph")')
-    expect((notice!.meta as Record<string, string>).chat_id).toBe(state.builderThreadId)
+    expect((notice!.meta as Record<string, unknown>).chat_id).toBe(state.builderThreadId)
 
     const confirm = sent.find(s => s.text.includes('Adopted'))
     expect(confirm).toBeDefined()

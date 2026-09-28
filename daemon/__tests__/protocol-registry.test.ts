@@ -56,11 +56,11 @@ describe('dispatch', () => {
     const calls: string[] = []
     registerProtocol('review', makeHooks({
       isParticipant: (id) => id === 'session-1',
-      onReply: () => calls.push('review'),
+      onReply: () => void calls.push('review'),
     }))
     registerProtocol('build', makeHooks({
       isParticipant: () => false,
-      onReply: () => calls.push('build'),
+      onReply: () => void calls.push('build'),
     }))
     await dispatchSessionReply('session-1', 'text', 'chat', ['msg1'])
     expect(calls).toEqual(['review'])
@@ -88,8 +88,8 @@ describe('dispatch', () => {
 
   test('dispatch skips protocols that do not claim the session', async () => {
     const calls: string[] = []
-    registerProtocol('review', makeHooks({ onReply: () => calls.push('review') }))
-    registerProtocol('build', makeHooks({ onReply: () => calls.push('build') }))
+    registerProtocol('review', makeHooks({ onReply: () => void calls.push('review') }))
+    registerProtocol('build', makeHooks({ onReply: () => void calls.push('build') }))
     await dispatchSessionReply('unclaimed', 'text', 'chat', [])
     expect(calls).toEqual([])
   })

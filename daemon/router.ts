@@ -653,7 +653,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         if (postModel === false) return
         const selection = preModel ?? postModel
         const rounds = parseInt(reviewMatch[2] ?? String(DEFAULT_REVIEW_ROUNDS))
-        let topic = reviewMatch[4]?.trim()
+        let topic: string | undefined = reviewMatch[4]?.trim()
         if (!selection && topic) {
           const badOrder = topic.match(/^(\S+)\s+(\d+)\b/)
           if (badOrder && (resolveModelAlias(badOrder[1]) || resolveCodexModelAlias(badOrder[1]))) {

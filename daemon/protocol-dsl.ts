@@ -51,7 +51,9 @@ export type PhaseInteraction = {
   descriptions?: Partial<Record<string, string>>
 }
 
-export type SeedContext = {
+// Seed input without `protocol`. Spelled out rather than `Omit<SeedContext, 'protocol'>`:
+// Omit over a type with an index signature collapses to the index signature alone.
+type SeedInput = {
   name: string
   sessionId: string
   threadId: string
@@ -59,9 +61,10 @@ export type SeedContext = {
   topic?: string
   task?: string
   model?: string
-  protocol: Protocol
   [key: string]: unknown
 }
+
+export type SeedContext = SeedInput & { protocol: Protocol }
 
 type SeedFn = (ctx: SeedContext) => string
 
@@ -96,7 +99,7 @@ export type ProtocolSpec<
     descriptions?: Partial<Record<string, string>>
     events?: Record<string, string>
     finalEvent?: string
-    finalEvents?: Partial<Record<string, string>>
+    finalEvents?: Record<string, string>
   }>
   roleConfig?: Partial<Record<keyof Roles & string, Partial<RoleConfig>>>
   seed?: Partial<Record<keyof Roles, SeedFn>>
@@ -166,10 +169,10 @@ export type Protocol<
   windowMs: (phase: string) => number | undefined
   graceMs: (role: string) => number | undefined
   ownerRole: string
-  decisions: Record<string, { phase: string; actor: string; options: readonly string[]; descriptions?: Partial<Record<string, string>>; events?: Record<string, string>; finalEvent?: string; finalEvents?: Partial<Record<string, string>> }>
+  decisions: Record<string, { phase: string; actor: string; options: readonly string[]; descriptions?: Partial<Record<string, string>>; events?: Record<string, string>; finalEvent?: string; finalEvents?: Record<string, string> }>
   phaseInteraction: (phase: string) => PhaseInteraction | undefined
   roleConfig: (role: string) => RoleConfig
-  seed: (role: string, ctx: Omit<SeedContext, 'protocol'> & { protocol?: Protocol }) => string | undefined
+  seed: (role: string, ctx: SeedInput & { protocol?: Protocol }) => string | undefined
   summaryFormat: (run: RunState) => string[]
   notifications: {
     onKickoff?: Partial<Record<string, (run: RunState) => string | null>>
@@ -369,7 +372,7 @@ export function protocol<
     decisions,
     phaseInteraction: (phase: string) => interactions.get(phase),
     roleConfig: (role: string) => roleConfigs.get(role) ?? DEFAULT_ROLE_CONFIG,
-    seed: (role: string, ctx: Omit<SeedContext, 'protocol'> & { protocol?: Protocol }) => {
+    seed: (role: string, ctx: SeedInput & { protocol?: Protocol }) => {
       const fullCtx: SeedContext = { ...ctx, protocol: ctx.protocol ?? built }
       const fn = spec.seed?.[role as keyof R]
       if (fn) return fn(fullCtx)

@@ -72,7 +72,7 @@ function armThenAdvance(tmuxName: string, armAt: number): number {
 // 'main' has no registry entry (info undefined) — same as a Claude session:
 // no adapter, so it always takes the nudge path.
 function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): SessionInfo {
-  const info: SessionInfo = {
+  const info = {
     sessionId,
     topic: 'test',
     threadId: 'thread-1',
@@ -81,7 +81,7 @@ function liveSession(sessionId: string, over: Partial<SessionInfo> = {}): Sessio
     tmuxName: 'cedar',
     listening: false,
     ...over,
-  }
+  } as SessionInfo // deliberately partial: no adapter unless `over` supplies one (see comment above)
   testSessions.set(sessionId, info)
   return info
 }

@@ -8,6 +8,9 @@ import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 
 export { UNIVERSAL_TOOLS }
 
+/** A tool as advertised to a session: overrides may replace the literal description/schema. */
+export type SessionTool = { readonly name: ToolName; readonly description: string; readonly inputSchema: object }
+
 export type ToolOverrides = {
   descriptions?: Partial<Record<ToolName, string>>
   inputSchemas?: Partial<Record<ToolName, object>>
@@ -19,7 +22,7 @@ export function defaultToolDescription(name: string): string {
   return tool.description
 }
 
-export function computeToolsForSession(type: SessionType, capabilities: Set<Capability>, overrides?: ToolOverrides): typeof UNIVERSAL_TOOLS {
+export function computeToolsForSession(type: SessionType, capabilities: Set<Capability>, overrides?: ToolOverrides): SessionTool[] {
   const allowed = new Set(BASE_TOOLS[type])
   for (const cap of capabilities) {
     const extra = CAPABILITY_TOOLS[cap]
@@ -37,6 +40,6 @@ export function computeToolsForSession(type: SessionType, capabilities: Set<Capa
 
 /** Codex MCP cannot accept tools_update, so advertise the union of dynamic
  * protocol tools and enforce the live subset at the daemon boundary. */
-export function codexStaticTools(): typeof UNIVERSAL_TOOLS {
+export function codexStaticTools(): SessionTool[] {
   return computeToolsForSession('thread_owner', new Set(['protocol_context', 'protocol_spawn']))
 }

@@ -5,7 +5,7 @@ import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateway.js'
 import type { ProviderId } from '../engines/engine-adapter.js'
 
-let buildProto: Awaited<ReturnType<typeof import('../../protocols/build.js')>>['default'] | null = null
+let buildProto: typeof import('../../protocols/build.js')['default'] | null = null
 
 async function getBuildProto() {
   if (!buildProto) buildProto = (await import('../../protocols/build.js')).default

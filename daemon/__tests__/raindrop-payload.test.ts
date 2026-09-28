@@ -337,7 +337,7 @@ describe('raindrop-payload: signals', () => {
     })
   })
 
-  test.each<[string, string, 'POSITIVE' | 'NEGATIVE']>([
+  test.each<[string, 'thumbs_up' | 'thumbs_down', 'POSITIVE' | 'NEGATIVE']>([
     ['+1', 'thumbs_up', 'POSITIVE'],
     ['thumbsup', 'thumbs_up', 'POSITIVE'],
     ['👍', 'thumbs_up', 'POSITIVE'],

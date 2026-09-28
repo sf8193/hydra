@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { protocol } from '../protocol-dsl.js'
+import { protocol, type ProtocolSpec } from '../protocol-dsl.js'
 import { protocolEvents } from '../protocol-runner.js'
 import type { CompletionEvent } from '../protocol-types.js'
 
@@ -378,13 +378,15 @@ describe('protocol DSL validation', () => {
   })
 
   test('rejects cleanupPhase on unknown phase', () => {
-    expect(() => protocol('bad', {
+    // Widened spec type: the phase name is invalid on purpose, to hit the runtime check.
+    const spec: ProtocolSpec = {
       emoji: '🧪', display: 'Bad',
       roles: { a: 'A' },
       phases: { start: { actor: 'a', on: {} } },
       windows: {},
       cleanupPhase: 'nonexistent',
-    })).toThrow('cleanupPhase "nonexistent" is not a declared phase')
+    }
+    expect(() => protocol('bad', spec)).toThrow('cleanupPhase "nonexistent" is not a declared phase')
   })
 
   test('protocol object is frozen', () => {
@@ -497,13 +499,15 @@ describe('roleConfig', () => {
   })
 
   test('rejects roleConfig for unknown role', () => {
-    expect(() => protocol('bad', {
+    // Widened spec type: the role name is invalid on purpose, to hit the runtime check.
+    const spec: ProtocolSpec = {
       emoji: '🧪', display: 'Bad',
       roles: { a: 'A' },
       phases: { start: { actor: 'a', on: {} } },
       windows: {},
       roleConfig: { nobody: { cadence: 'per-round' } },
-    })).toThrow('roleConfig for unknown role "nobody"')
+    }
+    expect(() => protocol('bad', spec)).toThrow('roleConfig for unknown role "nobody"')
   })
 
   test('rejects per-phase cadence without orient', () => {
