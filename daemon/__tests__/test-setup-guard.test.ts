@@ -159,9 +159,18 @@ describe('killPrivateTmux', () => {
     const dir = mkdtempSync(join(tmpdir(), 'kpt-live-'))
     const sockDir = join(dir, 'tmux', `tmux-${process.getuid!()}`); mkdirSync(sockDir, { recursive: true })
     const socket = join(sockDir, 'default')
-    expect(run('tmux', '-S', socket, 'new-session', '-d', '-s', 'kpt').exitCode).toBe(0)
-    killPrivateTmux(dir)
-    expect(run('tmux', '-S', socket, 'has-session', '-t', 'kpt').exitCode).not.toBe(0)
-    rmSync(dir, { recursive: true, force: true })
+    // Belt and braces: even a regressed killPrivateTmux that dropped -S would reach only
+    // this test's own (existing) TMUX_TMPDIR server, never the real default one.
+    const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX }
+    process.env.TMUX_TMPDIR = join(dir, 'tmux')
+    delete process.env.TMUX
+    try {
+      expect(run('tmux', '-S', socket, 'new-session', '-d', '-s', 'kpt').exitCode).toBe(0)
+      killPrivateTmux(dir)
+      expect(run('tmux', '-S', socket, 'has-session', '-t', 'kpt').exitCode).not.toBe(0)
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
