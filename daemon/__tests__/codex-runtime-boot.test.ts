@@ -67,12 +67,13 @@ describe('T0.7 boot sweep', () => {
 
   // Fake engine: socket live per home, resume records its start/end order.
   function engineFor(live: Set<string>, order: string[]) {
+    const connected = new Set<string>()
     return {
       isSocketLive: async (sock: string) => [...live].some(h => sock.includes(`hydra-${h}`)),
-      connectAndResume: async (sid: string) => { order.push(`start:${sid}`); await tick(5); order.push(`end:${sid}`); return { model: 'm-new' } },
+      connectAndResume: async (sid: string) => { order.push(`start:${sid}`); await tick(5); order.push(`end:${sid}`); connected.add(sid); return { model: 'm-new' } },
       connect: async () => { throw new Error('no fresh connect in this test') },
-      disconnect: () => {},
-      isConnected: () => false,
+      disconnect: (sid: string) => { connected.delete(sid) },
+      isConnected: (sid: string) => connected.has(sid),
     }
   }
 
@@ -83,7 +84,7 @@ describe('T0.7 boot sweep', () => {
     try { return await fn() } finally { for (const i of others) registry.set(i.sessionId, i) }
   }
 
-  test('success refreshes history and the surface; failure stamps without dispatch; dead skipped; sequential; one final persist', async () => {
+  test('success refreshes history and the surface; failure finalises (history closed) without dispatch; dead skipped; sequential', async () => {
     const order: string[] = []
     const adapter = new CodexEngineAdapter(engineFor(new Set(['t07-a', 't07-b']), order) as any) as any
     const surfaced: string[] = []
@@ -108,12 +109,12 @@ describe('T0.7 boot sweep', () => {
       const entry = threadRegistry.get(ok.threadId)!.sessionHistory[0] as any
       expect(entry).toMatchObject({ codexThreadId: `T-${ok.sessionId}`, codexHomeName: ok.sessionId, model: 'm-new' })
     }
-    expect(threadPersists).toBe(2)
+    expect(threadPersists).toBe(3) // a, b refreshed; fail's history entry closed
     expect(surfaced).toEqual(['t07-a', 't07-b'])
     expect(typeof fail.deadAt).toBe('number')
-    expect(threadRegistry.get(fail.threadId)!.sessionHistory[0]).toEqual({ sessionId: 't07-fail' } as any)
+    expect(threadRegistry.get(fail.threadId)!.sessionHistory[0]).toMatchObject({ sessionId: 't07-fail', endedAt: expect.any(Number) })
     expect(dead.deadAt).toBe(3)
-    expect(n).toBe(1)
+    expect(n).toBe(2) // the death is persisted as it happens, then the sweep's final persist
     await tick(10)
     expect(disconnects).toEqual([])
   })
@@ -286,7 +287,9 @@ describe('T0.7 engine events', () => {
 })
 
 describe('T0.7 persisted liveness at load', () => {
-  test('Codex with a thread id defers to the provider; everything else follows tmux', () => {
+  // Codex never asks tmux (its anchor outlives the app-server): a record with a thread
+  // id that wasn't dead is live until the runtime probes it; a dead one stays dead.
+  test('Codex with a thread id: live iff it was not dead (tmux ignored); everything else follows tmux', () => {
     const file = join(STATE_DIR, 'sessions.json')
     const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
     const rec = (sessionId: string, over: Record<string, unknown>) => ({
@@ -296,19 +299,23 @@ describe('T0.7 persisted liveness at load', () => {
     const records = [
       rec('k-codex-thread-tmux', { engine: 'codex', codexThreadId: 'T' }),
       rec('k-codex-thread-notmux', { engine: 'codex', codexThreadId: 'T' }),
+      rec('k-codex-live-thread-notmux', { engine: 'codex', codexThreadId: 'T', deadAt: undefined }),
+      rec('k-codex-live-nothread-tmux', { engine: 'codex', deadAt: undefined }),
       rec('k-codex-nothread-tmux', { engine: 'codex' }),
       rec('k-codex-nothread-notmux', { engine: 'codex' }),
       rec('k-claude-tmux', { engine: 'claude', claudeSessionId: 'c' }),
       rec('k-claude-notmux-codexid', { engine: 'claude', codexThreadId: 'T' }),
     ]
-    for (const r of ['k-codex-thread-tmux', 'k-codex-nothread-tmux', 'k-claude-tmux']) fake.alive(r)
+    for (const r of ['k-codex-thread-tmux', 'k-codex-nothread-tmux', 'k-codex-live-nothread-tmux', 'k-claude-tmux']) fake.alive(r)
     try {
       writeFileSync(file, JSON.stringify(records))
       const reg = new SessionRegistry()
       const deadAt = Object.fromEntries(records.map(r => [r.sessionId, reg.get(r.sessionId)?.deadAt ?? null]))
       expect(deadAt).toEqual({
-        'k-codex-thread-tmux': null,
-        'k-codex-thread-notmux': null,
+        'k-codex-thread-tmux': 5,
+        'k-codex-thread-notmux': 5,
+        'k-codex-live-thread-notmux': null,
+        'k-codex-live-nothread-tmux': null,
         'k-codex-nothread-tmux': null,
         'k-codex-nothread-notmux': 5,
         'k-claude-tmux': null,

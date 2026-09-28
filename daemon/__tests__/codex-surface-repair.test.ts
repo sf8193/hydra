@@ -68,7 +68,7 @@ describe('Codex app-server reconnect', () => {
       wait: async () => {},
       persist: () => {},
       failed: () => { failed++ },
-      announce: (i: any) => { announced.push(i.tmuxName) },
+      finalise: (i: any) => { i.deadAt = Date.now(); announced.push(i.tmuxName) },
     })
 
     expect(restored).toBe(false)

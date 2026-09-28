@@ -402,6 +402,7 @@ export class CodexEngine extends EventEmitter {
       scheduling.startState = 'idle'
       this.drainDeferredTurns(conn)
     }).catch(err => {
+      if (scheduling.fenced) return // retired or dead: nothing may reclaim this input
       const current = this.connections.get(conn.sessionId)
       // JSON-RPC error responses carry "(code N)"; timeouts/closed sockets don't,
       // so their outcome is unknown and must be reconciled, not replayed.
@@ -487,6 +488,29 @@ export class CodexEngine extends EventEmitter {
 
   isConnected(sessionId: string): boolean {
     return this.connections.has(sessionId)
+  }
+
+  /**
+   * A dead session: fence it and drop everything it still owned, with no RPC.
+   * queued = never started; unknown = a start whose outcome was never learned.
+   */
+  discardSession(sessionId: string): { queued: number; unknown: number } {
+    const conn = this.connections.get(sessionId)
+    const scheduling = this.getScheduling(sessionId, conn)
+    scheduling.fenced = true
+    const queued = scheduling.deferredTurnQueue.length + (scheduling.retryingDeferred ? 1 : 0)
+    const unknown = scheduling.uncertainDeferredText !== null || scheduling.startState === 'starting' ? 1 : 0
+    scheduling.deferredTurnQueue.length = 0
+    scheduling.retryingDeferred = null
+    scheduling.uncertainDeferredText = null
+    scheduling.uncertainStartAfterTurnId = null
+    scheduling.completedWhileStartingTurnIds.clear()
+    scheduling.startState = 'idle'
+    if (conn) {
+      for (const timer of conn.retryTimers) clearTimeout(timer)
+      conn.retryTimers.clear()
+    }
+    return { queued, unknown }
   }
 
   /** Fence scheduling and interrupt the active turn with server acknowledgement. */

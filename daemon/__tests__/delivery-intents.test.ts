@@ -39,7 +39,7 @@ const claude = (id: string) => put(id, { engine: 'claude', adapter: new ClaudeEn
 const codex = (id: string, calls: string[], extra: Record<string, unknown> = {}) => put(id, {
   engine: 'codex', ...extra,
   adapter: new CodexEngineAdapter({
-    isConnected: () => true,
+    isConnected: () => !extra.deadAt, // dead ⇔ its app-server socket is gone
     queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return true },
     // #378: steer returns its correlated DeliveryResult.
     steer: async (_id: string, text: string) => { calls.push('steer:' + text); return { status: 'accepted' as const, via: 'steer' } },
@@ -148,12 +148,12 @@ describe('T0.2 Codex', () => {
     expect(calls[1]).toBe('steer:next')
   })
 
-  test('pr-watch, deadAt: delivered at once (steer), nothing buffered', () => {
+  test('dead: pr-watch and user input are rejected — nothing steered, queued or buffered', async () => {
     const calls: string[] = []
     const id = sid(); codex(id, calls, { deadAt: 1 })
     deliverPrUpdate(id, THREAD, 'CI failed on PR #7')
-    expect(calls).toEqual(['steer:CI failed on PR #7'])
     transport.sendOrQueue(id, { type: 'notification', content: 'real', allowPiggyback: true })
-    expect(calls[1]).toBe('steer:real')
+    await tick()
+    expect(calls).toEqual([])
   })
 })

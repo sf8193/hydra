@@ -53,6 +53,9 @@ export type ProtocolRun = StatusLineState & {
   _nudged?: boolean
   _escalated?: boolean
   _bridgeEscalated?: boolean
+  // One entry per disconnect episode of a participant: set when the episode starts,
+  // removed only on reconnect, replacement, retirement or run cleanup (an expired
+  // grace timer's entry stays, so repeat reports of the same death are ignored).
   disconnectTimers: Map<string, ReturnType<typeof setTimeout>>
   decisions: Array<{ phase: string; role: string; value: string; because: string }>
   strike: boolean
@@ -597,7 +600,7 @@ export function onRunDisconnect(sessionId: string): void {
   if (!runId) return
   const run = runs.get(runId)
   if (!run || isTerminal(run)) return
-  // transport.has is constant true for Codex (PINNED C1); a deadAt record is gone regardless.
+  if (run.disconnectTimers.has(sessionId)) return // this episode is already being handled
   const connected = () => transport.has(sessionId) && !registry.get(sessionId)?.deadAt
   if (connected()) return
 

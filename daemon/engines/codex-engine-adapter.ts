@@ -177,11 +177,12 @@ export class CodexEngineAdapter implements EngineAdapter {
   // Every delivery is a priced turn, so the intents decide whether it gets one.
   deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
     if (msg.optional === true) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'optional delivery dropped for codex' })
+    // Accepting into a dead session's queue would lose it silently.
+    if (!this.isAlive(info)) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'session is dead — resume or respawn' })
     // Ride the next turn the user creates instead of paying for a standalone
     // one, CI failures and changes-requested included — Sam's call
     // (2026-09-15): the 1h backstop bounds the delay, no urgency carve-out.
-    // A dead session has no next turn: deliver now.
-    if (msg.lowPriority === true && !info.deadAt) {
+    if (msg.lowPriority === true) {
       this.piggyback.buffer(info.sessionId, msg.content as string)
       return Promise.resolve({ status: 'accepted', via: 'piggyback-buffer' })
     }
@@ -388,7 +389,9 @@ export class CodexEngineAdapter implements EngineAdapter {
         if (stale()) return false
         if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
         process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (resumed)\n`)
-        return true
+        // A close during the resume's queue drain can already have dropped the
+        // socket (and its event is swallowed while we're reconnecting).
+        return this.engine.isConnected(info.sessionId)
       } catch (err: any) {
         process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
         try { this.engine.disconnect(info.sessionId) } catch {}
@@ -407,7 +410,7 @@ export class CodexEngineAdapter implements EngineAdapter {
         void safeSend(info.threadId, `⚠️ Session resumed but conversation history was lost. The agent is starting fresh.`)
       }
       process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (new thread)\n`)
-      return true
+      return this.engine.isConnected(info.sessionId)
     } catch (err: any) {
       process.stderr.write(`codex-adapter: fresh connect failed for ${info.tmuxName}: ${err?.message || err}\n`)
       try { this.engine.disconnect(info.sessionId) } catch {}

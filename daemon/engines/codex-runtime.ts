@@ -19,6 +19,8 @@ import { STATE_DIR } from '../config.js'
 import { safeSend } from '../util.js'
 import { clearCodexKeys, flushCodexKeys } from '../codex-key-queue.js'
 import { noteCodexMessage, noteCodexTurnState } from './codex-observation.js'
+import { codexPiggyback } from './codex-piggyback.js'
+import { refreshSessionVisual } from '../anchor-state.js'
 import { on } from '../event-bus.js'
 import type { EngineAdapter } from './engine-adapter.js'
 
@@ -163,28 +165,47 @@ const reconnecting = new Set<string>()
 /** The runtime is reconnecting this session: alive, in grace (see CodexEngineAdapter.isAlive). */
 export const isCodexReconnecting = (sessionId: string): boolean => reconnecting.has(sessionId)
 
-// Interim (until the Codex liveness project): a dead Codex session was marked
-// deadAt with no word in its thread; say so, so the thread doesn't just go quiet.
-function announceCodexDeath(info: SessionInfo): void {
-  void safeSend(info.threadId, `⚠️ \`${info.tmuxName}\` (Codex) lost its app-server and could not reconnect — it is dead. Type \`resume\` or \`respawn\`.`).catch(() => {})
+// The one place a Codex record dies (reconnect exhaustion, or a failed boot probe).
+// After it, isAlive is false and deadAt records the verdict. Queued input is dropped
+// with a notice (Sam, 2026-09-28); piggyback items may be lost.
+export function finaliseCodexDeath(info: SessionInfo): void {
+  reconnecting.delete(info.sessionId)
+  info.deadAt = Date.now()
+  registry.persist()
+  threadRegistry.closeHistoryEntry(info.threadId, info)
+  clearCodexKeys(info.sessionId)
+  codexPiggyback.clear(info.sessionId)
+  const { queued, unknown } = codexEngine.discardSession(info.sessionId)
+  process.stderr.write(`codex-bootstrap: ${info.tmuxName} is dead (app-server unreachable); dropped ${queued} queued, ${unknown} unknown\n`)
+  if (info.ephemeral) return
+  refreshSessionVisual(info.threadId, { state: 'crashed' })
+  const lost = [
+    queued ? `${queued} queued message(s) were not delivered.` : '',
+    unknown ? 'Delivery of 1 message is unknown.' : '',
+  ].filter(Boolean).join(' ')
+  void safeSend(info.threadId, `⚠️ \`${info.tmuxName}\` (Codex) lost its app-server and could not reconnect — it is dead.${lost ? ` ${lost}` : ''} Type \`resume\` or \`respawn\`.`).catch(() => {})
+}
+
+type ReconnectDeps = {
+  get: (id: string) => SessionInfo | undefined
+  wait: (ms: number) => Promise<unknown>
+  persist: () => void
+  failed: (id: string) => void
+  finalise: (info: SessionInfo) => void
+}
+const reconnectDeps: ReconnectDeps = {
+  get: (id: string) => registry.get(id),
+  wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
+  persist: () => registry.persist(),
+  failed: (id: string) => dispatchDisconnect(id),
+  finalise: finaliseCodexDeath,
 }
 
 export async function reconnectCodexAfterDisconnect(
   sessionId: string,
-  deps: {
-    get: (id: string) => SessionInfo | undefined
-    wait: (ms: number) => Promise<unknown>
-    persist: () => void
-    failed: (id: string) => void
-    announce?: (info: SessionInfo) => void
-  } = {
-    get: (id: string) => registry.get(id),
-    wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
-    persist: () => registry.persist(),
-    failed: (id: string) => dispatchDisconnect(id),
-    announce: announceCodexDeath,
-  },
+  overrides: Partial<ReconnectDeps> = {},
 ): Promise<boolean> {
+  const deps = { ...reconnectDeps, ...overrides }
   const delays = [250, 750, 1_500]
   for (const delay of delays) {
     await deps.wait(delay)
@@ -204,12 +225,11 @@ export async function reconnectCodexAfterDisconnect(
     }
   }
 
+  // Terminal: release the grace first, so everything told of the death below
+  // (protocol runs via failed) already sees the session as not alive.
+  reconnecting.delete(sessionId)
   const info = deps.get(sessionId)
-  if (info && !info.deadAt) {
-    info.deadAt = Date.now()
-    deps.persist()
-    deps.announce?.(info)
-  }
+  if (info && !info.deadAt) deps.finalise(info)
   clearCodexKeys(sessionId)
   deps.failed(sessionId)
   return false
@@ -225,7 +245,8 @@ codexEngine.on('disconnected', (sessionId: string) => {
 // Reconnection — on daemon startup, reconnect persisted codex sessions
 // ---------------------------------------------------------------------------
 
-// records: the Codex records at boot. Only live ones reconnect, one at a time.
+// records: the Codex records at boot. Only live ones reconnect, one at a time; a
+// record dead before the restart stays dead (recovery is `resume`).
 export async function reconnectCodexSessions(records: readonly SessionInfo[]): Promise<void> {
   const codexSessions = records.filter(s => !s.deadAt)
   if (codexSessions.length === 0) return
@@ -245,9 +266,9 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
       reconnecting.delete(info.sessionId)
     }
 
+    if (registry.get(info.sessionId) !== info) continue // replaced during the sweep: not ours to finalise
     if (!connected) {
-      info.deadAt = Date.now()
-      announceCodexDeath(info)
+      finaliseCodexDeath(info)
     } else {
       delete info.deadAt
       const entry = threadRegistry.get(info.threadId)?.sessionHistory.find(e => e.sessionId === info.sessionId)

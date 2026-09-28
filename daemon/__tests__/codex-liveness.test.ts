@@ -75,3 +75,55 @@ describe('boot sweep grace', () => {
     expect(isAlive(b)).toBe(false)
   })
 })
+
+describe('reconnect verdicts (step 2)', () => {
+  test('reconnect reports failure when the socket is gone by the time resume returns', async () => {
+    const engine = {
+      isSocketLive: async () => true,
+      connectAndResume: async () => ({ model: 'm' }), // resumed, but its drain dropped the socket
+      isConnected: () => false,
+      disconnect: () => {},
+    }
+    const a = new CodexEngineAdapter(engine as any)
+    const info = rec(a, { codexThreadId: 'T' })
+    ids.push(info.sessionId); registry.set(info.sessionId, info)
+    expect(await a.reconnect(info)).toBe(false)
+  })
+
+  test('exhaustion: the session reads dead before the protocol layer is told', async () => {
+    const { codexEngine } = await import('../engines/codex-runtime.js')
+    const { registerProtocol } = await import('../protocol-registry.js')
+    const a = codex(false) as any
+    a.reconnect = async () => false
+    const info = rec(a, { codexThreadId: 'T', ephemeral: true })
+    ids.push(info.sessionId); registry.set(info.sessionId, info)
+    let aliveWhenTold: boolean | undefined
+    registerProtocol('lv-probe', {
+      getByThread: () => false, isParticipant: sid => sid === info.sessionId,
+      onReply: () => {}, onReconnect: () => {},
+      onDisconnect: sid => { aliveWhenTold = isAlive(registry.get(sid)!) },
+    })
+    codexEngine.emit('disconnected', info.sessionId)
+    expect(isCodexReconnecting(info.sessionId)).toBe(true)
+    await new Promise(r => setTimeout(r, 2_700))
+    expect(aliveWhenTold).toBe(false)
+    expect(typeof info.deadAt).toBe('number')
+  }, 10_000)
+})
+
+describe('discardSession (step 2)', () => {
+  test('a dead session drops queued + retrying input, reports an unknown start, and is fenced', async () => {
+    const { CodexEngine } = await import('../codex-engine.js')
+    const engine = new CodexEngine() as any
+    const s = engine.getScheduling('dead-1')
+    s.deferredTurnQueue.push('a', 'b')
+    s.retryingDeferred = { text: 'c', attempt: 1 }
+    s.uncertainDeferredText = 'd'
+    s.startState = 'uncertain'
+    expect(engine.discardSession('dead-1')).toEqual({ queued: 3, unknown: 1 })
+    expect(s.deferredTurnQueue).toEqual([])
+    expect(s.retryingDeferred).toBeNull()
+    expect(s.uncertainDeferredText).toBeNull()
+    expect(engine.queueTurn('dead-1', 'late')).toBe(false)
+  })
+})
