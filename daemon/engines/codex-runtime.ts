@@ -186,7 +186,7 @@ type ReconnectDeps = {
   failed: (id: string) => void
   finalise: (info: SessionInfo) => void
 }
-const reconnectDeps: ReconnectDeps = {
+export const reconnectDeps: ReconnectDeps = {
   get: (id: string) => registry.get(id),
   wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
   persist: () => registry.persist(),

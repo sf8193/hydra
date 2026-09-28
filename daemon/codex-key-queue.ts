@@ -5,6 +5,8 @@ import type { TmuxKeyAction } from './engines/engine-adapter.js'
 
 const execFileAsync = promisify(execFile)
 const inFlight = new Map<string, Promise<void>>()
+// Tests shorten this; production uses the default.
+export const keyTiming = { settleMs: 250 }
 
 export type { TmuxKeyAction } from './engines/engine-adapter.js'
 
@@ -51,7 +53,7 @@ async function sendAction(action: TmuxKeyAction, beforeSend?: (target: string) =
   await execFileAsync('tmux', ['send-keys', '-t', pane.id, '-l', action.text], { timeout: 3000 })
   // In the installed Codex TUI, immediate Enter can leave text in the composer.
   // A settling interval submitted reliably in the isolated /status probe.
-  await Bun.sleep(250)
+  await Bun.sleep(keyTiming.settleMs)
   await assertSamePane(pane)
   await execFileAsync('tmux', ['send-keys', '-t', pane.id, action.trailingKey ?? 'Enter'], { timeout: 3000 })
 }

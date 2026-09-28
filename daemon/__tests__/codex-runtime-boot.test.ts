@@ -15,7 +15,7 @@ import { notePendingReply, _pendingForTesting } from '../reply-guard.js'
 import { registerProtocol } from '../protocol-registry.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { engineRecords } from '../engines/boot.js'
-import { reconnectCodexSessions } from '../engines/codex-runtime.js'
+import { reconnectCodexAfterDisconnect, reconnectCodexSessions, reconnectDeps } from '../engines/codex-runtime.js'
 
 // The boot sweep over every Codex record in the registry.
 const sweep = (adapter: CodexEngineAdapter) => adapter.start(engineRecords(adapter))
@@ -49,8 +49,11 @@ registerProtocol('t07-probe', {
   onReply: () => {}, onDisconnect: sid => { disconnects.push(sid) }, onReconnect: () => {},
 })
 
-beforeEach(() => { fake = withFakeTmux(); disconnects.length = 0 })
+// Real reconnect backoff is 250/750/1500ms (pinned below); tests wait 1ms per attempt.
+const realWait = reconnectDeps.wait
+beforeEach(() => { fake = withFakeTmux(); disconnects.length = 0; reconnectDeps.wait = () => tick(1) })
 afterEach(() => {
+  reconnectDeps.wait = realWait
   for (const id of ids.splice(0)) { const i = registry.get(id); if (i) threadRegistry.delete(i.threadId); registry.delete(id) }
   fake.restore()
 })
@@ -258,7 +261,7 @@ describe('T0.7 engine events', () => {
     const info = put({ sessionId: 't07-dc-ok', codexThreadId: 'T', deadAt: 1,
       adapter: { reconnect: async () => { reconnects++; return true }, surface: () => { surfaced++; return null } } as any })
     codexEngine.emit('disconnected', 't07-dc-ok')
-    await tick(400)
+    await tick(50)
     expect(reconnects).toBe(1)
     expect(info.deadAt).toBeUndefined()
     expect(surfaced).toBe(1)
@@ -279,12 +282,21 @@ describe('T0.7 engine events', () => {
     let reconnects = 0
     const info = put({ sessionId: 't07-dc-fail', codexThreadId: 'T',
       adapter: { reconnect: async () => { reconnects++; return false }, surface: () => null } as any })
-    const { n } = await counting(registry, async () => { codexEngine.emit('disconnected', 't07-dc-fail'); await tick(2800) })
+    const { n } = await counting(registry, async () => { codexEngine.emit('disconnected', 't07-dc-fail'); await tick(100) })
     expect(reconnects).toBe(3)
     expect(typeof info.deadAt).toBe('number')
     expect(n).toBe(1)
     expect(disconnects).toEqual(['t07-dc-fail'])
-  }, 8000)
+  })
+
+  test('production reconnect backoff is 250/750/1500ms', async () => {
+    const waits: number[] = []
+    const info = { sessionId: 't07-backoff', engine: 'codex', codexThreadId: 'T', adapter: { reconnect: async () => false } } as any
+    await reconnectCodexAfterDisconnect('t07-backoff', {
+      get: () => info, wait: async ms => { waits.push(ms) }, failed: () => {}, finalise: () => {},
+    })
+    expect(waits).toEqual([250, 750, 1_500])
+  })
 })
 
 describe('T0.7 persisted liveness at load', () => {
