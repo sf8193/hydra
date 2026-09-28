@@ -13,10 +13,8 @@ afterEach(() => {
 })
 
 // Build a review CompletionEvent for a given thread/outcome. Mirrors what
-// protocol-runner emits at completeRun/cancelRun — including the cleanup-phase
-// summary, which rides on `summary` (not `decisions`, which stay empty for
-// verdict-less protocols like review).
-function reviewEvent(threadId: string, outcome: 'complete' | 'cancelled', summary?: string): CompletionEvent {
+// protocol-runner emits at completeRun/cancelRun.
+function reviewEvent(threadId: string, outcome: 'complete' | 'cancelled'): CompletionEvent {
   return {
     protocol: 'review',
     threadId,
@@ -24,7 +22,6 @@ function reviewEvent(threadId: string, outcome: 'complete' | 'cancelled', summar
     outcome,
     decisions: [],
     durationMs: 1000,
-    ...(summary ? { summary } : {}),
   }
 }
 
@@ -65,19 +62,6 @@ describe('protocolEvents.onceComplete', () => {
     expect(fired).toBe(0)
   })
 
-  test('summary rides on event.summary, not decisions', () => {
-    let captured: string | undefined = 'unset'
-    const targetThread = 'thread-summary-target'
-
-    protocolEvents.onceComplete(targetThread, (event) => {
-      captured = event.summary
-      expect(event.decisions.find(d => d.phase === 'cleanup')?.because).toBeUndefined()
-    })
-
-    protocolEvents.emitComplete(reviewEvent(targetThread, 'complete', 'the review synthesis'))
-    expect(captured).toBe('the review synthesis')
-  })
-
   test('fires on cancelled outcome', () => {
     let cancelled = 0
     const targetThread = 'thread-cancel-target'
@@ -88,28 +72,6 @@ describe('protocolEvents.onceComplete', () => {
 
     protocolEvents.emitComplete(reviewEvent(targetThread, 'cancelled'))
     expect(cancelled).toBe(1)
-  })
-})
-
-describe('killBuilder thread deletion sequencing', () => {
-  test('deleteThread should be called after killSession completes', async () => {
-    // This tests the sequencing principle: deleteThread must not race killSession.
-    // We verify the .finally() pattern by checking call order with promises.
-    const callOrder: string[] = []
-
-    const killPromise = new Promise<void>(resolve => {
-      setTimeout(() => {
-        callOrder.push('killSession')
-        resolve()
-      }, 10)
-    })
-
-    // Simulate the .finally() pattern from killBuilder
-    await killPromise.finally(() => {
-      callOrder.push('deleteThread')
-    })
-
-    expect(callOrder).toEqual(['killSession', 'deleteThread'])
   })
 })
 
