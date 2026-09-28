@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { readClaudeStatus } from '../engines/claude-status.js'
+import { blockedReason, readClaudeStatus } from '../engines/claude-status.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'claude-status-')) })
@@ -26,7 +26,7 @@ describe('readClaudeStatus', () => {
   })
   test('waiting and busy are reported as-is', () => {
     put('1.json', { pid: process.pid, sessionId: 's', status: 'waiting', waitingFor: 'permission prompt', tmux: 'cedar:@5.%9' })
-    expect(readClaudeStatus('cedar', dir)?.status).toBe('waiting')
+    expect(readClaudeStatus('cedar', dir)).toMatchObject({ status: 'waiting', waitingFor: 'permission prompt' })
   })
   test('two live matches for one tmux name are ambiguous -> null; a dead twin does not count', () => {
     put('1.json', { pid: process.pid, sessionId: 'a', status: 'idle', tmux: 'cedar:@5.%9' })
@@ -42,5 +42,27 @@ describe('readClaudeStatus', () => {
     put('y.json', { pid: process.pid, tmux: 'cedar:@5.%9' })
     put('z.json', { pid: process.pid, sessionId: 's', status: 'idle' })
     expect(readClaudeStatus('cedar', dir)).toBeNull()
+  })
+})
+
+describe('blockedReason', () => {
+  const st = (o: Record<string, unknown>) => ({ sessionId: 's', status: 'waiting', ...o })
+  test('passes the raw reason through, unknown values included', () => {
+    expect(blockedReason(st({ waitingFor: 'permission prompt' }))).toBe('permission prompt')
+    expect(blockedReason(st({ waitingFor: 'some future state' }))).toBe('some future state')
+  })
+  test('null unless status is waiting (or unreadable)', () => {
+    expect(blockedReason(st({ status: 'busy', waitingFor: 'stale' }))).toBeNull()
+    expect(blockedReason(null)).toBeNull()
+  })
+  test('waiting with no reason says "waiting"', () => {
+    expect(blockedReason(st({}))).toBe('waiting')
+    expect(blockedReason(st({ waitingFor: '`\n ' }))).toBe('waiting')
+  })
+  test('strips backticks/newlines and caps length', () => {
+    expect(blockedReason(st({ waitingFor: 'a`b\nc' }))).toBe('a b c')
+    expect(blockedReason(st({ waitingFor: 'x'.repeat(500) }))?.length).toBe(120)
+    expect(blockedReason(st({ waitingFor: '😀'.repeat(200) }))).toBe('😀'.repeat(120))
+    expect(blockedReason(st({ waitingFor: 'a\u202eb\x1b[31mc' }))).toBe('a b [31mc')
   })
 })

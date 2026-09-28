@@ -16,7 +16,15 @@ export function liveStateOf(status: string): LiveState | null {
   return status === 'busy' || status === 'shell' ? 'working' : status === 'idle' ? 'idle' : status === 'waiting' ? 'blocked' : null
 }
 
-export type ClaudeLiveStatus = { sessionId: string; status: string }
+export type ClaudeLiveStatus = { sessionId: string; status: string; waitingFor?: string }
+
+// Why Claude says it is stuck, exactly as it says it (no hardcoded list, so a new state shows up by itself),
+// cleaned for a chat message. null when it is not waiting, or the status is unreadable.
+export function blockedReason(status: ClaudeLiveStatus | null): string | null {
+  if (status?.status !== 'waiting') return null
+  // Control/format chars (newlines, ANSI, bidi) and backticks out; callers wrap the result in inline code so @mentions and markdown stay inert.
+  return Array.from((status.waitingFor ?? 'waiting').replace(/[\p{C}`]+/gu, ' ').trim()).slice(0, 120).join('') || 'waiting'
+}
 
 function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (e: any) { return e?.code === 'EPERM' }
@@ -33,7 +41,7 @@ export function readClaudeStatus(tmuxName: string, dir: string = join(claudeConf
     if (typeof d?.tmux !== 'string' || d.tmux.split(':')[0] !== tmuxName) continue
     if (typeof d.sessionId !== 'string' || typeof d.status !== 'string') continue
     if (!Number.isInteger(d.pid) || !pidAlive(d.pid)) continue
-    live.push({ sessionId: d.sessionId, status: d.status })
+    live.push({ sessionId: d.sessionId, status: d.status, waitingFor: typeof d.waitingFor === 'string' ? d.waitingFor : undefined })
   }
   // Two live claudes under one tmux name (split pane, manual claude): can't tell which is ours.
   return live.length === 1 ? live[0] : null

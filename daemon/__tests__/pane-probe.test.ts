@@ -643,6 +643,36 @@ describe('probeAllSessions', () => {
     expect(msg?.text).toContain('Allow access to ~/secrets?')
   })
 
+  it('unknown-dialog alert quotes what Claude says it is waiting on', async () => {
+    _setIO({ ...makeTestIO(), claudeStatus: () => ({ sessionId: 'c1', status: 'waiting', waitingFor: 'dialog open' }) })
+    addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+    paneTails.set('ember', `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`)
+    windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+
+    expect(sentMessages.find(m => m.channelId === 'thread-1')?.text).toContain('Claude says it is waiting on: `dialog open`')
+  })
+
+  it('unknown-dialog alert has no reason clause when the status file is not waiting', async () => {
+    _setIO({ ...makeTestIO(), claudeStatus: () => ({ sessionId: 'c1', status: 'idle' }) })
+    addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
+    paneTails.set('ember', `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`)
+    windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+
+    const text = sentMessages.find(m => m.channelId === 'thread-1')?.text
+    expect(text).toContain('stuck on a dialog')
+    expect(text).not.toContain('Claude says')
+  })
+
   it('respects notification cooldown', async () => {
     addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
     paneTails.set('bloom', PLAN_MODE_TAIL)

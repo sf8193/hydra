@@ -20,6 +20,7 @@ import { loadAccess } from './access.js'
 import { safeSend } from './util.js'
 import { transport } from './bridge-transport.js'
 import { byteTmuxName } from '../shared/constants.js'
+import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from './engines/claude-status.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -81,6 +82,8 @@ export type PaneProbeIO = {
   loadAccess: () => { allowFrom: string[] }
   platform: string
   defaultChannel: string
+  // Claude's own status for a session (its status file); optional so tests need not fake it.
+  claudeStatus?: (tmuxName: string) => ClaudeLiveStatus | null
 }
 
 const defaultIO: PaneProbeIO = {
@@ -123,6 +126,7 @@ const defaultIO: PaneProbeIO = {
   transportSendOrQueue: (sessionId, msg) => transport.sendOrQueue(sessionId, msg),
   loadAccess: () => loadAccess(),
   platform: PLATFORM,
+  claudeStatus: (tmuxName) => readClaudeStatus(tmuxName),
   defaultChannel: DEFAULT_SESSION_CHANNEL,
 }
 
@@ -437,7 +441,8 @@ async function notifyUnknownDialog(entry: ProbeEntry, now: number): Promise<void
     const channelId = entry.isMain ? io.defaultChannel : entry.threadId
     const tail = (await io.capturePaneTail(name, PANE_TAIL_LINES)) ?? ''
     if (channelId) {
-      await io.safeSend(channelId, `> ⏸️ **${name}** is stuck on a dialog. Run: \`tmux attach -t ${name}\`\n\`\`\`\n${tail.trim()}\n\`\`\``)
+      const why = blockedReason(io.claudeStatus?.(name) ?? null)
+      await io.safeSend(channelId, `> ⏸️ **${name}** is stuck on a dialog${why ? ` (Claude says it is waiting on: \`${why}\`)` : ''}. Run: \`tmux attach -t ${name}\`\n\`\`\`\n${tail.trim()}\n\`\`\``)
     }
     entry.notifiedAt = now
     entry.notifyCount++
@@ -804,6 +809,10 @@ export async function probeAllSessions(now?: number): Promise<void> {
         }
       }
     } else {
+      // Evidence for moving detection onto the status file: what Claude's own status says the moment
+      // this screen-scraped state is first seen (logged, not acted on).
+      const st = io.claudeStatus?.(target.tmuxName)
+      process.stderr.write(`daemon: pane-probe: ${target.tmuxName} first seen ${detected.kind}${detected.loginStage ? `/${detected.loginStage}` : ''}; status file: ${st ? `${st.status}${st.waitingFor ? ` (${st.waitingFor})` : ''}` : 'unreadable'}\n`)
       probeEntries.set(key, {
         tmuxName: target.tmuxName,
         threadId: target.threadId,
