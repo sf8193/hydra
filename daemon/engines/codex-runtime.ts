@@ -68,10 +68,7 @@ codexEngine.on('message', (sessionId: string, text: string) => {
   const info = registry.get(sessionId)
   if (!info) return
   info.lastActive = Date.now()
-  if (info.turnState !== 'working') {
-    info.turnState = 'working'
-    noteActivityForSession(info.tmuxName)
-  }
+  noteActivityForSession(info.tmuxName) // idempotent: sets a flag on this session's pending entries
   noteCodexMessage(sessionId, text)
   noteCodexTurnState(sessionId, false) // still producing — not the final answer yet
 })
@@ -86,7 +83,6 @@ codexEngine.on('autoApproved', (sessionId: string, method: string) => {
 codexEngine.on('turnCompleted', (sessionId: string) => {
   const info = registry.get(sessionId)
   if (!info) return
-  info.turnState = 'idle'
   noteCodexTurnState(sessionId, true)
   // The remote TUI may exit with the completed turn. Repair its tmux surface
   // immediately so the next protocol turn/keys command has somewhere to land.

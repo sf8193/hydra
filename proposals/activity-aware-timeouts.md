@@ -1,5 +1,7 @@
 # Activity-Aware Protocol Timeouts
 
+> **Superseded (Sep 28 2026):** the `turnState` field described below was deleted. "Is the session working?" is now `isSessionWorking(info)` in `daemon/session-activity.ts` (the provider's live signal, else tmux activity in the last 60s).
+
 > What was built in PR #160 and why.
 
 ## The problem

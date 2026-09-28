@@ -8,6 +8,13 @@
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { claudeConfigDir } from '../../shared/constants.js'
+import type { LiveState } from './engine-adapter.js'
+
+// Claude's status vocabulary (busy = thinking, shell = a Bash tool is running); anything else is
+// unknown, not a guess, and falls back to tmux.
+export function liveStateOf(status: string): LiveState | null {
+  return status === 'busy' || status === 'shell' ? 'working' : status === 'idle' ? 'idle' : status === 'waiting' ? 'blocked' : null
+}
 
 export type ClaudeLiveStatus = { sessionId: string; status: string }
 

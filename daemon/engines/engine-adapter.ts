@@ -81,7 +81,14 @@ export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): strin
 // activityAt: epoch seconds of the last observable activity, or null when it
 // can't be read (the reply-guard poller then skips the session this tick). Read
 // on access, so a caller that only wants the outcome pays for no activity read.
-export type Turn = TurnOutcome & { readonly activityAt: number | null }
+// live: what the session is doing right now from the provider's own signal, or null when
+// unknown (callers then fall back to tmux pane activity). Read on access, like activityAt.
+// 'idle' and 'blocked' are authoritative: isSessionWorking does not consult tmux for them, so
+// an engine that is unsure whether work continues must return null, not 'idle'.
+export type LiveState = 'working' | 'idle' | 'blocked'
+// workingSilenceLimitS: set by an engine whose 'working' claim can outlive a hung process (Claude's status
+// file stays busy): isSessionWorking then also requires pane activity within this many seconds.
+export type Turn = TurnOutcome & { readonly activityAt: number | null; readonly live: LiveState | null; readonly workingSilenceLimitS?: number }
 
 /** A tmux keystroke action: raw key names, or literal text plus an optional trailing key. */
 export type TmuxKeyAction =

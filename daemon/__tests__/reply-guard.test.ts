@@ -657,27 +657,25 @@ describe('pollActivityOnce', () => {
   beforeEach(() => { targets.length = 0 })
 
   for (const engine of ['claude', 'codex'] as const) {
-    test(`${engine}: active -> working + activity gate`, () => {
+    test(`${engine}: active -> activity gate`, () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'idle', adapter: adapter(engine) })
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', adapter: adapter(engine) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), Date.now() - 1000)
       activity = () => nowSec - 10
       poll(nowSec)
       expect(targets).toEqual(['cedar'])
-      expect(info.turnState).toBe('working')
       expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(true)
     })
 
-    test(`${engine}: idle -> idle + silence armed`, () => {
+    test(`${engine}: idle -> silence armed`, () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      const info = liveSession('s1', { engine, tmuxName: 'cedar', turnState: 'working', adapter: adapter(engine) })
+      const info = liveSession('s1', { engine, tmuxName: 'cedar', adapter: adapter(engine) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), T0)
       activity = () => nowSec - 45
       poll(nowSec)
       expect(targets).toEqual(['cedar'])
-      expect(info.turnState).toBe('idle')
       expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(false)
       expect(escalatesAfterGrace('cedar')).toBe(1)
     })
@@ -707,7 +705,7 @@ describe('pollActivityOnce', () => {
 
     test('claude, confirmed, pane active: relays the answer at once and clears pending', async () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('claude', true, nowSec) })
+      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', adapter: confirmedAdapter('claude', true, nowSec) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), Date.now() - 1000)
       poll(nowSec)
@@ -719,7 +717,7 @@ describe('pollActivityOnce', () => {
 
     test('claude, NOT confirmed, pane active: nothing sent and the grace clock is not started', async () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('claude', false, nowSec) })
+      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', adapter: confirmedAdapter('claude', false, nowSec) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), Date.now() - 1000)
       poll(nowSec)
@@ -732,7 +730,7 @@ describe('pollActivityOnce', () => {
 
     test('codex, confirmed flag, pane active: no early relay (its flag can be stale between turns)', async () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      liveSession('s1', { engine: 'codex', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('codex', true, nowSec) })
+      liveSession('s1', { engine: 'codex', tmuxName: 'cedar', adapter: confirmedAdapter('codex', true, nowSec) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), Date.now() - 1000)
       poll(nowSec)
@@ -743,7 +741,7 @@ describe('pollActivityOnce', () => {
 
     test('reply already called: pending is gone, nothing relayed', async () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('claude', true, nowSec) })
+      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', adapter: confirmedAdapter('claude', true, nowSec) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), Date.now() - 1000)
       clearPendingReply('s1', meta().chat_id)
@@ -765,13 +763,12 @@ describe('pollActivityOnce', () => {
 
   test('tmux throw -> skip', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: adapter('claude') })
+    const info = liveSession('s1', { tmuxName: 'cedar', adapter: adapter('claude') })
     fakeBridge('s1')
     notePendingReply('s1', meta(), T0)
     activity = () => { throw new Error('no such session') }
     poll(nowSec)
     expect(targets).toEqual(['cedar'])
-    expect(info.turnState).toBe('working')
     expect([..._pendingForTesting().values()][0].activitySeenAfterDelivery).toBe(false)
     // Silence was never armed: the first explicit silence only arms the grace window.
     expect(escalatesAfterGrace('cedar')).toBe(0)
@@ -789,33 +786,30 @@ describe('pollActivityOnce', () => {
 
   test('record without an adapter reads tmux through the fallback', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: undefined })
+    const info = liveSession('s1', { tmuxName: 'cedar', adapter: undefined })
     fakeBridge('s1')
     notePendingReply('s1', meta(), Date.now() - 1000)
     activity = () => nowSec - 10
     poll(nowSec)
     expect(targets).toEqual(['cedar'])
-    expect(info.turnState).toBe('working')
   })
 
   test('record with an adapter: the poller asks activityAt, not tmux', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'idle', adapter: fakeAdapter({ turn: () => ({ activityAt: nowSec - 10, confirmedComplete: false, answer: () => null }) }) })
+    const info = liveSession('s1', { tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ activityAt: nowSec - 10, confirmedComplete: false, answer: () => null }) }) })
     fakeBridge('s1')
     notePendingReply('s1', meta(), Date.now() - 1000)
     activity = () => 0
     poll(nowSec)
     expect(targets).toEqual([])
-    expect(info.turnState).toBe('working')
   })
 
   test('activityAt null -> skip', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', turnState: 'working', adapter: fakeAdapter({ turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }) }) })
+    const info = liveSession('s1', { tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }) }) })
     fakeBridge('s1')
     notePendingReply('s1', meta(), T0)
     poll(nowSec)
-    expect(info.turnState).toBe('working')
     expect(escalatesAfterGrace('cedar')).toBe(0)
   })
 })

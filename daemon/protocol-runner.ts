@@ -3,7 +3,8 @@ import { registry, sessionEmoji, addCapability, removeCapability, setToolDescrip
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type StatusLineState } from './util.js'
+import { isAlive, safeSend, type StatusLineState } from './util.js'
+import { isSessionWorking, isSessionWorkingAsync } from './session-activity.js'
 import { formatContextPercent, type ProviderId } from './engines/engine-adapter.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol, type ProtocolChildSpawnMetadata } from './protocol-registry.js'
@@ -1026,7 +1027,7 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
     const alive = info.adapter ? await info.adapter.isAlive(info) : isAlive(info)
     const connected = transport.has(actorSid)
 
-    // Hard cap check first — unconditional, never skipped by turnState
+    // Hard cap check first — unconditional, never skipped for a working session
     const phaseElapsed = Date.now() - run._phaseStartedAt
     const hardCapMs = (run.protocol.windowMs(run.phase) ?? 30 * 60 * 1000) * TOTAL_PHASE_CAP_FACTOR
     if (phaseElapsed > hardCapMs) {
@@ -1042,7 +1043,7 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
       return
     }
 
-    // Dead or half-dead: recover immediately regardless of turnState
+    // Dead or half-dead: recover immediately regardless of activity
     if (!alive) {
       process.stderr.write(`daemon: health: ${info.tmuxName} is dead (connected=${connected}), triggering recovery\n`)
       onRunDisconnect(actorSid)
@@ -1059,10 +1060,7 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
       return
     }
 
-    // Check tmux pane activity — source of truth for whether session is working.
-    // turnState can be stale (set by bridge, not updated during long tool runs).
-    const tmuxActive = await isTmuxRecentlyActive(info.tmuxName)
-    if (info.turnState === 'working' || tmuxActive) return
+    if (await isSessionWorkingAsync(info)) return
 
     const idleMs = Date.now() - info.lastActive
 
@@ -1480,13 +1478,8 @@ function resetTimeout(run: ProtocolRun): void {
     run._warningTimeout = setTimeout(() => {
       if (run.phase !== phase || !actorSessionId) return
       const info = registry.get(actorSessionId)
-      if (info?.turnState === 'working') {
-        process.stderr.write(`daemon: ${run.protocol.name} run: warning skipped — ${info.tmuxName} is actively working (turnState)\n`)
-        return
-      }
-      // Async tmux check — if active, skip the warning
-      if (info && isTmuxRecentlyActiveSync(info.tmuxName)) {
-        process.stderr.write(`daemon: ${run.protocol.name} run: warning skipped — ${info.tmuxName} is actively working (tmux)\n`)
+      if (info && isSessionWorking(info)) {
+        process.stderr.write(`daemon: ${run.protocol.name} run: warning skipped — ${info.tmuxName} is actively working\n`)
         return
       }
       sendWarning()
@@ -1512,13 +1505,8 @@ function resetTimeout(run: ProtocolRun): void {
   run.timeout = setTimeout(() => {
     if (run.phase !== phase) return
     const info = actorSessionId ? registry.get(actorSessionId) : undefined
-    if (info?.turnState === 'working') {
-      process.stderr.write(`daemon: ${run.protocol.name} run: timeout deferred — ${info.tmuxName} is actively working (turnState)\n`)
-      resetTimeout(run)
-      return
-    }
-    if (info && isTmuxRecentlyActiveSync(info.tmuxName)) {
-      process.stderr.write(`daemon: ${run.protocol.name} run: timeout deferred — ${info.tmuxName} is actively working (tmux)\n`)
+    if (info && isSessionWorking(info)) {
+      process.stderr.write(`daemon: ${run.protocol.name} run: timeout deferred — ${info.tmuxName} is actively working\n`)
       resetTimeout(run)
       return
     }
@@ -1539,7 +1527,7 @@ function resetTimeout(run: ProtocolRun): void {
   // Invariant: on deferral (recursive resetTimeout), _totalTimeout and
   // _phaseStartedAt survive — they anchor to phase entry, not to the
   // last reset. _extensions also survives (counts across the phase entry).
-  // Total backstop — unconditional, never resets, no turnState check.
+  // Total backstop — unconditional, never resets, no activity check.
   // Prevents unbounded deferral from activity-based resets.
   if (!run._totalTimeout) {
     const totalMs = ms * TOTAL_PHASE_CAP_FACTOR

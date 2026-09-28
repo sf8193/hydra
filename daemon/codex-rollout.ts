@@ -132,3 +132,35 @@ export function codexUsageTotals(s: CodexSubject, prev: unknown, homeDir = codex
   const restarted = !!p && (p.threadId !== threadId || decreased(p.totals, totals))
   return { totals, providerSessionId: threadId, cursor: { threadId, totals } satisfies CodexUsageCursor, restarted }
 }
+
+// ---- Turn boundary: task_started / task_complete / turn_aborted ------------------------------
+// The same rollout's event_msg task_started / task_complete / turn_aborted records are a durable turn
+// boundary that does not depend on the app-server socket delivering turnCompleted. A CLOSED boundary is
+// definitive; an OPEN one is not proof of work (a killed session ends its file open).
+
+export type TurnBoundary = 'open' | 'closed'
+
+
+// The latest turn boundary in the thread's rollout tail, or null when unknown (no file, no boundary in view).
+// ponytail: one 64KB tail; a turn whose latest boundary is further back reads null (5 of 190 real files), which
+// is the safe direction. Reuse lastTokenUsage's growing backwards walk if that ever matters.
+export function codexTurnBoundary(homeDir: string, threadId: string): TurnBoundary | null {
+  const path = findRollout(homeDir, threadId)
+  if (!path) return null
+  let fd: number | undefined
+  try {
+    fd = openSync(path, 'r')
+    const size = fstatSync(fd).size
+    const buf = Buffer.alloc(Math.min(size, TAIL_CHUNK_BYTES))
+    readSync(fd, buf, 0, buf.length, size - buf.length)
+    const lines = buf.toString('utf8').split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"event_msg"')) continue
+      let type: unknown
+      try { const m = JSON.parse(lines[i]); type = m.type === 'event_msg' ? m.payload?.type : undefined } catch { continue }
+      if (type === 'task_started') return 'open'
+      if (type === 'task_complete' || type === 'turn_aborted') return 'closed'
+    }
+    return null
+  } catch { return null } finally { if (fd !== undefined) try { closeSync(fd) } catch {} }
+}

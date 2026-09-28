@@ -98,7 +98,7 @@ describe.skipIf(mocked)('Codex key submission', () => {
     await withTmux(async (calls, pane) => {
       pane('Loading…\n')
       const adapter = new CodexEngineAdapter({} as any)
-      const sent = adapter.sendKeys({ tmuxName: 'a', turnState: 'working' } as any, '/status')
+      const sent = adapter.sendKeys({ tmuxName: 'a' } as any, '/status')
       await Bun.sleep(150)
       expect(calls()).toEqual([])
       pane('1 2 0\n› Ask Codex to do anything\n')

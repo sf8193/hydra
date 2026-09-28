@@ -327,12 +327,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         const info = registry.get(conn.sessionId)
         if (info) {
           info.lastActive = Date.now()
-          // A tool_call means the session is actively working — reconcile
-          // turnState if it was stuck in 'waiting' (e.g. model received a
-          // message and started processing without a tmux activity event).
-          if (info.turnState === 'waiting') {
-            info.turnState = 'working'
-          }
         }
       }
 
@@ -359,13 +353,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
             // Reply guard: settle synchronously — the reply is already sent, and
             // the hooks below await (and may throw), which would strand the guard.
             clearPendingReply(conn.sessionId, args.chat_id as string)
-
-            // Track turnState: session just sent a reply, so if it goes idle
-            // next, it's in 'waiting' state (idle + last action was outbound reply).
-            if (replyInfo) {
-              replyInfo.turnState = 'waiting'
-              registry.debouncedPersist()
-            }
 
             if (replyInfo && !replyInfo.ephemeral) {
               autoWatchPrUrls(conn.sessionId, replyText)

@@ -93,6 +93,9 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
   }
 }
 
+// ponytail: a genuinely silent Claude turn longer than this (no spinner repaint) reads not-working.
+export const CLAUDE_WORKING_SILENCE_S = 10 * 60
+
 export class ClaudeEngine implements EngineAdapter {
   readonly provider = 'claude' as const
   readonly channel = 'bridge' as const
@@ -125,6 +128,10 @@ export class ClaudeEngine implements EngineAdapter {
     return {
       get confirmedComplete() { return outcome.confirmedComplete }, answer: outcome.answer,
       get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
+      get live() { return outcome.live },
+      // A live turn keeps its spinner moving; a hung one (API retry loop, stuck tool) goes silent while the
+      // status file still says busy, so isSessionWorking bounds the claim by pane activity.
+      workingSilenceLimitS: CLAUDE_WORKING_SILENCE_S,
     }
   }
 

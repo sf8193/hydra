@@ -24,7 +24,7 @@ beforeEach(() => {
   registry.set('s1', {
     sessionId: 's1', topic: 'test', threadId: 'thread-1',
     createdAt: Date.now(), lastActive: Date.now(), tmuxName: 'critic',
-    listening: false, turnState: 'idle',
+    listening: false,
     sessionType: 'thread_guest',
   } as SessionInfo)
 })

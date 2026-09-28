@@ -71,7 +71,6 @@ export type SessionInfo = {
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
   ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors
-  turnState?: 'working' | 'idle' | 'waiting' // tmux-driven: working=activity, idle=silence, waiting=idle+last action was outbound reply
   contextUsage?: { usedTokens: number; contextWindow: number; percent: number; updatedAt: number }
   sessionType: SessionType
   label?: SessionLabel
@@ -439,6 +438,7 @@ export class SessionRegistry {
         delete raw.isFactoryBuilder
         delete raw.factorySupervised
         delete raw.supervised
+        delete raw.turnState // retired: derived live from the provider now (session-activity.ts)
 
         // Strip invalid capabilities from intermediate persisted states
         if (info.capabilities) {

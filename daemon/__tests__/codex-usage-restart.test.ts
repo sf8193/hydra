@@ -22,7 +22,7 @@ import { join } from 'path'
 import { _resetRolloutMemoForTesting, codexTotals, codexUsageTotals, findRollout, lastTokenUsage } from '../codex-rollout.js'
 import { CodexEngine } from '../codex-engine.js'
 import { codexEngine, onTurnReconciled } from '../engines/codex-runtime.js'
-import { getLastCodexMessage, isCodexTurnComplete } from '../engines/codex-observation.js'
+import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking } from '../engines/codex-observation.js'
 import { registry, type SessionInfo } from '../sessions.js'
 
 const dirs: string[] = []
@@ -238,7 +238,7 @@ describe('codex-runtime handles turnReconciled as observation only', () => {
     const surfaces: string[] = []
     const info = {
       sessionId, threadId: `T-${sessionId}`, tmuxName: sessionId, engine: 'codex', sessionType: 'thread_owner', originType: 'spawn',
-      createdAt: 1, lastActive: 1, listening: true, topic: '', turnState: 'working',
+      createdAt: 1, lastActive: 1, listening: true, topic: '',
       adapter: { ensureSurface: () => { surfaces.push(sessionId); return true } },
     } as unknown as SessionInfo
     registry.set(sessionId, info)
@@ -255,7 +255,7 @@ describe('codex-runtime handles turnReconciled as observation only', () => {
       expect(getLastCodexMessage('recon-1', 1790489642 * 1000 + 1), 'dated at completedAt, not now').toBeNull()
       expect(completed).toBe(0)
       expect(r.surfaces, 'no surface repair').toEqual([])
-      expect(r.info.turnState, 'turnCompleted would have set idle').toBe('working')
+      expect(isCodexWorking('recon-1'), 'reconciled to complete, not working').toBe(false)
     } finally { r.done() }
   })
 
