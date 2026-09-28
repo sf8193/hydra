@@ -38,6 +38,8 @@ export type CodexConn = {
   generation: number
   retryTimers: Set<ReturnType<typeof setTimeout>>
   lastKnownTurnId?: string | null
+  lastFrameAt?: number  // any inbound frame proves the app-server answers
+  heartbeat?: ReturnType<typeof setInterval>
 }
 
 /** How long a `!` waits for an in-flight turn/start to reveal its turn ID. */
@@ -214,6 +216,7 @@ export class CodexEngine extends EventEmitter {
 
     this.connections.set(sessionId, conn)
     this.attachWsHandlers(ws, conn, sessionId)
+    this.startHeartbeat(conn)
 
     try {
       await this.request(conn, 'initialize', {
@@ -473,6 +476,7 @@ export class CodexEngine extends EventEmitter {
     const conn = this.connections.get(sessionId)
     if (!conn) return
     if (conn.turnWatchdog) clearTimeout(conn.turnWatchdog)
+    clearInterval(conn.heartbeat)
     for (const timer of conn.retryTimers) clearTimeout(timer)
     conn.retryTimers.clear()
     const scheduling = this.getScheduling(sessionId, conn)
@@ -643,12 +647,38 @@ export class CodexEngine extends EventEmitter {
   // WebSocket connection
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Heartbeat — an open socket to a hung app-server is not alive. After a quiet
+  // interval, ask model/list (read-only, no turn); no frame back in time → drop
+  // the socket, and the close path hands it to the runtime's reconnect loop.
+  // ---------------------------------------------------------------------------
+
+  private static HEARTBEAT_MS = 30_000
+  private static HEARTBEAT_TIMEOUT_MS = 10_000
+
+  private startHeartbeat(conn: CodexConn): void {
+    conn.lastFrameAt = Date.now()
+    conn.heartbeat = setInterval(() => {
+      if (this.connections.get(conn.sessionId) !== conn) { clearInterval(conn.heartbeat); return }
+      const probeAt = Date.now()
+      if (probeAt - conn.lastFrameAt! < CodexEngine.HEARTBEAT_MS) return
+      this.request(conn, 'model/list', {}).catch(() => {})
+      setTimeout(() => {
+        if (this.connections.get(conn.sessionId) !== conn || conn.lastFrameAt! >= probeAt) return
+        process.stderr.write(`codex-engine: ${conn.sessionId} app-server unresponsive for ${CodexEngine.HEARTBEAT_TIMEOUT_MS}ms; dropping the socket\n`)
+        try { conn.ws.terminate() } catch {}
+      }, CodexEngine.HEARTBEAT_TIMEOUT_MS)
+    }, CodexEngine.HEARTBEAT_MS)
+  }
+
   private attachWsHandlers(ws: WebSocket, conn: CodexConn, sessionId: string, managed = true): void {
     ws.on('message', (data: WebSocket.Data) => {
+      conn.lastFrameAt = Date.now()
       if (managed && this.connections.get(sessionId) !== conn) return
       this.handleMessage(conn, data.toString())
     })
     ws.on('close', () => {
+      clearInterval(conn.heartbeat)
       this.rejectAllPending(conn, 'socket closed')
       if (conn.turnWatchdog) { clearTimeout(conn.turnWatchdog); conn.turnWatchdog = null }
       if (!managed) return

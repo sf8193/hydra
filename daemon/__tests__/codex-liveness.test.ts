@@ -127,3 +127,47 @@ describe('discardSession (step 2)', () => {
     expect(engine.queueTurn('dead-1', 'late')).toBe(false)
   })
 })
+
+describe('heartbeat (step 3)', () => {
+  const { EventEmitter } = require('events')
+  async function withHeartbeat(chatty: boolean) {
+    const { CodexEngine } = await import('../codex-engine.js')
+    const E = CodexEngine as any
+    const saved = [E.HEARTBEAT_MS, E.HEARTBEAT_TIMEOUT_MS]
+    E.HEARTBEAT_MS = 20; E.HEARTBEAT_TIMEOUT_MS = 15
+    const engine = new CodexEngine() as any
+    const sent: any[] = []
+    let terminated = false
+    const ws = Object.assign(new EventEmitter(), {
+      send(raw: string) { sent.push(JSON.parse(raw)) }, close() {},
+      terminate() { terminated = true; ws.emit('close') },
+    })
+    const conn: any = { sessionId: 'hb', ws, threadId: 't', currentTurnId: null, turnPending: false, turnWatchdog: null,
+      nextRequestId: 0, pendingRequests: new Map(), messageBuffer: [], deferredTurnQueue: [], lastUsageWarning: 0, retryTimers: new Set(), generation: 1 }
+    engine.connections.set('hb', conn)
+    engine.attachWsHandlers(ws, conn, 'hb')
+    const disconnected: string[] = []
+    engine.on('disconnected', (id: string) => disconnected.push(id))
+    engine.startHeartbeat(conn)
+    const chatter = chatty ? setInterval(() => ws.emit('message', JSON.stringify({ method: 'item/agentMessage/delta', params: {} })), 5) : null
+    await new Promise(r => setTimeout(r, 120))
+    if (chatter) clearInterval(chatter)
+    engine.disconnect('hb')
+    E.HEARTBEAT_MS = saved[0]; E.HEARTBEAT_TIMEOUT_MS = saved[1]
+    return { sent, terminated, disconnected }
+  }
+
+  test('a silent app-server is probed with model/list, then its socket is dropped → disconnected', async () => {
+    const r = await withHeartbeat(false)
+    expect(r.sent.some(m => m.method === 'model/list')).toBe(true)
+    expect(r.terminated).toBe(true)
+    expect(r.disconnected).toEqual(['hb'])
+  })
+
+  test('a chatty app-server is never probed or dropped', async () => {
+    const r = await withHeartbeat(true)
+    expect(r.sent).toEqual([])
+    expect(r.terminated).toBe(false)
+    expect(r.disconnected).toEqual([])
+  })
+})
