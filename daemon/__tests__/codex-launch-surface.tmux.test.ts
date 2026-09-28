@@ -5,10 +5,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 
-// Real-tmux tests. CI runs this file in its own `bun test` process:
-// cli/__tests__/peek.test.ts leaks a child_process mock into a shared process.
+// Real-tmux tests on an isolated server (own TMUX_TMPDIR, cleanup by explicit -S).
 const hasTmux = Bun.spawnSync(['tmux', '-V']).exitCode === 0
-const mocked = 'mock' in execFileSync
 
 async function withIsolatedPath(fakes: Record<string, string>, fn: (dir: string) => unknown) {
   const dir = mkdtempSync(join(tmpdir(), 'hydra-tmux-'))
@@ -29,7 +27,7 @@ async function withIsolatedPath(fakes: Record<string, string>, fn: (dir: string)
 }
 
 // F3: the TUI window must be current, so callers targeting the bare session hit it.
-test.skipIf(!hasTmux || mocked)('surface leaves hydra-chat as the current window', async () => {
+test.skipIf(!hasTmux)('surface leaves hydra-chat as the current window', async () => {
   await withIsolatedPath({ codex: '#!/bin/sh\nexec sleep 30\n' }, dir => {
     const adapter = new CodexEngineAdapter({ isConnected: () => true } as any)
     expect(adapter.surface({ sessionId: 's', tmuxName: 'r1-surface', codexThreadId: 't' } as any)).toBe('r1-surface:hydra-chat')
@@ -46,7 +44,7 @@ test.skipIf(!hasTmux || mocked)('surface leaves hydra-chat as the current window
 })
 
 // A broken tmux must never fail a launch: the surface is repaired on turn completion.
-test.skipIf(mocked)('launch resolves when every tmux call fails', async () => {
+test('launch resolves when every tmux call fails', async () => {
   await withIsolatedPath({ tmux: '#!/bin/sh\nexit 1\n' }, async () => {
     let connected = false
     const engine = {

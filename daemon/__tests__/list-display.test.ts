@@ -55,12 +55,8 @@ beforeEach(() => {
     tmuxName: 'drift',
     listening: false,
     engine: 'claude',
-    // Set directly rather than relying on resolveEngine('claude') to find
-    // the real singleton — this file doesn't care which engine ran, only
-    // that formatSessionEntry can render *something*, and a global
-    // singleton is reachable (and, per bun's documented mock.module leak
-    // across test files — see factory-worktree.test.ts — sometimes
-    // clobbered) from every other test file in the same run.
+    // A fake, not the real singleton: this file only needs formatSessionEntry
+    // to render *something*.
     adapter: fakeAdapter({ usage: () => null }),
     sessionType: 'thread_owner',
   }

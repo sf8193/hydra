@@ -21,9 +21,7 @@ import {
 //
 // Fixtures are built with plain fs (mkdir of a ".git" marker), NOT `git init`,
 // and git behaviour is supplied by a fake that reads this real temp tree. This
-// keeps the tests deterministic and immune to other suites globally mocking
-// child_process (cli/__tests__/peek.test.ts does exactly that, and bun leaks
-// mock.module across files).
+// keeps the tests deterministic.
 let root: string
 let nestedRepo: string      // <root>/Documents/hydra (a "repo": has a .git marker)
 let plainDir: string        // <root>/Documents (not a repo)
