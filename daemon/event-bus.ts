@@ -9,10 +9,12 @@
 // Extensible: other modules can augment EventMap via:
 //   declare module './event-bus' { interface EventMap { 'my:event': { ... } } }
 
+import type { ProviderId } from './engines/engine-adapter.js'
+
 export interface EventMap {
   'delivery:failed': { sessionId: string; status: 'rejected' | 'unknown'; reason: string; messageId?: string }
   'reply': { sessionId: string; text: string; chatId: string; sentIds: string[] }
-  'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: 'claude' | 'codex'; codexThreadId?: string; codexHomeName?: string }
+  'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }
   // Fires on every successful bridge registration, including reconnects —
   // subscribers must be idempotent.
   'session:bridge-registered': { sessionId: string; threadId: string }

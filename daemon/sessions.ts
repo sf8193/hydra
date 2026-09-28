@@ -8,6 +8,7 @@ import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
 import { recordPendingRetirement } from './retirement-journal.js'
 import { classifyPersisted } from './engines/boot.js'
+import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,7 +48,7 @@ export type SessionInfo = {
   worktreeRepo?: string
   worktreePath?: string
   worktreeBranch?: string
-  handoffSelection?: { model: string; engine: 'claude' | 'codex' }  // set by `handoff <model>`, read by the handoff tool; dies with the record
+  handoffSelection?: { model: string; engine: ProviderId }  // set by `handoff <model>`, read by the handoff tool; dies with the record
   deadAt?: number
   contextLinks?: string[]
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
@@ -65,8 +66,8 @@ export type SessionInfo = {
   exitFilePath?: string    // exit marker file: exit code, wall clock, signal — written by spawn command on exit
   stderrLogPath?: string   // stderr redirect: separate file for spawn's stderr output
   debugLogPath?: string    // CC --debug-file output: internal diagnostics, written throughout session lifetime
-  engine: 'claude' | 'codex'  // which backend runs this session
-  adapter: import('./engines/engine-adapter.js').EngineAdapter // runtime instance, not persisted — reattached on load
+  engine: ProviderId  // which backend runs this session
+  adapter: EngineAdapter // runtime instance, not persisted — reattached on load
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
   ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors
@@ -142,7 +143,7 @@ export type ThreadSessionEntry = {
   endedAt?: number
   messageCount: number
   claudeSessionId?: string
-  engine?: 'claude' | 'codex'
+  engine?: ProviderId
   codexThreadId?: string
   codexHomeName?: string
   model?: string
@@ -186,7 +187,7 @@ export type SpawnOpts = {
   model?: string         // per-spawn model override (falls back to spawnModel() / HYDRA_MODEL)
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
   trigger?: string       // what caused this spawn, for the announce line (e.g. 'spawn:', 'review 2:', 'CLI'); falls back to originType
-  engine?: 'claude' | 'codex'  // which backend to use (default: claude)
+  engine?: ProviderId  // which backend to use (default: claude)
   headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
@@ -491,7 +492,7 @@ export const registry = new SessionRegistry()
  * Reattach engine adapter instances to all loaded sessions.
  * Call once after both registry and engine singletons are initialized.
  */
-export function reattachAdapters(resolve: (provider: 'claude' | 'codex') => import('./engines/engine-adapter.js').EngineAdapter): void {
+export function reattachAdapters(resolve: (provider: ProviderId) => EngineAdapter): void {
   let count = 0
   for (const info of registry.values()) {
     info.adapter = resolve(info.engine ?? 'claude')

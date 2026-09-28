@@ -117,6 +117,7 @@ startVitalsSnapshots((id) => transport.has(id))
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 import { debouncedRefreshListDisplay } from './daemon/commands/status.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle, cacheSlackChannel, cacheSlackThread } from './daemon/artifacts.js'
+import type { ProviderId } from './daemon/engines/engine-adapter.js'
 registry.onPersist = refreshDashboard
 
 if ('homeTabHandler' in gateway) {
@@ -133,7 +134,7 @@ if ('homeSpawnHandler' in gateway) {
     try {
       let parsed = parseTemplateTopic(topic)
       let modelOverride: string | undefined
-      let engine: 'claude' | 'codex' | undefined
+      let engine: ProviderId | undefined
 
       // "factory sonnet: topic" — parseTemplateTopic sees "factory sonnet" as candidate, misses it.
       // Fall back: split prefix on space to find "template model: topic".

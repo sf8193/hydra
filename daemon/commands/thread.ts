@@ -18,7 +18,7 @@ import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-selection.js'
 import { recoveryEngine } from '../engines/history.js'
-import { formatContextPercent } from '../engines/engine-adapter.js'
+import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, classifyReachability } from '../session-reachability.js'
 
@@ -29,7 +29,7 @@ let recoveryDeps: RecoveryDeps = defaultRecoveryDeps
 export function _setRecoveryDeps(custom: Partial<RecoveryDeps>): void { recoveryDeps = { ...defaultRecoveryDeps, ...custom } }
 export function _resetRecoveryDeps(): void { recoveryDeps = defaultRecoveryDeps }
 
-function adapterFor(info: { engine?: 'claude' | 'codex'; adapter?: any }) {
+function adapterFor(info: { engine?: ProviderId; adapter?: any }) {
   return info.adapter
 }
 
@@ -100,7 +100,7 @@ export async function handleThreadKillIntercept(
   if (destroy) await handleDestroyIntercept(msg, { initiator })
 }
 
-export async function handleForkIntercept(msg: InboundMessage, description?: string, model?: string, opts?: { ephemeral?: boolean; engine?: 'claude' | 'codex' }): Promise<void> {
+export async function handleForkIntercept(msg: InboundMessage, description?: string, model?: string, opts?: { ephemeral?: boolean; engine?: ProviderId }): Promise<void> {
   const info = registry.resolveThreadSessionFromMsg(msg)
   if (!info) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
@@ -404,7 +404,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   }
 }
 
-export async function handleRespawnIntercept(msg: InboundMessage, topic?: string, templateName?: string, selection?: { model: string; engine: 'claude' | 'codex' }): Promise<void> {
+export async function handleRespawnIntercept(msg: InboundMessage, topic?: string, templateName?: string, selection?: { model: string; engine: ProviderId }): Promise<void> {
   if (!msg.isThread) {
     await reportError(msg.channelId, msg.id, 'respawn', 'must be used in a thread')
     return
@@ -664,7 +664,7 @@ function handoffRequest(artifact: string): string {
   ].join(' ')
 }
 
-export async function handleHandoffIntercept(msg: InboundMessage, selection?: { model: string; engine: 'claude' | 'codex' }): Promise<void> {
+export async function handleHandoffIntercept(msg: InboundMessage, selection?: { model: string; engine: ProviderId }): Promise<void> {
   const threadId = msg.effectiveThreadId ?? msg.channelId
   const liveId = msg.isThread ? registry.getByThread(threadId) : undefined
   const info = liveId ? registry.get(liveId) : undefined

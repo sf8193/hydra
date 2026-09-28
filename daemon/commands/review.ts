@@ -5,6 +5,7 @@ import { isThreadOccupied } from '../protocol-registry.js'
 import { resolveModifiers, partitionFlagModifiers, listLensNames } from '../modifiers.js'
 import type { InboundMessage } from '../../gateway.js'
 import { normalizeReviewRounds } from '../../shared/constants.js'
+import type { ProviderId } from '../engines/engine-adapter.js'
 
 let reviewProto: Awaited<ReturnType<typeof import('../../protocols/review.js')>>['default'] | null = null
 
@@ -13,7 +14,7 @@ async function getReviewProto() {
   return reviewProto
 }
 
-export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, modifierNames?: string[], engine?: 'claude' | 'codex'): Promise<void> {
+export async function handleReviewIntercept(msg: InboundMessage, rounds: number, topic?: string, model?: string, modifierNames?: string[], engine?: ProviderId): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '⚔️').catch(() => {})
 
   const resolvedThreadId = registry.resolveThreadId(msg)

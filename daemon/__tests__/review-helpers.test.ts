@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { executeTool, __test as dispatchTest } from '../bridge-dispatch.js'
-import { onRunAdvance, __test } from '../protocol-runner.js'
+import { onRunAdvance, onRunDisconnect, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
@@ -292,6 +292,21 @@ describe('critic prompt', () => {
     expect(seed).toContain('run the next stage in the same turn')
     expect(seed).toContain('case matrix')
     expect(seed).toContain('branch by branch')
+  })
+})
+
+describe('dead Codex actor', () => {
+  test('a deadAt actor is handled as disconnected even though transport.has says connected (Codex C1)', () => {
+    const run = reviewRun()
+    const has = spyOn(transport, 'has').mockImplementation((() => true) as any)
+    try {
+    onRunDisconnect('rh-critic')
+    expect(run.disconnectTimers.has('rh-critic')).toBe(false)   // live: ignored, as before
+    registry.get('rh-critic')!.deadAt = Date.now()
+    onRunDisconnect('rh-critic')
+    expect(run.disconnectTimers.has('rh-critic')).toBe(true)    // dead: the disconnect path runs
+    clearTimeout(run.disconnectTimers.get('rh-critic'))
+    } finally { has.mockRestore() }   // spies outlive the file; a stuck has() breaks later disconnect tests
   })
 })
 

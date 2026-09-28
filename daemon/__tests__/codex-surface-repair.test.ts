@@ -57,6 +57,7 @@ describe('Codex app-server reconnect', () => {
   test('classifies death only after bounded reconnect attempts fail', async () => {
     let attempts = 0
     let failed = 0
+    const announced: string[] = []
     const fakeAdapter = {
       reconnect: async () => { attempts++; throw new Error('server gone') },
       surface: () => 'ember:hydra-chat',
@@ -67,11 +68,13 @@ describe('Codex app-server reconnect', () => {
       wait: async () => {},
       persist: () => {},
       failed: () => { failed++ },
+      announce: (i: any) => { announced.push(i.tmuxName) },
     })
 
     expect(restored).toBe(false)
     expect(attempts).toBe(3)
     expect(info.deadAt).toBeNumber()
     expect(failed).toBe(1)
+    expect(announced).toEqual(['ember'])   // the thread is told, instead of going quiet
   })
 })

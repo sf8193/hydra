@@ -4,7 +4,7 @@ import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsIn
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type StatusLineState } from './util.js'
-import { formatContextPercent } from './engines/engine-adapter.js'
+import { formatContextPercent, type ProviderId } from './engines/engine-adapter.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol, type ProtocolChildSpawnMetadata } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
@@ -597,7 +597,9 @@ export function onRunDisconnect(sessionId: string): void {
   if (!runId) return
   const run = runs.get(runId)
   if (!run || isTerminal(run)) return
-  if (transport.has(sessionId)) return
+  // transport.has is constant true for Codex (PINNED C1); a deadAt record is gone regardless.
+  const connected = () => transport.has(sessionId) && !registry.get(sessionId)?.deadAt
+  if (connected()) return
 
   const role = run.sessionToRole.get(sessionId)
   if (!role) return
@@ -610,7 +612,7 @@ export function onRunDisconnect(sessionId: string): void {
       const currentInfo = registry.get(sessionId)
       const attempts = run._resumeAttempts ?? 0
       const decision = decideResume(
-        transport.has(sessionId),
+        connected(),
         currentInfo ? !isAlive(currentInfo) : true,
         !!claudeSessionId,
         attempts,
@@ -1261,7 +1263,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   }
 
   const model = (params.model as string) ?? undefined
-  const engine = (params.engine as 'claude' | 'codex' | undefined) ?? undefined
+  const engine = (params.engine as ProviderId | undefined) ?? undefined
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,

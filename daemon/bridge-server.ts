@@ -169,7 +169,8 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // session traffic uses codexEngine, so daemon-socket registrations for a
       // Codex record are control-plane connections by definition.
       conn.connectionRole = connectionRoleFor(msg, info)
-      if (info) {
+      // Only a Claude record carries a Claude session id; the Codex MCP sidecar registers here too.
+      if (info && (info.engine ?? 'claude') === 'claude') {
         const resolved = claudeSessionId || discoverClaudeSessionId(info.tmuxName)
         if (resolved) {
           info.claudeSessionId = resolved

@@ -817,6 +817,9 @@ export function factoryBuild(opts: FactoryBuildOpts): { ticket: string; warning?
 
   const pmInfo = registry.get(pmSessionId)
   const fresh = opts.fresh ?? false
+  if (!fresh && (pmInfo?.engine ?? 'claude') !== 'claude') {
+    return { error: `Cannot fork a ${pmInfo!.engine} PM into a builder — forking is Claude-only here. Use fresh=true.` }
+  }
   if (!fresh && !pmInfo?.claudeSessionId) {
     return { error: 'Cannot fork — PM claude session ID not found. Use fresh=true to spawn without fork.' }
   }

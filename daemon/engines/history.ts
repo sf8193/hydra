@@ -3,6 +3,7 @@
 // Engine facts read off thread history entries. Pure.
 
 import type { ThreadSessionEntry } from '../sessions.js'
+import type { ProviderId } from './engine-adapter.js'
 
 // A legacy respawn accidentally passed the Codex placeholder to Claude. Such
 // a zero-message replacement never established a usable conversation.
@@ -15,7 +16,7 @@ export function isForeignPlaceholder(entry: Pick<ThreadSessionEntry, 'model' | '
 // codexThreadId means Codex, else Claude. (Uses the id as a discriminator — PR-IDENT.)
 export function recoveryEngine(
   entry: Pick<ThreadSessionEntry, 'codexThreadId'> | undefined,
-  info: { engine?: 'claude' | 'codex' } | undefined,
-): 'claude' | 'codex' {
+  info: { engine?: ProviderId } | undefined,
+): ProviderId {
   return info?.engine ?? (entry?.codexThreadId ? 'codex' : 'claude')
 }
