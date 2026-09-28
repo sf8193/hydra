@@ -4,7 +4,7 @@ import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsIn
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
 import { isAlive, safeSend, isTmuxRecentlyActive, isTmuxRecentlyActiveSync, type StatusLineState } from './util.js'
-import { formatContextPercent } from './engines/engine-adapter.js'
+import { formatContextPercent, type ProviderId } from './engines/engine-adapter.js'
 import { recordSessionDeath } from './observability.js'
 import { registerProtocol, type ProtocolChildSpawnMetadata } from './protocol-registry.js'
 import { refreshSessionVisual, registerProtocolBadge, formatRoundBadge, formatStateLine } from './anchor-state.js'
@@ -15,7 +15,6 @@ import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import { requiredLenses, withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
-import type { ProviderId } from './engines/engine-adapter.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge

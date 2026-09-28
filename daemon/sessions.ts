@@ -8,7 +8,7 @@ import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
 import { recordPendingRetirement } from './retirement-journal.js'
 import { classifyPersisted } from './engines/boot.js'
-import type { ProviderId } from './engines/engine-adapter.js'
+import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,7 +67,7 @@ export type SessionInfo = {
   stderrLogPath?: string   // stderr redirect: separate file for spawn's stderr output
   debugLogPath?: string    // CC --debug-file output: internal diagnostics, written throughout session lifetime
   engine: ProviderId  // which backend runs this session
-  adapter: import('./engines/engine-adapter.js').EngineAdapter // runtime instance, not persisted — reattached on load
+  adapter: EngineAdapter // runtime instance, not persisted — reattached on load
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart
   codexHomeName?: string       // CODEX_HOME identity; differs from tmuxName after auto-resume
   ownershipGeneration?: string // immutable lifecycle owner; prevents stale cleanup from targeting successors
@@ -492,7 +492,7 @@ export const registry = new SessionRegistry()
  * Reattach engine adapter instances to all loaded sessions.
  * Call once after both registry and engine singletons are initialized.
  */
-export function reattachAdapters(resolve: (provider: ProviderId) => import('./engines/engine-adapter.js').EngineAdapter): void {
+export function reattachAdapters(resolve: (provider: ProviderId) => EngineAdapter): void {
   let count = 0
   for (const info of registry.values()) {
     info.adapter = resolve(info.engine ?? 'claude')

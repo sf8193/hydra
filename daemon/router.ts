@@ -30,10 +30,9 @@ import { notePendingReply } from './reply-guard.js'
 import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
-import type { TmuxKeyAction } from './engines/engine-adapter.js'
+import type { ProviderId, TmuxKeyAction } from './engines/engine-adapter.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
-import type { ProviderId } from './engines/engine-adapter.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
 // commands (fork, watch, build, respawn, resume) are excluded: those are

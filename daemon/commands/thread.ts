@@ -18,10 +18,9 @@ import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-selection.js'
 import { recoveryEngine } from '../engines/history.js'
-import { formatContextPercent } from '../engines/engine-adapter.js'
+import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, classifyReachability } from '../session-reachability.js'
-import type { ProviderId } from '../engines/engine-adapter.js'
 
 // Recovery executors, swappable in tests (same pattern as reply-guard's deps).
 type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn }
