@@ -9,11 +9,15 @@ const T = 1_000_000
 const info = { sessionId: 's1', codexThreadId: 'th', tmuxName: 'cedar' }
 
 let reads = 0
-const src = (over: { rollout?: CodexLastTurn | null; complete?: boolean; message?: string | null; noRollout?: boolean }): TurnSources => ({
-  transcriptPathFor: () => undefined,
-  readConversationForensics: () => null,
+const src = (over: {
+  rollout?: CodexLastTurn | null; complete?: boolean; message?: string | null; noRollout?: boolean
+  statusId?: string; transcript?: Record<string, string>
+}): TurnSources => ({
+  transcriptPathFor: (id) => id ? over.transcript?.[id] : undefined,
+  readConversationForensics: (p) => over.transcript && Object.values(over.transcript).includes(p) ? { tailTurns: 1, lastStopReason: 'end_turn', lastToolCalled: null, lastToolPending: false, pendingToolCount: 0, tailApiCalls: 1, lastAssistantText: `answer:${p}`, isTail: false, lastAssistantFullText: `answer:${p}`, lastAssistantTs: new Date(T + 1).toISOString(), lastAssistantTurnComplete: true, queueBacklog: 0, lastConsumeTs: null } : null,
   getLastCodexMessage: () => over.message ?? null,
   isCodexTurnComplete: () => over.complete ?? false,
+  readClaudeStatus: over.statusId !== undefined ? () => ({ sessionId: over.statusId!, status: 'idle' }) : undefined,
   ...(over.noRollout ? {} : { codexLastTurn: () => { reads++; return over.rollout ?? null } }),
 })
 const closed = (answer: string | null, at: number | null = T + 5): CodexLastTurn => ({ boundary: 'closed', answer, at })
@@ -108,4 +112,16 @@ test('a dead session\'s disagreement throttle entry is pruned, not leaked foreve
   for (const prune of vitalsPruners) prune(() => true) // everyone is gone
   codexTurnOutcome({ ...info, sessionId: id }, T, src({ rollout: closed('a'), complete: false })).confirmedComplete
   expect(logs.length).toBe(2) // pruned entry reset the throttle — proves the map no longer holds the old timestamp
+})
+
+test('a Claude-holding Codex record resolves its transcript id from the status file (follows /clear), not the stale stored one', () => {
+  const forked = { ...info, claudeSessionId: 'old-cleared-id' }
+  const o = codexTurnOutcome(forked, T, src({ statusId: 'new-id-after-clear', transcript: { 'new-id-after-clear': '/t/new.jsonl', 'old-cleared-id': '/t/old.jsonl' } }))
+  expect(o.answer()).toBe('answer:/t/new.jsonl')
+})
+test('no tmuxName, or nothing in the status file: the stored id is still the fallback', () => {
+  const forked = { sessionId: 's1', claudeSessionId: 'stored-id' }
+  expect(codexTurnOutcome(forked, T, src({ transcript: { 'stored-id': '/t/x.jsonl' } })).answer()).toBe('answer:/t/x.jsonl')
+  const forked2 = { ...info, claudeSessionId: 'stored-id' }
+  expect(codexTurnOutcome(forked2, T, src({ statusId: undefined, transcript: { 'stored-id': '/t/y.jsonl' } })).answer()).toBe('answer:/t/y.jsonl')
 })
