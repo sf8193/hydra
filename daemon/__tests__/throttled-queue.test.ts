@@ -62,13 +62,13 @@ describe('ThrottledQueue', () => {
 
     q.enqueue('filler', 'filler')
     await new Promise(r => setTimeout(r, 5))
+    // thread-2 is queued first, so only the kept high priority puts thread-1 ahead.
+    q.enqueue('thread-2', 'other', 'normal')
     q.enqueue('thread-1', 'killed', 'high')
     q.enqueue('thread-1', 'still killed', 'normal')
-    q.enqueue('thread-2', 'other', 'normal')
 
     await new Promise(r => setTimeout(r, 200))
-    expect(results[1]).toBe('still killed')
-    expect(results[2]).toBe('other')
+    expect(results).toEqual(['filler', 'still killed', 'other'])
   })
 
   test('action errors do not stop the drain', async () => {
