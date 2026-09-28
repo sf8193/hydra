@@ -150,13 +150,9 @@ After.`
 |------|------:|
 | a | 100 |
 | bb | 5 |`
-    const result = formatDiscordTables(text)
-    const lines = result.split('\n')
-    const dataLines = lines.filter(l => l.includes('100') || l.includes('5'))
-    for (const line of dataLines) {
-      const parts = line.split(/\s{2,}/)
-      expect(parts.length).toBeGreaterThanOrEqual(2)
-    }
+    expect(formatDiscordTables(text).split('\n')).toEqual([
+      '```', 'Name  Value', '───────────', 'a       100', 'bb        5', '```',
+    ])
   })
 
   test('handles emoji in code block with proper width', () => {
@@ -164,9 +160,10 @@ After.`
 |--------|------|
 | ✅ | alpha |
 | ⚠️ | beta |`
-    const result = formatDiscordTables(text)
-    expect(result).toContain('```')
-    expect(result).toContain('✅')
-    expect(result).toContain('⚠️')
+    // suspect: the VS16 in '⚠️' is counted as width 2 (its comment calls it
+    // zero-width), so '⚠️' measures 4 and its row is padded 2 short of '✅'.
+    expect(formatDiscordTables(text).split('\n')).toEqual([
+      '```', 'Status  Item ', '─────────────', '✅      alpha', '⚠️    beta ', '```',
+    ])
   })
 })
