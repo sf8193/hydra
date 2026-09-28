@@ -3,8 +3,8 @@
 
 import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
-import { resolve } from 'path'
-import { existsSync } from 'fs'
+import { dirname, join, resolve } from 'path'
+import { existsSync, readdirSync, statSync } from 'fs'
 
 const execAsync = promisify(execFile)
 
@@ -283,4 +283,57 @@ async function resolveBaseBranch(repoDir: string): Promise<string> {
   } catch {
     return 'master'
   }
+}
+
+// ---------------------------------------------------------------------------
+// Session scratchpad worktrees — `git worktree add`s a Claude session made on its
+// own under its scratchpad (<tmp>/claude-<uid>/<project>/<session id>/scratchpad).
+// Hydra never recorded them, so without this they outlive the session forever.
+// ---------------------------------------------------------------------------
+
+export function sessionScratchpads(claudeSessionId: string, root = `/private/tmp/claude-${process.getuid?.() ?? 0}`): string[] {
+  try {
+    return readdirSync(root).map(p => join(root, p, claudeSessionId, 'scratchpad')).filter(d => existsSync(d))
+  } catch { return [] }
+}
+
+// Linked worktrees (a `.git` FILE) directly in dir or one level below.
+function worktreesIn(dir: string): string[] {
+  const found: string[] = []
+  const visit = (d: string, depth: number) => {
+    let names: string[]
+    try { names = readdirSync(d) } catch { return }
+    for (const n of names) {
+      const p = join(d, n)
+      try { if (!statSync(p).isDirectory()) continue } catch { continue }
+      try { if (statSync(join(p, '.git')).isFile()) { found.push(p); continue } } catch {}
+      if (depth < 1) visit(p, depth + 1)
+    }
+  }
+  visit(dir, 0)
+  return found
+}
+
+/**
+ * Remove the worktrees under dirs that hold nothing to lose: no uncommitted or
+ * untracked changes, and every commit on HEAD is on a remote. Anything else is kept
+ * and reported. Branches are left alone.
+ */
+export async function cleanScratchWorktrees(dirs: string[]): Promise<{ removed: string[]; kept: Array<{ path: string; reason: string }> }> {
+  const removed: string[] = []
+  const kept: Array<{ path: string; reason: string }> = []
+  for (const wt of dirs.flatMap(worktreesIn)) {
+    try {
+      const git = (...args: string[]) => execAsync('git', ['-C', wt, ...args], { timeout: 10_000 }).then(r => r.stdout.trim())
+      if (await git('status', '--porcelain')) { kept.push({ path: wt, reason: 'uncommitted changes' }); continue }
+      const unpushed = Number(await git('rev-list', '--count', 'HEAD', '--not', '--remotes'))
+      if (unpushed > 0) { kept.push({ path: wt, reason: `${unpushed} unpushed commit(s)` }); continue }
+      const repo = dirname(resolve(wt, await git('rev-parse', '--git-common-dir')))
+      await withRepoLock(repo, () => execAsync('git', ['-C', repo, 'worktree', 'remove', wt], { timeout: 10_000 }))
+      removed.push(wt)
+    } catch (err) {
+      kept.push({ path: wt, reason: `could not verify (${err instanceof Error ? err.message.split('\n')[0] : err})` })
+    }
+  }
+  return { removed, kept }
 }

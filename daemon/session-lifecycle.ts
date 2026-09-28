@@ -23,7 +23,7 @@ import { loadAccess } from './access.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
-import { createWorktree, destroyWorktree, checkUnpushedCommits } from './worktree-manager.js'
+import { createWorktree, destroyWorktree, checkUnpushedCommits, cleanScratchWorktrees, sessionScratchpads } from './worktree-manager.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
@@ -353,20 +353,31 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     if (info.worktreePath && info.worktreeRepo && !opts?.skipWorktreeDestroy) {
       const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
 
-      // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort)
+      // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort).
+      // Work that isn't on a remote is kept, never destroyed.
       void (async () => {
         const unpushed = await checkUnpushedCommits(info.worktreeRepo!, branch)
-        if (unpushed > 0) {
-          process.stderr.write(`daemon: worktree ${info.tmuxName} has ${unpushed} unpushed commit(s) on ${branch}\n`)
-          void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` has ${unpushed} unpushed commit(s). Verify changes were pushed before cleanup.`).catch(() => {})
-        } else if (unpushed < 0) {
-          process.stderr.write(`daemon: worktree ${info.tmuxName}: couldn't verify unpushed commits on ${branch} before cleanup\n`)
-          void safeSend(info.threadId, `⚠️ Couldn't verify unpushed commits on worktree branch \`${branch}\` before cleanup (transient git error). Check the branch if it held unmerged work.`).catch(() => {})
+        if (unpushed !== 0) {
+          const why = unpushed > 0 ? `has ${unpushed} unpushed commit(s)` : `couldn't be checked for unpushed commits`
+          process.stderr.write(`daemon: worktree ${info.tmuxName}: ${branch} ${why}; kept ${info.worktreePath}\n`)
+          void safeSend(info.threadId, `⚠️ Worktree branch \`${branch}\` ${why} — kept at \`${info.worktreePath}\`. Remove it once the work is safe.`).catch(() => {})
+          return
         }
         await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch)
       })().catch(err => {
         process.stderr.write(`daemon: worktree cleanup failed for ${info.tmuxName}: ${err}\n`)
       })
+    }
+
+    // Worktrees the session made itself under its scratchpad: same rule.
+    if (info.claudeSessionId && !opts?.skipWorktreeDestroy) {
+      void cleanScratchWorktrees(sessionScratchpads(info.claudeSessionId)).then(({ removed, kept }) => {
+        if (removed.length) process.stderr.write(`daemon: ${info.tmuxName}: removed ${removed.length} scratchpad worktree(s)\n`)
+        if (kept.length) {
+          process.stderr.write(`daemon: ${info.tmuxName}: kept scratchpad worktree(s): ${kept.map(k => `${k.path} (${k.reason})`).join(', ')}\n`)
+          void safeSend(info.threadId, `⚠️ Kept ${kept.length} worktree(s) with work not on a remote:\n${kept.map(k => `- \`${k.path}\` — ${k.reason}`).join('\n')}`).catch(() => {})
+        }
+      }).catch(err => process.stderr.write(`daemon: scratchpad worktree cleanup failed for ${info.tmuxName}: ${err}\n`))
     }
 
     // Update thread metadata before deleting session
