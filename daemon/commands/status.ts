@@ -1,11 +1,10 @@
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
-import { execSync } from 'child_process'
 import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { fallbackDescription, formatDuration, atomicWriteFileSync, isAlive, safeSend, safeEdit } from '../util.js'
+import { fallbackDescription, formatDuration, atomicWriteFileSync, executionAlive, isAlive, safeSend, safeEdit } from '../util.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
@@ -247,9 +246,7 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
     return
   }
 
-  try {
-    execSync(`tmux has-session -t '${info.tmuxName}' 2>/dev/null`, { stdio: 'pipe' })
-  } catch {
+  if (!executionAlive(info)) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     return
   }
