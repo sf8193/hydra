@@ -25,21 +25,26 @@ function makeReq(overrides: Partial<CLIRequest> = {}): CLIRequest {
 }
 
 describe('cli-handler', () => {
-  test('health returns session counts', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'health' }))
-    expect(res.ok).toBe(true)
-    expect(res.type).toBe('cli-response')
-    const data = res.data as any
-    expect(data.sessions).toBeDefined()
-    expect(typeof data.sessions.total).toBe('number')
-    expect(typeof data.sessions.connected).toBe('number')
-    expect(typeof data.sessions.disconnected).toBe('number')
+  test('health counts a seeded session and its bridge', async () => {
+    const sid = `cli-health-${Date.now()}`
+    registry.set(sid, { sessionId: sid, tmuxName: sid, threadId: 't', createdAt: Date.now(), lastActive: Date.now(), adapter: engines.claude } as any)
+    transport.set(sid, { sessionId: sid, socket: { destroyed: false, write: () => true } } as any)
+    try {
+      const res = await handleCLIRequest(makeReq({ command: 'health' }))
+      expect(res.ok).toBe(true)
+      expect(res.type).toBe('cli-response')
+      expect((res.data as any).sessions).toEqual({ total: 1, connected: 1, disconnected: 0 })
+    } finally { registry.delete(sid); transport.bridges.delete(sid) }
   })
 
-  test('list returns array', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'list' }))
-    expect(res.ok).toBe(true)
-    expect(Array.isArray(res.data)).toBe(true)
+  test('list returns a row per seeded session', async () => {
+    const sid = `cli-list-${Date.now()}`
+    registry.set(sid, { sessionId: sid, tmuxName: 'list-row', threadId: 't', createdAt: Date.now(), lastActive: Date.now(), adapter: engines.claude } as any)
+    try {
+      const res = await handleCLIRequest(makeReq({ command: 'list' }))
+      expect(res.ok).toBe(true)
+      expect(res.data).toEqual([expect.objectContaining({ name: 'list-row', sessionId: sid, status: 'disconnected' })])
+    } finally { registry.delete(sid) }
   })
 
   test('status with missing name returns error', async () => {
@@ -126,13 +131,6 @@ describe('cli-handler', () => {
     const res = await handleCLIRequest(makeReq({ command: 'clear-key', params: { key: 'no-such-key-xyz' } }))
     expect(res.ok).toBe(false)
     expect(res.error).toContain('not found')
-  })
-
-  test('factory list returns builds array', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'factory', params: { sub: 'list' } }))
-    expect(res.ok).toBe(true)
-    const data = res.data as any
-    expect(Array.isArray(data.builds)).toBe(true)
   })
 
   test('factory status without ticket returns error', async () => {

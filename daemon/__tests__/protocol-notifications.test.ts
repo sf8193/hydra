@@ -57,11 +57,11 @@ describe('protocol notifications: onPhaseChange', () => {
 })
 
 describe('protocol notifications: onKickoff', () => {
-  test('review protocol initial actor is critic, not owner', () => {
-    h = createHarness(review, { rounds: 3 })
-    expect(review.notifications.onKickoff).toBeDefined()
+  test('kickoff notice reaches the owner; the critic (initial actor) gets none', async () => {
+    h = await TestHarness.started(review, { rounds: 3 })
     expect(review.phases[review.initialPhase].actor).toBe('critic')
-    expect(review.ownerRole).toBe('owner')
+    expect(h.actorNotifications('owner').some(n => n.includes('You are **The Owner**'))).toBe(true)
+    expect(h.actorNotifications('critic').some(n => n.includes('Adversarial Review'))).toBe(false)
   })
 })
 

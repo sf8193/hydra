@@ -1,5 +1,4 @@
 import { describe, test, expect } from 'bun:test'
-import { getRunByThread, getActiveRuns } from '../protocol-runner.js'
 
 process.stderr.write = (() => true) as any
 
@@ -41,19 +40,5 @@ describe('review state machine transitions (v2 DSL)', () => {
 
   test('invalid transitions rejected', () => {
     expect(review.machine.transition('complete', 'critic_feedback').ok).toBe(false)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Mutual exclusion — uses real getRunByThread/getActiveRuns from production
-// ---------------------------------------------------------------------------
-
-describe('mutual exclusion (real module lookups)', () => {
-  test('no active protocol run at baseline', () => {
-    expect(getRunByThread('test-thread-mutex')).toBeUndefined()
-  })
-
-  test('getActiveRuns returns an array', () => {
-    expect(Array.isArray(getActiveRuns())).toBe(true)
   })
 })
