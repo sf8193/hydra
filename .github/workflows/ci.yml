@@ -51,10 +51,9 @@ jobs:
           mkdir -p ~/.claude/channels/discord
           git fetch -q origin main
           for sha in origin/main cb7ee32 024f11a 25b9bf7 06ff6e7 ec057ff b6e6c98 752b37a 7b37faa; do
-            rm -rf /tmp/w && git worktree add -q --detach /tmp/w $sha && (cd /tmp/w && bun install --frozen-lockfile >/dev/null 2>&1)
+            rm -rf /tmp/w && mkdir /tmp/w && git archive $sha | tar -x -C /tmp/w && (cd /tmp/w && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm x && bun install --frozen-lockfile >/dev/null 2>&1)
             for rep in 1 2 3; do
               r=$(cd /tmp/w && bun test --isolate --path-ignore-patterns 'daemon/__tests__/pane-probe.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-launch-surface.tmux.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-key-replacement.tmux.test.ts' 2>&1 | grep -E '^\(fail\)| fail$|Ran ' | tr '\n' ' ' || true)
               echo "### SHA $sha rep$rep -> $r" | cut -c1-400
             done
-            git worktree remove --force /tmp/w
           done
