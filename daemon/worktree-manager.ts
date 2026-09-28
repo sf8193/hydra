@@ -123,16 +123,16 @@ export async function createWorktree(config: WorktreeConfig): Promise<WorktreeRe
     // A stale worktree/branch from a previous run is cleaned up — unless it holds work
     // (a killed session's worktree is kept then, and its name is free for reuse): step
     // aside to <name>-2, -3, … instead of touching it.
-    let wtDir = '', branch = ''
-    for (let n = 1; ; n++) {
-      if (n > 5) throw new Error(`worktree ${dirSuffix}: ${dirSuffix} and -2…-5 all hold kept work — remove some`)
+    let wtDir = '', branch = '', free = false
+    for (let n = 1; n <= 5 && !free; n++) {
       const suffix = n === 1 ? '' : `-${n}`
       wtDir = resolve(repoDir, '..', '.worktrees', dirSuffix + suffix)
       branch = branchName + suffix
       const risk = await workAtRisk(repoDir, wtDir, branch)
-      if (!risk) break
-      process.stderr.write(`daemon: worktree: ${wtDir} (${branch}) kept from an earlier session (${risk}); trying the next name\n`)
+      if (risk) process.stderr.write(`daemon: worktree: ${wtDir} (${branch}) kept from an earlier session (${risk}); trying the next name\n`)
+      free = !risk
     }
+    if (!free) throw new Error(`worktree ${dirSuffix}: it and -2…-5 all hold kept work — remove some`)
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'remove', wtDir, '--force'], { timeout: 10_000 }) } catch {}
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'prune'], { timeout: 5_000 }) } catch {}
     try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branch], { timeout: 5_000 }) } catch {}

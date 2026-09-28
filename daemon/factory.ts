@@ -1256,7 +1256,7 @@ async function createBuilderPR(state: FactoryBuildState): Promise<string | undef
   const info = registry.get(state.builderSessionId)
   if (!info?.worktreePath || !info.worktreeRepo) return undefined
 
-  const branch = `wt/${info.tmuxName}`
+  const branch = info.worktreeBranch ?? `wt/${info.tmuxName}` // may be suffixed (-2…) when a kept worktree held the name
   try {
     const { stdout: existing } = await execAsync(
       'gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--jq', '.[0].url'],

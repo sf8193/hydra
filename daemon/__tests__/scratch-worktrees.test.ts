@@ -122,6 +122,19 @@ describe('Hydra worktrees: kept work is never destroyed later', () => {
     expect(existsSync(first.worktreePath)).toBe(true)
   })
 
+  test('all five names hold kept work → createWorktree throws, touching none of them', async () => {
+    const { base, repo } = workspace()
+    const cfg = { repoName: 'app', spawnCwd: base, branchName: 'wt/full', dirSuffix: 'app-full' }
+    const shas: string[] = []
+    for (let i = 0; i < 5; i++) {
+      const wt = await createWorktree(cfg)
+      commit(wt.worktreePath, `kept ${i}`)
+      shas.push(git(wt.worktreePath, 'rev-parse', 'HEAD'))
+    }
+    await expect(createWorktree(cfg)).rejects.toThrow(/all hold kept work/)
+    expect(['wt/full', 'wt/full-2', 'wt/full-3', 'wt/full-4', 'wt/full-5'].map(b => git(repo, 'rev-parse', b))).toEqual(shas)
+  })
+
   test('destroyWorktree keeps uncommitted changes and work on a branch the session switched to', async () => {
     const { base, repo } = workspace()
     const dirty = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/d', dirSuffix: 'app-d' })
