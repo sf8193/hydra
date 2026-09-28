@@ -347,6 +347,36 @@ describe('protocol runner — timeout transitions', () => {
   })
 })
 
+describe('protocol runner — timeout while the actor is working', () => {
+  const working = (live: 'working' | 'idle') => ({
+    sessionId: 'test-critic', tmuxName: 'critic-tab',
+    adapter: harnessFakeAdapter({ usage: () => null, turn: () => ({ live, activityAt: null, confirmedComplete: false, answer: () => null }) }),
+  }) as any
+  afterEach(() => { jest.useRealTimers(); registry.delete('test-critic') })
+
+  test('a working actor skips the warning and defers the timeout; once it goes idle the re-armed timeout fires', () => {
+    jest.useFakeTimers()
+    const logs: string[] = []
+    process.stderr.write = ((c: any) => { logs.push(String(c)); return true }) as any
+    const run = createTestRun()
+    registry.set('test-critic', working('working'))
+    __test!.resetTimeout(run)
+    const ms = 10 * 60_000
+    jest.advanceTimersByTime(ms - __test!.WARNING_BEFORE_TIMEOUT_MS)
+    expect(logs.some(l => l.includes('warning skipped'))).toBe(true)
+    jest.advanceTimersByTime(__test!.WARNING_BEFORE_TIMEOUT_MS)
+    expect(logs.some(l => l.includes('timeout deferred'))).toBe(true)
+    expect(run.phase).toBe('critic_turn')
+
+    registry.set('test-critic', working('idle'))
+    logs.length = 0
+    jest.advanceTimersByTime(ms) // the re-armed timer fires; actor is idle now
+    expect(logs.some(l => l.includes('warning sent'))).toBe(true)
+    expect(logs.some(l => l.includes('timed out'))).toBe(true)
+    expect(run.phase).toBe('cancelled')
+  })
+})
+
 describe('protocol runner — strike and decisionContext', () => {
   test('run.strike is set from params, not ext', () => {
     const run = createTestRun()
