@@ -308,7 +308,10 @@ export function scratchSessionIds(info: SessionInfo, sessions: Iterable<SessionI
   return [...ids]
 }
 
-export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean }): Promise<void> {
+// skipWorktreeDestroy: the conversation continues elsewhere (handoff, reattach) — keep the
+// Hydra worktree and scratchpads. keepScratch: only the scratchpads (a resume or fork of
+// this conversation still names their paths, and a resume reuses the scratchpad itself).
+export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
 
@@ -380,7 +383,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
     // Worktrees the session — and, for a thread owner, its handoff predecessors, whose
     // worktrees a handoff deliberately kept for it — made under their scratchpads: same rule.
-    const scratchIds = !opts?.skipWorktreeDestroy ? scratchSessionIds(info, registry.values(), threadRegistry.get(info.threadId)?.sessionHistory ?? []) : []
+    const scratchIds = !opts?.skipWorktreeDestroy && !opts?.keepScratch ? scratchSessionIds(info, registry.values(), threadRegistry.get(info.threadId)?.sessionHistory ?? []) : []
     if (scratchIds.length) {
       void cleanScratchWorktrees(scratchIds.flatMap(id => sessionScratchpads(id))).then(({ removed, kept }) => {
         if (removed.length) process.stderr.write(`daemon: ${info.tmuxName}: removed ${removed.length} scratchpad worktree(s)\n`)
@@ -548,7 +551,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
             carriedArtifacts ??= existing.artifacts
             carriedContextLinks ??= existing.contextLinks
             carriedDescription ??= existing.description
-            await killSession(existing, 'replaced by new spawn')
+            await killSession(existing, 'replaced by new spawn', { keepScratch: isResume || !!opts?.forkFrom })
           }
         }
       }
@@ -638,7 +641,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
             branch: existing.worktreeBranch ?? `wt/${existing.tmuxName}`,
           }
         }
-        await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree })
+        await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree, keepScratch: isResume || !!opts?.forkFrom })
       }
     }
     if (!anchorMessageId) {

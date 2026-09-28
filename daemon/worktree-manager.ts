@@ -331,10 +331,8 @@ export async function cleanScratchWorktrees(dirs: string[]): Promise<{ removed: 
     try {
       const git = (...args: string[]) => execAsync('git', ['-C', wt, ...args], { timeout: 10_000 }).then(r => r.stdout.trim())
       if (await git('status', '--porcelain')) { kept.push({ path: wt, reason: 'uncommitted changes' }); continue }
-      const midOp = []
-      for (const f of ['rebase-merge', 'rebase-apply', 'sequencer', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG']) {
-        if (existsSync(resolve(wt, await git('rev-parse', '--git-path', f)))) midOp.push(f)
-      }
+      const gitDir = await git('rev-parse', '--absolute-git-dir') // all these markers are per-worktree
+      const midOp = ['rebase-merge', 'rebase-apply', 'sequencer', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'].filter(f => existsSync(join(gitDir, f)))
       if (midOp.length) { kept.push({ path: wt, reason: `operation in progress (${midOp.join(', ')})` }); continue }
       const unpushed = Number(await git('rev-list', '--count', 'HEAD', '--not', '--remotes'))
       if (unpushed > 0) { kept.push({ path: wt, reason: `${unpushed} unpushed commit(s)` }); continue }

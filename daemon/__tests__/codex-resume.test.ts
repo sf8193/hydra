@@ -5,7 +5,8 @@
 //   2. handleResumeIntercept end to end, with fake engine adapters, pinning the
 //      Codex and Claude cascades.
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, spyOn } from 'bun:test'
+import * as worktreeManager from '../worktree-manager.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { codexSocketPath } from '../codex-engine.js'
 import { codexHomeDir } from '../codex-process.js'
@@ -325,6 +326,22 @@ describe('handleResumeIntercept — Codex', () => {
 })
 
 describe('handleResumeIntercept — Claude (pinned, unchanged)', () => {
+  // The dead record is killed as "replaced by new spawn" before the resumed/forked
+  // session exists; the conversation continues, so its scratchpads must survive.
+  for (const tier of ['resume', 'fork'] as const) {
+    test(`${tier} never cleans the continued conversation's scratchpads`, async () => {
+      failClaudeResume = tier === 'fork'
+      const asked: string[] = []
+      const spy = spyOn(worktreeManager, 'sessionScratchpads').mockImplementation((id: string) => { asked.push(id); return [] })
+      try {
+        seedDead('claude')
+        await handleResumeIntercept(msg())
+        expect(launches.at(-1)!.input[tier === 'resume' ? 'resumeFrom' : 'forkFrom']).toBeDefined()
+        expect(asked).toEqual([])
+      } finally { spy.mockRestore() }
+    })
+  }
+
   test('tier 1 resumes with --resume <claudeSessionId>', async () => {
     const dead = seedDead('claude')
     await handleResumeIntercept(msg())
