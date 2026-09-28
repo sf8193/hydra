@@ -692,7 +692,7 @@ describe('pollActivityOnce', () => {
   for (const engine of ['claude', 'codex'] as const) {
     test(`${engine}: active -> activity gate`, () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      const info = liveSession('s1', { engine, tmuxName: 'cedar', adapter: adapter(engine) })
+      liveSession('s1', { engine, tmuxName: 'cedar', adapter: adapter(engine) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), Date.now() - 1000)
       activity = () => nowSec - 10
@@ -703,7 +703,7 @@ describe('pollActivityOnce', () => {
 
     test(`${engine}: idle -> silence armed`, () => {
       const nowSec = Math.floor(Date.now() / 1000)
-      const info = liveSession('s1', { engine, tmuxName: 'cedar', adapter: adapter(engine) })
+      liveSession('s1', { engine, tmuxName: 'cedar', adapter: adapter(engine) })
       fakeBridge('s1')
       notePendingReply('s1', meta(), T0)
       activity = () => nowSec - 45
@@ -796,7 +796,7 @@ describe('pollActivityOnce', () => {
 
   test('tmux throw -> skip', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', adapter: adapter('claude') })
+    liveSession('s1', { tmuxName: 'cedar', adapter: adapter('claude') })
     fakeBridge('s1')
     notePendingReply('s1', meta(), T0)
     activity = () => { throw new Error('no such session') }
@@ -819,7 +819,7 @@ describe('pollActivityOnce', () => {
 
   test('record without an adapter reads tmux through the fallback', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', adapter: undefined })
+    liveSession('s1', { tmuxName: 'cedar', adapter: undefined })
     fakeBridge('s1')
     notePendingReply('s1', meta(), Date.now() - 1000)
     activity = () => nowSec - 10
@@ -829,7 +829,7 @@ describe('pollActivityOnce', () => {
 
   test('record with an adapter: the poller asks activityAt, not tmux', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ activityAt: nowSec - 10, confirmedComplete: false, answer: () => null }) }) })
+    liveSession('s1', { tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ activityAt: nowSec - 10, confirmedComplete: false, answer: () => null }) }) })
     fakeBridge('s1')
     notePendingReply('s1', meta(), Date.now() - 1000)
     activity = () => 0
@@ -839,7 +839,7 @@ describe('pollActivityOnce', () => {
 
   test('activityAt null -> skip', () => {
     const nowSec = Math.floor(Date.now() / 1000)
-    const info = liveSession('s1', { tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }) }) })
+    liveSession('s1', { tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }) }) })
     fakeBridge('s1')
     notePendingReply('s1', meta(), T0)
     poll(nowSec)

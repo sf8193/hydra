@@ -117,4 +117,27 @@ describe('adapter live state', () => {
       expect(reads).toBe(1)
     } finally { Object.assign(defaultTurnSources, saved); fake.restore() }
   })
+  test('codex: closed boundary wins over a fresh flag; otherwise fresh flag = working, stale/absent = unknown', () => {
+    const ev = (type: string) => JSON.stringify({ type: 'event_msg', payload: { type } })
+    const rollout = (name: string, thread: string, lines: string[]) => {
+      const dir = join(codexHomeDir(name), 'sessions', '2026', '09', '28')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `rollout-2026-09-28T07-00-00-${thread}.jsonl`), lines.join('\n') + '\n')
+    }
+    rollout('live-tab', 'th-closed', [ev('task_started'), ev('task_complete')])
+    rollout('live-tab', 'th-open', [ev('task_started')])
+    const live = (id: string, thread: string | undefined, home = 'live-tab') =>
+      engines.codex.turn({ sessionId: id, tmuxName: 'x', codexThreadId: thread, codexHomeName: home } as unknown as SessionInfo, 0).live
+    noteCodexTurnState('fresh', false)
+    noteCodexTurnState('stale', false, Date.now() - CODEX_WORKING_STALE_MS - 1000)
+    expect([
+      live('fresh', 'th-closed'),      // closed + fresh flag -> idle (boundary wins)
+      live('fresh', 'th-open'),        // open + fresh -> working
+      live('stale', 'th-open'),        // open + stale -> unknown
+      live('fresh', undefined),        // no thread id, fresh flag -> working
+      live('none', undefined),         // nothing known -> unknown
+      live('none', 'th-missing'),      // no rollout file, no flag -> unknown
+      live('fresh', 'th-missing'),     // no rollout file, fresh flag -> working
+    ]).toEqual(['idle', 'working', null, 'working', null, null, 'working'])
+  })
 })

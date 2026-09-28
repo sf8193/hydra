@@ -85,6 +85,8 @@ export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): strin
 // unknown (callers then fall back to tmux pane activity). Read on access, like activityAt.
 // 'idle' and 'blocked' are authoritative: isSessionWorking does not consult tmux for them, so
 // an engine that is unsure whether work continues must return null, not 'idle'.
+// 'working' is unbounded unless the engine sets Turn.workingSilenceLimitS or the claim itself lapses (Codex's flag); a hung provider that
+// keeps claiming it is only bounded by the protocol runner's 3x backstop.
 export type LiveState = 'working' | 'idle' | 'blocked'
 // workingSilenceLimitS: set by an engine whose 'working' claim can outlive a hung process (Claude's status
 // file stays busy): isSessionWorking then also requires pane activity within this many seconds.
