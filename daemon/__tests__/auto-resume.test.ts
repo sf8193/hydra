@@ -83,13 +83,16 @@ describe('session map invariant — thread owner mapping', () => {
     expect(registry.getByThread('thread-1')).toBe('owner-1')
   })
 
-  test('replacing a join member preserves ownership', () => {
+  test('replacing a join member (repeated deaths + resumes) preserves ownership', () => {
     registerOwner('thread-1', 'owner-1')
     registerJoinMember('thread-1', 'critic-1')
-    registry.delete('critic-1')
-    registry.removeMember('thread-1', 'critic-1')
-    registerJoinMember('thread-1', 'critic-2')
-    expect(registry.getByThread('thread-1')).toBe('owner-1')
+    for (const [dead, next] of [['critic-1', 'critic-2'], ['critic-2', 'critic-3']]) {
+      registry.delete(dead)
+      registry.removeMember('thread-1', dead)
+      expect(registry.getByThread('thread-1')).toBe('owner-1')
+      registerJoinMember('thread-1', next)
+      expect(registry.getByThread('thread-1')).toBe('owner-1')
+    }
   })
 
   test('INVARIANT VIOLATION: setThread with non-owner overwrites ownership', () => {
@@ -103,55 +106,5 @@ describe('session map invariant — thread owner mapping', () => {
     registry.deleteThread('thread-1')
     expect(registry.getByThread('thread-1')).toBeUndefined()
     expect(registry.get('owner-1')).toBeDefined()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Full auto-resume lifecycle with real registry state
-// ---------------------------------------------------------------------------
-
-describe('auto-resume lifecycle', () => {
-  let registry: SessionRegistry
-
-  beforeEach(() => {
-    registry = Object.create(SessionRegistry.prototype)
-    ;(registry as any).sessions = new Map()
-    ;(registry as any).threadToSession = new Map()
-    ;(registry as any).threadMembers = new Map()
-  })
-
-  test('two critic deaths + auto-resumes preserve thread ownership', () => {
-    const threadId = 'thread-review'
-    const ownerId = 'glyph-session'
-
-    registry.set(ownerId, { sessionId: ownerId, tmuxName: 'glyph', threadId, createdAt: Date.now(), lastActive: Date.now(), listening: true } as any)
-    registry.setThread(threadId, ownerId)
-
-    for (const criticId of ['critic-v1', 'critic-v2']) {
-      registry.set(criticId, { sessionId: criticId, tmuxName: 'scout', threadId, isJoinMember: true, createdAt: Date.now(), lastActive: Date.now() } as any)
-      registry.addMember(threadId, criticId, 'critic')
-      expect(registry.getByThread(threadId)).toBe(ownerId)
-
-      registry.delete(criticId)
-      registry.removeMember(threadId, criticId)
-      expect(registry.getByThread(threadId)).toBe(ownerId)
-    }
-  })
-
-  test('BUG REPRO: tryResume without joinThread breaks then orphans', () => {
-    const threadId = 'thread-review'
-    const ownerId = 'glyph-session'
-
-    registry.set(ownerId, { sessionId: ownerId, tmuxName: 'glyph', threadId, createdAt: Date.now(), lastActive: Date.now(), listening: true } as any)
-    registry.setThread(threadId, ownerId)
-    registry.set('critic-1', { sessionId: 'critic-1', tmuxName: 'scout', threadId, isJoinMember: true, createdAt: Date.now(), lastActive: Date.now() } as any)
-    registry.addMember(threadId, 'critic-1', 'critic')
-
-    // Bug path: setThread overwrites, deleteThread orphans
-    registry.setThread(threadId, 'critic-2')
-    expect(registry.getByThread(threadId)).not.toBe(ownerId)
-    registry.deleteThread(threadId)
-    expect(registry.getByThread(threadId)).toBeUndefined()
-    expect(registry.get(ownerId)).toBeDefined()
   })
 })
