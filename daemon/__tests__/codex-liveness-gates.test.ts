@@ -9,7 +9,7 @@ import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { writeFileSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 import { registry } from '../sessions.js'
 import { gateway } from '../config.js'
 import { handleSpawnIntercept } from '../commands/global.js'
@@ -19,7 +19,7 @@ import { restoreWatches, getWatchesBySession, unwatchBySession, type WatchEntry 
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const codex = (connected: boolean) => {
-  const a = new CodexEngineAdapter({ isConnected: () => connected } as any) as any
+  const a = fakeCodexAdapter({ isConnected: () => connected }) as any
   a.stop = async () => ({})  // killSession of a replaced record must not touch a real app-server
   return a
 }

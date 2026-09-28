@@ -12,7 +12,7 @@ import { handleForkIntercept } from '../commands/thread.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 import type { InboundMessage } from '../../gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -93,9 +93,6 @@ function seed(engine: 'claude' | 'codex', extra: Partial<SessionInfo> = {}): Ses
 
 const listPanes = () => tmux.calls().filter(c => c.startsWith('list-panes'))
 
-function fakeCodexAdapter(): CodexEngineAdapter {
-  return new CodexEngineAdapter({ disconnect() {}, isConnected: () => true } as any, { stop() {} } as any)
-}
 
 describe('G1: killSession discovers a missing Claude id', () => {
   test('Claude record without an id: discovered, logged, and carried into the closed history entry', async () => {

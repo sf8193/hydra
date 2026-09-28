@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { sendTmuxKeys } from '../codex-key-queue.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 
 // Fake tmux executable on PATH, not a child_process mock.
 async function withTmux(fn: (calls: (all?: boolean) => Array<{ args: string[]; at: number }>, pane: (text: string) => void) => Promise<void>) {
@@ -94,7 +94,7 @@ describe('Codex key submission', () => {
   test('adapter waits for cold composer; active turn does not gate keys', async () => {
     await withTmux(async (calls, pane) => {
       pane('Loading…\n')
-      const adapter = new CodexEngineAdapter({} as any)
+      const adapter = fakeCodexAdapter()
       const sent = adapter.sendKeys({ tmuxName: 'a' } as any, '/status')
       await Bun.sleep(150)
       expect(calls()).toEqual([])
@@ -107,7 +107,7 @@ describe('Codex key submission', () => {
 
   test('adapter checks readiness again for each serialized literal action', async () => {
     await withTmux(async calls => {
-      const adapter = new CodexEngineAdapter({} as any)
+      const adapter = fakeCodexAdapter()
       await Promise.all([
         adapter.sendKeys({ tmuxName: 'a' } as any, '/status'),
         adapter.sendKeys({ tmuxName: 'a' } as any, '/model'),
@@ -121,7 +121,7 @@ describe('Codex key submission', () => {
   test('raw dialog controls bypass composer readiness and add no Enter', async () => {
     await withTmux(async (calls, pane) => {
       pane('Unrecognized dialog\n')
-      const adapter = new CodexEngineAdapter({} as any)
+      const adapter = fakeCodexAdapter()
       await adapter.sendKeys({ tmuxName: 'a' } as any, 'Down Enter', { raw: true })
       expect(calls().map(call => call.args)).toEqual([['send-keys', '-t', 'a:hydra-chat', 'Down', 'Enter']])
     })
@@ -129,7 +129,7 @@ describe('Codex key submission', () => {
 
   test('menu selection markers and stale prompts are not ready composers', async () => {
     await withTmux(async (calls, pane) => {
-      const adapter = new CodexEngineAdapter({} as any)
+      const adapter = fakeCodexAdapter()
       for (const dialog of [
         '0 120 3\nSelect Model and Effort\n› 1. GPT-6-Astra (current)\n\n  enter select · esc back\n',
         '0 120 3\nUpdate Model Permissions\n› 3. Full Access (current)\n\n  enter select · esc back\n',
@@ -150,7 +150,7 @@ describe('Codex key submission', () => {
   test('unready composer times out without typing', async () => {
     await withTmux(async (calls, pane) => {
       pane('Loading…\n')
-      const adapter = new CodexEngineAdapter({} as any)
+      const adapter = fakeCodexAdapter()
       const start = Date.now()
       await expect(adapter.sendKeys({ tmuxName: 'a' } as any, '/status')).rejects.toThrow('no text was sent')
       expect(Date.now() - start).toBeLessThan(6000)

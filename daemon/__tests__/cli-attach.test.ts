@@ -9,7 +9,7 @@ import { join } from 'path'
 import { handleCLIRequest } from '../cli-handler.js'
 import { registry } from '../sessions.js'
 import { engines } from '../engines/instances.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const CLI = join(import.meta.dir, '..', '..', 'cli', 'hydra.ts')
@@ -65,7 +65,7 @@ describe('hydra attach (Z1)', () => {
     expect(r.code).toBe(0)
   })
 
-  const codexAdapter = (connected: boolean) => new CodexEngineAdapter({ isConnected: () => connected } as any)
+  const codexAdapter = (connected: boolean) => fakeCodexAdapter({ isConnected: () => connected })
 
   test('codex session → tmux attach to its hydra-chat window', async () => {
     const name = seed('codex', { codexThreadId: 'T-z1', adapter: codexAdapter(true) }); fake.alive(name)

@@ -9,6 +9,7 @@ import { registry, threadRegistry, SessionRegistry, type SessionInfo } from '../
 import { codexEngine, engines } from '../engines/instances.js'
 import type { EngineAdapter } from '../engines/engine-adapter.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurnState } from '../engines/codex-observation.js'
 import { notePendingReply, _pendingForTesting } from '../reply-guard.js'
 import { queueCodexKeys, queuedCodexKeyCount } from '../codex-key-queue.js'
@@ -131,7 +132,7 @@ describe('Codex start: outcome logging', () => {
 
   // A throwing reconnect is caught per record (so it can't strand the rest of the sweep).
   test('a throwing reconnect resolves start and logs the failure', async () => {
-    const adapter = new CodexEngineAdapter({} as any) as any
+    const adapter = fakeCodexAdapter() as any
     const info = put({ sessionId: 't07-throw', adapter })
     adapter.reconnect = async () => { throw new Error('boom') }
     let settled = 'pending'
@@ -141,7 +142,7 @@ describe('Codex start: outcome logging', () => {
   })
 
   test('a finished sweep logs completion, also with no records', async () => {
-    const adapter = new CodexEngineAdapter({} as any)
+    const adapter = fakeCodexAdapter()
     expect(await stderrOf(() => adapter.start([]))).toEqual(['daemon: codex reconnection sweep complete\n'])
   })
 })
