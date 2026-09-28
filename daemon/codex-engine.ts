@@ -503,7 +503,8 @@ export class CodexEngine extends EventEmitter {
     const scheduling = this.getScheduling(sessionId, conn)
     scheduling.fenced = true
     const queued = scheduling.deferredTurnQueue.length + (scheduling.retryingDeferred ? 1 : 0)
-    const unknown = scheduling.uncertainDeferredText !== null || scheduling.startState === 'starting' ? 1 : 0
+    // A rejected start waiting to retry is known not-started (queued), not unknown.
+    const unknown = scheduling.uncertainDeferredText !== null || (scheduling.startState === 'starting' && !scheduling.retryingDeferred) ? 1 : 0
     scheduling.deferredTurnQueue.length = 0
     scheduling.retryingDeferred = null
     scheduling.uncertainDeferredText = null

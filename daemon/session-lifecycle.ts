@@ -518,7 +518,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          try { execFileSync('tmux', ['has-session', '-t', existing.tmuxName], { stdio: 'pipe' }) } catch {
+          if (!executionAlive(existing)) {
             respawnCount = (existing.respawnCount ?? 0) + 1
             // Lossless respawn (mirror the existingThreadId branch): carry the dead
             // record's deliverables/description to the replacement. Worktree destruction

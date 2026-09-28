@@ -256,20 +256,23 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
   for (const info of codexSessions) reconnecting.add(info.sessionId)
   let reconnected = 0
   for (const info of codexSessions) {
-    if (!info.adapter) { reconnecting.delete(info.sessionId); continue }
-    let connected = false
+    // Everything per record sits in one try/finally: an exception anywhere (the
+    // reconnect, finalising, the surface) must neither abort the sweep nor leave
+    // this record alive in grace forever.
     try {
-      connected = await reconnectOf(info)
-    } catch (err) {
-      process.stderr.write(`codex-bootstrap: reconnect threw for ${info.tmuxName}: ${err}\n`)
-    } finally {
+      if (!info.adapter) continue
+      let connected = false
+      try {
+        connected = await reconnectOf(info)
+      } catch (err) {
+        process.stderr.write(`codex-bootstrap: reconnect threw for ${info.tmuxName}: ${err}\n`)
+      }
       reconnecting.delete(info.sessionId)
-    }
-
-    if (registry.get(info.sessionId) !== info) continue // replaced during the sweep: not ours to finalise
-    if (!connected) {
-      finaliseCodexDeath(info)
-    } else {
+      if (registry.get(info.sessionId) !== info) continue // replaced during the sweep: not ours to finalise
+      if (!connected) {
+        finaliseCodexDeath(info)
+        continue
+      }
       delete info.deadAt
       const entry = threadRegistry.get(info.threadId)?.sessionHistory.find(e => e.sessionId === info.sessionId)
       if (entry) {
@@ -278,8 +281,12 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
         entry.model = info.sessionMetadata?.model
         threadRegistry.persist()
       }
-      info.adapter.surface(info)
       reconnected++
+      info.adapter.surface(info)
+    } catch (err) {
+      process.stderr.write(`codex-bootstrap: sweep failed for ${info.tmuxName}: ${err}\n`)
+    } finally {
+      reconnecting.delete(info.sessionId)
     }
   }
   registry.persist()

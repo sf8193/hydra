@@ -8,6 +8,8 @@ import { isCodexReconnecting, reconnectCodexSessions } from '../engines/codex-ru
 import { engines } from '../engines/instances.js'
 import { executionAlive, isAlive } from '../util.js'
 import { registry } from '../sessions.js'
+import { transport } from '../bridge-transport.js'
+import { withFakeTmux } from './fake-tmux.js'
 
 const codex = (connected: boolean) => new CodexEngineAdapter({ isConnected: () => connected } as any)
 const ids: string[] = []
@@ -30,6 +32,20 @@ describe('Codex adapter liveness', () => {
     const a = codex(true), info = rec(a)
     expect(a.isAlive(info)).toBe(true)
     expect(a.isConnected(info)).toBe(true)
+  })
+})
+
+describe('the anchor never counts', () => {
+  test('a disconnected Codex whose anchor tmux is alive is not alive and not connected', () => {
+    const fake = withFakeTmux()
+    try {
+      const a = codex(false), info = rec(a)
+      ids.push(info.sessionId); registry.set(info.sessionId, info)
+      fake.alive(info.tmuxName)
+      expect(a.isAlive(info)).toBe(false)
+      expect(isAlive(info)).toBe(false)
+      expect(transport.has(info.sessionId)).toBe(false)
+    } finally { fake.restore() }
   })
 })
 
@@ -73,6 +89,20 @@ describe('boot sweep grace', () => {
     expect(isCodexReconnecting(a.sessionId)).toBe(false)
     expect(isCodexReconnecting(b.sessionId)).toBe(false)
     expect(isAlive(b)).toBe(false)
+  })
+
+  test('a throw after a successful reconnect (e.g. surface) neither aborts the sweep nor strands grace', async () => {
+    const first = codex(true) as any, second = codex(false) as any
+    first.reconnect = async () => true
+    first.surface = () => { throw new Error('surface boom') }
+    let secondRan = false
+    second.reconnect = async () => { secondRan = true; return false }
+    const a = rec(first, { ephemeral: true }), b = rec(second, { ephemeral: true })
+    for (const r of [a, b]) { ids.push(r.sessionId); registry.set(r.sessionId, r) }
+    await reconnectCodexSessions([a, b])
+    expect(secondRan).toBe(true)
+    expect(isCodexReconnecting(a.sessionId)).toBe(false)
+    expect(isCodexReconnecting(b.sessionId)).toBe(false)
   })
 })
 
