@@ -290,6 +290,8 @@ describe('critic prompt', () => {
     expect(seed).toContain('⬆ architectural')
     expect(seed).toContain('Settled')
     expect(seed).toContain('run the next stage in the same turn')
+    expect(seed).toContain('case matrix')
+    expect(seed).toContain('branch by branch')
   })
 })
 
