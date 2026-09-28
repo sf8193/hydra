@@ -50,7 +50,7 @@ for (const change of ['replacement', 'respawn'] as const) {
       expect(readFileSync(newLog, 'utf8')).toBe('')
     } finally {
       if (sending) await sending
-      try { tmux('kill-server') } catch {}
+      try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'pipe' }) } catch {}
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key]
         else process.env[key] = value
