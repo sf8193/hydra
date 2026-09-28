@@ -354,50 +354,17 @@ describe('raindrop: the death event carries the time of death', () => {
 })
 
 describe('raindrop: defaultProjectFor', () => {
-  const git = (cwd: string, ...args: string[]) =>
-    Bun.spawnSync(['git', ...args], { cwd, stdout: 'ignore', stderr: 'ignore' })
-
-  test('a worktree and its checkout both report the project, not the directory', () => {
-    const root = mkdtempSync(join(tmpdir(), 'rd-proj-'))
-    const repo = join(root, 'hydra')
-    mkdirSync(repo)
-    git(repo, 'init', '-q')
-    git(repo, 'config', 'user.email', 't@t')
-    git(repo, 'config', 'user.name', 't')
-    writeFileSync(join(repo, 'f'), 'x')
-    git(repo, 'add', '.')
-    git(repo, 'commit', '-qm', 'init')
-    const wt = join(root, 'hydra-atlas')
-    git(repo, 'worktree', 'add', '-q', '--detach', wt)
-
-    expect(defaultProjectFor(repo)).toBe('hydra')
-    expect(defaultProjectFor(wt), 'a worktree must report its project').toBe('hydra')
-  })
-
-  test('a bare repo reports itself, not its parent directory', () => {
-    const root = mkdtempSync(join(tmpdir(), 'rd-bare-'))
-    const bare = join(root, 'barerepo.git')
-    Bun.spawnSync(['git', 'init', '-q', '--bare', bare], { stdout: 'ignore', stderr: 'ignore' })
-    expect(defaultProjectFor(bare)).toBe('barerepo')
-  })
-
-  test('a submodule reports its own name, not "modules"', () => {
-    const root = mkdtempSync(join(tmpdir(), 'rd-sub-'))
-    const inner = join(root, 'inner')
-    const outer = join(root, 'outer')
-    for (const r of [inner, outer]) {
-      mkdirSync(r)
-      git(r, 'init', '-q')
-      git(r, 'config', 'user.email', 't@t')
-      git(r, 'config', 'user.name', 't')
-      writeFileSync(join(r, 'f'), 'x')
-      git(r, 'add', '.')
-      git(r, 'commit', '-qm', 'init')
-    }
-    git(outer, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', inner, 'sub')
-    // Every submodule on the machine would otherwise collapse into one bucket.
-    expect(defaultProjectFor(join(outer, 'sub'))).toBe('sub')
-  })
+  // Worktree, bare-repo and submodule coverage moved to the projectFromGitDir
+  // test.each below: those three each spawned several real git subprocesses
+  // (init/commit/worktree add) just to reconfirm git's own well-known
+  // --git-common-dir output shape for each topology, then ran the exact same
+  // parsing this file already unit-tests on a literal string. Confirmed by
+  // running real git for all three: a worktree's common-dir is identical to a
+  // plain repo's (already the "plainrepo" row below); the bare-repo and
+  // submodule shapes are already exact rows below. No coverage lost, several
+  // real git spawns removed — this was the test flaking on a loaded CI runner
+  // (fixed with a timeout bump in #411); removing the subprocesses removes
+  // the flake source too.
 
   test('a git binary that cannot be run reports nothing rather than throwing', () => {
     const real = Bun.spawnSync

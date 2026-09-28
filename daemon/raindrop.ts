@@ -189,7 +189,8 @@ export function defaultProjectFor(repoPath: string): string | undefined {
   try {
     const proc = Bun.spawnSync(
       ['git', '-C', repoPath, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
-      { stdout: 'pipe', stderr: 'ignore', timeout: 2000 },
+      // ponytail: fixed timeout; a loaded CI runner has hit this and read "not a repo" for a git that just hadn't answered yet (seen Sep 2026).
+      { stdout: 'pipe', stderr: 'ignore', timeout: 5000 },
     )
     if (proc.exitCode !== 0) return undefined
     const common = proc.stdout.toString().trim()

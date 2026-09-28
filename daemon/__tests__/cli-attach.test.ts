@@ -83,13 +83,15 @@ describe('hydra attach (Z1)', () => {
     expect(fake.calls().some(c => c.startsWith('new-window'))).toBe(false)
   })
 
+  // A real `bun` subprocess + socket round trip; bun's default 5s per-test timeout has been hit under
+  // loaded CI (exit 143 = SIGTERM), not a hang in the code under test — seen Sep 2026.
   test('no surface (tmux gone) → exit 1, nothing attached', async () => {
     const name = seed('claude')
     const r = await attach(name)
     expect(r.code).toBe(1)
     expect(r.attached).toEqual([])
     expect(r.stderr).toContain(name)
-  })
+  }, 15000)
 
   // A plain status is read-only: only has-session (tmux field) and capture-pane
   // (context %) — never the surface repair that creates tmux or runs codex resume.

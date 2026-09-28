@@ -282,7 +282,8 @@ describe('T0.7 engine events', () => {
     let reconnects = 0
     const info = put({ sessionId: 't07-dc-fail', codexThreadId: 'T',
       adapter: { reconnect: async () => { reconnects++; return false }, surface: () => null } as any })
-    const { n } = await counting(registry, async () => { codexEngine.emit('disconnected', 't07-dc-fail'); await tick(100) })
+    // 3 mocked 1ms waits plus persist/dispatch; margin widened after this flaked once under loaded CI (Sep 2026).
+    const { n } = await counting(registry, async () => { codexEngine.emit('disconnected', 't07-dc-fail'); await tick(500) })
     expect(reconnects).toBe(3)
     expect(typeof info.deadAt).toBe('number')
     expect(n).toBe(1)
