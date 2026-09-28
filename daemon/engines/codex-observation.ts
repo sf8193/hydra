@@ -116,7 +116,9 @@ export function codexTurnOutcome(info: TurnInfo, sinceMs: number, src: TurnSourc
       return closed
     },
     answer: () => {
-      if (info.claudeSessionId) return transcriptAnswer(info.claudeSessionId, sinceMs, src)
+      // The id comes from the status file when present (it follows /clear); the stored id is the fallback.
+      const claudeId = (info.tmuxName ? src.readClaudeStatus?.(info.tmuxName)?.sessionId : undefined) ?? info.claudeSessionId
+      if (claudeId) return transcriptAnswer(claudeId, sinceMs, src)
       // A finished turn's own answer, newer than the message being answered (an unknown time is never relayed).
       const x = r()
       if (x?.boundary === 'closed' && x.answer && x.at != null && x.at >= sinceMs) return x.answer
