@@ -36,6 +36,7 @@ import { on } from './event-bus.js'
 import type { TurnOutcome } from './engines/engine-adapter.js'
 import { safeSend, tmuxWindowActivity } from './util.js'
 import { probeByteTmuxName } from './pane-probe.js'
+import { blockedReason, readClaudeStatus } from './engines/claude-status.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
@@ -50,6 +51,8 @@ export type ReplyGuardDeps = {
   capturePaneScreenshot: (tmuxName: string) => string | null
   capturePaneText: (tmuxName: string, lines?: number) => string | null
   turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome
+  // Why Claude says the session is stuck (its status file's waitingFor), or null. Optional so tests need not fake it.
+  blockedReason?: (tmuxName: string) => string | null
 }
 
 /** The adapter's answer. */
@@ -67,6 +70,7 @@ const defaultDeps: ReplyGuardDeps = {
   capturePaneScreenshot: (tmuxName) => capturePaneScreenshot(tmuxName),
   capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
   turnOutcome: (info, sinceMs) => defaultTurnOutcome(info, sinceMs),
+  blockedReason: (tmuxName) => blockedReason(readClaudeStatus(tmuxName)),
 }
 
 let deps: ReplyGuardDeps = defaultDeps
@@ -324,7 +328,10 @@ async function escalateWithCapture(
   tmuxName: string, chatId: string, user: string, messageId: string, mins: number,
   outcome?: TurnOutcome,
 ): Promise<void> {
-  const header = `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It may have answered in-transcript only. Here's what the session looks like:`
+  const why = deps.blockedReason?.(tmuxName)
+  const header = why
+    ? `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. Claude says it is waiting on: \`${why}\`. Here's what the session looks like:`
+    : `⚠️ **${tmuxName}** has been silent for ~${mins}m on a message from ${user}. It may have answered in-transcript only. Here's what the session looks like:`
 
   // Prefer the session's own clean text over a raw terminal capture. Claude:
   // pulled straight from its transcript. Codex: no transcript file, so from

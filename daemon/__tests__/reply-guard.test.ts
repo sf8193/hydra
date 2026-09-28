@@ -429,6 +429,39 @@ describe('escalateWithCapture', () => {
     expect(escalations[0].text).toContain('fake pane content')
   })
 
+  test('header quotes what Claude says it is waiting on, when it says', () => {
+    codexSession('sess-1', 'cedar')
+    fakeBridge('sess-1')
+    const base = {
+      registryGet: (id: string) => testSessions.get(id),
+      registryValues: () => testSessions.values(),
+      transportHas: (id: string) => connectedBridges.has(id),
+      transportSendOrQueue: (id: string, msg: unknown) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
+      gatewaySend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
+      safeSend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return ['msg-1'] },
+      capturePaneScreenshot: () => null,
+      capturePaneText: () => 'fake pane content',
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined, readConversationForensics: () => null,
+        getLastCodexMessage: () => null, isCodexTurnComplete: () => false,
+      }),
+    } as any
+    _setDeps({ ...base, blockedReason: () => 'permission prompt' })
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    armThenAdvance('cedar', T0 + 60_000)
+    expect(escalations[0].text).toContain('Claude says it is waiting on: `permission prompt`')
+
+    escalations.length = 0
+    _resetReplyGuardForTesting()
+    _setDeps({ ...base, blockedReason: () => null })
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    armThenAdvance('cedar', T0 + 60_000)
+    expect(escalations[0].text).not.toContain('Claude says')
+    expect(escalations[0].text).toContain('It may have answered in-transcript only')
+  })
+
   test('prefers the transcript\'s real last-assistant text over a pane capture', () => {
     codexSession('sess-1', 'cedar', 'claude-abc')
     fakeBridge('sess-1')
