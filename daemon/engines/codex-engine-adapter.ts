@@ -23,7 +23,6 @@ import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } fro
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
-import { codexTurnBoundary } from '../codex-rollout.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
 import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
 
@@ -91,16 +90,16 @@ export class CodexEngineAdapter implements EngineAdapter {
   // ⚠ F4s (pinned, fixed in S10): tmux window_activity of the session's current
   // window, which after surface repair is the static anchor, not the TUI pane.
   turn(info: SessionInfo, sinceMs: number): Turn {
-    const { confirmedComplete, answer } = codexTurnOutcome(info, sinceMs, defaultTurnSources)
+    const outcome = codexTurnOutcome(info, sinceMs, defaultTurnSources)
     return {
-      confirmedComplete, answer,
+      get confirmedComplete() { return outcome.confirmedComplete }, // lazy: it reads the rollout
+      answer: outcome.answer,
       get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
       // A closed rollout boundary wins over even a fresh working flag, by design (task_started is logged before
       // the first message, so the window is tiny). It is idle even if a turnCompleted event was lost; otherwise only the
       // runtime's own recent turn events claim working; anything else is unknown and falls back to tmux.
       get live() {
-        const closed = info.codexThreadId && codexTurnBoundary(codexHomeDirFn(info.codexHomeName ?? info.tmuxName), info.codexThreadId) === 'closed'
-        return closed ? 'idle' : isCodexWorking(info.sessionId) ? 'working' : null
+        return outcome.boundary === 'closed' ? 'idle' : isCodexWorking(info.sessionId) ? 'working' : null
       },
     }
   }
