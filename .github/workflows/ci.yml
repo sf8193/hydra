@@ -5,13 +5,14 @@ on:
     branches: [sf/ci-debug-403]
 
 jobs:
-  bisect:
+  probe:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        sha: [ec057ff2b526a85306f5fa5e1a21b752fea862cb, dc9406ab1f6a6ddc183239868bf997659369cf1d, 6e45a6218d1836b0f5dcaece5f3f2d80b345a2c3, e442e48a3284dd9f741f2d65e0b49f252fa09e07, ef39b4f33240700adfefe21d5dacccf9b7977dfa, 11fea6503658ae8652f1dd14ea4786ba30c545b2, d62a7b8c1d14233c0c27928723b7be5e69a523cc, 5e76e05d692c66466c9ccd45120124ed42b4d7c8, 6da63821d718a17c2ac4e861edd2e3c0fe74e355, a2fa68489caa4ea13fc43ee9023f1b1358255714, ad9812c810fadabdb3256a8acc63533e24d9c392, b6e6c98e819193a1b62fa0c46dedcc1b7eb1c909]
+        sha: [7b37faafa0bebb726cfec5855366bc696f224ff2, a12d0e6140f6d059c793498a7e1474e37c799ec4]
+        mode: [single, split, single-b, split-b]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,11 +26,15 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: test-token
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
+          MODE: ${{ matrix.mode }}
         run: |
           mkdir -p ~/.claude/channels/discord
+          X="--path-ignore-patterns daemon/__tests__/pane-probe.test.ts --path-ignore-patterns daemon/__tests__/codex-launch-surface.tmux.test.ts --path-ignore-patterns daemon/__tests__/codex-key-replacement.tmux.test.ts"
           for rep in 1 2 3 4; do
-            timeout 300 bun test --isolate --path-ignore-patterns 'daemon/__tests__/pane-probe.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-launch-surface.tmux.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-key-replacement.tmux.test.ts' > out.txt 2>&1; code=$?
+            case $MODE in single*) timeout 300 bun test --isolate > out.txt 2>&1 ;; split*) timeout 300 bun test --isolate $X > out.txt 2>&1 ;; esac; code=$?
             nf=$(grep -c '^(fail)' out.txt || true)
-            echo "### SHA ${{ matrix.sha }} rep$rep exit=$code fails=$nf $(grep -E '^ *[0-9]+ (pass|fail)$' out.txt | tr -s ' \n' ' ')"
+            echo "### ${{ matrix.sha }} $MODE rep$rep exit=$code fails=$nf $(grep -E '^ *[0-9]+ (pass|fail)$' out.txt | tr -s ' \n' ' ')"
             grep '^(fail)' out.txt | cut -c1-160 | sed 's/^/#### /'
+            ps -eo pid,ppid,etimes,comm,args --sort=etimes | grep -vE 'Runner|ps -eo|grep|bash|systemd|kworker|sshd|containerd|dockerd|agetty|\[' | head -30 | sed 's/^/@@@@ /'
+            ls /tmp | head -40 | sed 's/^/%%%% /'
           done
