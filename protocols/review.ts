@@ -188,7 +188,7 @@ export default protocol('review', {
         : autoLenses
           ? `**Staged fresh passes.** Each round, run ONE fresh pass for the current stage in a native subagent ${NATIVE_SUBAGENT}, then verify the owner's fixes yourself. Stages go big → small:
 1. **Architecture** — boundaries, contracts, is this the right shape (use the \`+architecture:\` block below if present).
-2. **Correctness / edge cases** — if the repo under review has \`.claude/commands/review.md\` (or \`.claude/skills/review/SKILL.md\`), paste that file's procedure into the subagent's assignment; otherwise a correctness review. Other requested lenses (e.g. \`+security:\`) run here too, each in its own subagent.
+2. **Correctness / edge cases** — if the repo under review has \`.claude/commands/review.md\` (or \`.claude/skills/review/SKILL.md\`), paste that file's procedure into the subagent's assignment; otherwise a formal correctness review: build a case matrix of the use cases and input/state permutations the change touches (normal paths, failures, retries, races, boundaries, empty/missing values), then walk the code branch by branch for each case and mark it correct / wrong / uncovered with file:line — report every wrong or uncovered case. Other requested lenses (e.g. \`+security:\`) run here too, each in its own subagent.
 3. **Simplify** — \`+ponytail:\` (and readability).`
           : `**Optional private sub-reviewers.** Delegate useful lenses when the material warrants it. Explicit \`+name:\` lenses are required; otherwise a small change may be reviewed directly.`
       const helperInstructions = !helpersAllowed ? '' : !autoLenses
