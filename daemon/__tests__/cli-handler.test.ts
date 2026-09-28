@@ -27,13 +27,15 @@ function makeReq(overrides: Partial<CLIRequest> = {}): CLIRequest {
 describe('cli-handler', () => {
   test('health counts a seeded session and its bridge', async () => {
     const sid = `cli-health-${Date.now()}`
+    const before = ((await handleCLIRequest(makeReq({ command: 'health' }))).data as any).sessions
     registry.set(sid, { sessionId: sid, tmuxName: sid, threadId: 't', createdAt: Date.now(), lastActive: Date.now(), adapter: engines.claude } as any)
     transport.set(sid, { sessionId: sid, socket: { destroyed: false, write: () => true } } as any)
     try {
       const res = await handleCLIRequest(makeReq({ command: 'health' }))
       expect(res.ok).toBe(true)
       expect(res.type).toBe('cli-response')
-      expect((res.data as any).sessions).toEqual({ total: 1, connected: 1, disconnected: 0 })
+      // Relative to what's already registered (a plain, non-isolated run shares the registry).
+      expect((res.data as any).sessions).toEqual({ total: before.total + 1, connected: before.connected + 1, disconnected: before.disconnected })
     } finally { registry.delete(sid); transport.bridges.delete(sid) }
   })
 
@@ -43,7 +45,7 @@ describe('cli-handler', () => {
     try {
       const res = await handleCLIRequest(makeReq({ command: 'list' }))
       expect(res.ok).toBe(true)
-      expect(res.data).toEqual([expect.objectContaining({ name: 'list-row', sessionId: sid, status: 'disconnected' })])
+      expect((res.data as any[]).filter(r => r.sessionId === sid)).toEqual([expect.objectContaining({ name: 'list-row', sessionId: sid, status: 'disconnected' })])
     } finally { registry.delete(sid) }
   })
 
