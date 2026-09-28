@@ -598,7 +598,9 @@ export function onRunDisconnect(sessionId: string): void {
   if (!runId) return
   const run = runs.get(runId)
   if (!run || isTerminal(run)) return
-  if (transport.has(sessionId)) return
+  // transport.has is constant true for Codex (PINNED C1); a deadAt record is gone regardless.
+  const connected = () => transport.has(sessionId) && !registry.get(sessionId)?.deadAt
+  if (connected()) return
 
   const role = run.sessionToRole.get(sessionId)
   if (!role) return
@@ -611,7 +613,7 @@ export function onRunDisconnect(sessionId: string): void {
       const currentInfo = registry.get(sessionId)
       const attempts = run._resumeAttempts ?? 0
       const decision = decideResume(
-        transport.has(sessionId),
+        connected(),
         currentInfo ? !isAlive(currentInfo) : true,
         !!claudeSessionId,
         attempts,

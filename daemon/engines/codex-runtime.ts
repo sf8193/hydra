@@ -161,13 +161,26 @@ function logContextUsageSample(sessionId: string, tmuxName: string, usage: { use
 
 const reconnecting = new Set<string>()
 
+// Interim (until the Codex liveness project): a dead Codex session was marked
+// deadAt with no word in its thread; say so, so the thread doesn't just go quiet.
+function announceCodexDeath(info: SessionInfo): void {
+  void safeSend(info.threadId, `⚠️ \`${info.tmuxName}\` (Codex) lost its app-server and could not reconnect — it is dead. Type \`resume\` or \`respawn\`.`).catch(() => {})
+}
+
 export async function reconnectCodexAfterDisconnect(
   sessionId: string,
-  deps = {
+  deps: {
+    get: (id: string) => SessionInfo | undefined
+    wait: (ms: number) => Promise<unknown>
+    persist: () => void
+    failed: (id: string) => void
+    announce?: (info: SessionInfo) => void
+  } = {
     get: (id: string) => registry.get(id),
     wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
     persist: () => registry.persist(),
     failed: (id: string) => dispatchDisconnect(id),
+    announce: announceCodexDeath,
   },
 ): Promise<boolean> {
   const delays = [250, 750, 1_500]
@@ -193,6 +206,7 @@ export async function reconnectCodexAfterDisconnect(
   if (info && !info.deadAt) {
     info.deadAt = Date.now()
     deps.persist()
+    deps.announce?.(info)
   }
   clearCodexKeys(sessionId)
   deps.failed(sessionId)
@@ -221,6 +235,7 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
 
     if (!connected) {
       info.deadAt = Date.now()
+      announceCodexDeath(info)
     } else {
       delete info.deadAt
       const entry = threadRegistry.get(info.threadId)?.sessionHistory.find(e => e.sessionId === info.sessionId)
