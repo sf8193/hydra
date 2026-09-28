@@ -1,14 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { execFile } from 'child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { sendTmuxKeys } from '../codex-key-queue.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 
-// Fake executable, not a global child_process mock. Run this file separately
-// from suites that replace child_process (as with codex-launch-surface.tmux).
-const mocked = 'mock' in execFile
+// Fake tmux executable on PATH, not a child_process mock.
 async function withTmux(fn: (calls: (all?: boolean) => Array<{ args: string[]; at: number }>, pane: (text: string) => void) => Promise<void>) {
   const dir = mkdtempSync(join(tmpdir(), 'codex-keys-'))
   const savedPath = process.env.PATH
@@ -36,7 +33,7 @@ if(args.includes('FAIL')) process.exit(1);
   }
 }
 
-describe.skipIf(mocked)('Codex key submission', () => {
+describe('Codex key submission', () => {
   test('settles literal text before the single default Enter', async () => {
     await withTmux(async calls => {
       await sendTmuxKeys({ target: 'a', mode: 'literal', text: '/status' })
