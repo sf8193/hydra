@@ -280,15 +280,19 @@ describe('private delivery', () => {
 describe('critic prompt', () => {
   test('describes lens selection and private synthesis; keeps +lens modifiers', () => {
     const seed = reviewProto.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, autoReviewLenses: true })!
-    for (const s of ['distinct lens', 'visibility="private"', 'exactly ONE critique', 'Do not fan out every lens', 'headless=true', 'read_thread=true', 'phase_budget', 'kill_session', 'small change']) {
+    for (const s of ['distinct lens', 'exactly ONE critique', 'Do not fan out every lens', 'native subagent', 'Agent tool', 'spawn_agent', 'do not poll', 'small change']) {
       expect(seed).toContain(s)
     }
+    expect(seed).not.toContain('spawn_session(')
     expect(seed).toContain('`+name:` blocks appended below')
-    expect(seed).toContain('own helper, quoting its block verbatim')
+    expect(seed).toContain('own native subagent, quoting its block verbatim')
+    expect(seed).toContain('`+<lens>:` section for every required lens')
   })
 })
 
-describe('requested ponytail gate', () => {
+describe('required lens sections gate', () => {
+  const seedMod = (name: string) => ({ type: 'seed', name, aliases: [], target: 'critic', instructions: name })
+
   test('default Ponytail is enforced unless an opt-out is present', async () => {
     const run = reviewRun()
     delete run.params.noPonytail
@@ -296,7 +300,7 @@ describe('requested ponytail gate', () => {
     expect((await onRunAdvance('rh-critic', 'Critique.', 'request_changes')).ok).toBe(false)
     // The gate holds for every verdict, including an early approval.
     expect((await onRunAdvance('rh-critic', 'Critique.', 'approve')).ok).toBe(false)
-    expect((await onRunAdvance('rh-critic', '+ponytail: helper returned nothing', 'request_changes')).ok).toBe(true)
+    expect((await onRunAdvance('rh-critic', '### +ponytail\n- cut X', 'request_changes')).ok).toBe(true)
 
     const optedOut = reviewRun()
     optedOut.params.autoReviewLenses = true
@@ -312,55 +316,34 @@ describe('requested ponytail gate', () => {
     expect((await onRunAdvance('rh-critic', 'Critique.', 'request_changes')).ok).toBe(true)
   })
 
-  test('critic cannot advance without a qualified current-phase private result', async () => {
+  test('every required lens (explicit or default) needs its own section; one lens cannot cover another', async () => {
     const run = reviewRun()
-    run.params.modifiers = [{ type: 'seed', name: 'ponytail', aliases: [], target: 'critic', instructions: 'x' }]
-    const denied = await onRunAdvance('rh-critic', 'Critique.', 'request_changes')
+    run.params.modifiers = [seedMod('architecture'), seedMod('ponytail')]
+    const denied = await onRunAdvance('rh-critic', '**+ponytail:** nothing to cut', 'request_changes')
     expect(denied.ok).toBe(false)
-    expect((denied as any).reason).toContain('+ponytail requires')
-
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000, lens: 'ponytail' })
-    await executeTool('send_to_thread', { target: 'rh-critic', type: 'result', text: 'Findings: none', visibility: 'private' }, 'rh-helper')
-    expect((await onRunAdvance('rh-critic', 'Critique: no findings.', 'request_changes')).ok).toBe(true)
+    expect((denied as any).reason).toContain('`+architecture:`')
+    expect((denied as any).reason).not.toContain('`+ponytail:`')
+    expect((await onRunAdvance('rh-critic', '+ponytail: nothing to cut\n\n## +architecture\nBoundary X leaks.', 'request_changes')).ok).toBe(true)
   })
 
-  test('critic may visibly disclose that the ponytail helper returned nothing', async () => {
+  test('a failed lens subagent may be disclosed instead', async () => {
     const run = reviewRun()
-    run.params.modifiers = [{ type: 'seed', name: 'ponytail', aliases: [], target: 'critic', instructions: 'x' }]
+    run.params.modifiers = [seedMod('ponytail')]
     expect((await onRunAdvance('rh-critic', 'Critique: helper failed.', 'request_changes')).ok).toBe(false)
     expect((await onRunAdvance('rh-critic', '+ponytail: helper returned nothing — timed out.', 'request_changes')).ok).toBe(true)
   })
 
-  test('UNAVAILABLE result must be surfaced in the public critique', async () => {
-    const run = reviewRun()
-    run.params.modifiers = [{ type: 'seed', name: 'ponytail', aliases: [], target: 'critic', instructions: 'x' }]
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000, lens: 'ponytail' })
-    await executeTool('send_to_thread', { target: 'rh-critic', type: 'result', text: 'UNAVAILABLE: /ponytail review — missing skill', visibility: 'private' }, 'rh-helper')
-    expect((await onRunAdvance('rh-critic', 'Critique.', 'request_changes')).ok).toBe(false)
-    expect((await onRunAdvance('rh-critic', 'UNAVAILABLE: /ponytail review — missing skill', 'request_changes')).ok).toBe(true)
-  })
-
-  test('+subagent uses the owner as parent and enforces the same result gate', async () => {
+  test('+subagent: the owner summary is held to the same sections', async () => {
     const run = reviewRun('subagent_review')
-    run.params.modifiers = [{ type: 'seed', name: 'ponytail', aliases: [], target: 'critic', instructions: 'x' }]
-    registry.get('rh-helper')!.initiator = 'rh-owner'
+    run.params.modifiers = [seedMod('security')]
     expect((await onRunAdvance('rh-owner', 'Summary.')).ok).toBe(false)
-    __test!.registerChild(run, 'rh-owner', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000, lens: 'ponytail' })
-    await executeTool('send_to_thread', { target: 'rh-owner', type: 'result', text: 'Findings: one', visibility: 'private' }, 'rh-helper')
-    expect((await onRunAdvance('rh-owner', 'Summary including finding.')).ok).toBe(true)
+    expect((await onRunAdvance('rh-owner', 'Summary.\n+security: no findings')).ok).toBe(true)
   })
 
-  test('a sibling readability result cannot satisfy the ponytail gate', async () => {
+  test('a mention mid-sentence is not a section', async () => {
     const run = reviewRun()
-    run.params.modifiers = [
-      { type: 'seed', name: 'readability', aliases: ['r'], target: 'critic', instructions: 'readability' },
-      { type: 'seed', name: 'ponytail', aliases: [], target: 'critic', instructions: 'ponytail' },
-    ]
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000, lens: 'readability' })
-    await executeTool('send_to_thread', { target: 'rh-critic', type: 'result', text: 'Readability: clean', visibility: 'private' }, 'rh-helper')
-    const denied = await onRunAdvance('rh-critic', 'Critique: readability clean.', 'request_changes')
-    expect(denied.ok).toBe(false)
-    expect((denied as any).reason).toContain('+ponytail requires')
+    run.params.modifiers = [seedMod('security')]
+    expect((await onRunAdvance('rh-critic', 'I skipped the +security lens.', 'request_changes')).ok).toBe(false)
   })
 })
 

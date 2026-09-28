@@ -232,14 +232,14 @@ register({
 export const PONYTAIL_INSTRUCTIONS = [
   'Specialized workflow — do NOT treat this as a generic prose lens and do NOT emulate it yourself.',
   '',
-  'Spawn exactly ONE private helper for this block: `spawn_session(topic, headless=true, read_thread=true, phase_budget="10m", lens="ponytail")`. Quote this entire `+ponytail:` block verbatim in the helper\'s assignment.',
+  'Run exactly ONE native subagent for this block (Claude: the Agent tool; Codex: spawn_agent, then wait_agent). Quote this entire `+ponytail:` block verbatim in its assignment.',
   '',
-  'Helper assignment (quoted verbatim to the helper):',
-  '- Invoke `/ponytail review` (the ponytail:ponytail-review skill) against the review target, and follow that workflow.',
-  '- Return its structured findings ONLY via `send_to_thread(target=<parent session name>, type="result", visibility="private", text=...)`. The parent is the session that spawned you (normally the critic; in `+subagent` mode, the owner). Never post raw output publicly.',
-  '- If you cannot access or invoke `/ponytail review`, send a private result whose text starts with `UNAVAILABLE: /ponytail review` and a one-line reason. Do NOT substitute a generic review.',
+  'Subagent assignment (quoted verbatim):',
+  '- Invoke `/ponytail review` (the ponytail-review skill) against the review target, and follow that workflow.',
+  '- Return its structured findings as your final answer.',
+  '- If you cannot access or invoke `/ponytail review`, answer with a line starting `UNAVAILABLE: /ponytail review` and a one-line reason. Do NOT substitute a generic review.',
   '',
-  'Parent reviewer: deduplicate the helper\'s findings into your single top-level `advance()` critique; this lens does not replace your own review. If the helper returns `UNAVAILABLE: /ponytail review`, state that visibly in your critique — never drop the lens silently or emulate it. If the helper exits, times out, or returns no private result, do not advance silently: report `+ponytail: helper returned nothing`, then retry or explain why the requested lens could not complete.',
+  'Parent reviewer: deduplicate the findings into your single top-level `advance()` critique, under a `+ponytail:` section; this lens does not replace your own review. If the subagent answered `UNAVAILABLE: /ponytail review`, state that visibly in that section — never drop the lens silently or emulate it. If it failed or returned nothing, write `+ponytail: helper returned nothing`.',
 ].join('\n')
 
 register({
