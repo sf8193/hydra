@@ -298,13 +298,15 @@ describe('critic prompt', () => {
 describe('dead Codex actor', () => {
   test('a deadAt actor is handled as disconnected even though transport.has says connected (Codex C1)', () => {
     const run = reviewRun()
-    spyOn(transport, 'has').mockImplementation((() => true) as any)
+    const has = spyOn(transport, 'has').mockImplementation((() => true) as any)
+    try {
     onRunDisconnect('rh-critic')
     expect(run.disconnectTimers.has('rh-critic')).toBe(false)   // live: ignored, as before
     registry.get('rh-critic')!.deadAt = Date.now()
     onRunDisconnect('rh-critic')
     expect(run.disconnectTimers.has('rh-critic')).toBe(true)    // dead: the disconnect path runs
     clearTimeout(run.disconnectTimers.get('rh-critic'))
+    } finally { has.mockRestore() }   // spies outlive the file; a stuck has() breaks later disconnect tests
   })
 })
 
