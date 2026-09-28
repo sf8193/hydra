@@ -3,8 +3,8 @@
 
 import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
-import { resolve } from 'path'
-import { existsSync } from 'fs'
+import { dirname, join, resolve } from 'path'
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'fs'
 
 const execAsync = promisify(execFile)
 
@@ -75,6 +75,36 @@ export function resolveAndValidateRepo(repoName: string, spawnCwd: string): stri
 }
 
 // ---------------------------------------------------------------------------
+// The one "nothing to lose" guard — every path that deletes a worktree or branch
+// asks it first: no uncommitted/untracked changes, no rebase/merge/cherry-pick/
+// revert/bisect in progress, HEAD and the named branch fully on a remote.
+// Gitignored files (node_modules, build output) are disposable. Returns why the
+// work is at risk (unverifiable counts as at risk), or null when it's safe to delete.
+// ---------------------------------------------------------------------------
+
+export async function workAtRisk(repoDir: string, worktreePath: string, branch?: string): Promise<string | null> {
+  try {
+    if (existsSync(worktreePath)) {
+      const git = (...args: string[]) => execAsync('git', ['-C', worktreePath, ...args], { timeout: 10_000 }).then(r => r.stdout.trim())
+      if (await git('status', '--porcelain')) return 'uncommitted changes'
+      const gitDir = await git('rev-parse', '--absolute-git-dir') // all these markers are per-worktree
+      const midOp = ['rebase-merge', 'rebase-apply', 'sequencer', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'].filter(f => existsSync(join(gitDir, f)))
+      if (midOp.length) return `operation in progress (${midOp.join(', ')})`
+      const unpushed = Number(await git('rev-list', '--count', 'HEAD', '--not', '--remotes'))
+      if (unpushed > 0) return `${unpushed} unpushed commit(s)`
+    }
+    if (branch) {
+      const n = await checkUnpushedCommits(repoDir, branch)
+      if (n > 0) return `${n} unpushed commit(s) on ${branch}`
+      if (n < 0) return `could not verify ${branch}`
+    }
+    return null
+  } catch (err) {
+    return `could not verify (${err instanceof Error ? err.message.split('\n')[0] : err})`
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
 
@@ -87,31 +117,39 @@ export async function createWorktree(config: WorktreeConfig): Promise<WorktreeRe
   const { repoName, spawnCwd, branchName, dirSuffix } = config
   const repoDir = resolveAndValidateRepo(repoName, spawnCwd)
 
-  const wtDir = resolve(repoDir, '..', '.worktrees', dirSuffix)
-
   // Serialize per-repo so concurrent spawns/recoveries on the same repo don't race the
   // worktree admin lock.
-  const baseBranch = await withRepoLock(repoDir, async () => {
-    // Clean up stale worktree/branch from previous runs
+  return withRepoLock(repoDir, async () => {
+    // A stale worktree/branch from a previous run is cleaned up — unless it holds work
+    // (a killed session's worktree is kept then, and its name is free for reuse): step
+    // aside to <name>-2, -3, … instead of touching it.
+    let wtDir = '', branch = '', free = false
+    for (let n = 1; n <= 5 && !free; n++) {
+      const suffix = n === 1 ? '' : `-${n}`
+      wtDir = resolve(repoDir, '..', '.worktrees', dirSuffix + suffix)
+      branch = branchName + suffix
+      const risk = await workAtRisk(repoDir, wtDir, branch)
+      if (risk) process.stderr.write(`daemon: worktree: ${wtDir} (${branch}) kept from an earlier session (${risk}); trying the next name\n`)
+      free = !risk
+    }
+    if (!free) throw new Error(`worktree ${dirSuffix}: it and -2…-5 all hold kept work — remove some`)
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'remove', wtDir, '--force'], { timeout: 10_000 }) } catch {}
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'prune'], { timeout: 5_000 }) } catch {}
-    try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branchName], { timeout: 5_000 }) } catch {}
+    try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branch], { timeout: 5_000 }) } catch {}
 
     // Resolve base branch: current branch → origin default → main → master
-    const base = await resolveBaseBranch(repoDir)
+    const baseBranch = await resolveBaseBranch(repoDir)
 
     // Create worktree
     try {
-      await execAsync('git', ['-C', repoDir, 'worktree', 'add', '-b', branchName, wtDir, base], { timeout: 15_000 })
-      process.stderr.write(`daemon: worktree: created ${wtDir} (branch ${branchName}) from ${base}\n`)
+      await execAsync('git', ['-C', repoDir, 'worktree', 'add', '-b', branch, wtDir, baseBranch], { timeout: 15_000 })
+      process.stderr.write(`daemon: worktree: created ${wtDir} (branch ${branch}) from ${baseBranch}\n`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new Error(`failed to create worktree: ${msg}`)
     }
-    return base
+    return { repoDir, worktreePath: wtDir, branch, baseBranch }
   })
-
-  return { repoDir, worktreePath: wtDir, branch: branchName, baseBranch }
 }
 
 // 'attached' = worktree now materialized at the path; 'branch-gone' = the branch no
@@ -176,17 +214,23 @@ export async function reattachWorktree(repoDir: string, worktreePath: string, br
 /**
  * Destroy a worktree: run cleanup hook, remove worktree, prune, delete branch.
  * Best-effort — logs failures but doesn't throw. Safe to call if already gone.
+ * Work at risk (see workAtRisk) is kept, not destroyed: returns why, else null.
  */
-export async function destroyWorktree(repoDir: string, worktreePath: string, branch: string): Promise<void> {
+export async function destroyWorktree(repoDir: string, worktreePath: string, branch: string): Promise<string | null> {
   // Serialize per-repo so a destroy can't race a concurrent add/reattach on the same repo.
-  await withRepoLock(repoDir, async () => {
+  return withRepoLock(repoDir, async () => {
+    const risk = await workAtRisk(repoDir, worktreePath, branch)
+    if (risk) {
+      process.stderr.write(`daemon: worktree: kept ${worktreePath} (${branch}): ${risk}\n`)
+      return risk
+    }
     // Skip if worktree dir is already gone
     if (!existsSync(worktreePath)) {
       process.stderr.write(`daemon: worktree: ${worktreePath} already gone, skipping destroy\n`)
       // Still try to prune + delete branch (may be orphaned)
       try { await execAsync('git', ['-C', repoDir, 'worktree', 'prune'], { timeout: 5_000 }) } catch {}
       try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branch], { timeout: 5_000 }) } catch {}
-      return
+      return null
     }
 
     // Run cleanup hook if present
@@ -224,6 +268,7 @@ export async function destroyWorktree(repoDir: string, worktreePath: string, bra
       await execAsync('git', ['-C', repoDir, 'branch', '-D', branch], { timeout: 5_000 })
       process.stderr.write(`daemon: worktree: deleted branch ${branch}\n`)
     } catch {}
+    return null
   })
 }
 
@@ -283,4 +328,61 @@ async function resolveBaseBranch(repoDir: string): Promise<string> {
   } catch {
     return 'master'
   }
+}
+
+// ---------------------------------------------------------------------------
+// Session scratchpad worktrees — `git worktree add`s a Claude session made on its
+// own under its scratchpad (<tmp>/claude-<uid>/<project>/<session id>/scratchpad).
+// Hydra never recorded them, so without this they outlive the session forever.
+// ---------------------------------------------------------------------------
+
+export function sessionScratchpads(claudeSessionId: string, root = `/private/tmp/claude-${process.getuid?.() ?? 0}`): string[] {
+  try {
+    return readdirSync(root).map(p => join(root, p, claudeSessionId, 'scratchpad')).filter(d => existsSync(d))
+  } catch { return [] }
+}
+
+// Linked worktrees (a `.git` FILE) directly in dir or one level below. Symlinks are
+// never followed, and every hit must really live inside dir: nothing outside the
+// session's scratchpad can be reached.
+function worktreesIn(dir: string): string[] {
+  const found: string[] = []
+  let base: string
+  try { base = realpathSync(dir) + '/' } catch { return found }
+  const visit = (d: string, depth: number) => {
+    let names: string[]
+    try { names = readdirSync(d) } catch { return }
+    for (const n of names) {
+      const p = join(d, n)
+      try { const st = lstatSync(p); if (st.isSymbolicLink() || !st.isDirectory() || !realpathSync(p).startsWith(base)) continue } catch { continue }
+      try { if (statSync(join(p, '.git')).isFile()) { found.push(p); continue } } catch {}
+      if (depth < 1) visit(p, depth + 1)
+    }
+  }
+  visit(dir, 0)
+  return found
+}
+
+/**
+ * Remove the worktrees under dirs that hold nothing to lose: no uncommitted or
+ * untracked changes, no rebase/merge/cherry-pick/revert/bisect in progress, and every
+ * commit on HEAD is on a remote. Anything else is kept and reported. Branches are left
+ * alone. Gitignored files (node_modules, build output) are treated as disposable.
+ */
+export async function cleanScratchWorktrees(dirs: string[]): Promise<{ removed: string[]; kept: Array<{ path: string; reason: string }> }> {
+  const removed: string[] = []
+  const kept: Array<{ path: string; reason: string }> = []
+  for (const wt of dirs.flatMap(worktreesIn)) {
+    try {
+      const risk = await workAtRisk(wt, wt)
+      if (risk) { if (existsSync(wt)) kept.push({ path: wt, reason: risk }); continue } // gone meanwhile: another kill got it
+      const commonDir = (await execAsync('git', ['-C', wt, 'rev-parse', '--git-common-dir'], { timeout: 10_000 })).stdout.trim()
+      const repo = dirname(resolve(wt, commonDir))
+      await withRepoLock(repo, () => execAsync('git', ['-C', repo, 'worktree', 'remove', wt], { timeout: 10_000 }))
+      removed.push(wt)
+    } catch (err) {
+      if (existsSync(wt)) kept.push({ path: wt, reason: `could not verify (${err instanceof Error ? err.message.split('\n')[0] : err})` })
+    }
+  }
+  return { removed, kept }
 }
