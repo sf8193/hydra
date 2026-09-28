@@ -5,7 +5,8 @@
 
 import type { ConversationForensics } from '../observability.js'
 import type { TurnOutcome } from './engine-adapter.js'
-import type { ClaudeLiveStatus } from './claude-status.js'
+import { liveStateOf, type ClaudeLiveStatus } from './claude-status.js'
+import type { LiveState } from './engine-adapter.js'
 
 // The two transcript sources a turn outcome reads — injected so tests can fake them.
 export type TranscriptSources = {
@@ -47,25 +48,29 @@ function settledAfterConsume(f: ConversationForensics): boolean {
 // when it can be read; otherwise confirmedComplete stays false and the reply
 // guard falls back to waiting out silence. The transcript id comes from the
 // status file when present (it follows /clear); the registry's is the fallback.
-// One snapshot per outcome, taken on first use: confirmedComplete and answer()
-// must describe the same status and transcript, and the poller builds an
-// outcome every tick just for activityAt, so nothing is read before it is asked.
-export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: TranscriptSources): TurnOutcome {
-  let snap: { status: string | undefined; f: ConversationForensics | null } | undefined
-  const snapshot = () => {
-    if (!snap) {
-      const live = info.tmuxName ? src.readClaudeStatus?.(info.tmuxName) ?? null : null
-      const id = live?.sessionId ?? info.claudeSessionId
+// One snapshot per outcome, taken on first use: `live`, confirmedComplete and answer() describe
+// the same status and transcript, and the poller builds an outcome every tick just for
+// activityAt, so nothing is read before it is asked (the transcript only when its answer is).
+export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: TranscriptSources): TurnOutcome & { readonly live: LiveState | null } {
+  let status: { sessionId: string | undefined; status: string | undefined } | undefined
+  let forensics: ConversationForensics | null | undefined
+  const st = () => status ??= (() => {
+    const s = info.tmuxName ? src.readClaudeStatus?.(info.tmuxName) ?? null : null
+    return { sessionId: s?.sessionId ?? info.claudeSessionId, status: s?.status }
+  })()
+  const f = () => {
+    if (forensics === undefined) {
+      const id = st().sessionId
       const path = id ? src.transcriptPathFor(id) : undefined
-      snap = { status: live?.status, f: path ? src.readConversationForensics(path) : null }
+      forensics = path ? src.readConversationForensics(path) : null
     }
-    return snap
+    return forensics
   }
   return {
+    get live() { const s = st().status; return s ? liveStateOf(s) : null },
     get confirmedComplete() {
-      const { status, f } = snapshot()
-      return status === 'idle' && !!f && answerFrom(f, sinceMs) !== null && settledAfterConsume(f)
+      return st().status === 'idle' && !!f() && answerFrom(f(), sinceMs) !== null && settledAfterConsume(f()!)
     },
-    answer: () => answerFrom(snapshot().f, sinceMs),
+    answer: () => answerFrom(f(), sinceMs),
   }
 }

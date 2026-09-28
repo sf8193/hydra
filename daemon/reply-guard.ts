@@ -398,13 +398,9 @@ export function _pendingForTesting(): ReadonlyMap<string, PendingReply> {
 // ---------------------------------------------------------------------------
 // Only checks sessions with pending replies — O(pending) not O(sessions).
 //
-// The turnState writes below are a coarse, tmux-visual-silence-driven proxy
-// for reply-guard's own activity gate ONLY. They are NOT the source of
-// truth for "has Codex's protocol-level turn actually finished" — that's
-// the adapter's turn().confirmedComplete, driven by codex-runtime.ts's
-// own turnCompleted/message events. Do not read turnState for anything that
-// needs to know whether a turn is really done; 45s of no terminal repaint
-// (a long-running tool, a stalled remote call) is not the same thing.
+// Pane activity here only drives reply-guard's own activity gate (and the early Claude relay).
+// "Has the turn actually finished" is the adapter's turn().confirmedComplete; protocol timeouts
+// ask isSessionWorking. 45s of no terminal repaint (a long tool, a stalled call) is neither.
 const MIN_IDLE_BEFORE_SILENCE_S = 45
 
 export type PollActivityDeps = {
@@ -436,7 +432,6 @@ export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = de
     if (lastActivitySec === null) continue
     const secSinceActivity = nowSec - lastActivitySec
     if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
-      if (info && info.turnState !== 'working') info.turnState = 'working'
       handleActivityEvent(tmuxName)
       // Claude's own status says the turn is over: relay now instead of waiting for pane silence.
       // Claude only: Codex's confirmedComplete is a flag that can be stale between turns
@@ -444,7 +439,6 @@ export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = de
       // ponytail: engine check in the guard; if a third engine confirms reliably, let the adapter opt in.
       if (info && (info.engine ?? 'claude') === 'claude') handleSilenceEvent(tmuxName, Date.now(), true)
     } else {
-      if (info && info.turnState !== 'idle') info.turnState = 'idle'
       handleSilenceEvent(tmuxName)
     }
   }

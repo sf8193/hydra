@@ -71,26 +71,50 @@ export function tmuxWindowActivity(target: string): number {
   ) || 0
 }
 
-export function isTmuxRecentlyActiveSync(name: string, thresholdSeconds = 60): boolean {
+// window_activity epoch (seconds) of a tmux target, or null when tmux could not answer (error,
+// timeout, unparsable). Callers decide what "unknown" means.
+function windowActivitySync(name: string): number | null {
   try {
     const ts = execFileSync('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString().trim()
     const epoch = parseInt(ts, 10)
-    if (isNaN(epoch)) return false
-    return (Date.now() / 1000 - epoch) < thresholdSeconds
-  } catch { return false }
+    return isNaN(epoch) ? null : epoch
+  } catch { return null }
 }
 
-export async function isTmuxRecentlyActive(name: string, thresholdSeconds = 60): Promise<boolean> {
+async function windowActivity(name: string): Promise<number | null> {
   try {
     const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
       execFile('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
         { encoding: 'utf8', timeout: 2000 }, (err, stdout) => err ? reject(err) : resolve({ stdout }))
     })
     const epoch = parseInt(stdout.trim(), 10)
-    if (isNaN(epoch)) return false
-    return (Date.now() / 1000 - epoch) < thresholdSeconds
-  } catch { return false }
+    return isNaN(epoch) ? null : epoch
+  } catch { return null }
+}
+
+const ageS = (epoch: number) => Date.now() / 1000 - epoch
+
+/** Active within the last `thresholdSeconds`; a failed lookup reads as not active. */
+export function isTmuxRecentlyActiveSync(name: string, thresholdSeconds = 60): boolean {
+  const epoch = windowActivitySync(name)
+  return epoch !== null && ageS(epoch) < thresholdSeconds
+}
+
+export async function isTmuxRecentlyActive(name: string, thresholdSeconds = 60): Promise<boolean> {
+  const epoch = await windowActivity(name)
+  return epoch !== null && ageS(epoch) < thresholdSeconds
+}
+
+/** Silent for MORE than `seconds`: true only when tmux answered. A failed lookup is unknown, not silence. */
+export function tmuxSilentLongerThanSync(name: string, seconds: number): boolean {
+  const epoch = windowActivitySync(name)
+  return epoch !== null && ageS(epoch) > seconds
+}
+
+export async function tmuxSilentLongerThan(name: string, seconds: number): Promise<boolean> {
+  const epoch = await windowActivity(name)
+  return epoch !== null && ageS(epoch) > seconds
 }
 
 // The statusLine renders below the input box's bottom rule, so only the lines

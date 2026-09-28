@@ -1,4 +1,7 @@
 import { describe, test, expect } from 'bun:test'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { STATE_DIR } from '../config.js'
 import { SessionRegistry, ThreadRegistry, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
 
 // Suppress stderr
@@ -34,6 +37,17 @@ function makeThread(overrides: Partial<ThreadMetadata> = {}): ThreadMetadata {
 // Real sessions may exist on the host, so we test behaviors that are additive/relative.
 
 describe('SessionRegistry', () => {
+  test('a persisted turnState (retired field) is dropped on load, not carried or re-persisted', () => {
+    const file = join(STATE_DIR, 'sessions.json')
+    const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
+    try {
+      writeFileSync(file, JSON.stringify([{ ...makeInfo({ sessionId: 'test-retired-turnstate', tmuxName: 'test-retired-turnstate' }), turnState: 'working' }]))
+      const reg = new SessionRegistry()
+      expect((reg.get('test-retired-turnstate') as any).turnState).toBeUndefined()
+      expect(readFileSync(file, 'utf8')).not.toContain('turnState')
+    } finally { if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved) }
+  })
+
   test('set and get', () => {
     const reg = new SessionRegistry()
     const baseline = reg.size

@@ -103,7 +103,6 @@ export class TestHarness {
         lastActive: Date.now(),
         tmuxName: role,
         listening: false,
-        turnState: 'idle',
         engine: 'claude',
         adapter: engines.claude,
         sessionType: role === ownerRole ? 'thread_owner' : 'thread_guest',
@@ -178,7 +177,6 @@ export class TestHarness {
       lastActive: Date.now(),
       tmuxName: ownerRole,
       listening: false,
-      turnState: 'idle',
       engine: 'claude',
       adapter: engines.claude,
       sessionType: 'thread_owner',
@@ -260,9 +258,10 @@ export class TestHarness {
   // Registry control
   // ---------------------------------------------------------------------------
 
-  setTurnState(role: string, state: 'working' | 'idle' | 'waiting'): void {
+  // The provider's live signal (what isSessionWorking asks the adapter), not a registry field.
+  setTurnState(role: string, state: 'working' | 'idle'): void {
     const info = registry.get(this.sessionId(role))
-    if (info) info.turnState = state
+    if (info) info.adapter = Object.assign(Object.create(info.adapter), { turn: () => ({ live: state, activityAt: null, confirmedComplete: false, answer: () => null }) }) as EngineAdapter
   }
 
   setSessionDead(role: string, claudeSessionId?: string): void {
@@ -297,7 +296,6 @@ export class TestHarness {
           lastActive: Date.now(),
           tmuxName: `resumed-${sid.slice(14)}`,
           listening: false,
-          turnState: 'idle',
           engine: 'claude',
           adapter: engines.claude,
           sessionType: spawnOpts?.joinThread ? 'thread_guest' : 'thread_owner',

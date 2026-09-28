@@ -9,7 +9,7 @@ import { registry, threadRegistry, SessionRegistry, type SessionInfo } from '../
 import { codexEngine, engines } from '../engines/instances.js'
 import type { EngineAdapter } from '../engines/engine-adapter.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
-import { getLastCodexMessage, isCodexTurnComplete, noteCodexTurnState } from '../engines/codex-observation.js'
+import { getLastCodexMessage, isCodexTurnComplete, isCodexWorking, noteCodexTurnState } from '../engines/codex-observation.js'
 import { notePendingReply, _pendingForTesting } from '../reply-guard.js'
 import { queueCodexKeys, queuedCodexKeyCount } from '../codex-key-queue.js'
 import { registerProtocol } from '../protocol-registry.js'
@@ -148,15 +148,26 @@ describe('Codex start: outcome logging', () => {
 
 describe('T0.7 engine events', () => {
   test('message: activity, working, the stashed message, turn not complete', () => {
-    const info = put({ sessionId: 't07-msg', turnState: 'idle' })
+    const info = put({ sessionId: 't07-msg' })
     noteCodexTurnState('t07-msg', true)
     notePendingReply('t07-msg', { chat_id: 'c-msg', message_id: 'm', user: 'u' }, Date.now() - 1000)
     codexEngine.emit('message', 't07-msg', 'hello there')
     expect(info.lastActive).toBeGreaterThan(1)
-    expect(info.turnState).toBe('working')
+    expect(isCodexWorking('t07-msg')).toBe(true)
     expect([..._pendingForTesting().values()].find(p => p.sessionId === 't07-msg')!.activitySeenAfterDelivery).toBe(true)
     expect(getLastCodexMessage('t07-msg', 0)).toBe('hello there')
     expect(isCodexTurnComplete('t07-msg')).toBe(false)
+  })
+
+  test('message: every message notes activity (the gate is idempotent), even after a lost turnCompleted', () => {
+    put({ sessionId: 't07-gate' })
+    notePendingReply('t07-gate', { chat_id: 'c-gate', message_id: 'm', user: 'u' }, Date.now() - 1000)
+    const pending = () => [..._pendingForTesting().values()].find(p => p.sessionId === 't07-gate')!
+    codexEngine.emit('message', 't07-gate', 'a')
+    expect(pending().activitySeenAfterDelivery).toBe(true)
+    pending().activitySeenAfterDelivery = false
+    codexEngine.emit('message', 't07-gate', 'b') // same turn, no completion in between
+    expect(pending().activitySeenAfterDelivery).toBe(true)
   })
 
   test('autoApproved: appended to the spawn log', () => {
@@ -170,7 +181,7 @@ describe('T0.7 engine events', () => {
 
   test('turnCompleted: idle, complete, surface now, keys flushed, silence handled', async () => {
     let surfaced = 0
-    const info = put({ sessionId: 't07-done', turnState: 'working', adapter: { surface: () => { surfaced++; return null } } as any })
+    const info = put({ sessionId: 't07-done', adapter: { surface: () => { surfaced++; return null } } as any })
     noteCodexTurnState('t07-done', false)
     const settled: Array<Error | undefined> = []
     queueCodexKeys('t07-done', { target: 't07-done:hydra-chat', mode: 'raw', keys: ['Enter'] }, e => { settled.push(e) })
@@ -178,7 +189,7 @@ describe('T0.7 engine events', () => {
     notePendingReply(gone.sessionId, { chat_id: 'c-done', message_id: 'm', user: 'u' })
 
     codexEngine.emit('turnCompleted', 't07-done')
-    expect(info.turnState).toBe('idle')
+    expect(isCodexWorking('t07-done')).toBe(false)
     expect(isCodexTurnComplete('t07-done')).toBe(true)
     expect(surfaced).toBe(1)
     expect(queuedCodexKeyCount('t07-done')).toBe(0)

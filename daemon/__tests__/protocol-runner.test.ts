@@ -651,7 +651,7 @@ describe('health monitor — callback behavior', () => {
       sessionId, topic: 'test', threadId: 'test-thread',
       createdAt: Date.now(), lastActive: Date.now(),
       tmuxName: sessionId, listening: false, engine: 'claude' as const,
-      sessionType: 'thread_guest' as const, turnState: 'idle',
+      sessionType: 'thread_guest' as const,
       adapter: fakeAdapter(true),
       ...overrides,
     })
@@ -676,7 +676,7 @@ describe('health monitor — callback behavior', () => {
 
   test('working session is not nudged', async () => {
     const run = createTestRun()
-    setupSession('test-critic', { turnState: 'working', lastActive: Date.now() - 6 * 60 * 1000, adapter: fakeAdapter(true) })
+    setupSession('test-critic', { lastActive: Date.now() - 6 * 60 * 1000, adapter: harnessFakeAdapter({ isAlive: () => true, usage: () => null, turn: () => ({ live: 'working', activityAt: null, confirmedComplete: false, answer: () => null }) }) })
     setupSession('test-owner')
     transport.bridges.set('test-critic', { sessionId: 'test-critic', socket: {} as any, buf: '' })
 
@@ -733,12 +733,12 @@ function createDelegateRun(overrides: Record<string, unknown> = {}) {
   registry.set(pmSid, {
     sessionId: pmSid, topic: 'delegate pm', threadId, createdAt: Date.now(),
     lastActive: Date.now(), tmuxName: 'pm', listening: false, engine: 'claude', adapter: engines.claude,
-    turnState: 'idle', sessionType: 'thread_owner',
+    sessionType: 'thread_owner',
   })
   registry.set(builderSid, {
     sessionId: builderSid, topic: 'delegate builder', threadId, createdAt: Date.now(),
     lastActive: Date.now(), tmuxName: 'builder', listening: false, engine: 'claude', adapter: engines.claude,
-    turnState: 'idle', sessionType: 'thread_guest',
+    sessionType: 'thread_guest',
   })
   const run = {
     id: `delegate-run-${Math.random().toString(36).slice(2, 8)}`,

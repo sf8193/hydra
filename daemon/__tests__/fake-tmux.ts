@@ -23,7 +23,7 @@ case "$1" in
   list-panes) cat "$D/pid-$3" 2>/dev/null ;;
   has-session) [ -f "$D/alive-$3" ] ;;
   capture-pane) cat "$D/pane-$3" 2>/dev/null ;;
-  display) cat "$D/activity-$3" 2>/dev/null ;;
+  display|display-message) cat "$D/activity-$3" 2>/dev/null ;;
   *) : ;;
 esac
 `

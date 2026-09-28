@@ -69,7 +69,6 @@ beforeEach(() => {
         lastActive: Date.now(),
         tmuxName: `spawned-${sessionId}`,
         listening: false,
-        turnState: 'idle',
       } as SessionInfo)
       trackedSessions.add(sessionId)
       return { name: registry.get(sessionId)!.tmuxName, sessionId, threadId: opts?.joinThread ?? '', url: '' }
@@ -112,7 +111,6 @@ function mkOwner(): { sessionId: string; threadId: string; msg: InboundMessage }
     lastActive: Date.now(),
     tmuxName: 'drift',
     listening: false,
-    turnState: 'idle',
     sessionType: 'thread_owner',
   } as SessionInfo)
   registry.setThread(threadId, sessionId)

@@ -20,23 +20,31 @@ export function noteCodexMessage(sessionId: string, text: string, at: number = D
 }
 
 // Dedicated, engine-owned signal for "has Codex's own protocol-level turn
-// actually finished" — deliberately separate from SessionInfo.turnState,
-// which the daemon.ts activity poller ALSO writes from raw tmux visual
-// silence (a coarser, unrelated purpose: driving the reply-guard activity
-// gate). Sharing that field for turn-completeness let a still-in-flight
-// Codex turn (e.g. waiting on a remote call, no terminal repaint) get
-// stomped to "idle" by the poller alone — silently reopening the exact
+// actually finished", written only by codex-runtime's turn events. Tmux visual
+// silence must never write it: a still-in-flight Codex turn (e.g. waiting on a
+// remote call, no terminal repaint) would read as finished and reopen the
 // mid-turn-fragment-relay bug the completeness gate exists to close.
 // Defaults to false (not complete) when never observed: unsure means don't
 // claim confidence, same fail-safe direction as the rest of this gate.
 const codexTurnComplete = new Map<string, boolean>()
 
-export function noteCodexTurnState(sessionId: string, complete: boolean): void {
+const codexTurnStateAt = new Map<string, number>()
+
+export function noteCodexTurnState(sessionId: string, complete: boolean, at: number = Date.now()): void {
   codexTurnComplete.set(sessionId, complete)
+  codexTurnStateAt.set(sessionId, at)
 }
 
 export function isCodexTurnComplete(sessionId: string): boolean {
   return codexTurnComplete.get(sessionId) ?? false
+}
+
+// A turn in flight that the runtime saw within the last CODEX_WORKING_STALE_MS (every message
+// event refreshes it). Older is a lost turnCompleted, not work: the claim lapses so tmux decides.
+// ponytail: a Codex turn silent (no message events) for longer than this reads unknown until its next message.
+export const CODEX_WORKING_STALE_MS = 10 * 60_000
+export function isCodexWorking(sessionId: string, now: number = Date.now()): boolean {
+  return codexTurnComplete.get(sessionId) === false && now - (codexTurnStateAt.get(sessionId) ?? 0) < CODEX_WORKING_STALE_MS
 }
 
 // Only returns the message if it arrived after `sinceMs` — an older one
@@ -50,7 +58,7 @@ export function getLastCodexMessage(sessionId: string, sinceMs: number): string 
 
 vitalsPruners.push((goneOrDead) => {
   for (const id of codexLastMessage.keys()) if (goneOrDead(id)) codexLastMessage.delete(id)
-  for (const id of codexTurnComplete.keys()) if (goneOrDead(id)) codexTurnComplete.delete(id)
+  for (const id of codexTurnComplete.keys()) if (goneOrDead(id)) { codexTurnComplete.delete(id); codexTurnStateAt.delete(id) }
 })
 
 // The four sources a turn outcome is composed from — injected so tests can fake them.
@@ -80,10 +88,7 @@ export function codexTurnOutcome(info: TurnInfo, sinceMs: number, src: TurnSourc
     confirmedComplete: src.isCodexTurnComplete(info.sessionId),
     answer: () => {
       if (info.claudeSessionId) return transcriptAnswer(info.claudeSessionId, sinceMs, src)
-      // Engine-owned signal (codex-runtime.ts's own turnCompleted event),
-      // deliberately NOT SessionInfo.turnState — that field is also written by
-      // the tmux-activity poller from raw visual silence, independent of
-      // whether Codex's actual turn has finished.
+      // Engine-owned signal (codex-runtime.ts's own turnCompleted event), not tmux activity.
       if (src.isCodexTurnComplete(info.sessionId)) return src.getLastCodexMessage(info.sessionId, sinceMs)
       return null
     },

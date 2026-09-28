@@ -1086,7 +1086,6 @@ describe('factoryReview result delivery', () => {
           listening: false,
           engine: 'claude',
           adapter: engines.claude,
-          turnState: 'idle',
         } as SessionInfo)
         trackedSessions.add(sessionId)
         return { name: registry.get(sessionId)!.tmuxName, sessionId, threadId: opts?.joinThread ?? targetThreadId, url: '' }
