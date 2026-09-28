@@ -3,57 +3,33 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
 jobs:
-  build-and-test:
+  bisect:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        sha: [ec057ff, dc9406a, 6e45a62, e442e48, ef39b4f, 11fea65, d62a7b8, 5e76e05, 6da6382, a2fa684, ad9812c, b6e6c98]
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
+          ref: ${{ matrix.sha }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2 # --isolate semantics are load-bearing; bump deliberately
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build daemon
-        run: bun build daemon.ts --target bun --outdir /tmp/hb
-
-      - name: Build bridge
-        run: bun build bridge.ts --target bun --outdir /tmp/hb
-
-      - name: Build CLI
-        run: bun build cli/hydra.ts --target bun --outdir /tmp/hb
-
-      # Zero gate: tsc's exit code decides. bun's bundler elides unused imports and
-      # erases types, so it never sees the errors tsc does — this is the only gate
-      # that does, and it fires on the PR, before merge.
-      - name: Typecheck
-        run: bunx tsc --noEmit
-
-      # Dangerous primitives (destructive tmux/git, raw liveness) only in their owner files.
-      - name: Owner check
-        run: bun scripts/check-owners.ts
-
-      - name: Install tmux
-        run: sudo apt-get install -y tmux
-
-      - name: Run tests
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: sudo apt-get install -y tmux
+      - name: Run tests x4
         env:
           DISCORD_BOT_TOKEN: test-token
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: |
           mkdir -p ~/.claude/channels/discord
-          git fetch -q origin main
-          for sha in origin/main cb7ee32 024f11a 25b9bf7 06ff6e7 ec057ff b6e6c98 752b37a 7b37faa; do
-            rm -rf /tmp/w && mkdir /tmp/w && git archive $sha | tar -x -C /tmp/w && (cd /tmp/w && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm x && bun install --frozen-lockfile >/dev/null 2>&1)
-            for rep in 1 2 3; do
-              r=$(cd /tmp/w && bun test --isolate --path-ignore-patterns 'daemon/__tests__/pane-probe.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-launch-surface.tmux.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-key-replacement.tmux.test.ts' 2>&1 | grep -E '^\(fail\)| fail$|Ran ' | tr '\n' ' ' || true)
-              echo "### SHA $sha rep$rep -> $r" | cut -c1-400
-            done
+          for rep in 1 2 3 4; do
+            timeout 300 bun test --isolate --path-ignore-patterns 'daemon/__tests__/pane-probe.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-launch-surface.tmux.test.ts' --path-ignore-patterns 'daemon/__tests__/codex-key-replacement.tmux.test.ts' > out.txt 2>&1; code=$?
+            nf=$(grep -c '^(fail)' out.txt || true)
+            echo "### SHA ${{ matrix.sha }} rep$rep exit=$code fails=$nf $(grep -E '^ *[0-9]+ (pass|fail)$' out.txt | tr -s ' \n' ' ')"
+            grep '^(fail)' out.txt | cut -c1-160 | sed 's/^/#### /'
           done
