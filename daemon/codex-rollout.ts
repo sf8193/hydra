@@ -142,9 +142,13 @@ export type TurnBoundary = 'open' | 'closed'
 
 
 // The latest turn boundary in the thread's rollout tail, or null when unknown (no file, no boundary in view).
+// `answer`/`at` are the boundary line's own: a task_complete's last_agent_message and its timestamp (epoch ms);
+// null for an open boundary, an abort, or a line without them.
 // ponytail: one 64KB tail; a turn whose latest boundary is further back reads null (5 of 190 real files), which
 // is the safe direction. Reuse lastTokenUsage's growing backwards walk if that ever matters.
-export function codexTurnBoundary(homeDir: string, threadId: string): TurnBoundary | null {
+export type CodexLastTurn = { boundary: TurnBoundary; answer: string | null; at: number | null }
+
+export function codexLastTurn(homeDir: string, threadId: string): CodexLastTurn | null {
   const path = findRollout(homeDir, threadId)
   if (!path) return null
   let fd: number | undefined
@@ -156,11 +160,19 @@ export function codexTurnBoundary(homeDir: string, threadId: string): TurnBounda
     const lines = buf.toString('utf8').split('\n')
     for (let i = lines.length - 1; i >= 0; i--) {
       if (!lines[i].includes('"event_msg"')) continue
-      let type: unknown
-      try { const m = JSON.parse(lines[i]); type = m.type === 'event_msg' ? m.payload?.type : undefined } catch { continue }
-      if (type === 'task_started') return 'open'
-      if (type === 'task_complete' || type === 'turn_aborted') return 'closed'
+      let m: any
+      try { m = JSON.parse(lines[i]) } catch { continue }
+      const type = m.type === 'event_msg' ? m.payload?.type : undefined
+      if (type !== 'task_started' && type !== 'task_complete' && type !== 'turn_aborted') continue
+      const at = Date.parse(m.timestamp)
+      const text = type === 'task_complete' ? m.payload?.last_agent_message : undefined
+      return {
+        boundary: type === 'task_started' ? 'open' : 'closed',
+        answer: typeof text === 'string' && text.trim() ? text : null,
+        at: Number.isFinite(at) ? at : null,
+      }
     }
     return null
   } catch { return null } finally { if (fd !== undefined) try { closeSync(fd) } catch {} }
 }
+
