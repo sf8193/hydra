@@ -263,8 +263,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
         if (budgetRaw && !phaseBudgetMs) throw new Error(`invalid phase_budget "${budgetRaw}" — use e.g. "90s", "20m", "1h"`)
         const headless = spawnMode.headless
-        const lens = (args.lens as string | undefined)?.trim().toLowerCase() || undefined
-        if (lens && !/^[a-z][a-z0-9-]{0,31}$/.test(lens)) throw new Error('lens must be a lowercase name using letters, digits, or hyphens')
         const readThreadRaw = args.read_thread as boolean | number | undefined
         const spawnerName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? 'main' : 'main'
         let readThreadPrefix = ''
@@ -295,7 +293,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
               headless: true,
               readThread: !!readThreadPrefix,
               phaseBudgetMs,
-              lens,
             })
             if (preLaunchRegistration !== 'registered') {
               finishPrivateProtocolChildLaunch(sessionId)
@@ -316,7 +313,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
               headless: headless === true,
               readThread: !!readThreadPrefix,
               phaseBudgetMs,
-              lens,
             })
           : 'not_protocol'
         if (protocolScopedSpawn && childRegistration !== 'registered') {

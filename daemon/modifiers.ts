@@ -83,7 +83,8 @@ export const LOCAL_LENSES_DIR = join(STATE_DIR, 'lenses')
 
 export type LocalLens = SeedModifier & { isDefault: boolean }
 
-// Same shape spawn_session accepts for `lens=` (bridge-dispatch), so every local lens can tag its helper.
+// Lens names become `+name` tokens the router matches and the review gate builds a
+// regex from (protocol-runner validateRequestedReviewLenses) — keep them to this shape.
 const LENS_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/
 const warned = new Set<string>()
 const warnOnce = (msg: string) => { if (!warned.has(msg)) { warned.add(msg); process.stderr.write(`daemon: lens: ${msg}\n`) } }
@@ -114,6 +115,19 @@ export function localLenses(): LocalLens[] {
 
 export function resolveModifier(name: string): Modifier | undefined {
   return registry.get(name) ?? localLenses().find(l => l.name === name || l.aliases.includes(name))
+}
+
+/**
+ * The lenses a review run must cover: every requested lens (explicit + local defaults)
+ * plus ponytail by default when automatic lenses run. Single owner for the critic
+ * prompt, the +subagent prompt and the advance() gate.
+ */
+export function requiredLenses(params: { [key: string]: unknown }): string[] {
+  const names = ((params.modifiers as Modifier[] | undefined) ?? [])
+    .filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic')
+    .map(m => m.name)
+  const autoPonytail = params.autoReviewLenses === true && !params.noAutoLenses && !params.noPonytail
+  return [...new Set(autoPonytail ? [...names, 'ponytail'] : names)]
 }
 
 /**
@@ -229,10 +243,13 @@ register({
 
 // Unlike prose lenses, +ponytail is a specialized delegated workflow: the
 // critic hands one private helper the `/ponytail review` skill, verbatim.
+/** How to start a native subagent on each engine — one wording for every lens prompt. */
+export const NATIVE_SUBAGENT = '(Claude: the Agent tool; Codex: spawn_agent, then wait_agent)'
+
 export const PONYTAIL_INSTRUCTIONS = [
   'Specialized workflow — do NOT treat this as a generic prose lens and do NOT emulate it yourself.',
   '',
-  'Run exactly ONE native subagent for this block (Claude: the Agent tool; Codex: spawn_agent, then wait_agent). Quote this entire `+ponytail:` block verbatim in its assignment.',
+  `Run exactly ONE native subagent for this block ${NATIVE_SUBAGENT}. Quote this entire \`+ponytail:\` block verbatim in its assignment, with the review target inline.`,
   '',
   'Subagent assignment (quoted verbatim):',
   '- Invoke `/ponytail review` (the ponytail-review skill) against the review target, and follow that workflow.',

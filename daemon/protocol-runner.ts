@@ -14,7 +14,7 @@ import { pushToolSurface } from './tool-surface.js'
 import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
-import { withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
+import { requiredLenses, withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -530,13 +530,12 @@ function validateDelegatedBuildVerification(run: ProtocolRun, content: string): 
 // so the gate is on the output: one `+<lens>` section per required lens.
 // ponytail: trusts the reviewer not to write a section it didn't delegate; same trust as its own review.
 function validateRequestedReviewLenses(run: ProtocolRun, content: string): string | null {
-  const required = ((run.params.modifiers as Modifier[] | undefined) ?? [])
-    .filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic')
-    .map(m => m.name)
-  if (run.params.autoReviewLenses === true && !run.params.noAutoLenses && !run.params.noPonytail && !required.includes('ponytail')) required.push('ponytail')
-  const missing = required.filter(name => !new RegExp(`(^|\\n)[\\s#>*_]*\\+${name}\\b`, 'i').test(content))
+  // A section line: optional markdown lead (#, >, *, _, `, bullets, "1.") then `+name` not followed by more lens-name chars.
+  const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const missing = requiredLenses(run.params).filter(name =>
+    !new RegExp(`(^|\\n)[\\s#>*_\`-]*(\\d+\\.\\s*)?[*_\`]*\\+${esc(name)}(?![a-z0-9-])`, 'i').test(content))
   if (missing.length === 0) return null
-  return `missing lens section${missing.length > 1 ? 's' : ''}: ${missing.map(n => `\`+${n}:\``).join(', ')}. Run each required lens in its own native subagent and report it under a \`+<lens>:\` section (or \`+<lens>: helper returned nothing\`) before advancing`
+  return `missing lens section${missing.length > 1 ? 's' : ''}: ${missing.map(n => `+${n}:`).join(', ')}. Run each required lens in its own native subagent and report it under a "+<lens>:" section (or "+<lens>: helper returned nothing") before advancing`
 }
 
 // ---------------------------------------------------------------------------

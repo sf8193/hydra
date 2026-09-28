@@ -170,7 +170,7 @@ describe('private delivery', () => {
 
   test('truncates oversized private results before recording or delivery', async () => {
     const run = reviewRun()
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000, lens: 'ponytail' })
+    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
     const res = await executeTool('send_to_thread', {
       target: 'rh-critic', type: 'result', text: 'x'.repeat(70_000), visibility: 'private',
     }, 'rh-helper')
@@ -210,7 +210,7 @@ describe('private delivery', () => {
 
   test('registered review helpers must use private; public is rejected', async () => {
     const run = reviewRun()
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000, lens: 'ponytail' })
+    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
     const pub = await executeTool('send_to_thread', { target: 'rh-critic', type: 'result', text: 'x' }, 'rh-helper')
     expect(pub.isError).toBe(true)
     expect(pub.content[0].text).toContain('visibility="private"')
@@ -321,8 +321,8 @@ describe('required lens sections gate', () => {
     run.params.modifiers = [seedMod('architecture'), seedMod('ponytail')]
     const denied = await onRunAdvance('rh-critic', '**+ponytail:** nothing to cut', 'request_changes')
     expect(denied.ok).toBe(false)
-    expect((denied as any).reason).toContain('`+architecture:`')
-    expect((denied as any).reason).not.toContain('`+ponytail:`')
+    expect((denied as any).reason).toContain('+architecture:')
+    expect((denied as any).reason).not.toContain('+ponytail:')
     expect((await onRunAdvance('rh-critic', '+ponytail: nothing to cut\n\n## +architecture\nBoundary X leaks.', 'request_changes')).ok).toBe(true)
   })
 
@@ -338,6 +338,17 @@ describe('required lens sections gate', () => {
     run.params.modifiers = [seedMod('security')]
     expect((await onRunAdvance('rh-owner', 'Summary.')).ok).toBe(false)
     expect((await onRunAdvance('rh-owner', 'Summary.\n+security: no findings')).ok).toBe(true)
+  })
+
+  test('accepts common markdown section forms, including the refusal message\'s own form', async () => {
+    for (const form of ['`+security:` none', '- **+security:** none', '1. +security: none', '> +security: none', '### +security', '__+security__: none']) {
+      const run = reviewRun()
+      run.params.modifiers = [seedMod('security')]
+      expect((await onRunAdvance('rh-critic', `Critique.\n${form}`, 'request_changes')).ok).toBe(true)
+    }
+    const run = reviewRun()
+    run.params.modifiers = [seedMod('security')]
+    expect((await onRunAdvance('rh-critic', '### +security-review\nx', 'request_changes')).ok).toBe(false)   // a longer name is not this lens
   })
 
   test('a mention mid-sentence is not a section', async () => {

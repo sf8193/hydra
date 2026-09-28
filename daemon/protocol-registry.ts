@@ -26,7 +26,6 @@ export type ProtocolChildSpawnMetadata = {
   headless: boolean
   readThread: boolean
   phaseBudgetMs?: number
-  lens?: string
 }
 
 // Protocol names are plain strings — intentionally not a union type so new
