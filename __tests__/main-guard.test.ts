@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { shouldHoldIncumbentMain } from '../daemon/main-guard.js'
+import { sessionFlapAction, shouldHoldIncumbentMain } from '../daemon/main-guard.js'
 
 describe('shouldHoldIncumbentMain', () => {
   test('no incumbent → never hold (first/only main registers normally)', () => {
@@ -24,5 +24,22 @@ describe('shouldHoldIncumbentMain', () => {
 
   test('no incumbent overrides cooldown → never hold without a rival socket', () => {
     expect(shouldHoldIncumbentMain({ hasOtherIncumbent: false, flapping: false, now: 100, cooldownUntil: 999 })).toBe(false)
+  })
+})
+
+describe('sessionFlapAction (spawned sessions)', () => {
+  test('not flapping, not held → accept (normal reconnects and replacements)', () => {
+    expect(sessionFlapAction({ hasOtherIncumbent: true, held: false, flapping: false })).toBe('accept')
+    expect(sessionFlapAction({ hasOtherIncumbent: false, held: false, flapping: false })).toBe('accept')
+  })
+  test('flapping with another live bridge on the id → hold the incumbent, do NOT kill the session', () => {
+    expect(sessionFlapAction({ hasOtherIncumbent: true, held: false, flapping: true })).toBe('hold')
+  })
+  test('flapping alone (no incumbent) → kill: a genuine single-bridge reconnect loop still trips the breaker', () => {
+    expect(sessionFlapAction({ hasOtherIncumbent: false, held: false, flapping: true })).toBe('kill')
+  })
+  test('a hold in force → refuse the newcomer (and the caller never counts it as a flap)', () => {
+    expect(sessionFlapAction({ hasOtherIncumbent: true, held: true, flapping: false })).toBe('refuse')
+    expect(sessionFlapAction({ hasOtherIncumbent: true, held: true, flapping: true })).toBe('refuse')
   })
 })

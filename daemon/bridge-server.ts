@@ -17,7 +17,7 @@ import { clearPendingReply, settlePendingOnReact, notePendingFromQueue } from '.
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleCLIRequest, type CLIRequest } from './cli-handler.js'
 import { watchPr, getWatchesBySession } from './pr-watch.js'
-import { shouldHoldIncumbentMain } from './main-guard.js'
+import { sessionFlapAction, shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { safeSend } from './util.js'
@@ -108,7 +108,8 @@ function autoWatchPrUrls(sessionId: string, text: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge flap circuit breaker — kill sessions that reconnect too rapidly
+// Bridge flap circuit breaker — kill sessions that reconnect too rapidly, unless another
+// live bridge holds the id (then hold the incumbent: see sessionFlapAction)
 // ---------------------------------------------------------------------------
 
 const FLAP_WINDOW_MS = 60_000
@@ -140,6 +141,9 @@ function trackRegistration(sessionId: string): boolean {
 let duplicateMainCooldownUntil = 0
 let duplicateMainIncumbentSocket: import('net').Socket | undefined
 
+// The same hold for spawned sessions: the incumbent socket we are keeping, until when.
+const incumbentHolds = new Map<string, { until: number; socket: import('net').Socket }>()
+
 // ---------------------------------------------------------------------------
 // Bridge protocol handler
 // ---------------------------------------------------------------------------
@@ -169,6 +173,40 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
       // session traffic uses codexEngine, so daemon-socket registrations for a
       // Codex record are control-plane connections by definition.
       conn.connectionRole = connectionRoleFor(msg, info)
+
+      // Decide flap/hold BEFORE anything below mutates the session (its claudeSessionId, thread history):
+      // a refused or killed registration must leave the live session untouched.
+      if (sessionId !== 'main' && conn.connectionRole !== 'control') {
+        const incumbent = transport.get(sessionId)
+        const hasOtherIncumbent = !!incumbent && incumbent.socket !== conn.socket
+        const hold = incumbentHolds.get(sessionId)
+        const held = hasOtherIncumbent && !!hold && Date.now() < hold.until && hold.socket === incumbent!.socket
+        if (hold && !held) incumbentHolds.delete(sessionId) // expired, or its incumbent is gone
+        // A refused registration must not feed the flap detector (same rule as 'main').
+        const action = sessionFlapAction({ hasOtherIncumbent, held, flapping: !held && trackRegistration(sessionId) })
+        if (action === 'refuse' || action === 'hold') {
+          if (action === 'hold') incumbentHolds.set(sessionId, { until: Date.now() + MAIN_COOLDOWN_MS, socket: incumbent!.socket })
+          process.stderr.write(action === 'hold'
+            ? `daemon: bridge for ${sessionId} flapping with another live bridge on the same id — holding the incumbent, refusing newcomer. A second process is using this session's HYDRA_SESSION_ID (a probe or child claude run from its shell?); stop it. Session NOT killed.\n`
+            : `daemon: bridge for ${sessionId}: another live bridge holds this id — refusing newcomer\n`)
+          try { conn.socket.end() } catch {}
+          break
+        }
+        if (action === 'kill') {
+          if (info) {
+            process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
+            try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+            info.deadAt = Date.now()
+            registry.persist()
+            void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
+          } else {
+            process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
+          }
+          try { conn.socket.end() } catch {}
+          break
+        }
+      }
+
       // Only a Claude record carries a Claude session id; the Codex MCP sidecar registers here too.
       if (info && (info.engine ?? 'claude') === 'claude') {
         const resolved = claudeSessionId || discoverClaudeSessionId(info.tmuxName)
@@ -201,20 +239,6 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           },
         })
         process.stderr.write(`daemon: control bridge registered for session ${sessionId}\n`)
-        break
-      }
-
-      if (sessionId !== 'main' && trackRegistration(sessionId)) {
-        if (info) {
-          process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
-          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
-          info.deadAt = Date.now()
-          registry.persist()
-          void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
-        } else {
-          process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
-        }
-        try { conn.socket.end() } catch {}
         break
       }
 
