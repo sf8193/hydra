@@ -108,16 +108,18 @@ describe('Hydra worktrees: kept work is never destroyed later', () => {
   }
   const commit = (wt: string, m: string) => git(wt, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', m)
 
-  test('a name reused after its worktree was kept: createWorktree refuses instead of deleting the commit', async () => {
+  test('a name reused after its worktree was kept: the new one steps aside, the commit survives', async () => {
     const { base, repo } = workspace()
     const cfg = { repoName: 'app', spawnCwd: base, branchName: 'wt/vale', dirSuffix: 'app-vale' }
     const first = await createWorktree(cfg)
     commit(first.worktreePath, 'unpushed work')
     const sha = git(first.worktreePath, 'rev-parse', 'HEAD')
     expect(await destroyWorktree(repo, first.worktreePath, cfg.branchName)).toContain('unpushed')
-    await expect(createWorktree(cfg)).rejects.toThrow(/kept from an earlier session/)
-    expect(git(repo, 'cat-file', '-t', sha)).toBe('commit')
+    const second = await createWorktree(cfg)
+    expect(second.worktreePath).toBe(first.worktreePath + '-2')
+    expect(second.branch).toBe('wt/vale-2')
     expect(git(repo, 'rev-parse', cfg.branchName)).toBe(sha)
+    expect(existsSync(first.worktreePath)).toBe(true)
   })
 
   test('destroyWorktree keeps uncommitted changes and work on a branch the session switched to', async () => {

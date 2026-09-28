@@ -369,7 +369,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       // Work at risk (uncommitted, mid-operation, not on a remote) is kept, never destroyed.
       void (async () => {
         const kept = await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch)
-        if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${info.worktreePath}\` (branch \`${branch}\`) kept: ${kept}. Remove it once the work is safe — a new spawn can't reuse this name until then.`).catch(() => {})
+        if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${info.worktreePath}\` (branch \`${branch}\`) kept: ${kept}. Remove it once the work is safe.`).catch(() => {})
       })().catch(err => {
         process.stderr.write(`daemon: worktree cleanup failed for ${info.tmuxName}: ${err}\n`)
       })

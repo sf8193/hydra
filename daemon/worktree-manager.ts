@@ -117,34 +117,39 @@ export async function createWorktree(config: WorktreeConfig): Promise<WorktreeRe
   const { repoName, spawnCwd, branchName, dirSuffix } = config
   const repoDir = resolveAndValidateRepo(repoName, spawnCwd)
 
-  const wtDir = resolve(repoDir, '..', '.worktrees', dirSuffix)
-
   // Serialize per-repo so concurrent spawns/recoveries on the same repo don't race the
   // worktree admin lock.
-  const baseBranch = await withRepoLock(repoDir, async () => {
-    // Clean up stale worktree/branch from previous runs — unless they hold work (a
-    // killed session's worktree is kept then, and its name may be reused).
-    const risk = await workAtRisk(repoDir, wtDir, branchName)
-    if (risk) throw new Error(`worktree ${wtDir} / branch ${branchName} was kept from an earlier session (${risk}) — remove it or spawn under another name`)
+  return withRepoLock(repoDir, async () => {
+    // A stale worktree/branch from a previous run is cleaned up — unless it holds work
+    // (a killed session's worktree is kept then, and its name is free for reuse): step
+    // aside to <name>-2, -3, … instead of touching it.
+    let wtDir = '', branch = ''
+    for (let n = 1; ; n++) {
+      if (n > 5) throw new Error(`worktree ${dirSuffix}: ${dirSuffix} and -2…-5 all hold kept work — remove some`)
+      const suffix = n === 1 ? '' : `-${n}`
+      wtDir = resolve(repoDir, '..', '.worktrees', dirSuffix + suffix)
+      branch = branchName + suffix
+      const risk = await workAtRisk(repoDir, wtDir, branch)
+      if (!risk) break
+      process.stderr.write(`daemon: worktree: ${wtDir} (${branch}) kept from an earlier session (${risk}); trying the next name\n`)
+    }
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'remove', wtDir, '--force'], { timeout: 10_000 }) } catch {}
     try { await execAsync('git', ['-C', repoDir, 'worktree', 'prune'], { timeout: 5_000 }) } catch {}
-    try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branchName], { timeout: 5_000 }) } catch {}
+    try { await execAsync('git', ['-C', repoDir, 'branch', '-D', branch], { timeout: 5_000 }) } catch {}
 
     // Resolve base branch: current branch → origin default → main → master
-    const base = await resolveBaseBranch(repoDir)
+    const baseBranch = await resolveBaseBranch(repoDir)
 
     // Create worktree
     try {
-      await execAsync('git', ['-C', repoDir, 'worktree', 'add', '-b', branchName, wtDir, base], { timeout: 15_000 })
-      process.stderr.write(`daemon: worktree: created ${wtDir} (branch ${branchName}) from ${base}\n`)
+      await execAsync('git', ['-C', repoDir, 'worktree', 'add', '-b', branch, wtDir, baseBranch], { timeout: 15_000 })
+      process.stderr.write(`daemon: worktree: created ${wtDir} (branch ${branch}) from ${baseBranch}\n`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       throw new Error(`failed to create worktree: ${msg}`)
     }
-    return base
+    return { repoDir, worktreePath: wtDir, branch, baseBranch }
   })
-
-  return { repoDir, worktreePath: wtDir, branch: branchName, baseBranch }
 }
 
 // 'attached' = worktree now materialized at the path; 'branch-gone' = the branch no
