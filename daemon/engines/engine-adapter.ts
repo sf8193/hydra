@@ -163,12 +163,14 @@ export interface EngineAdapter {
   stop(info: SessionInfo): Promise<StopResult>
 
   // Observation
-  // Is a delivery channel connected? Backs transport.has().
+  // Is a delivery channel connected? Backs transport.has(). Codex: same answer as isAlive.
   isConnected(info: SessionInfo): boolean
   // The session's turn as seen now: last activity, and whether the turn that
   // answers a message delivered at sinceMs ended and what it said.
   turn(info: SessionInfo, sinceMs: number): Turn
-  isAlive(info: SessionInfo): Promise<boolean>
+  // Is the execution alive? Claude: its tmux session. Codex: its app-server socket is
+  // connected or its runtime is reconnecting it (tmux is only a replaceable anchor).
+  isAlive(info: SessionInfo): boolean
   peek(info: SessionInfo, lines?: number): string
   usage(info: SessionInfo): ContextUsage | null
   // Spend so far, or null when it can't be read yet (Raindrop counts the session unresolved).

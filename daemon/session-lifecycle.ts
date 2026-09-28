@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
@@ -518,7 +518,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          try { execFileSync('tmux', ['has-session', '-t', existing.tmuxName], { stdio: 'pipe' }) } catch {
+          if (!executionAlive(existing)) {
             respawnCount = (existing.respawnCount ?? 0) + 1
             // Lossless respawn (mirror the existingThreadId branch): carry the dead
             // record's deliverables/description to the replacement. Worktree destruction
@@ -591,7 +591,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (existingId) {
       const existing = registry.get(existingId)
       if (existing) {
-        if (tmuxHasSession(existing.tmuxName)) {
+        if (executionAlive(existing)) {
           throw new Error(`thread has a live session (${existing.tmuxName}) — kill it first or spawn in a new thread`)
         }
         respawnCount = (existing.respawnCount ?? 0) + 1

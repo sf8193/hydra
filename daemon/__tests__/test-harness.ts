@@ -10,7 +10,7 @@ import type { CompletionEvent } from '../protocol-types.js'
 import type { SessionInfo } from '../sessions.js'
 import { withoutIntents, type EngineAdapter } from '../engines/engine-adapter.js'
 import type { SessionLabel } from '../../shared/constants.js'
-import { resolveSpawnLabel } from '../util.js'
+import { resolveSpawnLabel, tmuxHasSession } from '../util.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
 const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP, setLifecycle, resetLifecycle } = __test
@@ -448,6 +448,7 @@ export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdap
     provider: 'claude',
     channel: 'bridge',
     isConnected: (info: SessionInfo) => transport.bridges.has(info.sessionId),
+    isAlive: (info: SessionInfo) => tmuxHasSession(info.tmuxName),
     deliver: async (info: SessionInfo, msg: Record<string, unknown>) => { transport.writeOrQueue(info.sessionId, withoutIntents(msg)); return { status: 'accepted' } },
     turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null }),
     recoveryPlan: () => ({ generic: true, resume: null, fork: null }),

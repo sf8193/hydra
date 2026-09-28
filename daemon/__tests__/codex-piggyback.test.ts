@@ -26,7 +26,7 @@ type DeliverTurn = (info: any, msg: any) => any
 
 /** A real Codex adapter over `piggyback` whose single-turn delivery is `deliverTurn`. */
 function codexAdapter(piggyback: CodexPiggyback, deliverTurn: DeliverTurn): CodexEngineAdapter {
-  const adapter = new CodexEngineAdapter({} as any, undefined, piggyback)
+  const adapter = new CodexEngineAdapter({ isConnected: () => true } as any, undefined, piggyback)
   adapter.deliverTurn = deliverTurn
   return adapter
 }

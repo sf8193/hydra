@@ -4,7 +4,7 @@ import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { atomicWriteFileSync, formatDuration, tmuxHasSession } from './util.js'
+import { atomicWriteFileSync, formatDuration, executionAlive } from './util.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -638,7 +638,7 @@ export function restoreWatches(entries: WatchEntry[], newSessionId: string, newT
     const existing = watches.get(entry.prUrl)
     if (existing && existing.sessionId !== newSessionId) {
       const owner = registry.get(existing.sessionId)
-      if (owner && tmuxHasSession(owner.tmuxName)) continue
+      if (owner && executionAlive(owner)) continue
     }
     watches.set(entry.prUrl, { ...entry, sessionId: newSessionId, threadId: newThreadId })
     restored++

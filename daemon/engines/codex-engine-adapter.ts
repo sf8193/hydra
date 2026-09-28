@@ -25,7 +25,7 @@ import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
-import { reconnectCodexSessions } from './codex-runtime.js'
+import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -77,10 +77,10 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
-  // PINNED C1: always true, as transport.has() answered before S2. Reporting
-  // this.engine.isConnected is PR-CONN (needs disconnect-time grace first).
-  isConnected(_info: SessionInfo): boolean {
-    return true
+  // The live app-server socket, or the runtime reconnecting it (the grace), is the
+  // truth. A queued turn waits out a reconnect, so deliverable == alive.
+  isConnected(info: SessionInfo): boolean {
+    return this.isAlive(info)
   }
 
   // ⚠ F4s (pinned, fixed in S10): tmux window_activity of the session's current
@@ -177,11 +177,12 @@ export class CodexEngineAdapter implements EngineAdapter {
   // Every delivery is a priced turn, so the intents decide whether it gets one.
   deliver(info: SessionInfo, msg: Notification): Promise<DeliveryResult> {
     if (msg.optional === true) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'optional delivery dropped for codex' })
+    // Accepting into a dead session's queue would lose it silently.
+    if (!this.isAlive(info)) return Promise.resolve({ status: 'rejected', retryable: false, reason: 'session is dead — resume or respawn' })
     // Ride the next turn the user creates instead of paying for a standalone
     // one, CI failures and changes-requested included — Sam's call
     // (2026-09-15): the 1h backstop bounds the delay, no urgency carve-out.
-    // A dead session has no next turn: deliver now.
-    if (msg.lowPriority === true && !info.deadAt) {
+    if (msg.lowPriority === true) {
       this.piggyback.buffer(info.sessionId, msg.content as string)
       return Promise.resolve({ status: 'accepted', via: 'piggyback-buffer' })
     }
@@ -240,14 +241,10 @@ export class CodexEngineAdapter implements EngineAdapter {
     return { status: 'stopped' }
   }
 
-  async isAlive(info: SessionInfo): Promise<boolean> {
-    if (this.engine.isConnected(info.sessionId)) return true
-    // Check if the app-server socket is reachable even when we're not connected
-    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
-    try {
-      if (await this.engine.isSocketLive(sockPath)) return true
-    } catch {}
-    return tmuxHasSession(info.tmuxName)
+  // Not tmux: the hydra-anchor window outlives a dead app-server. Not deadAt: the
+  // runtime writes that as the verdict when reconnecting gives up.
+  isAlive(info: SessionInfo): boolean {
+    return this.engine.isConnected(info.sessionId) || isCodexReconnecting(info.sessionId)
   }
 
   peek(info: SessionInfo, lines: number = 50): string {
@@ -306,6 +303,8 @@ export class CodexEngineAdapter implements EngineAdapter {
       const windows = execFileSync('tmux', ['list-windows', '-t', info.tmuxName, '-F', '#{window_name}'],
         { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
       if (windows.split('\n').includes('hydra-chat')) return target
+      // Never start a TUI against a dead server; the anchor alone would let this through.
+      if (!this.engine.isConnected(info.sessionId)) return null
       const homeName = info.codexHomeName ?? info.tmuxName
       const codexHome = join(homedir(), '.codex', `hydra-${homeName}`)
       const socket = codexSocketPath(homeName)
@@ -390,7 +389,9 @@ export class CodexEngineAdapter implements EngineAdapter {
         if (stale()) return false
         if (result.model && info.sessionMetadata) info.sessionMetadata.model = result.model
         process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (resumed)\n`)
-        return true
+        // A close during the resume's queue drain can already have dropped the
+        // socket (and its event is swallowed while we're reconnecting).
+        return this.engine.isConnected(info.sessionId)
       } catch (err: any) {
         process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
         try { this.engine.disconnect(info.sessionId) } catch {}
@@ -409,7 +410,7 @@ export class CodexEngineAdapter implements EngineAdapter {
         void safeSend(info.threadId, `⚠️ Session resumed but conversation history was lost. The agent is starting fresh.`)
       }
       process.stderr.write(`codex-adapter: reconnected ${info.tmuxName} (new thread)\n`)
-      return true
+      return this.engine.isConnected(info.sessionId)
     } catch (err: any) {
       process.stderr.write(`codex-adapter: fresh connect failed for ${info.tmuxName}: ${err?.message || err}\n`)
       try { this.engine.disconnect(info.sessionId) } catch {}

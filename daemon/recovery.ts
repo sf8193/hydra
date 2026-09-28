@@ -10,7 +10,7 @@ import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, SessionInfo } from './sessions.js'
 import { doSpawnSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
-import { tmuxHasSession, isAlive, safeSend, baseNameFromBranch } from './util.js'
+import { tmuxHasSession, isAlive, executionAlive, safeSend, baseNameFromBranch } from './util.js'
 import { parsePrUrl, getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import type { WatchEntry } from './pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
@@ -362,7 +362,7 @@ export async function dedupForRecovery(candidates: SessionInfo[]): Promise<{
   const candidateIds = new Set(candidates.map(c => c.sessionId))
   const liveKeys = new Map<string, SessionInfo>()  // workKey → live owner (a real competitor, not a candidate)
   for (const info of registry.values()) {
-    if (info.sessionType === 'thread_guest' || !tmuxHasSession(info.tmuxName)) continue
+    if (info.sessionType === 'thread_guest' || !executionAlive(info)) continue
     if (candidateIds.has(info.sessionId)) continue
     const key = workKey(info)
     if (key && !liveKeys.has(key)) liveKeys.set(key, info)

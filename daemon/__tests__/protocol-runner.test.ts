@@ -295,6 +295,16 @@ describe('protocol runner — disconnect / reconnect', () => {
     expect(run.disconnectTimers.has('test-critic')).toBe(true)
   })
 
+  // A disconnect episode is handled once: repeat reports (e.g. a health tick every
+  // 30s on a dead actor) must not stack timers.
+  test('a repeated disconnect of the same episode keeps the first timer', () => {
+    const run = createTestRun()
+    onRunDisconnect('test-critic')
+    const first = run.disconnectTimers.get('test-critic')
+    onRunDisconnect('test-critic')
+    expect(run.disconnectTimers.get('test-critic')).toBe(first)
+  })
+
   test('reconnect clears grace timer', () => {
     const run = createTestRun()
 
@@ -633,7 +643,7 @@ describe('protocol runner — health monitor', () => {
 })
 
 describe('health monitor — callback behavior', () => {
-  const fakeAdapter = (alive: boolean) => harnessFakeAdapter({ isAlive: async () => alive, usage: () => null })
+  const fakeAdapter = (alive: boolean) => harnessFakeAdapter({ isAlive: () => alive, usage: () => null })
 
   function setupSession(sessionId: string, overrides: Record<string, unknown> = {}) {
     registry.set(sessionId, {

@@ -257,7 +257,8 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
       sessionId, engine: 'codex', threadId: 'thread-1', ...opts,
       // A real Codex adapter (it owns the piggyback buffer) with only its
       // one-turn delivery faked.
-      adapter: Object.assign(new CodexEngineAdapter({} as any), {
+      // A dead record's app-server socket is gone (the runtime stamps deadAt then).
+      adapter: Object.assign(new CodexEngineAdapter({ isConnected: () => !opts.deadAt } as any), {
         deliverTurn: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } },
       }),
     } as any)
@@ -301,13 +302,14 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
     expect(written[0]).toContain('CI failed on PR #2')
   })
 
-  test('a dead codex session does not get buffered — the !info.deadAt guard is live', () => {
+  // Dead: rejected outright — neither buffered for a turn that will never come
+  // nor delivered (Sam, 2026-09-28: PR notices may be lost).
+  test('a dead codex session neither buffers nor delivers', () => {
     codexSession('pr-s3', { deadAt: Date.now() })
     deliverPrUpdate('pr-s3', 'thread-1', 'CI failed on PR #3')
-    // Falls through to the immediate path (dead sessions aren't piggyback-eligible);
-    // whether that immediate send actually reaches anyone is transport's problem,
-    // not this function's — the guard's job is just "don't buffer for a dead session."
-    expect(delivered).toEqual(['CI failed on PR #3'])
+    expect(delivered).toEqual([])
+    const info = registry.get('pr-s3') as any
+    expect(info.adapter.piggyback.begin('pr-s3')).toBeUndefined()
   })
 
   test('an unknown session id does not throw', () => {

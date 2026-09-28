@@ -9,6 +9,7 @@ import { join } from 'path'
 import { handleCLIRequest } from '../cli-handler.js'
 import { registry } from '../sessions.js'
 import { engines } from '../engines/instances.js'
+import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const CLI = join(import.meta.dir, '..', '..', 'cli', 'hydra.ts')
@@ -64,11 +65,22 @@ describe('hydra attach (Z1)', () => {
     expect(r.code).toBe(0)
   })
 
+  const codexAdapter = (connected: boolean) => new CodexEngineAdapter({ isConnected: () => connected } as any)
+
   test('codex session → tmux attach to its hydra-chat window', async () => {
-    const name = seed('codex', { codexThreadId: 'T-z1' }); fake.alive(name)
+    const name = seed('codex', { codexThreadId: 'T-z1', adapter: codexAdapter(true) }); fake.alive(name)
     const r = await attach(name)
     expect(r.attached).toEqual([`attach -t ${name}:hydra-chat`])
     expect(r.code).toBe(0)
+  })
+
+  // Only the anchor survives a dead app-server; no TUI is started against it.
+  test('codex session, app-server gone (anchor tmux only) → exit 1, no TUI started', async () => {
+    const name = seed('codex', { codexThreadId: 'T-z1d', adapter: codexAdapter(false) }); fake.alive(name)
+    const r = await attach(name)
+    expect(r.code).toBe(1)
+    expect(r.attached).toEqual([])
+    expect(fake.calls().some(c => c.startsWith('new-window'))).toBe(false)
   })
 
   test('no surface (tmux gone) → exit 1, nothing attached', async () => {
