@@ -11,7 +11,7 @@ import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 import { deliverPrUpdate } from '../pr-watch.js'
 import { __test } from '../protocol-runner.js'
 
@@ -38,12 +38,7 @@ const put = (id: string, extra: Record<string, unknown>) =>
 const claude = (id: string) => put(id, { engine: 'claude', adapter: new ClaudeEngine(transport) })
 const codex = (id: string, calls: string[], extra: Record<string, unknown> = {}) => put(id, {
   engine: 'codex', ...extra,
-  adapter: new CodexEngineAdapter({
-    isConnected: () => !extra.deadAt, // dead ⇔ its app-server socket is gone
-    queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return true },
-    // #378: steer returns its correlated DeliveryResult.
-    steer: async (_id: string, text: string) => { calls.push('steer:' + text); return { status: 'accepted' as const, via: 'steer' } },
-  } as any),
+  adapter: fakeCodexAdapter({ calls, isConnected: () => !extra.deadAt }), // dead ⇔ its app-server socket is gone
 })
 const bridge = (id: string) => {
   const written: string[] = []

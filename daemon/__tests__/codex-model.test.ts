@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { CodexEngine, parseCodexContextUsage, selectDefaultCodexModel } from '../codex-engine.js'
 import { EventEmitter } from 'events'
+import { fakeCodexAdapter } from './test-harness.js'
 
 describe('Codex model continuity', () => {
   test('an explicit fork model reaches the native fork request', async () => {
@@ -597,24 +598,16 @@ describe('Codex ! interrupt', () => {
   })
 
   test('adapter uses the app-server interrupt when connected', async () => {
-    const { CodexEngineAdapter } = await import('../engines/codex-engine-adapter.js')
     const calls: string[] = []
-    const fake: any = { isConnected: () => true, interruptActiveTurn: async (id: string) => { calls.push(id); return true } }
-    await new CodexEngineAdapter(fake).interrupt({ sessionId: 's', tmuxName: 'nope' } as any)
-    expect(calls).toEqual(['s'])
+    await fakeCodexAdapter({ calls }).interrupt({ sessionId: 's', tmuxName: 'nope' } as any)
+    expect(calls).toEqual(['interrupt:s'])
   })
 })
 
 describe('Codex adapter delivery modes', () => {
   test('next-turn queues a distinct turn and never steers', async () => {
-    const { CodexEngineAdapter } = await import('../engines/codex-engine-adapter.js')
     const calls: string[] = []
-    const fake: any = {
-      isConnected: () => true,
-      queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return true },
-      steer: (_id: string, text: string) => { calls.push('steer:' + text) },
-    }
-    const result = await new CodexEngineAdapter(fake).deliver({ sessionId: 's', tmuxName: 'x' } as any, { type: 'notification', content: 'hi', deferUntilTurnComplete: true, meta: { downloaded_files: '/a.png' } })
+    const result = await fakeCodexAdapter({ calls }).deliver({ sessionId: 's', tmuxName: 'x' } as any, { type: 'notification', content: 'hi', deferUntilTurnComplete: true, meta: { downloaded_files: '/a.png' } })
     expect(calls).toEqual(['queue:hi\n\n[attachments: /a.png]'])
     expect(result).toEqual({ status: 'accepted', via: 'queued-turn' })
   })

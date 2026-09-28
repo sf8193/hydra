@@ -4,7 +4,7 @@ import { test, expect } from 'bun:test'
 import { EventEmitter } from 'events'
 import { CodexEngine } from '../codex-engine.js'
 import { classifyPersisted } from '../engines/boot.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 import { registry } from '../sessions.js'
 import { reconnectCodexSessions, codexEngine } from '../engines/codex-runtime.js'
 const tick = () => new Promise(r => setTimeout(r, 0))
@@ -59,7 +59,7 @@ test('boot sweep cannot finalise replaced record, including a new ID in same thr
  }
 })
 test('fresh-connect verdict checks actual socket',async()=>{
- const adapter=new CodexEngineAdapter({isSocketLive:async()=>true,connect:async()=>({threadId:'t'}),isConnected:()=>false} as any)
+ const adapter=fakeCodexAdapter({isSocketLive:async()=>true,connect:async()=>({threadId:'t'}),isConnected:()=>false})
  const info:any={sessionId:'fresh',tmuxName:'fresh',adapter};registry.set('fresh',info);try{expect(await adapter.reconnect(info)).toBe(false)}finally{registry.delete('fresh')}
 })
 test('boot sweep for all eight persisted states',async()=>{

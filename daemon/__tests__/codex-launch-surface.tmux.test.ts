@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 
 // Real-tmux tests on an isolated server (own TMUX_TMPDIR, cleanup by explicit -S).
 const hasTmux = Bun.spawnSync(['tmux', '-V']).exitCode === 0
@@ -29,7 +30,7 @@ async function withIsolatedPath(fakes: Record<string, string>, fn: (dir: string)
 // F3: the TUI window must be current, so callers targeting the bare session hit it.
 test.skipIf(!hasTmux)('surface leaves hydra-chat as the current window', async () => {
   await withIsolatedPath({ codex: '#!/bin/sh\nexec sleep 30\n' }, dir => {
-    const adapter = new CodexEngineAdapter({ isConnected: () => true } as any)
+    const adapter = fakeCodexAdapter()
     expect(adapter.surface({ sessionId: 's', tmuxName: 'r1-surface', codexThreadId: 't' } as any)).toBe('r1-surface:hydra-chat')
     const sock = join(dir, `tmux-${process.getuid!()}`, 'default')
     const current = execFileSync('tmux', ['-S', sock, 'display-message', '-p', '-t', 'r1-surface', '#{window_name}'],

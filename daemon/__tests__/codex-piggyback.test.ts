@@ -16,7 +16,7 @@ import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { on } from '../event-bus.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 import { CodexPiggyback } from '../engines/codex-piggyback.js'
 
 // Suppress stderr
@@ -25,8 +25,8 @@ process.stderr.write = (() => true) as any
 type DeliverTurn = (info: any, msg: any) => any
 
 /** A real Codex adapter over `piggyback` whose single-turn delivery is `deliverTurn`. */
-function codexAdapter(piggyback: CodexPiggyback, deliverTurn: DeliverTurn): CodexEngineAdapter {
-  const adapter = new CodexEngineAdapter({ isConnected: () => true } as any, undefined, piggyback)
+function codexAdapter(piggyback: CodexPiggyback, deliverTurn: DeliverTurn) {
+  const adapter = fakeCodexAdapter({}, undefined, piggyback)
   adapter.deliverTurn = deliverTurn
   return adapter
 }
@@ -517,14 +517,8 @@ describe('piggyback delivery paths (adapter-policy T7)', () => {
   const realStderr = process.stderr.write
   const put = (sessionId: string, extra: Record<string, unknown>) =>
     registry.set(sessionId, { sessionId, threadId: 'chat1', tmuxName: sessionId, ...extra } as any)
-  const codexEngine = (calls: string[], opts: { queueOk?: boolean } = {}) => ({
-    isConnected: () => true,
-    queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return opts.queueOk ?? true },
-    // #378: steer returns its correlated DeliveryResult.
-    steer: async (_id: string, text: string) => { calls.push('steer:' + text); return { status: 'accepted' as const, via: 'steer' } },
-  })
-  const codex = (sessionId: string, calls: string[], opts: { queueOk?: boolean } = {}, piggyback = pb) =>
-    put(sessionId, { engine: 'codex', adapter: new CodexEngineAdapter(codexEngine(calls, opts) as any, undefined, piggyback) })
+  const codex = (sessionId: string, calls: string[], overrides: Record<string, unknown> = {}, piggyback = pb) =>
+    put(sessionId, { engine: 'codex', adapter: fakeCodexAdapter({ calls, ...overrides }, undefined, piggyback) })
 
   beforeEach(() => {
     t = new BridgeTransport()
@@ -559,7 +553,7 @@ describe('piggyback delivery paths (adapter-policy T7)', () => {
   // automatic re-carry) and surfaces delivery:failed.
   test('E1a codex rejected carry: the piggyback prefix is retained and held (#378)', async () => {
     const calls: string[] = []
-    codex('t7-x3', calls, { queueOk: false }) // retiring: queueTurn refuses → rejected
+    codex('t7-x3', calls, { queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return false } }) // retiring: queueTurn refuses → rejected
     pb.buffer('t7-x3', 'buffered')
     t.sendOrQueue('t7-x3', { type: 'notification', content: 'first', allowPiggyback: true, deferUntilTurnComplete: true })
     await new Promise(resolve => setTimeout(resolve, 0))

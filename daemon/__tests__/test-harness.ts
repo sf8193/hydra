@@ -11,6 +11,8 @@ import type { SessionInfo } from '../sessions.js'
 import { withoutIntents, type EngineAdapter } from '../engines/engine-adapter.js'
 import type { SessionLabel } from '../../shared/constants.js'
 import { resolveSpawnLabel, tmuxHasSession } from '../util.js'
+import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import type { CodexPiggyback } from '../engines/codex-piggyback.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
 const { runs, threadToRun, sessionToRun, resetTimeout: armTimeout, WARNING_BEFORE_TIMEOUT_MS, TOTAL_PHASE_CAP_FACTOR: _CAP, setLifecycle, resetLifecycle } = __test
@@ -452,4 +454,45 @@ export function fakeAdapter(overrides: Record<string, unknown> = {}): EngineAdap
     recoveryPlan: () => ({ generic: true, resume: null, fork: null }),
     ...overrides,
   } as unknown as EngineAdapter
+}
+
+/**
+ * Shared fake CodexEngine: a safe default for every engine method
+ * CodexEngineAdapter calls, so no test's fake is missing one. queueTurn, steer
+ * and interruptActiveTurn record `queue:<text>`, `steer:<text>`,
+ * `interrupt:<sessionId>` into `calls` (pass your own array as `calls` to read
+ * it back). Override anything per test.
+ */
+export function fakeCodexEngine(overrides: Record<string, unknown> = {}): Record<string, any> {
+  const e: Record<string, any> = {
+    calls: [] as string[],
+    isConnected: () => true,
+    isSocketLive: async () => true,
+    queueTurn: (_id: string, text: string) => { e.calls.push('queue:' + text); return true },
+    steer: async (_id: string, text: string) => { e.calls.push('steer:' + text); return { status: 'accepted' as const, via: 'steer' } },
+    interruptActiveTurn: async (id: string) => { e.calls.push('interrupt:' + id); return true },
+    connect: async () => ({ threadId: 'fake-thread' }),
+    connectAndResume: async () => ({}),
+    connectAndFork: async () => ({ threadId: 'fake-fork' }),
+    disconnect: () => {},
+    discardSession: () => ({ queued: 0, unknown: 0 }),
+    ...overrides,
+  }
+  return e
+}
+
+/** Fake app-server process helpers: no-ops that record `mcp:<sid>`, `start:<home>`, `stop:<home>`. */
+export function fakeCodexProc() {
+  const calls: string[] = []
+  return {
+    calls,
+    registerMcp: (_homeDir: string, sid: string) => { calls.push('mcp:' + sid) },
+    start: (o: { homeName: string }) => { calls.push('start:' + o.homeName); return 0 },
+    stop: (home: string) => { calls.push('stop:' + home); return true },
+  }
+}
+
+/** A real CodexEngineAdapter over fakeCodexEngine and (by default) fakeCodexProc. */
+export function fakeCodexAdapter(engineOverrides: Record<string, unknown> = {}, proc?: unknown, piggyback?: CodexPiggyback): CodexEngineAdapter {
+  return new CodexEngineAdapter(fakeCodexEngine(engineOverrides) as any, (proc ?? fakeCodexProc()) as any, piggyback)
 }

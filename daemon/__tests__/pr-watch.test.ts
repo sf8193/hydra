@@ -3,7 +3,7 @@ import { deliverPrUpdate } from '../pr-watch.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -258,7 +258,7 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
       // A real Codex adapter (it owns the piggyback buffer) with only its
       // one-turn delivery faked.
       // A dead record's app-server socket is gone (the runtime stamps deadAt then).
-      adapter: Object.assign(new CodexEngineAdapter({ isConnected: () => !opts.deadAt } as any), {
+      adapter: Object.assign(fakeCodexAdapter({ isConnected: () => !opts.deadAt }), {
         deliverTurn: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } },
       }),
     } as any)
