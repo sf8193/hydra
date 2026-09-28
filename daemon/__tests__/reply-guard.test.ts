@@ -165,7 +165,8 @@ describe('notePendingReply', () => {
     notePendingReply('main', meta({ message_id: 'msg-1', ts: '2026-07-09T00:00:00.000Z' }), T0 + 500)
     expect([..._pendingForTesting().values()][0].messageId).toBe('msg-2')
     settlePendingOnReact('main', 'chat-1', 'msg-2')
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+    expect(_pendingForTesting().size).toBe(0)
+    expect(armThenAdvance('main', T0 + 60_000)).toBe(0)
   })
 })
 
@@ -175,7 +176,8 @@ describe('clearPendingReply', () => {
     notePendingReply('main', meta(), T0)
     noteActivityForSession('main', T0 + 1000)
     clearPendingReply('main', 'chat-1')
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+    expect(_pendingForTesting().size).toBe(0)
+    expect(armThenAdvance('main', T0 + 60_000)).toBe(0)
   })
 
   test('a reply to a different chat does not settle it', () => {
@@ -201,7 +203,8 @@ describe('settlePendingOnReact', () => {
     notePendingReply('main', meta(), T0)
     noteActivityForSession('main', T0 + 1000)
     settlePendingOnReact('main', 'chat-1', 'msg-1')
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+    expect(_pendingForTesting().size).toBe(0)
+    expect(armThenAdvance('main', T0 + 60_000)).toBe(0)
   })
 
   test('a reaction to a different message does not settle it', () => {
@@ -386,7 +389,8 @@ describe('activity gate', () => {
   test('silence without prior activity does not act', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+    expect(armThenAdvance('main', T0 + 60_000)).toBe(0)
+    expect(escalations.length).toBe(0)
     expect(_pendingForTesting().size).toBe(1)
   })
 
@@ -408,14 +412,17 @@ describe('activity gate', () => {
   test('backstop does not fire before 5 minutes', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)
-    expect(handleSilenceEvent('main', T0 + _ACTIVITY_BACKSTOP_MS - 1)).toBe(0)
+    // Second call lands 1ms short of the backstop.
+    expect(armThenAdvance('main', T0 + _ACTIVITY_BACKSTOP_MS - 1 - _ESCALATION_GRACE_MS)).toBe(0)
+    expect(escalations.length).toBe(0)
   })
 
   test('activity before deliveredAt does not open gate', () => {
     fakeBridge('main')
     noteActivityForSession('main', T0 - 1000)
     notePendingReply('main', meta(), T0)
-    expect(handleSilenceEvent('main', T0 + 60_000)).toBe(0)
+    expect(armThenAdvance('main', T0 + 60_000)).toBe(0)
+    expect(escalations.length).toBe(0)
   })
 })
 
