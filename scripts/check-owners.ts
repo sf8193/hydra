@@ -2,6 +2,7 @@
 // use it (Sep 28, 2026: a raw `tmux kill-server` killed every live session). Lexical, not proof.
 //   bun scripts/check-owners.ts
 // Adding a file to an allowlist claims it owns that primitive — say why in the PR.
+// Rule 2 names git's delete verbs only; rmSync of a worktree or `git update-ref -d` are not covered.
 
 import { execFileSync } from 'child_process'
 import { readFileSync } from 'fs'
@@ -13,6 +14,7 @@ type Rule = {
   pattern: RegExp
   allowed: string[]
   skipLine?: (normalizedLine: string) => boolean
+  okAt?: (flat: string, index: number) => boolean   // a match that is fine in context
   tests: boolean   // does the rule also apply to test files?
   ts: boolean      // .ts only (true) or every scanned file type (false)
   why: string
@@ -21,14 +23,21 @@ type Rule = {
 export const RULES: Rule[] = [
   {
     name: 'tmux kill-server without -S',
-    // kill-server with no `-S` earlier in the same statement.
-    pattern: /(?<!-S [^;]{0,60})\bkill-server\b/g,
+    // Fine only if a -S sits between the nearest preceding tmux token (tmux, tmuxBin, …) and
+    // kill-server — hydra has no semicolons, so "the same statement" means "this tmux call".
+    pattern: /\bkill-server\b/g,
+    okAt: (flat, i) => {
+      const before = flat.slice(Math.max(0, i - 200), i)
+      const calls = [...before.matchAll(/(?:^|\s)tmux\w*(?=\s)/g)]
+      const call = calls.length ? before.slice(calls.at(-1)!.index!) : before.slice(-60)
+      return /(?:^|\s)-S\s/.test(call)
+    },
     allowed: [], tests: true, ts: false,
     why: 'address a server only by exact socket (-S): a missing TMUX_TMPDIR dir silently targets the real server',
   },
   {
     name: 'git branch delete / worktree remove|prune',
-    pattern: /\bbranch\b[^;]{0,40}?(?:\s-[dD]|--delete)\b|\bworktree\s+(?:remove|prune)\b/g,
+    pattern: /\bgit\b[^;]{0,60}?\b(?:branch\b[^;]{0,40}?(?:\s-[dD]|--delete)\b|worktree\s+(?:remove|prune)\b)/g,
     allowed: ['daemon/worktree-manager.ts'], tests: false, ts: false,
     why: 'deleting work goes through workAtRisk in worktree-manager',
   },
@@ -77,7 +86,7 @@ export function violations(files: Array<{ path: string; text: string }>): string
     const raw = text.split('\n')
     for (const r of RULES) {
       if (r.allowed.includes(path) || (!r.tests && isTest(path)) || (r.ts && !path.endsWith('.ts'))) continue
-      const hits = [...flat.matchAll(r.pattern)].map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1]))
+      const hits = [...flat.matchAll(r.pattern)].filter(m => !r.okAt?.(flat, m.index!)).map(m => lineAt(m.index!)).filter(n => !r.skipLine?.(lines[n - 1]))
       for (const n of new Set(hits)) out.push(`${path}:${n}: ${r.name} — ${r.why}\n    ${raw[n - 1]?.trim()}`)
     }
   }

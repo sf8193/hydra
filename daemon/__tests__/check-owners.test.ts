@@ -18,8 +18,16 @@ describe('check-owners: kill-server needs -S (no exemption, tests included)', ()
     expect(hits('daemon/x.ts', 'execFileSync("tmux", ["kill-server"])')).toHaveLength(1)
   })
 
-  test('a -S in an earlier statement does not count', () => {
+  test('a -S in an earlier tmux call does not count (hydra has no semicolons)', () => {
     expect(hits('daemon/x.ts', "x('-S'); execFileSync('tmux', ['kill-server'])")).toHaveLength(1)
+    expect(hits('daemon/x.ts', "const has = execFileSync('tmux', ['-S', sock, 'ls'])", "execFileSync('tmux', ['kill-server'], { env })")).toHaveLength(1)
+    expect(hits('daemon/x.ts', "tmux(['-S', sock, 'list-sessions'])", "tmux(['kill-server'])")).toHaveLength(1)
+  })
+
+  test('a socket path containing "tmux-" does not end the call; a tmuxBin variable counts as tmux', () => {
+    expect(hits('daemon/x.ts', "execFileSync('tmux', ['-S', join(dir, `tmux-${uid}`, 'default'), 'kill-server'])")).toEqual([])
+    expect(hits('scripts/x.ts', "execFileSync(tmuxBin, ['-S', socket, 'kill-server'])")).toEqual([])
+    expect(hits('daemon/x.ts', "const args = ['kill-server']")).toHaveLength(1)
   })
 
   test('by exact socket is fine — same line, wrapped, double-quoted, or in a shell string', () => {
@@ -49,6 +57,10 @@ describe('check-owners: deleting work only in worktree-manager', () => {
   test('split across lines is caught', () => {
     expect(hits('daemon/factory.ts', "execAsync('git', ['-C', repo,", "  'branch', '-D', b])")).toHaveLength(1)
   })
+  test('an unrelated -d near the word branch is not a git delete', () => {
+    expect(hits('daemon/x.ts', 'const branch = pick()', "execFileSync('curl', ['-d', body])")).toEqual([])
+  })
+
   test('in shell scripts too; allowed in worktree-manager', () => {
     expect(hits('cleanup.sh', 'git worktree remove "$wt"')).toHaveLength(1)
     expect(hits('daemon/worktree-manager.ts', ...spellings)).toEqual([])
