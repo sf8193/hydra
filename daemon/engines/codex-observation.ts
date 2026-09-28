@@ -7,6 +7,7 @@ import { readConversationForensics, vitalsPruners } from '../observability.js'
 import { transcriptPathFor } from '../usage.js'
 import type { TurnOutcome } from './engine-adapter.js'
 import { transcriptAnswer, type TranscriptSources } from './claude-transcript.js'
+import { readClaudeStatus } from './claude-status.js'
 
 // Codex has no transcript file to read back (unlike Claude's JSONL) — its
 // protocol streams message text via an event instead, so we stash the latest
@@ -63,6 +64,7 @@ export type TurnSources = TranscriptSources & {
 export const defaultTurnSources: TurnSources = {
   transcriptPathFor: (id) => transcriptPathFor(id),
   readConversationForensics: (p) => readConversationForensics(p),
+  readClaudeStatus: (name) => readClaudeStatus(name),
   getLastCodexMessage: (sid, since) => getLastCodexMessage(sid, since),
   isCodexTurnComplete: (sid) => isCodexTurnComplete(sid),
 }

@@ -121,9 +121,9 @@ export class ClaudeEngine implements EngineAdapter {
   }
 
   turn(info: SessionInfo, sinceMs: number): Turn {
-    const { confirmedComplete, answer } = claudeTurnOutcome(info, sinceMs, defaultTurnSources)
+    const outcome = claudeTurnOutcome(info, sinceMs, defaultTurnSources)
     return {
-      confirmedComplete, answer,
+      get confirmedComplete() { return outcome.confirmedComplete }, answer: outcome.answer,
       get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
     }
   }

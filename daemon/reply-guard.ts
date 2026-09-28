@@ -151,7 +151,7 @@ export function notePendingFromQueue(sessionId: string, queued: Array<Record<str
  * Returns the number of escalations sent (0 or 1+ across all pending chats
  * for this session).
  */
-export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): number {
+export function handleSilenceEvent(tmuxName: string, now: number = Date.now(), onlyConfirmed = false): number {
   // Resolve tmuxName → sessionId. 'main' is the control session and never
   // appears in the registry, but it can have pending replies.
   let sessionId: string | undefined
@@ -207,6 +207,9 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now()): 
     // 'main' has no record: grace, and no relay (the codex flag is only ever
     // written for registry records).
     const outcome = info ? deps.turnOutcome(info, p.deliveredAt) : undefined
+    // Early call (turn just ended, pane not yet silent): act only on a
+    // confirmed turn; don't start the grace clock for an unconfirmed one.
+    if (onlyConfirmed && !outcome?.confirmedComplete) continue
     if (!outcome?.confirmedComplete) {
       const firstSeen = silenceFirstSeenAt.get(key)
       if (firstSeen === undefined) {
@@ -435,6 +438,11 @@ export function pollActivityOnce(nowSec: number, pollDeps: PollActivityDeps = de
     if (secSinceActivity < MIN_IDLE_BEFORE_SILENCE_S) {
       if (info && info.turnState !== 'working') info.turnState = 'working'
       handleActivityEvent(tmuxName)
+      // Claude's own status says the turn is over: relay now instead of waiting for pane silence.
+      // Claude only: Codex's confirmedComplete is a flag that can be stale between turns
+      // (PINNED R15 in observability.test.ts), so it must not act while the pane is active.
+      // ponytail: engine check in the guard; if a third engine confirms reliably, let the adapter opt in.
+      if (info && (info.engine ?? 'claude') === 'claude') handleSilenceEvent(tmuxName, Date.now(), true)
     } else {
       if (info && info.turnState !== 'idle') info.turnState = 'idle'
       handleSilenceEvent(tmuxName)

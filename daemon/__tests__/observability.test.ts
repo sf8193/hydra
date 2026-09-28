@@ -340,6 +340,43 @@ describe('readConversationForensics', () => {
     expect(f?.lastAssistantFullText).toBe('MARKER: must survive the tail cut')
     expect(f?.isTail).toBe(true)
   })
+  test('queue backlog: enqueue without dequeue is outstanding; FIFO dequeues drain it; lastConsumeTs is the latest', () => {
+    const path = tmpFile('forensics-queue.jsonl')
+    const op = (operation: string, timestamp: string) => line({ type: 'queue-operation', operation, timestamp })
+    writeFileSync(path, op('enqueue', 'T1') + op('dequeue', 'T2') + op('enqueue', 'T3') + op('enqueue', 'T4') + op('dequeue', 'T5'))
+    const f = readConversationForensics(path)
+    expect(f?.queueBacklog).toBe(1)
+    expect(f?.lastConsumeTs).toBe('T5')
+  })
+
+  test('queue backlog: a remove (message injected into the running turn) consumes like a dequeue', () => {
+    const path = tmpFile('forensics-queue-remove.jsonl')
+    const op = (operation: string, timestamp: string) => line({ type: 'queue-operation', operation, timestamp })
+    writeFileSync(path, op('enqueue', 'T1') + op('remove', 'T2'))
+    const f = readConversationForensics(path)
+    expect(f?.queueBacklog).toBe(0)
+    expect(f?.lastConsumeTs).toBe('T2')
+  })
+
+  test('queue backlog: a consume record without a timestamp does not erase the last known consume time', () => {
+    const path = tmpFile('forensics-queue-nots.jsonl')
+    writeFileSync(path, line({ type: 'queue-operation', operation: 'enqueue', timestamp: 'T1' }) + line({ type: 'queue-operation', operation: 'dequeue', timestamp: 'T2' })
+      + line({ type: 'queue-operation', operation: 'enqueue', timestamp: 'T3' }) + line({ type: 'queue-operation', operation: 'remove' }))
+    const f = readConversationForensics(path)
+    expect(f?.queueBacklog).toBe(0)
+    expect(f?.lastConsumeTs).toBe('T2')
+  })
+
+  test('queue backlog: a dequeue whose enqueue is outside the tail clamps at 0; no ops -> 0/null', () => {
+    const path = tmpFile('forensics-queue-clamp.jsonl')
+    writeFileSync(path, line({ type: 'queue-operation', operation: 'dequeue', timestamp: 'T9' }))
+    expect(readConversationForensics(path)?.queueBacklog).toBe(0)
+    const none = tmpFile('forensics-queue-none.jsonl')
+    writeFileSync(none, line({ type: 'other' }))
+    const f = readConversationForensics(none)
+    expect(f?.queueBacklog).toBe(0)
+    expect(f?.lastConsumeTs).toBeNull()
+  })
 })
 
 // T6 (adapter-policy): the reply guard's turn-outcome composition (F1s/F2s).
@@ -349,7 +386,8 @@ describe('turnOutcome composition', () => {
   const forensics = (over: Partial<ConversationForensics> = {}): ConversationForensics => ({
     tailTurns: 1, lastStopReason: 'end_turn', lastToolCalled: null, lastToolPending: false,
     pendingToolCount: 0, tailApiCalls: 1, lastAssistantText: null, isTail: false,
-    lastAssistantFullText: null, lastAssistantTs: null, lastAssistantTurnComplete: true, ...over,
+    lastAssistantFullText: null, lastAssistantTs: null, lastAssistantTurnComplete: true,
+    queueBacklog: 0, lastConsumeTs: null, ...over,
   })
   // Production shape: transcript at claude-abc; the codex maps hold a fresh message.
   function src(over: { flag?: boolean; f?: ConversationForensics | null; msgAt?: number } = {}): TurnSources {
@@ -423,6 +461,81 @@ describe('turnOutcome composition', () => {
     })
   }
 
+  // Claude turn end from the live status file (status idle + this message taken up + answer after the last dequeue).
+  describe('claudeTurnOutcome: live status', () => {
+    const live = { ...claude, tmuxName: 'cedar' } as SessionInfo
+    // A consume in view (T+1000) before the answer (T+5000): the state of a normally delivered message.
+    const base = () => forensics({ lastAssistantFullText: 'transcript answer', lastAssistantTs: iso(T + 5000), lastConsumeTs: iso(T + 1000) })
+    const withStatus = (status: { sessionId: string; status: string } | null, f?: ConversationForensics | null): TurnSources =>
+      ({ ...src({ f: f === undefined ? base() : f }), readClaudeStatus: (n: string) => n === 'cedar' ? status : null })
+    const idle = { sessionId: 'claude-abc', status: 'idle' }
+
+    test('idle + fresh answer + nothing queued → confirmed, answer relayed', () => {
+      const o = claudeTurnOutcome(live, T, withStatus(idle))
+      expect(o.confirmedComplete).toBe(true)
+      expect(o.answer()).toBe('transcript answer')
+    })
+    test('busy, waiting, or unreadable status → not confirmed', () => {
+      expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status: 'busy' })).confirmedComplete).toBe(false)
+      expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status: 'waiting' })).confirmedComplete).toBe(false)
+      expect(claudeTurnOutcome(live, T, withStatus(null)).confirmedComplete).toBe(false)
+      expect(claudeTurnOutcome(claude, T, withStatus(idle)).confirmedComplete).toBe(false) // no tmuxName
+    })
+    test('a message still queued behind a running turn → not confirmed', () => {
+      const f = forensics({ lastAssistantFullText: 'turn A answer', lastAssistantTs: iso(T + 5000), queueBacklog: 1 })
+      expect(claudeTurnOutcome(live, T, withStatus(idle, f)).confirmedComplete).toBe(false)
+    })
+    test('an answer written before the last dequeue belongs to an earlier turn → not confirmed', () => {
+      const f = forensics({ lastAssistantFullText: 'turn A answer', lastAssistantTs: iso(T + 5000), lastConsumeTs: iso(T + 6000) })
+      expect(claudeTurnOutcome(live, T, withStatus(idle, f)).confirmedComplete).toBe(false)
+      const g = forensics({ lastAssistantFullText: 'turn B answer', lastAssistantTs: iso(T + 7000), lastConsumeTs: iso(T + 6000) })
+      expect(claudeTurnOutcome(live, T, withStatus(idle, g)).confirmedComplete).toBe(true)
+    })
+    test('idle but no usable answer (tool pending, stale, no transcript) → not confirmed', () => {
+      expect(claudeTurnOutcome(live, T, withStatus(idle, forensics({ lastAssistantFullText: 'Let me check', lastAssistantTs: iso(T + 5000), lastToolPending: true }))).confirmedComplete).toBe(false)
+      expect(claudeTurnOutcome(live, T, withStatus(idle, forensics({ lastAssistantFullText: 'old', lastAssistantTs: iso(T - 5000) }))).confirmedComplete).toBe(false)
+      expect(claudeTurnOutcome(live, T, withStatus(idle, null)).confirmedComplete).toBe(false)
+    })
+    test('tail read with no consume in view (enqueue may be cut off) → not confirmed', () => {
+      const f = forensics({ lastAssistantFullText: 'answer to A, not M', lastAssistantTs: iso(T + 5000), isTail: true })
+      expect(claudeTurnOutcome(live, T, withStatus(idle, f)).confirmedComplete).toBe(false)
+    })
+    test('no consume record at all (log format drift, or a first message) → not confirmed, even on a full read', () => {
+      const f = forensics({ lastAssistantFullText: 'answer', lastAssistantTs: iso(T + 5000), isTail: false })
+      expect(claudeTurnOutcome(live, T, withStatus(idle, f)).confirmedComplete).toBe(false)
+      expect(claudeTurnOutcome(live, T, withStatus(idle, { ...f, lastConsumeTs: iso(T + 1000) })).confirmedComplete).toBe(true)
+    })
+    test('the transcript is the one the status file names, not the registry pin (follows /clear)', () => {
+      const seen: string[] = []
+      const s = { ...withStatus({ sessionId: 'claude-new', status: 'idle' }), transcriptPathFor: (id: string) => { seen.push(id); return '/t.jsonl' } }
+      expect(claudeTurnOutcome(live, T, s).answer()).toBe('transcript answer')
+      expect(seen).toEqual(['claude-new'])
+    })
+    test('one snapshot: confirmedComplete and answer() agree even if the status file changes, one transcript read', () => {
+      let statusReads = 0, forensicsReads = 0
+      const ids: string[] = []
+      const s = {
+        ...withStatus(idle),
+        readClaudeStatus: () => ++statusReads === 1 ? idle : { sessionId: 'claude-other', status: 'busy' },
+        transcriptPathFor: (id: string) => { ids.push(id); return '/t.jsonl' },
+        readConversationForensics: () => { forensicsReads++; return forensics({ lastAssistantFullText: 'answer', lastAssistantTs: iso(T + 5000), lastConsumeTs: iso(T + 1000) }) },
+      }
+      const o = claudeTurnOutcome(live, T, s)
+      expect(o.confirmedComplete).toBe(true)
+      expect(o.answer()).toBe('answer')
+      expect(o.confirmedComplete).toBe(true)
+      expect({ statusReads, forensicsReads, ids }).toEqual({ statusReads: 1, forensicsReads: 1, ids: ['claude-abc'] })
+    })
+    test('lazy: no status read until confirmedComplete or answer is asked for', () => {
+      let reads = 0
+      const s = { ...withStatus(idle), readClaudeStatus: () => { reads++; return idle } }
+      const o = claudeTurnOutcome(live, T, s)
+      expect(reads).toBe(0)
+      void o.confirmedComplete
+      expect(reads).toBe(1)
+    })
+  })
+
   // S6 exit: adapters delegate through defaultTurnSources — swapping its members
   // gives exactly what the exported function returns over the swapped sources.
   test('delegation: adapters answer as their exported function over swapped defaultTurnSources', () => {
@@ -444,6 +557,20 @@ describe('turnOutcome composition', () => {
   })
 
   // answer() stays lazy: turn() reads no transcript or Codex message until asked.
+  // The poller builds turn() every 20s per pending session just for activityAt: no status/transcript reads then.
+  test('claude adapter: turn().activityAt reads no status file; confirmedComplete does', () => {
+    const saved = { ...defaultTurnSources }
+    let statusReads = 0
+    Object.assign(defaultTurnSources, { ...src(), readClaudeStatus: () => { statusReads++; return null } })
+    try {
+      const t = engines.claude.turn({ ...claude, tmuxName: 'cedar' } as SessionInfo, T)
+      void t.activityAt
+      expect(statusReads).toBe(0)
+      void t.confirmedComplete
+      expect(statusReads).toBe(1)
+    } finally { Object.assign(defaultTurnSources, saved) }
+  })
+
   test('adapters: turn() reads nothing until answer() is called', () => {
     const saved = { ...defaultTurnSources }
     let reads = 0

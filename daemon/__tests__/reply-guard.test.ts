@@ -34,6 +34,7 @@ function fakeForensics(over: Partial<ConversationForensics> = {}): ConversationF
     tailTurns: 1, lastStopReason: 'end_turn', lastToolCalled: null, lastToolPending: false,
     pendingToolCount: 0, tailApiCalls: 1, lastAssistantText: null, isTail: false,
     lastAssistantFullText: null, lastAssistantTs: null, lastAssistantTurnComplete: true,
+    queueBacklog: 0, lastConsumeTs: null,
     ...over,
   }
 }
@@ -681,6 +682,76 @@ describe('pollActivityOnce', () => {
       expect(escalatesAfterGrace('cedar')).toBe(1)
     })
   }
+
+  // Turn just ended (pane still active): Claude relays now if its own status confirms the turn; nothing else changes.
+  describe('early relay on confirmed turn end', () => {
+    const confirmedAdapter = (provider: string, confirmedComplete: boolean, nowSec: number) => fakeAdapter({
+      provider,
+      turn: () => ({ activityAt: nowSec - 5, confirmedComplete, answer: () => 'the plain-text answer' }),
+    })
+    const settle = () => new Promise(r => setTimeout(r, 0))
+    // Production routing: the outcome comes from the record's adapter.
+    beforeEach(() => {
+      _setDeps({
+        registryGet: (id) => testSessions.get(id),
+        registryValues: () => testSessions.values(),
+        transportHas: (id) => connectedBridges.has(id),
+        transportSendOrQueue: () => {},
+        gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
+        safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
+        capturePaneScreenshot: () => null,
+        capturePaneText: () => 'fake pane content',
+        turnOutcome: (info, since) => info.adapter.turn(info, since),
+      })
+    })
+
+    test('claude, confirmed, pane active: relays the answer at once and clears pending', async () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('claude', true, nowSec) })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), Date.now() - 1000)
+      poll(nowSec)
+      await settle()
+      expect(escalations.map(e => e.text).join('\n')).toContain('the plain-text answer')
+      expect(escalations).toHaveLength(1)
+      expect(_pendingForTesting().size).toBe(0)
+    })
+
+    test('claude, NOT confirmed, pane active: nothing sent and the grace clock is not started', async () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('claude', false, nowSec) })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), Date.now() - 1000)
+      poll(nowSec)
+      await settle()
+      expect(escalations).toHaveLength(0)
+      expect(_pendingForTesting().size).toBe(1)
+      // first real silence sighting must still START the grace, not finish it
+      expect(handleSilenceEvent('cedar', Date.now() + _ESCALATION_GRACE_MS)).toBe(0)
+    })
+
+    test('codex, confirmed flag, pane active: no early relay (its flag can be stale between turns)', async () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      liveSession('s1', { engine: 'codex', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('codex', true, nowSec) })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), Date.now() - 1000)
+      poll(nowSec)
+      await settle()
+      expect(escalations).toHaveLength(0)
+      expect(_pendingForTesting().size).toBe(1)
+    })
+
+    test('reply already called: pending is gone, nothing relayed', async () => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      liveSession('s1', { engine: 'claude', tmuxName: 'cedar', turnState: 'working', adapter: confirmedAdapter('claude', true, nowSec) })
+      fakeBridge('s1')
+      notePendingReply('s1', meta(), Date.now() - 1000)
+      clearPendingReply('s1', meta().chat_id)
+      poll(nowSec)
+      await settle()
+      expect(escalations).toHaveLength(0)
+    })
+  })
 
   test("main: reads the byte window, guard keeps logical 'main'", () => {
     const nowSec = Math.floor(Date.now() / 1000)
