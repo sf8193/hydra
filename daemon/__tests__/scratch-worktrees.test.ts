@@ -2,7 +2,7 @@
 // holding nothing to lose (clean, every commit on a remote).
 
 import { describe, test, expect, afterAll } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { cleanScratchWorktrees, sessionScratchpads } from '../worktree-manager.js'
@@ -49,6 +49,24 @@ describe('scratchpad worktree cleanup', () => {
     ]))
     expect(existsSync(dirty) && existsSync(ahead)).toBe(true)
     expect(git(repo, 'worktree', 'list')).not.toContain(clean)
+  })
+
+  test('never follows a symlink out of the scratchpad; keeps a worktree mid-rebase', async () => {
+    const repo = join(root, 'repo')
+    const outside = join(root, 'outside-wt')
+    git(repo, 'worktree', 'add', '-q', '--detach', outside, 'origin/main')
+    const scratch = join(root, 'proj', 'sess-3', 'scratchpad')
+    mkdirSync(scratch, { recursive: true })
+    symlinkSync(outside, join(scratch, 'link-to-wt'))
+    symlinkSync(root, join(scratch, 'link-to-parent'))
+    const rebasing = join(scratch, 'rebasing')
+    git(repo, 'worktree', 'add', '-q', '--detach', rebasing, 'origin/main')
+    mkdirSync(join(git(rebasing, 'rev-parse', '--absolute-git-dir'), 'rebase-merge'))
+
+    const r = await cleanScratchWorktrees(sessionScratchpads('sess-3', root))
+    expect(r.removed).toEqual([])
+    expect(existsSync(outside)).toBe(true)
+    expect(r.kept).toEqual([{ path: rebasing, reason: 'operation in progress (rebase-merge)' }])
   })
 
   test('another session\'s scratchpad is never touched', () => {

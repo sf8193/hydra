@@ -4,7 +4,7 @@
 import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { dirname, join, resolve } from 'path'
-import { existsSync, readdirSync, statSync } from 'fs'
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'fs'
 
 const execAsync = promisify(execFile)
 
@@ -297,15 +297,19 @@ export function sessionScratchpads(claudeSessionId: string, root = `/private/tmp
   } catch { return [] }
 }
 
-// Linked worktrees (a `.git` FILE) directly in dir or one level below.
+// Linked worktrees (a `.git` FILE) directly in dir or one level below. Symlinks are
+// never followed, and every hit must really live inside dir: nothing outside the
+// session's scratchpad can be reached.
 function worktreesIn(dir: string): string[] {
   const found: string[] = []
+  let base: string
+  try { base = realpathSync(dir) + '/' } catch { return found }
   const visit = (d: string, depth: number) => {
     let names: string[]
     try { names = readdirSync(d) } catch { return }
     for (const n of names) {
       const p = join(d, n)
-      try { if (!statSync(p).isDirectory()) continue } catch { continue }
+      try { const st = lstatSync(p); if (st.isSymbolicLink() || !st.isDirectory() || !realpathSync(p).startsWith(base)) continue } catch { continue }
       try { if (statSync(join(p, '.git')).isFile()) { found.push(p); continue } } catch {}
       if (depth < 1) visit(p, depth + 1)
     }
@@ -316,8 +320,9 @@ function worktreesIn(dir: string): string[] {
 
 /**
  * Remove the worktrees under dirs that hold nothing to lose: no uncommitted or
- * untracked changes, and every commit on HEAD is on a remote. Anything else is kept
- * and reported. Branches are left alone.
+ * untracked changes, no rebase/merge/cherry-pick/revert/bisect in progress, and every
+ * commit on HEAD is on a remote. Anything else is kept and reported. Branches are left
+ * alone. Gitignored files (node_modules, build output) are treated as disposable.
  */
 export async function cleanScratchWorktrees(dirs: string[]): Promise<{ removed: string[]; kept: Array<{ path: string; reason: string }> }> {
   const removed: string[] = []
@@ -326,6 +331,11 @@ export async function cleanScratchWorktrees(dirs: string[]): Promise<{ removed: 
     try {
       const git = (...args: string[]) => execAsync('git', ['-C', wt, ...args], { timeout: 10_000 }).then(r => r.stdout.trim())
       if (await git('status', '--porcelain')) { kept.push({ path: wt, reason: 'uncommitted changes' }); continue }
+      const midOp = []
+      for (const f of ['rebase-merge', 'rebase-apply', 'sequencer', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG']) {
+        if (existsSync(resolve(wt, await git('rev-parse', '--git-path', f)))) midOp.push(f)
+      }
+      if (midOp.length) { kept.push({ path: wt, reason: `operation in progress (${midOp.join(', ')})` }); continue }
       const unpushed = Number(await git('rev-list', '--count', 'HEAD', '--not', '--remotes'))
       if (unpushed > 0) { kept.push({ path: wt, reason: `${unpushed} unpushed commit(s)` }); continue }
       const repo = dirname(resolve(wt, await git('rev-parse', '--git-common-dir')))
