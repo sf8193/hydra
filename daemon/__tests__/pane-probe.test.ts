@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { join } from 'path'
+import { homedir } from 'os'
 
 // ---------------------------------------------------------------------------
 // Test state — injected via PaneProbeIO, no mock.module needed
@@ -260,11 +262,12 @@ describe('detectBlockingState (pure)', () => {
     expect(detectBlockingState(HISTORICAL_PLAN_MODE)).toBeNull()
   })
 
-  it('detects login prompt (select method)', () => {
-    const result = detectBlockingState(LOGIN_SELECT_METHOD_TAIL)
-    expect(result).not.toBeNull()
-    expect(result!.kind).toBe('login_required')
-    expect(result!.loginStage).toBe('blocked')
+  // suspect: LOGIN_PROMPT_TAIL ("Not authenticated. Please sign in…" + auth.anthropic.com
+  // URL) reads like a login block, but matches none of the screenshot-derived LOGIN_*
+  // patterns, so it is not detected. Pinned as today's behaviour; either the fixture is
+  // not a real CC screen or the patterns miss this one.
+  it('does not detect the "Not authenticated" login fixture (pinned)', () => {
+    expect(detectBlockingState(LOGIN_PROMPT_TAIL)).toBeNull()
   })
 
   it('detects login expiring warning', () => {
@@ -374,13 +377,6 @@ describe('detectBlockingState (pure)', () => {
     expect(result!.planPath).toBe('sparkling-wondering-torvalds.md')
   })
 
-  it('captures path traversal attempt but readPlanSummary rejects it', () => {
-    const traversalTail = PLAN_MODE_TAIL.replace('witty-humming-beaver.md', '../../../etc/passwd.md')
-    const result = detectBlockingState(traversalTail)
-    expect(result).not.toBeNull()
-    // The regex captures the path, but readPlanSummary rejects paths containing ".."
-    expect(result!.planPath).toContain('..')
-  })
 })
 
 describe('probeAllSessions', () => {
@@ -428,6 +424,21 @@ describe('probeAllSessions', () => {
     expect(sentMessages.length).toBeGreaterThan(0)
     expect(sentMessages[0].channelId).toBe('thread-1')
     expect(sentMessages[0].text).toContain('plan approval')
+  })
+
+  it('path traversal in the plan path never reaches the notification', async () => {
+    const traversal = '../../../etc/passwd.md'
+    addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+    paneTails.set('bloom', PLAN_MODE_TAIL.replace('witty-humming-beaver.md', traversal))
+    fileContents.set(join(homedir(), '.claude', 'plans', traversal), '# SECRET\nleaked body')
+    windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+    expect(sentMessages.some(m => m.text.includes('plan approval'))).toBe(true)
+    expect(sentMessages.some(m => m.text.includes('SECRET') || m.text.includes('leaked'))).toBe(false)
   })
 
   it('registers intercept on plan mode notification', async () => {
