@@ -27,6 +27,8 @@ describe('readClaudeStatus', () => {
   test('waiting and busy are reported as-is', () => {
     put('1.json', { pid: process.pid, sessionId: 's', status: 'waiting', waitingFor: 'permission prompt', tmux: 'cedar:@5.%9' })
     expect(readClaudeStatus('cedar', dir)?.status).toBe('waiting')
+    put('1.json', { pid: process.pid, sessionId: 's', status: 'busy', tmux: 'cedar:@5.%9' })
+    expect(readClaudeStatus('cedar', dir)?.status).toBe('busy')
   })
   test('two live matches for one tmux name are ambiguous -> null; a dead twin does not count', () => {
     put('1.json', { pid: process.pid, sessionId: 'a', status: 'idle', tmux: 'cedar:@5.%9' })

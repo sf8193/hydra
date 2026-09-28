@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { codexHomeDir, codexPidPath, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 
 describe('durable Codex app-server process', () => {
@@ -25,5 +26,19 @@ describe('durable Codex app-server process', () => {
 
   test('does not report a stop when no Hydra pid file exists', () => {
     expect(stopCodexAppServer(`missing-${Date.now()}`)).toBe(false)
+  })
+
+  // A harmless sleep whose argv merely reads like an app-server, never the real binary.
+  test('stops the process its pid file names when it still looks like an app-server', async () => {
+    const name = `lookalike-${Date.now()}`
+    const proc = Bun.spawn(['bash', '-c', 'exec -a "codex app-server x" sleep 30'])
+    try {
+      await Bun.sleep(100) // let exec replace bash so ps shows the mimic argv
+      mkdirSync(dirname(codexPidPath(name)), { recursive: true })
+      writeFileSync(codexPidPath(name), String(proc.pid))
+      expect(stopCodexAppServer(name)).toBe(true)
+      expect(existsSync(codexPidPath(name))).toBe(false)
+      expect(await proc.exited).toBe(143) // SIGTERM
+    } finally { proc.kill('SIGKILL') }
   })
 })
