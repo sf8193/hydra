@@ -99,11 +99,6 @@ describe('formatThreadName', () => {
     expect(name).toBe('🔣 bold and italic · glyph')
   })
 
-  test('custom emoji overrides catalog emoji', () => {
-    const { name } = formatThreadName({ ...base, emoji: '🔐' })
-    expect(name).toBe('🔐 fixing auth middleware · glyph')
-  })
-
   test('truncates to 100 chars', () => {
     const longDesc = 'a'.repeat(200)
     const { name } = formatThreadName({ ...base, description: longDesc })

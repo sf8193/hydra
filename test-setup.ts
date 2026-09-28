@@ -102,6 +102,7 @@ export function sweepStaleTestDirs(root: string, now: number, maxAgeMs: number):
 export const TEST_STATE_DIR = explicit ?? mkdtempSync(join(tmpdir(), TEST_DIR_PREFIX))
 const dir = TEST_STATE_DIR
 process.env.HYDRA_STATE_DIR = dir
+process.env.HYDRA_TEST_PRELOADED = '1' // daemon/config.ts refuses to load under bun test without it
 
 // Claude's config dir too, or planted transcript fixtures land in the live ~/.claude/projects.
 process.env.CLAUDE_CONFIG_DIR = join(dir, 'claude')

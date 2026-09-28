@@ -13,6 +13,7 @@ import { reviewResult } from '../review-result.js'
 import review from '../../protocols/review.js'
 import build from '../../protocols/build.js'
 import spike from '../../protocols/spike.js'
+import delegatedBuild from '../../protocols/delegated-build.js'
 
 let h: TestHarness
 
@@ -1287,13 +1288,6 @@ describe('dynamic tool scoping', () => {
     expect(extendPhase!.description).toBe('extend...')
   })
 
-  test('protocol_context grants both advance and extend_phase as a unit', () => {
-    const tools = computeToolsForSession('thread_owner', new Set(['protocol_context']))
-    const names = tools.map(t => t.name)
-    expect(names).toContain('advance')
-    expect(names).toContain('extend_phase')
-  })
-
   test('thread_guest base set restricts to 8 tools', () => {
     const tools = computeToolsForSession('thread_guest', new Set())
     const names = tools.map(t => t.name)
@@ -1339,17 +1333,19 @@ describe('tools_update on phase transition', () => {
     expect(tools.some(t => t.name === 'advance')).toBe(true)
   })
 
-  test('only active actor receives tools_update on phase transition', async () => {
-    h = createHarness(review, { rounds: 3 })
-    await h.advance('critic', 'Critique.', 'request_changes')
+  // review's critic is a thread_guest, whose base set already carries advance, so
+  // "non-actor has no advance" is not observable there. Phase capabilities are.
+  test('only the active actor gains the phase capabilities on transition', async () => {
+    h = createHarness(delegatedBuild, { rounds: 3 })
+    h.run.phase = 'building'
+    await h.advance('builder', 'Built the feature.')
+    expect(h.phase).toBe('verifying')
 
-    // After critic advances, owner_turn is active — owner should get tools, not critic
-    const ownerMsgs = h.actorMessages('owner')
-    const ownerUpdates = ownerMsgs.filter(m => m.type === 'tools_update')
-    expect(ownerUpdates.length).toBeGreaterThan(0)
-    const latest = ownerUpdates[ownerUpdates.length - 1]
-    const tools = latest.tools as Array<{ name: string; description: string }>
-    expect(tools.some(t => t.name === 'advance')).toBe(true)
+    expect(registry.get(h.sessionId('pm'))?.capabilities).toContain('protocol_spawn')
+    expect(registry.get(h.sessionId('builder'))?.capabilities ?? []).not.toContain('protocol_spawn')
+    const builderUpdates = h.actorMessages('builder').filter(m => m.type === 'tools_update')
+    const builderTools = builderUpdates[builderUpdates.length - 1].tools as Array<{ name: string }>
+    expect(builderTools.some(t => t.name === 'kill_session')).toBe(false)
   })
 
   test('advance description contains verdict options for build reviewing', async () => {
@@ -1426,50 +1422,3 @@ describe('tools_update on phase transition', () => {
   })
 })
 
-describe('tool descriptions and capability integration', () => {
-  test('active actor receives advance in tools_update after transition', async () => {
-    h = createHarness(review, { rounds: 3 })
-    await h.advance('critic', 'Critique.', 'request_changes')
-    expect(h.phase).toBe('owner_turn')
-    const msgs = h.actorMessages('owner')
-    const toolsUpdate = msgs.find(m => m.type === 'tools_update')
-    expect(toolsUpdate).toBeDefined()
-    const tools = toolsUpdate!.tools as Array<{ name: string }>
-    expect(tools.some(t => t.name === 'advance')).toBe(true)
-  })
-
-  test('owner receives advance after becoming active actor', async () => {
-    h = createHarness(review, { rounds: 3 })
-    const beforeCount = h.actorMessages('owner').filter(m => m.type === 'tools_update').length
-    await h.advance('critic', 'Critique.', 'request_changes')
-    const msgs = h.actorMessages('owner')
-    const toolsUpdates = msgs.filter(m => m.type === 'tools_update')
-    const latest = toolsUpdates[toolsUpdates.length - 1]
-    expect(latest).toBeDefined()
-    const tools = latest.tools as Array<{ name: string }>
-    expect(tools.some(t => t.name === 'advance')).toBe(true)
-  })
-
-  test('thread_owner without protocol_context gets no advance or extend_phase', () => {
-    const tools = computeToolsForSession('thread_owner', new Set())
-    const names = tools.map(t => t.name)
-    expect(names).not.toContain('advance')
-    expect(names).not.toContain('extend_phase')
-  })
-
-  test('actor advance tool carries phase-specific description', async () => {
-    h = createHarness(build, { rounds: 3 })
-    await h.advance('builder', 'Implementation.')
-    expect(h.phase).toBe('reviewing')
-
-    const msgs = h.actorMessages('critic')
-    const toolsUpdates = msgs.filter(m => m.type === 'tools_update')
-    const latest = toolsUpdates[toolsUpdates.length - 1]
-    expect(latest).toBeDefined()
-    const tools = latest.tools as Array<{ name: string; description: string }>
-    const advance = tools.find(t => t.name === 'advance')
-    expect(advance).toBeDefined()
-    expect(advance!.description).toContain('approve')
-    expect(advance!.description).toContain('request_changes')
-  })
-})

@@ -1,28 +1,16 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { deliverPrUpdate } from '../pr-watch.js'
+import { describe, test, expect, afterEach } from 'bun:test'
+import { deliverPrUpdate, parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, restoreWatches, listWatches, type WatchEntry } from '../pr-watch.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
 
-// We can't import the module directly because it pulls in config/gateway/registry.
-// Instead, extract and test the pure logic by re-implementing the key functions here.
-// This mirrors the actual implementations in pr-watch.ts.
-
 // ---------------------------------------------------------------------------
 // parsePrUrl
 // ---------------------------------------------------------------------------
-
-function parsePrUrl(url: string): { owner: string; repo: string; prNumber: number } | null {
-  const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
-  if (match) {
-    return { owner: match[1], repo: match[2], prNumber: parseInt(match[3]) }
-  }
-  return null
-}
 
 describe('parsePrUrl', () => {
   test('parses standard GitHub PR URL', () => {
@@ -70,11 +58,6 @@ describe('parsePrUrl', () => {
 // maxId
 // ---------------------------------------------------------------------------
 
-function maxId(items: any[] | null): number {
-  if (!items || !Array.isArray(items) || items.length === 0) return 0
-  return Math.max(...items.map((i: any) => i.id ?? 0))
-}
-
 describe('maxId', () => {
   test('returns max id from array', () => {
     expect(maxId([{ id: 1 }, { id: 5 }, { id: 3 }])).toBe(5)
@@ -105,14 +88,6 @@ describe('maxId', () => {
 // WATCH_ERRORS
 // ---------------------------------------------------------------------------
 
-const WATCH_ERRORS = {
-  NO_SESSION: 'bare `watch` only works in a session thread — provide a PR URL',
-  NO_CWD: 'no URL provided and could not determine session cwd — provide a PR URL',
-  NO_PR: 'no open PR found on current branch — provide a PR URL',
-  PR_CLOSED: (url: string, state: string) => `PR ${url} is ${state} — provide a URL for the current PR`,
-  INVALID_URL: (url: string) => `detected URL from current branch but it doesn't look like a GitHub PR: ${url}`,
-} as const
-
 describe('WATCH_ERRORS', () => {
   test('PR_CLOSED formats with url and state', () => {
     expect(WATCH_ERRORS.PR_CLOSED('https://github.com/o/r/pull/1', 'merged'))
@@ -132,88 +107,33 @@ describe('WATCH_ERRORS', () => {
 })
 
 // ---------------------------------------------------------------------------
-// State check case-insensitivity
-// ---------------------------------------------------------------------------
-
-describe('PR state check', () => {
-  function isOpen(state: string): boolean {
-    return state.toLowerCase() === 'open'
-  }
-
-  test('OPEN (uppercase from GitHub API)', () => {
-    expect(isOpen('OPEN')).toBe(true)
-  })
-
-  test('open (lowercase)', () => {
-    expect(isOpen('open')).toBe(true)
-  })
-
-  test('Open (mixed case)', () => {
-    expect(isOpen('Open')).toBe(true)
-  })
-
-  test('CLOSED is not open', () => {
-    expect(isOpen('CLOSED')).toBe(false)
-  })
-
-  test('MERGED is not open', () => {
-    expect(isOpen('MERGED')).toBe(false)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Watch CRUD logic (in-memory, no network)
+// Watch map operations (real module map; seeded via restoreWatches, no network)
 // ---------------------------------------------------------------------------
 
 describe('watch map operations', () => {
-  let watches: Map<string, any>
+  const URL1 = 'https://github.com/o/r/pull/1'
 
-  beforeEach(() => {
-    watches = new Map()
-  })
-
-  function watchPr(prUrl: string, sessionId: string, threadId: string) {
-    if (watches.has(prUrl)) {
-      return `already watching ${prUrl} (session: ${watches.get(prUrl).sessionId})`
-    }
-    const parsed = parsePrUrl(prUrl)
-    if (!parsed) throw new Error(`invalid PR URL: ${prUrl}`)
-    watches.set(prUrl, { prUrl, sessionId, threadId, ...parsed, createdAt: Date.now() })
-    return `watching ${prUrl}`
+  function seed(prUrl: string, sessionId: string) {
+    restoreWatches([{ prUrl, owner: 'o', repo: 'r', prNumber: 1, sessionId, threadId: 'thread-1', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'unknown', createdAt: Date.now() } as WatchEntry], sessionId, 'thread-1')
   }
+  const watched = (prUrl: string) => listWatches().some(w => w.prUrl === prUrl)
 
-  function unwatchPr(prUrl: string, callerSessionId?: string) {
-    const entry = watches.get(prUrl)
-    if (!entry) return `not watching ${prUrl}`
-    if (callerSessionId && callerSessionId !== entry.sessionId && callerSessionId !== 'main') {
-      return `cannot unwatch — owned by session ${entry.sessionId}`
-    }
-    watches.delete(prUrl)
-    return `stopped watching ${prUrl}`
-  }
+  afterEach(() => { unwatchPr(URL1) })
 
-  test('watch adds entry', () => {
-    const result = watchPr('https://github.com/o/r/pull/1', 'sess-1', 'thread-1')
-    expect(result).toBe('watching https://github.com/o/r/pull/1')
-    expect(watches.size).toBe(1)
+  test('duplicate watch returns already watching, without replacing the owner', async () => {
+    seed(URL1, 'sess-1')
+    expect(await watchPr(URL1, 'sess-2', 'thread-2')).toBe(`already watching ${URL1} (session: sess-1)`)
+    expect(listWatches().find(w => w.prUrl === URL1)!.sessionId).toBe('sess-1')
   })
 
-  test('duplicate watch returns already watching', () => {
-    watchPr('https://github.com/o/r/pull/1', 'sess-1', 'thread-1')
-    const result = watchPr('https://github.com/o/r/pull/1', 'sess-2', 'thread-2')
-    expect(result).toContain('already watching')
-    expect(watches.size).toBe(1)
-  })
-
-  test('invalid URL throws', () => {
-    expect(() => watchPr('https://not-github.com/foo', 's', 't')).toThrow('invalid PR URL')
+  test('invalid URL throws', async () => {
+    await expect(watchPr('https://not-github.com/foo', 's', 't')).rejects.toThrow('invalid PR URL')
   })
 
   test('unwatch removes entry', () => {
-    watchPr('https://github.com/o/r/pull/1', 'sess-1', 'thread-1')
-    const result = unwatchPr('https://github.com/o/r/pull/1', 'sess-1')
-    expect(result).toBe('stopped watching https://github.com/o/r/pull/1')
-    expect(watches.size).toBe(0)
+    seed(URL1, 'sess-1')
+    expect(unwatchPr(URL1, 'sess-1')).toBe(`stopped watching ${URL1}`)
+    expect(watched(URL1)).toBe(false)
   })
 
   test('unwatch non-existent returns not watching', () => {
@@ -221,30 +141,21 @@ describe('watch map operations', () => {
   })
 
   test('unwatch by wrong session is rejected', () => {
-    watchPr('https://github.com/o/r/pull/1', 'sess-1', 'thread-1')
-    const result = unwatchPr('https://github.com/o/r/pull/1', 'sess-2')
-    expect(result).toContain('cannot unwatch')
-    expect(watches.size).toBe(1)
+    seed(URL1, 'sess-1')
+    expect(unwatchPr(URL1, 'sess-2')).toBe('cannot unwatch — owned by session sess-1')
+    expect(watched(URL1)).toBe(true)
   })
 
   test('unwatch by main session is allowed', () => {
-    watchPr('https://github.com/o/r/pull/1', 'sess-1', 'thread-1')
-    const result = unwatchPr('https://github.com/o/r/pull/1', 'main')
-    expect(result).toBe('stopped watching https://github.com/o/r/pull/1')
-    expect(watches.size).toBe(0)
+    seed(URL1, 'sess-1')
+    expect(unwatchPr(URL1, 'main')).toBe(`stopped watching ${URL1}`)
+    expect(watched(URL1)).toBe(false)
   })
 
   test('unwatch without callerSessionId is allowed', () => {
-    watchPr('https://github.com/o/r/pull/1', 'sess-1', 'thread-1')
-    const result = unwatchPr('https://github.com/o/r/pull/1')
-    expect(result).toBe('stopped watching https://github.com/o/r/pull/1')
-  })
-
-  test('multiple watches for different PRs', () => {
-    watchPr('https://github.com/o/r/pull/1', 'sess-1', 'thread-1')
-    watchPr('https://github.com/o/r/pull/2', 'sess-1', 'thread-1')
-    watchPr('https://github.com/o/r/pull/3', 'sess-2', 'thread-2')
-    expect(watches.size).toBe(3)
+    seed(URL1, 'sess-1')
+    expect(unwatchPr(URL1)).toBe(`stopped watching ${URL1}`)
+    expect(watched(URL1)).toBe(false)
   })
 })
 
@@ -258,7 +169,7 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
       // A real Codex adapter (it owns the piggyback buffer) with only its
       // one-turn delivery faked.
       // A dead record's app-server socket is gone (the runtime stamps deadAt then).
-      adapter: Object.assign(new CodexEngineAdapter({ isConnected: () => !opts.deadAt } as any), {
+      adapter: Object.assign(fakeCodexAdapter({ isConnected: () => !opts.deadAt }), {
         deliverTurn: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } },
       }),
     } as any)

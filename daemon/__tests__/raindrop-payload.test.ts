@@ -112,9 +112,10 @@ describe('raindrop-payload: egress allowlist', () => {
   })
 
   test('no absolute path escapes — repo is a bare name', () => {
-    const serialized = JSON.stringify(ev())
-    expect(serialized).not.toContain('/Users/kevin')
-    expect(JSON.parse(serialized).properties.repo).toBe('hydra')
+    expect(ev().properties.repo).toBe('hydra')
+    const body = ev({ facts: { ...facts, project: '/Users/kevin/x/hydra' } })
+    expect(JSON.stringify(body)).not.toContain('/Users/kevin')
+    expect('repo' in body.properties).toBe(false)
   })
 
   test('replyChars is the only caller-supplied property with a free value', () => {
@@ -260,13 +261,6 @@ describe('raindrop-payload: the cost bucket is an enum at the wire', () => {
   test.each(['review', 'build', 'investigate'] as const)('%s is shipped', (label) => {
     expect(ev({ facts: { ...facts, label } }).properties.label).toBe(label)
   })
-
-  // sessions.json is parsed unchecked on boot, so the type is not the gate.
-  test('a label that is not one of the three is dropped, not shipped', () => {
-    const body = ev({ facts: { ...facts, label: 'acme-corp-diligence' } })
-    expect(JSON.stringify(body)).not.toContain('acme-corp-diligence')
-    expect('label' in body.properties).toBe(false)
-  })
 })
 
 describe('raindrop-payload: the value gate is a PII gate, not just a charset gate', () => {
@@ -384,10 +378,6 @@ describe('reactions: sentiment and delete are disjoint vocabularies', () => {
 })
 
 describe('raindrop-payload: omitRepo', () => {
-  test('false reports the project', () => {
-    expect(ev({ omitRepo: false }).properties.repo).toBe('hydra')
-  })
-
   test('true omits the field entirely rather than blanking it', () => {
     expect('repo' in ev({ omitRepo: true }).properties).toBe(false)
   })

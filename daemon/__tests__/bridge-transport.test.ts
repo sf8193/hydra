@@ -5,10 +5,9 @@ import { BridgeTransport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { on } from '../event-bus.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { engines } from '../engines/instances.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
-import { fakeAdapter } from './test-harness.js'
+import { fakeAdapter, fakeCodexAdapter } from './test-harness.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -250,7 +249,7 @@ describe('sendOrQueue through the adapter', () => {
 
   test('Codex drops an optional delivery: rejected, nothing steered or queued', async () => {
     const calls: string[] = []
-    const codex = new CodexEngineAdapter({ isConnected: () => true, steer: () => calls.push('steer'), queueTurn: () => { calls.push('queue'); return true } } as any)
+    const codex = fakeCodexAdapter({ calls })
     const r = await codex.deliver({ sessionId: 's18' } as any, { type: 'notification', content: 'nudge', optional: true })
     expect(r).toMatchObject({ status: 'rejected' })
     expect(calls).toEqual([])
@@ -300,7 +299,7 @@ describe('delivery outcomes', () => {
 // S2 move to adapter.isConnected is checked against the same matrix.
 describe('has() matrix (adapter-policy T2)', () => {
   let bt: BridgeTransport
-  const codex = (connected: boolean) => new CodexEngineAdapter({ isConnected: () => connected } as any)
+  const codex = (connected: boolean) => fakeCodexAdapter({ isConnected: () => connected })
   const put = (sessionId: string, extra: Record<string, unknown>) =>
     registry.set(sessionId, { sessionId, threadId: 'chat1', ...extra } as any)
   const bridge = (sessionId: string) => bt.set(sessionId, { sessionId, socket: mockSocket().socket, buf: '' })
@@ -375,14 +374,8 @@ describe('delivery paths (adapter-policy T7)', () => {
   const put = (sessionId: string, extra: Record<string, unknown>) =>
     registry.set(sessionId, { sessionId, threadId: 'chat1', tmuxName: sessionId, ...extra } as any)
   const claude = (sessionId: string, owner = t) => put(sessionId, { engine: 'claude', adapter: new ClaudeEngine(owner) })
-  const codexEngine = (calls: string[], opts: { queueOk?: boolean } = {}) => ({
-    isConnected: () => true,
-    queueTurn: (_id: string, text: string) => { calls.push('queue:' + text); return opts.queueOk ?? true },
-    // #378: steer returns its correlated DeliveryResult.
-    steer: async (_id: string, text: string) => { calls.push('steer:' + text); return { status: 'accepted' as const, via: 'steer' } },
-  })
-  const codex = (sessionId: string, calls: string[], opts: { queueOk?: boolean } = {}) =>
-    put(sessionId, { engine: 'codex', adapter: new CodexEngineAdapter(codexEngine(calls, opts) as any) })
+  const codex = (sessionId: string, calls: string[]) =>
+    put(sessionId, { engine: 'codex', adapter: fakeCodexAdapter({ calls }) })
   const socketOn = (owner: BridgeTransport, sessionId: string, write: (d: string) => boolean = () => true) => {
     const written: string[] = []
     const socket: any = { write: (d: string) => { written.push(d); return write(d) }, end() {}, destroyed: false }

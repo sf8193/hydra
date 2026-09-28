@@ -35,6 +35,8 @@ describe('isForbiddenStateDir', () => {
     // Not forbidden from the repo root, regardless of cwd — sanity check that
     // resolve() is actually being applied, not comparing raw strings.
     expect(isForbiddenStateDir('./some-relative-dir')).toBe(false)
+    // Raw, this string sits in the -backup sibling; resolved, it is the live dir.
+    expect(isForbiddenStateDir(`${FORBIDDEN_STATE_DIR_PREFIX}-backup/../channels/discord`)).toBe(true)
   })
 })
 

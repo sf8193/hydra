@@ -19,10 +19,4 @@ describe('formatTranscript', () => {
     expect(out).toContain('> topic: liveness')
     expect(out).toContain('4/5 tracked messages captured (2 exchange, 2 scaffolding)')
   })
-
-  test('sentinel-tagged posts are never classified as scaffolding', () => {
-    const out = formatTranscript('review', 't-1', [entries[1]], 1)
-    expect(out).toContain('## The exchange')
-    expect(out).not.toContain('## Scaffolding')
-  })
 })

@@ -208,6 +208,15 @@ export const killsInProgress = new Set<string>()
 // Kill session
 // ---------------------------------------------------------------------------
 
+/** Resume count for a new session resuming `resumeFrom`: the most recently
+ *  dead session on that conversation's count + 1, or 0 when there is none. */
+export function nextResumeCount(sessions: Iterable<SessionInfo>, resumeFrom: string): number {
+  const predecessor = [...sessions]
+    .filter(s => s.claudeSessionId === resumeFrom && s.deadAt)
+    .sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
+  return predecessor ? (predecessor.resumeCount ?? 0) + 1 : 0
+}
+
 export function emitSessionDeath(info: SessionInfo): void {
   emit('session:death', {
     sessionId: info.sessionId,
@@ -507,12 +516,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const isJoin = !!opts?.joinThread
   let respawnCount = 0
   let resumeCount = 0
-  if (isResume) {
-    const predecessor = [...registry.values()]
-      .filter(s => s.claudeSessionId === opts!.resumeFrom && s.deadAt)
-      .sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
-    if (predecessor) resumeCount = (predecessor.resumeCount ?? 0) + 1
-  }
+  if (isResume) resumeCount = nextResumeCount(registry.values(), opts!.resumeFrom!)
   if (isJoin) {
     threadId = opts!.joinThread!
   }

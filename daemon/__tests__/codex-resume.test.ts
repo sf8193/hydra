@@ -18,14 +18,7 @@ import { gateway } from '../config.js'
 import { transport } from '../bridge-transport.js'
 import type { LaunchInput } from '../engines/engine-adapter.js'
 import type { InboundMessage } from '../../gateway.js'
-import * as childProcess from 'child_process'
 
-// cli/__tests__/peek.test.ts mock.module()s child_process for the whole process
-// with an execFileSync that never throws — so, in a full run, every
-// `tmux has-session` "succeeds" and doSpawnSession refuses the thread as live.
-// When that leaked mock is present, make tmux calls fail (no such session) for
-// this file, then put peek's default back.
-const leakedExecFileSync = (childProcess.execFileSync as any).mock ? childProcess.execFileSync as any : null
 
 // ---------------------------------------------------------------------------
 // 1. Adapter launch
@@ -173,7 +166,6 @@ beforeAll(() => {
   ;(registry as any).persist = () => {}
   ;(threadRegistry as any).persist = () => {}
   process.env.SPAWN_CWD = process.cwd()
-  leakedExecFileSync?.mockImplementation((cmd: string) => { if (cmd === 'tmux') throw new Error('no tmux session'); return '' })
 })
 
 afterAll(() => {
@@ -190,7 +182,6 @@ afterAll(() => {
   ;(threadRegistry as any).persist = orig.tpersist
   if (orig.spawnCwd === undefined) delete process.env.SPAWN_CWD
   else process.env.SPAWN_CWD = orig.spawnCwd
-  leakedExecFileSync?.mockImplementation(() => '')
 })
 
 let origStderr: typeof process.stderr.write
@@ -411,9 +402,17 @@ describe('stale Codex reconnect', () => {
     }
     const adapter = new CodexEngineAdapter(engine, fakeProc() as any)
 
-    expect(await adapter.reconnect(A)).toBe(false)
+    const realRetry = CodexEngineAdapter.RESUME_RETRY_MS
+    CodexEngineAdapter.RESUME_RETRY_MS = 1 // the backoff's length is not under test
+    try {
+      expect(await adapter.reconnect(A)).toBe(false)
+    } finally { CodexEngineAdapter.RESUME_RETRY_MS = realRetry }
     expect(engine.calls.filter((c: string) => c.startsWith('connect '))).toEqual([])
     expect(A.codexThreadId).toBe('T-r16-A')
+  })
+
+  test('production failed-resume backoff is 2s', () => {
+    expect(CodexEngineAdapter.RESUME_RETRY_MS).toBe(2000)
   })
 
   test('adapter.reconnect: record replaced while probing the socket → nothing attempted', async () => {

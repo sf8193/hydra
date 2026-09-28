@@ -11,6 +11,13 @@ import { claudeConfigDir } from '../shared/constants.js'
 // Paths & env
 // ---------------------------------------------------------------------------
 
+// Under bun test the preload (test-setup.ts, found via bunfig.toml at the repo root)
+// points state at a temp dir. Run from a subdirectory, bun skips it and tests would read
+// and write the live daemon's state (it happened: Sep 28, 2026). Refuse instead.
+if (process.env.NODE_ENV === 'test' && process.env.HYDRA_TEST_PRELOADED !== '1') {
+  throw new Error('bun test without test-setup.ts preload: run it from the repo root so state is isolated')
+}
+
 export const STATE_DIR = process.env.HYDRA_STATE_DIR
   ?? process.env.DISCORD_STATE_DIR
   ?? join(homedir(), '.claude', 'channels', process.env.CHAT_PLATFORM ?? 'discord')

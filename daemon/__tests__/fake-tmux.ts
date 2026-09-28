@@ -10,7 +10,6 @@
 //   calls         → one line per tmux invocation (its argv)
 // pgrep always finds nothing, so discovery's child-env fallback stays inert.
 
-import * as childProcess from 'child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -28,12 +27,6 @@ case "$1" in
 esac
 `
 
-// cli/__tests__/peek.test.ts mock.module()s child_process for the whole
-// process with an execFileSync that returns ''. When that leak is present,
-// route it through the shim for the duration of the test, then put peek's
-// default back.
-// Checked per call, not at import: peek's mock may be installed after this module loads.
-
 export type FakeTmux = {
   dir: string
   claudeDir: string
@@ -48,8 +41,6 @@ export type FakeTmux = {
 }
 
 export function withFakeTmux(): FakeTmux {
-  const leaked = (childProcess.execFileSync as any).mock ? childProcess.execFileSync as any : null
-  const leakedSh = (childProcess.execSync as any).mock ? childProcess.execSync as any : null
   const dir = mkdtempSync(join(tmpdir(), 'hydra-faketmux-'))
   const claudeDir = join(dir, 'claude-config')
   writeFileSync(join(dir, 'tmux'), TMUX); chmodSync(join(dir, 'tmux'), 0o755)
@@ -59,22 +50,6 @@ export function withFakeTmux(): FakeTmux {
   process.env.PATH = `${dir}:${saved.PATH}`
   process.env.CLAUDE_CONFIG_DIR = claudeDir
   delete process.env.TMUX
-
-  if (leaked) {
-    leaked.mockImplementation((cmd: string, args: string[] = []) => {
-      const bin = Bun.which(cmd, { PATH: process.env.PATH }) ?? cmd
-      const r = Bun.spawnSync([bin, ...args], { env: process.env as Record<string, string> })
-      if (r.exitCode !== 0) throw new Error(`${cmd} ${args.join(' ')} exited ${r.exitCode}`)
-      return r.stdout.toString()
-    })
-  }
-  if (leakedSh) {
-    leakedSh.mockImplementation((cmd: string) => {
-      const r = Bun.spawnSync(['sh', '-c', cmd], { env: process.env as Record<string, string> })
-      if (r.exitCode !== 0) throw new Error(`${cmd} exited ${r.exitCode}`)
-      return r.stdout
-    })
-  }
 
   return {
     dir,
@@ -92,8 +67,6 @@ export function withFakeTmux(): FakeTmux {
       writeFileSync(join(projectDir, `${sessionId}.jsonl`), '')
     },
     restore() {
-      if (leaked) leaked.mockImplementation(() => '')
-      if (leakedSh) leakedSh.mockImplementation(() => '')
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
       rmSync(dir, { recursive: true, force: true })
     },

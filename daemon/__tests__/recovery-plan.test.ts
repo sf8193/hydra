@@ -4,10 +4,10 @@
 
 import { describe, expect, test } from 'bun:test'
 import { ClaudeEngine } from '../engines/claude-engine.js'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { fakeCodexAdapter } from './test-harness.js'
 
 const claude = new ClaudeEngine({} as any)
-const codex = new CodexEngineAdapter({} as any, {} as any)
+const codex = fakeCodexAdapter()
 
 describe('native fork (ported from canNativeFork)', () => {
   test('allows same-engine forks with matching native history', () => {

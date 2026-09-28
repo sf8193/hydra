@@ -56,6 +56,10 @@ export function resumeHomeOwner(records: Iterable<SessionInfo>, resumeCodex: { h
 export const codexLaunchProcess = { registerMcp: registerCodexMcp, start: startCodexAppServer, stop: stopCodexAppServer }
 
 export class CodexEngineAdapter implements EngineAdapter {
+  // Tests shorten these; production uses the defaults.
+  static COMPOSER_DEADLINE_MS = 5000
+  static COMPOSER_POLL_MS = 100
+  static RESUME_RETRY_MS = 2000
   readonly provider = 'codex' as const
   readonly channel = 'engine' as const
   constructor(
@@ -337,7 +341,7 @@ export class CodexEngineAdapter implements EngineAdapter {
   }
 
   private async waitForComposer(target: string): Promise<void> {
-    const deadline = Date.now() + 5000
+    const deadline = Date.now() + CodexEngineAdapter.COMPOSER_DEADLINE_MS
     do {
       // A newly created window is not necessarily a ready TUI. Inspect the live
       // viewport at the visible cursor for Codex's composer before typing text.
@@ -353,7 +357,7 @@ export class CodexEngineAdapter implements EngineAdapter {
         const match = cursor.match(/^1 (\d+) (\d+)$/)
         if (match && Number(match[1]) >= 2 && /^›(?: |$)/.test(lines[Number(match[2])] ?? '')) return
       } catch { /* Missing/cold panes may become ready within the deadline. */ }
-      await new Promise(resolve => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))))
+      await new Promise(resolve => setTimeout(resolve, Math.min(CodexEngineAdapter.COMPOSER_POLL_MS, Math.max(0, deadline - Date.now()))))
     } while (Date.now() < deadline)
     throw new Error(`Codex composer is not ready for ${target} after 5s; no text was sent`)
   }
@@ -403,7 +407,7 @@ export class CodexEngineAdapter implements EngineAdapter {
       } catch (err: any) {
         process.stderr.write(`codex-adapter: resume failed for ${info.tmuxName}: ${err?.message || err}\n`)
         try { this.engine.disconnect(info.sessionId) } catch {}
-        await new Promise(r => setTimeout(r, 2000))
+        await new Promise(r => setTimeout(r, CodexEngineAdapter.RESUME_RETRY_MS))
         if (stale()) return false
       }
     }

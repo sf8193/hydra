@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, parseSpawnTopic, safeEdit, resolveSpawnLabel } from '../util.js'
+import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, parseSpawnTopic, safeEdit, resolveSpawnLabel, parseContextPercent } from '../util.js'
 import { parseSessionLabel } from '../../shared/constants.js'
 import { gateway } from '../config.js'
 
@@ -29,28 +29,21 @@ describe('chunk', () => {
     expect(result[2].length).toBe(50)
   })
 
-  test('newline mode prefers paragraph break', () => {
-    const text = 'first paragraph\n\nsecond paragraph that is very long and keeps going'
-    const result = chunk(text, 30, 'newline')
-    // First chunk includes text up to the paragraph break point
-    expect(result[0]).toContain('first paragraph')
-    expect(result.length).toBeGreaterThan(1)
-    // Second chunk should have the continuation
-    expect(result.slice(1).join('')).toContain('second paragraph')
+  test('newline mode prefers paragraph break, and strips leading newlines from the next chunk', () => {
+    expect(chunk('para one\n\npara two\n\npara three', 20, 'newline'))
+      .toEqual(['para one\n\npara two', 'para three'])
   })
 
   test('newline mode falls back to line break', () => {
-    const text = 'line one\nline two\nline three is here'
-    const result = chunk(text, 20, 'newline')
-    expect(result.length).toBeGreaterThan(1)
+    expect(chunk('line one\nline two\nline three is here', 20, 'newline'))
+      .toEqual(['line one\nline two', 'line three is here'])
+    expect(chunk('line one\nline two\nline three\nline four', 15, 'newline'))
+      .toEqual(['line one', 'line two', 'line three', 'line four'])
   })
 
-  test('newline mode splits long text without newlines', () => {
-    const text = 'one two three four five six seven eight nine ten eleven twelve'
-    const result = chunk(text, 30, 'newline')
-    expect(result.length).toBeGreaterThan(1)
-    // All content should be preserved
-    expect(result.join('').replace(/\s+/g, ' ').trim()).toContain('one two three')
+  test('newline mode splits long text without newlines at a space', () => {
+    expect(chunk('one two three four five six seven eight nine ten eleven twelve', 30, 'newline'))
+      .toEqual(['one two three four five six', ' seven eight nine ten eleven', ' twelve'])
   })
 
   test('empty text returns single empty chunk', () => {
@@ -77,10 +70,8 @@ describe('chunk markdown mode', () => {
   })
 
   test('plain prose splits at paragraph boundaries', () => {
-    const text = 'First paragraph here.\n\nSecond paragraph that continues on and on.'
-    const result = chunk(text, 40, 'markdown')
-    expect(result.length).toBeGreaterThan(1)
-    expect(result[0]).toContain('First paragraph')
+    expect(chunk('Para one.\n\nPara two.\n\nPara three and more text here.', 25, 'markdown'))
+      .toEqual(['Para one.\n\n', 'Para two.\n\n', 'Para three and more', ' text here.'])
   })
 
   test('fence spanning a split is closed and reopened', () => {
@@ -137,11 +128,6 @@ describe('chunk markdown mode', () => {
     }
   })
 
-  test('plain prose unchanged when under limit', () => {
-    const text = 'Just a simple message.'
-    expect(chunk(text, 100, 'markdown')).toEqual([text])
-  })
-
   test('content round-trips minus injected fence markers', () => {
     const code = 'const a = 1\nconst b = 2\n'.repeat(20)
     const text = 'Intro.\n\n```ts\n' + code + '```\n\nOutro paragraph.'
@@ -190,15 +176,6 @@ describe('chunk markdown mode', () => {
     expect(result.length).toBeGreaterThan(1)
     expect(result.join('')).toContain('hello world')
   })
-
-  test('legacy modes still work', () => {
-    const text = 'a'.repeat(250)
-    expect(chunk(text, 100, 'length').length).toBe(3)
-
-    const text2 = 'word '.repeat(50)
-    const result = chunk(text2, 30, 'newline')
-    expect(result.length).toBeGreaterThan(1)
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -206,6 +183,11 @@ describe('chunk markdown mode', () => {
 // ---------------------------------------------------------------------------
 
 describe('formatDuration', () => {
+  test('sub-minute remainders floor, never round up', () => {
+    expect(formatDuration(90_000)).toBe('1m')
+    expect(formatDuration(59_000)).toBe('0m')
+  })
+
   test('minutes only', () => {
     expect(formatDuration(5 * 60_000)).toBe('5m')
     expect(formatDuration(0)).toBe('0m')
@@ -252,6 +234,12 @@ describe('fallbackDescription', () => {
   test('empty string', () => {
     expect(fallbackDescription('')).toBe('')
   })
+
+  // The command and content joined by ':' are one token, so the whole input
+  // is stripped and the description is empty.
+  test('slash command with no space strips the entire token', () => {
+    expect(fallbackDescription('/spawn:topic')).toBe('')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -297,10 +285,31 @@ describe('parseDuration', () => {
     expect(parseDuration('25h')).toBeNull()
     expect(parseDuration('999999h')).toBeNull()
     expect(parseDuration('24h')).toBe(86_400_000)
+    expect(parseDuration('1441m')).toBeNull()
+  })
+
+  test('case insensitive and trims whitespace', () => {
+    expect(parseDuration('5M')).toBe(300_000)
+    expect(parseDuration('2H')).toBe(7_200_000)
+    expect(parseDuration('10S')).toBe(10_000)
+    expect(parseDuration('  5m  ')).toBe(300_000)
+  })
+
+  test('rejects invalid formats', () => {
+    expect(parseDuration('5ms')).toBeNull()
+    expect(parseDuration('5 m')).toBeNull()
+    expect(parseDuration('1.5m')).toBeNull()
+    expect(parseDuration('-5m')).toBeNull()
   })
 })
 
 describe('extractPhaseBudget', () => {
+  test('only the first flag is consumed; a second stays in the topic', () => {
+    const r = extractPhaseBudget('work --phase-budget 5m --phase-budget 10m end')
+    expect(r.budgetMs).toBe(300_000)
+    expect(r.topic).toContain('--phase-budget 10m')
+  })
+
   test('strips the flag and returns ms', () => {
     expect(extractPhaseBudget('fix the bug --phase-budget 20m off main'))
       .toEqual({ topic: 'fix the bug off main', budgetMs: 1_200_000 })
@@ -311,6 +320,10 @@ describe('extractPhaseBudget', () => {
       .toEqual({ topic: 'quick check', budgetMs: 90_000 })
     expect(extractPhaseBudget('audit logs --phase-budget=1h'))
       .toEqual({ topic: 'audit logs', budgetMs: 3_600_000 })
+  })
+
+  test('case insensitive flag', () => {
+    expect(extractPhaseBudget('work --PHASE-BUDGET 1h done')).toEqual({ topic: 'work done', budgetMs: 3_600_000 })
   })
 
   test('no flag → topic unchanged', () => {
@@ -326,6 +339,10 @@ describe('extractPhaseBudget', () => {
 // ---------------------------------------------------------------------------
 
 describe('transformProtocolTag', () => {
+  test('text after the tag keeps every following line', () => {
+    expect(transformProtocolTag('[critic→owner] First line\nSecond line')).toBe('First line\nSecond line')
+  })
+
   test('routing tag is stripped, content preserved', () => {
     expect(transformProtocolTag('[critic→owner]\nFinding 1: bug'))
       .toBe('Finding 1: bug')
@@ -334,6 +351,10 @@ describe('transformProtocolTag', () => {
   test('routing tag with content on same line', () => {
     expect(transformProtocolTag('[builder→critic] done with round'))
       .toBe('done with round')
+  })
+
+  test('hyphenated role names', () => {
+    expect(transformProtocolTag('[build-owner→critic] text')).toBe('text')
   })
 
   test('body-less routing tag returns original text', () => {
@@ -558,5 +579,50 @@ describe('resolveSpawnLabel', () => {
   test('a label word in the middle of prose is not a flag', () => {
     expect(resolveSpawnLabel('compare --review and --build modes')).toEqual({})
     expect(resolveSpawnLabel('compare --review and --build modes', undefined, 'investigate')).toEqual({ label: 'investigate' })
+  })
+})
+
+describe('parseContextPercent', () => {
+  const RULE = '─'.repeat(80)
+  // Shape of a live CC pane: conversation, input box between two rules, footer.
+  const pane = (conversation: string, footer: string) =>
+    `${conversation}\n${RULE}\n❯ \n${RULE}\n${footer}\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n`
+
+  test('README footer: ctx: N%', () => {
+    expect(parseContextPercent(pane('⏺ done', '  ctx: 88%'))).toBe(88)
+  })
+
+  test('GSD footer: progress bar then N%', () => {
+    expect(parseContextPercent(pane('⏺ done', '  ⬆ /gsd-update │ Opus 5.5 (1M context) │ hydra █░░░░░░░░░ 11%'))).toBe(11)
+  })
+
+  test('GSD critical footer with skull prefix', () => {
+    expect(parseContextPercent(pane('⏺ done', '  Opus 5.5 │ hydra 💀 ██████████ 100%'))).toBe(100)
+  })
+
+  test('percentages in conversation text never count', () => {
+    const convo = '⏺ Sales are up 34% and the 15% discount held.\n  progress █████░░░░░ 50%'
+    expect(parseContextPercent(pane(convo, '  ctx: 88%'))).toBe(88)
+  })
+
+  test('conversation % with no recognizable footer → null, not the stray number', () => {
+    expect(parseContextPercent(pane('⏺ Sales are up 34%', '  Opus 5.5 │ hydra'))).toBeNull()
+  })
+
+  test('CC auto-compact line reports remaining, not used — ignored', () => {
+    const p = `⏺ done\n${RULE}\n❯ \n${RULE}\n  ⏵⏵ bypass permissions on · Context left until auto-compact: 8%\n`
+    expect(parseContextPercent(p)).toBeNull()
+  })
+
+  test('ctx label wins over bar when both render', () => {
+    expect(parseContextPercent(pane('⏺ done', '  ctx: 42% │ █████░░░░░ 50%'))).toBe(42)
+  })
+
+  test('no input rule (not a REPL screen) → null', () => {
+    expect(parseContextPercent('Login expired · ctx: 88%\n')).toBeNull()
+  })
+
+  test('empty pane → null', () => {
+    expect(parseContextPercent('')).toBeNull()
   })
 })

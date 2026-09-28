@@ -3,15 +3,15 @@
 // is the runtime's verdict, not a veto on a connected socket.
 
 import { describe, test, expect, afterEach } from 'bun:test'
-import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
-import { isCodexReconnecting, reconnectCodexSessions } from '../engines/codex-runtime.js'
+import { fakeCodexAdapter } from './test-harness.js'
+import { isCodexReconnecting, reconnectCodexSessions, reconnectDeps } from '../engines/codex-runtime.js'
 import { engines } from '../engines/instances.js'
 import { executionAlive, isAlive } from '../util.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { withFakeTmux } from './fake-tmux.js'
 
-const codex = (connected: boolean) => new CodexEngineAdapter({ isConnected: () => connected } as any)
+const codex = (connected: boolean) => fakeCodexAdapter({ isConnected: () => connected })
 const ids: string[] = []
 afterEach(() => { for (const id of ids.splice(0)) registry.delete(id) })
 
@@ -108,13 +108,11 @@ describe('boot sweep grace', () => {
 
 describe('reconnect verdicts (step 2)', () => {
   test('reconnect reports failure when the socket is gone by the time resume returns', async () => {
-    const engine = {
+    const a = fakeCodexAdapter({
       isSocketLive: async () => true,
       connectAndResume: async () => ({ model: 'm' }), // resumed, but its drain dropped the socket
       isConnected: () => false,
-      disconnect: () => {},
-    }
-    const a = new CodexEngineAdapter(engine as any)
+    })
     const info = rec(a, { codexThreadId: 'T' })
     ids.push(info.sessionId); registry.set(info.sessionId, info)
     expect(await a.reconnect(info)).toBe(false)
@@ -133,12 +131,16 @@ describe('reconnect verdicts (step 2)', () => {
       onReply: () => {}, onReconnect: () => {},
       onDisconnect: sid => { aliveWhenTold = isAlive(registry.get(sid)!) },
     })
-    codexEngine.emit('disconnected', info.sessionId)
-    expect(isCodexReconnecting(info.sessionId)).toBe(true)
-    await new Promise(r => setTimeout(r, 2_700))
+    const realWait = reconnectDeps.wait
+    reconnectDeps.wait = () => new Promise(r => setTimeout(r, 1)) // skip the real 250/750/1500ms backoff
+    try {
+      codexEngine.emit('disconnected', info.sessionId)
+      expect(isCodexReconnecting(info.sessionId)).toBe(true)
+      await new Promise(r => setTimeout(r, 100))
+    } finally { reconnectDeps.wait = realWait }
     expect(aliveWhenTold).toBe(false)
     expect(typeof info.deadAt).toBe('number')
-  }, 10_000)
+  })
 })
 
 describe('discardSession (step 2)', () => {

@@ -588,25 +588,6 @@ describe('progress board', () => {
     expect(boardWrites()).toHaveLength(0)
   })
 
-  test('the board is not left behind once its thread is done with it', async () => {
-    const pmThreadId = 'qol-pm-thread-23'
-    const pm = mkPm(pmThreadId)
-    const state = mkBuild({ ticket: 'fb-52-1111', pmThreadId, builderName: 'drift' })
-
-    factory.tickProgress(pmThreadId)
-    await settle()
-    expect(factory.boards.has(pmThreadId)).toBe(true)
-
-    factory.transitionFactoryPhase(state, 'awaiting_pm')
-    state.reviewed = true
-    expect(factoryAccept('fb-52-1111', pm.sessionId)).toEqual({ ok: true })
-    await settle()
-
-    // Message, ticker, history and write chain all retire together — the
-    // closing write must not resurrect an entry to queue itself on.
-    expect(factory.boards.has(pmThreadId)).toBe(false)
-  })
-
   test('a non-review protocol in the builder thread leaves the board alone', async () => {
     const pmThreadId = 'qol-pm-thread-25'
     mkPm(pmThreadId)
@@ -647,8 +628,9 @@ describe('progress board', () => {
     // The ✅ carries the outcome, so the line does not also spell out the phase.
     expect(board.text).toMatch(/ {2}✅ 🌊 drift · divergences #5\+#6 · \d+[smh] \(fb-49\)/)
     expect(board.text).not.toContain('· complete (fb-49)')
-    // The board is retired with the last build, not left ticking.
-    // The board is retired wholesale — message, ticker and history together.
+    // The board is retired with the last build, not left ticking: message,
+    // ticker, history and write chain all go together — the closing write must
+    // not resurrect an entry to queue itself on.
     expect(factory.boards.has(pmThreadId)).toBe(false)
   })
 

@@ -5,8 +5,8 @@ import { join } from 'path'
 import { sendTmuxKeys } from '../codex-key-queue.js'
 import { tmuxNewSession } from '../../shared/spawn-env.js'
 
-// Isolated real tmux server. Run separately from global child_process mocks.
-const available = !('mock' in execFileSync) && Bun.spawnSync(['tmux', '-V']).exitCode === 0
+// Isolated real tmux server (its own TMUX_TMPDIR, every command by explicit -S).
+const available = Bun.spawnSync(['tmux', '-V']).exitCode === 0
 const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
 async function until(predicate: () => boolean) {
   const end = Date.now() + 2000
