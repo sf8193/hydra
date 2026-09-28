@@ -1,11 +1,21 @@
 import { describe, expect, test } from 'bun:test'
 import { homedir, tmpdir } from 'os'
+import { join } from 'path'
 import { codexHomeDir, codexPidPath, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 
 describe('durable Codex app-server process', () => {
   test('stores process identity inside the isolated agent home', () => {
     expect(codexHomeDir('ember')).toBe(`${process.env.HYDRA_CODEX_ROOT}/hydra-ember`)
     expect(codexPidPath('ember')).toBe(`${process.env.HYDRA_CODEX_ROOT}/hydra-ember/hydra-app-server.pid`)
+  })
+
+  test('without the test override, homes live under ~/.codex', () => {
+    const saved = process.env.HYDRA_CODEX_ROOT
+    delete process.env.HYDRA_CODEX_ROOT
+    try {
+      expect(codexHomeDir('ember')).toBe(join(homedir(), '.codex', 'hydra-ember'))
+      expect(codexPidPath('ember')).toBe(join(homedir(), '.codex', 'hydra-ember', 'hydra-app-server.pid'))
+    } finally { process.env.HYDRA_CODEX_ROOT = saved }
   })
 
   // test-setup.ts: tests can neither see real app-servers nor start one.
