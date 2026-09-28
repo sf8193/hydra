@@ -75,6 +75,8 @@ export type UsageReading = { totals: TokenTotals; providerSessionId: string; cur
 
 // confirmedComplete: the turn is definitely over (skip the reply guard's grace).
 // answer(): the session's last clean answer given after sinceMs, or null.
+// Either may be lazy (Claude reads the status file and transcript on first use, and both
+// describe one snapshot): read them off the outcome, never destructure it.
 export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): string | null }
 // activityAt: epoch seconds of the last observable activity, or null when it
 // can't be read (the reply-guard poller then skips the session this tick). Read

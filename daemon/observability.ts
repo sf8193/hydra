@@ -85,6 +85,13 @@ export type ConversationForensics = {
   // left as a precision gap rather than fixed — not worth the complexity of
   // threading "which turn" through both fields for a safe-side miss.
   lastAssistantTurnComplete: boolean
+  // Claude logs queue-operation enqueue when a channel message arrives, and dequeue
+  // (between turns) or remove (injected into the running turn) when consumed. Backlog =
+  // enqueued but not consumed, counted over the tail: a consume with no enqueue in view
+  // clamps at 0 and can cancel an in-view enqueue (only in the gap between two turns).
+  // lastConsumeTs (named for both ops) is the latest consume.
+  queueBacklog: number
+  lastConsumeTs: string | null
 }
 
 // Reads the tail of a transcript file, splitting into complete JSON lines.
@@ -120,12 +127,23 @@ export function readConversationForensics(transcriptPath: string): ConversationF
     let lastAssistantTs: string | null = null
     let lastAssistantTurnComplete = false
     let tailApiCalls = 0
+    let queueBacklog = 0
+    let lastConsumeTs: string | null = null
     const lastTurnToolIds = new Set<string>()
     const answeredToolIds = new Set<string>()
 
     for (const line of lines) {
       let entry: any
       try { entry = JSON.parse(line) } catch { continue }
+
+      if (entry.type === 'queue-operation') {
+        if (entry.operation === 'enqueue') queueBacklog++
+        else if (entry.operation === 'dequeue' || entry.operation === 'remove') {
+          queueBacklog = Math.max(0, queueBacklog - 1)
+          if (entry.timestamp) lastConsumeTs = entry.timestamp
+        }
+        continue
+      }
 
       if (entry.type === 'assistant') {
         tailTurns++
@@ -175,6 +193,7 @@ export function readConversationForensics(transcriptPath: string): ConversationF
     return {
       tailTurns, lastStopReason, lastToolCalled, lastToolPending, pendingToolCount: pendingIds.length,
       tailApiCalls, lastAssistantText, isTail, lastAssistantFullText, lastAssistantTs, lastAssistantTurnComplete,
+      queueBacklog, lastConsumeTs,
     }
   } catch {
     if (fd !== undefined) try { closeSync(fd) } catch {}
