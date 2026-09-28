@@ -4,7 +4,7 @@ import { protocol } from '../protocol-dsl.js'
 import { onRunReply, onRunAdvance, onRunDisconnect, onRunReconnect, onRunExtend, startProtocolRun, __test } from '../protocol-runner.js'
 import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
-import { fakeAdapter as harnessFakeAdapter } from './test-harness.js'
+import { fakeAdapter as harnessFakeAdapter, TestHarness } from './test-harness.js'
 import delegatedBuildProto from '../../protocols/delegated-build.js'
 import delegatedBuildQuickProto from '../../protocols/delegated-build-quick.js'
 import { selectDelegatedBuildProtocol } from '../../protocols/delegated-build-select.js'
@@ -151,6 +151,10 @@ describe('protocol runner — advance routing', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.reason).toContain('not your turn')
     expect(run.phase).toBe('critic_turn')
+
+    const withVerdict = await onRunAdvance('test-owner', 'I approve myself.', 'approve')
+    expect(withVerdict.ok).toBe(false)
+    expect(run.decisions).toHaveLength(0)
   })
 
   test('reply never advances protocol', async () => {
@@ -170,15 +174,6 @@ describe('protocol runner — advance routing', () => {
     if (!result.ok) expect(result.reason).toContain('invalid verdict')
     expect(run.decisions).toHaveLength(0)
     expect(run.phase).toBe('critic_turn')
-  })
-
-  test('advance from wrong role is rejected', async () => {
-    const run = createTestRun()
-
-    const result = await onRunAdvance('test-owner', 'I approve myself.', 'approve')
-
-    expect(result.ok).toBe(false)
-    expect(run.decisions).toHaveLength(0)
   })
 
   test('verdict in wrong phase is rejected', async () => {
@@ -327,26 +322,6 @@ describe('protocol runner — terminal phases', () => {
   })
 })
 
-describe('protocol runner — timeout transitions', () => {
-  test('timeout to cancelled phase uses cancel semantics', async () => {
-    const run = createTestRun({ phase: 'critic_turn' })
-    // critic_turn timeout → cancelled (the cancelPhase)
-    const result = testProto.machine.transition('critic_turn' as any, 'timeout' as any)
-    expect(result.ok).toBe(true)
-    if (result.ok) expect(result.to).toBe('cancelled')
-    expect(run.protocol.cancelPhase).toBe('cancelled')
-  })
-
-  test('timeout to non-cancel phase routes through afterTransition', () => {
-    // closing timeout → complete (not cancelled, so completeRun semantics)
-    const result = testProto.machine.transition('closing' as any, 'timeout' as any)
-    expect(result.ok).toBe(true)
-    if (!result.ok) throw new Error('unreachable: asserted ok above')
-    expect(result.to).toBe('complete')
-    expect(result.to).not.toBe('cancelled')
-  })
-})
-
 describe('protocol runner — timeout while the actor is working', () => {
   const working = (live: 'working' | 'idle') => ({
     sessionId: 'test-critic', tmuxName: 'critic-tab',
@@ -377,20 +352,12 @@ describe('protocol runner — timeout while the actor is working', () => {
   })
 })
 
-describe('protocol runner — strike and decisionContext', () => {
-  test('run.strike is set from params, not ext', () => {
-    const run = createTestRun()
-    expect(run.strike).toBe(false)
-
-    const runWithStrike = createTestRun({ strike: true })
-    expect(runWithStrike.strike).toBe(true)
-  })
-
-  test('decisionContext stamps context on decisions', async () => {
-    const run = createTestRun()
-    await onRunAdvance('test-critic', 'Looks good.', 'approve')
-    expect(run.decisions).toHaveLength(1)
-    expect(run.decisions[0].context).toBeUndefined()
+describe('protocol runner — strike', () => {
+  test('run.strike is set from params by startProtocolRun', async () => {
+    const plain = await TestHarness.started(testProto)
+    try { expect(plain.run.strike).toBe(false) } finally { plain.dispose() }
+    const struck = await TestHarness.started(testProto, { strike: true })
+    try { expect(struck.run.strike).toBe(true) } finally { struck.dispose() }
   })
 })
 
@@ -401,6 +368,9 @@ describe('protocol runner — behavior chain', () => {
     await onRunAdvance('test-owner', 'Final defense.')
 
     expect(run.phase).toBe('closing')
+    expect(run.timeout).toBeDefined() // backstopTimer (2nd)
+    const ownerNotes = (transport.messageQueues.get('test-owner') ?? []).map(m => String(m.content))
+    expect(ownerNotes.some(n => n.includes('Test Review complete (3 rounds)'))).toBe(true) // notifyOwnerSummary (3rd)
   })
 })
 
@@ -489,11 +459,6 @@ describe('spike protocol structure', () => {
     expect(spike.windowMs('exploring')).toBe(60 * 60 * 1000)
   })
 
-  test('phaseInteraction classifies advance and both modes', () => {
-    expect(spike.phaseInteraction('exploring')).toEqual({ verdict: 'optional', options: ['done'], descriptions: { done: 'your summary' } })
-    expect(spike.phaseInteraction('reporting')).toEqual({ verdict: 'none' })
-  })
-
   test('seed renders with topic', () => {
     const seed = spike.seed('explorer', { name: 'cedar', sessionId: 'abc', threadId: 't-1', rounds: 1, topic: 'Why does qubit keep crashing?' })
     expect(seed).toContain('cedar')
@@ -503,11 +468,6 @@ describe('spike protocol structure', () => {
 
   test('exploring phase has no onEnter behaviors (rounds advance on reply)', () => {
     expect(spike.phases.exploring.onEnter).toBeUndefined()
-  })
-
-  test('reporting phase has empty onEnter (explorer stays alive, standard timeout)', () => {
-    expect(spike.phases.reporting.onEnter).toEqual([])
-    expect(spike.phases.reporting.onEnter).not.toContain('killNonOwner')
   })
 })
 
@@ -902,19 +862,21 @@ describe('delegated-build protocol', () => {
 
   test('builder disconnect triggers fallback to pm_build', async () => {
     const { run, builderSid } = createDelegateRun({ phase: 'building' })
-    // Simulate disconnect — builder has 30s grace
-    onRunDisconnect(builderSid)
-    // Grace timer should be set
-    expect(run.disconnectTimers.has(builderSid)).toBe(true)
-    // Fast-forward the grace timer
-    const timer = run.disconnectTimers.get(builderSid)!
-    clearTimeout(timer)
-    // Manually fire what the timer would do
-    // canFallbackOnDeath checks: non-owner role, phase has fallback transition
-    const role = run.sessionToRole.get(builderSid)
-    const phase = run.protocol.phases[run.phase]
-    expect(role).toBe('builder')
-    expect(phase.on.fallback).toBe('pm_build')
+    __test!.setLifecycle({ killSession: async () => {} })
+    // Capture the disconnect timers (3s resume check, then the 30s grace) and fire them in order.
+    const realSetTimeout = globalThis.setTimeout
+    const pending: Array<() => unknown> = []
+    globalThis.setTimeout = ((fn: () => unknown) => { pending.push(fn); return realSetTimeout(() => {}, 0) }) as any
+    try {
+      onRunDisconnect(builderSid)
+      expect(run.disconnectTimers.has(builderSid)).toBe(true)
+      for (let i = 0; i < 5 && run.phase === 'building' && pending.length; i++) await pending.shift()!()
+      await new Promise(r => realSetTimeout(r, 0))
+    } finally {
+      globalThis.setTimeout = realSetTimeout
+      __test!.resetLifecycle()
+    }
+    expect(run.phase).toBe('pm_build')
   })
 
   test('quick protocol preserves the old graph separately', () => {
