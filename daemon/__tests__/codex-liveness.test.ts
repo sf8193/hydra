@@ -4,7 +4,7 @@
 
 import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
-import { isCodexReconnecting, reconnectCodexSessions } from '../engines/codex-runtime.js'
+import { isCodexReconnecting, reconnectCodexSessions, reconnectDeps } from '../engines/codex-runtime.js'
 import { engines } from '../engines/instances.js'
 import { executionAlive, isAlive } from '../util.js'
 import { registry } from '../sessions.js'
@@ -131,12 +131,16 @@ describe('reconnect verdicts (step 2)', () => {
       onReply: () => {}, onReconnect: () => {},
       onDisconnect: sid => { aliveWhenTold = isAlive(registry.get(sid)!) },
     })
-    codexEngine.emit('disconnected', info.sessionId)
-    expect(isCodexReconnecting(info.sessionId)).toBe(true)
-    await new Promise(r => setTimeout(r, 2_700))
+    const realWait = reconnectDeps.wait
+    reconnectDeps.wait = () => new Promise(r => setTimeout(r, 1)) // skip the real 250/750/1500ms backoff
+    try {
+      codexEngine.emit('disconnected', info.sessionId)
+      expect(isCodexReconnecting(info.sessionId)).toBe(true)
+      await new Promise(r => setTimeout(r, 100))
+    } finally { reconnectDeps.wait = realWait }
     expect(aliveWhenTold).toBe(false)
     expect(typeof info.deadAt).toBe('number')
-  }, 10_000)
+  })
 })
 
 describe('discardSession (step 2)', () => {

@@ -1,45 +1,69 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { sendTmuxKeys } from '../codex-key-queue.js'
+import { keyTiming, sendTmuxKeys } from '../codex-key-queue.js'
+import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { fakeCodexAdapter } from './test-harness.js'
 
-// Fake tmux executable on PATH, not a child_process mock.
+// Fake tmux executable on PATH, not a child_process mock. Perl, written once per
+// file: a bun process per call and macOS's first-exec check per new file are slow.
+const dir = mkdtempSync(join(tmpdir(), 'codex-keys-'))
+const log = join(dir, 'calls')
+const pane = join(dir, 'pane')
+writeFileSync(join(dir, 'tmux'), String.raw`#!/usr/bin/perl
+use Time::HiRes qw(time);
+my $q = sub { my $s = shift; $s =~ s/(["\\])/\\$1/g; "\"$s\"" };
+open(my $l, '>>', ${JSON.stringify(log)}) or die;
+print $l '{"args":[' . join(',', map { $q->($_) } @ARGV) . '],"at":' . int(time * 1000) . "}\n";
+close $l;
+if ($ARGV[0] eq 'display-message') {
+  if (grep { $_ eq '#{pane_id} #{pane_pid} #{pane_dead}' } @ARGV) { print "%1 100 0\n" }
+  else { open(my $p, '<', ${JSON.stringify(pane)}) or die; local $/; print <$p> }
+}
+exit 1 if grep { $_ eq 'FAIL' } @ARGV;
+`)
+chmodSync(join(dir, 'tmux'), 0o755)
+afterAll(() => rmSync(dir, { recursive: true, force: true }))
+
 async function withTmux(fn: (calls: (all?: boolean) => Array<{ args: string[]; at: number }>, pane: (text: string) => void) => Promise<void>) {
-  const dir = mkdtempSync(join(tmpdir(), 'codex-keys-'))
   const savedPath = process.env.PATH
-  const log = join(dir, 'calls')
-  const pane = join(dir, 'pane')
   writeFileSync(log, '')
   writeFileSync(pane, '1 2 0\n› Ask Codex to do anything\n')
-  writeFileSync(join(dir, 'tmux'), `#!${process.execPath}\nimport { appendFileSync, readFileSync } from 'fs';
-const args=process.argv.slice(2);
-appendFileSync(${JSON.stringify(log)},JSON.stringify({args,at:Date.now()})+'\\n');
-if(args[0]==='display-message') {
- if(args.includes('#{pane_id} #{pane_pid} #{pane_dead}')) process.stdout.write('%1 100 0\\n');
- else process.stdout.write(readFileSync(${JSON.stringify(pane)},'utf8'));
-}
-if(args.includes('FAIL')) process.exit(1);
-`)
-  chmodSync(join(dir, 'tmux'), 0o755)
   process.env.PATH = `${dir}:${savedPath}`
   try {
     await fn((all = false) => readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => all || call.args[0] === 'send-keys'),
       text => writeFileSync(pane, text))
   } finally {
     process.env.PATH = savedPath
-    rmSync(dir, { recursive: true, force: true })
   }
 }
 
+// Shrink real delays; production defaults are pinned below.
+const defaults = { settleMs: keyTiming.settleMs, deadline: CodexEngineAdapter.COMPOSER_DEADLINE_MS, poll: CodexEngineAdapter.COMPOSER_POLL_MS }
+beforeEach(() => { keyTiming.settleMs = 30; CodexEngineAdapter.COMPOSER_POLL_MS = 10 })
+afterEach(() => {
+  keyTiming.settleMs = defaults.settleMs
+  CodexEngineAdapter.COMPOSER_DEADLINE_MS = defaults.deadline
+  CodexEngineAdapter.COMPOSER_POLL_MS = defaults.poll
+})
+
+const CURSOR_PROBE = '#{cursor_flag} #{cursor_x} #{cursor_y}'
+async function probesSeen(calls: (all?: boolean) => Array<{ args: string[] }>, n: number) {
+  while (calls(true).filter(call => call.args.includes(CURSOR_PROBE)).length < n) await Bun.sleep(5)
+}
+
 describe('Codex key submission', () => {
+  test('production timing defaults', () => {
+    expect(defaults).toEqual({ settleMs: 250, deadline: 5000, poll: 100 })
+  })
+
   test('settles literal text before the single default Enter', async () => {
     await withTmux(async calls => {
       await sendTmuxKeys({ target: 'a', mode: 'literal', text: '/status' })
       const sent = calls()
       expect(sent.map(call => call.args.slice(3))).toEqual([['-l', '/status'], ['Enter']])
-      expect(sent[1].at - sent[0].at).toBeGreaterThanOrEqual(250)
+      expect(sent[1].at - sent[0].at).toBeGreaterThanOrEqual(keyTiming.settleMs)
     })
   })
 
@@ -54,8 +78,8 @@ describe('Codex key submission', () => {
       expect(sent.map(call => call.args.slice(3))).toEqual([
         ['-l', '/status'], ['Enter'], ['Down', 'Enter'], ['-l', '/model'], ['Escape'],
       ])
-      expect(sent[1].at - sent[0].at).toBeGreaterThanOrEqual(250)
-      expect(sent[4].at - sent[3].at).toBeGreaterThanOrEqual(250)
+      expect(sent[1].at - sent[0].at).toBeGreaterThanOrEqual(keyTiming.settleMs)
+      expect(sent[4].at - sent[3].at).toBeGreaterThanOrEqual(keyTiming.settleMs)
     })
   })
 
@@ -96,7 +120,7 @@ describe('Codex key submission', () => {
       pane('Loading…\n')
       const adapter = fakeCodexAdapter()
       const sent = adapter.sendKeys({ tmuxName: 'a' } as any, '/status')
-      await Bun.sleep(150)
+      await probesSeen(calls, 2)
       expect(calls()).toEqual([])
       pane('1 2 0\n› Ask Codex to do anything\n')
       await expect(sent).resolves.toEqual({ queued: false })
@@ -136,9 +160,10 @@ describe('Codex key submission', () => {
         '1 2 2\n› historical prompt\n\nSome other focused input\n',
       ]) {
         const before = calls().length
+        const probes = calls(true).filter(call => call.args.includes(CURSOR_PROBE)).length
         pane(dialog)
         const sending = adapter.sendKeys({ tmuxName: 'a' } as any, '/status')
-        await Bun.sleep(400)
+        await probesSeen(calls, probes + 3)
         expect(calls()).toHaveLength(before)
         pane('1 2 0\n› Ask Codex to do anything\n')
         await sending
@@ -150,11 +175,12 @@ describe('Codex key submission', () => {
   test('unready composer times out without typing', async () => {
     await withTmux(async (calls, pane) => {
       pane('Loading…\n')
+      CodexEngineAdapter.COMPOSER_DEADLINE_MS = 100
       const adapter = fakeCodexAdapter()
       const start = Date.now()
       await expect(adapter.sendKeys({ tmuxName: 'a' } as any, '/status')).rejects.toThrow('no text was sent')
-      expect(Date.now() - start).toBeLessThan(6000)
+      expect(Date.now() - start).toBeLessThan(CodexEngineAdapter.COMPOSER_DEADLINE_MS + 1000)
       expect(calls()).toEqual([])
     })
-  }, 8000)
+  })
 })
