@@ -154,13 +154,17 @@ describe('transcribeDownloads', () => {
   test('files above HYDRA_TRANSCRIBE_MAX_BYTES are skipped before the network', async () => {
     process.env.HYDRA_TRANSCRIBE_ENABLED = '1'
     process.env.HYDRA_TRANSCRIBE_MAX_BYTES = '4' // audio file is 10 bytes
-    globalThis.fetch = (async () => { throw new Error('should not be called') }) as any
+    let calls = 0
+    globalThis.fetch = (async () => { calls++; throw new Error('should not be called') }) as any
     expect(await transcribeDownloads([voiceClip] as any)).toEqual([])
+    expect(calls).toBe(0)
   })
 
   test('disabled flag short-circuits without touching the network', async () => {
     process.env.HYDRA_TRANSCRIBE_ENABLED = '0'
-    globalThis.fetch = (async () => { throw new Error('should not be called') }) as any
+    let calls = 0
+    globalThis.fetch = (async () => { calls++; throw new Error('should not be called') }) as any
     expect(await transcribeDownloads([voiceClip] as any)).toEqual([])
+    expect(calls).toBe(0)
   })
 })
