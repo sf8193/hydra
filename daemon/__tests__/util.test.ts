@@ -183,6 +183,11 @@ describe('chunk markdown mode', () => {
 // ---------------------------------------------------------------------------
 
 describe('formatDuration', () => {
+  test('sub-minute remainders floor, never round up', () => {
+    expect(formatDuration(90_000)).toBe('1m')
+    expect(formatDuration(59_000)).toBe('0m')
+  })
+
   test('minutes only', () => {
     expect(formatDuration(5 * 60_000)).toBe('5m')
     expect(formatDuration(0)).toBe('0m')
@@ -299,6 +304,12 @@ describe('parseDuration', () => {
 })
 
 describe('extractPhaseBudget', () => {
+  test('only the first flag is consumed; a second stays in the topic', () => {
+    const r = extractPhaseBudget('work --phase-budget 5m --phase-budget 10m end')
+    expect(r.budgetMs).toBe(300_000)
+    expect(r.topic).toContain('--phase-budget 10m')
+  })
+
   test('strips the flag and returns ms', () => {
     expect(extractPhaseBudget('fix the bug --phase-budget 20m off main'))
       .toEqual({ topic: 'fix the bug off main', budgetMs: 1_200_000 })
@@ -328,6 +339,10 @@ describe('extractPhaseBudget', () => {
 // ---------------------------------------------------------------------------
 
 describe('transformProtocolTag', () => {
+  test('text after the tag keeps every following line', () => {
+    expect(transformProtocolTag('[critic→owner] First line\nSecond line')).toBe('First line\nSecond line')
+  })
+
   test('routing tag is stripped, content preserved', () => {
     expect(transformProtocolTag('[critic→owner]\nFinding 1: bug'))
       .toBe('Finding 1: bug')
