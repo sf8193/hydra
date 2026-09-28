@@ -160,6 +160,8 @@ function logContextUsageSample(sessionId: string, tmuxName: string, usage: { use
 }
 
 const reconnecting = new Set<string>()
+/** The runtime is reconnecting this session: alive, in grace (see CodexEngineAdapter.isAlive). */
+export const isCodexReconnecting = (sessionId: string): boolean => reconnecting.has(sessionId)
 
 // Interim (until the Codex liveness project): a dead Codex session was marked
 // deadAt with no word in its thread; say so, so the thread doesn't just go quiet.
@@ -228,10 +230,20 @@ export async function reconnectCodexSessions(records: readonly SessionInfo[]): P
   const codexSessions = records.filter(s => !s.deadAt)
   if (codexSessions.length === 0) return
 
+  // Until its turn in the sweep, a record is alive in grace (isCodexReconnecting),
+  // not dead: the sweep is sequential and each attempt can take tens of seconds.
+  for (const info of codexSessions) reconnecting.add(info.sessionId)
   let reconnected = 0
   for (const info of codexSessions) {
-    if (!info.adapter) continue
-    const connected = await reconnectOf(info)
+    if (!info.adapter) { reconnecting.delete(info.sessionId); continue }
+    let connected = false
+    try {
+      connected = await reconnectOf(info)
+    } catch (err) {
+      process.stderr.write(`codex-bootstrap: reconnect threw for ${info.tmuxName}: ${err}\n`)
+    } finally {
+      reconnecting.delete(info.sessionId)
+    }
 
     if (!connected) {
       info.deadAt = Date.now()

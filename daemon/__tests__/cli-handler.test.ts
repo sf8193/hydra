@@ -224,7 +224,7 @@ describe('cli-handler: deliver (Z2)', () => {
     return info
   }
   function codex(deliver: (...args: unknown[]) => Promise<unknown>) {
-    return seed('codex', { adapter: fakeAdapter({ provider: 'codex', channel: 'engine', isConnected: () => true, deliver }) })
+    return seed('codex', { adapter: fakeAdapter({ provider: 'codex', channel: 'engine', isConnected: () => true, isAlive: () => true, deliver }) })
   }
   function bridge(sessionId: string, write: () => boolean, destroyed = false) {
     const written: string[] = []

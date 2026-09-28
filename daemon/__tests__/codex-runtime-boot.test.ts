@@ -128,14 +128,15 @@ describe('Codex start: outcome logging', () => {
     return lines
   }
 
-  test('a rejecting sweep resolves start and logs the failure', async () => {
+  // A throwing reconnect is caught per record (so it can't strand the rest of the sweep).
+  test('a throwing reconnect resolves start and logs the failure', async () => {
     const adapter = new CodexEngineAdapter({} as any) as any
     const info = put({ sessionId: 't07-throw', adapter })
     adapter.reconnect = async () => { throw new Error('boom') }
     let settled = 'pending'
     const lines = await stderrOf(() => adapter.start([info]).then(() => { settled = 'resolved' }, () => { settled = 'rejected' }))
     expect(settled).toBe('resolved')
-    expect(lines).toContain('daemon: codex reconnection failed: Error: boom\n')
+    expect(lines).toContain('codex-bootstrap: reconnect threw for t07-throw: Error: boom\n')
   })
 
   test('a finished sweep logs completion, also with no records', async () => {

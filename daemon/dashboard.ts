@@ -5,7 +5,7 @@
 import { gateway, PLATFORM } from './config.js'
 import { registry, threadRegistry, sessionEmoji } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { formatDuration, tmuxHasSession } from './util.js'
+import { formatDuration, executionAlive } from './util.js'
 import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
@@ -43,7 +43,7 @@ function getActiveSessions(): SessionRow[] {
 
   const rows: SessionRow[] = []
   for (const s of all) {
-    if (!tmuxHasSession(s.tmuxName)) continue
+    if (!executionAlive(s)) continue
     const rawDesc = s.description || s.topic || s.tmuxName
     const desc = rawDesc.length > 80 ? rawDesc.slice(0, 77) + '...' : rawDesc
     const url = s.lastReplyId

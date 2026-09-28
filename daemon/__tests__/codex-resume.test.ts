@@ -39,6 +39,7 @@ function fakeEngine() {
     connectAndResume: async (sid: string, sock: string, tid: string) => { calls.push(`resume ${sid} ${sock} ${tid}`); return { model: 'm' } },
     connectAndFork: async (sid: string, sock: string, tid: string) => { calls.push(`fork ${sid} ${sock} ${tid}`); return { threadId: 'forked', model: 'm' } },
     disconnect: () => {},
+    isConnected: () => false,
   }
   return engine
 }
@@ -140,7 +141,7 @@ function fakeAdapter(provider: 'claude' | 'codex') {
       stops.push({ tmuxName: info.tmuxName, home: info.codexHomeName })
       return provider === 'codex' ? realStopAdapter.stop(info) : { status: 'stopped' }
     },
-    isAlive: async () => false,
+    isAlive: () => false,
     surface: () => null,
     recoveryPlan: (s: any, o: any) => orig[provider].recoveryPlan(s, o),
   }

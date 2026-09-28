@@ -272,7 +272,7 @@ export class ClaudeEngine implements EngineAdapter {
     }
   }
 
-  async isAlive(info: SessionInfo): Promise<boolean> {
+  isAlive(info: SessionInfo): boolean {
     return tmuxHasSession(info.tmuxName)
   }
 

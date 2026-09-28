@@ -6,7 +6,7 @@ import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession } from '../session-lifecycle.js'
-import { tmuxHasSession, safeSend } from '../util.js'
+import { executionAlive, safeSend } from '../util.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
@@ -24,7 +24,7 @@ async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
     const staleId = registry.getByThread(resolvedThreadId)
     if (staleId && registry.has(staleId)) {
       const staleInfo = registry.get(staleId)!
-      if (tmuxHasSession(staleInfo.tmuxName)) {
+      if (executionAlive(staleInfo)) {
         try { await gateway.send(msg.channelId, `Thread already has a live session (**${staleInfo.tmuxName}**). Spawning in a new thread instead.`, { replyTo: msg.id }) } catch {}
       } else {
         chatId = resolvedThreadId

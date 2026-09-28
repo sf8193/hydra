@@ -39,9 +39,20 @@ export function formatDuration(ms: number): string {
   return remHrs > 0 ? `${days}d ${remHrs}h` : `${days}d`
 }
 
-export function isAlive(info: { tmuxName: string; deadAt?: number }): boolean {
+type LivenessSubject = { tmuxName: string; deadAt?: number; adapter?: { provider: string; isAlive(info: any): boolean } }
+
+// Is the session's execution running? Its adapter decides (Claude: tmux; Codex: the
+// app-server socket, since its tmux is a replaceable anchor); no adapter → tmux.
+export function executionAlive(info: LivenessSubject): boolean {
+  return info.adapter ? info.adapter.isAlive(info) : tmuxHasSession(info.tmuxName)
+}
+
+// Live and not given up on. Codex has no deadAt veto: its runtime keeps deadAt in step
+// with the socket, and while probing a record the socket is the truth.
+export function isAlive(info: LivenessSubject): boolean {
+  if (info.adapter?.provider === 'codex') return executionAlive(info)
   if (info.deadAt) return false
-  return tmuxHasSession(info.tmuxName)
+  return executionAlive(info)
 }
 
 export function tmuxHasSession(name: string): boolean {

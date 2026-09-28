@@ -25,7 +25,7 @@ import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources } from './codex-observation.js'
 import { codexPiggyback, type CodexPiggyback } from './codex-piggyback.js'
-import { reconnectCodexSessions } from './codex-runtime.js'
+import { isCodexReconnecting, reconnectCodexSessions } from './codex-runtime.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -77,10 +77,10 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
-  // PINNED C1: always true, as transport.has() answered before S2. Reporting
-  // this.engine.isConnected is PR-CONN (needs disconnect-time grace first).
-  isConnected(_info: SessionInfo): boolean {
-    return true
+  // The live app-server socket, or the runtime reconnecting it (the grace), is the
+  // truth. A queued turn waits out a reconnect, so deliverable == alive.
+  isConnected(info: SessionInfo): boolean {
+    return this.isAlive(info)
   }
 
   // ⚠ F4s (pinned, fixed in S10): tmux window_activity of the session's current
@@ -240,14 +240,10 @@ export class CodexEngineAdapter implements EngineAdapter {
     return { status: 'stopped' }
   }
 
-  async isAlive(info: SessionInfo): Promise<boolean> {
-    if (this.engine.isConnected(info.sessionId)) return true
-    // Check if the app-server socket is reachable even when we're not connected
-    const sockPath = codexSocketPath(info.codexHomeName ?? info.tmuxName)
-    try {
-      if (await this.engine.isSocketLive(sockPath)) return true
-    } catch {}
-    return tmuxHasSession(info.tmuxName)
+  // Not tmux: the hydra-anchor window outlives a dead app-server. Not deadAt: the
+  // runtime writes that as the verdict when reconnecting gives up.
+  isAlive(info: SessionInfo): boolean {
+    return this.engine.isConnected(info.sessionId) || isCodexReconnecting(info.sessionId)
   }
 
   peek(info: SessionInfo, lines: number = 50): string {
@@ -306,6 +302,8 @@ export class CodexEngineAdapter implements EngineAdapter {
       const windows = execFileSync('tmux', ['list-windows', '-t', info.tmuxName, '-F', '#{window_name}'],
         { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
       if (windows.split('\n').includes('hydra-chat')) return target
+      // Never start a TUI against a dead server; the anchor alone would let this through.
+      if (!this.engine.isConnected(info.sessionId)) return null
       const homeName = info.codexHomeName ?? info.tmuxName
       const codexHome = join(homedir(), '.codex', `hydra-${homeName}`)
       const socket = codexSocketPath(homeName)

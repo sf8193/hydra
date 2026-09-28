@@ -321,19 +321,20 @@ describe('has() matrix (adapter-policy T2)', () => {
     expect(bt.has('hm-c2')).toBe(false)
   })
 
-  test('PINNED C1 codex record, engine connected → true', () => {
+  // Codex: the live app-server socket (or the runtime reconnecting it) is the truth.
+  test('codex record, engine connected → true', () => {
     put('hm-x1', { engine: 'codex', adapter: codex(true) })
     expect(bt.has('hm-x1')).toBe(true)
   })
 
-  test('PINNED C1 codex record, engine disconnected → still true', () => {
+  test('codex record, engine disconnected, not reconnecting → false', () => {
     put('hm-x2', { engine: 'codex', adapter: codex(false) })
-    expect(bt.has('hm-x2')).toBe(true)
+    expect(bt.has('hm-x2')).toBe(false)
   })
 
-  test('PINNED C1 codex record with deadAt, engine disconnected → still true', () => {
+  test('codex record with deadAt, engine disconnected → false', () => {
     put('hm-x3', { engine: 'codex', adapter: codex(false), deadAt: Date.now() })
-    expect(bt.has('hm-x3')).toBe(true)
+    expect(bt.has('hm-x3')).toBe(false)
   })
 
   test('no record → bridges.has', () => {

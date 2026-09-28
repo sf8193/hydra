@@ -633,7 +633,7 @@ describe('protocol runner — health monitor', () => {
 })
 
 describe('health monitor — callback behavior', () => {
-  const fakeAdapter = (alive: boolean) => harnessFakeAdapter({ isAlive: async () => alive, usage: () => null })
+  const fakeAdapter = (alive: boolean) => harnessFakeAdapter({ isAlive: () => alive, usage: () => null })
 
   function setupSession(sessionId: string, overrides: Record<string, unknown> = {}) {
     registry.set(sessionId, {
