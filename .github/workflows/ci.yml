@@ -34,6 +34,10 @@ jobs:
       - name: Typecheck
         run: bunx tsc --noEmit
 
+      # Dangerous primitives (destructive tmux/git, raw liveness) only in their owner files.
+      - name: Owner check
+        run: bun scripts/check-owners.ts
+
       - name: Install tmux
         run: sudo apt-get install -y tmux
 
