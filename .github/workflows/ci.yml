@@ -47,5 +47,8 @@ jobs:
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: |
           mkdir -p ~/.claude/channels/discord
-          ( while true; do sleep 20; echo "=== ps $(date +%T)"; ps -eo pid,ppid,etime,stat,pcpu,args --sort=-pcpu | head -25; done ) &
-          for i in 1 2 3; do echo "### RUN $i"; bun test --isolate 2>&1 | grep -E '^\(fail\)|dangling| pass$| fail$|Ran ' || true; done
+          echo "### ALONE"; bun test --isolate daemon/__tests__/raindrop.test.ts -t defaultProjectFor 2>&1 | grep -E '^\(fail\)| pass$| fail$' || true
+          for f in __tests__/topology-freshness.test.ts __tests__/gateway-health.test.ts __tests__/pr-watch-ci.test.ts __tests__/main-guard.test.ts __tests__/resume-health.test.ts __tests__/discord-table-format.test.ts cli/__tests__/helpers-config.test.ts cli/__tests__/peek.test.ts daemon/__tests__/main-bridge-cycle.test.ts daemon/__tests__/codex-runtime-boot.test.ts daemon/__tests__/modifiers.test.ts daemon/__tests__/transcript-dump.test.ts daemon/__tests__/util.test.ts daemon/__tests__/codex-queue-regressions.test.ts daemon/__tests__/protocol-runner.test.ts daemon/__tests__/plugin-start-script.test.ts daemon/__tests__/orchestration-tools.test.ts daemon/__tests__/cli-attach.test.ts daemon/__tests__/state-machine.test.ts; do
+            r=$(bun test --isolate $f daemon/__tests__/raindrop.test.ts 2>&1 | grep -cE '^\(fail\) raindrop: defaultProjectFor')
+            echo "### PAIR $f -> raindrop fails=$r"
+          done
