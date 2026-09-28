@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, statS
 import { homedir, tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { join } from 'path'
+import { parseEnvLine } from '../env-parse.js'
 import {
   SCRUBBED_SPAWN_VARS, SWEEP_ARGV, TMUX_PANE_FD_LIMIT,
   captureSpawnVars, codexSpawnEnv, scrubbedSpawnEnv, tmuxNewSession, withRaisedFdLimit,
@@ -65,7 +66,7 @@ test('a captured key is absent from a real forked child', () => {
     'import { captureSpawnVars } from ' + JSON.stringify(join(ROOT, 'shared/spawn-env.ts')),
     "process.env.RAINDROP_WRITE_KEY = 'rk_forked'",
     'const captured = captureSpawnVars()',
-    "const out = Bun.spawnSync(['sh', '-c', " + JSON.stringify("echo ${RAINDROP_WRITE_KEY:-absent}") + '])',
+    "const out = Bun.spawnSync(['sh', '-c', " + JSON.stringify("echo ${RAINDROP_WRITE_KEY:-absent}") + '], { env: { ...process.env } })',
     'console.log(captured.RAINDROP_WRITE_KEY, out.stdout.toString().trim())',
   ].join('\n'))
   const proc = Bun.spawnSync([process.execPath, script])
@@ -331,14 +332,14 @@ test('no real credential from a state-dir .env appears anywhere in the repo', ()
   const secrets: Array<{ name: string; value: string }> = []
   for (const envPath of homes) {
     for (const line of readFileSync(envPath, 'utf8').split('\n')) {
-      const m = /^\s*([A-Z0-9_]*(?:KEY|TOKEN|SECRET))\s*=\s*(.*)$/.exec(line)
-      if (!m) continue
-      const value = m[2].trim().replace(/^["']|["']$/g, '')
-      if (value.length >= 12) secrets.push({ name: m[1], value })
+      const parsed = parseEnvLine(line)
+      if (!parsed || !/(?:KEY|TOKEN|SECRET)$/.test(parsed[0])) continue
+      if (parsed[1].length >= 12) secrets.push({ name: parsed[0], value: parsed[1] })
     }
   }
-  const tracked = Bun.spawnSync(['git', 'ls-files'], { cwd: ROOT, stdout: 'pipe' })
+  const tracked = Bun.spawnSync(['git', 'ls-files'], { cwd: ROOT, stdout: 'pipe', env: { ...process.env } })
     .stdout.toString().split('\n').filter(Boolean)
+  expect(tracked, 'the secret scan must be looking at THIS repo').toContain('shared/__tests__/spawn-env.test.ts')
   const offenders: string[] = []
   for (const f of tracked) {
     let body: string

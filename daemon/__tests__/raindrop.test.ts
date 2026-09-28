@@ -30,6 +30,7 @@ import {
   usageEventId,
   defaultProtocolPhaseFor,
   protocolPhaseForRole,
+  gitProbeEnv,
   UNATTRIBUTED_REPO,
   type RaindropDeps,
   type RaindropMode,
@@ -43,6 +44,7 @@ import { join } from 'path'
 import { trimRaindropDryrun, startVitalsSnapshots } from '../observability.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
 import { plantTranscript, turnLines, uniqueClaudeId } from './projects-fixture.js'
+import { fixtureRoot, gitInit } from './git-fixture.js'
 import { __test as protocolTest } from '../protocol-runner.js'
 import { zeroPhaseTotals, type TokenTotals } from '../usage.js'
 import { USAGE_PHASES, type UsagePhase } from '../usage-phase.js'
@@ -405,8 +407,54 @@ describe('raindrop: defaultProjectFor', () => {
     expect(projectFromGitDir(common)).toBe(want)
   })
 
+  test('the probe env carries what git reads and neither a secret nor an ambient repo', () => {
+    expect(gitProbeEnv({
+      PATH: '/usr/bin',
+      HOME: '/home/x',
+      XDG_CONFIG_HOME: '/home/x/.config',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_DIR: '/someone/elses/.git',
+      GIT_WORK_TREE: '/someone/elses',
+      GIT_COMMON_DIR: '/someone/elses/.git',
+      GIT_INDEX_FILE: '/someone/elses/.git/index',
+      GIT_OBJECT_DIRECTORY: '/someone/elses/.git/objects',
+      GIT_NAMESPACE: 'theirs',
+      GIT_CEILING_DIRECTORIES: '/someone/elses',
+      SLACK_BOT_TOKEN: 'xoxb-a-live-token',
+      RAINDROP_WRITE_KEY: 'a-live-key',
+    })).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/home/x',
+      XDG_CONFIG_HOME: '/home/x/.config',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+    })
+  })
+
+  // Probes a subdirectory: a ceiling at the repo root is inert from the root itself.
+  test('neither an ambient GIT_DIR nor a ceiling bends the probe, which only a fresh process can show', () => {
+    const { path: root, cleanup } = fixtureRoot('rd-ambient')
+    cleanups.push(cleanup)
+    gitInit(join(root, 'myproj'))
+    gitInit(join(root, 'victim'))
+    mkdirSync(join(root, 'myproj', 'sub'))
+    const code = [
+      "const { defaultProjectFor } = await import('./daemon/raindrop.ts')",
+      `console.log(defaultProjectFor(${JSON.stringify(join(root, 'myproj', 'sub'))}) ?? 'none')`,
+    ].join('; ')
+    const r = Bun.spawnSync(['bun', '-e', code], {
+      cwd: join(import.meta.dir, '..', '..'),
+      env: {
+        ...process.env,
+        GIT_DIR: join(root, 'victim', '.git'), GIT_WORK_TREE: join(root, 'victim'),
+        GIT_CEILING_DIRECTORIES: join(root, 'myproj'),
+      },
+    })
+    expect(r.stdout.toString().trim(), r.stderr.toString()).toBe('myproj')
+  })
+
   test('a path that is not a git repo reports nothing rather than a directory name', () => {
-    const plain = mkdtempSync(join(tmpdir(), 'rd-plain-'))
+    const { path: plain, cleanup } = fixtureRoot('rd-plain')
+    cleanups.push(cleanup)
     expect(defaultProjectFor(plain)).toBeUndefined()
     expect(defaultProjectFor(join(plain, 'gone'))).toBeUndefined()
   })

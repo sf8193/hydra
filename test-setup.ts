@@ -67,6 +67,26 @@ if (explicit && isForbiddenStateDir(explicit)) {
 
 export const TEST_DIR_PREFIX = 'hydra-test-'
 
+const HERMETIC_GIT_ENV: Record<string, string> = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_ATTR_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'hydra-test',
+  GIT_COMMITTER_NAME: 'hydra-test',
+  GIT_AUTHOR_EMAIL: 'hydra-test@invalid',
+  GIT_COMMITTER_EMAIL: 'hydra-test@invalid',
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'core.excludesFile',
+  GIT_CONFIG_VALUE_0: '/dev/null',
+  GIT_CONFIG_KEY_1: 'core.attributesFile',
+  GIT_CONFIG_VALUE_1: '/dev/null',
+}
+
+export function applyHermeticGit(env: Record<string, string | undefined>): void {
+  for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k]
+  Object.assign(env, HERMETIC_GIT_ENV)
+}
+
 // A test that starts tmux sessions starts the run's private server; stop it before its
 // socket dir goes, or it lives on unreachable. Only by exact socket (-S), and only if that
 // socket exists: addressed by TMUX_TMPDIR, a missing dir silently falls back to the REAL
@@ -99,7 +119,7 @@ export function sweepStaleTestDirs(root: string, now: number, maxAgeMs: number):
 }
 
 // Exported so fixtures compare against the dir in force, not against TMPDIR.
-export const TEST_STATE_DIR = explicit ?? mkdtempSync(join(tmpdir(), TEST_DIR_PREFIX))
+export const TEST_STATE_DIR = explicit || mkdtempSync(join(tmpdir(), TEST_DIR_PREFIX))
 const dir = TEST_STATE_DIR
 process.env.HYDRA_STATE_DIR = dir
 process.env.HYDRA_TEST_PRELOADED = '1' // daemon/config.ts refuses to load under bun test without it
@@ -113,6 +133,8 @@ process.env.TMUX_TMPDIR = join(dir, 'tmux')
 mkdirSync(process.env.TMUX_TMPDIR, { recursive: true })
 delete process.env.TMUX
 process.env.HYDRA_CODEX_ROOT = join(dir, 'codex')
+
+applyHermeticGit(process.env)
 if (!explicit) {
   // Best-effort: bun fires 'exit' unreliably here, so also sweep day-old dirs on the way in.
   process.on('exit', () => { killPrivateTmux(dir); try { rmSync(dir, { recursive: true, force: true }) } catch {} })

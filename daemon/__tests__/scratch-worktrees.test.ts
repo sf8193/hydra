@@ -2,35 +2,29 @@
 // holding nothing to lose (clean, every commit on a remote).
 
 import { describe, test, expect, afterAll, spyOn } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { cleanScratchWorktrees, createWorktree, destroyWorktree, sessionScratchpads } from '../worktree-manager.js'
 import * as worktreeManager from '../worktree-manager.js'
 import { scratchSessionIds, splitOwnFromHistory, killSession } from '../session-lifecycle.js'
 import type { SessionInfo } from '../sessions.js'
 import { threadRegistry } from '../sessions.js'
+import { fixtureRoot, git, gitCommit, gitInit } from './git-fixture.js'
 
-const root = mkdtempSync(join(tmpdir(), 'scratch-wt-'))
-afterAll(() => rmSync(root, { recursive: true, force: true }))
-// Bun.spawnSync, not child_process: another test file mock.module()s child_process for the whole run.
-const run = (...args: string[]) => {
-  const r = Bun.spawnSync(args, { stdout: 'pipe', stderr: 'pipe' })
-  if (r.exitCode !== 0) throw new Error(`${args.join(' ')}: ${r.stderr.toString()}`)
-  return r.stdout.toString().trim()
-}
-const git = (cwd: string, ...args: string[]) => run('git', '-C', cwd, ...args)
+const { path: root, cleanup } = fixtureRoot('scratch-wt')
+afterAll(cleanup)
 
-function repoWithRemote(): string {
-  const base = mkdtempSync(join(root, 'rwr-'))
-  const remote = join(base, 'remote.git'), repo = join(base, 'repo')
-  run('git', 'init', '-q', '--bare', remote)
-  run('git', 'init', '-q', '-b', 'main', repo)
-  git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init')
+function repoWithOrigin(base: string, name: string): string {
+  const remote = join(base, `${name}-remote.git`), repo = join(base, name)
+  gitInit(remote, '--bare')
+  gitInit(repo, '-b', 'main')
+  gitCommit(repo, 'init', '--allow-empty')
   git(repo, 'remote', 'add', 'origin', remote)
-  git(repo, 'push', '-q', 'origin', 'main')
+  git(repo, 'push', '-q', '-u', 'origin', 'main')
   return repo
 }
+
+const repoWithRemote = (): string => repoWithOrigin(mkdtempSync(join(root, 'rwr-')), 'repo')
 
 describe('scratchpad worktree cleanup', () => {
   test('removes clean pushed worktrees; keeps dirty, untracked and unpushed ones', async () => {
@@ -41,7 +35,7 @@ describe('scratchpad worktree cleanup', () => {
     const clean = wt('clean')
     const nested = wt('nested/clean2')
     const dirty = wt('dirty'); writeFileSync(join(dirty, 'new.txt'), 'x')
-    const ahead = wt('ahead'); git(ahead, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'local')
+    const ahead = wt('ahead'); gitCommit(ahead, 'local', '--allow-empty')
 
     expect(sessionScratchpads('sess-1', root)).toEqual([scratch])
     const r = await cleanScratchWorktrees(sessionScratchpads('sess-1', root))
@@ -133,21 +127,15 @@ describe('whose scratchpads a kill cleans', () => {
 
 describe('Hydra worktrees: kept work is never destroyed later', () => {
   function workspace() {
-    const base = mkdtempSync(join(root, 'ws-')), remote = join(base, 'remote.git'), repo = join(base, 'app')
-    run('git', 'init', '-q', '--bare', remote)
-    run('git', 'init', '-q', '-b', 'main', repo)
-    git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init')
-    git(repo, 'remote', 'add', 'origin', remote)
-    git(repo, 'push', '-q', '-u', 'origin', 'main')
-    return { base, repo }
+    const base = mkdtempSync(join(root, 'ws-'))
+    return { base, repo: repoWithOrigin(base, 'app') }
   }
-  const commit = (wt: string, m: string) => git(wt, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', m)
 
   test('a name reused after its worktree was kept: the new one steps aside, the commit survives', async () => {
     const { base, repo } = workspace()
     const cfg = { repoName: 'app', spawnCwd: base, branchName: 'wt/vale', dirSuffix: 'app-vale' }
     const first = await createWorktree(cfg)
-    commit(first.worktreePath, 'unpushed work')
+    gitCommit(first.worktreePath, 'unpushed work', '--allow-empty')
     const sha = git(first.worktreePath, 'rev-parse', 'HEAD')
     expect(await destroyWorktree(repo, first.worktreePath, cfg.branchName)).toContain('unpushed')
     const second = await createWorktree(cfg)
@@ -163,7 +151,7 @@ describe('Hydra worktrees: kept work is never destroyed later', () => {
     const shas: string[] = []
     for (let i = 0; i < 5; i++) {
       const wt = await createWorktree(cfg)
-      commit(wt.worktreePath, `kept ${i}`)
+      gitCommit(wt.worktreePath, `kept ${i}`, '--allow-empty')
       shas.push(git(wt.worktreePath, 'rev-parse', 'HEAD'))
     }
     await expect(createWorktree(cfg)).rejects.toThrow(/all hold kept work/)
@@ -179,7 +167,7 @@ describe('Hydra worktrees: kept work is never destroyed later', () => {
 
     const switched = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/s', dirSuffix: 'app-s' })
     git(switched.worktreePath, 'switch', '-q', '-c', 'feature')
-    commit(switched.worktreePath, 'on another branch')
+    gitCommit(switched.worktreePath, 'on another branch', '--allow-empty')
     expect(await destroyWorktree(repo, switched.worktreePath, 'wt/s')).toBe('1 unpushed commit(s)')
 
     const clean = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/c', dirSuffix: 'app-c' })
@@ -195,7 +183,7 @@ describe('Hydra worktrees: kept work is never destroyed later', () => {
     expect(existsSync(dirty.worktreePath)).toBe(false)
 
     const unpushed = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/fu', dirSuffix: 'app-fu' })
-    commit(unpushed.worktreePath, 'unpushed work')
+    gitCommit(unpushed.worktreePath, 'unpushed work', '--allow-empty')
     expect(await destroyWorktree(repo, unpushed.worktreePath, 'wt/fu', true)).toBeNull()
     expect(existsSync(unpushed.worktreePath)).toBe(false)
   })
