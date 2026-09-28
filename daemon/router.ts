@@ -67,6 +67,43 @@ const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_ALIAS_RE = new RegExp(`^(${CODEX_MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
+// Chat command patterns, matched in routeMessage. Exported for tests.
+export const SPAWN_RE = /^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i
+export const SPAWN_WT_RE = /^(?:spawn-wt:|\/spawn-wt)\s*(\S+)\s+([\s\S]+)/i
+export const KILL_RE = /^(?:kill session:|kill:|\/kill)(?!\s*(?:!|--cascade)?(?:\s*\+(?:d|destroy))?\s*$)\s*(.+)/i
+export const LIST_RE = /^(?:\/sessions|list sessions)\s*$/i
+export const RESTART_RE = /^(?:\/restart|restart daemon|restart)\s*$/i
+export const HEALTH_RE = /^(?:\/health|health|status)\s*$/i
+export const RECONNECT_RE = /^(?:\/reconnect|reconnect)\s*$/i
+export const COMMANDS_RE = /^(?:\/commands|commands|list commands|show commands|\/help|help)\s*$/i
+export const THREAD_KILL_RE = /^(?:kill|\/kill)(!|\s+--cascade)?(?:\s*\+(d|destroy))?\s*$/i
+export const DESTROY_RE = /^(?:destroy|\/destroy)\s*$/i
+export const USAGE_RE = /^(?:\/usage|usage)\s*$/i
+export const FORK_RE = /^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i
+export const FORKS_RE = /^(?:forks|\/forks)\s*$/i
+export const REVIEW_RE = /^(?:\/review_v2|review_v2|\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
+export const BUILD_RE = /^(?:\/build_v2|build_v2|\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i
+export const LISTEN_RE = /^(listen|unlisten)\s*$/i
+export const PAUSE_RE = /^(pause|unpause)\s*$/i
+export const KEYS_RE = /^(?:\/keys|keys)\s+([\s\S]+)/i
+
+// Map lowercase → canonical tmux key name (tmux is case-sensitive)
+export const TMUX_KEY_MAP = new Map<string, string>()
+for (const k of [
+  'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace', 'Delete', 'DC',
+  'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown',
+  'PPage', 'NPage', 'IC',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+  'C-a', 'C-b', 'C-c', 'C-d', 'C-e', 'C-f', 'C-g', 'C-h', 'C-i', 'C-j',
+  'C-k', 'C-l', 'C-m', 'C-n', 'C-o', 'C-p', 'C-q', 'C-r', 'C-s', 'C-t',
+  'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
+]) TMUX_KEY_MAP.set(k.toLowerCase(), k)
+// Single characters or recognized key names → raw mode
+export function resolveTmuxKey(t: string): string | null {
+  if (t.length === 1) return t
+  return TMUX_KEY_MAP.get(t.toLowerCase()) ?? null
+}
+
 type ProtocolModelSelection = { model: string; engine: ProviderId }
 
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
@@ -385,7 +422,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const spawnMatch = msg.content.match(/^(?:new session:|spawn:|\/spawn)\s*([\s\S]+)/i)
+    const spawnMatch = msg.content.match(SPAWN_RE)
     if (spawnMatch) {
       const topic = spawnMatch[1].trim()
       // Catch "spawn sonnet:" (alias without topic) — don't spawn with "sonnet:" as topic
@@ -421,7 +458,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     }
 
     // spawn-wt: repo_name topic — shorthand for worktree spawns
-    const spawnWtMatch = msg.content.match(/^(?:spawn-wt:|\/spawn-wt)\s*(\S+)\s+([\s\S]+)/i)
+    const spawnWtMatch = msg.content.match(SPAWN_WT_RE)
     if (spawnWtMatch) {
       const repo = spawnWtMatch[1].trim()
       const topic = spawnWtMatch[2].trim()
@@ -436,13 +473,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
     // read as a modifier rather than as the name of a session to kill. They are
     // matched further
     // down, not sessions named "!" or "--cascade".
-    const killMatch = msg.content.match(/^(?:kill session:|kill:|\/kill)(?!\s*(?:!|--cascade)?(?:\s*\+(?:d|destroy))?\s*$)\s*(.+)/i)
+    const killMatch = msg.content.match(KILL_RE)
     if (killMatch) {
       void handleKillIntercept(msg, killMatch[1].trim())
       return
     }
 
-    const listMatch = msg.content.match(/^(?:\/sessions|list sessions)\s*$/i)
+    const listMatch = msg.content.match(LIST_RE)
     if (listMatch) {
       void handleListIntercept(msg)
       return
@@ -464,13 +501,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const restartMatch = msg.content.match(/^(?:\/restart|restart daemon|restart)\s*$/i)
+    const restartMatch = msg.content.match(RESTART_RE)
     if (restartMatch) {
       void handleRestartIntercept(msg)
       return
     }
 
-    const healthMatch = msg.content.match(/^(?:\/health|health|status)\s*$/i)
+    const healthMatch = msg.content.match(HEALTH_RE)
     if (healthMatch) {
       void handleHealthIntercept(msg)
       return
@@ -488,7 +525,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const reconnectMatch = msg.content.match(/^(?:\/reconnect|reconnect)\s*$/i)
+    const reconnectMatch = msg.content.match(RECONNECT_RE)
     if (reconnectMatch) {
       void handleReconnectIntercept(msg)
       return
@@ -500,7 +537,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const commandsMatch = msg.content.match(/^(?:\/commands|commands|list commands|show commands|\/help|help)\s*$/i)
+    const commandsMatch = msg.content.match(COMMANDS_RE)
     if (commandsMatch) {
       void handleCommandsIntercept(msg)
       return
@@ -512,13 +549,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
     // `+d` / `+destroy` appends the `destroy` step, collapsing the two-command
     // sequence `destroy` itself demands (it refuses while a session is alive).
     // The modifiers compose: `kill! +d` cascades, kills, then deletes the thread.
-    const threadKillMatch = msg.content.match(/^(?:kill|\/kill)(!|\s+--cascade)?(?:\s*\+(d|destroy))?\s*$/i)
+    const threadKillMatch = msg.content.match(THREAD_KILL_RE)
     if (threadKillMatch && msg.isThread) {
       void handleThreadKillIntercept(msg, { cascade: !!threadKillMatch[1], destroy: !!threadKillMatch[2] })
       return
     }
 
-    const destroyMatch = msg.content.match(/^(?:destroy|\/destroy)\s*$/i)
+    const destroyMatch = msg.content.match(DESTROY_RE)
     if (destroyMatch && msg.isThread) {
       void handleDestroyIntercept(msg)
       return
@@ -563,7 +600,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    const usageMatch = msg.content.match(/^(?:\/usage|usage)\s*$/i)
+    const usageMatch = msg.content.match(USAGE_RE)
     if (usageMatch) {
       void handleUsageIntercept(msg)
       return
@@ -630,13 +667,13 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const forkMatch = msg.content.match(/^(?:fork|\/fork)(?::\s*([\s\S]+))?$/i)
+      const forkMatch = msg.content.match(FORK_RE)
       if (forkMatch) {
         void handleForkIntercept(msg, forkMatch[1]?.trim())
         return
       }
 
-      const forksMatch = msg.content.match(/^(?:forks|\/forks)\s*$/i)
+      const forksMatch = msg.content.match(FORKS_RE)
       if (forksMatch) {
         void handleForksIntercept(msg)
         return
@@ -645,7 +682,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       // One review command — `review` / `/review` (with the `review_v2` suffix
       // still accepted for backwards compat). Parses an optional model alias,
       // round count, topic, and `+modifier` lenses (e.g. `+s` for security).
-      const reviewMatch = msg.content.match(/^(?:\/review_v2|review_v2|\/review|review)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const reviewMatch = msg.content.match(REVIEW_RE)
       if (reviewMatch) {
         const preModel = resolveProtocolModel(reviewMatch[1]?.toLowerCase(), msg.channelId, msg.id)
         if (preModel === false) return
@@ -680,7 +717,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const buildV2Match = msg.content.match(/^(?:\/build_v2|build_v2|\/build|build)\s*(?:(\S+?):\s+)?(\d+)?\s*(?:(\S+?):\s+)?([\s\S]+)?$/i)
+      const buildV2Match = msg.content.match(BUILD_RE)
       if (buildV2Match) {
         const preModel = resolveProtocolModel(buildV2Match[1]?.toLowerCase(), msg.channelId, msg.id)
         if (preModel === false) return
@@ -798,7 +835,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (mappedSession) {
         const info = registry.get(mappedSession)
         if (info && isAlive(info)) {
-          const listenMatch = msg.content.match(/^(listen|unlisten)\s*$/i)
+          const listenMatch = msg.content.match(LISTEN_RE)
           if (listenMatch) {
             info.listening = listenMatch[1].toLowerCase() === 'listen'
             registry.persist()
@@ -836,7 +873,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
 
-          const pauseMatch = msg.content.match(/^(pause|unpause)\s*$/i)
+          const pauseMatch = msg.content.match(PAUSE_RE)
           if (pauseMatch) {
             if (pauseMatch[1].toLowerCase() === 'pause') {
               const occupied = isThreadOccupied(resolvedThreadId)
@@ -852,7 +889,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
             return
           }
 
-          const keysMatch = msg.content.match(/^(?:\/keys|keys)\s+([\s\S]+)/i)
+          const keysMatch = msg.content.match(KEYS_RE)
           if (keysMatch) {
             if (info.paused) {
               void gateway.react(msg.channelId, msg.id, '⏸').catch(() => {})
@@ -865,24 +902,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
                 const adapter = info.adapter
                 const target = adapter.surface(info)
                 if (target === null) throw new Error(`interactive surface is unavailable`)
-                // Map lowercase → canonical tmux key name (tmux is case-sensitive)
-                const TMUX_KEY_MAP = new Map<string, string>()
-                for (const k of [
-                  'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace', 'Delete', 'DC',
-                  'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown',
-                  'PPage', 'NPage', 'IC',
-                  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
-                  'C-a', 'C-b', 'C-c', 'C-d', 'C-e', 'C-f', 'C-g', 'C-h', 'C-i', 'C-j',
-                  'C-k', 'C-l', 'C-m', 'C-n', 'C-o', 'C-p', 'C-q', 'C-r', 'C-s', 'C-t',
-                  'C-u', 'C-v', 'C-w', 'C-x', 'C-y', 'C-z',
-                ]) TMUX_KEY_MAP.set(k.toLowerCase(), k)
                 const tokens = text.split(/\s+/)
-                // Single characters or recognized key names → raw mode
-                const resolveKey = (t: string): string | null => {
-                  if (t.length === 1) return t
-                  return TMUX_KEY_MAP.get(t.toLowerCase()) ?? null
-                }
-                const resolved = tokens.map(resolveKey)
+                const resolved = tokens.map(resolveTmuxKey)
                 const allKeyNames = resolved.every((r): r is string => r !== null)
                 let action: TmuxKeyAction = allKeyNames
                   ? { target, mode: 'raw', keys: resolved }
