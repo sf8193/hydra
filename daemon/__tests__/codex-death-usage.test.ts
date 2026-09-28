@@ -5,6 +5,7 @@
 // start, so the body runs in a child `bun test` with HOME pointed at a temp dir.
 
 import { expect, test } from 'bun:test'
+import { codexHomeDir } from '../codex-process.js'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
@@ -33,7 +34,7 @@ test.skipIf(!CHILD)('a dying Codex session reports its final growth under provid
   const rd = await import('../raindrop.js')
   expect(homedir().startsWith(tmpdir()) || homedir().includes('s10-home-'), 'HOME must be the temp dir').toBe(true)
 
-  const dir = join(homedir(), '.codex', 'hydra-deadhome', 'sessions', '2026', '09', '26')
+  const dir = join(codexHomeDir('deadhome'), 'sessions', '2026', '09', '26')
   mkdirSync(dir, { recursive: true })
   const rollout = join(dir, 'rollout-2026-09-26T23-13-59-thread-d.jsonl')
   writeFileSync(rollout, tc(1000, 600, 50))

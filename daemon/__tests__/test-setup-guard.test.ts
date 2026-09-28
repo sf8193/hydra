@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
-import { isForbiddenStateDir, FORBIDDEN_STATE_DIR_PREFIX, sweepStaleTestDirs, testStateDirRefusal, TEST_DIR_PREFIX } from '../../test-setup.js'
-import { existsSync, lutimesSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
+import { isForbiddenStateDir, FORBIDDEN_STATE_DIR_PREFIX, sweepStaleTestDirs, testStateDirRefusal, TEST_DIR_PREFIX, killPrivateTmux } from '../../test-setup.js'
+import { chmodSync, existsSync, lutimesSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir, tmpdir } from 'os'
 
@@ -135,5 +135,42 @@ describe('sweepStaleTestDirs', () => {
   test('an unreadable root is a no-op, not a throw', () => {
     expect(() => sweepStaleTestDirs('/nope/not/a/dir', NOW, DAY)).not.toThrow()
     expect(sweepStaleTestDirs('/nope/not/a/dir', NOW, DAY)).toEqual([])
+  })
+})
+
+// Sep 28, 2026: cleanup addressed tmux by TMUX_TMPDIR; for a stale dir with no tmux subdir,
+// tmux fell back to the real default server and kill-server took down every live session.
+describe('killPrivateTmux', () => {
+  const run = (...args: string[]) => Bun.spawnSync(args, { stdout: 'pipe', stderr: 'pipe' })
+
+  test('a state dir with no private socket never invokes tmux at all', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kpt-none-'))
+    const bin = join(dir, 'bin'); mkdirSync(bin)
+    const log = join(dir, 'calls')
+    writeFileSync(join(bin, 'tmux'), `#!/bin/sh\necho "$*" >> '${log}'\n`); chmodSync(join(bin, 'tmux'), 0o755)
+    const path = process.env.PATH
+    process.env.PATH = `${bin}:${path}`
+    try { killPrivateTmux(dir) } finally { process.env.PATH = path }
+    expect(existsSync(log)).toBe(false)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('kills only the private server, by its exact socket', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kpt-live-'))
+    const sockDir = join(dir, 'tmux', `tmux-${process.getuid!()}`); mkdirSync(sockDir, { recursive: true })
+    const socket = join(sockDir, 'default')
+    // Belt and braces: even a regressed killPrivateTmux that dropped -S would reach only
+    // this test's own (existing) TMUX_TMPDIR server, never the real default one.
+    const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, TMUX: process.env.TMUX }
+    process.env.TMUX_TMPDIR = join(dir, 'tmux')
+    delete process.env.TMUX
+    try {
+      expect(run('tmux', '-S', socket, 'new-session', '-d', '-s', 'kpt').exitCode).toBe(0)
+      killPrivateTmux(dir)
+      expect(run('tmux', '-S', socket, 'has-session', '-t', 'kpt').exitCode).not.toBe(0)
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

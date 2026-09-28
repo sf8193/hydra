@@ -18,7 +18,7 @@ Flow diagrams: `diagrams/` — Mermaid `.mmd` sources with rendered `.png` for k
 bun build daemon.ts --target bun --outdir /tmp/hb    # daemon
 bun build cli/hydra.ts --target bun --outdir /tmp/hb  # CLI
 bun build bridge.ts --target bun --outdir /tmp/hb     # bridge
-DISCORD_BOT_TOKEN=dummy bun test                       # all tests (daemon/config.ts exits at import without a platform token, running zero files)
+DISCORD_BOT_TOKEN=dummy bun test --isolate            # all tests, each file isolated, as CI runs them (daemon/config.ts exits without a platform token)
 ```
 
 Compile-check all three entry points before committing — they are independent module graphs.

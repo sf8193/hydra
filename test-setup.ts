@@ -23,7 +23,8 @@
 // debugging something, silently reproducing the exact bug this file exists to prevent. So this
 // is a hard guard, not just a convention: refuse to isolate to anything under ~/.claude/channels
 // (any platform, not just the current CHAT_PLATFORM), full stop, even if explicitly requested.
-import { lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os'
 import { join, resolve } from 'path'
 import { isUnder } from './shared/path-containment.js'
@@ -66,6 +67,16 @@ if (explicit && isForbiddenStateDir(explicit)) {
 
 export const TEST_DIR_PREFIX = 'hydra-test-'
 
+// A test that starts tmux sessions starts the run's private server; stop it before its
+// socket dir goes, or it lives on unreachable. Only by exact socket (-S), and only if that
+// socket exists: addressed by TMUX_TMPDIR, a missing dir silently falls back to the REAL
+// default server — which is how this once killed every live session (Sep 28, 2026).
+export function killPrivateTmux(stateDir: string, uid = process.getuid?.() ?? 0): void {
+  const socket = join(stateDir, 'tmux', `tmux-${uid}`, 'default')
+  if (!existsSync(socket)) return
+  try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore', timeout: 3000 }) } catch {}
+}
+
 // The only delete in this file: the prefix and the age bound are all that stand
 // between a preload and rmSync over a concurrent run's state dir.
 export function sweepStaleTestDirs(root: string, now: number, maxAgeMs: number): string[] {
@@ -79,6 +90,7 @@ export function sweepStaleTestDirs(root: string, now: number, maxAgeMs: number):
       const info = lstatSync(stale)
       if (!info.isDirectory() && !info.isSymbolicLink()) continue
       if (now - info.mtimeMs <= maxAgeMs) continue
+      killPrivateTmux(stale)
       rmSync(stale, { recursive: true, force: true })
       removed.push(stale)
     } catch {}
@@ -94,8 +106,14 @@ process.env.HYDRA_STATE_DIR = dir
 // Claude's config dir too, or planted transcript fixtures land in the live ~/.claude/projects.
 process.env.CLAUDE_CONFIG_DIR = join(dir, 'claude')
 delete process.env.DISCORD_STATE_DIR
+
+// Real processes too: a private tmux server and a throwaway Codex root (codex-process.ts refuses real starts).
+process.env.TMUX_TMPDIR = join(dir, 'tmux')
+mkdirSync(process.env.TMUX_TMPDIR, { recursive: true })
+delete process.env.TMUX
+process.env.HYDRA_CODEX_ROOT = join(dir, 'codex')
 if (!explicit) {
   // Best-effort: bun fires 'exit' unreliably here, so also sweep day-old dirs on the way in.
-  process.on('exit', () => { try { rmSync(dir, { recursive: true, force: true }) } catch {} })
+  process.on('exit', () => { killPrivateTmux(dir); try { rmSync(dir, { recursive: true, force: true }) } catch {} })
   sweepStaleTestDirs(tmpdir(), Date.now(), 24 * 60 * 60 * 1000)
 }

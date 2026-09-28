@@ -6,7 +6,6 @@
 import { execFile, execFileSync, execSync } from 'child_process'
 import { promisify } from 'util'
 import { mkdirSync } from 'fs'
-import { homedir } from 'os'
 import { join } from 'path'
 import { codexSpawnEnv, tmuxNewSession } from '../../shared/spawn-env.js'
 import { registry, type SessionInfo } from '../sessions.js'
@@ -19,7 +18,7 @@ import type {
 } from './engine-adapter.js'
 import { codexUsageTotals } from '../codex-rollout.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
-import { codexHomeDir as codexHomeDirFn, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
+import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
 import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
@@ -32,11 +31,12 @@ const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 const execFileAsync = promisify(execFile)
 
 function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string): void {
+  if (process.env.NODE_ENV === 'test') throw new Error('refusing to run a real `codex mcp add` under bun test — give the adapter a fake process')
   const mcpServerPath = join(new URL('.', import.meta.url).pathname, '..', 'codex-mcp-server.ts')
   try {
     execFileSync('bash', ['-c', [
       `mkdir -p ${shq(homeDir)}`,
-      `ln -sf ~/.codex/auth.json ${shq(homeDir)}/auth.json`,
+      `ln -sf ${shq(join(codexRoot(), 'auth.json'))} ${shq(homeDir)}/auth.json`,
       `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
     ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv() })
   } catch (err) {
@@ -306,7 +306,7 @@ export class CodexEngineAdapter implements EngineAdapter {
       // Never start a TUI against a dead server; the anchor alone would let this through.
       if (!this.engine.isConnected(info.sessionId)) return null
       const homeName = info.codexHomeName ?? info.tmuxName
-      const codexHome = join(homedir(), '.codex', `hydra-${homeName}`)
+      const codexHome = codexHomeDirFn(homeName)
       const socket = codexSocketPath(homeName)
       const command = `export CODEX_HOME=${shq(codexHome)} && codex resume ${shq(info.codexThreadId)} --remote ${shq(`unix://${socket}`)}`
       execFileSync('tmux', ['new-window', '-n', 'hydra-chat', '-t', info.tmuxName, command],
