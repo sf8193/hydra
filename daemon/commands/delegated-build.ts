@@ -3,6 +3,7 @@ import { registry } from '../sessions.js'
 import { startProtocolRun, getRunByThread, cancelRun } from '../protocol-runner.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import type { InboundMessage } from '../../gateway.js'
+import type { ProviderId } from '../engines/engine-adapter.js'
 
 let selectProto: typeof import('../../protocols/delegated-build-select.js')['selectDelegatedBuildProtocol'] | null = null
 
@@ -11,7 +12,7 @@ async function getProto(quick = false) {
   return selectProto(quick)
 }
 
-export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: 'claude' | 'codex', opts?: { skipClarify?: boolean }): Promise<void> {
+export async function handleDelegatedBuildIntercept(msg: InboundMessage, rounds: number, task?: string, model?: string, engine?: ProviderId, opts?: { skipClarify?: boolean }): Promise<void> {
   void gateway.react(msg.channelId, msg.id, opts?.skipClarify ? '⚡' : '📋').catch(() => {})
 
   if (isNaN(rounds)) rounds = 3

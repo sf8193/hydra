@@ -33,6 +33,7 @@ import { isAlive, reportError } from './util.js'
 import type { TmuxKeyAction } from './engines/engine-adapter.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
+import type { ProviderId } from './engines/engine-adapter.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
 // commands (fork, watch, build, respawn, resume) are excluded: those are
@@ -67,7 +68,7 @@ const BARE_ALIAS_RE = new RegExp(`^(${MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_ALIAS_RE = new RegExp(`^(${CODEX_MODEL_ALIAS_PATTERN}):?$`, 'i')
 const BARE_CODEX_RE = /^codex:?\s*$/i
 
-type ProtocolModelSelection = { model: string; engine: 'claude' | 'codex' }
+type ProtocolModelSelection = { model: string; engine: ProviderId }
 
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
   if (!alias) return undefined

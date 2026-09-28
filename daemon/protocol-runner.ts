@@ -15,6 +15,7 @@ import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import { requiredLenses, withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
+import type { ProviderId } from './engines/engine-adapter.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -1261,7 +1262,7 @@ async function spawnRole(run: ProtocolRun, role: string, params: Record<string, 
   }
 
   const model = (params.model as string) ?? undefined
-  const engine = (params.engine as 'claude' | 'codex' | undefined) ?? undefined
+  const engine = (params.engine as ProviderId | undefined) ?? undefined
   const result = await doSpawnSession(`${run.protocol.display} ${run.protocol.roles[role]} (${run.rounds} rounds)`, undefined, undefined, {
     trigger: run.protocol.name as any,
     joinThread: run.threadId,

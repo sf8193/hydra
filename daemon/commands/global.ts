@@ -13,6 +13,7 @@ import type { SpawnTemplate } from '../templates.js'
 import { buildTemplateSpawnOpts, runTemplateAction } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
 import { type Access } from '../access.js'
+import type { ProviderId } from '../engines/engine-adapter.js'
 
 const RESTART_PENDING_FILE = join(STATE_DIR, 'restart-pending.json')
 
@@ -57,7 +58,7 @@ async function spawnAndNotify(
   topic: string,
   template?: { name: string; template: SpawnTemplate },
   model?: string,
-  engine?: 'claude' | 'codex',
+  engine?: ProviderId,
 ): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🚀').catch(() => {})
   const chatId = await resolveSpawnTarget(msg)
@@ -122,7 +123,7 @@ async function spawnAndNotify(
   }
 }
 
-export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string, engine?: 'claude' | 'codex'): Promise<void> {
+export async function handleSpawnIntercept(msg: InboundMessage, topic: string, access: Access, model?: string, engine?: ProviderId): Promise<void> {
   // Also parse --codex flag from topic (fallback for non-prefix usage)
   let resolvedEngine = engine
   let cleanTopic = topic
