@@ -11,7 +11,7 @@ import { resolveSpawnTarget } from '../commands/global.js'
 import type { SessionInfo } from '../sessions.js'
 import type { InboundMessage } from '../../gateway.js'
 
-function liveSession(id: string, threadId: string, anchorChannelId: string): SessionInfo {
+function liveSession(id: string, threadId: string, anchorChannelId?: string): SessionInfo {
   const info = {
     sessionId: id, topic: 't', threadId, createdAt: Date.now(), lastActive: Date.now(),
     tmuxName: id, listening: false, engine: 'claude', sessionType: 'thread_owner',
@@ -43,5 +43,11 @@ describe('resolveSpawnTarget: retrying a spawn inside an already-live thread', (
     expect(chatId).not.toBe('spawn-guard-thread')
     expect(chatId).toBe('parent-channel-1')
     expect(sends.some(a => String(a[1]).includes('already has a live session'))).toBe(true)
+  })
+
+  test('aborts instead of falling back to the live thread when anchorChannelId is missing', async () => {
+    liveSession('spawn-guard-live', 'spawn-guard-thread', undefined)
+
+    await expect(resolveSpawnTarget(threadMsg('spawn-guard-thread'))).rejects.toThrow('thread has a live session')
   })
 })

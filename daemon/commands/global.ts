@@ -27,10 +27,16 @@ export async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
       if (executionAlive(staleInfo)) {
         // Live session already owns this thread: reusing resolvedThreadId as chatId
         // would just re-enter it (doSpawnSession treats an already-thread chatId as
-        // "reuse this thread"). Redirect to its parent channel so a genuinely new
-        // sibling thread gets created instead.
+        // "reuse this thread"). Redirect to its parent channel instead. If that's
+        // unset (anchorChannelId backfill can fail, see session-lifecycle.ts), fall
+        // back to msg.channelId — but only when msg.channelId is itself distinct from
+        // the live thread (e.g. spawn triggered from the thread's parent channel).
+        // When msg.channelId IS the live thread (the in-thread-retry case this guard
+        // exists for), that fallback would silently reproduce the bug, so abort instead.
+        const redirectTo = staleInfo.anchorChannelId ?? (msg.channelId !== resolvedThreadId ? msg.channelId : undefined)
+        if (!redirectTo) throw new Error(`thread has a live session (${staleInfo.tmuxName}) — kill it first or spawn in a new thread`)
         try { await gateway.send(msg.channelId, `Thread already has a live session (**${staleInfo.tmuxName}**). Spawning in a new thread instead.`, { replyTo: msg.id }) } catch {}
-        chatId = staleInfo.anchorChannelId ?? msg.channelId
+        chatId = redirectTo
       } else {
         chatId = resolvedThreadId
       }
@@ -66,7 +72,6 @@ async function spawnAndNotify(
   engine?: ProviderId,
 ): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '🚀').catch(() => {})
-  const chatId = await resolveSpawnTarget(msg)
   const label = template?.name ?? null
   const resolvedModel = model ?? template?.template.model
   const spawnOpts = {
@@ -77,6 +82,7 @@ async function spawnAndNotify(
   }
 
   try {
+    const chatId = await resolveSpawnTarget(msg)
     const result = await doSpawnSession(topic, chatId, msg.id, spawnOpts)
 
     if (label || resolvedModel) {
