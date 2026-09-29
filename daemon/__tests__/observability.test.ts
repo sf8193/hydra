@@ -274,6 +274,30 @@ describe('readConversationForensics', () => {
     return JSON.stringify(entry) + '\n'
   }
 
+  test('finds a consume line buried under more than one tail window of tool output', () => {
+    const path = tmpFile('forensics-buried-consume.jsonl')
+    const consumeTs = '2026-09-21T21:09:00.000Z'
+    writeFileSync(path,
+      line({ type: 'queue-operation', operation: 'enqueue', timestamp: consumeTs }) +
+      line({ type: 'queue-operation', operation: 'dequeue', timestamp: consumeTs }) +
+      line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x'.repeat(TAIL_BYTES * 2) }] } }) +
+      line({ type: 'assistant', timestamp: '2026-09-21T21:10:00.000Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } }))
+    const f = readConversationForensics(path)
+    expect(f?.lastConsumeTs).toBe(consumeTs)
+    expect(f?.queueBacklog).toBe(0)
+  })
+
+  test('stops widening at the cap: a consume line beyond it stays unknown (null)', () => {
+    const path = tmpFile('forensics-past-cap.jsonl')
+    writeFileSync(path,
+      line({ type: 'queue-operation', operation: 'dequeue', timestamp: '2026-09-21T21:09:00.000Z' }) +
+      line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x'.repeat(9 * 1024 * 1024) }] } }) +
+      line({ type: 'assistant', timestamp: '2026-09-21T21:10:00.000Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } }))
+    const f = readConversationForensics(path)
+    expect(f?.lastConsumeTs).toBeNull()
+    expect(f?.lastAssistantFullText).toBe('done')
+  })
+
   test('extracts full last-assistant text, its timestamp, and turn-completeness', () => {
     const path = tmpFile('forensics-basic.jsonl')
     const ts = '2026-09-21T21:10:00.000Z'
@@ -320,9 +344,11 @@ describe('readConversationForensics', () => {
     const markerLine = line(marker)
     const markerBytes = Buffer.byteLength(markerLine, 'utf8')
     const before = line({ type: 'other', pad: 'x'.repeat(200) }) // arbitrary content before the boundary
-    const afterBytes = TAIL_BYTES - markerBytes
+    // A consume line inside the window, so the reader doesn't widen past the boundary under test.
+    const consume = line({ type: 'queue-operation', operation: 'dequeue', timestamp: '2026-09-21T21:09:00.000Z' })
+    const afterBytes = TAIL_BYTES - markerBytes - Buffer.byteLength(consume, 'utf8')
     const after = 'x'.repeat(Math.max(0, afterBytes - 1)) + '\n' // invalid JSON — parsed and skipped, just padding
-    writeFileSync(path, before + markerLine + after)
+    writeFileSync(path, before + markerLine + after + consume)
 
     const stat = statSync(path)
     const offset = stat.size - TAIL_BYTES

@@ -111,12 +111,24 @@ function readTailLines(fd: number, size: number, tailBytes: number): { lines: st
   return { lines: rawLines.filter(l => l.trim()), isTail }
 }
 
+// The consume line for the latest message can sit far back (a long turn with big tool output), so
+// widen the window until it is in view. Capped: this is a sync read on the daemon poll path, and
+// a transcript with no consume line at all would otherwise be parsed in full every tick. Past the
+// cap lastConsumeTs stays null, which callers already treat as unknown (silence-timer fallback).
+const MAX_TAIL_BYTES = 8 * 1024 * 1024
 export function readConversationForensics(transcriptPath: string): ConversationForensics | null {
+  for (let tailBytes = 32 * 1024; ; tailBytes *= 4) {
+    const f = forensicsFromTail(transcriptPath, tailBytes)
+    if (!f || f.lastConsumeTs || !f.isTail || tailBytes >= MAX_TAIL_BYTES) return f
+  }
+}
+
+function forensicsFromTail(transcriptPath: string, tailBytes: number): ConversationForensics | null {
   let fd: number | undefined
   try {
     fd = openSync(transcriptPath, 'r')
     const stat = fstatSync(fd)
-    const { lines, isTail } = readTailLines(fd, stat.size, 32 * 1024)
+    const { lines, isTail } = readTailLines(fd, stat.size, tailBytes)
     closeSync(fd)
     fd = undefined
     let tailTurns = 0
