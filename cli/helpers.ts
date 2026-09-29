@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
 import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir } from '../shared/constants.js'
 import { tmuxNewSession, captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
-import { sourceEnvFiles } from '../shared/env-parse.js'
+import { sourceEnvFiles, parseEnvLine } from '../shared/env-parse.js'
 
 // ---------------------------------------------------------------------------
 // Config resolution (replaces env-setup.sh)
@@ -32,8 +32,24 @@ export type HydraConfig = {
   socketTimeout: number
 }
 
+function readEnvFileValue(path: string, key: string): string | undefined {
+  try {
+    for (const line of readFileSync(path, 'utf8').split('\n')) {
+      const parsed = parseEnvLine(line)
+      if (parsed && parsed[0] === key) return parsed[1]
+    }
+  } catch {}
+  return undefined
+}
+
 export function sourceStateDirEnv(stateDir: string): { configDir: string; spawnCwd: string; spawnCwdBlank: boolean } {
   sourceEnvFiles([join(stateDir, '.env')])
+  // sourceEnvFiles only backfills a blank var. A tmux server freezes its env at first
+  // launch (see CLAUDE.md), so HYDRA_MODEL can sit stale in every session's ambient env
+  // long after the state-dir .env is edited. .env is the intended source of truth for
+  // this one, so it wins here even over a non-blank ambient value.
+  const fileModel = readEnvFileValue(join(stateDir, '.env'), 'HYDRA_MODEL')
+  if (fileModel?.trim()) process.env.HYDRA_MODEL = fileModel.trim()
   // The CLI must not forward these to the daemon it launches.
   captureSpawnVars()
   return {
