@@ -10,6 +10,7 @@ export const TRANSCRIBE_TMUX = 'hydra-transcribe'
 export const KNOWN_MODELS = new Set([
   'claude-opus-5-5',
   'claude-opus-5',
+  'claude-sonnet-5-5',
   'claude-sonnet-5',
   'claude-fable-5-1',
   'claude-fable-5',
@@ -23,7 +24,8 @@ export const KNOWN_MODELS = new Set([
 
 /** Short aliases for chat commands like `spawn sonnet: topic`. */
 export const MODEL_ALIASES: Record<string, string> = {
-  'sonnet': 'claude-sonnet-5[1m]',
+  'sonnet': 'claude-sonnet-5-5[1m]',
+  'sonnet-5': 'claude-sonnet-5[1m]',
   'haiku': 'claude-haiku-4-5-20251001',
   'opus': 'claude-opus-5-5[1m]',
   'fable': 'claude-fable-5-1[1m]',

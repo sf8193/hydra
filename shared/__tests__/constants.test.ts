@@ -13,7 +13,7 @@ test('review rounds have a twenty-round default and hard cap', () => {
 
 describe('resolveModelAlias', () => {
   test('resolves short aliases', () => {
-    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5[1m]')
+    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5-5[1m]')
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001')
     expect(resolveModelAlias('opus')).toBe('claude-opus-5-5[1m]')
     expect(resolveModelAlias('fable')).toBe('claude-fable-5-1[1m]')
@@ -22,11 +22,11 @@ describe('resolveModelAlias', () => {
   test('resolves hyphenated aliases', () => {
     expect(resolveModelAlias('opus-4-7')).toBe('claude-opus-4-7[1m]')
     expect(resolveModelAlias('opus-4-8')).toBe('claude-opus-4-8[1m]')
-    // sonnet-5 alias removed — 'sonnet' now points to sonnet-5
+    expect(resolveModelAlias('sonnet-5')).toBe('claude-sonnet-5[1m]')
   })
 
   test('is case-insensitive', () => {
-    expect(resolveModelAlias('Sonnet')).toBe('claude-sonnet-5[1m]')
+    expect(resolveModelAlias('Sonnet')).toBe('claude-sonnet-5-5[1m]')
     expect(resolveModelAlias('HAIKU')).toBe('claude-haiku-4-5-20251001')
   })
 
