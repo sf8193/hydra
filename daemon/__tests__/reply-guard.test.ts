@@ -469,6 +469,29 @@ describe('escalateWithCapture', () => {
     expect(escalations[0].text).toContain('It may have answered in-transcript only')
   })
 
+  test('status-file waiting escalates on the first silence call, no grace wait', () => {
+    codexSession('sess-1', 'cedar')
+    fakeBridge('sess-1')
+    _setDeps({
+      registryGet: (id: string) => testSessions.get(id),
+      registryValues: () => testSessions.values(),
+      transportHas: (id: string) => connectedBridges.has(id),
+      transportSendOrQueue: () => {},
+      gatewaySend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
+      safeSend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return ['msg-1'] },
+      capturePaneScreenshot: () => null,
+      capturePaneText: () => 'fake pane content',
+      turnOutcome: turnOutcomeOver({
+        transcriptPathFor: () => undefined, readConversationForensics: () => null,
+        getLastCodexMessage: () => null, isCodexTurnComplete: () => false,
+      }),
+      blockedReason: () => 'input needed',
+    } as any)
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(handleSilenceEvent('cedar', T0 + 60_000)).toBe(1)
+  })
+
   test('prefers the transcript\'s real last-assistant text over a pane capture', () => {
     codexSession('sess-1', 'cedar', 'claude-abc')
     fakeBridge('sess-1')

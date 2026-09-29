@@ -213,8 +213,11 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now(), o
     const outcome = info ? deps.turnOutcome(info, p.deliveredAt) : undefined
     // Early call (turn just ended, pane not yet silent): act only on a
     // confirmed turn; don't start the grace clock for an unconfirmed one.
-    if (onlyConfirmed && !outcome?.confirmedComplete) continue
-    if (!outcome?.confirmedComplete) {
+    // Claude's status file says it's waiting on the user: deterministic, no idle/grace wait needed.
+    const blocked = info ? deps.blockedReason?.(info.tmuxName) : null
+    const certain = outcome?.confirmedComplete || !!blocked
+    if (onlyConfirmed && !certain) continue
+    if (!certain) {
       const firstSeen = silenceFirstSeenAt.get(key)
       if (firstSeen === undefined) {
         silenceFirstSeenAt.set(key, now)
