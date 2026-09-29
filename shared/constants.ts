@@ -1,4 +1,4 @@
-export const DEFAULT_MODEL = 'claude-opus-5-5[1m]'
+export const DEFAULT_MODEL = 'claude-sonnet-5-5[1m]'
 export const DEFAULT_REVIEW_ROUNDS = 20
 export const MAX_REVIEW_ROUNDS = 20
 
