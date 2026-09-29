@@ -9,7 +9,9 @@ import { on } from './event-bus.js'
 import { byteTmuxName, sentimentForReaction } from '../shared/constants.js'
 import { setSweepFailureHandler } from '../shared/spawn-env.js'
 import { isUnder } from '../shared/path-containment.js'
-import { latestCwd, projectDirNames, subtractTotals, totalsChanged, transcriptPathFor, zeroTotals, type TokenTotals } from './usage.js'
+import { latestCwd, projectDirNames, subtractTotals, sumTotals, totalsChanged, transcriptPathFor, zeroTotals, type PhaseTotals, type TokenTotals } from './usage.js'
+import { isUsagePhase, USAGE_PHASES, type UsagePhase, type UsagePhaseSource } from './usage-phase.js'
+import { getProtocolContext } from './protocol-runner.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EventMap } from './event-bus.js'
 import {
@@ -129,14 +131,24 @@ function stale<T>(entry: Cached<T> | undefined, now: number, okMs: number, failM
 }
 
 const projectNames = new Map<string, Cached<string | undefined>>()
+// phaseTotals is the baseline this read advances to if the batch is delivered.
+type PhaseAttribution =
+  | { phase: UsagePhase; phaseSource: UsagePhaseSource; phaseTotals: PhaseTotals }
+  | { phase?: undefined; phaseSource?: undefined; phaseTotals?: undefined }
+
 // providerSessionId: the Claude session id or the Codex thread id. claudeSessionId
 // is kept on Claude events so existing dashboards don't break.
-export type SessionUsage = { totals: TokenTotals; delta: TokenTotals; providerSessionId: string; claudeSessionId?: string; coldStart: boolean }
+export type SessionUsage = {
+  totals: TokenTotals; delta: TokenTotals; providerSessionId: string
+  claudeSessionId?: string; coldStart: boolean
+} & PhaseAttribution
 // What a death event carries: killSession clears the registry entry first.
 export type UsageHint = Partial<Pick<EventMap['session:death'], 'claudeSessionId' | 'engine' | 'codexThreadId' | 'codexHomeName' | 'tmuxName'>>
 
 // Dashboard contract: LAST cumulative* per providerSessionId for lifetime spend,
 // SUM delta* for a window. Spawned sessions only; see the PR for the caveats.
+// A tick emits one event per phase, so delta* is phase-scoped while cumulative*
+// stays session-wide and identical across them.
 export function usageExtra(u: SessionUsage): Record<string, string | number> {
   return {
     cumulativeInputTokens: u.totals.inputTokens,
@@ -152,13 +164,25 @@ export function usageExtra(u: SessionUsage): Record<string, string | number> {
     coldStart: u.coldStart ? 1 : 0,
     providerSessionId: u.providerSessionId,
     ...(u.claudeSessionId ? { claudeSessionId: u.claudeSessionId } : {}),
+    // Omitted, not faked, for a provider with no tool names to read a phase from.
+    ...(u.phase ? { phase: u.phase, phaseSource: u.phaseSource } : {}),
   }
 }
+
+// Keyed on the ROLE, not the protocol's name. The name says what the run is
+// called, not what this session is doing in it: the `review` protocol's
+// apply_changes phase is the OWNER editing, and `build`'s reviewing phase is a
+// genuine critic that the name test misses entirely. A critic reviews in any
+// protocol; every other role falls through to the tool reading.
+export const protocolPhaseForRole = (role: string | undefined): UsagePhase | undefined =>
+  (role === 'critic' ? 'review' : undefined)
 
 // Per session: the adapter's opaque cursor and the totals it last read.
 const usageCursors = new Map<string, { cursor: unknown; totals: TokenTotals }>()
 // How far the wire has actually accepted, which is not how far the reader got.
+// Never both populated for one session: a session keeps one adapter for life.
 const deliveredTotals = new Map<string, TokenTotals>()
+const deliveredPhaseTotals = new Map<string, PhaseTotals>()
 // A death mid-POST would otherwise read a baseline the in-flight event is about
 // to advance, and report the same window twice.
 const pendingEmits = new Map<string, Promise<unknown>>()
@@ -215,7 +239,8 @@ export type RaindropDeps = {
   recordDryRun: (endpoint: string, body: WireBody) => void
   allowedUsers: () => Drivers
   projectFor: (repoPath: string) => string | undefined
-  usageFor: (sessionId: string, hint?: UsageHint) => SessionUsage | undefined
+  usageFor: (sessionId: string, hint?: UsageHint) => SessionUsage[]
+  protocolPhaseFor: (sessionId: string) => UsagePhase | undefined
   env: () => Record<string, string | undefined>
   now: () => number
 }
@@ -301,8 +326,14 @@ export function defaultAllowedUsers(): Drivers {
   try { return drivableBy(loadAccess()) } catch { return new Set() }
 }
 
+export function defaultProtocolPhaseFor(sessionId: string): UsagePhase | undefined {
+  try { return protocolPhaseForRole(getProtocolContext(sessionId)?.role) } catch { return undefined }
+}
+
 // The engine's adapter reads the spend; see usageTotals in engine-adapter.ts.
-export function defaultUsageFor(sessionId: string, hint?: UsageHint): SessionUsage | undefined {
+// One entry per phase that moved, or a single unlabelled entry for a provider
+// whose adapter reports no phase split.
+export function defaultUsageFor(sessionId: string, hint?: UsageHint): SessionUsage[] {
   const info = registry.get(sessionId)
   // killSession clears the registry entry first, so the ids ride the event.
   const subject = info ?? { sessionId, tmuxName: hint?.tmuxName ?? '', claudeSessionId: hint?.claudeSessionId, codexThreadId: hint?.codexThreadId, codexHomeName: hint?.codexHomeName }
@@ -311,7 +342,7 @@ export function defaultUsageFor(sessionId: string, hint?: UsageHint): SessionUsa
   const r = adapter.usageTotals(subject, stored?.cursor)
   if (!r) {
     if (info) unresolved.add(sessionId)
-    return undefined
+    return []
   }
   unresolved.delete(sessionId)
   const prevTotals = stored?.totals ?? zeroTotals()
@@ -324,19 +355,73 @@ export function defaultUsageFor(sessionId: string, hint?: UsageHint): SessionUsa
   // thread), both have no delivered baseline to subtract — that is what coldStart marks.
   // Dropped, not skipped: `restarted` is true for one read only, so a
   // baseline that outlives it is subtracted from a different session.
-  if (r.restarted) deliveredTotals.delete(sessionId)
-  const sent = deliveredTotals.get(sessionId)
-  const coldStart = sent === undefined
-  const base = sent ?? r.totals
-  if (!totalsChanged(prevTotals, r.totals) && !totalsChanged(base, r.totals)) return undefined
-  return {
-    totals: { ...r.totals },
-    delta: subtractTotals(base, r.totals),
+  if (r.restarted) forgetDelivered(sessionId)
+  const identity = {
     providerSessionId: r.providerSessionId,
     ...(adapter.provider === 'claude' ? { claudeSessionId: r.providerSessionId } : {}),
-    coldStart,
   }
+
+  // Returns before the protocol force below, so a Codex critic reports no phase
+  // at all even though its role is a fact hydra holds. Deliberate for now; the
+  // union at PhaseAttribution has to split before a row can carry one without a
+  // per-phase baseline to bank.
+  if (!r.phases) {
+    const sent = deliveredTotals.get(sessionId)
+    const base = sent ?? r.totals
+    if (!totalsChanged(prevTotals, r.totals) && !totalsChanged(base, r.totals)) return []
+    return [{ totals: { ...r.totals }, delta: subtractTotals(base, r.totals), ...identity, coldStart: sent === undefined }]
+  }
+
+  const read = r.phases.totals
+  const voted = new Set(r.phases.voted)
+  const sent = deliveredPhaseTotals.get(sessionId)
+  const coldStart = sent === undefined
+  const base = sent ?? read
+  const sessionBase = sumTotals(USAGE_PHASES.map(p => base[p]))
+  if (!totalsChanged(prevTotals, r.totals) && !totalsChanged(sessionBase, r.totals)) return []
+
+  const totals = { ...r.totals }
+  const deltas = USAGE_PHASES.map(phase => ({ phase, delta: subtractTotals(base[phase], read[phase]) }))
+
+  // A protocol run is the stronger fact, so it takes the whole window rather
+  // than letting the tool reading split it. See protocolPhaseForRole.
+  const forced = deps.protocolPhaseFor(sessionId)
+  // deps.protocolPhaseFor is injectable, so the set check is a real boundary.
+  if (isUsagePhase(forced)) {
+    return [{
+      totals, delta: sumTotals(deltas.map(d => d.delta)), ...identity, coldStart,
+      phase: forced, phaseSource: 'protocol', phaseTotals: read,
+    }]
+  }
+  const moved = deltas.filter(d => totalsChanged(zeroTotals(), d.delta))
+  // A cold start moves nothing, but the cumulative still has to land — attribute
+  // it to where the cursor actually stands.
+  const rows = moved.length > 0 ? moved : [{ phase: r.phases.current, delta: zeroTotals() }]
+  return rows.map(({ phase, delta }) => ({
+    totals, delta, ...identity, coldStart, phase, phaseTotals: read,
+    // Scoped to the READ, which is the delivered window only while dispatch
+    // succeeds; a retried window reports votes already gone and reads `latched`.
+    phaseSource: voted.has(phase) ? 'tools' as const : 'latched' as const,
+  }))
 }
+
+function forgetDelivered(sessionId: string): void {
+  deliveredTotals.delete(sessionId)
+  deliveredPhaseTotals.delete(sessionId)
+}
+
+// Defensive: the adapter binding already means the other map holds nothing.
+function bankDelivered(sessionId: string, row: SessionUsage): void {
+  forgetDelivered(sessionId)
+  if (row.phaseTotals) deliveredPhaseTotals.set(sessionId, row.phaseTotals)
+  else deliveredTotals.set(sessionId, row.totals)
+}
+
+// The three-letter code buys uniform length: every phase's id is the same size,
+// so a session's rows can only pass or fail the 64-char gate together. A
+// phase-less provider emits one row and keeps the id it always had.
+export const usageEventId = (sessionId: string, stamp: string, phase?: UsagePhase): string =>
+  phase ? `${sessionId}:u${stamp}:${phase.slice(0, 3)}` : `${sessionId}:usage:${stamp}`
 
 const defaultDeps: RaindropDeps = {
   factsFor: factsFromRegistry,
@@ -350,6 +435,7 @@ const defaultDeps: RaindropDeps = {
   allowedUsers: defaultAllowedUsers,
   projectFor: defaultProjectFor,
   usageFor: defaultUsageFor,
+  protocolPhaseFor: defaultProtocolPhaseFor,
   env: () => RAINDROP_ENV,
   now: () => Date.now(),
 }
@@ -366,13 +452,14 @@ export function _trackedSizeForTesting(): number { return tracked.size }
 
 export function _usageCursorCountForTesting(): number { return usageCursors.size }
 
-export function _deliveredCountForTesting(): number { return deliveredTotals.size }
+export function _deliveredCountForTesting(): number { return deliveredTotals.size + deliveredPhaseTotals.size }
 
 export function _resetStateForTesting(): void {
   projectNames.clear()
   tracked.clear()
   usageCursors.clear()
   deliveredTotals.clear()
+  deliveredPhaseTotals.clear()
   pendingEmits.clear()
   unresolved.clear()
   messageEvents.clear()
@@ -470,9 +557,25 @@ export function register(): () => void {
     process.stderr.write(`daemon: raindrop: ${verb} failed (${counters.failures}): ${errText(err)}\n`)
   }
 
-  const emitUsage = async (facts: SessionFacts, eventId: string, at: number, usage: SessionUsage) => track({
-    event: 'hydra.session.usage', eventId, facts, threadId: facts.threadId, at, extra: usageExtra(usage),
-  })
+  // Shared by the tick and the death read so they cannot drift. Returns
+  // undefined rather than a partial set: the baseline advances per session, so
+  // shipping a subset would mark a dropped phase delivered.
+  const usageBodies = (
+    sessionId: string, facts: SessionFacts, stamp: string, at: number, rows: readonly SessionUsage[],
+  ): EventBody[] | undefined => {
+    // Hoisted: defaultAllowedUsers re-reads access.json on every call.
+    const user = resolveUserId(deps.allowedUsers())
+    if (!user) return undefined
+    const bodies: EventBody[] = []
+    for (const usage of rows) {
+      const body = buildTracked({
+        event: 'hydra.session.usage', eventId: usageEventId(sessionId, stamp, usage.phase),
+        facts, threadId: facts.threadId, at, extra: usageExtra(usage),
+      }, user)
+      if (body) bodies.push(body)
+    }
+    return bodies.length === rows.length ? bodies : undefined
+  }
 
   // A local read failure is not a delivery failure. Named for the path rather
   // than the cause: the same catch covers facts and usage.
@@ -509,8 +612,9 @@ export function register(): () => void {
     } catch (err) { onError(err); return false }
   }
 
-  const buildTracked = (input: Omit<EventInput, 'userId' | 'omitRepo'>): EventBody | undefined => {
-    const user = resolveUserId(deps.allowedUsers())
+  // Cached per burst: defaultAllowedUsers re-reads access.json on every call.
+  const buildTracked = (input: Omit<EventInput, 'userId' | 'omitRepo'>, cachedUser?: string): EventBody | undefined => {
+    const user = cachedUser ?? resolveUserId(deps.allowedUsers())
     if (!user) return undefined
     const body = buildEvent({ ...input, userId: user, omitRepo: omitRepoSetting() !== 'off' })
     if (!body) onError(new Error(`refused to build ${input.event}: event_id or user_id failed its shape gate`))
@@ -540,28 +644,25 @@ export function register(): () => void {
     // One fleet-wide condition, reported once — the sessions themselves still
     // land in `unresolved`, which is what names CLAUDE_CONFIG_DIR to the operator.
     try { projectDirNames() } catch (err) { rootError(err) }
-    const batch: Array<{ sessionId: string; totals: TokenTotals; body: EventBody }> = []
+    const batch: Array<{ sessionId: string; row: SessionUsage; bodies: EventBody[] }> = []
     for (const sessionId of deps.liveSessionIds()) {
       // Facts first: a headless session would advance its cursor past spend nobody reports.
-      let usage: SessionUsage | undefined
+      let rows: SessionUsage[] = []
       let facts: SessionFacts | undefined
       try {
         facts = deps.factsFor(sessionId)
-        if (facts) usage = deps.usageFor(sessionId)
+        if (facts) rows = deps.usageFor(sessionId)
       } catch (err) { usageError(err) }
-      if (!facts || !usage) continue
-      const body = buildTracked({
-        event: 'hydra.session.usage', eventId: `${sessionId}:usage:${at}`, facts,
-        // Centred: the tokens were burned across the interval, not at its end.
-        threadId: facts.threadId, at: at - USAGE_TICK_MS / 2, extra: usageExtra(usage),
-      })
-      if (body) batch.push({ sessionId, totals: usage.totals, body })
+      if (!facts || rows.length === 0) continue
+      // Centred: the tokens were burned across the interval, not at its end.
+      const bodies = usageBodies(sessionId, facts, String(at), at - USAGE_TICK_MS / 2, rows)
+      if (bodies) batch.push({ sessionId, row: rows[0]!, bodies })
     }
     if (batch.length === 0) return
     // All or nothing, which is what makes the retry sound: a failed batch
     // advances no baseline, so every window in it is re-sent next tick.
-    const inFlight = dispatch(EVENT_ENDPOINT, batch.map(b => b.body))
-      .then(ok => { if (ok) for (const b of batch) deliveredTotals.set(b.sessionId, b.totals) })
+    const inFlight = dispatch(EVENT_ENDPOINT, batch.flatMap(b => b.bodies))
+      .then(ok => { if (ok) for (const b of batch) bankDelivered(b.sessionId, b.row) })
       .catch(usageError)
       .finally(() => {
         for (const b of batch) if (pendingEmits.get(b.sessionId) === inFlight) pendingEmits.delete(b.sessionId)
@@ -576,7 +677,7 @@ export function register(): () => void {
     const known = new Set(deps.knownSessionIds())
     for (const id of [...tracked.keys()]) if (!known.has(id)) tracked.delete(id)
     for (const id of [...usageCursors.keys()]) if (!known.has(id)) usageCursors.delete(id)
-    for (const id of [...deliveredTotals.keys()]) if (!known.has(id)) deliveredTotals.delete(id)
+    for (const id of [...deliveredTotals.keys(), ...deliveredPhaseTotals.keys()]) if (!known.has(id)) forgetDelivered(id)
     for (const id of [...pendingEmits.keys()]) if (!known.has(id)) pendingEmits.delete(id)
     // Liveness: nothing later reads this one, so a crashed record would pin its
     // entry — and the count it feeds is the only alarm for a wrong config dir.
@@ -617,16 +718,17 @@ export function register(): () => void {
       const facts = tracked.get(sessionId)
       tracked.delete(sessionId)
       await pendingEmits.get(sessionId)
-      let final: SessionUsage | undefined
+      let final: SessionUsage[] = []
       try { final = deps.usageFor(sessionId, death) } catch (err) { usageError(err) }
       // Before the early return — a session that never registered a bridge has no facts.
       usageCursors.delete(sessionId)
-      deliveredTotals.delete(sessionId)
+      forgetDelivered(sessionId)
       pendingEmits.delete(sessionId)
       if (!facts) return
-      if (final) {
+      if (final.length > 0) {
         // Not centred: this one happened at the instant of death.
-        await emitUsage(facts, `${sessionId}:usage:final`, deadAt ?? deps.now(), final)
+        const bodies = usageBodies(sessionId, facts, 'final', deadAt ?? deps.now(), final)
+        if (bodies) await dispatch(EVENT_ENDPOINT, bodies)
       }
       await track({
         event: 'hydra.session.death', eventId: `${sessionId}:death`, facts,

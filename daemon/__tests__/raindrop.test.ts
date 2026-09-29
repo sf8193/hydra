@@ -27,6 +27,9 @@ import {
   defaultProjectFor,
   projectFromGitDir,
   defaultLiveSessionIds,
+  usageEventId,
+  defaultProtocolPhaseFor,
+  protocolPhaseForRole,
   UNATTRIBUTED_REPO,
   type RaindropDeps,
   type RaindropMode,
@@ -39,8 +42,10 @@ import { mkdirSync as mkdirp, realpathSync, rmSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { trimRaindropDryrun, startVitalsSnapshots } from '../observability.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
-import { plantTranscript, uniqueClaudeId } from './projects-fixture.js'
-import type { TokenTotals } from '../usage.js'
+import { plantTranscript, turnLines, uniqueClaudeId } from './projects-fixture.js'
+import { __test as protocolTest } from '../protocol-runner.js'
+import { zeroPhaseTotals, type TokenTotals } from '../usage.js'
+import { USAGE_PHASES, type UsagePhase } from '../usage-phase.js'
 import { emitSessionDeath } from '../session-lifecycle.js'
 import { PLATFORM, STATE_DIR, RAINDROP_DRYRUN_FILE } from '../config.js'
 import { SCRUBBED_SPAWN_VARS, tmuxNewSession } from '../../shared/spawn-env.js'
@@ -82,7 +87,10 @@ function stubDeps(over: Partial<RaindropDeps> = {}): void {
     recordDryRun: record,
     allowedUsers: () => new Set([DRIVER]),
     projectFor: (p) => p.split('/').pop(),
-    usageFor: () => undefined,
+    usageFor: () => [],
+    // Without this every defaultUsageFor call reaches the real protocol-runner
+    // module map, coupling these tests to another file's state.
+    protocolPhaseFor: () => undefined,
     env: () => process.env,
     now: () => NOW,
     ...over,
@@ -124,13 +132,22 @@ afterEach(() => {
 // Stubs hand back a SessionUsage; cumulative and delta are the same here
 // because each stub represents a single tick's worth of spend.
 const zero = (): TokenTotals => ({ inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0 })
-const usageOf = (t: Partial<TokenTotals>, claudeSessionId = 'c-test', d?: Partial<TokenTotals>, coldStart = false) => ({
+const usageOf = (t: Partial<TokenTotals>, claudeSessionId = 'c-test', d?: Partial<TokenTotals>, coldStart = false, phase: UsagePhase = 'plan') => ([{
   totals: { ...zero(), ...t },
   delta: { ...zero(), ...(d ?? t) },
   coldStart,
   providerSessionId: claudeSessionId,
   claudeSessionId,
-})
+  phase,
+  phaseSource: 'tools' as const,
+  phaseTotals: { ...zeroPhaseTotals(), [phase]: { ...zero(), ...t } },
+}])
+
+// Every scenario below drains a single-phase transcript, so the tick emits one row.
+const only = (rows: ReturnType<typeof defaultUsageFor>) => {
+  expect(rows.length, 'these scenarios are single-phase by construction').toBeLessThanOrEqual(1)
+  return rows[0]
+}
 
 const oneLine = (id: string, n: number) => JSON.stringify({ message: { id, usage: { output_tokens: n } } }) + '\n'
 
@@ -528,7 +545,7 @@ describe('raindrop: usage events', () => {
       liveSessionIds: () => ['u-1'], knownSessionIds: () => ['u-1'],
       usageFor: defaultUsageFor, factsFor: factsFromRegistry,
     })
-    expect(defaultUsageFor('u-1'), 'the fixture must not resolve').toBeUndefined()
+    expect(defaultUsageFor('u-1'), 'the fixture must not resolve').toEqual([])
 
     const fire = tickOnce()
     fire()
@@ -589,7 +606,7 @@ describe('raindrop: usage events', () => {
   })
 
   test('a session whose totals did not move sends nothing', async () => {
-    stubDeps({ liveSessionIds: () => ['sess-1'], usageFor: () => undefined })
+    stubDeps({ liveSessionIds: () => ['sess-1'], usageFor: () => [] })
     const tick = tickOnce()
     tick()
     await new Promise(r => setTimeout(r, 0))
@@ -1023,22 +1040,22 @@ describe('raindrop: events', () => {
   // a usage event saying nothing had been spent.
   test('the first tick is silent when nothing has been spent yet', () => {
     plant('zero-1', JSON.stringify({ type: 'user' }) + '\n')
-    expect(defaultUsageFor('zero-1')).toBeUndefined()
+    expect(defaultUsageFor('zero-1')).toEqual([])
   })
 
   test('the first tick still reports spend that is already on disk', () => {
     plant('spend-1', JSON.stringify({ message: { usage: { output_tokens: 4 } } }) + '\n')
-    expect(defaultUsageFor('spend-1')?.totals.outputTokens).toBe(4)
+    expect(only(defaultUsageFor('spend-1'))?.totals.outputTokens).toBe(4)
   })
 
   // Without the cursor carried forward, every tick re-reads from offset 0 and
   // re-reports the session's whole lifetime as if it were new.
   test('an unchanged second tick is silent, and fresh spend reports the larger total', () => {
     const path = plant('delta-1', JSON.stringify({ message: { usage: { output_tokens: 4 } } }) + '\n')
-    expect(defaultUsageFor('delta-1')?.totals.outputTokens).toBe(4)
-    expect(defaultUsageFor('delta-1'), 'nothing new must send nothing').toBeUndefined()
+    expect(only(defaultUsageFor('delta-1'))?.totals.outputTokens).toBe(4)
+    expect(defaultUsageFor('delta-1'), 'nothing new must send nothing').toEqual([])
     appendFileSync(path, JSON.stringify({ message: { usage: { output_tokens: 3 } } }) + '\n')
-    expect(defaultUsageFor('delta-1')?.totals.outputTokens, 'cumulative, not a delta').toBe(7)
+    expect(only(defaultUsageFor('delta-1'))?.totals.outputTokens, 'cumulative, not a delta').toBe(7)
   })
 
   // The silent failure mode: point the daemon at the wrong projects root and
@@ -1046,7 +1063,7 @@ describe('raindrop: events', () => {
   test('a session whose transcript cannot be found is reported, not just skipped', () => {
     registry.set('lost-1', sessionInfo({ sessionId: 'lost-1', threadId: 'T-lost', claudeSessionId: uniqueClaudeId('never-planted') }))
     cleanups.push(() => registry.delete('lost-1'))
-    expect(defaultUsageFor('lost-1')).toBeUndefined()
+    expect(defaultUsageFor('lost-1')).toEqual([])
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
   })
 
@@ -1055,7 +1072,7 @@ describe('raindrop: events', () => {
   test('a claude session with no transcript id yet is reported as unresolved', () => {
     registry.set('noid-1', sessionInfo({ sessionId: 'noid-1', threadId: 'T-noid' }))
     cleanups.push(() => registry.delete('noid-1'))
-    expect(defaultUsageFor('noid-1')).toBeUndefined()
+    expect(defaultUsageFor('noid-1')).toEqual([])
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
   })
 
@@ -1064,7 +1081,7 @@ describe('raindrop: events', () => {
   test('a codex session with no readable rollout is reported as unresolved', () => {
     registry.set('cdx-1', sessionInfo({ sessionId: 'cdx-1', threadId: 'T-cdx', engine: 'codex' }))
     cleanups.push(() => registry.delete('cdx-1'))
-    expect(defaultUsageFor('cdx-1')).toBeUndefined()
+    expect(defaultUsageFor('cdx-1')).toEqual([])
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
   })
 
@@ -1073,12 +1090,12 @@ describe('raindrop: events', () => {
     cleanups.push(plantTranscript(claudeId, oneLine('a', 5)).cleanup)
     registry.set('cdx-2', sessionInfo({ sessionId: 'cdx-2', threadId: 'T-cdx2', engine: 'codex', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('cdx-2'))
-    expect(defaultUsageFor('cdx-2')).toBeUndefined()
+    expect(defaultUsageFor('cdx-2')).toEqual([])
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
   })
 
   test('a session already gone from the registry is not reported as unresolved', () => {
-    expect(defaultUsageFor('never-registered')).toBeUndefined()
+    expect(defaultUsageFor('never-registered')).toEqual([])
     expect(raindropStatusLine('cli')).not.toContain('no transcript yet')
   })
 
@@ -1090,7 +1107,7 @@ describe('raindrop: events', () => {
     registry.set('crashu-1', info)
     cleanups.push(() => registry.delete('crashu-1'))
     stubDeps({ liveSessionIds: () => (info.deadAt ? [] : ['crashu-1']), usageFor: defaultUsageFor, factsFor: factsFromRegistry })
-    expect(defaultUsageFor('crashu-1')).toBeUndefined()
+    expect(defaultUsageFor('crashu-1')).toEqual([])
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
 
     const fireIntervals = registerWithIntervals()
@@ -1104,11 +1121,11 @@ describe('raindrop: events', () => {
     const claudeId = uniqueClaudeId('late')
     registry.set('late-1', sessionInfo({ sessionId: 'late-1', threadId: 'T-late', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('late-1'))
-    expect(defaultUsageFor('late-1')).toBeUndefined()
+    expect(defaultUsageFor('late-1')).toEqual([])
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
 
     cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { usage: { output_tokens: 2 } } }) + '\n').cleanup)
-    expect(defaultUsageFor('late-1')?.totals.outputTokens).toBe(2)
+    expect(only(defaultUsageFor('late-1'))?.totals.outputTokens).toBe(2)
     expect(raindropStatusLine('cli'), 'the count must clear, not latch').not.toContain('no transcript yet')
   })
 
@@ -1117,7 +1134,7 @@ describe('raindrop: events', () => {
     cleanups.push(() => registry.delete('gone-1'))
     let live = ['gone-1']
     stubDeps({ liveSessionIds: () => live, usageFor: defaultUsageFor, factsFor: factsFromRegistry })
-    expect(defaultUsageFor('gone-1')).toBeUndefined()
+    expect(defaultUsageFor('gone-1')).toEqual([])
     expect(raindropStatusLine('cli')).toContain('1 session with no transcript yet')
 
     const fireIntervals = registerWithIntervals()
@@ -1141,7 +1158,7 @@ describe('raindrop: events', () => {
     cleanups.push(plantTranscript(claudeId, oneLine('a', 900)).cleanup)
     registry.set('base-1', sessionInfo({ sessionId: 'base-1', threadId: 'T-base', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('base-1'))
-    const u = defaultUsageFor('base-1')
+    const u = only(defaultUsageFor('base-1'))
     expect(u?.totals.outputTokens, 'the lifetime is still reported').toBe(900)
     expect(u?.delta.outputTokens, 'but none of it is new in this window').toBe(0)
   })
@@ -1185,6 +1202,353 @@ describe('raindrop: events', () => {
       'every counter must be the growth, not just output',
     ).toEqual([3, 25, 7, 11])
     expect(ev.coldStart, 'and it is no longer a first sighting').toBe(0)
+  })
+
+  // A window that spans phases cannot ride one event, because one event carries
+  // one phase. The split is what makes SUM(delta*) GROUP BY phase mean anything.
+  // The protocol tick test stubs `protocolPhaseFor` out wholesale, so the real
+  // lookup needs its own coverage.
+  test('a session in no protocol run forces nothing', () => {
+    expect(defaultProtocolPhaseFor('not-in-a-run')).toBeUndefined()
+  })
+
+  // Stubbing protocolPhaseFor leaves the getProtocolContext -> role join
+  // uncovered: replacing it with `undefined` passed the whole suite, so a
+  // rename of `role` upstream would drop protocol attribution fleet-wide.
+  test('a critic in a live run forces review through the real lookup', () => {
+    const t = protocolTest!
+    t.runs.set('r-usage', { protocol: { name: 'build' }, phase: 'reviewing', currentRound: 1,
+      rounds: 1, decisions: [], sessionToRole: new Map([['crit-1', 'critic']]) } as never)
+    t.sessionToRun.set('crit-1', 'r-usage')
+    try {
+      expect(defaultProtocolPhaseFor('crit-1'), 'named build, so only the role can produce this').toBe('review')
+    } finally {
+      t.runs.delete('r-usage')
+      t.sessionToRun.delete('crit-1')
+    }
+  })
+
+  test('only a critic forces a phase, in any protocol', () => {
+    expect(protocolPhaseForRole('critic')).toBe('review')
+    expect(protocolPhaseForRole('owner'), 'the owner applying fixes is executing, not reviewing').toBeUndefined()
+    expect(protocolPhaseForRole('builder')).toBeUndefined()
+    // Roles are an OPEN per-protocol set, so a Record indexed by one would hand
+    // back a truthy Object.prototype member where a UsagePhase belongs.
+    expect(protocolPhaseForRole('constructor')).toBeUndefined()
+    expect(protocolPhaseForRole('__proto__')).toBeUndefined()
+  })
+
+  // The baseline advances once per SESSION, so shipping a subset of a session's
+  // phase rows would mark the dropped phase's window delivered and lose those
+  // tokens for good. The tick guards that with bodies.length === rows.length.
+  //
+  // That guard is unreachable by construction, and this is what keeps it so:
+  // every phase's event id is the same length, so a session's rows can only
+  // pass or fail the id gate together. It was NOT true of the original
+  // `:usage:${at}:${phase}` form, where 'execute' sat at the 64-char ceiling
+  // and 'plan' had three characters to spare.
+  test('all four phases produce the same id length, so rows build or fail together', () => {
+    const lens = new Set(USAGE_PHASES.map(p => usageEventId('a'.repeat(36), '1789800000000', p).length))
+    expect(lens.size, 'one length for every phase').toBe(1)
+    expect([...lens][0]!, 'with room under the 64-char gate').toBeLessThanOrEqual(56)
+  })
+
+  // The whole point of the third source value: a dashboard has to be able to
+  // tell a phase a turn chose from one that was carried in.
+  test('phaseSource is tools only when this window voted, latched otherwise', async () => {
+    const claudeId = uniqueClaudeId('srcsplit')
+    const planted = plantTranscript(claudeId, turnLines('a', 5, ['Edit']))
+    cleanups.push(planted.cleanup)
+    registry.set('ss-1', sessionInfo({ sessionId: 'ss-1', threadId: 'T-ss', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('ss-1'))
+    stubDeps({ liveSessionIds: () => ['ss-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    appendFileSync(planted.path, turnLines('b', 20, ['Edit']))
+    fire(); await tick()
+    const voted = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
+    expect([voted.phase, voted.phaseSource], 'an Edit landed in this window').toEqual(['execute', 'tools'])
+
+    // Same phase, next window, no tool vote in it — the spend is carryover.
+    appendFileSync(planted.path, turnLines('c', 30, ['Bash']))
+    fire(); await tick()
+    const carried = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
+    expect([carried.phase, carried.phaseSource], 'Bash votes nothing').toEqual(['execute', 'latched'])
+    expect(carried.deltaOutputTokens, 'still billed, just honestly labelled').toBe(30)
+  })
+
+  // A bogus phase from the injectable dep would otherwise ride onto the wire as
+  // `phaseSource: 'protocol'` with no `phase` (the payload oneOf drops the phase
+  // but passes the source), under an id that collides with a genuine review row
+  // from the same session and tick. Dropping `&& isUsagePhase(forced)` survived
+  // the whole suite before this.
+  test('a protocol phase outside the closed set is refused, not forwarded', async () => {
+    const claudeId = uniqueClaudeId('badproto')
+    cleanups.push(plantTranscript(claudeId, turnLines('a', 5, ['Edit'])).cleanup)
+    registry.set('bp-1', sessionInfo({ sessionId: 'bp-1', threadId: 'T-bp', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('bp-1'))
+    stubDeps({
+      liveSessionIds: () => ['bp-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      protocolPhaseFor: () => 'reviewing' as never,
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    const ev = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body
+    expect(ev.properties.phase, 'falls back to the tool reading').toBe('execute')
+    expect(ev.properties.phaseSource, 'and must not claim the protocol said so').toBe('tools')
+    expect(String(ev.event_id).endsWith(':exe')).toBe(true)
+  })
+
+  // A protocol run takes the whole window; the tick after it leaves the run must
+  // still measure from the baseline that tick banked, not from zero.
+  test('a normal tick after a protocol tick measures from the protocol baseline', async () => {
+    const claudeId = uniqueClaudeId('protothen')
+    const planted = plantTranscript(claudeId, turnLines('a', 5, ['Edit']))
+    cleanups.push(planted.cleanup)
+    registry.set('pt-1', sessionInfo({ sessionId: 'pt-1', threadId: 'T-pt', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('pt-1'))
+    let forced: string | undefined = 'review'
+    stubDeps({
+      liveSessionIds: () => ['pt-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      protocolPhaseFor: () => forced as never,
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    appendFileSync(planted.path, turnLines('b', 20, ['Edit']))
+    fire(); await tick()
+    const inRun = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
+    expect([inRun.phaseSource, inRun.deltaOutputTokens]).toEqual(['protocol', 20])
+    forced = undefined
+    appendFileSync(planted.path, turnLines('c', 300, ['Edit']))
+    fire(); await tick()
+    const after = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
+    expect(after.phaseSource).toBe('tools')
+    expect(after.deltaOutputTokens, 'the window since the protocol tick, not since zero').toBe(300)
+    expect(after.cumulativeOutputTokens).toBe(325)
+  })
+
+  // The two baseline maps are keyed by the same session id, so a session that
+  // ever appeared in both would have one of them silently subtracted from the
+  // other. bankDelivered clearing the pair first is what makes that structural.
+  test('a Claude and a Codex session in one tick bank into one map each', async () => {
+    const claudeId = uniqueClaudeId('mixc')
+    cleanups.push(plantTranscript(claudeId, turnLines('a', 5, ['Edit'])).cleanup)
+    registry.set('mix-claude', sessionInfo({ sessionId: 'mix-claude', threadId: 'T-mc', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('mix-claude'))
+    registry.set('mix-codex', sessionInfo({
+      sessionId: 'mix-codex', threadId: 'T-mx', engine: 'codex', codexThreadId: 'thread-mix', codexHomeName: 'h',
+      adapter: fakeAdapter({
+        provider: 'codex',
+        usageTotals: () => ({ totals: { ...zero(), outputTokens: 9 }, providerSessionId: 'thread-mix', cursor: {}, restarted: false }),
+      }),
+    }))
+    cleanups.push(() => registry.delete('mix-codex'))
+    stubDeps({ liveSessionIds: () => ['mix-claude', 'mix-codex'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    const usage = sent.filter(x => x.body.event === 'hydra.session.usage')
+    expect(usage.length, 'one dispatch carrying both').toBe(1)
+    const ids = usage[0]!.raw.map((b: any) => b.event_id).sort()
+    expect(ids).toEqual([`mix-claude:u${NOW}:exe`, `mix-codex:usage:${NOW}`])
+    const byId = Object.fromEntries(usage[0]!.raw.map((b: any) => [b.event_id, b.properties]))
+    expect(byId[`mix-claude:u${NOW}:exe`].phase).toBe('execute')
+    expect(byId[`mix-codex:usage:${NOW}`].phase, 'no tool stream, so no phase').toBeUndefined()
+    expect(_deliveredCountForTesting(), 'one bucket each, never two for one session').toBe(2)
+  })
+
+  // _resetStateForTesting dropping deliveredPhaseTotals.clear() was invisible to
+  // all 2367 tests, so the next file's first tick would inherit a baseline.
+  test('resetting test state clears both delivered baselines', async () => {
+    const claudeId = uniqueClaudeId('resetboth')
+    cleanups.push(plantTranscript(claudeId, turnLines('a', 5, ['Edit'])).cleanup)
+    registry.set('rb-1', sessionInfo({ sessionId: 'rb-1', threadId: 'T-rb', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('rb-1'))
+    stubDeps({ liveSessionIds: () => ['rb-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(_deliveredCountForTesting(), 'a phase baseline is banked').toBe(1)
+    _resetStateForTesting()
+    expect(_deliveredCountForTesting()).toBe(0)
+  })
+
+  test('a session whose rows all build ships and banks the baseline', async () => {
+    const good = {
+      totals: { ...zero(), outputTokens: 50 }, delta: { ...zero(), outputTokens: 50 },
+      coldStart: false, providerSessionId: 'c-ok', claudeSessionId: 'c-ok', phase: 'execute' as UsagePhase,
+      phaseSource: 'tools' as const,
+      phaseTotals: { ...zeroPhaseTotals(), execute: { ...zero(), outputTokens: 50 } },
+    }
+    stubDeps({ liveSessionIds: () => ['ok-1'], factsFor: () => facts, usageFor: () => [good] })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(sent.filter(x => x.body.event === 'hydra.session.usage').length).toBe(1)
+    expect(_deliveredCountForTesting(), 'the happy path still advances').toBe(1)
+  })
+
+  // `for (const usage of final)` -> `final.slice(0, 1)` survived the whole suite:
+  // a session dying with spend in two phases lost one phase's final event. A
+  // delivered baseline has to exist first, or the cold-start path collapses the
+  // window to a single zero-delta row and the fan-out is never exercised.
+  test('a death with spend in two phases emits a final event for each', async () => {
+    const claudeId = uniqueClaudeId('deathsplit')
+    const planted = plantTranscript(claudeId, turnLines('a', 5, ['Edit']))
+    cleanups.push(planted.cleanup)
+    registry.set('ds-1', sessionInfo({ sessionId: 'ds-1', threadId: 'T-ds', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('ds-1'))
+    let live = ['ds-1']
+    stubDeps({ liveSessionIds: () => live, usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+
+    const fire = registerWithIntervals()
+    emit('session:bridge-registered', { sessionId: 'ds-1', threadId: 'T-ds' })
+    fire(); await tick()
+    sent.length = 0
+
+    // Spend in two phases since that baseline, then die.
+    appendFileSync(planted.path, turnLines('b', 20, ['Edit']) + turnLines('c', 70, ['Agent']))
+    live = []
+    registry.delete('ds-1')
+    emit('session:death', { sessionId: 'ds-1', threadId: 'T-ds', wasOwner: true, tmuxName: 'x', deadAt: 9, claudeSessionId: claudeId })
+    await tick()
+
+    // One dispatch carries every phase, so read the raw wire array — `body` is
+    // only its first entry, which is what made the fan-out invisible.
+    const finals = sent.flatMap(x => ((x.raw as any[]) ?? [x.body]))
+      .filter(b => b.event === 'hydra.session.usage' && String(b.event_id).includes(':ufinal:'))
+    expect(finals.map(b => b.properties.phase).sort(), 'both phases report at death')
+      .toEqual(['execute', 'review'])
+    expect(new Set(finals.map(b => b.event_id)).size, 'under distinct ids').toBe(2)
+    expect(finals.find(b => b.properties.phase === 'review')!.properties.deltaOutputTokens).toBe(70)
+    expect(sent.map(x => x.body.event), 'and the death event still lands').toContain('hydra.session.death')
+    expect(sent.filter(x => String(x.body.event_id).includes(':ufinal:')).length,
+      'in ONE dispatch, not one per phase').toBe(1)
+  })
+
+  test('a window spanning two phases emits one event per phase', async () => {
+    const claudeId = uniqueClaudeId('split')
+    const planted = plantTranscript(claudeId, turnLines('a', 1, ['Edit']))
+    cleanups.push(planted.cleanup)
+    registry.set('split-1', sessionInfo({ sessionId: 'split-1', threadId: 'T-split', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('split-1'))
+    stubDeps({ liveSessionIds: () => ['split-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    // The cold row carries the cursor's phase, not a hardcoded default: a
+    // session already editing when the daemon first sees it must not bank its
+    // baseline under 'plan'. `phase: next.phase` -> `phase: 'plan'` survived.
+    const cold = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
+    expect(cold.phase, 'the fixture already used Edit').toBe('execute')
+    expect(cold.coldStart).toBe(1)
+    sent.length = 0
+    appendFileSync(planted.path, turnLines('b', 20, ['Edit']) + turnLines('c', 300, ['Agent']))
+    fire(); await tick()
+
+    const usage = sent.filter(x => x.body.event === 'hydra.session.usage').flatMap(x => x.raw as any[])
+    const byPhase = new Map(usage.map(b => [b.properties.phase, b.properties]))
+    expect([...byPhase.keys()].sort(), 'both phases report').toEqual(['execute', 'review'])
+    expect(byPhase.get('execute')!.deltaOutputTokens, 'the edit turn').toBe(20)
+    expect(byPhase.get('review')!.deltaOutputTokens, 'the delegating turn').toBe(300)
+    expect(byPhase.get('execute')!.phaseSource).toBe('tools')
+
+    // The documented contract: cumulative* stays session-wide and identical, so
+    // LAST(cumulative*) per claudeSessionId still means lifetime spend.
+    expect(byPhase.get('execute')!.cumulativeOutputTokens).toBe(321)
+    expect(byPhase.get('review')!.cumulativeOutputTokens).toBe(321)
+    const ids = usage.map(b => b.event_id)
+    expect(new Set(ids).size, 'and neither event overwrites the other').toBe(ids.length)
+  })
+
+  // The tick banks rows[0]'s baseline for the whole SESSION, which is only
+  // right because every row of one read carries the same object. Banking
+  // rows.at(-1), or every row, both survived the suite.
+  test('every phase row of one read shares one baseline object', async () => {
+    const claudeId = uniqueClaudeId('share')
+    const planted = plantTranscript(claudeId, turnLines('a', 1, ['Edit']))
+    cleanups.push(planted.cleanup)
+    registry.set('share-1', sessionInfo({ sessionId: 'share-1', threadId: 'T-share', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('share-1'))
+    let rows: ReturnType<typeof defaultUsageFor> = []
+    stubDeps({
+      liveSessionIds: () => ['share-1'], factsFor: factsFromRegistry,
+      usageFor: (id, hint) => { rows = defaultUsageFor(id, hint); return rows },
+    })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    appendFileSync(planted.path, turnLines('b', 20, ['Edit']) + turnLines('c', 300, ['Agent']))
+    fire(); await tick()
+
+    expect(rows.length, 'two phases moved').toBe(2)
+    expect(rows.every(r => r.phaseTotals === rows[0]!.phaseTotals)).toBe(true)
+    expect(rows.every(r => r.totals === rows[0]!.totals)).toBe(true)
+  })
+
+  // usageBodies has two refusals — no user, and a short body list — and each
+  // survives the suite alone because the other covers it. With both gone the
+  // tick dispatches [], which resolves ok and banks a window nothing sent.
+  test('no resolvable user emits nothing and banks no baseline', async () => {
+    const claudeId = uniqueClaudeId('nouser')
+    const planted = plantTranscript(claudeId, turnLines('a', 5, ['Edit']))
+    cleanups.push(planted.cleanup)
+    registry.set('nouser-1', sessionInfo({ sessionId: 'nouser-1', threadId: 'T-nouser', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('nouser-1'))
+    // Two drivers and no RAINDROP_USER_ID: resolveUserId cannot pick one.
+    stubDeps({
+      liveSessionIds: () => ['nouser-1'], factsFor: factsFromRegistry, usageFor: defaultUsageFor,
+      allowedUsers: () => new Set([DRIVER, 'U-SECOND']),
+    })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(sent.filter(x => x.body.event === 'hydra.session.usage'), 'nothing egresses').toHaveLength(0)
+    expect(_deliveredCountForTesting(), 'and no baseline advanced').toBe(0)
+  })
+
+  // A protocol run is a fact the daemon holds, so it takes the whole window
+  // rather than letting the tool reading split it.
+  test('a session inside a review protocol reports review, however its tools read', async () => {
+    const claudeId = uniqueClaudeId('proto')
+    const planted = plantTranscript(claudeId, usageLine('a', BASELINE))
+    cleanups.push(planted.cleanup)
+    registry.set('proto-1', sessionInfo({ sessionId: 'proto-1', threadId: 'T-proto', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('proto-1'))
+    stubDeps({
+      liveSessionIds: () => ['proto-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      protocolPhaseFor: () => 'review',
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    appendFileSync(planted.path, turnLines('b', 5, ['Edit']))
+    fire(); await tick()
+    const last = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
+    expect(last.phase, 'the run outranks the Edit').toBe('review')
+    expect(last.phaseSource).toBe('protocol')
+    expect(last.deltaOutputTokens, 'and it still carries the whole window').toBe(5)
+  })
+
+  // A critic replies inside its own run. `report` is the one phase a tool can
+  // pick outright rather than latch, so it is the sharpest test that the force
+  // suppresses the tool reading rather than merely outranking the latch.
+  test('a report turn inside a forced window folds in rather than splitting off', async () => {
+    const claudeId = uniqueClaudeId('protorep')
+    const planted = plantTranscript(claudeId, usageLine('a', BASELINE))
+    cleanups.push(planted.cleanup)
+    registry.set('protorep-1', sessionInfo({ sessionId: 'protorep-1', threadId: 'T-protorep', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('protorep-1'))
+    stubDeps({
+      liveSessionIds: () => ['protorep-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      protocolPhaseFor: () => 'review',
+    })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    sent.length = 0
+    appendFileSync(planted.path, turnLines('b', 5, ['Edit']) + turnLines('c', 40, ['mcp__plugin_slack_slack__slack_send_message']))
+    fire(); await tick()
+
+    const rows = sent.filter(x => x.body.event === 'hydra.session.usage').flatMap(x => x.raw as any[])
+    expect(rows.map(b => b.properties.phase), 'one row, not one per phase').toEqual(['review'])
+    expect(rows[0]!.properties.phaseSource).toBe('protocol')
+    expect(rows[0]!.properties.deltaOutputTokens, 'the reply is folded in, not split off as report').toBe(45)
   })
 
   // Every other rotation test calls defaultUsageFor directly, so `delivered` is
@@ -1318,7 +1682,7 @@ describe('raindrop: events', () => {
     expect(usageDispatches[0].raw.length, 'carrying all three events').toBe(3)
     expect(new Set(usageDispatches[0].raw.map((b: any) => b.properties.tmuxName)).size).toBe(1)
     expect(usageDispatches[0].raw.map((b: any) => b.event_id).sort())
-      .toEqual(planted.map(x => `${x.id}:usage:${NOW}`).sort())
+      .toEqual(planted.map(x => usageEventId(x.id, String(NOW), 'plan')).sort())
 
     // "recorded" has to keep counting events, or batching silently divides the
     // operator's only throughput number by the batch size.
@@ -1420,9 +1784,9 @@ describe('raindrop: events', () => {
     const info = sessionInfo({ sessionId: 'neg-1', threadId: 'T-neg', claudeSessionId: idA })
     registry.set('neg-1', info)
     cleanups.push(() => registry.delete('neg-1'))
-    expect(defaultUsageFor('neg-1')?.totals.outputTokens).toBe(500)
+    expect(only(defaultUsageFor('neg-1'))?.totals.outputTokens).toBe(500)
     info.claudeSessionId = idB
-    const after = defaultUsageFor('neg-1')
+    const after = only(defaultUsageFor('neg-1'))
     // Suppressed is fine; a reported negative is not.
     if (after) expect(after.delta.outputTokens, 'the restart must reach the base').toBeGreaterThanOrEqual(0)
     expect(after?.totals.outputTokens ?? 0, 'and the totals must follow the new file').toBe(0)
@@ -1436,9 +1800,9 @@ describe('raindrop: events', () => {
     cleanups.push(planted.cleanup)
     registry.set('tr-1', sessionInfo({ sessionId: 'tr-1', threadId: 'T-tr', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('tr-1'))
-    expect(defaultUsageFor('tr-1')?.totals.outputTokens).toBe(60)
+    expect(only(defaultUsageFor('tr-1'))?.totals.outputTokens).toBe(60)
     writeFileSync(planted.path, oneLine('b', 5))
-    const after = defaultUsageFor('tr-1')
+    const after = only(defaultUsageFor('tr-1'))
     expect(after?.totals.outputTokens, 'the re-read is the new truth').toBe(5)
     expect(after?.delta.outputTokens, 'a restart is a baseline, not negative spend').toBe(0)
   })
@@ -1468,7 +1832,7 @@ describe('raindrop: events', () => {
     cleanups.push(() => registry.delete('rot-1'))
     defaultUsageFor('rot-1')
     info.claudeSessionId = idB
-    const after = defaultUsageFor('rot-1')
+    const after = only(defaultUsageFor('rot-1'))
     expect(after?.totals.outputTokens, 'cumulative follows the new transcript').toBe(7)
     expect(after?.delta.outputTokens, 'the new transcript is a baseline too').toBe(0)
   })
@@ -1480,11 +1844,11 @@ describe('raindrop: events', () => {
     cleanups.push(plantTranscript(claudeId, oneLine('a', 400_000)).cleanup)
     registry.set('res-1', sessionInfo({ sessionId: 'res-1', threadId: 'T-res', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('res-1'))
-    expect(defaultUsageFor('res-1')?.delta.outputTokens).toBe(0)
+    expect(only(defaultUsageFor('res-1'))?.delta.outputTokens).toBe(0)
     // the successor: new hydra sessionId, same transcript, no cursor of its own
     registry.set('res-2', sessionInfo({ sessionId: 'res-2', threadId: 'T-res', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('res-2'))
-    const u = defaultUsageFor('res-2')
+    const u = only(defaultUsageFor('res-2'))
     expect(u?.totals.outputTokens, 'the transcript lifetime is still reported').toBe(400_000)
     expect(u?.delta.outputTokens, 'none of it was spent by the successor').toBe(0)
   })
@@ -1541,7 +1905,7 @@ describe('raindrop: events', () => {
     const ids = sent.map(x => x.body.event_id)
     expect(new Set(ids).size, `two events sharing an id overwrite: ${ids.join(', ')}`).toBe(ids.length)
     // The final read happened at the instant of death, not the tick moment.
-    const finalUsage = sent.find(x => x.body.event === 'hydra.session.usage' && String(x.body.event_id).endsWith(':final'))
+    const finalUsage = sent.find(x => x.body.event === 'hydra.session.usage' && String(x.body.event_id).includes(':ufinal:'))
     expect(finalUsage?.body.timestamp, 'stamped at deadAt').toBe(new Date(9).toISOString())
   })
 
@@ -1553,7 +1917,7 @@ describe('raindrop: events', () => {
     // The cursor exists, but the session must NOT be live when register()
     // runs — otherwise it seeds `tracked` and the early return never fires.
     stubDeps({ liveSessionIds: () => [], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
-    expect(defaultUsageFor('nb-1')?.totals.outputTokens).toBe(5)
+    expect(only(defaultUsageFor('nb-1'))?.totals.outputTokens).toBe(5)
     expect(_usageCursorCountForTesting()).toBe(1)
     dispose = register()
     // never bridge-registered, so the handler has no facts and returns early
@@ -1579,7 +1943,7 @@ describe('raindrop: events', () => {
     dispose = register()
     emit('session:bridge-registered', { sessionId: 'bf-1', threadId: 'T-bf' })
     await tick()
-    expect(defaultUsageFor('bf-1')?.totals.outputTokens).toBe(5)
+    expect(only(defaultUsageFor('bf-1'))?.totals.outputTokens).toBe(5)
     expect(_usageCursorCountForTesting()).toBe(1)
     boom = true
     emit('session:death', { sessionId: 'bf-1', threadId: 'T-bf', wasOwner: true, tmuxName: 'x', deadAt: 3, claudeSessionId: claudeId })
@@ -2870,6 +3234,52 @@ describe('raindrop: codex usage from the rollout', () => {
     expect([ev.deltaInputTokens, ev.deltaCacheReadTokens, ev.deltaOutputTokens, ev.coldStart]).toEqual([100, 400, 30, 0])
   })
 
+  // The phase split is read from tool names, and a Codex rollout carries none.
+  // Omitted rather than defaulted: a `plan` nobody read would be indistinguishable
+  // on a dashboard from one a transcript voted for.
+  test('a Codex event carries no phase, and keeps the event id it always had', async () => {
+    codexSession('cx-nophase', 'thread-a', tc(1000, 600, 50))
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    const ev = lastUsage()
+    expect(ev.phase).toBeUndefined()
+    expect(ev.phaseSource).toBeUndefined()
+    const id = String(sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.event_id)
+    expect(id.startsWith('cx-nophase:usage:'), `phase-less ids are unchanged, got ${id}`).toBe(true)
+    // One baseline map holds it, not both: the two are keyed by the same session id.
+    expect(_deliveredCountForTesting(), 'banked once').toBe(1)
+  })
+
+  // The phase split forked one short-circuit into two, and only the phase copy
+  // kept this coverage. Without it a Codex session whose POST fails and then
+  // goes quiet never re-sends: it waits until it next spends, and measures that
+  // delta from a stale baseline.
+  test('a Codex window whose send failed is re-sent, not lost', async () => {
+    const { path } = codexSession('cx-retry', 'thread-r', tc(1000, 600, 50))
+    let failNext = false
+    stubDeps({
+      liveSessionIds: () => ['cx-retry'], usageFor: defaultUsageFor, factsFor: factsFromRegistry,
+      recordDryRun: (endpoint, body) => {
+        if (failNext && (body as any)[0]?.event === 'hydra.session.usage') throw new Error('502 from raindrop')
+        record(endpoint, body)
+      },
+    })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    expect(lastUsage().coldStart, 'baseline delivered').toBe(1)
+
+    failNext = true
+    appendFileSync(path, tc(1500, 1000, 80))
+    fire(); await tick()
+    expect(lastUsage().deltaOutputTokens, 'nothing new reached the wire').toBe(0)
+
+    // No further spend, so only the un-banked baseline can bring it back.
+    failNext = false
+    fire(); await tick()
+    expect(lastUsage().deltaOutputTokens, 'the dropped window is re-sent').toBe(30)
+  })
+
   test('a decrease after a delivered baseline is a cold start with no delta', async () => {
     const { path } = codexSession('cx-2', 'thread-a', tc(1_460_000, 1_000_000, 900))
     const fire = registerWithIntervals()
@@ -2894,7 +3304,7 @@ describe('raindrop: codex usage from the rollout', () => {
     expect([ev.coldStart, ev.deltaInputTokens, ev.deltaOutputTokens]).toEqual([1, 0, 0])
   })
 
-  test('a Claude usage event is what it was, plus providerSessionId', async () => {
+  test('a Claude usage event is what it was, plus providerSessionId and the phase', async () => {
     const claudeId = uniqueClaudeId('snap')
     cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { id: 'm', usage: { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: 3, cache_read_input_tokens: 4 } } }) + '\n').cleanup)
     registry.set('snap-1', sessionInfo({ sessionId: 'snap-1', threadId: 'T-snap', tmuxName: 'atlas', claudeSessionId: claudeId }))
@@ -2909,6 +3319,9 @@ describe('raindrop: codex usage from the rollout', () => {
       deltaInputTokens: 0, deltaOutputTokens: 0, deltaCacheCreateTokens: 0, deltaCacheReadTokens: 0,
       coldStart: 1, claudeSessionId: claudeId,
       providerSessionId: claudeId,
+      // Nothing in this window voted: the fixture has no tool_use at all, and
+      // no tool can vote `plan` in any case.
+      phase: 'plan', phaseSource: 'latched',
     })
   })
 })

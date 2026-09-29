@@ -13,6 +13,7 @@ graph TD
     shared_constants["constants.ts"]
     shared_tool-definitions["tool-definitions.ts"]
     daemon_raindrop-payload["raindrop-payload.ts"]
+    daemon_usage-phase["usage-phase.ts"]
   end
 
   subgraph core["Core"]
@@ -225,9 +226,12 @@ graph TD
   daemon_raindrop --> daemon_sessions
   daemon_raindrop --> shared_constants
   daemon_raindrop --> daemon_usage
+  daemon_raindrop --> daemon_usage-phase
   daemon_raindrop --> daemon_raindrop-payload
   daemon_raindrop-payload --> shared_constants
+  daemon_raindrop-payload --> daemon_usage-phase
   daemon_usage --> shared_constants
+  daemon_usage --> daemon_usage-phase
   daemon_commands_global --> daemon_config
   daemon_commands_global --> daemon_sessions
   daemon_commands_global --> daemon_bridge-transport

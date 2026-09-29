@@ -13,7 +13,9 @@ import {
   type SessionFacts,
 } from '../raindrop-payload.js'
 import { sentimentForReaction, isDeleteReaction, SENTIMENT_REACTIONS, DELETE_REACTIONS } from '../../shared/constants.js'
-import { usageExtra } from '../raindrop.js'
+import { usageExtra, usageEventId } from '../raindrop.js'
+import { USAGE_PHASES, USAGE_PHASE_SOURCES } from '../usage-phase.js'
+import { zeroPhaseTotals } from '../usage.js'
 const zero = () => ({ inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0 })
 
 const CREATED = 1789752921748
@@ -147,6 +149,7 @@ describe('raindrop-payload: extra is a declared channel, not an open one', () =>
   test('every key usageExtra produces is on the allowlist', () => {
     const produced = Object.keys(usageExtra({
       totals: zero(), delta: zero(), providerSessionId: 'c-1', claudeSessionId: 'c-1', coldStart: false,
+      phase: 'plan', phaseSource: 'tools', phaseTotals: zeroPhaseTotals(),
     }))
     expect(produced.length, 'the producer must actually produce keys').toBeGreaterThan(8)
     for (const key of produced) {
@@ -157,6 +160,7 @@ describe('raindrop-payload: extra is a declared channel, not an open one', () =>
   test('the allowlist holds nothing beyond the producers', () => {
     const produced = new Set(Object.keys(usageExtra({
       totals: zero(), delta: zero(), providerSessionId: 'c-1', claudeSessionId: 'c-1', coldStart: false,
+      phase: 'plan', phaseSource: 'tools', phaseTotals: zeroPhaseTotals(),
     })))
     // `reason` is the sweep-failure producer's, not usageExtra's.
     const extras = [...EXTRA_PROPERTY_KEYS].filter(k => !produced.has(k))
@@ -169,6 +173,62 @@ describe('raindrop-payload: extra is a declared channel, not an open one', () =>
     expect(JSON.stringify(body)).not.toContain('Acme-Corp')
     expect(body.properties.someFutureKey).toBeUndefined()
     expect(body.properties.deltaInputTokens, 'a declared key still rides').toBe(7)
+  })
+
+  // phase and phaseSource are enums, so they get their SET, not the 64-char
+  // charset rule the other extras live under. A charset gate would happily ship
+  // any short string a future caller passed under these names.
+  test.each(['reviewing', 'REVIEW', 'plan ', '', 'execute; drop table', 'constructor', '__proto__'])(
+    'an out-of-set phase %p never reaches the wire', (bad) => {
+      const body = ev({ extra: { phase: bad, deltaInputTokens: 7 } })
+      expect(body.properties.phase, 'the set is the gate').toBeUndefined()
+      expect(body.properties.deltaInputTokens, 'and a good key beside it still rides').toBe(7)
+    })
+
+  test.each(['tool', 'Protocol', 'subagents', 'guess'])(
+    'an out-of-set phaseSource %p never reaches the wire', (bad) => {
+      expect(ev({ extra: { phaseSource: bad } }).properties.phaseSource).toBeUndefined()
+    })
+
+  // The numeric fast path used to run before the gate lookup, so a number rode
+  // out under a key whose whole point is that it is a closed set of strings.
+  test('a numeric phase is refused, like any other out-of-set value', () => {
+    const body = ev({ extra: { phase: 42 as never, phaseSource: 7 as never, deltaInputTokens: 9 } })
+    expect(body.properties.phase).toBeUndefined()
+    expect(body.properties.phaseSource).toBeUndefined()
+    expect(body.properties.deltaInputTokens, 'an ungated number still rides').toBe(9)
+  })
+
+  test.each([...USAGE_PHASES])('the in-set phase %s does ride', (good: string) => {
+    expect(ev({ extra: { phase: good } }).properties.phase).toBe(good)
+  })
+
+  test.each([...USAGE_PHASE_SOURCES])('the in-set phaseSource %s does ride', (good: string) => {
+    expect(ev({ extra: { phaseSource: good } }).properties.phaseSource).toBe(good)
+  })
+
+  // The tick id used to be `${sessionId}:usage:${at}:${phase}`, which put
+  // 'execute' at exactly the 64-char EVENT_ID ceiling with a real 36-char
+  // session id. One more character and that phase alone was refused while the
+  // others shipped — and the delivered baseline advanced past it anyway.
+  describe('the usage event id', () => {
+    const SID = '6071daa0-1111-2222-3333-444455556666' // 36, the randomUUID shape
+    test.each([...USAGE_PHASES])('fits well inside the id gate for %s', (phase) => {
+      const id = usageEventId(SID, String(1789800000000), phase)
+      expect(id.length, `${id} is ${id.length} chars`).toBeLessThanOrEqual(56)
+      expect(safeEventId(id), 'and survives the gate').toBe(id)
+    })
+
+    // 'review' and 'report' share three letters at two. A collision would make
+    // two phases overwrite each other on the wire.
+    test('every phase gets a distinct id', () => {
+      const ids = USAGE_PHASES.map(p => usageEventId(SID, '1', p))
+      expect(new Set(ids).size).toBe(USAGE_PHASES.length)
+    })
+
+    test('the death id is distinct from a tick id', () => {
+      expect(usageEventId(SID, 'final', 'plan')).not.toBe(usageEventId(SID, '1', 'plan'))
+    })
   })
 
   // A key gate alone would still ship a path under a permitted name.

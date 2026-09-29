@@ -326,7 +326,11 @@ export class ClaudeEngine implements EngineAdapter {
     const transcript = transcriptPathFor(info.claudeSessionId)
     if (!transcript) return null
     const next = drainUsage(transcript, (prev as UsageCursor | undefined) ?? newCursor())
-    return { totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next, restarted: next.restartedFromZero === true }
+    return {
+      totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next,
+      restarted: next.restartedFromZero === true,
+      phases: { totals: next.phaseTotals, current: next.latch, voted: next.voted },
+    }
   }
 
   surface(info: SessionInfo): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }

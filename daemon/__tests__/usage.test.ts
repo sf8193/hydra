@@ -3,7 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlin
 import { randomUUID } from 'crypto'
 import { homedir, tmpdir } from 'os'
 import { join, sep } from 'path'
-import { drainUsage, latestCwd, newCursor, projectDirName, projectDirNames, projectsRoot, readUsageDelta, totalsChanged, transcriptPathFor, zeroTotals } from '../usage.js'
+import { drainUsage, latestCwd, newCursor, projectDirName, projectDirNames, projectsRoot, readUsageDelta, sumTotals, turnsIn, totalsChanged, transcriptPathFor, zeroPhaseTotals, zeroTotals } from '../usage.js'
+import { USAGE_PHASES } from '../usage-phase.js'
 import { plantTranscript, uniqueClaudeId } from './projects-fixture.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 import { TEST_STATE_DIR } from '../../test-setup.js'
@@ -137,18 +138,38 @@ describe('usage: nothing but integers can escape', () => {
   const planted = () => fixture(
     JSON.stringify({
       cwd: '/Users/kevin/secret-repo',
-      message: { role: 'assistant', id: `msg_${SECRETS[0]}`, content: SECRETS.join(' '), usage: { output_tokens: 3 } },
+      message: {
+        role: 'assistant', id: `msg_${SECRETS[0]}`, usage: { output_tokens: 3 },
+        // A real tool_use block, so the classifier actually RUNS against
+        // attacker-controlled text. With a bare string here toolNamesFrom
+        // returned [], no phase was ever chosen, and the guards below asserted
+        // nothing — a classifier that lifted its input passed both.
+        content: [{ type: 'tool_use', name: `mcp__${SECRETS[1]}__reply`, input: { prompt: SECRETS.join(' ') } }],
+      },
       summary: SECRETS.join(' | '),
     }) + '\n',
   )
 
-  // The cursor is memory-only and carries two strings lifted from the file. If
-  // either is ever widened onto SessionUsage, this is what has to be revisited.
-  test('the cursor holds transcript text, and exactly two fields of it', () => {
+  // The cursor is memory-only. Two of its strings are lifted from the file and
+  // one (latch) is derived; if any is ever widened onto SessionUsage, this is
+  // what has to be revisited.
+  test('the cursor holds transcript text, and exactly three string fields', () => {
     const cursor = readUsageDelta(planted(), newCursor())
     expect(cursor.lastMessageId, 'the id comes straight off the line').toContain(SECRETS[0])
     expect(Object.keys(cursor).filter(k => typeof (cursor as Record<string, unknown>)[k] === 'string').sort())
-      .toEqual(['lastMessageId', 'path'])
+      .toEqual(['lastMessageId', 'latch', 'path'])
+  })
+
+  // latch is the third string. The fixture's tool name is attacker-controlled
+  // and DOES drive the classifier, so this pins that the cursor keeps the set
+  // member rather than the name that selected it.
+  test('the phase is drawn from its own closed set, not from the transcript', () => {
+    const cursor = readUsageDelta(planted(), newCursor())
+    // The measurement, not a tautology: the planted reply tool routed the spend
+    // to `report` while leaving the latch where it was. Asserting membership or
+    // secret-absence beside an exact match would restate this one, not test it.
+    expect(cursor.phaseTotals.report.outputTokens).toBe(3)
+    expect(cursor.latch, 'replying is momentary — the latch must not follow it').toBe('plan')
   })
 
   // What actually matters: the wire. An earlier version of this test built
@@ -214,7 +235,7 @@ describe('usage: one turn, many content blocks', () => {
 
   test('a re-read from the top does not carry a stale id across the reset', () => {
     const f = fixture(block('msg_a'))
-    const c = readUsageDelta(f, { offset: 9_999, totals: { inputTokens: 5, outputTokens: 5, cacheCreateTokens: 5, cacheReadTokens: 5 }, lastMessageId: 'msg_a' })
+    const c = readUsageDelta(f, { offset: 9_999, totals: { inputTokens: 5, outputTokens: 5, cacheCreateTokens: 5, cacheReadTokens: 5 }, lastMessageId: 'msg_a', latch: 'review', phaseTotals: zeroPhaseTotals(), voted: [] })
     expect(c.totals.outputTokens, 'the rotated file must be counted afresh').toBe(336)
   })
 })
@@ -397,6 +418,26 @@ describe('usage: drainUsage', () => {
     expect(resumed.totals.outputTokens).toBe(128)
   })
 
+  // raindrop.ts banks a read's phaseTotals as a long-lived delivered baseline
+  // and subtracts the next read from it. If a read handed back the buckets its
+  // predecessor still holds, the banked baseline would track the live cursor and
+  // every delta would settle at zero — silently, across a file boundary. The
+  // adapter copies at that seam too; this is the invariant that makes the copy
+  // belt-and-braces rather than load-bearing.
+  test('a read never hands back the buckets the cursor it was given holds', () => {
+    const f = fixture(line({ output_tokens: 5 }))
+    const first = drainUsage(f, newCursor(), 256)
+    const banked = first.phaseTotals
+    appendFileSync(f, line({ output_tokens: 7 }))
+    const second = drainUsage(f, first, 256)
+    expect(second.phaseTotals, 'a fresh record, not the one handed in').not.toBe(banked)
+    for (const p of USAGE_PHASES) {
+      expect(second.phaseTotals[p], `${p}'s bucket is fresh too`).not.toBe(banked[p])
+    }
+    expect(banked.plan.outputTokens, 'the banked baseline did not move').toBe(5)
+    expect(second.phaseTotals.plan.outputTokens).toBe(12)
+  })
+
   test('draining twice with nothing new does not move the cursor or the totals', () => {
     const f = fixture(line({ output_tokens: 5 }).repeat(10))
     const first = drainUsage(f, newCursor(), 256)
@@ -492,5 +533,259 @@ describe('usage: the suite never writes into a real Claude config dir', () => {
       expect(planted.path.startsWith(projectsRoot())).toBe(true)
       expect(planted.path.startsWith(claudeConfigDir()), 'never outside the isolated config dir').toBe(true)
     } finally { planted.cleanup() }
+  })
+})
+
+// A real transcript writes ONE content block per line, every line repeating the
+// turn's whole usage envelope. So the tool_use blocks land on exactly the lines
+// the envelope dedupe throws away. Reading tool names after the dedupe sees
+// almost no tools at all.
+// Exported so the turn-assembly half can be exercised without touching fs; the
+// export claimed that and nothing imported it.
+describe('usage: turnsIn assembles a turn from its lines', () => {
+  const l = (o: unknown) => JSON.stringify(o) + '\n'
+
+  test('the lines of one turn collapse to one usage envelope plus every tool', () => {
+    const turns = turnsIn(
+      l({ message: { id: 'a', usage: { output_tokens: 5 } } })
+      + l({ message: { id: 'a', usage: { output_tokens: 5 }, content: [{ type: 'tool_use', name: 'Edit' }] } })
+      + l({ message: { id: 'a', usage: { output_tokens: 5 }, content: [{ type: 'tool_use', name: 'Agent' }] } }),
+    )
+    expect(turns.length, 'one turn, not three').toBe(1)
+    expect(turns[0]!.tools, 'tools from lines the envelope dedupe would drop').toEqual(['Edit', 'Agent'])
+    expect(turns[0]!.usage?.output_tokens).toBe(5)
+  })
+
+  test('two ids are two turns, and a malformed line is skipped not thrown', () => {
+    const turns = turnsIn(l({ message: { id: 'a', usage: { output_tokens: 1 } } })
+      + 'not json\n' + l({ message: { id: 'b', usage: { output_tokens: 2 } } }))
+    expect(turns.map(t => t.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('usage: phase is read off the transcript', () => {
+  // Distinct magnitudes per counter, so a dropped or swapped term is visible.
+  const rich = (id: string, n: number, tools: string[] = []) =>
+    JSON.stringify({ message: { id, role: 'assistant', usage: {
+      input_tokens: n * 10, output_tokens: n, cache_creation_input_tokens: n * 100,
+      cache_read_input_tokens: n * 1000 } } }) + '\n'
+    + tools.map(name => JSON.stringify({ message: { id, role: 'assistant', usage: {
+      input_tokens: n * 10, output_tokens: n, cache_creation_input_tokens: n * 100,
+      cache_read_input_tokens: n * 1000 },
+      content: [{ type: 'tool_use', name }] } }) + '\n').join('')
+
+  const turn = (id: string, out: number, tools: string[] = []) =>
+    JSON.stringify({ message: { id, role: 'assistant', usage: { output_tokens: out } } }) + '\n'
+    + tools.map(name =>
+      JSON.stringify({ message: { id, role: 'assistant', usage: { output_tokens: out },
+        content: [{ type: 'tool_use', name, input: { prompt: 'must not escape' } }] } }) + '\n').join('')
+
+  test('a fresh cursor starts in plan', () => {
+    expect(newCursor().latch).toBe('plan')
+    expect(readUsageDelta(fixture(turn('a', 5)), newCursor()).latch).toBe('plan')
+  })
+
+  // A real transcript interleaves the tool_result for one tool_use before the
+  // next tool_use of the SAME message id. Without the structure-line skip the
+  // turn splits and its tools are read apart: measured over 60 transcripts,
+  // 31,174 spurious turns and 2.2% of output tokens moving phase.
+  test('a tool_result between two tool_use lines does not split the turn', () => {
+    const head = { id: 'a', role: 'assistant', usage: { output_tokens: 7 } }
+    const body = JSON.stringify({ message: head }) + '\n'
+      + JSON.stringify({ message: { ...head, content: [{ type: 'tool_use', name: 'reply' }] } }) + '\n'
+      + JSON.stringify({ message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] } }) + '\n'
+      + JSON.stringify({ message: { ...head, content: [{ type: 'tool_use', name: 'Write' }] } }) + '\n'
+
+    expect(turnsIn(body).map(t => t.tools), 'one turn, both tools').toEqual([['reply', 'Write']])
+    const c = readUsageDelta(fixture(body), newCursor())
+    expect(c.phaseTotals.execute.outputTokens, 'the Write is seen, so this is not a report turn').toBe(7)
+    expect(c.phaseTotals.report.outputTokens).toBe(0)
+  })
+
+  // Voting on the tail alone let a late Edit outrank an Agent that latchVote
+  // ranks above it, and the latch then mislabelled every tool-less turn after
+  // it — unbounded, unlike the straddling turn's own envelope.
+  test('a turn split across reads is classified on all its tools, not the last ones', () => {
+    const head = { id: 'a', role: 'assistant', usage: { output_tokens: 10 } }
+    const L = (o: object) => JSON.stringify({ message: o }) + '\n'
+    const f = fixture(L(head) + L({ ...head, content: [{ type: 'tool_use', name: 'Agent' }] }))
+    let c = readUsageDelta(f, newCursor())
+    expect(c.latch).toBe('review')
+
+    appendFileSync(f, L({ ...head, content: [{ type: 'tool_use', name: 'Edit' }] }))
+    c = readUsageDelta(f, c)
+    expect(c.latch, 'delegating outranks editing; the seam must not invert it').toBe('review')
+
+    appendFileSync(f, L({ id: 'b', role: 'assistant', usage: { output_tokens: 500 } }))
+    c = readUsageDelta(f, c)
+    expect(c.phaseTotals.review.outputTokens, 'exactly what one read would give').toBe(510)
+    expect(c.phaseTotals.execute.outputTokens).toBe(0)
+  })
+
+  // The cursor crosses an `unknown` boundary at the engine adapter. A read with
+  // no new bytes returns the latch untouched by the turn loop, so this repair is
+  // the only thing standing between a bogus value and phaseTotals[undefined],
+  // which throws into the tick's catch and stops that session reporting for good.
+  test('an idle read repairs a latch outside the set', () => {
+    const f = fixture(turn('a', 5))
+    const first = readUsageDelta(f, newCursor())
+    const idle = readUsageDelta(f, { ...first, latch: 'bogus' as never })
+    expect(idle.latch, 'no turns ran, so nothing else could have repaired it').toBe('plan')
+
+    appendFileSync(f, turn('b', 9))
+    expect(readUsageDelta(f, idle).phaseTotals.plan.outputTokens).toBe(14)
+  })
+
+  test.each([
+    [['Agent'], 'review'],
+    [['Edit'], 'execute'],
+  ])('a turn using %p leaves the cursor latched in %s', (tools, phase) => {
+    const c = readUsageDelta(fixture(turn('a', 5, tools as string[])), newCursor())
+    expect(c.latch).toBe(phase as never)
+    expect(c.phaseTotals[phase as 'review'].outputTokens, 'and its tokens land in that phase').toBe(5)
+  })
+
+  test('voted names only the phases a turn in this read actually chose', () => {
+    const c = readUsageDelta(fixture(turn('a', 5, ['Edit']) + turn('b', 7, ['Bash'])), newCursor())
+    expect(c.voted, 'Bash says nothing; the edit voted').toEqual(['execute'])
+    expect(c.phaseTotals.execute.outputTokens, 'but both turns bill to execute').toBe(12)
+  })
+
+  test('a read with no votes at all reports none, though it still bills', () => {
+    const c = readUsageDelta(fixture(turn('a', 5, ['Bash'])), newCursor())
+    expect(c.voted).toEqual([])
+    expect(c.phaseTotals.plan.outputTokens).toBe(5)
+  })
+
+  test('a reply counts as a vote for report', () => {
+    const c = readUsageDelta(fixture(turn('a', 5, ['mcp__x__reply'])), newCursor())
+    expect(c.voted).toEqual(['report'])
+  })
+
+  // One drain is one telemetry window, so a vote in an early pass still
+  // describes it. With a per-pass reset the last pass silently wins.
+  test('votes survive a multi-pass drain', () => {
+    const body = turn('a', 5, ['Agent']) + turn('b', 7, ['Bash']).repeat(20)
+    const c = drainUsage(fixture(body), newCursor(), 256)
+    expect(c.voted, 'the Agent is in the first pass only').toEqual(['review'])
+  })
+
+  // Momentary: the tokens land in `report`, the latch does not follow. Latching
+  // it billed runs of up to 135 consecutive Bash turns as reporting on four real
+  // transcripts — 45-83% of spend against the ledger's 17%.
+  test('a reply bills its own turn to report and leaves the latch alone', () => {
+    const t = turn('a', 5, ['Edit']) + turn('b', 7, ['mcp__plugin_discord_discord__reply']) + turn('c', 11, ['Bash'])
+    const c = readUsageDelta(fixture(t), newCursor())
+    expect(c.phaseTotals.report.outputTokens, 'only the replying turn').toBe(7)
+    expect(c.phaseTotals.execute.outputTokens, 'the edit AND the Bash turn after the reply').toBe(16)
+    expect(c.latch).toBe('execute')
+  })
+
+  // The dedupe regression guard. Delete the pre-dedupe tool read and this fails:
+  // the Agent block is on a line whose envelope is skipped.
+  test('tools on a deduped line still move the phase', () => {
+    const c = readUsageDelta(fixture(turn('a', 5, ['Agent'])), newCursor())
+    expect(c.latch, 'the tool_use block is never the first line of its turn').toBe('review')
+    expect(c.totals.outputTokens, 'while the envelope is still counted once').toBe(5)
+  })
+
+  // The case Kevin named: edit, then hand off to reviewers. If the phase moved
+  // after the turn was attributed, these 7 tokens would be billed to execute.
+  test('a turn that edits and then delegates bills the handoff to review', () => {
+    const body = turn('a', 3, ['Edit']) + turn('b', 7, ['Agent'])
+    const c = readUsageDelta(fixture(body), newCursor())
+    expect(c.phaseTotals.execute.outputTokens, 'the edit turn is execute').toBe(3)
+    expect(c.phaseTotals.review.outputTokens, 'the delegating turn is already review').toBe(7)
+    expect(c.phaseTotals.plan.outputTokens).toBe(0)
+  })
+
+  test('the phase survives a drain, so a quiet window keeps spending in it', () => {
+    const f = fixture(turn('a', 3, ['Agent']))
+    const first = readUsageDelta(f, newCursor())
+    expect(first.latch).toBe('review')
+    appendFileSync(f, turn('b', 11) + turn('c', 13))
+    const second = readUsageDelta(f, first)
+    expect(second.latch, 'nothing said otherwise').toBe('review')
+    expect(second.phaseTotals.review.outputTokens, 'the quiet turns are review spend').toBe(27)
+  })
+
+  test('a rotated transcript restarts in plan rather than inheriting a phase', () => {
+    const f = fixture(turn('a', 3, ['Agent']))
+    const first = readUsageDelta(f, newCursor())
+    writeFileSync(f, turn('z', 4))
+    const second = readUsageDelta(f, first)
+    expect(second.restartedFromZero).toBe(true)
+    expect(second.latch, 'a new transcript inherits nothing').toBe('plan')
+    expect(second.phaseTotals.review.outputTokens, 'and neither do its buckets').toBe(0)
+  })
+
+  // All four counters: the split and sumTotals were only ever exercised on
+  // outputTokens, so dropping a cacheCreate or cacheRead term survived the suite
+  // — and a cache-read-only window being filtered out loses those tokens for good.
+  test('the phase buckets always add up to the session total, on every counter', () => {
+    const body = rich('a', 1, ['Edit']) + rich('b', 2, ['Agent']) + rich('c', 3)
+      + rich('d', 4, ['mcp__plugin_slack_slack__slack_send_message'])
+    const c = readUsageDelta(fixture(body), newCursor())
+    expect(sumTotals(USAGE_PHASES.map(p => c.phaseTotals[p])),
+      'no turn may be dropped or double-counted by the split').toEqual(c.totals)
+    expect(c.totals, 'and every counter is actually carried').toEqual({
+      inputTokens: 100, outputTokens: 10, cacheCreateTokens: 1000, cacheReadTokens: 10000,
+    })
+  })
+
+  test('a window whose only spend is cache-read still registers as spend', () => {
+    const only = JSON.stringify({ message: { id: 'z', role: 'assistant',
+      usage: { cache_read_input_tokens: 4242 } } }) + '\n'
+    const c = readUsageDelta(fixture(only), newCursor())
+    expect(c.totals.cacheReadTokens).toBe(4242)
+    expect(totalsChanged(zeroTotals(), c.totals), 'or the window is filtered out and lost').toBe(true)
+  })
+
+  test('a turn straddling two reads is not re-counted, but its late tools still land', () => {
+    const f = fixture(JSON.stringify({ message: { id: 'a', role: 'assistant', usage: { output_tokens: 9 } } }) + '\n')
+    const first = readUsageDelta(f, newCursor())
+    expect(first.latch).toBe('plan')
+    appendFileSync(f, JSON.stringify({ message: { id: 'a', role: 'assistant', usage: { output_tokens: 9 },
+      content: [{ type: 'tool_use', name: 'Agent' }] } }) + '\n')
+    const second = readUsageDelta(f, first)
+    expect(second.totals.outputTokens, 'the envelope counts once across the seam').toBe(9)
+    expect(second.latch, 'but the tool on the far side still moves the phase').toBe('review')
+  })
+})
+
+// An id-less line can be neither deduped nor grouped, so it stands alone.
+// `line()` above produces exactly this shape, so every pre-existing fixture in
+// this file rides it — but no phase assertion did.
+describe('usage: turns with no message id still bucket correctly', () => {
+  const bare = (out: number, tools: string[] = []) =>
+    JSON.stringify({ message: { role: 'assistant', usage: { output_tokens: out },
+      content: tools.map(name => ({ type: 'tool_use', name })) } }) + '\n'
+
+  // The whole block below uses id-less lines only, so an id-less line FOLLOWING
+  // an id-bearing one never ran. Inheriting the open turn's id there would feed
+  // it to the dedupe and discard its tokens.
+  test('an id-less line after an id-bearing turn is not absorbed into it', () => {
+    const withId = JSON.stringify({ message: { id: 'a', role: 'assistant', usage: { output_tokens: 4 } } }) + '\n'
+    const c = readUsageDelta(fixture(withId + bare(11)), newCursor())
+    expect(turnsIn(withId + bare(11)).length, 'two turns, not one').toBe(2)
+    expect(c.totals.outputTokens, 'and both sets of tokens count').toBe(15)
+  })
+
+  test('an id-less turn is attributed to the phase its own tools chose', () => {
+    const c = readUsageDelta(fixture(bare(10) + bare(20, ['Agent']) + bare(30)), newCursor())
+    expect(c.phaseTotals.plan.outputTokens, 'before any vote').toBe(10)
+    expect(c.phaseTotals.review.outputTokens, 'the voting turn and the one that latched after it').toBe(50)
+    expect(c.totals.outputTokens).toBe(60)
+  })
+
+  test('the bucket sum invariant holds on the id-less path too', () => {
+    const c = readUsageDelta(fixture(bare(3, ['Edit']) + bare(7) + bare(11, ['Agent'])), newCursor())
+    const summed = USAGE_PHASES.reduce((n, p) => n + c.phaseTotals[p].outputTokens, 0)
+    expect(summed).toBe(c.totals.outputTokens)
+  })
+
+  // Two id-less turns in a row must not merge into one.
+  test('consecutive id-less turns both count', () => {
+    expect(readUsageDelta(fixture(bare(5) + bare(5)), newCursor()).totals.outputTokens).toBe(10)
   })
 })
