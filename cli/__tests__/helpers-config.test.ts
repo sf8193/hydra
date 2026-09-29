@@ -184,6 +184,16 @@ test('resolveConfig: byteModel comes from the state-dir HYDRA_MODEL', () => {
   }
 })
 
+test('resolveConfig: state-dir HYDRA_MODEL wins over a stale ambient value (tmux env freeze)', () => {
+  try {
+    process.env.HYDRA_MODEL = 'claude-sonnet-5[1m]' // simulates a frozen tmux-server env
+    writePlatformEnv("HYDRA_MODEL='claude-sonnet-5-5[1m]'\n")
+    expect(resolveConfig(TEST_PLATFORM).byteModel).toBe('claude-sonnet-5-5[1m]')
+  } finally {
+    rmSync(testChannelDir, { recursive: true, force: true })
+  }
+})
+
 test('a whitespace-only SPAWN_CWD never reaches byteCwd as whitespace', () => {
   process.env.SPAWN_CWD = '   '
   const r = sourceStateDirEnv(stateDir)
