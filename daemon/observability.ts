@@ -76,14 +76,10 @@ export type ConversationForensics = {
   // real failure mode, not a hypothetical one.
   lastAssistantFullText: string | null
   lastAssistantTs: string | null
-  // Known limitation (round-2 adversarial review): this describes the last
-  // turn that produced TEXT, not necessarily the true last turn — a later
-  // tool-only turn updates lastToolPending without touching this. A caller
-  // gating on both together can see a real, complete, on-time text answer
-  // rejected because a *subsequent* unrelated tool call is still pending.
-  // Fails safe (falls back to a working fallback, never misrepresents), so
-  // left as a precision gap rather than fixed — not worth the complexity of
-  // threading "which turn" through both fields for a safe-side miss.
+  // A later tool_use entry (tool-only, or split from the text into its own entry)
+  // resets this to false: a complete answer must not be followed by a tool call.
+  // That fails safe — a real answer followed by an unrelated tool call is just not
+  // treated as complete, never misrepresented.
   lastAssistantTurnComplete: boolean
   // Claude logs queue-operation enqueue when a channel message arrives, and dequeue
   // (between turns) or remove (injected into the running turn) when consumed. Backlog =
@@ -184,6 +180,10 @@ function forensicsFromTail(transcriptPath: string, tailBytes: number): Conversat
         // real answer if this turn didn't also reach for a tool.
         if (sawTextThisTurn) {
           lastAssistantTurnComplete = lastTurnToolIds.size === 0 && msg.stop_reason !== 'tool_use'
+        } else if (lastTurnToolIds.size > 0) {
+          // Claude logs each content block as its own entry: text, then the tool_use in a LATER entry.
+          // A tool call after the text means that text was narration, not the answer.
+          lastAssistantTurnComplete = false
         }
         if (msg.usage) tailApiCalls++
       }

@@ -332,6 +332,19 @@ describe('readConversationForensics', () => {
     expect(f?.lastToolPending).toBe(true)
   })
 
+  test('narration split from its tool_use into separate entries, tool already answered → still incomplete', () => {
+    const path = tmpFile('forensics-split-narration.jsonl')
+    writeFileSync(path,
+      line({ type: 'queue-operation', operation: 'enqueue', timestamp: '2026-09-21T21:09:00.000Z' }) +
+      line({ type: 'queue-operation', operation: 'dequeue', timestamp: '2026-09-21T21:09:01.000Z' }) +
+      line({ type: 'assistant', timestamp: '2026-09-21T21:10:00.000Z', message: { stop_reason: null, content: [{ type: 'text', text: 'Let me check that...' }] } }) +
+      line({ type: 'assistant', timestamp: '2026-09-21T21:10:01.000Z', message: { stop_reason: null, content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash' }] } }) +
+      line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }] } }))
+    const f = readConversationForensics(path)
+    expect(f?.lastToolPending).toBe(false)
+    expect(f?.lastAssistantTurnComplete).toBe(false)
+  })
+
   // Regression test for a real bug found in adversarial review: a tail read
   // can start mid-line, so the old code unconditionally dropped the first
   // line of the tail as "presumably partial" — but when the read offset
@@ -481,7 +494,7 @@ describe('turnOutcome composition', () => {
     })
   }
 
-  // Claude turn end from the live status file (status idle + this message taken up + answer after the last dequeue).
+  // Claude turn end from the transcript (this message taken up + completed answer after the last dequeue); status only names the transcript.
   describe('claudeTurnOutcome: live status', () => {
     const live = { ...claude, tmuxName: 'cedar' } as SessionInfo
     // A consume in view (T+1000) before the answer (T+5000): the state of a normally delivered message.
@@ -495,11 +508,11 @@ describe('turnOutcome composition', () => {
       expect(o.confirmedComplete).toBe(true)
       expect(o.answer()).toBe('transcript answer')
     })
-    test('busy, waiting, or unreadable status → not confirmed', () => {
-      expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status: 'busy' })).confirmedComplete).toBe(false)
-      expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status: 'waiting' })).confirmedComplete).toBe(false)
-      expect(claudeTurnOutcome(live, T, withStatus(null)).confirmedComplete).toBe(false)
-      expect(claudeTurnOutcome(claude, T, withStatus(idle)).confirmedComplete).toBe(false) // no tmuxName
+    test('status does not gate: shell (background work), busy, waiting or unreadable still confirm a completed answer', () => {
+      for (const status of ['shell', 'busy', 'waiting']) {
+        expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status })).confirmedComplete).toBe(true)
+      }
+      expect(claudeTurnOutcome(live, T, withStatus(null)).confirmedComplete).toBe(true) // registry id fallback
     })
     test('a message still queued behind a running turn → not confirmed', () => {
       const f = forensics({ lastAssistantFullText: 'turn A answer', lastAssistantTs: iso(T + 5000), queueBacklog: 1 })
