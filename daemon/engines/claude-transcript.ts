@@ -36,7 +36,7 @@ export function transcriptAnswer(claudeSessionId: string, sinceMs: number, src: 
 
 type TurnInfo = { sessionId: string; claudeSessionId?: string; tmuxName?: string }
 
-// Idle ends the turn that consumed this message only if a consume is in view
+// A completed answer ends the turn that consumed this message only if a consume is in view
 // (none means the log format drifted, or the enqueue was cut from the tail: unknown,
 // not "nothing queued"), nothing is still queued, and the answer post-dates it.
 function settledAfterConsume(f: ConversationForensics): boolean {
@@ -44,10 +44,10 @@ function settledAfterConsume(f: ConversationForensics): boolean {
   return new Date(f.lastAssistantTs).getTime() > new Date(f.lastConsumeTs).getTime()
 }
 
-// The answer is the transcript. Turn end comes from Claude's own status file
-// when it can be read; otherwise confirmedComplete stays false and the reply
-// guard falls back to waiting out silence. The transcript id comes from the
-// status file when present (it follows /clear); the registry's is the fallback.
+// The answer is the transcript, and so is turn end: a completed (non-tool_use) answer after the
+// consume of this message. Status is not consulted (background shells hold it at `shell` long after
+// the turn ends). The transcript id comes from the status file when present (it follows /clear);
+// the registry's is the fallback.
 // One snapshot per outcome, taken on first use: `live`, confirmedComplete and answer() describe
 // the same status and transcript, and the poller builds an outcome every tick just for
 // activityAt, so nothing is read before it is asked (the transcript only when its answer is).
@@ -69,7 +69,7 @@ export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: Transcri
   return {
     get live() { const s = st().status; return s ? liveStateOf(s) : null },
     get confirmedComplete() {
-      return st().status === 'idle' && !!f() && answerFrom(f(), sinceMs) !== null && settledAfterConsume(f()!)
+      return !!f() && answerFrom(f(), sinceMs) !== null && settledAfterConsume(f()!)
     },
     answer: () => answerFrom(f(), sinceMs),
   }
