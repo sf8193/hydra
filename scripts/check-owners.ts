@@ -6,6 +6,8 @@
 
 import { execFileSync } from 'child_process'
 import { readFileSync } from 'fs'
+import { join } from 'path'
+import { fileURLToPath } from 'url'
 
 type Rule = {
   name: string
@@ -94,8 +96,11 @@ export function violations(files: Array<{ path: string; text: string }>): string
 }
 
 if (import.meta.main) {
-  const paths = execFileSync('git', ['ls-files', '*.ts', '*.sh', '*.yml', '*.json'], { encoding: 'utf8' }).split('\n').filter(Boolean)
-  const found = violations(paths.map(path => ({ path, text: readFileSync(path, 'utf8') })))
+  const env = { ...process.env }
+  for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k]
+  const cwd = fileURLToPath(new URL('../', import.meta.url))
+  const paths = execFileSync('git', ['ls-files', '*.ts', '*.sh', '*.yml', '*.json'], { cwd, env, encoding: 'utf8' }).split('\n').filter(Boolean)
+  const found = violations(paths.map(path => ({ path, text: readFileSync(join(cwd, path), 'utf8') })))
   if (found.length) {
     console.error(`check-owners: ${found.length} violation(s)\n${found.join('\n')}`)
     process.exit(1)

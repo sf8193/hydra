@@ -207,6 +207,17 @@ export function projectFromGitDir(common: string): string | undefined {
   return last.endsWith('.git') ? last.slice(0, -4) : last
 }
 
+const GIT_PROBE_KEEP = new Set(['PATH', 'HOME', 'XDG_CONFIG_HOME'])
+const GIT_PROBE_DROP = new Set([
+  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE',
+  'GIT_CEILING_DIRECTORIES',
+])
+
+export function gitProbeEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(base).filter(([k]) =>
+    GIT_PROBE_KEEP.has(k) || (k.startsWith('GIT_') && !GIT_PROBE_DROP.has(k))))
+}
+
 export function defaultProjectFor(repoPath: string): string | undefined {
   // Bun.spawnSync throws rather than returning a code when git is absent, and
   // this runs inside register(), whose throw would leave the daemon half-booted.
@@ -214,7 +225,7 @@ export function defaultProjectFor(repoPath: string): string | undefined {
     const proc = Bun.spawnSync(
       ['git', '-C', repoPath, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
       // ponytail: fixed timeout; a loaded CI runner has hit this and read "not a repo" for a git that just hadn't answered yet (seen Sep 2026).
-      { stdout: 'pipe', stderr: 'ignore', timeout: 5000 },
+      { stdout: 'pipe', stderr: 'ignore', timeout: 5000, env: gitProbeEnv() },
     )
     if (proc.exitCode !== 0) return undefined
     const common = proc.stdout.toString().trim()
