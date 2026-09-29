@@ -17,15 +17,20 @@ import type { ProviderId } from '../engines/engine-adapter.js'
 
 const RESTART_PENDING_FILE = join(STATE_DIR, 'restart-pending.json')
 
-async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
+export async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
   let chatId = msg.channelId
-  const resolvedThreadId = registry.resolveThreadId(msg)
-  if (msg.isThread && resolvedThreadId !== msg.channelId) {
+  if (msg.isThread) {
+    const resolvedThreadId = registry.resolveThreadId(msg)
     const staleId = registry.getByThread(resolvedThreadId)
     if (staleId && registry.has(staleId)) {
       const staleInfo = registry.get(staleId)!
       if (executionAlive(staleInfo)) {
+        // Live session already owns this thread: reusing resolvedThreadId as chatId
+        // would just re-enter it (doSpawnSession treats an already-thread chatId as
+        // "reuse this thread"). Redirect to its parent channel so a genuinely new
+        // sibling thread gets created instead.
         try { await gateway.send(msg.channelId, `Thread already has a live session (**${staleInfo.tmuxName}**). Spawning in a new thread instead.`, { replyTo: msg.id }) } catch {}
+        chatId = staleInfo.anchorChannelId ?? msg.channelId
       } else {
         chatId = resolvedThreadId
       }
