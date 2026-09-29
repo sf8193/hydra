@@ -317,6 +317,14 @@ export function scratchSessionIds(info: SessionInfo, sessions: Iterable<SessionI
   return [...ids]
 }
 
+/** Splits scratchSessionIds' output so a force-cleanup opt-in never reaches a predecessor's
+ * handoff history — only the id that is genuinely the killed session's own. */
+export function splitOwnFromHistory(allIds: readonly string[], ownId: string | undefined): { own: string[]; history: string[] } {
+  const own = ownId && allIds.includes(ownId) ? [ownId] : []
+  const history = allIds.filter(id => id !== ownId)
+  return { own, history }
+}
+
 // skipWorktreeDestroy: the conversation continues elsewhere (handoff, reattach) — keep the
 // Hydra worktree and scratchpads. keepScratch: only the scratchpads (a resume or fork of
 // this conversation still names their paths, and a resume reuses the scratchpad itself).
@@ -375,9 +383,10 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
 
       // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort).
-      // Work at risk (uncommitted, mid-operation, not on a remote) is kept, never destroyed.
+      // Work at risk (uncommitted, mid-operation, not on a remote) is kept, never destroyed —
+      // unless info.forceWorktreeCleanup (see SpawnOpts).
       void (async () => {
-        const kept = await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch)
+        const kept = await destroyWorktree(info.worktreeRepo!, info.worktreePath!, branch, info.forceWorktreeCleanup)
         if (kept) void safeSend(info.threadId, `⚠️ Worktree \`${info.worktreePath}\` (branch \`${branch}\`) kept: ${kept}. Remove it once the work is safe.`).catch(() => {})
       })().catch(err => {
         process.stderr.write(`daemon: worktree cleanup failed for ${info.tmuxName}: ${err}\n`)
@@ -386,9 +395,17 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
     // Worktrees the session — and, for a thread owner, its handoff predecessors, whose
     // worktrees a handoff deliberately kept for it — made under their scratchpads: same rule.
-    const scratchIds = !opts?.skipWorktreeDestroy && !opts?.keepScratch ? scratchSessionIds(info, registry.values(), threadRegistry.get(info.threadId)?.sessionHistory ?? []) : []
-    if (scratchIds.length) {
-      void cleanScratchWorktrees(scratchIds.flatMap(id => sessionScratchpads(id))).then(({ removed, kept }) => {
+    // forceWorktreeCleanup is this session's own opt-in: it never applies to a predecessor's
+    // history, whose work a handoff may have deliberately kept.
+    const allScratchIds = !opts?.skipWorktreeDestroy && !opts?.keepScratch ? scratchSessionIds(info, registry.values(), threadRegistry.get(info.threadId)?.sessionHistory ?? []) : []
+    const { own: ownScratchIds, history: historyScratchIds } = splitOwnFromHistory(allScratchIds, info.claudeSessionId)
+    if (allScratchIds.length) {
+      void Promise.all([
+        cleanScratchWorktrees(ownScratchIds.flatMap(id => sessionScratchpads(id)), info.forceWorktreeCleanup),
+        cleanScratchWorktrees(historyScratchIds.flatMap(id => sessionScratchpads(id))),
+      ]).then(([own, history]) => {
+        const removed = [...own.removed, ...history.removed]
+        const kept = [...own.kept, ...history.kept]
         if (removed.length) process.stderr.write(`daemon: ${info.tmuxName}: removed ${removed.length} scratchpad worktree(s)\n`)
         if (kept.length) {
           process.stderr.write(`daemon: ${info.tmuxName}: kept scratchpad worktree(s): ${kept.map(k => `${k.path} (${k.reason})`).join(', ')}\n`)
@@ -801,6 +818,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
     initiator: opts?.initiator,
     ephemeral: opts?.ephemeral,
+    forceWorktreeCleanup: opts?.forceWorktreeCleanup,
     ...(isHeadless ? { headless: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
     adapter,

@@ -1,12 +1,15 @@
 // Kill cleans up worktrees a session made under its own scratchpad, but only ones
 // holding nothing to lose (clean, every commit on a remote).
 
-import { describe, test, expect, afterAll } from 'bun:test'
+import { describe, test, expect, afterAll, spyOn } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { cleanScratchWorktrees, createWorktree, destroyWorktree, sessionScratchpads } from '../worktree-manager.js'
-import { scratchSessionIds } from '../session-lifecycle.js'
+import * as worktreeManager from '../worktree-manager.js'
+import { scratchSessionIds, splitOwnFromHistory, killSession } from '../session-lifecycle.js'
+import type { SessionInfo } from '../sessions.js'
+import { threadRegistry } from '../sessions.js'
 
 const root = mkdtempSync(join(tmpdir(), 'scratch-wt-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -19,7 +22,8 @@ const run = (...args: string[]) => {
 const git = (cwd: string, ...args: string[]) => run('git', '-C', cwd, ...args)
 
 function repoWithRemote(): string {
-  const remote = join(root, 'remote.git'), repo = join(root, 'repo')
+  const base = mkdtempSync(join(root, 'rwr-'))
+  const remote = join(base, 'remote.git'), repo = join(base, 'repo')
   run('git', 'init', '-q', '--bare', remote)
   run('git', 'init', '-q', '-b', 'main', repo)
   git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init')
@@ -52,8 +56,25 @@ describe('scratchpad worktree cleanup', () => {
     expect(git(repo, 'worktree', 'list')).not.toContain(clean)
   })
 
+  test('force=true removes a dirty/unpushed scratch worktree that would otherwise be kept', async () => {
+    const repo = repoWithRemote()
+    const scratch = join(root, 'proj', 'sess-force', 'scratchpad')
+    mkdirSync(scratch, { recursive: true })
+    const wt = (name: string) => { const p = join(scratch, name); git(repo, 'worktree', 'add', '-q', '--detach', p, 'origin/main'); return p }
+    const dirty = wt('dirty'); writeFileSync(join(dirty, 'new.txt'), 'x')
+
+    const unforced = await cleanScratchWorktrees(sessionScratchpads('sess-force', root))
+    expect(unforced.kept).toEqual([{ path: dirty, reason: 'uncommitted changes' }])
+    expect(existsSync(dirty)).toBe(true)
+
+    const forced = await cleanScratchWorktrees(sessionScratchpads('sess-force', root), true)
+    expect(forced.removed).toEqual([dirty])
+    expect(forced.kept).toEqual([])
+    expect(existsSync(dirty)).toBe(false)
+  })
+
   test('never follows a symlink out of the scratchpad; keeps a worktree mid-rebase', async () => {
-    const repo = join(root, 'repo')
+    const repo = repoWithRemote()
     const outside = join(root, 'outside-wt')
     git(repo, 'worktree', 'add', '-q', '--detach', outside, 'origin/main')
     const scratch = join(root, 'proj', 'sess-3', 'scratchpad')
@@ -93,6 +114,20 @@ describe('whose scratchpads a kill cleans', () => {
   test('a guest: only its own', () => {
     const guest = rec({ claudeSessionId: 'g', sessionType: 'thread_guest' })
     expect(scratchSessionIds(guest, [guest], history)).toEqual(['g'])
+  })
+
+  test('splitOwnFromHistory: force-cleanup opt-in must scope to only the killed session\'s own id, never a handoff predecessor\'s', () => {
+    const me = rec({ claudeSessionId: 'me' })
+    const all = scratchSessionIds(me, [me], history) // ['me', 'pred-1', 'pred-2']
+    const { own, history: hist } = splitOwnFromHistory(all, me.claudeSessionId)
+    expect(own).toEqual(['me'])
+    expect(hist.sort()).toEqual(['pred-1', 'pred-2'])
+  })
+
+  test('splitOwnFromHistory: no own id (killed before discovery) — everything falls into history, nothing is forced', () => {
+    const { own, history: hist } = splitOwnFromHistory(['pred-1', 'pred-2'], undefined)
+    expect(own).toEqual([])
+    expect(hist.sort()).toEqual(['pred-1', 'pred-2'])
   })
 })
 
@@ -150,5 +185,63 @@ describe('Hydra worktrees: kept work is never destroyed later', () => {
     const clean = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/c', dirSuffix: 'app-c' })
     expect(await destroyWorktree(repo, clean.worktreePath, 'wt/c')).toBeNull()
     expect(existsSync(clean.worktreePath)).toBe(false)
+  })
+
+  test('destroyWorktree with force=true removes uncommitted/unpushed work instead of keeping it', async () => {
+    const { base, repo } = workspace()
+    const dirty = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/fd', dirSuffix: 'app-fd' })
+    writeFileSync(join(dirty.worktreePath, 'wip.txt'), 'x')
+    expect(await destroyWorktree(repo, dirty.worktreePath, 'wt/fd', true)).toBeNull()
+    expect(existsSync(dirty.worktreePath)).toBe(false)
+
+    const unpushed = await createWorktree({ repoName: 'app', spawnCwd: base, branchName: 'wt/fu', dirSuffix: 'app-fu' })
+    commit(unpushed.worktreePath, 'unpushed work')
+    expect(await destroyWorktree(repo, unpushed.worktreePath, 'wt/fu', true)).toBeNull()
+    expect(existsSync(unpushed.worktreePath)).toBe(false)
+  })
+})
+
+describe('killSession: forceWorktreeCleanup wiring', () => {
+  const tick = () => new Promise(r => setTimeout(r, 0))
+
+  test('reaches destroyWorktree, and the own scratch pass, but never the handoff-predecessor scratch pass', async () => {
+    const destroyCalls: Array<{ force: boolean | undefined }> = []
+    const scratchCalls: Array<{ ids: string[]; force: boolean | undefined }> = []
+    const destroySpy = spyOn(worktreeManager, 'destroyWorktree').mockImplementation((async (_repo: string, _path: string, _branch: string, force?: boolean) => {
+      destroyCalls.push({ force }); return null
+    }) as any)
+    const cleanSpy = spyOn(worktreeManager, 'cleanScratchWorktrees').mockImplementation((async (dirs: string[], force?: boolean) => {
+      scratchCalls.push({ ids: dirs, force }); return { removed: [], kept: [] }
+    }) as any)
+
+    const threadId = 'kfc-thread'
+    threadRegistry.set(threadId, {
+      threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
+      sessionHistory: [{ sessionId: 'pred', tmuxName: 'pred', originType: 'spawn', startedAt: 1, messageCount: 0, claudeSessionId: 'pred-1' }],
+    } as any)
+
+    const info = {
+      sessionId: 'kfc-me', tmuxName: 'kfc', threadId, createdAt: Date.now(), lastActive: Date.now(),
+      listening: false, engine: 'claude', sessionType: 'thread_owner', ephemeral: true,
+      adapter: { stop: async () => {} }, claudeSessionId: 'me-2',
+      worktreeRepo: '/fake/repo', worktreePath: '/fake/repo/../.worktrees/kfc', worktreeBranch: 'wt/kfc',
+      forceWorktreeCleanup: true,
+    } as unknown as SessionInfo
+
+    try {
+      await killSession(info, 'test')
+      await tick(); await tick()
+
+      expect(destroyCalls).toEqual([{ force: true }])
+      // killSession invokes cleanScratchWorktrees(own, force) then cleanScratchWorktrees(history)
+      // in that array-literal order — Promise.all preserves it, so index pins own vs. history.
+      expect(scratchCalls.length).toBe(2)
+      expect(scratchCalls[0].force).toBe(true)   // own (info.claudeSessionId): forced
+      expect(scratchCalls[1].force).toBeUndefined() // history (the handoff predecessor): never forced
+    } finally {
+      destroySpy.mockRestore()
+      cleanSpy.mockRestore()
+      threadRegistry.threads.delete(threadId)
+    }
   })
 })

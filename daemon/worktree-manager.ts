@@ -216,10 +216,10 @@ export async function reattachWorktree(repoDir: string, worktreePath: string, br
  * Best-effort — logs failures but doesn't throw. Safe to call if already gone.
  * Work at risk (see workAtRisk) is kept, not destroyed: returns why, else null.
  */
-export async function destroyWorktree(repoDir: string, worktreePath: string, branch: string): Promise<string | null> {
+export async function destroyWorktree(repoDir: string, worktreePath: string, branch: string, force?: boolean): Promise<string | null> {
   // Serialize per-repo so a destroy can't race a concurrent add/reattach on the same repo.
   return withRepoLock(repoDir, async () => {
-    const risk = await workAtRisk(repoDir, worktreePath, branch)
+    const risk = force ? null : await workAtRisk(repoDir, worktreePath, branch)
     if (risk) {
       process.stderr.write(`daemon: worktree: kept ${worktreePath} (${branch}): ${risk}\n`)
       return risk
@@ -369,16 +369,16 @@ function worktreesIn(dir: string): string[] {
  * commit on HEAD is on a remote. Anything else is kept and reported. Branches are left
  * alone. Gitignored files (node_modules, build output) are treated as disposable.
  */
-export async function cleanScratchWorktrees(dirs: string[]): Promise<{ removed: string[]; kept: Array<{ path: string; reason: string }> }> {
+export async function cleanScratchWorktrees(dirs: string[], force?: boolean): Promise<{ removed: string[]; kept: Array<{ path: string; reason: string }> }> {
   const removed: string[] = []
   const kept: Array<{ path: string; reason: string }> = []
   for (const wt of dirs.flatMap(worktreesIn)) {
     try {
-      const risk = await workAtRisk(wt, wt)
+      const risk = force ? null : await workAtRisk(wt, wt)
       if (risk) { if (existsSync(wt)) kept.push({ path: wt, reason: risk }); continue } // gone meanwhile: another kill got it
       const commonDir = (await execAsync('git', ['-C', wt, 'rev-parse', '--git-common-dir'], { timeout: 10_000 })).stdout.trim()
       const repo = dirname(resolve(wt, commonDir))
-      await withRepoLock(repo, () => execAsync('git', ['-C', repo, 'worktree', 'remove', wt], { timeout: 10_000 }))
+      await withRepoLock(repo, () => execAsync('git', ['-C', repo, 'worktree', 'remove', ...(force ? ['--force'] : []), wt], { timeout: 10_000 }))
       removed.push(wt)
     } catch (err) {
       if (existsSync(wt)) kept.push({ path: wt, reason: `could not verify (${err instanceof Error ? err.message.split('\n')[0] : err})` })

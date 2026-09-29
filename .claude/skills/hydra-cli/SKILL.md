@@ -27,7 +27,7 @@ Two CLI primitives: **spawn** creates sessions, **deliver** messages existing on
 hydra spawn "<prompt>" \
   --initiator "<who>" \
   --idempotency-key "<key>" \
-  [--model <alias>] [--quiet] [--ephemeral]
+  [--model <alias>] [--quiet] [--ephemeral] [--force-cleanup]
 ```
 
 **Both `--initiator` and `--idempotency-key` are required.** No defaults.
@@ -77,6 +77,7 @@ Run `hydra spawn --help` for current aliases, or check `shared/constants.ts`. Om
 | `--message <id>` | Anchor thread to this message (requires `--channel`) |
 | `--quiet` | Suppress spawn announcement in chat |
 | `--ephemeral` | Auto-kill on `[done]`, skip death visuals |
+| `--force-cleanup` | Remove worktree + branch on kill even with uncommitted/unpushed work — for review-only spawns that never keep work |
 
 ### Reading the Response
 

@@ -54,6 +54,7 @@ export type SessionInfo = {
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
   artifactsBackfilled?: boolean  // one-time history scan done (skips the fetch on later restarts)
   ephemeral?: boolean
+  forceWorktreeCleanup?: boolean  // see SpawnOpts
   headless?: boolean       // no Discord thread — worker communicates via send_to_thread
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
@@ -183,6 +184,7 @@ export type SpawnOpts = {
   label?: SessionLabel  // what the session is for, for cost grouping
   inheritedLabel?: SessionLabel  // bucket handed down by a parent or dead predecessor; loses to `label` and to a flag on the topic
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
+  forceWorktreeCleanup?: boolean  // remove worktrees on kill even with uncommitted/unpushed work (caller opt-in, e.g. a review-only cron)
   model?: string         // per-spawn model override (falls back to spawnModel() / HYDRA_MODEL)
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
   trigger?: string       // what caused this spawn, for the announce line (e.g. 'spawn:', 'review 2:', 'CLI'); falls back to originType

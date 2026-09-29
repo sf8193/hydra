@@ -67,13 +67,14 @@ function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?
 // ---------------------------------------------------------------------------
 
 async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
-  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, quiet, model } = req.params as {
+  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, forceWorktreeCleanup, quiet, model } = req.params as {
     prompt?: string
     initiator?: string
     idempotencyKey?: string
     channel?: string
     message?: string
     ephemeral?: boolean
+    forceWorktreeCleanup?: boolean
     quiet?: boolean
     model?: string
   }
@@ -94,7 +95,7 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
 
   let result
   try {
-    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, trigger: 'CLI' })
+    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
   } catch (err) {
     updateIdempotency(idempotencyKey, { status: 'failed' })
     throw err

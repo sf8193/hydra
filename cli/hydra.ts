@@ -69,6 +69,7 @@ Spawn options:
   --read-thread [limit] [thread-id]    Read thread history first (default: 50 msgs from --channel, max 200)
   --quiet                              Suppress spawn announcement in chat
   --ephemeral                          Auto-kill on [done], skip death visuals
+  --force-cleanup                      Remove worktree + branch on kill even with uncommitted/unpushed work (unpushed commits become unreachable)
 
 Model aliases:
 ${Object.entries(MODEL_ALIASES).map(([k, v]) => `  ${k.padEnd(16)} → ${v}`).join('\n')}
@@ -132,8 +133,9 @@ async function main(): Promise<void> {
     process.exit(0)
   }
 
-  // Session management commands (require running daemon)
-  const socketPath = resolveSocket(daemonName)
+  // Lazy: resolved on first actual use, so a command's own argument validation runs first.
+  let resolvedSocketPath: string | undefined
+  const socketPath = () => resolvedSocketPath ??= resolveSocket(daemonName)
 
   switch (command) {
     case 'spawn': {
@@ -143,6 +145,7 @@ async function main(): Promise<void> {
       let message: string | undefined
       let quiet = false
       let ephemeral = false
+      let forceWorktreeCleanup = false
       let readThreadLimit = 0  // 0 = disabled
       let model: string | undefined
       const promptParts: string[] = []
@@ -160,6 +163,8 @@ async function main(): Promise<void> {
           quiet = true
         } else if (filtered[i] === '--ephemeral') {
           ephemeral = true
+        } else if (filtered[i] === '--force-cleanup') {
+          forceWorktreeCleanup = true
         } else if (filtered[i] === '--read-thread') {
           readThreadLimit = 50  // default
           // peek at next arg — if it's a number, use it as the limit
@@ -168,6 +173,9 @@ async function main(): Promise<void> {
           }
         } else if (filtered[i] === '--model' && i + 1 < filtered.length) {
           model = filtered[++i]
+        } else if (filtered[i].startsWith('--')) {
+          console.error(`error: unknown flag ${filtered[i]}`)
+          process.exit(1)
         } else {
           promptParts.push(filtered[i])
         }
@@ -197,18 +205,18 @@ async function main(): Promise<void> {
       if (readThreadLimit > 0 && channel) {
         prompt = `Read the recent history in this channel for context: fetch_messages(channel="${channel}", limit=${readThreadLimit}). Then continue with the task below.\n\n${prompt}`
       }
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli',
         command: 'spawn',
         id: randomUUID(),
-        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }) },
+        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
       })
       printResponse(response, json)
       break
     }
 
     case 'list': {
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'list', id: randomUUID(), params: {},
       })
       printResponse(response, json)
@@ -221,7 +229,7 @@ async function main(): Promise<void> {
         console.error('error: session name required')
         process.exit(1)
       }
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'status', id: randomUUID(), params: { name },
       })
       printResponse(response, json)
@@ -234,7 +242,7 @@ async function main(): Promise<void> {
         console.error('error: session name required')
         process.exit(1)
       }
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'kill', id: randomUUID(), params: { name },
       })
       printResponse(response, json)
@@ -242,7 +250,7 @@ async function main(): Promise<void> {
     }
 
     case 'health': {
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'health', id: randomUUID(), params: {},
       })
       printResponse(response, json)
@@ -255,7 +263,7 @@ async function main(): Promise<void> {
         console.error('error: idempotency key required')
         process.exit(1)
       }
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'clear-key', id: randomUUID(), params: { key },
       })
       printResponse(response, json)
@@ -268,7 +276,7 @@ async function main(): Promise<void> {
         console.error('error: idempotency key required')
         process.exit(1)
       }
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'check-key', id: randomUUID(), params: { key },
       })
       printResponse(response, json)
@@ -289,7 +297,7 @@ async function main(): Promise<void> {
         process.exit(1)
       }
       const allowUnreviewed = filtered.includes('--allow-unreviewed')
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'factory', id: randomUUID(),
         params: { sub, ...(ticket && { ticket }), ...(allowUnreviewed && { allowUnreviewed }) },
       })
@@ -332,7 +340,7 @@ async function main(): Promise<void> {
 
       if (!initiator) initiator = process.env.USER ?? 'unknown'
 
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'deliver', id: randomUUID(),
         params: {
           ...(thread && { thread }),
@@ -358,7 +366,7 @@ async function main(): Promise<void> {
         console.error('error: session name required. Usage: hydra attach <name>')
         process.exit(1)
       }
-      const response = await sendRequest(socketPath, {
+      const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'status', id: randomUUID(), params: { name, attach: true },
       })
       if (!response.ok) {
