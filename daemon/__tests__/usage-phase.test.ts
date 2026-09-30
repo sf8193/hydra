@@ -6,7 +6,7 @@ import {
 
 describe('usage-phase: what a turn does with its tools', () => {
   test.each([
-    [['Agent'], 'review'], [['Task'], 'review'],
+    [['Agent'], 'review'], [['Task'], 'review'], [['Workflow'], 'review'],
     [['Edit'], 'execute'], [['Write'], 'execute'], [['NotebookEdit'], 'execute'],
   ])('%p latches to %s', (tools, phase) => {
     expect(nextLatch('plan', tools as string[])).toBe(phase as LatchPhase)

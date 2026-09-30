@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { randomUUID } from 'crypto'
-import { join, resolve } from 'path'
+import { basename, dirname, join, resolve } from 'path'
 import { projectsRoot } from '../usage.js'
 import { isUnder } from '../../shared/path-containment.js'
 import { TEST_STATE_DIR } from '../../test-setup.js'
@@ -33,6 +33,37 @@ export function plantTranscript(claudeSessionId: string, body: string): { path: 
   const path = join(dir, `${claudeSessionId}.jsonl`)
   writeFileSync(path, body)
   return { path, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+}
+
+export const subagentsDirOf = (transcript: string, workflowRun?: string): string =>
+  join(dirname(transcript), basename(transcript, '.jsonl'), 'subagents', ...(workflowRun ? ['workflows', workflowRun] : []))
+
+export function plantSubagent(transcript: string, name: string, body: string, workflowRun?: string): string {
+  const dir = subagentsDirOf(transcript, workflowRun)
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, name)
+  writeFileSync(path, body)
+  return path
+}
+
+// Passes containment, then fails to read; a dangling link would not, as the test root sits under /var -> /private/var.
+export function plantUnreadableSubagent(transcript: string, name = 'agent-y.jsonl'): string {
+  const dir = subagentsDirOf(transcript)
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, name)
+  symlinkSync(dirname(transcript), path)
+  return path
+}
+
+export function plantBrokenListing(transcript: string): string {
+  mkdirSync(dirname(subagentsDirOf(transcript)), { recursive: true })
+  writeFileSync(subagentsDirOf(transcript), 'not a directory')
+  return subagentsDirOf(transcript)
+}
+
+export function healSubagent(unreadable: string, body: string): void {
+  rmSync(unreadable)
+  writeFileSync(unreadable, body)
 }
 
 // A real transcript writes one content block per line, every line repeating the

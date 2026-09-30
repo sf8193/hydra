@@ -43,7 +43,7 @@ import { mkdirSync as mkdirp, realpathSync, rmSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { trimRaindropDryrun, startVitalsSnapshots } from '../observability.js'
 import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
-import { plantTranscript, turnLines, uniqueClaudeId } from './projects-fixture.js'
+import { healSubagent, plantSubagent, plantTranscript, plantUnreadableSubagent, turnLines, uniqueClaudeId } from './projects-fixture.js'
 import { fixtureRoot, gitInit } from './git-fixture.js'
 import { __test as protocolTest } from '../protocol-runner.js'
 import { zeroPhaseTotals, type TokenTotals } from '../usage.js'
@@ -1323,6 +1323,65 @@ describe('raindrop: events', () => {
     const carried = sent.filter(x => x.body.event === 'hydra.session.usage').at(-1)!.body.properties
     expect([carried.phase, carried.phaseSource], 'Bash votes nothing').toEqual(['execute', 'latched'])
     expect(carried.deltaOutputTokens, 'still billed, just honestly labelled').toBe(30)
+  })
+
+  test('subagent spend reaches the wire as a review delta, once', async () => {
+    const claudeId = uniqueClaudeId('subwire')
+    const planted = plantTranscript(claudeId, turnLines('a', 5, ['Edit']))
+    cleanups.push(planted.cleanup)
+    registry.set('sw-1', sessionInfo({ sessionId: 'sw-1', threadId: 'T-sw', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('sw-1'))
+    stubDeps({ liveSessionIds: () => ['sw-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    plantSubagent(planted.path, 'agent-x.jsonl', turnLines('s1', 40))
+    fire(); await tick()
+    const rows = () => sent.filter(x => x.body.event === 'hydra.session.usage').map(x => x.body.properties)
+    const review = rows().filter(p => p.phase === 'review')
+    expect(review.map(p => p.deltaOutputTokens)).toEqual([40])
+    expect(review[0].phaseSource, 'the parent latch is execute, so this spend was not carried').toBe('tools')
+    expect(review[0].coldStart, 'a new subagent is spend, not a restart').toBe(0)
+    expect(review[0].cumulativeOutputTokens).toBe(45)
+    const before = rows().length
+    fire(); await tick()
+    expect(rows().length, 'nothing new was spent, so nothing new is sent').toBe(before)
+  })
+
+  test('a subagent unreadable on the cold read does not resend its history once it reads', async () => {
+    const claudeId = uniqueClaudeId('subcold')
+    const planted = plantTranscript(claudeId, turnLines('a', 10, ['Edit']))
+    cleanups.push(planted.cleanup)
+    const agent = plantUnreadableSubagent(planted.path)
+    registry.set('sc-1', sessionInfo({ sessionId: 'sc-1', threadId: 'T-sc', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('sc-1'))
+    stubDeps({ liveSessionIds: () => ['sc-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    healSubagent(agent, turnLines('s1', 1000))
+    fire(); await tick()
+    const rows = sent.filter(x => x.body.event === 'hydra.session.usage').map(x => x.body.properties)
+    expect(rows.some(p => p.deltaOutputTokens === 1000), 'already-delivered history must not come back as a delta').toBe(false)
+    expect(rows.at(-1)!.coldStart, 're-banked instead').toBe(1)
+    expect(rows.at(-1)!.cumulativeOutputTokens).toBe(1010)
+  })
+
+  test('a subagent that heals with no spend yet does not re-bank and drop the next window', async () => {
+    const claudeId = uniqueClaudeId('subempty')
+    const planted = plantTranscript(claudeId, turnLines('a', 10, ['Edit']))
+    cleanups.push(planted.cleanup)
+    const agent = plantUnreadableSubagent(planted.path)
+    registry.set('se-1', sessionInfo({ sessionId: 'se-1', threadId: 'T-se', claudeSessionId: claudeId }))
+    cleanups.push(() => registry.delete('se-1'))
+    stubDeps({ liveSessionIds: () => ['se-1'], usageFor: defaultUsageFor, factsFor: factsFromRegistry })
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    healSubagent(agent, JSON.stringify({ type: 'user', message: { role: 'user', content: 'go' } }) + '\n')
+    fire(); await tick()
+    appendFileSync(planted.path, turnLines('b', 7, ['Edit']))
+    fire(); await tick()
+    const rows = sent.filter(x => x.body.event === 'hydra.session.usage').map(x => x.body.properties)
+    expect(rows.reduce((sum, p) => sum + p.deltaOutputTokens, 0)).toBe(7)
+    expect(rows.at(-1)!.coldStart).toBe(0)
   })
 
   // A bogus phase from the injectable dep would otherwise ride onto the wire as

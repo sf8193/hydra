@@ -19,7 +19,7 @@ import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
 import { parseContextPercent, tmuxHasSession, tmuxWindowActivity } from '../util.js'
 import { claudeConfigDir, contextWindowOf, isKnownModel } from '../../shared/constants.js'
-import { drainUsage, lastContextTokens, newCursor, projectDirName, projectsRoot, transcriptPathFor, type UsageCursor } from '../usage.js'
+import { drainSession, lastContextTokens, newSessionCursor, projectDirName, projectsRoot, transcriptPathFor, type SessionCursor } from '../usage.js'
 import { claudeTurnOutcome } from './claude-transcript.js'
 import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
@@ -325,10 +325,10 @@ export class ClaudeEngine implements EngineAdapter {
   usageTotals(info: UsageSubject, prev: unknown): UsageReading | null {
     const transcript = transcriptPathFor(info.claudeSessionId)
     if (!transcript) return null
-    const next = drainUsage(transcript, (prev as UsageCursor | undefined) ?? newCursor())
+    const next = drainSession(transcript, (prev as SessionCursor | undefined) ?? newSessionCursor())
     return {
-      totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next,
-      restarted: next.restartedFromZero === true,
+      totals: { ...next.totals }, providerSessionId: info.claudeSessionId!, cursor: next.cursor,
+      restarted: next.restarted,
       phases: { totals: next.phaseTotals, current: next.latch, voted: next.voted },
     }
   }

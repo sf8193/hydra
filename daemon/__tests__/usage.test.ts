@@ -1,11 +1,11 @@
-import { describe, test, expect, afterEach } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync, appendFileSync } from 'fs'
+import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, appendFileSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { homedir, tmpdir } from 'os'
-import { join, sep } from 'path'
-import { drainUsage, latestCwd, newCursor, projectDirName, projectDirNames, projectsRoot, readUsageDelta, sumTotals, turnsIn, totalsChanged, transcriptPathFor, zeroPhaseTotals, zeroTotals } from '../usage.js'
+import { basename, dirname, join, sep } from 'path'
+import { drainSession, drainUsage, latestCwd, newCursor, newSessionCursor, projectDirName, projectDirNames, projectsRoot, readUsageDelta, subagentPathsFor, sumTotals, turnsIn, totalsChanged, transcriptPathFor, zeroPhaseTotals, zeroTotals } from '../usage.js'
 import { USAGE_PHASES } from '../usage-phase.js'
-import { plantTranscript, uniqueClaudeId } from './projects-fixture.js'
+import { healSubagent, plantBrokenListing, plantSubagent, plantTranscript, plantUnreadableSubagent, subagentsDirOf, turnLines, uniqueClaudeId } from './projects-fixture.js'
 import { claudeConfigDir } from '../../shared/constants.js'
 import { TEST_STATE_DIR } from '../../test-setup.js'
 import { buildEvent } from '../raindrop-payload.js'
@@ -787,5 +787,299 @@ describe('usage: turns with no message id still bucket correctly', () => {
   // Two id-less turns in a row must not merge into one.
   test('consecutive id-less turns both count', () => {
     expect(readUsageDelta(fixture(bare(5) + bare(5)), newCursor()).totals.outputTokens).toBe(10)
+  })
+})
+
+describe('usage: subagent transcripts', () => {
+  const planted: Array<() => void> = []
+  const logged: string[] = []
+  const realWrite = process.stderr.write
+  beforeEach(() => {
+    logged.length = 0
+    process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true }) as typeof process.stderr.write
+  })
+  afterEach(() => {
+    process.stderr.write = realWrite
+    while (planted.length) planted.pop()!()
+  })
+
+  function plantSession(prefix: string, main: string) {
+    const id = uniqueClaudeId(prefix)
+    const session = plantTranscript(id, main)
+    planted.push(session.cleanup)
+    return { ...session, id }
+  }
+
+  test('subagent spend folds into the session total and books to review, even when the subagent edits', () => {
+    const s = plantSession('fold', turnLines('m1', 10, ['Edit']))
+    plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    plantSubagent(s.path, 'agent-b.jsonl', turnLines('s2', 5, ['Edit']))
+    const r = drainSession(s.path, newSessionCursor())
+    expect(r.totals.outputTokens).toBe(22)
+    expect(r.phaseTotals.execute.outputTokens, 'the parent keeps its own split').toBe(10)
+    expect(r.phaseTotals.review.outputTokens, 'a subagent inherits its spawn phase, not its own tools').toBe(12)
+    expect(sumTotals(USAGE_PHASES.map(p => r.phaseTotals[p])).outputTokens, 'the split still sums to the total').toBe(22)
+    expect(r.latch, 'the parent alone steers the latch').toBe('execute')
+  })
+
+  test('a Workflow run one level down is counted too, and its other files are not', () => {
+    const s = plantSession('wf', turnLines('m1', 1))
+    plantSubagent(s.path, 'agent-w.jsonl', turnLines('w1', 30), 'wf_044b3fe1-ad4')
+    plantSubagent(s.path, 'journal.jsonl', turnLines('x1', 1000), 'wf_044b3fe1-ad4')
+    plantSubagent(s.path, 'agent-z.jsonl', turnLines('x2', 1000), 'not-a-run')
+    expect(drainSession(s.path, newSessionCursor()).totals.outputTokens).toBe(31)
+  })
+
+  test('spend is counted once across repeated drains, and an append adds only its new bytes', () => {
+    const s = plantSession('once', turnLines('m1', 10))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    const first = drainSession(s.path, newSessionCursor())
+    const again = drainSession(s.path, first.cursor)
+    expect([again.totals.outputTokens, again.restarted]).toEqual([17, false])
+    appendFileSync(agent, turnLines('s2', 4))
+    const grown = drainSession(s.path, again.cursor)
+    expect([grown.totals.outputTokens, grown.restarted]).toEqual([21, false])
+  })
+
+  test('a read where only subagents spent votes review, so the row reads as chosen, not carried', () => {
+    const s = plantSession('vote', turnLines('m1', 10, ['Edit']))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    const first = drainSession(s.path, newSessionCursor())
+    const idle = drainSession(s.path, first.cursor)
+    expect(idle.voted, 'a subagent that spent nothing new votes nothing').toEqual([])
+    appendFileSync(agent, turnLines('s2', 3))
+    expect(drainSession(s.path, idle.cursor).voted).toEqual(['review'])
+  })
+
+  test('a subagent that appears mid-session is added without reading as a restart', () => {
+    const s = plantSession('late', turnLines('m1', 10))
+    const first = drainSession(s.path, newSessionCursor())
+    expect(first.restarted, "the parent's own first read is a cold start").toBe(true)
+    const quiet = drainSession(s.path, first.cursor)
+    plantSubagent(s.path, 'agent-new.jsonl', turnLines('s1', 9))
+    const joined = drainSession(s.path, quiet.cursor)
+    expect([joined.totals.outputTokens, joined.restarted]).toEqual([19, false])
+  })
+
+  test('a subagent file rewritten shorter re-banks instead of resending the turns it repeats', () => {
+    const s = plantSession('shrink', turnLines('m1', 10))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 2000) + turnLines('s2', 5))
+    const first = drainSession(s.path, newSessionCursor())
+    writeFileSync(agent, turnLines('s1', 2000))
+    const after = drainSession(s.path, first.cursor)
+    expect(after.restarted, 's1 was already delivered').toBe(true)
+    expect(after.totals.outputTokens, 'the cumulative never falls').toBeGreaterThanOrEqual(first.totals.outputTokens)
+  })
+
+  test('a subagent file truncated to empty keeps what it spent and does not restart the session', () => {
+    const s = plantSession('emptied', turnLines('m1', 10))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 2000))
+    const first = drainSession(s.path, newSessionCursor())
+    writeFileSync(agent, '')
+    appendFileSync(s.path, turnLines('m2', 50))
+    const after = drainSession(s.path, first.cursor)
+    expect(after.restarted, "nothing was re-read, and a restart would drop the parent's new 50").toBe(false)
+    expect(after.totals.outputTokens).toBe(10 + 50 + 2000)
+    expect(after.phaseTotals.review.outputTokens).toBe(2000)
+  })
+
+  test('a session with no subagents directory reads exactly as its parent transcript', () => {
+    const s = plantSession('solo', turnLines('m1', 10, ['Edit']) + turnLines('m2', 3))
+    const r = drainSession(s.path, newSessionCursor())
+    const alone = drainUsage(s.path, newCursor())
+    expect(r.totals).toEqual(alone.totals)
+    expect(r.phaseTotals).toEqual(alone.phaseTotals)
+    expect(logged, 'having no subagents is normal, not a failure').toEqual([])
+  })
+
+  test('a session path that is a file has no subagents, which is not a failure', () => {
+    const s = plantSession('asfile', turnLines('m1', 10))
+    writeFileSync(join(s.dir, s.id), 'not a directory')
+    const r = drainSession(s.path, newSessionCursor())
+    expect([r.totals.outputTokens, r.cursor.missingFromBaseline, logged]).toEqual([10, [], []])
+  })
+
+  test('only agent-*.jsonl is read — the meta.json sidecar and stray files are not', () => {
+    const s = plantSession('sidecar', turnLines('m1', 1))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    plantSubagent(s.path, 'agent-a.meta.json', turnLines('x1', 1000))
+    plantSubagent(s.path, 'notes.jsonl', turnLines('x2', 1000))
+    expect(subagentPathsFor(s.path)).toEqual([agent])
+    expect(drainSession(s.path, newSessionCursor()).totals.outputTokens).toBe(8)
+  })
+
+  test('a subagent file that leaves the projects root through a symlink is not read', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'usage-outside-'))
+    planted.push(() => rmSync(outside, { recursive: true, force: true }))
+    const target = join(outside, 'agent-evil.jsonl')
+    writeFileSync(target, turnLines('x1', 1000))
+    const s = plantSession('escape', turnLines('m1', 1))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    symlinkSync(target, join(dirname(agent), 'agent-evil.jsonl'))
+    expect(subagentPathsFor(s.path)).toEqual([agent])
+    expect(drainSession(s.path, newSessionCursor()).totals.outputTokens).toBe(8)
+  })
+
+  test('an unreadable subagent is logged by name once per read and does not silence the parent or its siblings', () => {
+    const s = plantSession('bad', turnLines('m1', 10))
+    plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    const bad = plantUnreadableSubagent(s.path)
+    const first = drainSession(s.path, newSessionCursor())
+    expect(first.totals.outputTokens).toBe(17)
+    appendFileSync(s.path, turnLines('m2', 5))
+    expect(drainSession(s.path, first.cursor).totals.outputTokens).toBe(22)
+    expect(logged).toHaveLength(2)
+    expect(logged.filter(l => !l.includes(bad))).toEqual([])
+  })
+
+  test('a directory with an agent name is skipped without a log', () => {
+    const s = plantSession('dirname', turnLines('m1', 10))
+    mkdirSync(join(dirname(plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))), 'agent-x.jsonl'))
+    expect(drainSession(s.path, newSessionCursor()).totals.outputTokens).toBe(17)
+    expect(logged).toEqual([])
+  })
+
+  test('a file named like a Workflow run does not hide the other subagents', () => {
+    const s = plantSession('wfbogus', turnLines('m1', 1))
+    plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    plantSubagent(s.path, 'agent-w.jsonl', turnLines('w1', 30), 'wf_real')
+    writeFileSync(join(subagentsDirOf(s.path), 'workflows', 'wf_bogus'), 'not a run')
+    expect(drainSession(s.path, newSessionCursor()).totals.outputTokens).toBe(38)
+  })
+
+  test.each([
+    ['a subagent',
+      (t: string) => plantUnreadableSubagent(t),
+      (broken: string) => healSubagent(broken, turnLines('s1', 1000))],
+    ['the listing',
+      (t: string) => plantBrokenListing(t),
+      (broken: string, t: string) => { rmSync(broken); plantSubagent(t, 'agent-y.jsonl', turnLines('s1', 1000)) }],
+  ])('a cold read that could not read %s re-banks once it can, and only once', (_label, breakIt, fixIt) => {
+    const s = plantSession('rebank', turnLines('m1', 10))
+    const broken = breakIt(s.path)
+    const cold = drainSession(s.path, newSessionCursor())
+    expect([cold.restarted, cold.totals.outputTokens]).toEqual([true, 10])
+    const still = drainSession(s.path, cold.cursor)
+    expect(still.restarted, 'still failing: nothing to re-bank, the parent keeps reporting').toBe(false)
+    fixIt(broken, s.path)
+    const healed = drainSession(s.path, still.cursor)
+    expect([healed.restarted, healed.totals.outputTokens], 'baseline re-banked with the full history').toEqual([true, 1010])
+    expect(drainSession(s.path, healed.cursor).restarted).toBe(false)
+  })
+
+  test.each([
+    ['the session directory is unsearchable', (t: string) => join(dirname(t), basename(t, '.jsonl')), 0o000],
+    ['subagents/ is listable but not searchable', (t: string) => subagentsDirOf(t), 0o644],
+  ])('a baseline read where %s is a failed listing, not an empty one', (_label, dirOf, mode) => {
+    if (process.getuid?.() === 0) return
+    const s = plantSession('eacces', turnLines('m1', 10))
+    plantSubagent(s.path, 'agent-w.jsonl', turnLines('w1', 1000), 'wf_run')
+    const dir = dirOf(s.path)
+    chmodSync(dir, mode)
+    let cold: ReturnType<typeof drainSession>
+    try { cold = drainSession(s.path, newSessionCursor()) } finally { chmodSync(dir, 0o755) }
+    expect([cold.restarted, cold.cursor.missingFromBaseline]).toEqual([true, null])
+    const healed = drainSession(s.path, cold.cursor)
+    expect([healed.restarted, healed.totals.outputTokens], 're-banked, not delivered as a delta').toEqual([true, 1010])
+  })
+
+  test('each subagent missing from the baseline re-banks as it heals, even while another still fails', () => {
+    const s = plantSession('partial', turnLines('m1', 10))
+    const a = plantUnreadableSubagent(s.path, 'agent-a.jsonl')
+    const b = plantUnreadableSubagent(s.path, 'agent-b.jsonl')
+    const cold = drainSession(s.path, newSessionCursor())
+    healSubagent(b, turnLines('b1', 1000))
+    const bHealed = drainSession(s.path, cold.cursor)
+    expect(bHealed.restarted, 'b is missing from the baseline, so it re-banks rather than arriving as a delta').toBe(true)
+    const quiet = drainSession(s.path, bHealed.cursor)
+    expect(quiet.restarted, 'a is still failing').toBe(false)
+    healSubagent(a, turnLines('a1', 100))
+    const aHealed = drainSession(s.path, quiet.cursor)
+    expect([aHealed.restarted, aHealed.totals.outputTokens]).toEqual([true, 1110])
+    expect(drainSession(s.path, aHealed.cursor).restarted).toBe(false)
+  })
+
+  test('a genuinely new subagent while another stays broken is real spend, not a re-bank', () => {
+    const s = plantSession('newbie', turnLines('m1', 10))
+    plantUnreadableSubagent(s.path, 'agent-a.jsonl')
+    const cold = drainSession(s.path, newSessionCursor())
+    plantSubagent(s.path, 'agent-new.jsonl', turnLines('n1', 40))
+    const next = drainSession(s.path, cold.cursor)
+    expect([next.restarted, next.totals.outputTokens]).toEqual([false, 50])
+  })
+
+  test('a subagent that was banked and then fails is not missing from the baseline', () => {
+    const s = plantSession('banked', turnLines('m1', 10))
+    const a = plantSubagent(s.path, 'agent-a.jsonl', turnLines('a1', 7))
+    const b = plantUnreadableSubagent(s.path, 'agent-b.jsonl')
+    const cold = drainSession(s.path, newSessionCursor())
+    healSubagent(b, turnLines('b1', 100))
+    rmSync(a)
+    plantUnreadableSubagent(s.path, 'agent-a.jsonl')
+    const bHealed = drainSession(s.path, cold.cursor)
+    expect([bHealed.restarted, bHealed.totals.outputTokens], "b's heal re-banks, with a's old spend still in it").toEqual([true, 117])
+    expect(drainSession(s.path, bHealed.cursor).restarted, "a failing again is not a heal").toBe(false)
+  })
+
+  test('a new subagent that fails its first read on a heal tick is ordinary spend once it reads', () => {
+    const s = plantSession('coincide', turnLines('m1', 10))
+    const a = plantUnreadableSubagent(s.path, 'agent-a.jsonl')
+    const cold = drainSession(s.path, newSessionCursor())
+    healSubagent(a, turnLines('a1', 100))
+    const c = plantUnreadableSubagent(s.path, 'agent-c.jsonl')
+    const aHealed = drainSession(s.path, cold.cursor)
+    expect(aHealed.restarted, "a's heal re-banks").toBe(true)
+    healSubagent(c, turnLines('c1', 500))
+    const cRead = drainSession(s.path, aHealed.cursor)
+    expect([cRead.restarted, cRead.totals.outputTokens], 'c was in no baseline, so its spend is a delta').toEqual([false, 610])
+  })
+
+  test('a listing that recovers with nothing readable leaves later new subagents as ordinary spend', () => {
+    const s = plantSession('relist', turnLines('m1', 10))
+    const listing = plantBrokenListing(s.path)
+    const cold = drainSession(s.path, newSessionCursor())
+    rmSync(listing)
+    plantUnreadableSubagent(s.path)
+    const relisted = drainSession(s.path, cold.cursor)
+    expect(relisted.restarted, 'nothing read, nothing to re-bank').toBe(false)
+    plantSubagent(s.path, 'agent-new.jsonl', turnLines('n1', 40))
+    const next = drainSession(s.path, relisted.cursor)
+    expect([next.restarted, next.totals.outputTokens]).toEqual([false, 50])
+  })
+
+  test('a steady-state read failure does not re-bank, since nothing was banked without it', () => {
+    const s = plantSession('steady', turnLines('m1', 10))
+    const first = drainSession(s.path, newSessionCursor())
+    const broken = plantUnreadableSubagent(s.path)
+    const failing = drainSession(s.path, first.cursor)
+    healSubagent(broken, turnLines('s1', 40))
+    const healed = drainSession(s.path, failing.cursor)
+    expect([failing.restarted, healed.restarted, healed.totals.outputTokens]).toEqual([false, false, 50])
+  })
+
+  test('a subagent file that disappears keeps its spend, so the cumulative never falls', () => {
+    const s = plantSession('gone', turnLines('m1', 10))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 7))
+    const first = drainSession(s.path, newSessionCursor())
+    rmSync(agent)
+    const after = drainSession(s.path, first.cursor)
+    expect([after.totals.outputTokens, after.restarted]).toEqual([17, false])
+  })
+
+  test('a parent that moves rebuilds its subagents, so a stale cursor cannot double-count them', () => {
+    const s = plantSession('moved', turnLines('m1', 10))
+    const agent = plantSubagent(s.path, 'agent-a.jsonl', turnLines('s1', 700))
+    const before = drainSession(s.path, newSessionCursor())
+    writeFileSync(agent, turnLines('s2', 3))
+    const first = drainSession(s.path, before.cursor)
+    expect(first.totals.outputTokens, 'the shrink retired 700').toBe(713)
+    const dest = mkdtempSync(join(projectsRoot(), '-hydra-fixture-'))
+    planted.push(() => rmSync(dest, { recursive: true, force: true }))
+    const moved = join(dest, `${s.id}.jsonl`)
+    renameSync(s.path, moved)
+    renameSync(join(s.dir, s.id), join(dest, s.id))
+    const after = drainSession(moved, first.cursor)
+    expect(after.restarted).toBe(true)
+    expect(after.totals.outputTokens, 'rebuilt from what is on disk').toBe(13)
   })
 })
