@@ -189,16 +189,32 @@ describe('orphan detection', () => {
 })
 
 describe('context alert', () => {
-  test('≥70% fires once; below does not', () => {
+  test('≥70% fires once; below 50 does not', () => {
     const hot = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 70 }) }) })
-    const cool = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 69 }) }) })
+    const cool = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 49 }) }) })
 
     pollSessionsOnce(NOW)
     pollSessionsOnce(NOW + 1000)
 
     expect(to(hot, 'context')).toHaveLength(1)
-    expect(to(hot, 'context')[0].text).toBe(`**${hot.tmuxName}** is at **70%** context. Consider \`respawn\` to continue in a fresh session.`)
+    expect(to(hot, 'context')[0].text).toBe(`**${hot.tmuxName}** is at **70%** context. Consider a \`handoff\` to a fresh session.`)
     expect(to(cool, 'context')).toHaveLength(0)
+  })
+
+  test('50% then 70% each fire once; a jump past both fires once', () => {
+    let pct = 50
+    const climbing = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: pct }) }) })
+    const jumping = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 85 }) }) })
+
+    pollSessionsOnce(NOW)
+    pollSessionsOnce(NOW + 1000)
+    expect(to(climbing, 'context')).toHaveLength(1)
+    expect(to(climbing, 'context')[0].text).toBe(`**${climbing.tmuxName}** is at **50%** context. Consider a \`handoff\` to a fresh session.`)
+    pct = 70
+    pollSessionsOnce(NOW + 2000)
+    pollSessionsOnce(NOW + 3000)
+    expect(to(climbing, 'context')).toHaveLength(2)
+    expect(to(jumping, 'context')).toHaveLength(1)
   })
 
   test('unknown usage ("?") never alerts', () => {

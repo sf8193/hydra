@@ -10,7 +10,7 @@ const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
 // SYNC: shared with the recovery commands' reachability check, which must agree
 // on what counts as an orphan. See daemon/session-reachability.ts.
-const CONTEXT_ALERT_THRESHOLD = 70
+const CONTEXT_ALERT_THRESHOLDS = [50, 70]
 
 const contextAlerted = new Set<string>()
 const crashAlerted = new Set<string>()
@@ -67,10 +67,13 @@ export function pollSessionsOnce(now: number): void {
     const pct = formatContextPercent(info.adapter, info)
     if (pct === '?') continue
     const num = parseInt(pct)
-    if (num >= CONTEXT_ALERT_THRESHOLD && !contextAlerted.has(info.sessionId)) {
-      contextAlerted.add(info.sessionId)
+    // Highest crossed threshold not yet alerted; a jump past both fires once.
+    const threshold = CONTEXT_ALERT_THRESHOLDS.findLast(t => num >= t)
+    const key = `${info.sessionId}:${threshold}`
+    if (threshold !== undefined && !contextAlerted.has(key)) {
+      for (const t of CONTEXT_ALERT_THRESHOLDS) if (t <= threshold) contextAlerted.add(`${info.sessionId}:${t}`)
       process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
-      void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider \`respawn\` to continue in a fresh session.`).catch(() => {})
+      void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider a \`handoff\` to a fresh session.`).catch(() => {})
     }
   }
 }
