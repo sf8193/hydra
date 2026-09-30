@@ -1,8 +1,8 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'fs'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import { claudeConfigDir } from '../shared/constants.js'
 import { isUnder } from '../shared/path-containment.js'
-import { INITIAL_PHASE, latchVote, nextLatch, phaseForTurn, toolNamesFrom, USAGE_PHASES, type LatchPhase, type UsagePhase } from './usage-phase.js'
+import { DELEGATED_PHASE, INITIAL_PHASE, latchVote, nextLatch, phaseForTurn, toolNamesFrom, USAGE_PHASES, type LatchPhase, type UsagePhase } from './usage-phase.js'
 
 export type TokenTotals = {
   inputTokens: number
@@ -165,6 +165,111 @@ export function drainUsage(path: string, cursor: UsageCursor, maxBytes?: number)
     if (done) break
   }
   return { ...next, restartedFromZero, voted: [...voted] }
+}
+
+export type SessionCursor = {
+  main: UsageCursor
+  subagents: Record<string, UsageCursor>
+  retired: TokenTotals
+  // null when a baseline read could not list subagents, so which are missing is unknown.
+  missingFromBaseline: string[] | null
+}
+
+export const newSessionCursor = (): SessionCursor =>
+  ({ main: newCursor(), subagents: {}, retired: zeroTotals(), missingFromBaseline: [] })
+
+export type SessionUsageRead = {
+  cursor: SessionCursor
+  totals: TokenTotals
+  phaseTotals: PhaseTotals
+  latch: LatchPhase
+  voted: readonly UsagePhase[]
+  restarted: boolean
+}
+
+const SUBAGENT_FILE = /^agent-[A-Za-z0-9_-]{1,128}\.jsonl$/
+const WORKFLOW_RUN = /^wf_[A-Za-z0-9_-]{1,128}$/
+
+const entriesMatching = (dir: string, pattern: RegExp, wantDir: boolean): string[] =>
+  readdirSync(dir, { withFileTypes: true })
+    .filter(e => pattern.test(e.name) && e.isDirectory() === wantDir)
+    .map(e => join(dir, e.name))
+
+// existsSync is false on EACCES too, which would read an unlistable directory as an empty one.
+const present = (path: string): boolean => {
+  try { statSync(path); return true } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false
+    throw err
+  }
+}
+
+export function subagentPathsFor(transcript: string): string[] {
+  const dir = join(dirname(transcript), basename(transcript, '.jsonl'), 'subagents')
+  if (!present(dir)) return []
+  const workflows = join(dir, 'workflows')
+  const runs = present(workflows) ? entriesMatching(workflows, WORKFLOW_RUN, true) : []
+  const root = projectsRoot()
+  return [dir, ...runs]
+    .flatMap(d => entriesMatching(d, SUBAGENT_FILE, false))
+    .filter(p => isUnder(p, root, { realpath: true }))
+}
+
+// Logged, not thrown: one unreadable subagent must not silence the parent's own spend.
+const subagentReadFailed = (where: string, err: unknown): void => {
+  process.stderr.write(`daemon: raindrop: subagent usage read failed: ${where}: ${err instanceof Error ? err.message : String(err)}\n`)
+}
+
+type SubagentState = Pick<SessionCursor, 'subagents' | 'retired'>
+
+function readSubagents(transcript: string, from: SubagentState, maxBytes?: number): SubagentState & { failed: string[] | null; shrank: boolean } {
+  const subagents = { ...from.subagents }
+  let retired = from.retired
+  let paths: string[]
+  try { paths = subagentPathsFor(transcript) } catch (err) {
+    subagentReadFailed(transcript, err)
+    return { subagents, retired, failed: null, shrank: false }
+  }
+  const failedPaths: string[] = []
+  let shrank = false
+  for (const path of paths) {
+    const seen = subagents[path]
+    let next: UsageCursor
+    try { next = drainUsage(path, seen ?? newCursor(), maxBytes) } catch (err) { subagentReadFailed(path, err); failedPaths.push(path); continue }
+    // A rotated file keeps what it spent, so the cumulative never falls; what it re-read may already be delivered.
+    if (seen && next.restartedFromZero) {
+      retired = sumTotals([retired, seen.totals])
+      shrank ||= totalsChanged(zeroTotals(), next.totals)
+    }
+    subagents[path] = next
+  }
+  return { subagents, retired, failed: failedPaths, shrank }
+}
+
+const delegatedOf = (s: SubagentState): TokenTotals =>
+  sumTotals([s.retired, ...Object.values(s.subagents).map(c => c.totals)])
+
+export function drainSession(transcript: string, prev: SessionCursor, maxBytes?: number): SessionUsageRead {
+  const main = drainUsage(transcript, prev.main, maxBytes)
+  const parentRestarted = main.restartedFromZero === true
+  // Old-path cursors would double-count a moved parent's subagents.
+  const read = readSubagents(transcript, parentRestarted ? newSessionCursor() : prev, maxBytes)
+  const missing = prev.missingFromBaseline
+  // A subagent the banked baseline lacks re-banks when it reads, or its whole history arrives as a delta.
+  const healed = Object.keys(read.subagents)
+    .some(path => !(path in prev.subagents) && (missing === null || missing.includes(path))
+      && totalsChanged(zeroTotals(), read.subagents[path].totals))
+  const restarted = parentRestarted || healed || read.shrank
+  const delegated = delegatedOf(read)
+  const spent = totalsChanged(delegatedOf(prev), delegated)
+  return {
+    cursor: { main, subagents: read.subagents, retired: read.retired, missingFromBaseline: (parentRestarted || missing === null) ? read.failed : missing },
+    totals: sumTotals([main.totals, delegated]),
+    phaseTotals: { ...main.phaseTotals, [DELEGATED_PHASE]: sumTotals([main.phaseTotals[DELEGATED_PHASE], delegated]) },
+    latch: main.latch,
+    voted: spent ? [...main.voted, DELEGATED_PHASE] : main.voted,
+    restarted,
+  }
 }
 
 export function totalsChanged(a: TokenTotals, b: TokenTotals): boolean {

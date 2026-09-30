@@ -15,8 +15,10 @@ export type UsagePhaseSource = typeof USAGE_PHASE_SOURCES[number]
 // mirror-image reason — letting read-only tools vote it put 98% in one bucket.
 export type LatchPhase = Exclude<UsagePhase, 'report'>
 export const INITIAL_PHASE: LatchPhase = 'plan'
+// Subagent spend books here too: a subagent inherits the phase its spawn chose.
+export const DELEGATED_PHASE: LatchPhase = 'review'
 
-const DELEGATION_TOOLS = new Set(['Agent', 'Task'])
+const DELEGATION_TOOLS = new Set(['Agent', 'Task', 'Workflow'])
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
 // `edit_message` is excluded: it is documented as an interim update DURING long
 // work. The `^` alternative covers a bare name; the bridge exposes both forms.
@@ -33,7 +35,7 @@ export function isLatchPhase(v: unknown): v is LatchPhase {
 // What this turn's tools actually chose, or undefined if they said nothing.
 // Delegating beats editing: the edit is the handoff being prepared.
 export function latchVote(names: readonly string[]): LatchPhase | undefined {
-  if (names.some(n => DELEGATION_TOOLS.has(n))) return 'review'
+  if (names.some(n => DELEGATION_TOOLS.has(n))) return DELEGATED_PHASE
   if (names.some(n => EDIT_TOOLS.has(n))) return 'execute'
   return undefined
 }
