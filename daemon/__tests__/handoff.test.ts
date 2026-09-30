@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { executeTool } from '../bridge-dispatch.js'
@@ -8,6 +8,7 @@ import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { gateway, STATE_DIR } from '../config.js'
 import { handleHandoffIntercept } from '../commands/thread.js'
+import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
 
 process.stderr.write = (() => true) as any
 
@@ -68,6 +69,76 @@ test('handoff command: asks the live session to write a handoff file under STATE
     ;(gateway as any).react = origReact
     registry.delete('ho-2')
     registry.deleteThread('ho-thread-2')
+  }
+})
+
+// Runs the `handoff` command in a fresh thread and returns the text sent to the live session.
+async function requestText(msg: Record<string, unknown> = {}, selection?: { model: string; engine: any }): Promise<string> {
+  const origSend = transport.sendOrQueue, origReact = gateway.react
+  const delivered: any[] = []
+  ;(transport as any).sendOrQueue = (_id: string, m: any) => { delivered.push(m) }
+  ;(gateway as any).react = async () => {}
+  mk('ho-3', 'pulse', 'ho-thread-3')
+  registry.setThread('ho-thread-3', 'ho-3')
+  try {
+    await handleHandoffIntercept({ channelId: 'ho-thread-3', id: 'msg-1', isThread: true, content: 'handoff', ...msg } as any, selection)
+    expect(delivered.length).toBe(1)
+    return delivered[0].content
+  } finally {
+    ;(transport as any).sendOrQueue = origSend
+    ;(gateway as any).react = origReact
+    registry.delete('ho-3')
+    registry.deleteThread('ho-thread-3')
+  }
+}
+
+test('handoff command: with no template, the built-in request names whoever typed it, or "the user"', async () => {
+  const text = await requestText({ authorUsername: 'dan' })
+  expect(text).toStartWith('[system] dan asked you to hand off')
+  expect(text).toContain('Open questions for dan;')
+  expect(text).not.toContain('Sam')
+  const anon = await requestText()
+  expect(anon).toStartWith('[system] the user asked you to hand off')
+  expect(anon).toContain('Open questions for the user;')
+})
+
+test('handoff command: request.md replaces the built-in request, placeholders filled, unknown ones kept', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'request.md')
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  try {
+    writeFileSync(file, '\n  {{requester}} {{session}} {{artifact}} {{model}} {{unknown}}\n\n')
+    const text = await requestText({ authorUsername: 'dan' }, { model: 'claude-opus-5-5', engine: 'claude' })
+    const [requester, session, artifact, model, unknown] = text.split(' ')
+    expect([requester, session, model, unknown]).toEqual(['dan', 'pulse', 'claude-opus-5-5', '{{unknown}}'])
+    expect(artifact).toMatch(new RegExp(`^${join(STATE_DIR, 'handoffs', 'pulse-').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\d+\\.md$`))
+  } finally {
+    rmSync(file, { force: true })
+  }
+})
+
+test('handoff command: a whitespace-only request.md falls back to the built-in request', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'request.md')
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  try {
+    writeFileSync(file, '  \n\t\n')
+    const text = await requestText({ authorUsername: 'dan' })
+    expect(text).toStartWith('[system] dan asked you to hand off')
+    expect(text).toContain('Non-goals')
+  } finally {
+    rmSync(file, { force: true })
+  }
+})
+
+test('handoff command: request.md is re-read on every handoff, so an edit applies without a restart', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'request.md')
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  try {
+    writeFileSync(file, 'first {{session}}')
+    expect(await requestText()).toBe('first pulse')
+    writeFileSync(file, 'second {{session}}')
+    expect(await requestText()).toBe('second pulse')
+  } finally {
+    rmSync(file, { force: true })
   }
 })
 

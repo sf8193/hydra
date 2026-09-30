@@ -21,6 +21,7 @@ import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, classifyReachability } from '../session-reachability.js'
+import { readHandoffTemplate } from '../handoff-templates.js'
 
 // Recovery executors, swappable in tests (same pattern as reply-guard's deps).
 type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn }
@@ -655,11 +656,11 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 // fresh session (via the `handoff` tool, which does the kill + successor spawn)
 // ---------------------------------------------------------------------------
 
-function handoffRequest(artifact: string): string {
+function handoffRequest(artifact: string, requester: string): string {
   return [
-    `[system] Sam asked you to hand off this thread to a fresh session.`,
+    `[system] ${requester} asked you to hand off this thread to a fresh session.`,
     `Write ${artifact} with these sections: Goal; Non-goals (what is explicitly out of scope); State (branch, last commit, current step);`,
-    `Decisions & constraints (including rejected ideas); Open questions for Sam; Next action.`,
+    `Decisions & constraints (including rejected ideas); Open questions for ${requester}; Next action.`,
     `Then call the handoff tool with path="${artifact}". Do nothing else after that.`,
   ].join(' ')
 }
@@ -675,9 +676,14 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
   info.handoffSelection = selection
+  const requester = msg.authorUsername || 'the user'
+  const vars = {
+    artifact, session: info.tmuxName, requester, model: selection?.model ?? '',
+    cwd: info.worktreePath ?? info.sessionMetadata?.cwd ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
+  }
   transport.sendOrQueue(info.sessionId, {
     type: 'notification',
-    content: handoffRequest(artifact),
+    content: readHandoffTemplate('request', vars) ?? handoffRequest(artifact, requester),
     meta: { chat_id: threadId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
   void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
