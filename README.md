@@ -432,6 +432,35 @@ Spawn isolated Claude sessions from chat:
 
 Sessions get cute names (spark, pixel, nova...) and run in their own tmux sessions. State persists across daemon restarts.
 
+### Handoff
+
+`handoff [model]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
+
+Two optional files in the state dir customize what each side is told. Both are re-read on every handoff, so edits apply without a restart:
+
+- `actions/handoff/departing.md` **replaces** what the outgoing session is told. It must tell the session to write the file and call the `handoff` tool with `path=` (usually `{{artifact}}`). Nothing enforces this, so a template that omits it never hands off.
+- `actions/handoff/arriving.md` is **added** to the successor's prompt, after the read-your-handoff line. The rest of the prompt (thread ids, greeting, description, Next action) stays.
+
+`{{name}}` placeholders are filled per handoff:
+
+| Placeholder | departing | arriving |
+|---|---|---|
+| `artifact` | ✓ | ✓ |
+| `session` | ✓ (outgoing) | ✓ (successor) |
+| `requester` | ✓ | |
+| `model` | ✓ | |
+| `cwd` | ✓ | ✓ |
+| `worktree` | ✓ | ✓ |
+| `branch` | ✓ | ✓ |
+| `label` | ✓ | |
+| `from` | | ✓ |
+| `from_session` | | ✓ |
+| `from_transcript` | | ✓ |
+
+`from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
+
+`hooks/on-kill` in the state dir already runs on a handoff, with `HYDRA_KILL_REASON='handed off'`. Use it for post-handoff work nobody waits on.
+
 ## Troubleshooting
 
 Symptoms first — each maps to one root cause. See [docs/ONBOARDING_TIPS.md](./docs/ONBOARDING_TIPS.md) for a full first-machine checklist.
