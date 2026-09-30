@@ -42,7 +42,7 @@ export function buildForkPrompt(p: PromptParams & { originFrom: string }): strin
   ].join('\n')
 }
 
-export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string }): string {
+export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; arrival?: string }): string {
   const contextLine = p.artifact
     ? `Read your handoff context from \`${p.artifact}\`, then read your memory files.`
     : `Read your memory files and workstream canon for context.`
@@ -51,6 +51,7 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
     ``,
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     contextLine,
+    ...(p.arrival ? [p.arrival] : []),
     `After reading the artifact, append a "### Reception (by ${p.tmuxName})" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.`,
     `Send a greeting to your thread using reply(chat_id=${p.threadId}). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.`,
     `Then ${DESCRIPTION_INSTRUCTION(p.sessionId)}`,

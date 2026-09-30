@@ -17,6 +17,8 @@ import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
+import { readHandoffTemplate } from './handoff-templates.js'
+import { transcriptPathFor } from './usage.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
@@ -240,6 +242,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
   return {
     existingThreadId: info.threadId,
     handedOffFrom: info.tmuxName,
+    handoffFromClaudeSessionId: info.claudeSessionId,
     artifact,
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
@@ -248,6 +251,15 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     carryOver: { artifacts: info.artifacts, contextLinks: info.contextLinks, description: info.description },
     ...(reuseWorktree && { preserveWorktree: true, reuseWorktree }),
   }
+}
+
+/** The successor's local arrival text (<STATE_DIR>/handoff/arrival.md), filled for this handoff; undefined → built-in prompt only. */
+export function handoffArrival(opts: SpawnOpts, vars: { from: string; session: string; cwd: string; worktree: string; branch: string }): string | undefined {
+  return readHandoffTemplate('arrival', {
+    ...vars,
+    artifact: opts.artifact ?? '',
+    from_transcript: transcriptPathFor(opts.handoffFromClaudeSessionId) ?? '',
+  })
 }
 
 // Injectable for tests (like recoveryDeps): the real ones kill tmux and spawn sessions.
@@ -757,7 +769,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (opts?.promptBuilder) {
     prompt = opts.promptBuilder(sessionId, tmuxName)
   } else if (isHandoff) {
-    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact })
+    const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktreePath ?? '', branch: worktreeBranch ?? '' })
+    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, arrival })
   } else if (isFork) {
     prompt = buildForkPrompt({ ...promptParams, originFrom: originFrom! })
   } else if (isResurrect) {

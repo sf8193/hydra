@@ -168,3 +168,68 @@ test('handOff: deliverables, PR watches and the `handoff <model>` choice reach t
     unwatchBySession('ho-5'); registry.delete('ho-4'); registry.delete('ho-5')
   }
 })
+
+test('successor prompt: no arrival.md leaves the prompt as built without one', async () => {
+  const { handoffArrival } = await import('../session-lifecycle.js')
+  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  const p = { sessionId: 's-1', tmuxName: 'fresh', threadId: 'th-1', topic: 't', originFrom: 'flint', artifact: '/h.md' }
+  const arrival = handoffArrival({ artifact: '/h.md' }, { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' })
+  expect(arrival).toBeUndefined()
+  expect(buildHandoffPrompt({ ...p, arrival })).toBe(buildHandoffPrompt(p))
+})
+
+test('successor prompt: arrival.md is filled and placed between the context line and the Reception line', async () => {
+  const { handoffArrival } = await import('../session-lifecycle.js')
+  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  const file = join(HANDOFF_TEMPLATE_DIR, 'arrival.md')
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  try {
+    writeFileSync(file, 'Arriving {{session}} from {{from}} via {{artifact}} on {{branch}} in {{cwd}}.\n')
+    const arrival = handoffArrival({ artifact: '/h.md' }, { from: 'flint', session: 'fresh', cwd: '/w', worktree: '/w', branch: 'feat/x' })
+    expect(arrival).toBe('Arriving fresh from flint via /h.md on feat/x in /w.')
+    const lines = buildHandoffPrompt({ sessionId: 's-1', tmuxName: 'fresh', threadId: 'th-1', topic: 't', originFrom: 'flint', artifact: '/h.md', arrival }).split('\n')
+    const at = lines.indexOf(arrival!)
+    expect(lines[at - 1]).toStartWith('Read your handoff context from `/h.md`')
+    expect(lines[at + 1]).toStartWith('After reading the artifact, append a "### Reception')
+    expect(lines).toContain('Your chat thread chat_id is th-1. Your session_id is s-1.')
+    const rest = lines.slice(at + 1).join('\n')
+    expect(rest).toContain('Send a greeting to your thread using reply(chat_id=th-1)')
+    expect(rest).toContain('set_description')
+    expect(rest).toContain('begin executing the Next action')
+  } finally {
+    rmSync(file, { force: true })
+  }
+})
+
+test('handoffSpawnOpts carries the predecessor\'s claude session id', async () => {
+  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
+  mk('ho-6', 'flint', 'ho-thread-6')
+  try {
+    const info = registry.get('ho-6')!
+    info.claudeSessionId = 'abc-123'
+    expect(handoffSpawnOpts(info, '/h.md').handoffFromClaudeSessionId).toBe('abc-123')
+  } finally {
+    registry.delete('ho-6')
+  }
+})
+
+test('arrival {{from_transcript}}: the predecessor\'s transcript path when it exists, empty when the id is unknown', async () => {
+  const { handoffArrival } = await import('../session-lifecycle.js')
+  const { projectsRoot } = await import('../usage.js')
+  const projectDir = join(projectsRoot(), '-tmp-handoff-fixture')
+  const transcript = join(projectDir, 'pred-1.jsonl')
+  const file = join(HANDOFF_TEMPLATE_DIR, 'arrival.md')
+  mkdirSync(projectDir, { recursive: true })
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  const vars = { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' }
+  try {
+    writeFileSync(transcript, '{}\n')
+    writeFileSync(file, 'transcript=[{{from_transcript}}]')
+    expect(handoffArrival({ handoffFromClaudeSessionId: 'pred-1' }, vars)).toBe(`transcript=[${transcript}]`)
+    expect(handoffArrival({ handoffFromClaudeSessionId: 'no-such-id' }, vars)).toBe('transcript=[]')
+    expect(handoffArrival({}, vars)).toBe('transcript=[]')
+  } finally {
+    rmSync(file, { force: true })
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
