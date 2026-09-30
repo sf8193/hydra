@@ -51,7 +51,9 @@ export function mechanicsBlock(opts: MechanicsOpts): string {
     `**If a tool call returns InputValidationError, that tool is *deferred* — its name is known but its schema is not loaded. Call ToolSearch(query="select:<tool_name>") to load it, then retry. Never abandon your protocol action because its tool errored — recover the tool and complete the action.**`,
     ``,
     ...speakLines,
-    ...(waits ? [``, `**Between rounds:** after posting, stay idle and wait for the next [system] notification — it will deliver the other party's response. Do not poll the thread or exit; the protocol needs you alive for subsequent rounds.`] : []),
+    ``,
+    `**Codex turn lifecycle:** after handing off with advance() (or a tagged protocol reply), end your turn immediately. Also end your turn when a notification only says another actor is working or that it is not your turn. Never use sleep, polling, or a wait loop between protocol turns. Ending your turn does not exit your session: Hydra queues the next protocol response for a new turn, and cannot deliver it until your current turn ends.`,
+    ...(waits ? [``, `**Between rounds (Claude only):** after posting, stay idle and wait for the next [system] notification — it will deliver the other party's response. Do not poll the thread or exit; the protocol needs you alive for subsequent rounds.`] : []),
   ].join('\n')
 }
 
