@@ -169,7 +169,7 @@ export type ThreadMetadata = {
 export type SpawnOpts = {
   forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string; codexHomeName?: string }
   handedOffFrom?: string
-  handoffFromClaudeSessionId?: string  // predecessor's transcript id, for the arrival template's {{from_transcript}}
+  handoffFromClaudeSessionId?: string  // predecessor's Claude session id (undefined for Codex), for the arriving template's {{from_session}} and {{from_transcript}}
   artifact?: string
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
   resumeFrom?: string                                          // claude session ID for --resume (no --fork-session)

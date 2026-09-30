@@ -102,8 +102,8 @@ test('handoff command: with no template, the built-in request names whoever type
   expect(anon).toContain('Open questions for the user;')
 })
 
-test('handoff command: request.md replaces the built-in request, placeholders filled, unknown ones kept', async () => {
-  const file = join(HANDOFF_TEMPLATE_DIR, 'request.md')
+test('handoff command: departing.md replaces the built-in request, placeholders filled, unknown ones kept', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'departing.md')
   mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
   try {
     writeFileSync(file, '\n  {{requester}} {{session}} {{artifact}} {{model}} {{unknown}}\n\n')
@@ -116,8 +116,8 @@ test('handoff command: request.md replaces the built-in request, placeholders fi
   }
 })
 
-test('handoff command: a whitespace-only request.md falls back to the built-in request', async () => {
-  const file = join(HANDOFF_TEMPLATE_DIR, 'request.md')
+test('handoff command: a whitespace-only departing.md falls back to the built-in request', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'departing.md')
   mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
   try {
     writeFileSync(file, '  \n\t\n')
@@ -129,8 +129,8 @@ test('handoff command: a whitespace-only request.md falls back to the built-in r
   }
 })
 
-test('handoff command: request.md is re-read on every handoff, so an edit applies without a restart', async () => {
-  const file = join(HANDOFF_TEMPLATE_DIR, 'request.md')
+test('handoff command: departing.md is re-read on every handoff, so an edit applies without a restart', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'departing.md')
   mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
   try {
     writeFileSync(file, 'first {{session}}')
@@ -169,7 +169,7 @@ test('handOff: deliverables, PR watches and the `handoff <model>` choice reach t
   }
 })
 
-test('successor prompt: no arrival.md leaves the prompt as built without one', async () => {
+test('successor prompt: no arriving.md leaves the prompt as built without one', async () => {
   const { handoffArrival } = await import('../session-lifecycle.js')
   const { buildHandoffPrompt } = await import('../prompts/session.js')
   const p = { sessionId: 's-1', tmuxName: 'fresh', threadId: 'th-1', topic: 't', originFrom: 'flint', artifact: '/h.md' }
@@ -178,10 +178,10 @@ test('successor prompt: no arrival.md leaves the prompt as built without one', a
   expect(buildHandoffPrompt({ ...p, arrival })).toBe(buildHandoffPrompt(p))
 })
 
-test('successor prompt: arrival.md is filled and placed between the context line and the Reception line', async () => {
+test('successor prompt: arriving.md is filled and placed between the context line and the Reception line', async () => {
   const { handoffArrival } = await import('../session-lifecycle.js')
   const { buildHandoffPrompt } = await import('../prompts/session.js')
-  const file = join(HANDOFF_TEMPLATE_DIR, 'arrival.md')
+  const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')
   mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
   try {
     writeFileSync(file, 'Arriving {{session}} from {{from}} via {{artifact}} on {{branch}} in {{cwd}}.\n')
@@ -201,24 +201,44 @@ test('successor prompt: arrival.md is filled and placed between the context line
   }
 })
 
-test('handoffSpawnOpts carries the predecessor\'s claude session id', async () => {
+test('templates live under <STATE_DIR>/actions/handoff', () => {
+  expect(HANDOFF_TEMPLATE_DIR).toBe(join(STATE_DIR, 'actions', 'handoff'))
+})
+
+test('handoffSpawnOpts carries the predecessor\'s claude session id, and none for a Codex predecessor', async () => {
   const { handoffSpawnOpts } = await import('../session-lifecycle.js')
   mk('ho-6', 'flint', 'ho-thread-6')
   try {
     const info = registry.get('ho-6')!
     info.claudeSessionId = 'abc-123'
     expect(handoffSpawnOpts(info, '/h.md').handoffFromClaudeSessionId).toBe('abc-123')
+    info.engine = 'codex'
+    expect(handoffSpawnOpts(info, '/h.md').handoffFromClaudeSessionId).toBeUndefined()
   } finally {
     registry.delete('ho-6')
   }
 })
 
-test('arrival {{from_transcript}}: the predecessor\'s transcript path when it exists, empty when the id is unknown', async () => {
+test('arriving {{from_session}}: the predecessor\'s claude session id, empty when there is none (Codex)', async () => {
+  const { handoffArrival } = await import('../session-lifecycle.js')
+  const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  const vars = { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' }
+  try {
+    writeFileSync(file, 'ask-predecessor [{{from_session}}]')
+    expect(handoffArrival({ handoffFromClaudeSessionId: 'pred-1' }, vars)).toBe('ask-predecessor [pred-1]')
+    expect(handoffArrival({}, vars)).toBe('ask-predecessor []')
+  } finally {
+    rmSync(file, { force: true })
+  }
+})
+
+test('arriving {{from_transcript}}: the predecessor\'s transcript path when it exists, empty when the id is unknown', async () => {
   const { handoffArrival } = await import('../session-lifecycle.js')
   const { projectsRoot } = await import('../usage.js')
   const projectDir = join(projectsRoot(), '-tmp-handoff-fixture')
   const transcript = join(projectDir, 'pred-1.jsonl')
-  const file = join(HANDOFF_TEMPLATE_DIR, 'arrival.md')
+  const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')
   mkdirSync(projectDir, { recursive: true })
   mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
   const vars = { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' }

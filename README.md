@@ -438,12 +438,12 @@ Sessions get cute names (spark, pixel, nova...) and run in their own tmux sessio
 
 Two optional files in the state dir customize what each side is told. Both are re-read on every handoff, so edits apply without a restart:
 
-- `handoff/request.md` **replaces** what the outgoing session is told. It must tell the session to write the file and call the `handoff` tool with `path=` (usually `{{artifact}}`). Nothing enforces this, so a template that omits it never hands off.
-- `handoff/arrival.md` is **added** to the successor's prompt, after the read-your-handoff line. The rest of the prompt (thread ids, greeting, description, Next action) stays.
+- `actions/handoff/departing.md` **replaces** what the outgoing session is told. It must tell the session to write the file and call the `handoff` tool with `path=` (usually `{{artifact}}`). Nothing enforces this, so a template that omits it never hands off.
+- `actions/handoff/arriving.md` is **added** to the successor's prompt, after the read-your-handoff line. The rest of the prompt (thread ids, greeting, description, Next action) stays.
 
 `{{name}}` placeholders are filled per handoff:
 
-| Placeholder | request | arrival |
+| Placeholder | departing | arriving |
 |---|---|---|
 | `artifact` | ✓ | ✓ |
 | `session` | ✓ (outgoing) | ✓ (successor) |
@@ -454,9 +454,10 @@ Two optional files in the state dir customize what each side is told. Both are r
 | `branch` | ✓ | ✓ |
 | `label` | ✓ | |
 | `from` | | ✓ |
+| `from_session` | | ✓ |
 | `from_transcript` | | ✓ |
 
-`from_transcript` is the predecessor's transcript path, empty for a Codex predecessor. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
+`from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
 
 `hooks/on-kill` in the state dir already runs on a handoff, with `HYDRA_KILL_REASON='handed off'`. Use it for post-handoff work nobody waits on.
 

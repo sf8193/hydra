@@ -242,7 +242,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
   return {
     existingThreadId: info.threadId,
     handedOffFrom: info.tmuxName,
-    handoffFromClaudeSessionId: info.claudeSessionId,
+    handoffFromClaudeSessionId: (info.engine ?? 'claude') === 'claude' ? info.claudeSessionId : undefined,
     artifact,
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
@@ -253,11 +253,12 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
   }
 }
 
-/** The successor's local arrival text (<STATE_DIR>/handoff/arrival.md), filled for this handoff; undefined → built-in prompt only. */
+/** The successor's local arrival text (<STATE_DIR>/actions/handoff/arriving.md), filled for this handoff; undefined → built-in prompt only. */
 export function handoffArrival(opts: SpawnOpts, vars: { from: string; session: string; cwd: string; worktree: string; branch: string }): string | undefined {
-  return readHandoffTemplate('arrival', {
+  return readHandoffTemplate('arriving', {
     ...vars,
     artifact: opts.artifact ?? '',
+    from_session: opts.handoffFromClaudeSessionId ?? '',
     from_transcript: transcriptPathFor(opts.handoffFromClaudeSessionId) ?? '',
   })
 }

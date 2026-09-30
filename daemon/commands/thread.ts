@@ -683,7 +683,7 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   }
   transport.sendOrQueue(info.sessionId, {
     type: 'notification',
-    content: readHandoffTemplate('request', vars) ?? handoffRequest(artifact, requester),
+    content: readHandoffTemplate('departing', vars) ?? handoffRequest(artifact, requester),
     meta: { chat_id: threadId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
   void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
