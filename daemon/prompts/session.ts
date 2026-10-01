@@ -42,7 +42,20 @@ export function buildForkPrompt(p: PromptParams & { originFrom: string }): strin
   ].join('\n')
 }
 
-export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; arrival?: string }): string {
+// A headless fork has no thread: it answers the session that spawned it, then ends.
+export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; answerTo: string; readOnly: boolean }): string {
+  return [
+    `You are ${p.tmuxName}, a headless${p.readOnly ? ' read-only' : ''} fork of ${p.originFrom}. You have its conversation up to here, but you are not ${p.originFrom} and you have no thread of your own.`,
+    `Your session_id is ${p.sessionId}.`,
+    ``,
+    `Question: ${p.topic}`,
+    ``,
+    `Answer it from that conversation and anything you can look up${p.readOnly ? ' (Edit, Write and NotebookEdit are blocked)' : ''}.`,
+    `Reply once with send_to_thread(target="${p.answerTo}", type="result", text="<your answer>"), then stop.`,
+  ].join('\n')
+}
+
+export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; arrival?: string; hasPredecessor?: boolean }): string {
   const contextLine = p.artifact
     ? `Read your handoff context from \`${p.artifact}\`, then read your memory files.`
     : `Read your memory files and workstream canon for context.`
@@ -52,6 +65,7 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     contextLine,
     ...(p.arrival ? [p.arrival] : []),
+    ...(p.hasPredecessor ? [`If a question comes up that only ${p.originFrom} can answer, ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.`] : []),
     `After reading the artifact, append a "### Reception (by ${p.tmuxName})" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.`,
     `Send a greeting to your thread using reply(chat_id=${p.threadId}). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.`,
     `Then ${DESCRIPTION_INSTRUCTION(p.sessionId)}`,

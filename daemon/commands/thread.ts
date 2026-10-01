@@ -333,8 +333,9 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
   const deadModel = recoveryModel(lastSession?.model ?? lastInfo?.sessionMetadata?.model)
   const deadLabel = deadSessionLabel(lastSession, lastInfo)
-  // Tier 1 (resume) keeps it off the dead record; the fork and respawn tiers run after that record is gone.
-  const carryOver = lastInfo?.predecessor ? { predecessor: lastInfo.predecessor } : undefined
+  // Tier 1 (resume) keeps these off the dead record; the fork and respawn tiers run after that record is gone.
+  const { predecessor, launchCwd, disallowedTools } = lastInfo ?? {}
+  const carryOver = predecessor || launchCwd || disallowedTools ? { predecessor, launchCwd, disallowedTools } : undefined
   const engineType = recoveryEngine(lastSession, lastInfo)
   const plan = resolveEngine(engineType).recoveryPlan({
     tmuxName: lastTmuxName, claudeSessionId,

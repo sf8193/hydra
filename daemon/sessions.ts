@@ -50,6 +50,8 @@ export type SessionInfo = {
   worktreeBranch?: string
   handoffSelection?: { model: string; engine: ProviderId }  // set by `handoff <model>`, read by the handoff tool; dies with the record
   predecessor?: Predecessor  // set on a handoff successor: the session it took over from, still forkable after its kill
+  launchCwd?: string          // a fork's launch dir (its source's); a resume must start there to find the transcript
+  disallowedTools?: string[]  // Claude built-in tools blocked at spawn (read_only, factory PM); a resume re-applies them
   deadAt?: number
   contextLinks?: string[]
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
@@ -198,13 +200,14 @@ export type SpawnOpts = {
   engine?: ProviderId  // which backend to use (default: claude)
   headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
+  launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   sessionType?: SessionType  // declared at spawn — determines base tool set
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
   reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
-  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor }  // recovery: deliverables/description (and a handoff successor's predecessor) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
+  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[] }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
 // ---------------------------------------------------------------------------

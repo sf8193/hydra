@@ -16,7 +16,7 @@ import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
-import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
+import { buildSpawnPrompt, buildForkPrompt, buildHeadlessForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from './usage.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -538,6 +538,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let carriedDescription: string | undefined = opts?.carryOver?.description
   // A handoff names it; a recovered successor keeps the one its dead record had.
   let carriedPredecessor: Predecessor | undefined = opts?.predecessor ?? opts?.carryOver?.predecessor
+  // Launch options a resumed or recovered session must keep: where it starts, what it may not edit.
+  let launchCwd: string | undefined = opts?.launchCwd ?? opts?.carryOver?.launchCwd
+  let disallowedTools: string[] | undefined = opts?.disallowedTools ?? opts?.carryOver?.disallowedTools
   // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
   // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
   // even after the record it came from was deleted.
@@ -705,7 +708,11 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         carriedDescription ??= existing.description
         // A resume continues the dead session itself. Other tiers (fork, respawn) name it
         // via carryOver; any other replacement has a different predecessor.
-        if (opts?.resumeFrom || opts?.resumeCodex) carriedPredecessor ??= existing.predecessor
+        if (opts?.resumeFrom || opts?.resumeCodex) {
+          carriedPredecessor ??= existing.predecessor
+          launchCwd ??= existing.launchCwd
+          disallowedTools ??= existing.disallowedTools
+        }
         // Recovery reuses the existing worktree in place; skip destruction so unpushed
         // work survives and --resume can find the transcript under the same CWD.
         // An explicit opts.reuseWorktree (fallback tiers) already covers this — only
@@ -750,7 +757,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let worktreePath: string | undefined
   let worktreeBranch: string | undefined
   let effectiveCwd = spawnCwd
-  if (reuseWorktree) {
+  // Only a fork or a resume continues a transcript filed under launchCwd. A fresh launch
+  // (respawn) starts as usual — the dir may be a worktree that died with its session.
+  if (!isFork && !isResume && !opts?.resumeCodex) launchCwd = undefined
+  if (launchCwd) {
+    // A fork (and its resume) must start where its source started, or --resume can't find the transcript.
+    if (!existsSync(launchCwd)) throw new Error(`cannot fork: the source's launch directory ${launchCwd} no longer exists`)
+    effectiveCwd = launchCwd
+  } else if (reuseWorktree) {
     // Recovery adopts the dead session's worktree in place. recoverOne has already resolved
     // availability (reattached the dir, or deferred/skipped) BEFORE this cascade — so the
     // dir is expected to exist here. If it doesn't (sub-second race: removed between that
@@ -819,7 +833,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt = opts.promptBuilder(sessionId, tmuxName)
   } else if (isHandoff) {
     const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktreePath ?? '', branch: worktreeBranch ?? '' })
-    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, arrival })
+    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, arrival, hasPredecessor: carriedPredecessor?.engine === 'claude' })  // only Claude predecessors can be forked today
+  } else if (isFork && isHeadless) {
+    prompt = buildHeadlessForkPrompt({ ...promptParams, originFrom: originFrom!, answerTo: opts?.initiator ?? 'main', readOnly: !!disallowedTools?.length })
   } else if (isFork) {
     prompt = buildForkPrompt({ ...promptParams, originFrom: originFrom! })
   } else if (isResurrect) {
@@ -847,7 +863,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
-    tools: opts?.tools, disallowedTools: opts?.disallowedTools,
+    tools: opts?.tools, disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex,
     threadId,
   })
@@ -884,6 +900,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(isHeadless ? { headless: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
     ...(carriedPredecessor ? { predecessor: carriedPredecessor } : {}),
+    ...(launchCwd ? { launchCwd } : {}),
+    ...(disallowedTools?.length ? { disallowedTools } : {}),
     adapter,
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)

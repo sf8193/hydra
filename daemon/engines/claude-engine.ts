@@ -154,6 +154,8 @@ export class ClaudeEngine implements EngineAdapter {
     const channelFlag = 'plugin:discord@claude-plugins-official'
     let claudeArgs: string
     let assignedClaudeSessionId: string | undefined
+    const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
+    const toolsFlag = input.tools?.length ? ` --tools ${shq(input.tools.join(','))}` : ''
     if (isFork) {
       claudeArgs = [
         `claude`,
@@ -163,7 +165,7 @@ export class ClaudeEngine implements EngineAdapter {
         `--channels ${shq(channelFlag)}`,
         `--dangerously-skip-permissions`,
         shq(prompt),
-      ].join(' ')
+      ].join(' ') + disallowed + toolsFlag
     } else if (isResume) {
       claudeArgs = [
         `claude`,
@@ -171,15 +173,13 @@ export class ClaudeEngine implements EngineAdapter {
         `--model ${shq(model)}`,
         `--channels ${shq(channelFlag)}`,
         `--dangerously-skip-permissions`,
-      ].join(' ')
+      ].join(' ') + disallowed + toolsFlag
     } else {
       assignedClaudeSessionId = randomUUID()
-      const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
-      const toolsFlag = input.tools?.length ? ` --tools ${shq(input.tools.join(','))}` : ''
       claudeArgs = `claude --session-id ${shq(assignedClaudeSessionId)} --model ${shq(model)} --channels ${shq(channelFlag)} --dangerously-skip-permissions ${shq(prompt)}${disallowed}${toolsFlag}`
-      if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
-      if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${input.tools!.length} tools, Edit/Write blocked)\n`)
     }
+    if (disallowed) process.stderr.write(`daemon: disallowedTools flag: ${disallowed}\n`)
+    if (toolsFlag) process.stderr.write(`daemon: tools whitelist active (${input.tools!.length} tools, Edit/Write blocked)\n`)
 
     const stderrLog = join(SPAWN_LOGS_DIR, `stderr-${tmuxName}-${sessionId}.log`)
     const debugLog = join(SPAWN_LOGS_DIR, `debug-${tmuxName}-${sessionId}.log`)

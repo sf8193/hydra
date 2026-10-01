@@ -1,12 +1,13 @@
 import { statSync } from 'fs'
 import { execSync } from 'child_process'
 import { gateway, INBOX_DIR } from './config.js'
-import { registry, resolveSendTarget } from './sessions.js'
+import { registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { doSpawnSession, handOff, killSession } from './session-lifecycle.js'
+import { claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
+import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -33,6 +34,56 @@ function resolveProtocolSpawnMode(callerSessionId: string | undefined, requested
 export const __test = process.env.NODE_ENV === 'test'
   ? { PRIVATE_HELPER_ALLOWED_TOOLS, resolveProtocolSpawnMode }
   : undefined
+
+// read_only: blocks Claude's file-editing tools. Bash remains, so it is a guard, not a sandbox.
+const READ_ONLY_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit']
+
+/**
+ * The session that ran under this name: the live record, else the latest dead record,
+ * else the latest thread-history entry. Never its successor — that is a different conversation.
+ */
+function findSessionByName(name: string): { record: SessionInfo } | { history: ThreadSessionEntry } | undefined {
+  const records = [...registry.values()].filter(s => s.tmuxName === name)
+  const record = records.find(s => !s.deadAt) ?? records.sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
+  if (record) return { record }
+  let latest: ThreadSessionEntry | undefined
+  for (const thread of threadRegistry.threads.values()) {
+    for (const h of thread.sessionHistory) {
+      if (h.tmuxName === name && (h.endedAt ?? h.startedAt) >= (latest ? latest.endedAt ?? latest.startedAt : -Infinity)) latest = h
+    }
+  }
+  return latest && { history: latest }
+}
+
+/** A fork source rebuilt from a history entry, whose record is gone. History keeps no cwd: a Claude transcript names it. */
+function forkSourceOfHistory(h: ThreadSessionEntry): Predecessor | undefined {
+  const engine = h.engine ?? 'claude'
+  const fork = resolveEngine(engine).recoveryPlan({ tmuxName: h.tmuxName, claudeSessionId: h.claudeSessionId, codexThreadId: h.codexThreadId, codexHomeName: h.codexHomeName }).fork
+  if (!fork) return undefined
+  // A Codex source is refused before launch, so its missing cwd never matters.
+  const cwd = fork.claudeSessionId ? claudeLaunchCwd(fork.claudeSessionId) : process.env.SPAWN_CWD
+  if (!cwd) throw new Error(`fork_from: no transcript found for ${h.tmuxName} — its conversation is gone; spawn fresh with read_thread instead`)
+  return { engine, fork, cwd, ...(h.model ? { model: h.model } : {}) }
+}
+
+/** spawn_session fork_from: a session name, or "predecessor" for the caller's own. */
+function resolveForkSource(name: string, callerSessionId: string | undefined): Predecessor {
+  let source: Predecessor | undefined
+  if (name === 'predecessor') {
+    const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+    source = caller?.predecessor
+    if (!source) throw new Error(`fork_from="predecessor": ${caller?.tmuxName ?? 'this session'} has no predecessor — only a session that took over by handoff has one`)
+  } else {
+    const found = findSessionByName(name)
+    if (!found) throw new Error(`fork_from: no session named "${name}" — call list_sessions for live names`)
+    source = 'record' in found ? predecessorOf(found.record) : forkSourceOfHistory(found.history)
+    if (!source) throw new Error(`fork_from: ${name} has no conversation id to fork — spawn fresh with read_thread instead`)
+  }
+  // A Codex fork launches its own app-server in a fresh CODEX_HOME, where the source's
+  // rollout is not found; launching in the source's home would restart its app-server.
+  if (source.engine === 'codex') throw new Error(`fork_from: ${source.fork.parentName} is a Codex session, and Codex sessions cannot be forked yet — spawn fresh with read_thread instead`)
+  return source
+}
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined
@@ -256,8 +307,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const spawnMode = resolveProtocolSpawnMode(callerSessionId, args.headless as boolean | undefined)
         const privateProtocolSpawn = spawnMode.privateSpawn
         const worktree = args.worktree as string | undefined
+        const forkFromRaw = (args.fork_from as string | undefined)?.trim() || undefined
+        if (forkFromRaw && worktree) throw new Error('fork_from cannot be combined with worktree — a fork runs where its source ran')
+        const source = forkFromRaw ? resolveForkSource(forkFromRaw, callerSessionId) : undefined
+        const readOnly = args.read_only === true
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
-        const model = (args.model as string | undefined)?.trim() || undefined
+        const model = (args.model as string | undefined)?.trim() || source?.model
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
@@ -282,6 +337,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         try {
           result = await doSpawnSession(topic, args.chat_id as string | undefined, args.message_id as string | undefined, {
           ...(model ? { model } : {}),
+          // engine: always 'claude' while Codex sources are refused; it matters once Codex forks are supported.
+          ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
+          ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
           ...(headless ? { headless: true } : {}),
           ...(spawnMode.quiet ? { quiet: true } : {}),

@@ -461,6 +461,22 @@ Two optional files in the state dir customize what each side is told. Both are r
 
 `hooks/on-kill` in the state dir already runs on a handoff, with `HYDRA_KILL_REASON='handed off'`. Use it for post-handoff work nobody waits on.
 
+### Forking sessions
+
+`spawn_session` can start from a copy of another Claude session's conversation instead of from scratch:
+
+- `fork_from="<name>"` forks the session that ran under that name, alive or ended — never a later session that took over its thread. `fork_from="predecessor"` forks the session the caller took over from by handoff. The fork launches in the directory its source launched from, on its source's model unless `model` is given. The source is not touched.
+- `read_only=true` blocks Edit, Write and NotebookEdit. Bash stays available, so it is a guard, not a sandbox. A resume keeps it; a handoff successor starts without it.
+- Codex sessions can't be forked yet: a fork would need the source's `CODEX_HOME`, and launching there restarts the source's app-server.
+
+To ask the session you took over from a question only it can answer:
+
+```
+spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>")
+```
+
+The fork answers with `send_to_thread(type="result")` and stops. Each fork is a full session boot that loads its source's whole context, so it takes seconds and costs that context's tokens.
+
 ## Troubleshooting
 
 Symptoms first — each maps to one root cause. See [docs/ONBOARDING_TIPS.md](./docs/ONBOARDING_TIPS.md) for a full first-machine checklist.

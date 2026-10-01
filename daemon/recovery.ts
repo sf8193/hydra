@@ -72,7 +72,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
     ? { repo: deadInfo.worktreeRepo, path: deadInfo.worktreePath, branch: deadInfo.worktreeBranch ?? `wt/${deadInfo.tmuxName}` }
     : undefined
   const carryOver = deadInfo
-    ? { artifacts: deadInfo.artifacts, contextLinks: deadInfo.contextLinks, description: deadInfo.description, predecessor: deadInfo.predecessor }
+    ? { artifacts: deadInfo.artifacts, contextLinks: deadInfo.contextLinks, description: deadInfo.description, predecessor: deadInfo.predecessor, launchCwd: deadInfo.launchCwd, disallowedTools: deadInfo.disallowedTools }
     : undefined
   // Snapshot PR watches with their seen-cursors before any kill unwatches them; the
   // cascade recreates the session under a new id, so restore them onto the survivor.
