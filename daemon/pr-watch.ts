@@ -1,7 +1,7 @@
 import { execSync } from 'child_process'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
+import { STATE_DIR, gateway } from './config.js'
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { atomicWriteFileSync, formatDuration, executionAlive } from './util.js'
@@ -43,6 +43,7 @@ export type WatchEntry = {
   lastHeadSha: string
   lastCheckStatus: 'pending' | 'success' | 'failure' | 'unknown'
   createdAt: number
+  pinMessageId?: string
 }
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
@@ -95,6 +96,25 @@ function persist(): void {
   } catch (err) {
     process.stderr.write(`daemon: pr-watch: persist failed: ${err}\n`)
   }
+}
+
+// Best-effort: a pin is a convenience, never worth failing a watch over.
+async function pinWatch(entry: WatchEntry): Promise<void> {
+  if (!gateway?.pin) return
+  try {
+    const sent = await gateway.send(entry.threadId, `👁️ Watching [#${entry.prNumber}${entry.title ? ` ${entry.title}` : ''}](<${entry.prUrl}>)`)
+    await gateway.pin(entry.threadId, sent.id)
+    entry.pinMessageId = sent.id
+    if (watches.get(entry.prUrl) === entry) persist()
+  } catch (err) {
+    process.stderr.write(`daemon: pr-watch: pin failed for ${entry.prUrl}: ${err}\n`)
+  }
+}
+
+function unpinWatch(entry: WatchEntry): void {
+  if (!entry.pinMessageId || !gateway?.unpin) return
+  gateway.unpin(entry.threadId, entry.pinMessageId).catch(err =>
+    process.stderr.write(`daemon: pr-watch: unpin failed for ${entry.prUrl}: ${err}\n`))
 }
 
 function loadPersisted(): void {
@@ -356,6 +376,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
       process.stderr.write(`daemon: pr-watch: #${entry.prNumber} ${reason}, auto-unwatching\n`)
       watches.delete(entry.prUrl)
       persist()
+      unpinWatch(entry)
       // Scrub the PR from the session's artifact list so it disappears from the home tab
       const info = registry.get(entry.sessionId)
       if (info?.artifacts?.length) {
@@ -592,6 +613,7 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
 
   watches.set(prUrl, entry)
   persist()
+  void pinWatch(entry)
   process.stderr.write(`daemon: pr-watch: watching ${prUrl} → session ${sessionId}, thread ${threadId}\n`)
   return `watching ${prUrl} — will poll every ${POLL_INTERVAL_MS / 60000} minutes`
 }
@@ -606,6 +628,7 @@ export function unwatchPr(prUrl: string, callerSessionId?: string): string {
   }
   watches.delete(prUrl)
   persist()
+  unpinWatch(entry)
   process.stderr.write(`daemon: pr-watch: unwatched ${prUrl}\n`)
   return `stopped watching ${prUrl}`
 }
@@ -615,6 +638,7 @@ export function unwatchBySession(sessionId: string): number {
   for (const [url, entry] of watches) {
     if (entry.sessionId === sessionId) {
       watches.delete(url)
+      unpinWatch(entry)
       removed++
     }
   }
@@ -640,7 +664,10 @@ export function restoreWatches(entries: WatchEntry[], newSessionId: string, newT
       const owner = registry.get(existing.sessionId)
       if (owner && executionAlive(owner)) continue
     }
-    watches.set(entry.prUrl, { ...entry, sessionId: newSessionId, threadId: newThreadId })
+    // The old pin lives in the dead thread; re-pin in the successor's thread.
+    const moved = { ...entry, sessionId: newSessionId, threadId: newThreadId, pinMessageId: undefined }
+    watches.set(entry.prUrl, moved)
+    void pinWatch(moved)
     restored++
   }
   if (restored > 0) persist()
