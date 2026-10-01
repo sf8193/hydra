@@ -364,6 +364,18 @@ export class DiscordGateway implements ChatGateway {
     await msg.delete()
   }
 
+  async pin(channelId: string, messageId: string): Promise<void> {
+    const ch = await this.fetchTextChannel(channelId)
+    const msg = await ch.messages.fetch(messageId)
+    await msg.pin()
+  }
+
+  async unpin(channelId: string, messageId: string): Promise<void> {
+    const ch = await this.fetchTextChannel(channelId)
+    const msg = await ch.messages.fetch(messageId)
+    await msg.unpin()
+  }
+
   async react(channelId: string, messageId: string, emoji: string): Promise<void> {
     const ch = await this.fetchTextChannel(channelId)
     const msg = await ch.messages.fetch(messageId)
