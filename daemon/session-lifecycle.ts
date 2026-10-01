@@ -1,12 +1,12 @@
 import { randomUUID } from 'crypto'
 import { execSync, execFileSync, spawn } from 'child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs'
-import { join, resolve } from 'path'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, openSync, readSync, closeSync } from 'fs'
+import { basename, dirname, join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
 import { registry, sessionEmoji, threadRegistry } from './sessions.js'
-import type { SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
+import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
@@ -18,7 +18,7 @@ import type { EngineAdapter } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
 import { readHandoffTemplate } from './handoff-templates.js'
-import { transcriptPathFor } from './usage.js'
+import { projectDirName, transcriptPathFor } from './usage.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
@@ -233,9 +233,51 @@ export function emitSessionDeath(info: SessionInfo): void {
   })
 }
 
+const LAUNCH_CWD_HEAD_BYTES = 256 * 1024
+
+/**
+ * The directory a Claude session was launched from, read from its transcript: the first
+ * recorded cwd whose project-dir name matches the dir the transcript lives in. `--resume`
+ * looks transcripts up by that dir, and a session forked into a worktree was launched
+ * from SPAWN_CWD, not from its worktree.
+ */
+export function claudeLaunchCwd(claudeSessionId: string): string | undefined {
+  const path = transcriptPathFor(claudeSessionId)
+  if (!path) return undefined
+  const dir = basename(dirname(path))
+  let head: string
+  try {
+    const fd = openSync(path, 'r')
+    try {
+      const buf = Buffer.alloc(LAUNCH_CWD_HEAD_BYTES)
+      head = buf.toString('utf8', 0, readSync(fd, buf, 0, buf.length, 0))
+    } finally { closeSync(fd) }
+  } catch { return undefined }
+  for (const line of head.split('\n')) {
+    try {
+      const cwd = (JSON.parse(line) as { cwd?: unknown }).cwd
+      if (typeof cwd === 'string' && projectDirName(cwd) === dir) return cwd
+    } catch {}  // blank, or the truncated last line
+  }
+  return undefined
+}
+
+/** What it takes to fork info after it is gone, or undefined when its engine has no native id to fork. */
+export function predecessorOf(info: SessionInfo): Predecessor | undefined {
+  // Still alive here, so a missing native id can be learned from the running session.
+  const fork = resolveEngine(info.engine).recoveryPlan(info, { discover: true }).fork
+  if (!fork) return undefined
+  const cwd = (fork.claudeSessionId ? claudeLaunchCwd(fork.claudeSessionId) : undefined)
+    ?? info.worktreePath ?? info.sessionMetadata?.cwd ?? process.env.SPAWN_CWD
+  if (!cwd) return undefined
+  const model = info.sessionMetadata?.model
+  return { engine: info.engine ?? 'claude', fork, cwd, ...(model ? { model } : {}) }
+}
+
 /** Spawn opts for the successor: same thread/label/worktree and carried deliverables; model+engine from `handoff <model>` if given. */
 export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts {
   const sel = info.handoffSelection
+  const predecessor = predecessorOf(info)
   const reuseWorktree = info.worktreePath && info.worktreeRepo
     ? { repo: info.worktreeRepo, path: info.worktreePath, branch: info.worktreeBranch ?? `wt/${info.tmuxName}` }
     : undefined
@@ -243,6 +285,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     existingThreadId: info.threadId,
     handedOffFrom: info.tmuxName,
     handoffFromClaudeSessionId: (info.engine ?? 'claude') === 'claude' ? info.claudeSessionId : undefined,
+    ...(predecessor && { predecessor }),
     artifact,
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
@@ -493,6 +536,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let carriedArtifacts: string[] | undefined = opts?.carryOver?.artifacts
   let carriedContextLinks: string[] | undefined = opts?.carryOver?.contextLinks
   let carriedDescription: string | undefined = opts?.carryOver?.description
+  // A handoff names it; a recovered successor keeps the one its dead record had.
+  let carriedPredecessor: Predecessor | undefined = opts?.predecessor ?? opts?.carryOver?.predecessor
   // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
   // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
   // even after the record it came from was deleted.
@@ -658,6 +703,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         carriedArtifacts ??= existing.artifacts
         carriedContextLinks ??= existing.contextLinks
         carriedDescription ??= existing.description
+        // A resume continues the dead session itself. Other tiers (fork, respawn) name it
+        // via carryOver; any other replacement has a different predecessor.
+        if (opts?.resumeFrom || opts?.resumeCodex) carriedPredecessor ??= existing.predecessor
         // Recovery reuses the existing worktree in place; skip destruction so unpushed
         // work survives and --resume can find the transcript under the same CWD.
         // An explicit opts.reuseWorktree (fallback tiers) already covers this — only
@@ -835,6 +883,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     forceWorktreeCleanup: opts?.forceWorktreeCleanup,
     ...(isHeadless ? { headless: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
+    ...(carriedPredecessor ? { predecessor: carriedPredecessor } : {}),
     adapter,
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)

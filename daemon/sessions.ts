@@ -49,6 +49,7 @@ export type SessionInfo = {
   worktreePath?: string
   worktreeBranch?: string
   handoffSelection?: { model: string; engine: ProviderId }  // set by `handoff <model>`, read by the handoff tool; dies with the record
+  predecessor?: Predecessor  // set on a handoff successor: the session it took over from, still forkable after its kill
   deadAt?: number
   contextLinks?: string[]
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
@@ -166,10 +167,15 @@ export type ThreadMetadata = {
   parentChannelId?: string
 }
 
+// The session a handoff successor took over from, snapshotted before its kill: the
+// engine that ran it, its native fork ids, the directory it worked in, and its model.
+export type Predecessor = { engine: ProviderId; fork: NonNullable<SpawnOpts['forkFrom']>; cwd: string; model?: string }
+
 export type SpawnOpts = {
   forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string; codexHomeName?: string }
   handedOffFrom?: string
   handoffFromClaudeSessionId?: string  // predecessor's Claude session id (undefined for Codex), for the arriving template's {{from_session}} and {{from_transcript}}
+  predecessor?: Predecessor            // handoff: persisted on the successor's record so it can fork the session it replaced
   artifact?: string
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
   resumeFrom?: string                                          // claude session ID for --resume (no --fork-session)
@@ -198,7 +204,7 @@ export type SpawnOpts = {
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
   reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
-  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string }  // recovery: deliverables/description to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
+  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor }  // recovery: deliverables/description (and a handoff successor's predecessor) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
 // ---------------------------------------------------------------------------

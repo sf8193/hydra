@@ -333,6 +333,8 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
   const deadModel = recoveryModel(lastSession?.model ?? lastInfo?.sessionMetadata?.model)
   const deadLabel = deadSessionLabel(lastSession, lastInfo)
+  // Tier 1 (resume) keeps it off the dead record; the fork and respawn tiers run after that record is gone.
+  const carryOver = lastInfo?.predecessor ? { predecessor: lastInfo.predecessor } : undefined
   const engineType = recoveryEngine(lastSession, lastInfo)
   const plan = resolveEngine(engineType).recoveryPlan({
     tmuxName: lastTmuxName, claudeSessionId,
@@ -387,7 +389,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       if (!plan.fork) throw new Error('cannot fork this session')
       const forkResult = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
         existingThreadId: thread.threadId, forkFrom: plan.fork,
-        model: deadModel, engine: engineType, label: deadLabel,
+        model: deadModel, engine: engineType, label: deadLabel, carryOver,
       })
       await announceRecovery(msg, forkResult, thread, 'resumed (forked from dead session — transcript preserved)', '⏯️', lastTmuxName)
       return
@@ -397,7 +399,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   }
 
   // Tier 3: respawn (fresh session reads thread history)
-  const t3result = await recoveryDeps.tryRespawn(threadId, thread.topic, lastTmuxName, deadModel, { engine: engineType, label: deadLabel })
+  const t3result = await recoveryDeps.tryRespawn(threadId, thread.topic, lastTmuxName, deadModel, { engine: engineType, label: deadLabel, carryOver })
   if (t3result) {
     await announceRecovery(msg, t3result, thread, 'respawned (resume unavailable — reading thread history)', '🔁', lastTmuxName)
   } else {
