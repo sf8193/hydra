@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
-import { parentOf, registry, sessionEmoji, threadRegistry } from './sessions.js'
+import { authorityId, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
@@ -291,7 +291,8 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     engine: sel?.engine ?? info.engine,
     inheritedLabel: info.label,
     // killSession deletes the record, so the spawn can't snapshot these itself (same as recovery.ts)
-    carryOver: { artifacts: info.artifacts, contextLinks: info.contextLinks, description: info.description },
+    // The successor is the same session continuing, so it answers to the same parent.
+    carryOver: { artifacts: info.artifacts, contextLinks: info.contextLinks, description: info.description, parentId: authorityId(info), initiator: info.initiator },
     ...(reuseWorktree && { preserveWorktree: true, reuseWorktree }),
   }
 }
@@ -326,6 +327,7 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
     await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true })
     const r = await handoffIO.doSpawnSession(info.topic, undefined, undefined, opts)
     if (watches.length > 0) restoreWatches(watches, r.sessionId, r.threadId)
+    repointChildren(info, r.sessionId)  // its children now answer to the successor
     return r
   } finally {
     handoffsInFlight.delete(info.sessionId)
@@ -400,11 +402,10 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       refreshSessionVisual(info.threadId, { state: 'killed' })
     }
 
-    // Notify parent session when a child dies (createdAt guard prevents name-recycling mismatch)
-    // Gated on lineage as before; the notice goes to the parent (the spawner, if any).
+    // Notify the parent session when a child dies. Gated on lineage as before; the notice
+    // goes to whoever holds authority (by sessionId, so a recycled name can't receive it).
     if (info.originFrom && info.sessionType !== 'thread_guest' && !info.suppressDeathMessage) {
-      const parentName = parentOf(info)
-      const parent = [...registry.values()].find(s => s.tmuxName === parentName && s.createdAt < info.createdAt)
+      const parent = parentSessionOf(info)
       if (parent) {
         const msgs = info.messageCount ?? 0
         const emoji = sessionEmoji(info.tmuxName)
@@ -543,6 +544,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Launch options a resumed or recovered session must keep: where it starts, what it may not edit.
   let launchCwd: string | undefined = opts?.launchCwd ?? opts?.carryOver?.launchCwd
   let disallowedTools: string[] | undefined = opts?.disallowedTools ?? opts?.carryOver?.disallowedTools
+  // Authority: the spawner, or (resume/recovery/handoff) the dead record's parent, carried.
+  let carriedParentId: string | null | undefined = opts?.parentId ?? opts?.carryOver?.parentId
+  let carriedInitiator: string | undefined = opts?.initiator ?? opts?.carryOver?.initiator
   // Recovery: reuse the dead session's on-disk worktree rather than recreate one.
   // An explicit descriptor (opts.reuseWorktree) wins so fallback tiers can adopt it
   // even after the record it came from was deleted.
@@ -714,6 +718,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
           carriedPredecessor ??= existing.predecessor
           launchCwd ??= existing.launchCwd
           disallowedTools ??= existing.disallowedTools
+          if (carriedParentId === undefined) carriedParentId = authorityId(existing)
+          carriedInitiator ??= existing.initiator
         }
         // Recovery reuses the existing worktree in place; skip destruction so unpushed
         // work survives and --resume can find the transcript under the same CWD.
@@ -896,7 +902,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
     ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
     ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
-    initiator: opts?.initiator,
+    initiator: carriedInitiator,
+    parentId: carriedParentId ?? null,
     ephemeral: opts?.ephemeral,
     forceWorktreeCleanup: opts?.forceWorktreeCleanup,
     ...(isHeadless ? { headless: true } : {}),

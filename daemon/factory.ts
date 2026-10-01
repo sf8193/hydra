@@ -1473,7 +1473,7 @@ async function spawnBuilder(
     ...(forkInfo ? { forkFrom: { claudeSessionId: forkInfo.claudeSessionId, parentName: forkInfo.tmuxName } } : {}),
     model: state.builderModel,
     promptPrefix: builderPrompt,
-    ...(initiator ? { initiator } : {}),
+    ...(initiator ? { initiator, parentId: state.pmSessionId } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
     // The builder owns the review protocol, so every reviewer round inherits this.
     inheritedLabel: registry.get(state.pmSessionId)?.label,

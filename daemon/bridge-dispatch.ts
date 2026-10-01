@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'fs'
 import { execSync } from 'child_process'
 import { gateway, INBOX_DIR } from './config.js'
-import { parentOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
+import { isParentOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf } from './session-lifecycle.js'
@@ -72,7 +72,7 @@ function forkSourceOfHistory(h: ThreadSessionEntry): Predecessor | undefined {
  * Reads are universal, authority is the spawner's. Any session can fork any other by name:
  * every session runs as the same user and can already read any transcript on disk, so a
  * fork grants no new information access. Control of the fork (kill, peek, death notice)
- * belongs to the spawner — see parentOf.
+ * belongs to the spawner — see isParentOf.
  */
 function resolveForkSource(name: string, callerSessionId: string | undefined): Predecessor {
   let source: Predecessor | undefined
@@ -368,6 +368,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           } } : {}),
           trigger: 'spawn_session',
           initiator: spawnerName,
+          ...(callerSessionId && registry.has(callerSessionId) ? { parentId: callerSessionId } : {}),
           })
         } catch (err) {
           if (allocatedSessionId) finishPrivateProtocolChildLaunch(allocatedSessionId)
@@ -463,10 +464,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // Non-main sessions can only kill sessions they spawned
         let reason = 'session ended'
         if (callerSessionId && callerSessionId !== 'main') {
-          const callerName = registry.get(callerSessionId)?.tmuxName
+          const caller = registry.get(callerSessionId)
           // Distinct from a human's 'session ended' so the on-kill hook can tell them apart
-          reason = `session ended by ${callerName ?? 'agent'}`
-          if (parentOf(info) !== callerName) {
+          reason = `session ended by ${caller?.tmuxName ?? 'agent'}`
+          if (!caller || !isParentOf(caller, info)) {
             throw new Error(`cannot kill ${info.tmuxName} — you can only kill sessions you spawned`)
           }
           // A protocol-managed participant (e.g. the review Critic) belongs to the
@@ -697,7 +698,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           if (resolved.replaced) throw new Error(`no live session named "${target}" for private delivery`)
           if (msgType === 'question') throw new Error('private delivery supports progress and result only')
           if (files.length > 0) throw new Error('private delivery cannot attach files')
-          if (parentOf(sender) !== targetSession.tmuxName) {
+          if (!isParentOf(targetSession, sender)) {
             throw new Error(`private delivery denied — "${target}" is not your parent session`)
           }
           // Private reports enter the parent's model context directly. Bound a
@@ -786,7 +787,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         if (callerSessionId && callerSessionId !== 'main') {
           const caller = registry.get(callerSessionId)
-          if (caller && parentOf(found) !== caller.tmuxName) {
+          if (caller && !isParentOf(caller, found)) {
             throw new Error(`peek denied — "${name}" is not a child of your session`)
           }
         }

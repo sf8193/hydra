@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { gateway, STATE_DIR } from '../config.js'
 import { doSpawnSession, handOff, handoffIO, predecessorOf } from '../session-lifecycle.js'
-import { registry, SessionRegistry, threadRegistry } from '../sessions.js'
+import { isParentOf, registry, SessionRegistry, threadRegistry } from '../sessions.js'
 import type { SessionInfo, ThreadSessionEntry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { engines } from '../engines/instances.js'
@@ -245,6 +245,96 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     // The respawn is a fresh conversation: SPAWN_CWD, still read-only.
     expect(launches.map(keptBy)).toEqual([kept, kept, { launchCwd: process.cwd(), disallowedTools: kept.disallowedTools }])
     expect(live().launchCwd).toBeUndefined()
+  })
+
+  describe('authority passes through handoff and recovery, by session id', () => {
+    const sent: { channel: string; text: string }[] = []
+    let savedSend: typeof gateway.send
+    beforeEach(() => {
+      sent.length = 0
+      savedSend = gateway.send
+      ;(gateway as any).send = async (channel: string, text: string) => { sent.push({ channel, text }); return { id: 'm', channelId: channel } }
+    })
+    afterEach(() => {
+      (gateway as any).send = savedSend
+      for (const id of ['au-parent', 'au-child', 'au-legacy', 'au-recycled']) registry.delete(id)
+    })
+    const old = { createdAt: Date.now() - 2e6 }
+    const errText = (r: any) => r.content[0].text as string
+    const deathNotices = () => sent.filter(m => m.text.includes('died')).map(m => m.channel)
+    const parentAndKids = (pred: SessionInfo) => {
+      mk('au-parent', 'auparent', { ...old, adapter: fakeClaude } as any)
+      const child = mk('au-child', 'auchild', { parentId: pred.sessionId, adapter: fakeClaude } as any)
+      const legacy = mk('au-legacy', 'aulegacy', { initiator: pred.tmuxName, adapter: fakeClaude } as any)  // pre-parentId record
+      return { child, legacy }
+    }
+    const resumeMsg = (): InboundMessage => ({
+      id: `fp-msg-${++seq}`, channelId: THREAD, authorId: 'u1', authorUsername: 'op', content: 'resume', isDM: false,
+      isThread: true, isBot: false, parentChannelId: PARENT, hasExistingThread: false, existingThreadId: null,
+      referenceMessageId: null, effectiveThreadId: THREAD, attachments: [], createdAt: new Date(),
+    })
+
+    test('handoff: the successor answers to the predecessor\'s parent, takes over its children, and a recycled name gets nothing', async () => {
+      const pred = seedDead({ deadAt: undefined, parentId: 'au-parent', initiator: 'auparent' } as any)
+      const { child, legacy } = parentAndKids(pred)
+      const origKill = handoffIO.killSession
+      handoffIO.killSession = (async (i: SessionInfo) => { registry.delete(i.sessionId) }) as any
+      try {
+        await handOff(pred, '/h.md')
+      } finally { handoffIO.killSession = origKill }
+      const succ = live()
+      expect(succ.originFrom).toBe(pred.tmuxName)  // lineage only
+      expect(succ.parentId).toBe('au-parent')
+      expect(succ.initiator).toBe('auparent')
+      expect(child.parentId).toBe(succ.sessionId)
+      expect(legacy.parentId).toBe(succ.sessionId)
+
+      // A new, unrelated session reusing the dead predecessor's name holds no authority.
+      mk('au-recycled', pred.tmuxName, { createdAt: Date.now() + 1000, adapter: fakeClaude } as any)
+      expect(errText(await executeTool('kill_session', { session_id: child.sessionId }, 'au-recycled'))).toContain('cannot kill')
+      expect(errText(await executeTool('peek_session', { name: child.tmuxName }, 'au-recycled'))).toContain('peek denied')
+      expect(errText(await executeTool('kill_session', { session_id: succ.sessionId }, 'au-recycled'))).toContain('cannot kill')
+
+      expect(errText(await executeTool('peek_session', { name: child.tmuxName }, succ.sessionId))).not.toContain('peek denied')
+      expect((await executeTool('kill_session', { session_id: child.sessionId }, succ.sessionId)).isError).toBeFalsy()
+      expect((await executeTool('kill_session', { session_id: succ.sessionId }, 'au-parent')).isError).toBeFalsy()
+      expect(deathNotices()).toContain('au-parent-thread')
+    })
+
+    test('recover tier 1 (resume) and tier 2 (fork) keep the parent and take over the children', async () => {
+      for (const failTier1 of [false, true]) {
+        failResume = failTier1
+        const dead = seedDead({ parentId: 'au-parent', initiator: 'auparent' } as any)
+        const { child } = parentAndKids(dead)
+        const savedHas = transport.has
+        ;(transport as any).has = () => !failTier1  // tier 1 waits for the resumed bridge
+        try {
+          await handleRecoverIntercept({ channelId: 'ch', id: `m-${seq}` } as any, dead.tmuxName)
+        } finally { (transport as any).has = savedHas }
+        expect(launches.at(-1)?.[failTier1 ? 'forkFrom' : 'resumeFrom']).toBeDefined()
+        expect(live().parentId).toBe('au-parent')
+        expect(live().initiator).toBe('auparent')
+        expect(child.parentId).toBe(live().sessionId)
+        registry.delete(live().sessionId)
+        for (const id of ['au-parent', 'au-child', 'au-legacy']) registry.delete(id)
+      }
+    })
+
+    test('manual resume tier 3 (respawn) keeps the parent and takes over the children', async () => {
+      const dead = seedDead({ parentId: 'au-parent', initiator: 'auparent' } as any)
+      const { child } = parentAndKids(dead)
+      failResume = true; failFork = true
+      await handleResumeIntercept(resumeMsg())
+      expect(launches.map(l => l.resumeFrom ? 'resume' : l.forkFrom ? 'fork' : 'other')).toEqual(['resume', 'fork', 'other'])
+      expect(live().parentId).toBe('au-parent')
+      expect(child.parentId).toBe(live().sessionId)
+    })
+
+    test('a plain replacement spawn into the thread inherits no parent', async () => {
+      seedDead({ parentId: 'au-parent' } as any)
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD })
+      expect(live().parentId).toBeNull()
+    })
   })
 
   test('manual resume of a fork whose launch dir is gone: resume and fork refuse, the respawn starts in SPAWN_CWD', async () => {
@@ -528,7 +618,8 @@ describe('spawn_session fork_from and read_only', () => {
     test('a human fork (no spawner) still answers to its source', async () => {
       mk('fs-src', 'fssrc', old)
       mk('fs-other', 'fsother', old)
-      await doSpawnSession('t', undefined, undefined, { forkFrom: { claudeSessionId: 'cl-src', parentName: 'fssrc' }, headless: true })
+      // The fork command names the source as parent (commands/thread.ts handleForkIntercept).
+      await doSpawnSession('t', undefined, undefined, { forkFrom: { claudeSessionId: 'cl-src', parentName: 'fssrc' }, parentId: 'fs-src', headless: true })
       const child = registry.get(launches[0].sessionId)!
       expect(child.initiator).toBeUndefined()
 
@@ -581,4 +672,34 @@ describe('Claude fork argv', () => {
     expect(restricted).toContain("cd '/src/dir'")
     expect(await launchFork()).not.toContain('--disallowedTools')
   })
+})
+
+test('isParentOf: by session id when set; legacy records by name, guarded against recycled names, lineage only for forks', () => {
+  const t = 1_000_000
+  const p = { sessionId: 'p1', tmuxName: 'pa', createdAt: t }
+  expect(isParentOf(p, { parentId: 'p1', createdAt: t + 1 })).toBe(true)
+  expect(isParentOf(p, { parentId: 'p2', initiator: 'pa', createdAt: t + 1 })).toBe(false)  // id wins over name
+  expect(isParentOf(p, { parentId: null, initiator: 'pa', createdAt: t + 1 })).toBe(false)  // explicit: no parent
+  // Legacy (no parentId):
+  expect(isParentOf(p, { initiator: 'pa', createdAt: t + 1 })).toBe(true)
+  expect(isParentOf({ ...p, createdAt: t + 2 }, { initiator: 'pa', createdAt: t + 1 })).toBe(false)  // recycled name, born later
+  expect(isParentOf(p, { originType: 'fork', originFrom: 'pa', createdAt: t + 1 })).toBe(true)
+  expect(isParentOf(p, { originType: 'handoff', originFrom: 'pa', createdAt: t + 1 })).toBe(false)
+  expect(isParentOf(p, { originType: 'resurrect', originFrom: 'pa', createdAt: t + 1 })).toBe(false)
+})
+
+test('parentId survives persist and a reload, null included', () => {
+  const file = join(STATE_DIR, 'sessions.json')
+  const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
+  mk('fp-pid-1', 'pidone', { parentId: 'someone' })
+  mk('fp-pid-2', 'pidtwo', { parentId: null })
+  try {
+    registry.persist()
+    const reloaded = new SessionRegistry()
+    expect(reloaded.get('fp-pid-1')?.parentId).toBe('someone')
+    expect(reloaded.get('fp-pid-2')?.parentId).toBeNull()
+  } finally {
+    registry.delete('fp-pid-1'); registry.delete('fp-pid-2')
+    if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved)
+  }
 })

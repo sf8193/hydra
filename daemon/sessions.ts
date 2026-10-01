@@ -40,6 +40,9 @@ export type SessionInfo = {
   originType?: 'spawn' | 'fork' | 'handoff' | 'resurrect'
   originFrom?: string
   initiator?: string
+  // The sessionId with authority over this one (kill, peek, private send, death notice).
+  // null: no parent. undefined: a record from before parentId existed — see isParentOf.
+  parentId?: string | null
   sessionMetadata?: SessionMetadata
   respawnCount?: number
   resumeCount?: number
@@ -118,14 +121,46 @@ export function removeToolInputSchemas(info: SessionInfo, ...names: ToolName[]):
 }
 
 /**
- * The session with authority over this one (kill, peek, private send, death notice).
- * The spawner is the parent; lineage (originFrom) is the parent only when nobody spawned it.
- * Only a session-name initiator (spawn_session, factory) can match a session. A human or CLI
- * initiator matches none, so setting one on a path that has an originFrom would leave that
- * session with no parent.
+ * Authority (kill, peek, private send, death notice) belongs to the spawner, held by
+ * sessionId so a recycled name can't inherit it. It passes along a handoff or a recovery,
+ * since those are the same session continuing (see repointChildren); lineage alone
+ * (originFrom) never confers it, except a human `fork`, which answers to its source.
  */
-export function parentOf(info: Pick<SessionInfo, 'initiator' | 'originFrom'>): string | undefined {
-  return info.initiator ?? info.originFrom
+export function isParentOf(parent: Pick<SessionInfo, 'sessionId' | 'tmuxName' | 'createdAt'>, child: Pick<SessionInfo, 'parentId' | 'initiator' | 'originType' | 'originFrom' | 'createdAt'>): boolean {
+  if (child.parentId !== undefined) return child.parentId !== null && child.parentId === parent.sessionId
+  // Legacy record (no parentId): match by name, guarded against a recycled name.
+  const name = child.initiator ?? (child.originType === 'fork' ? child.originFrom : undefined)
+  return !!name && parent.tmuxName === name && parent.createdAt <= child.createdAt
+}
+
+/** The record holding authority over info, if any (for the death notice). */
+export function parentSessionOf(info: SessionInfo): SessionInfo | undefined {
+  if (info.parentId) return registry.get(info.parentId)
+  if (info.parentId === null) return undefined
+  return [...registry.values()].find(s => s.sessionId !== info.sessionId && isParentOf(s, info))
+}
+
+/** The parentId a successor of info inherits: its own, or a legacy record's name-matched parent; null if none. */
+export function authorityId(info: SessionInfo): string | null {
+  if (info.parentId !== undefined) return info.parentId
+  return parentSessionOf(info)?.sessionId ?? null
+}
+
+/**
+ * A handoff or recovery replaced oldId with newId: the same session, continuing. Its
+ * children answer to the new record. Legacy children matched by name are upgraded.
+ */
+export function repointChildren(old: Pick<SessionInfo, 'sessionId' | 'tmuxName' | 'createdAt'>, newId: string): number {
+  let n = 0
+  for (const s of registry.values()) {
+    if (s.sessionId === newId || s.sessionId === old.sessionId) continue
+    if (s.parentId === old.sessionId || (s.parentId === undefined && isParentOf(old, s))) {
+      s.parentId = newId
+      n++
+    }
+  }
+  if (n > 0) registry.persist()
+  return n
 }
 
 export function ensureSessionType(info: SessionInfo): void {
@@ -201,6 +236,7 @@ export type SpawnOpts = {
   promptPrefix?: string                                        // prepended to the generated prompt (used by templates)
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
+  parentId?: string                    // the spawner's sessionId: authority over the new session (see isParentOf)
   label?: SessionLabel  // what the session is for, for cost grouping
   inheritedLabel?: SessionLabel  // bucket handed down by a parent or dead predecessor; loses to `label` and to a flag on the topic
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
@@ -218,7 +254,7 @@ export type SpawnOpts = {
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
   reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
-  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[] }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
+  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[]; parentId?: string | null; initiator?: string }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
 // ---------------------------------------------------------------------------
