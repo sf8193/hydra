@@ -1,10 +1,10 @@
 import { existsSync, statSync } from 'fs'
 import { execSync } from 'child_process'
 import { gateway, INBOX_DIR } from './config.js'
-import { isParentOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
+import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf } from './session-lifecycle.js'
+import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
@@ -37,6 +37,36 @@ export const __test = process.env.NODE_ENV === 'test'
 
 // read_only: blocks Claude's file-editing tools. Bash remains, so it is a guard, not a sandbox.
 const READ_ONLY_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit']
+
+/** A headless session's threadId is synthetic (its own session id), so reply/fetch_messages on it can only fail. */
+function assertRealThread(channelId: string | undefined): void {
+  if (channelId && registry.get(channelId)?.headless) {
+    throw new Error('headless sessions have no thread — use send_to_thread(target="parent", …) to reach your parent')
+  }
+}
+
+/** send_to_thread target "parent": the caller's parent by id. */
+function resolveParentTarget(caller: SessionInfo | undefined): { session: SessionInfo; replaced?: string } {
+  if (!caller) throw new Error('target="parent" requires a session context')
+  const parent = parentSessionOf(caller)
+  if (!parent) throw new Error(`${caller.tmuxName} has no parent session to send to`)
+  if (parent.deadAt) throw new Error(`${caller.tmuxName}'s parent ${parent.tmuxName} has ended`)
+  return { session: parent }
+}
+
+const answered = new WeakSet<SessionInfo>()  // in-memory: a restart inside the delay leaves phase_budget as the net
+/** An answer-once session (a headless fork) is ended once its first result is delivered — after this tool call returns. */
+function endIfAnswered(sender: SessionInfo): void {
+  if (!sender.answerOnce || answered.has(sender)) return
+  answered.add(sender)
+  setTimeout(() => {
+    if (registry.get(sender.sessionId) !== sender) return
+    void answeredIO.killSession(sender, ANSWERED_KILL_REASON, { skipWorktreeDestroy: true }).catch(() => {})
+  }, ANSWERED_KILL_DELAY_MS)
+}
+export const ANSWERED_KILL_DELAY_MS = 500
+// Injectable for tests (like handoffIO): the real one kills tmux.
+export const answeredIO = { killSession: (i: SessionInfo, r: string, o: { skipWorktreeDestroy: boolean }) => killSession(i, r, o) }
 
 /**
  * The session that ran under this name: the live record, else the latest dead record,
@@ -144,6 +174,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
     switch (name) {
       case 'reply': {
         const chat_id = args.chat_id as string
+        assertRealThread(chat_id)
         const text = args.text as string
         const reply_to = args.reply_to as string | undefined
         const files = (args.files as string[] | undefined) ?? []
@@ -244,6 +275,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'fetch_messages': {
         const channelId = args.channel as string
+        assertRealThread(channelId)
         const limit = Math.min((args.limit as number) ?? 20, 100)
         const msgs = await gateway.fetchMessages(channelId, limit)
         const botId = gateway.botId
@@ -351,6 +383,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
           ...(headless ? { headless: true } : {}),
+          // A headless fork exists to answer one question; it is ended once that answer is delivered.
+          ...(headless && source ? { answerOnce: true } : {}),
           ...(spawnMode.quiet ? { quiet: true } : {}),
           ...(readThreadPrefix ? { promptPrefix: readThreadPrefix } : {}),
           ...(privateProtocolSpawn ? { beforeInitialTurn: (sessionId: string) => {
@@ -681,25 +715,32 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         process.stderr.write(`daemon: send_to_thread [${msgType}] → ${target}\n`)
 
-        // Resolve by session name only — no raw thread IDs (use reply for those)
-        const resolved = resolveSendTarget(target)
+        // Resolve by session name only — no raw thread IDs (use reply for those).
+        // "parent" is the caller's parent by id, so a child never needs its name.
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        const resolved = target === 'parent' ? resolveParentTarget(caller) : resolveSendTarget(target)
         if (!resolved) {
           const known = [...registry.values()].filter(s => !s.deadAt).map(s => s.tmuxName).join(', ')
           throw new Error(`no session named "${target}". Known sessions: ${known || '(none)'}`)
         }
         const targetSession = resolved.session
         const threadId = targetSession.threadId
+        // A headless session has no Discord thread (its threadId is synthetic), so a
+        // public send to it can only go to its session context — which is private
+        // delivery, under the same rule: only its own children may reach it.
+        const toHeadless = !isPrivate && targetSession.headless === true
 
         // Private delivery: child → its own parent only, straight to the parent's
         // session. Never touches the gateway, so nothing lands in any thread.
-        if (isPrivate) {
-          const sender = callerSessionId ? registry.get(callerSessionId) : undefined
-          if (!sender) throw new Error('private delivery requires a session context')
+        if (isPrivate || toHeadless) {
+          const sender = caller
+          const why = toHeadless ? `"${target}" is headless and has no thread, so it can only be reached privately by its own child sessions` : ''
+          if (!sender) throw new Error(toHeadless ? why : 'private delivery requires a session context')
           if (resolved.replaced) throw new Error(`no live session named "${target}" for private delivery`)
-          if (msgType === 'question') throw new Error('private delivery supports progress and result only')
-          if (files.length > 0) throw new Error('private delivery cannot attach files')
+          if (msgType === 'question') throw new Error(toHeadless ? `${why} — progress and result only` : 'private delivery supports progress and result only')
+          if (files.length > 0) throw new Error(toHeadless ? `${why} — no files` : 'private delivery cannot attach files')
           if (!isParentOf(targetSession, sender)) {
-            throw new Error(`private delivery denied — "${target}" is not your parent session`)
+            throw new Error(toHeadless ? why : `private delivery denied — "${target}" is not your parent session`)
           }
           // Private reports enter the parent's model context directly. Bound a
           // noisy or hostile helper so one result cannot consume it wholesale.
@@ -713,7 +754,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             content: `[private ${msgType} from ${sender.tmuxName}] ${privateText}`,
             meta: { chat_id: threadId, message_id: '', user: sender.tmuxName, user_id: 'session', ts: new Date().toISOString() },
           })
-          return { content: [{ type: 'text', text: `privately delivered to ${target}` }] }
+          if (msgType === 'result') endIfAnswered(sender)
+          const note = toHeadless ? ' (it is headless, so delivered privately)' : ''
+          return { content: [{ type: 'text', text: `privately delivered to ${targetSession.tmuxName}${note}` }] }
         }
         const redirectNote = resolved.replaced
           ? ` (delivered to ${targetSession.tmuxName}, which replaced ${resolved.replaced} in that thread)`
@@ -771,6 +814,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           },
         })
 
+        if (msgType === 'result' && caller) endIfAnswered(caller)
         const result = sentIds.length === 1
           ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}`
           : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}`

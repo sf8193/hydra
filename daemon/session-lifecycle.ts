@@ -383,6 +383,9 @@ export function splitOwnFromHistory(allIds: readonly string[], ownId: string | u
   return { own, history }
 }
 
+/** Kill reason for an answer-once session ended after its result was delivered. */
+export const ANSWERED_KILL_REASON = 'answered'
+
 // skipWorktreeDestroy: the conversation continues elsewhere (handoff, reattach) — keep the
 // Hydra worktree and scratchpads. keepScratch: only the scratchpads (a resume or fork of
 // this conversation still names their paths, and a resume reuses the scratchpad itself).
@@ -404,9 +407,11 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
     // Notify the parent session when a child dies. Gated on lineage as before; the notice
     // goes to whoever holds authority (by sessionId, so a recycled name can't receive it).
-    if (info.originFrom && info.sessionType !== 'thread_guest' && !info.suppressDeathMessage) {
+    // An answered session completed rather than died: its parent already has the answer.
+    if (info.originFrom && info.sessionType !== 'thread_guest' && !info.suppressDeathMessage && reason !== ANSWERED_KILL_REASON) {
       const parent = parentSessionOf(info)
-      if (parent) {
+      // A headless parent has no thread to post to.
+      if (parent && !parent.headless) {
         const msgs = info.messageCount ?? 0
         const emoji = sessionEmoji(info.tmuxName)
         void gateway.send(parent.threadId, `${emoji} \`${info.tmuxName}\` died — _${reason}_ (${msgs} msgs)`).catch(err => {
@@ -589,8 +594,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   // Headless sessions: no Discord thread, just tmux + send_to_thread.
-  // Use sessionId as a synthetic threadId for registry tracking.
-  // TODO: headless sessions can send via send_to_thread but cannot receive — safeSend with a UUID silently fails
+  // Use sessionId as a synthetic threadId for registry tracking. Nothing may post to it:
+  // send_to_thread delivers to a headless target privately, and announcements skip it.
   const isHeadless = !!opts?.headless
   if (isHeadless) {
     threadId = sessionId // synthetic — not a real Discord thread
@@ -843,7 +848,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktreePath ?? '', branch: worktreeBranch ?? '' })
     prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, arrival, hasPredecessor: carriedPredecessor?.engine === 'claude' })  // only Claude predecessors can be forked today
   } else if (isFork && isHeadless) {
-    prompt = buildHeadlessForkPrompt({ ...promptParams, originFrom: originFrom!, answerTo: opts?.initiator ?? 'main', readOnly: !!disallowedTools?.length })
+    prompt = buildHeadlessForkPrompt({ ...promptParams, originFrom: originFrom!, readOnly: !!disallowedTools?.length, answerOnce: !!opts?.answerOnce })
   } else if (isFork) {
     prompt = buildForkPrompt({ ...promptParams, originFrom: originFrom! })
   } else if (isResurrect) {
@@ -906,6 +911,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     parentId: carriedParentId ?? null,
     ephemeral: opts?.ephemeral,
     forceWorktreeCleanup: opts?.forceWorktreeCleanup,
+    ...(opts?.answerOnce ? { answerOnce: true } : {}),
     ...(isHeadless ? { headless: true } : {}),
     ...(phaseBudgetMs ? { budgetDeadline: now + phaseBudgetMs } : {}),
     ...(carriedPredecessor ? { predecessor: carriedPredecessor } : {}),
@@ -962,7 +968,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       // The spawner by id, so a session that reused the spawner's name never gets the announcement.
       const self = registry.get(sessionId)
       const parentInfo = self ? parentSessionOf(self) : undefined
-      if (parentInfo) {
+      // A headless parent has no thread to post to.
+      if (parentInfo && !parentInfo.headless) {
         void safeSend(parentInfo.threadId, `${spawnLine}\n_↳ headless worker_`)
       }
     }

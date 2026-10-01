@@ -358,7 +358,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     const headless = launches[0].prompt
     expect(headless).toContain('a headless read-only fork of elder')
     expect(headless).toContain('Question: q?')
-    expect(headless).toContain('send_to_thread(target="asker", type="result"')
+    expect(headless).toContain('send_to_thread(target="parent", type="result"')
     expect(headless).not.toContain('Greet')
 
     await doSpawnSession('q2', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' } })
@@ -621,6 +621,25 @@ describe('spawn_session fork_from and read_only', () => {
       await doSpawnSession('t', undefined, undefined, { headless: true, parentId: 'fs-caller', initiator: 'fsimposter' })
       const announced = sent.filter(m => m.text.includes('headless worker')).map(m => m.channel)
       expect(announced).toEqual(['fs-caller-thread'])
+    })
+
+    test('the headless spawn line is skipped for a headless parent and still posted for a threaded one', async () => {
+      mk('fs-caller', 'fscaller', old)
+      mk('fs-ghost', 'fsghost', { ...old, headless: true })
+      await doSpawnSession('t', undefined, undefined, { headless: true, parentId: 'fs-ghost', initiator: 'fsghost' })
+      await doSpawnSession('t', undefined, undefined, { headless: true, parentId: 'fs-caller', initiator: 'fscaller' })
+      expect(sent.filter(m => m.text.includes('headless worker')).map(m => m.channel)).toEqual(['fs-caller-thread'])
+    })
+
+    test('only a headless fork_from spawn is answer-once', async () => {
+      mk('fs-caller', 'fscaller', old)
+      mk('fs-src', 'fssrc', { ...old, claudeSessionId: 'cl-src', worktreePath: dir })
+      expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
+      expect((await spawn({})).isError).toBeFalsy()
+      const flags = launches.map(l => registry.get(l.sessionId)?.answerOnce ?? false)
+      expect(flags).toEqual([true, false])
+      expect(launches[0].prompt).toContain('you are ended once it is delivered')
+      expect(launches[1].prompt).not.toContain('you are ended once it is delivered')
     })
 
     test('a human fork (no spawner) still answers to its source', async () => {
