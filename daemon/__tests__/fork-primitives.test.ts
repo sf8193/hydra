@@ -615,6 +615,14 @@ describe('spawn_session fork_from and read_only', () => {
       expect(deathNotices()).toEqual(['fs-caller-thread'])
     })
 
+    test('the headless spawn line goes to the spawner by id, never to a session that took its name', async () => {
+      mk('fs-caller', 'fscaller', old)
+      mk('fs-imposter', 'fsimposter', old)  // holds the name the spawn's initiator string carries
+      await doSpawnSession('t', undefined, undefined, { headless: true, parentId: 'fs-caller', initiator: 'fsimposter' })
+      const announced = sent.filter(m => m.text.includes('headless worker')).map(m => m.channel)
+      expect(announced).toEqual(['fs-caller-thread'])
+    })
+
     test('a human fork (no spawner) still answers to its source', async () => {
       mk('fs-src', 'fssrc', old)
       mk('fs-other', 'fsother', old)

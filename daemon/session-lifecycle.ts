@@ -959,7 +959,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   if (isHeadless) {
     if (!opts?.quiet) {
-      const parentInfo = opts?.initiator ? registry.findByName(opts.initiator) : undefined
+      // The spawner by id, so a session that reused the spawner's name never gets the announcement.
+      const self = registry.get(sessionId)
+      const parentInfo = self ? parentSessionOf(self) : undefined
       if (parentInfo) {
         void safeSend(parentInfo.threadId, `${spawnLine}\n_↳ headless worker_`)
       }

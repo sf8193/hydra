@@ -176,6 +176,8 @@ test('successor prompt: no arriving.md leaves the prompt as built without one', 
   const arrival = handoffArrival({ artifact: '/h.md' }, { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' })
   expect(arrival).toBeUndefined()
   expect(buildHandoffPrompt({ ...p, arrival })).toBe(buildHandoffPrompt(p))
+  // Pinned to the bytes main produced before arriving.md could replace behavior lines.
+  expect(buildHandoffPrompt(p)).toBe("You are fresh, a session created by handoff from flint. Topic: t\n\nYour chat thread chat_id is th-1. Your session_id is s-1.\nRead your handoff context from `/h.md`, then read your memory files.\nAfter reading the artifact, append a \"### Reception (by fresh)\" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.\nSend a greeting to your thread using reply(chat_id=th-1). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.\nThen call set_description(session_id=\"s-1\", description=\"...\") to name this thread. Lead with the domain if one is clear. 5 words max. Rewrite it whenever your focus shifts — the thread name updates live.\nAfter greeting, begin executing the Next action from the artifact immediately. Do not wait for user input unless there are critical questions that need the user's answer.")
 })
 
 test('successor prompt: arriving.md is filled, placed after the context line, and replaces the built-in arrival behavior', async () => {
