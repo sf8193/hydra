@@ -24,7 +24,7 @@
 // is a hard guard, not just a convention: refuse to isolate to anything under ~/.claude/channels
 // (any platform, not just the current CHAT_PLATFORM), full stop, even if explicitly requested.
 import { execFileSync } from 'child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
+import { existsSync, lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os'
 import { join, resolve } from 'path'
 import { isUnder } from './shared/path-containment.js'
@@ -97,6 +97,24 @@ export function killPrivateTmux(stateDir: string, uid = process.getuid?.() ?? 0)
   try { execFileSync('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore', timeout: 3000 }) } catch {}
 }
 
+/** TMUX and TMUX_TMPDIR as a child process sees them, which is not what process.env says. */
+export function childTmuxEnv(): { TMUX: string; TMUX_TMPDIR: string } {
+  const out = execFileSync('sh', ['-c', 'printf "%s\\n%s" "$TMUX" "$TMUX_TMPDIR"']).toString()
+  const [TMUX = '', TMUX_TMPDIR = ''] = out.split('\n')
+  return { TMUX, TMUX_TMPDIR }
+}
+
+export function tmuxIsolationRefusal(seen: { TMUX: string; TMUX_TMPDIR: string }, tmp = tmpdir()): string | undefined {
+  let real = tmp
+  try { real = realpathSync(tmp) } catch {}
+  const isolated = !seen.TMUX && !!seen.TMUX_TMPDIR &&
+    (isUnder(seen.TMUX_TMPDIR, tmp) || isUnder(seen.TMUX_TMPDIR, real))
+  if (isolated) return undefined
+  return `tests would reach the live tmux server (TMUX=${seen.TMUX || '<unset>'}, ` +
+    `TMUX_TMPDIR=${seen.TMUX_TMPDIR || '<unset>'}) and could kill live sessions. ` +
+    `Run them with \`bun run test\` (scripts/test.sh), which starts bun on a private tmux server.`
+}
+
 // The only delete in this file: the prefix and the age bound are all that stand
 // between a preload and rmSync over a concurrent run's state dir.
 export function sweepStaleTestDirs(root: string, now: number, maxAgeMs: number): string[] {
@@ -129,9 +147,13 @@ process.env.CLAUDE_CONFIG_DIR = join(dir, 'claude')
 delete process.env.DISCORD_STATE_DIR
 
 // Real processes too: a private tmux server and a throwaway Codex root (codex-process.ts refuses real starts).
-process.env.TMUX_TMPDIR = join(dir, 'tmux')
-mkdirSync(process.env.TMUX_TMPDIR, { recursive: true })
-delete process.env.TMUX
+// The tmux server can't be chosen here: bun's child processes inherit the environment bun
+// started with, not edits to process.env, so a TMUX_TMPDIR set in this file reached only the
+// call sites that pass env explicitly. Every other `tmux kill-session -t drift` went to the
+// live server and killed the live session of that name (Oct 1, 2026). scripts/test.sh sets it
+// before bun starts; refuse to run without it.
+const tmuxRefusal = tmuxIsolationRefusal(childTmuxEnv())
+if (tmuxRefusal) throw new Error(tmuxRefusal)
 process.env.HYDRA_CODEX_ROOT = join(dir, 'codex')
 
 applyHermeticGit(process.env)

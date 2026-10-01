@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { isForbiddenStateDir, FORBIDDEN_STATE_DIR_PREFIX, sweepStaleTestDirs, testStateDirRefusal, TEST_DIR_PREFIX, killPrivateTmux } from '../../test-setup.js'
+import { isForbiddenStateDir, FORBIDDEN_STATE_DIR_PREFIX, sweepStaleTestDirs, testStateDirRefusal, TEST_DIR_PREFIX, killPrivateTmux, childTmuxEnv, tmuxIsolationRefusal } from '../../test-setup.js'
 import { chmodSync, existsSync, lutimesSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { homedir, tmpdir } from 'os'
@@ -174,5 +174,33 @@ describe('killPrivateTmux', () => {
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('tmux isolation', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'tmux-guard-'))
+
+  test('a child process sees the private server, whatever process.env says', () => {
+    // The live-session killer: bun children ignore process.env edits, so check what a child sees.
+    const seen = childTmuxEnv()
+    expect(seen.TMUX).toBe('')
+    expect(tmuxIsolationRefusal(seen)).toBeUndefined()
+  })
+
+  test('a private TMUX_TMPDIR under the temp dir with no TMUX passes', () => {
+    expect(tmuxIsolationRefusal({ TMUX: '', TMUX_TMPDIR: join(tmp, 'x') }, tmp)).toBeUndefined()
+  })
+
+  test('running inside a live tmux session is refused', () => {
+    expect(tmuxIsolationRefusal({ TMUX: '/private/tmp/tmux-501/default,1,1', TMUX_TMPDIR: join(tmp, 'x') }, tmp))
+      .toContain('live tmux server')
+  })
+
+  test('no TMUX_TMPDIR falls back to the default server, so it is refused', () => {
+    expect(tmuxIsolationRefusal({ TMUX: '', TMUX_TMPDIR: '' }, tmp)).toContain('bun run test')
+  })
+
+  test('a TMUX_TMPDIR outside the temp dir is refused', () => {
+    expect(tmuxIsolationRefusal({ TMUX: '', TMUX_TMPDIR: '/Users/someone/tmux' }, tmp)).toBeDefined()
   })
 })
