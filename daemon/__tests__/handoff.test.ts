@@ -176,9 +176,11 @@ test('successor prompt: no arriving.md leaves the prompt as built without one', 
   const arrival = handoffArrival({ artifact: '/h.md' }, { from: 'flint', session: 'fresh', cwd: '/w', worktree: '', branch: '' })
   expect(arrival).toBeUndefined()
   expect(buildHandoffPrompt({ ...p, arrival })).toBe(buildHandoffPrompt(p))
+  // Pinned to the bytes main produced before arriving.md could replace behavior lines.
+  expect(buildHandoffPrompt(p)).toBe("You are fresh, a session created by handoff from flint. Topic: t\n\nYour chat thread chat_id is th-1. Your session_id is s-1.\nRead your handoff context from `/h.md`, then read your memory files.\nAfter reading the artifact, append a \"### Reception (by fresh)\" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.\nSend a greeting to your thread using reply(chat_id=th-1). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.\nThen call set_description(session_id=\"s-1\", description=\"...\") to name this thread. Lead with the domain if one is clear. 5 words max. Rewrite it whenever your focus shifts — the thread name updates live.\nAfter greeting, begin executing the Next action from the artifact immediately. Do not wait for user input unless there are critical questions that need the user's answer.")
 })
 
-test('successor prompt: arriving.md is filled and placed between the context line and the Reception line', async () => {
+test('successor prompt: arriving.md is filled, placed after the context line, and replaces the built-in arrival behavior', async () => {
   const { handoffArrival } = await import('../session-lifecycle.js')
   const { buildHandoffPrompt } = await import('../prompts/session.js')
   const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')
@@ -190,12 +192,17 @@ test('successor prompt: arriving.md is filled and placed between the context lin
     const lines = buildHandoffPrompt({ sessionId: 's-1', tmuxName: 'fresh', threadId: 'th-1', topic: 't', originFrom: 'flint', artifact: '/h.md', arrival }).split('\n')
     const at = lines.indexOf(arrival!)
     expect(lines[at - 1]).toStartWith('Read your handoff context from `/h.md`')
-    expect(lines[at + 1]).toStartWith('After reading the artifact, append a "### Reception')
+    // Plumbing stays.
+    expect(lines[0]).toBe('You are fresh, a session created by handoff from flint. Topic: t')
     expect(lines).toContain('Your chat thread chat_id is th-1. Your session_id is s-1.')
-    const rest = lines.slice(at + 1).join('\n')
-    expect(rest).toContain('Send a greeting to your thread using reply(chat_id=th-1)')
-    expect(rest).toContain('set_description')
-    expect(rest).toContain('begin executing the Next action')
+    expect(lines[at + 1]).toBe('Send a greeting to your thread using reply(chat_id=th-1).')
+    expect(lines[at + 2]).toStartWith('Then call set_description(session_id="s-1"')
+    expect(lines.length).toBe(at + 3)
+    // The built-in behavior it replaces does not leak through.
+    const prompt = lines.join('\n')
+    expect(prompt).not.toContain('### Reception')
+    expect(prompt).not.toContain('In your greeting, include')
+    expect(prompt).not.toContain('begin executing the Next action')
   } finally {
     rmSync(file, { force: true })
   }
@@ -252,4 +259,14 @@ test('arriving {{from_transcript}}: the predecessor\'s transcript path when it e
     rmSync(file, { force: true })
     rmSync(projectDir, { recursive: true, force: true })
   }
+})
+
+test('successor prompt: with arriving.md and a predecessor, the fork recipe stays and the built-in behavior is gone', async () => {
+  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  const p = { sessionId: 's-2', tmuxName: 'fresh', threadId: 'th-2', topic: 't', originFrom: 'flint', artifact: '/h.md', arrival: 'Run /workstream-orient.', hasPredecessor: true }
+  const lines = buildHandoffPrompt(p).split('\n')
+  const at = lines.indexOf('Run /workstream-orient.')
+  expect(lines[at + 1]).toStartWith('If a question comes up that only flint can answer, ask a fork of it: spawn_session(fork_from="predecessor"')
+  expect(lines[at + 2]).toBe('Send a greeting to your thread using reply(chat_id=th-2).')
+  expect(lines.join('\n')).not.toMatch(/### Reception|In your greeting, include|begin executing the Next action/)
 })

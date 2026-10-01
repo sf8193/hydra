@@ -3,7 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { mkdirSync, unlinkSync } from 'fs'
 import { gateway, STATE_DIR } from '../config.js'
-import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
+import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
 import type { SpawnResult } from '../sessions.js'
@@ -165,6 +165,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     const ephemeralPrefix = opts?.ephemeral ? `When you are finished, post exactly \`[done]\` on its own line to your thread. This signals the system to clean up your session automatically.\n\n` : undefined
     const result = await recoveryDeps.doSpawnSession(forkTopic, baseChatId, undefined, {
       forkFrom: forkFrom!,
+      parentId: info.sessionId,  // a human fork answers to its source
       model: forkModel,
       engine: targetEngine,
       inheritedLabel: info.label,
@@ -197,6 +198,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
       await gateway.send(msg.channelId, `⚠️ Fork failed — spawning fresh session that will read the thread for context.`, { replyTo: msg.id })
       const result = await recoveryDeps.doSpawnSession(forkTopic, baseChatId, undefined, {
         resurrectFrom: parentName,
+        parentId: info.sessionId,  // a human fork answers to its source
         promptPrefix: `Read the parent thread for context using fetch_messages(channel="${info.threadId}", limit=50), then continue in your own thread.`,
         model: forkModel,
         engine: targetEngine,
@@ -333,6 +335,11 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
   const deadModel = recoveryModel(lastSession?.model ?? lastInfo?.sessionMetadata?.model)
   const deadLabel = deadSessionLabel(lastSession, lastInfo)
+  // Tier 1 (resume) keeps these off the dead record; the fork and respawn tiers run after that record is gone.
+  const { predecessor, launchCwd, disallowedTools, initiator } = lastInfo ?? {}
+  // A resumed session is the dead one continuing, so it keeps its parent.
+  const parentId = lastInfo ? authorityId(lastInfo) : undefined
+  const carryOver = predecessor || launchCwd || disallowedTools || parentId || initiator ? { predecessor, launchCwd, disallowedTools, parentId, initiator } : undefined
   const engineType = recoveryEngine(lastSession, lastInfo)
   const plan = resolveEngine(engineType).recoveryPlan({
     tmuxName: lastTmuxName, claudeSessionId,
@@ -377,6 +384,7 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       const method = result.bridgeOrphan
         ? 'resumed — context restored, but bridge not yet connected (may need a moment)'
         : 'resumed — full context restored'
+      if (lastInfo) repointChildren(lastInfo, result.sessionId)
       await announceRecovery(msg, result, thread, method, '⏯️', lastTmuxName)
       return
     }
@@ -387,8 +395,9 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       if (!plan.fork) throw new Error('cannot fork this session')
       const forkResult = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
         existingThreadId: thread.threadId, forkFrom: plan.fork,
-        model: deadModel, engine: engineType, label: deadLabel,
+        model: deadModel, engine: engineType, label: deadLabel, carryOver,
       })
+      if (lastInfo) repointChildren(lastInfo, forkResult.sessionId)
       await announceRecovery(msg, forkResult, thread, 'resumed (forked from dead session — transcript preserved)', '⏯️', lastTmuxName)
       return
     } catch {
@@ -397,8 +406,9 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
   }
 
   // Tier 3: respawn (fresh session reads thread history)
-  const t3result = await recoveryDeps.tryRespawn(threadId, thread.topic, lastTmuxName, deadModel, { engine: engineType, label: deadLabel })
+  const t3result = await recoveryDeps.tryRespawn(threadId, thread.topic, lastTmuxName, deadModel, { engine: engineType, label: deadLabel, carryOver })
   if (t3result) {
+    if (lastInfo) repointChildren(lastInfo, t3result.sessionId)
     await announceRecovery(msg, t3result, thread, 'respawned (resume unavailable — reading thread history)', '🔁', lastTmuxName)
   } else {
     await reportError(msg.channelId, msg.id, 'resume', 'all recovery methods failed')

@@ -40,6 +40,9 @@ export type SessionInfo = {
   originType?: 'spawn' | 'fork' | 'handoff' | 'resurrect'
   originFrom?: string
   initiator?: string
+  // The sessionId with authority over this one (kill, peek, private send, death notice).
+  // null: no parent. undefined: a record from before parentId existed — see isParentOf.
+  parentId?: string | null
   sessionMetadata?: SessionMetadata
   respawnCount?: number
   resumeCount?: number
@@ -49,6 +52,9 @@ export type SessionInfo = {
   worktreePath?: string
   worktreeBranch?: string
   handoffSelection?: { model: string; engine: ProviderId }  // set by `handoff <model>`, read by the handoff tool; dies with the record
+  predecessor?: Predecessor  // set on a handoff successor: the session it took over from, still forkable after its kill
+  launchCwd?: string          // a fork's launch dir (its source's); a resume must start there to find the transcript
+  disallowedTools?: string[]  // Claude built-in tools blocked at spawn (read_only, factory PM); a resume re-applies them
   deadAt?: number
   contextLinks?: string[]
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
@@ -114,6 +120,49 @@ export function removeToolInputSchemas(info: SessionInfo, ...names: ToolName[]):
   if (Object.keys(info.toolInputSchemas).length === 0) delete info.toolInputSchemas
 }
 
+/**
+ * Authority (kill, peek, private send, death notice) belongs to the spawner, held by
+ * sessionId so a recycled name can't inherit it. It passes along a handoff or a recovery,
+ * since those are the same session continuing (see repointChildren); lineage alone
+ * (originFrom) never confers it, except a human `fork`, which answers to its source.
+ */
+export function isParentOf(parent: Pick<SessionInfo, 'sessionId' | 'tmuxName' | 'createdAt'>, child: Pick<SessionInfo, 'parentId' | 'initiator' | 'originType' | 'originFrom' | 'createdAt'>): boolean {
+  if (child.parentId !== undefined) return child.parentId !== null && child.parentId === parent.sessionId
+  // Legacy record (no parentId): match by name, guarded against a recycled name.
+  const name = child.initiator ?? (child.originType === 'fork' ? child.originFrom : undefined)
+  return !!name && parent.tmuxName === name && parent.createdAt <= child.createdAt
+}
+
+/** The record holding authority over info, if any (for the death notice). */
+export function parentSessionOf(info: SessionInfo): SessionInfo | undefined {
+  if (info.parentId) return registry.get(info.parentId)
+  if (info.parentId === null) return undefined
+  return [...registry.values()].find(s => s.sessionId !== info.sessionId && isParentOf(s, info))
+}
+
+/** The parentId a successor of info inherits: its own, or a legacy record's name-matched parent; null if none. */
+export function authorityId(info: SessionInfo): string | null {
+  if (info.parentId !== undefined) return info.parentId
+  return parentSessionOf(info)?.sessionId ?? null
+}
+
+/**
+ * A handoff or recovery replaced oldId with newId: the same session, continuing. Its
+ * children answer to the new record. Legacy children matched by name are upgraded.
+ */
+export function repointChildren(old: Pick<SessionInfo, 'sessionId' | 'tmuxName' | 'createdAt'>, newId: string): number {
+  let n = 0
+  for (const s of registry.values()) {
+    if (s.sessionId === newId || s.sessionId === old.sessionId) continue
+    if (s.parentId === old.sessionId || (s.parentId === undefined && isParentOf(old, s))) {
+      s.parentId = newId
+      n++
+    }
+  }
+  if (n > 0) registry.persist()
+  return n
+}
+
 export function ensureSessionType(info: SessionInfo): void {
   if (!info.sessionType) {
     info.sessionType = 'thread_owner'
@@ -166,10 +215,15 @@ export type ThreadMetadata = {
   parentChannelId?: string
 }
 
+// The session a handoff successor took over from, snapshotted before its kill: the
+// engine that ran it, its native fork ids, the directory it worked in, and its model.
+export type Predecessor = { engine: ProviderId; fork: NonNullable<SpawnOpts['forkFrom']>; cwd: string; model?: string }
+
 export type SpawnOpts = {
   forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string; codexHomeName?: string }
   handedOffFrom?: string
   handoffFromClaudeSessionId?: string  // predecessor's Claude session id (undefined for Codex), for the arriving template's {{from_session}} and {{from_transcript}}
+  predecessor?: Predecessor            // handoff: persisted on the successor's record so it can fork the session it replaced
   artifact?: string
   existingThreadId?: string                                    // reuse an existing thread instead of creating a new one
   resumeFrom?: string                                          // claude session ID for --resume (no --fork-session)
@@ -182,6 +236,7 @@ export type SpawnOpts = {
   promptPrefix?: string                                        // prepended to the generated prompt (used by templates)
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
+  parentId?: string                    // the spawner's sessionId: authority over the new session (see isParentOf)
   label?: SessionLabel  // what the session is for, for cost grouping
   inheritedLabel?: SessionLabel  // bucket handed down by a parent or dead predecessor; loses to `label` and to a flag on the topic
   ephemeral?: boolean    // auto-kill on [done] sentinel, skip death visuals
@@ -192,13 +247,14 @@ export type SpawnOpts = {
   engine?: ProviderId  // which backend to use (default: claude)
   headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
+  launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   sessionType?: SessionType  // declared at spawn — determines base tool set
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
   worktreeBranchSuffix?: string // appended to `wt/<name>` to avoid branch collisions between same-named builders
   preserveWorktree?: boolean  // recovery: reuse the dead session's on-disk worktree instead of destroying+recreating it (keeps unpushed work + lets --resume find the transcript)
   reuseWorktree?: { repo: string; path: string; branch: string }  // recovery: explicit worktree to adopt in place — survives even after the dead record it came from is deleted (resume-fail fallback tiers)
-  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string }  // recovery: deliverables/description to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
+  carryOver?: { artifacts?: string[]; contextLinks?: string[]; description?: string; predecessor?: Predecessor; launchCwd?: string; disallowedTools?: string[]; parentId?: string | null; initiator?: string }  // recovery: deliverables/description (and a handoff successor's predecessor, a fork's launch dir and blocked tools) to re-apply — carried explicitly so fallback tiers keep them after the dead record is gone
 }
 
 // ---------------------------------------------------------------------------

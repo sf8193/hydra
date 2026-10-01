@@ -7,7 +7,7 @@
 // work-key dedup, and the single-flight guard here.
 import { existsSync } from 'fs'
 import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
-import { registry, sessionEmoji, threadRegistry } from './sessions.js'
+import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, SessionInfo } from './sessions.js'
 import { doSpawnSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { tmuxHasSession, isAlive, executionAlive, safeSend, baseNameFromBranch } from './util.js'
@@ -72,7 +72,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
     ? { repo: deadInfo.worktreeRepo, path: deadInfo.worktreePath, branch: deadInfo.worktreeBranch ?? `wt/${deadInfo.tmuxName}` }
     : undefined
   const carryOver = deadInfo
-    ? { artifacts: deadInfo.artifacts, contextLinks: deadInfo.contextLinks, description: deadInfo.description }
+    ? { artifacts: deadInfo.artifacts, contextLinks: deadInfo.contextLinks, description: deadInfo.description, predecessor: deadInfo.predecessor, launchCwd: deadInfo.launchCwd, disallowedTools: deadInfo.disallowedTools, parentId: authorityId(deadInfo), initiator: deadInfo.initiator }
     : undefined
   // Snapshot PR watches with their seen-cursors before any kill unwatches them; the
   // cascade recreates the session under a new id, so restore them onto the survivor.
@@ -80,6 +80,8 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   // a watch owned by the skipped session isn't stranded on a never-revived record.
   const savedWatches = [...(deadInfo ? getWatchesBySession(deadInfo.sessionId) : []), ...(dead.siblingWatches ?? [])]
   const restoreOnto = (r: { sessionId: string; threadId: string }): void => {
+    // The recovered session is the dead one continuing: its children answer to it now.
+    if (deadInfo) repointChildren(deadInfo, r.sessionId)
     if (savedWatches.length > 0) {
       const n = restoreWatches(savedWatches, r.sessionId, r.threadId)
       if (n > 0) process.stderr.write(`daemon: recover ${lastTmuxName}: restored ${n} PR watch(es) onto ${r.sessionId}\n`)

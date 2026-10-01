@@ -42,20 +42,41 @@ export function buildForkPrompt(p: PromptParams & { originFrom: string }): strin
   ].join('\n')
 }
 
-export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; arrival?: string }): string {
+// A headless fork has no thread: it answers the session that spawned it, then ends.
+export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; answerTo: string; readOnly: boolean }): string {
+  return [
+    `You are ${p.tmuxName}, a headless${p.readOnly ? ' read-only' : ''} fork of ${p.originFrom}. You have its conversation up to here, but you are not ${p.originFrom} and you have no thread of your own.`,
+    `Your session_id is ${p.sessionId}.`,
+    ``,
+    `Question: ${p.topic}`,
+    ``,
+    `Answer it from that conversation and anything you can look up${p.readOnly ? ' (Edit, Write and NotebookEdit are blocked)' : ''}.`,
+    `Reply once with send_to_thread(target="${p.answerTo}", type="result", text="<your answer>"), then stop.`,
+  ].join('\n')
+}
+
+// A deployment's arriving.md replaces the built-in arrival *behavior* — the Reception note,
+// the greeting's content, and starting the Next action at once — so a local arrival
+// procedure has one owner. Identity, thread ids, the handoff file, the greeting itself,
+// set_description and the fork recipe are plumbing and always stay.
+export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; arrival?: string; hasPredecessor?: boolean }): string {
   const contextLine = p.artifact
     ? `Read your handoff context from \`${p.artifact}\`, then read your memory files.`
     : `Read your memory files and workstream canon for context.`
+  const greet = `Send a greeting to your thread using reply(chat_id=${p.threadId}).`
   return [
     `You are ${p.tmuxName}, a session created by handoff from ${p.originFrom}. Topic: ${p.topic}`,
     ``,
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     contextLine,
     ...(p.arrival ? [p.arrival] : []),
-    `After reading the artifact, append a "### Reception (by ${p.tmuxName})" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.`,
-    `Send a greeting to your thread using reply(chat_id=${p.threadId}). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.`,
+    ...(p.hasPredecessor ? [`If a question comes up that only ${p.originFrom} can answer, ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.`] : []),
+    ...(p.arrival ? [greet] : [
+      `After reading the artifact, append a "### Reception (by ${p.tmuxName})" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.`,
+      `${greet} In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.`,
+    ]),
     `Then ${DESCRIPTION_INSTRUCTION(p.sessionId)}`,
-    `After greeting, begin executing the Next action from the artifact immediately. Do not wait for user input unless there are critical questions that need the user's answer.`,
+    ...(p.arrival ? [] : [`After greeting, begin executing the Next action from the artifact immediately. Do not wait for user input unless there are critical questions that need the user's answer.`]),
   ].join('\n')
 }
 
