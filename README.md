@@ -439,7 +439,7 @@ Sessions get cute names (spark, pixel, nova...) and run in their own tmux sessio
 Two optional files in the state dir customize what each side is told. Both are re-read on every handoff, so edits apply without a restart:
 
 - `actions/handoff/departing.md` **replaces** what the outgoing session is told. It must tell the session to write the file and call the `handoff` tool with `path=` (usually `{{artifact}}`). Nothing enforces this, so a template that omits it never hands off.
-- `actions/handoff/arriving.md` is **added** to the successor's prompt, after the read-your-handoff line. The rest of the prompt (thread ids, greeting, description, Next action) stays.
+- `actions/handoff/arriving.md` is inserted after the read-your-handoff line and **replaces** the built-in arrival behavior (the Reception note, the greeting's content, starting the Next action at once). Thread ids, the greeting itself, the description and the fork recipe stay.
 
 `{{name}}` placeholders are filled per handoff:
 
