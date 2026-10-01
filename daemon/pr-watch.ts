@@ -102,7 +102,7 @@ function persist(): void {
 async function pinWatch(entry: WatchEntry): Promise<void> {
   if (!gateway?.pin) return
   try {
-    const sent = await gateway.send(entry.threadId, `👁️ Watching [#${entry.prNumber}${entry.title ? ` ${entry.title}` : ''}](<${entry.prUrl}>)`)
+    const sent = await gateway.send(entry.threadId, `[#${entry.prNumber}](${entry.prUrl})${entry.title ? ` ${entry.title}` : ''}`)
     await gateway.pin(entry.threadId, sent.id)
     entry.pinMessageId = sent.id
     if (watches.get(entry.prUrl) === entry) persist()
