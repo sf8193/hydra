@@ -43,7 +43,7 @@ export function buildForkPrompt(p: PromptParams & { originFrom: string }): strin
 }
 
 // A headless fork has no thread: it answers the session that spawned it, then ends.
-export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; answerTo: string; readOnly: boolean }): string {
+export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; readOnly: boolean; answerOnce?: boolean }): string {
   return [
     `You are ${p.tmuxName}, a headless${p.readOnly ? ' read-only' : ''} fork of ${p.originFrom}. You have its conversation up to here, but you are not ${p.originFrom} and you have no thread of your own.`,
     `Your session_id is ${p.sessionId}.`,
@@ -51,7 +51,7 @@ export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; 
     `Question: ${p.topic}`,
     ``,
     `Answer it from that conversation and anything you can look up${p.readOnly ? ' (Edit, Write and NotebookEdit are blocked)' : ''}.`,
-    `Reply once with send_to_thread(target="${p.answerTo}", type="result", text="<your answer>"), then stop.`,
+    `Reply once with send_to_thread(target="parent", type="result", text="<your answer>")${p.answerOnce ? ' — you are ended once it is delivered' : ', then stop'}.`,
   ].join('\n')
 }
 

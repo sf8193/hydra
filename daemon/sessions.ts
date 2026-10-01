@@ -62,6 +62,7 @@ export type SessionInfo = {
   ephemeral?: boolean
   forceWorktreeCleanup?: boolean  // see SpawnOpts
   headless?: boolean       // no Discord thread — worker communicates via send_to_thread
+  answerOnce?: boolean     // a headless fork: ended once its first result is delivered
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
   factoryTicket?: string       // factory ticket ID — for restart recovery info
@@ -246,6 +247,7 @@ export type SpawnOpts = {
   trigger?: string       // what caused this spawn, for the announce line (e.g. 'spawn:', 'review 2:', 'CLI'); falls back to originType
   engine?: ProviderId  // which backend to use (default: claude)
   headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
+  answerOnce?: boolean   // end the session once its first result is delivered (headless forks)
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
