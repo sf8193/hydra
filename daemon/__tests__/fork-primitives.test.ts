@@ -464,6 +464,82 @@ describe('spawn_session fork_from and read_only', () => {
     expect(await errorOf({ fork_from: 'predecessor' })).toContain('cxold is a Codex session')
   })
 
+  test('a threaded fork whose source dir is gone fails before a thread exists', async () => {
+    const calls: string[] = []
+    const saved = { createThread: gateway.createThread, send: gateway.send }
+    ;(gateway as any).createThread = async () => { calls.push('createThread'); return { id: 'fs-orphan' } }
+    ;(gateway as any).send = async (c: string) => { calls.push(`send:${c}`); return { id: 'm', channelId: c } }
+    try {
+      mk('fs-caller', 'fscaller')
+      mk('fs-gone', 'fsgone', { claudeSessionId: 'cl-g', worktreePath: join(dir, 'removed') })
+      expect(await errorOf({ fork_from: 'fsgone', headless: false, chat_id: 'fs-chan' })).toContain(`launch directory ${join(dir, 'removed')} no longer exists`)
+      expect(calls).toEqual([])
+      expect(launches).toEqual([])
+    } finally { Object.assign(gateway, saved) }
+  })
+
+  describe('authority over a fork belongs to its spawner', () => {
+    const sent: { channel: string; text: string }[] = []
+    const delivered: string[] = []
+    let savedSend: typeof gateway.send
+    let savedSendOrQueue: typeof transport.sendOrQueue
+    beforeEach(() => {
+      sent.length = 0; delivered.length = 0
+      savedSend = gateway.send; savedSendOrQueue = transport.sendOrQueue
+      ;(gateway as any).send = async (channel: string, text: string) => { sent.push({ channel, text }); return { id: 'm', channelId: channel } }
+      ;(transport as any).sendOrQueue = (sessionId: string) => { delivered.push(sessionId) }
+    })
+    afterEach(() => { (gateway as any).send = savedSend; (transport as any).sendOrQueue = savedSendOrQueue })
+
+    const deathNotices = () => sent.filter(m => m.text.includes('died')).map(m => m.channel)
+    const errText = (r: { content: { text: string }[] }) => r.content[0].text
+    // Authorized peeks get past the check and fail later: these sessions have no tmux.
+    const PEEK_ALLOWED = 'tmux not running'
+    const privateSend = (from: string, target: string) => executeTool('send_to_thread', { target, type: 'result', text: 'r', visibility: 'private' }, from)
+    const old = { createdAt: Date.now() - 60_000 }
+
+    test('a live source can neither kill nor peek its fork; the spawner can, and gets the death notice', async () => {
+      mk('fs-caller', 'fscaller', old)
+      mk('fs-src', 'fssrc', { ...old, claudeSessionId: 'cl-src', worktreePath: dir })
+      expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
+      const child = registry.get(launches[0].sessionId)!
+      expect(child.originFrom).toBe('fssrc')  // lineage stays the source
+
+      expect(errText(await executeTool('peek_session', { name: child.tmuxName }, 'fs-src') as any)).toContain('peek denied')
+      expect(errText(await executeTool('peek_session', { name: child.tmuxName }, 'fs-caller') as any)).toContain(PEEK_ALLOWED)
+      expect(errText(await executeTool('kill_session', { session_id: child.sessionId }, 'fs-src') as any)).toContain(`cannot kill ${child.tmuxName}`)
+      expect(errText(await privateSend(child.sessionId, 'fssrc') as any)).toContain('"fssrc" is not your parent session')
+      expect((await privateSend(child.sessionId, 'fscaller')).isError).toBeFalsy()
+      expect(delivered).toEqual(['fs-caller'])
+
+      expect((await executeTool('kill_session', { session_id: child.sessionId }, 'fs-caller')).isError).toBeFalsy()
+      expect(deathNotices()).toEqual(['fs-caller-thread'])
+    })
+
+    test('fork_from="predecessor": the source is dead, and the spawner still gets the death notice', async () => {
+      mk('fs-caller', 'fscaller', { ...old, predecessor: { engine: 'claude', fork: { claudeSessionId: 'cl-gone', parentName: 'fselder' }, cwd: dir } })
+      expect((await spawn({ fork_from: 'predecessor' })).isError).toBeFalsy()
+      const child = registry.get(launches[0].sessionId)!
+      expect(child.originFrom).toBe('fselder')
+      expect((await executeTool('kill_session', { session_id: child.sessionId }, 'fs-caller')).isError).toBeFalsy()
+      expect(deathNotices()).toEqual(['fs-caller-thread'])
+    })
+
+    test('a human fork (no spawner) still answers to its source', async () => {
+      mk('fs-src', 'fssrc', old)
+      mk('fs-other', 'fsother', old)
+      await doSpawnSession('t', undefined, undefined, { forkFrom: { claudeSessionId: 'cl-src', parentName: 'fssrc' }, headless: true })
+      const child = registry.get(launches[0].sessionId)!
+      expect(child.initiator).toBeUndefined()
+
+      expect(errText(await executeTool('peek_session', { name: child.tmuxName }, 'fs-other') as any)).toContain('peek denied')
+      expect(errText(await executeTool('peek_session', { name: child.tmuxName }, 'fs-src') as any)).toContain(PEEK_ALLOWED)
+      expect(errText(await executeTool('kill_session', { session_id: child.sessionId }, 'fs-other') as any)).toContain(`cannot kill ${child.tmuxName}`)
+      expect((await executeTool('kill_session', { session_id: child.sessionId }, 'fs-src')).isError).toBeFalsy()
+      expect(deathNotices()).toEqual(['fs-src-thread'])
+    })
+  })
+
   test('read_only without fork_from reaches the launch too', async () => {
     mk('fs-caller', 'fscaller')
     expect((await spawn({ read_only: true })).isError).toBeFalsy()

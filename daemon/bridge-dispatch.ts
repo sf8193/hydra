@@ -1,7 +1,7 @@
-import { statSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { execSync } from 'child_process'
 import { gateway, INBOX_DIR } from './config.js'
-import { registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
+import { parentOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf } from './session-lifecycle.js'
@@ -66,7 +66,14 @@ function forkSourceOfHistory(h: ThreadSessionEntry): Predecessor | undefined {
   return { engine, fork, cwd, ...(h.model ? { model: h.model } : {}) }
 }
 
-/** spawn_session fork_from: a session name, or "predecessor" for the caller's own. */
+/**
+ * spawn_session fork_from: a session name, or "predecessor" for the caller's own.
+ *
+ * Reads are universal, authority is the spawner's. Any session can fork any other by name:
+ * every session runs as the same user and can already read any transcript on disk, so a
+ * fork grants no new information access. Control of the fork (kill, peek, death notice)
+ * belongs to the spawner — see parentOf.
+ */
 function resolveForkSource(name: string, callerSessionId: string | undefined): Predecessor {
   let source: Predecessor | undefined
   if (name === 'predecessor') {
@@ -82,6 +89,8 @@ function resolveForkSource(name: string, callerSessionId: string | undefined): P
   // A Codex fork launches its own app-server in a fresh CODEX_HOME, where the source's
   // rollout is not found; launching in the source's home would restart its app-server.
   if (source.engine === 'codex') throw new Error(`fork_from: ${source.fork.parentName} is a Codex session, and Codex sessions cannot be forked yet — spawn fresh with read_thread instead`)
+  // Checked here, before doSpawnSession creates a thread; its own check is the backstop for resumes.
+  if (!existsSync(source.cwd)) throw new Error(`cannot fork: the source's launch directory ${source.cwd} no longer exists`)
   return source
 }
 
@@ -457,7 +466,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const callerName = registry.get(callerSessionId)?.tmuxName
           // Distinct from a human's 'session ended' so the on-kill hook can tell them apart
           reason = `session ended by ${callerName ?? 'agent'}`
-          if (info.initiator !== callerName && info.originFrom !== callerName) {
+          if (parentOf(info) !== callerName) {
             throw new Error(`cannot kill ${info.tmuxName} — you can only kill sessions you spawned`)
           }
           // A protocol-managed participant (e.g. the review Critic) belongs to the
@@ -688,7 +697,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           if (resolved.replaced) throw new Error(`no live session named "${target}" for private delivery`)
           if (msgType === 'question') throw new Error('private delivery supports progress and result only')
           if (files.length > 0) throw new Error('private delivery cannot attach files')
-          if (sender.initiator !== targetSession.tmuxName && sender.originFrom !== targetSession.tmuxName) {
+          if (parentOf(sender) !== targetSession.tmuxName) {
             throw new Error(`private delivery denied — "${target}" is not your parent session`)
           }
           // Private reports enter the parent's model context directly. Bound a
@@ -777,7 +786,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         if (callerSessionId && callerSessionId !== 'main') {
           const caller = registry.get(callerSessionId)
-          if (caller && found.originFrom !== caller.tmuxName && found.initiator !== caller.tmuxName) {
+          if (caller && parentOf(found) !== caller.tmuxName) {
             throw new Error(`peek denied — "${name}" is not a child of your session`)
           }
         }

@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'path'
 import { homedir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
-import { registry, sessionEmoji, threadRegistry } from './sessions.js'
+import { parentOf, registry, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
@@ -401,8 +401,10 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     // Notify parent session when a child dies (createdAt guard prevents name-recycling mismatch)
+    // Gated on lineage as before; the notice goes to the parent (the spawner, if any).
     if (info.originFrom && info.sessionType !== 'thread_guest' && !info.suppressDeathMessage) {
-      const parent = [...registry.values()].find(s => s.tmuxName === info.originFrom && s.createdAt < info.createdAt)
+      const parentName = parentOf(info)
+      const parent = [...registry.values()].find(s => s.tmuxName === parentName && s.createdAt < info.createdAt)
       if (parent) {
         const msgs = info.messageCount ?? 0
         const emoji = sessionEmoji(info.tmuxName)

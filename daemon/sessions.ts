@@ -117,6 +117,17 @@ export function removeToolInputSchemas(info: SessionInfo, ...names: ToolName[]):
   if (Object.keys(info.toolInputSchemas).length === 0) delete info.toolInputSchemas
 }
 
+/**
+ * The session with authority over this one (kill, peek, private send, death notice).
+ * The spawner is the parent; lineage (originFrom) is the parent only when nobody spawned it.
+ * Only a session-name initiator (spawn_session, factory) can match a session. A human or CLI
+ * initiator matches none, so setting one on a path that has an originFrom would leave that
+ * session with no parent.
+ */
+export function parentOf(info: Pick<SessionInfo, 'initiator' | 'originFrom'>): string | undefined {
+  return info.initiator ?? info.originFrom
+}
+
 export function ensureSessionType(info: SessionInfo): void {
   if (!info.sessionType) {
     info.sessionType = 'thread_owner'
