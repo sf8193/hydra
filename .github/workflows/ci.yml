@@ -47,4 +47,4 @@ jobs:
           DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: |
           mkdir -p ~/.claude/channels/discord
-          bun test --isolate
+          bun run test --isolate

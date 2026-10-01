@@ -19,7 +19,7 @@ bun build daemon.ts --target bun --outdir /tmp/hb    # daemon
 bun build cli/hydra.ts --target bun --outdir /tmp/hb  # CLI
 bun build bridge.ts --target bun --outdir /tmp/hb     # bridge
 bun scripts/check-owners.ts                           # destructive tmux/git + raw liveness only in owner files (CI gate)
-DISCORD_BOT_TOKEN=dummy bun test --isolate            # all tests, each file isolated, as CI runs them (daemon/config.ts exits without a platform token)
+DISCORD_BOT_TOKEN=dummy bun run test --isolate        # all tests, each file isolated, as CI runs them, on a private tmux server (plain `bun test` refuses: it would reach live sessions)
 ```
 
 Compile-check all three entry points before committing — they are independent module graphs.
