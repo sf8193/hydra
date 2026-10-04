@@ -620,6 +620,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       !!gateway.canThreadInDM,
     )
     targetChannelId = resolved.targetChannelId
+    if (!targetChannelId) throw new Error('no channel to spawn in: pass chat_id (the parent channel ID), or set DEFAULT_SESSION_CHANNEL in .env')
     parentChannelId = resolved.parentChannelId ?? resolved.targetChannelId
     if (resolved.threadId) threadId = resolved.threadId
     if (resolved.warning) process.stderr.write(`daemon: WARNING: ${resolved.warning}\n`)
