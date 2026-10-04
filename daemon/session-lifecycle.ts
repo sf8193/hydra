@@ -53,27 +53,28 @@ export async function resolveSpawnChannel(
     return { targetChannelId: defaultChannel, ...(warning ? { warning } : {}) }
   }
   if (!chatId) return toDefault()
+  let ch: ChannelProbe
   try {
-    const ch = await fetchChannel(chatId)
-    if (ch.isThread) {
-      const parentChannelId = ch.parentId ?? undefined
-      if (parentChannelId) {
-        // Return both: threadId so the caller can reuse the thread (respawn in
-        // dead thread), and targetChannelId=parent so new thread creation lands
-        // in the right channel if the thread can't be reused.
-        return { targetChannelId: parentChannelId, threadId: chatId, parentChannelId }
-      }
-      return toDefault(`chatId ${chatId} is a thread with no parentId — structurally unexpected, falling back to default channel`)
-    }
-    if (ch.isDM && !canThreadInDM) {
-      // Intentionally silent — DMs without thread support are expected on Slack
-      return toDefault()
-    }
-    return { targetChannelId: chatId }
+    ch = await fetchChannel(chatId)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return toDefault(`fetchChannel(${chatId}) failed: ${msg} — falling back to default channel`)
   }
+  if (ch.isThread) {
+    const parentChannelId = ch.parentId ?? undefined
+    if (parentChannelId) {
+      // Return both: threadId so the caller can reuse the thread (respawn in
+      // dead thread), and targetChannelId=parent so new thread creation lands
+      // in the right channel if the thread can't be reused.
+      return { targetChannelId: parentChannelId, threadId: chatId, parentChannelId }
+    }
+    return toDefault(`chatId ${chatId} is a thread with no parentId — structurally unexpected, falling back to default channel`)
+  }
+  if (ch.isDM && !canThreadInDM) {
+    // Intentionally silent — DMs without thread support are expected on Slack
+    return toDefault()
+  }
+  return { targetChannelId: chatId }
 }
 
 // ---------------------------------------------------------------------------

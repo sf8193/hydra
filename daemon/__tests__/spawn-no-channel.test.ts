@@ -16,3 +16,10 @@ test('a failed chat_id lookup with no default surfaces the lookup error', async 
   const failing = async () => { throw new Error('Missing Access') }
   await expect(resolveSpawnChannel('c1', '', failing, false)).rejects.toThrow('Missing Access')
 })
+
+test('a thread with no parent and no default names that cause, not a fetch failure', async () => {
+  const orphan = async () => ({ isThread: true, isDM: false, parentId: null })
+  const msg = await resolveSpawnChannel('c1', '', orphan, false).then(() => '', (e: Error) => e.message)
+  expect(msg).toContain('thread with no parentId')
+  expect(msg).not.toContain('fetchChannel')
+})
