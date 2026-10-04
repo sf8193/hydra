@@ -11,3 +11,8 @@ test('no chat_id and no default channel fails with a clear message', async () =>
 test('a chat_id still resolves when there is no default channel', async () => {
   expect((await resolveSpawnChannel('c1', '', probe, false)).targetChannelId).toBe('c1')
 })
+
+test('a failed chat_id lookup with no default surfaces the lookup error', async () => {
+  const failing = async () => { throw new Error('Missing Access') }
+  await expect(resolveSpawnChannel('c1', '', failing, false)).rejects.toThrow('Missing Access')
+})

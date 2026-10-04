@@ -47,18 +47,12 @@ export async function resolveSpawnChannel(
   fetchChannel: (id: string) => Promise<ChannelProbe>,
   canThreadInDM: boolean,
 ): Promise<ChannelResolution> {
-  const resolved = await resolveSpawnChannelOrDefault(chatId, defaultChannel, fetchChannel, canThreadInDM)
-  if (!resolved.targetChannelId) throw new Error('no channel to spawn in: pass chat_id (the parent channel ID), or set DEFAULT_SESSION_CHANNEL in .env')
-  return resolved
-}
-
-async function resolveSpawnChannelOrDefault(
-  chatId: string | undefined,
-  defaultChannel: string,
-  fetchChannel: (id: string) => Promise<ChannelProbe>,
-  canThreadInDM: boolean,
-): Promise<ChannelResolution> {
-  if (!chatId) return { targetChannelId: defaultChannel }
+  // Every fallback lands here: an empty default would reach Discord as `GET /channels/` ("404: Not Found").
+  const toDefault = (warning?: string): ChannelResolution => {
+    if (!defaultChannel) throw new Error(`no channel to spawn in${warning ? ` (${warning})` : ''}: pass chat_id (the parent channel ID), or set DEFAULT_SESSION_CHANNEL in .env`)
+    return { targetChannelId: defaultChannel, ...(warning ? { warning } : {}) }
+  }
+  if (!chatId) return toDefault()
   try {
     const ch = await fetchChannel(chatId)
     if (ch.isThread) {
@@ -69,22 +63,16 @@ async function resolveSpawnChannelOrDefault(
         // in the right channel if the thread can't be reused.
         return { targetChannelId: parentChannelId, threadId: chatId, parentChannelId }
       }
-      return {
-        targetChannelId: defaultChannel,
-        warning: `chatId ${chatId} is a thread with no parentId — structurally unexpected, falling back to default channel`,
-      }
+      return toDefault(`chatId ${chatId} is a thread with no parentId — structurally unexpected, falling back to default channel`)
     }
     if (ch.isDM && !canThreadInDM) {
       // Intentionally silent — DMs without thread support are expected on Slack
-      return { targetChannelId: defaultChannel }
+      return toDefault()
     }
     return { targetChannelId: chatId }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return {
-      targetChannelId: defaultChannel,
-      warning: `fetchChannel(${chatId}) failed: ${msg} — falling back to default channel`,
-    }
+    return toDefault(`fetchChannel(${chatId}) failed: ${msg} — falling back to default channel`)
   }
 }
 
