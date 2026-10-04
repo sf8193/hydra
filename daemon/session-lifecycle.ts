@@ -47,6 +47,17 @@ export async function resolveSpawnChannel(
   fetchChannel: (id: string) => Promise<ChannelProbe>,
   canThreadInDM: boolean,
 ): Promise<ChannelResolution> {
+  const resolved = await resolveSpawnChannelOrDefault(chatId, defaultChannel, fetchChannel, canThreadInDM)
+  if (!resolved.targetChannelId) throw new Error('no channel to spawn in: pass chat_id (the parent channel ID), or set DEFAULT_SESSION_CHANNEL in .env')
+  return resolved
+}
+
+async function resolveSpawnChannelOrDefault(
+  chatId: string | undefined,
+  defaultChannel: string,
+  fetchChannel: (id: string) => Promise<ChannelProbe>,
+  canThreadInDM: boolean,
+): Promise<ChannelResolution> {
   if (!chatId) return { targetChannelId: defaultChannel }
   try {
     const ch = await fetchChannel(chatId)
@@ -620,7 +631,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       !!gateway.canThreadInDM,
     )
     targetChannelId = resolved.targetChannelId
-    if (!targetChannelId) throw new Error('no channel to spawn in: pass chat_id (the parent channel ID), or set DEFAULT_SESSION_CHANNEL in .env')
     parentChannelId = resolved.parentChannelId ?? resolved.targetChannelId
     if (resolved.threadId) threadId = resolved.threadId
     if (resolved.warning) process.stderr.write(`daemon: WARNING: ${resolved.warning}\n`)
