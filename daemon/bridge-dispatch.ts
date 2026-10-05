@@ -15,7 +15,7 @@ import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
-import { normalizeReviewRounds } from '../shared/constants.js'
+import { normalizeReviewRounds, resolveCodexModelAlias } from '../shared/constants.js'
 import { isToolAllowed } from './tool-surface.js'
 
 const SEND_RETRY_ATTEMPTS = 3
@@ -353,7 +353,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const source = forkFromRaw ? resolveForkSource(forkFromRaw, callerSessionId) : undefined
         const readOnly = args.read_only === true
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
-        const model = (args.model as string | undefined)?.trim() || source?.model
+        const modelArg = (args.model as string | undefined)?.trim()
+        // A Codex alias (astra, sol, ...) selects the Codex engine, as in chat spawns; otherwise it would launch `claude --model astra`.
+        const codexModel = modelArg && !source ? resolveCodexModelAlias(modelArg) : undefined
+        const model = codexModel ?? (modelArg || source?.model)
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
@@ -380,6 +383,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           ...(model ? { model } : {}),
           // engine: always 'claude' while Codex sources are refused; it matters once Codex forks are supported.
           ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
+          ...(codexModel ? { engine: 'codex' as const } : {}),
           ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
           ...(headless ? { headless: true } : {}),
