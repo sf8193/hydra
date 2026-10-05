@@ -355,7 +355,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const topic = worktree ? `worktree:${worktree} ${args.topic}` : args.topic as string
         const modelArg = (args.model as string | undefined)?.trim()
         // A Codex alias (astra, sol, ...) selects the Codex engine, as in chat spawns; otherwise it would launch `claude --model astra`.
-        const codexModel = modelArg && !source ? resolveCodexModelAlias(modelArg) : undefined
+        const codexModel = modelArg ? resolveCodexModelAlias(modelArg) : undefined
+        if (codexModel && source) throw new Error('fork_from cannot be combined with a Codex model — Codex sessions cannot be forked')
+        if (codexModel && readOnly) throw new Error('read_only is not enforced on Codex sessions — use a Claude model')
         const model = codexModel ?? (modelArg || source?.model)
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
