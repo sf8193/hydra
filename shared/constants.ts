@@ -35,6 +35,12 @@ export const MODEL_ALIASES: Record<string, string> = {
   'opus-4-8': 'claude-opus-4-8[1m]',
 }
 
+/** A bare known model ID (e.g. `claude-opus-5-5`) gets the same 1M window as its alias, so the window hydra records matches what claude runs. */
+export function withContextSuffix(model: string): string {
+  const full = `${model}[1m]`
+  return Object.values(MODEL_ALIASES).includes(full) ? full : model
+}
+
 /** Codex model aliases. Kept separate because selecting one also selects the
  * Codex engine; MODEL_ALIASES historically implies the Claude engine. */
 export const CODEX_MODEL_ALIASES: Record<string, string> = {

@@ -11,7 +11,7 @@ import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
-import { isKnownModel, resolveModelAlias, spawnModel } from '../shared/constants.js'
+import { isKnownModel, resolveModelAlias, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter } from './engines/engine-adapter.js'
@@ -864,7 +864,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Central model resolution: alias → full ID → validate. All callers can pass
   // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-5[1m]").
   const rawModel = opts?.model
-  const model = rawModel ? (resolveModelAlias(rawModel) ?? rawModel) : spawnModel()
+  const model = rawModel ? (resolveModelAlias(rawModel) ?? withContextSuffix(rawModel)) : spawnModel()
 
   const engine = opts?.engine ?? 'claude'
 
