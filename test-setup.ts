@@ -24,7 +24,7 @@
 // is a hard guard, not just a convention: refuse to isolate to anything under ~/.claude/channels
 // (any platform, not just the current CHAT_PLATFORM), full stop, even if explicitly requested.
 import { execFileSync } from 'child_process'
-import { existsSync, lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os'
 import { join, resolve } from 'path'
 import { isUnder } from './shared/path-containment.js'
@@ -140,6 +140,7 @@ export function sweepStaleTestDirs(root: string, now: number, maxAgeMs: number):
 export const TEST_STATE_DIR = explicit || mkdtempSync(join(tmpdir(), TEST_DIR_PREFIX))
 const dir = TEST_STATE_DIR
 process.env.HYDRA_STATE_DIR = dir
+mkdirSync(join(dir, 'mods'), { recursive: true }) // the daemon's boot sync (shared/mods.ts) made this before any spawn
 process.env.HYDRA_TEST_PRELOADED = '1' // daemon/config.ts refuses to load under bun test without it
 
 // Claude's config dir too, or planted transcript fixtures land in the live ~/.claude/projects.

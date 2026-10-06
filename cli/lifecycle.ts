@@ -10,6 +10,7 @@ import {
   waitForSocket, buildDaemonEnvs, requireSpawnCwd, pluginVersionDir, probeDaemonHealth,
 } from './helpers.js'
 import { isKnownModel } from '../shared/constants.js'
+import { modsExport, syncMods } from '../shared/mods.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)
@@ -88,12 +89,15 @@ export async function startByte(cfg: HydraConfig): Promise<void> {
   if (!isKnownModel(cfg.byteModel)) {
     console.warn(`\u26a0\ufe0f  Unrecognized model "${cfg.byteModel}" \u2014 may be a new release or typo. Starting anyway.`)
   }
+  // The watchdog can restart byte under a daemon that predates the mods sync, so sync here too.
+  syncMods(cfg.hydraDir, cfg.stateDir)
   const inner = [
     `cd ${shq(cfg.byteCwd)}`,
     `export DAEMON_SOCK=${shq(cfg.sockPath)}`,
     `export CLAUDE_CONFIG_DIR=${shq(cfg.configDir)}`,
     `export CHAT_PLATFORM=${cfg.platform}`,
     `export HYDRA_ROLE=main`,
+    modsExport(cfg.stateDir),
     authExport || null,
     `caffeinate -i claude --model ${shq(cfg.byteModel)} --channels plugin:discord@claude-plugins-official --dangerously-skip-permissions ${shq(prompt)}`,
   ].filter(Boolean).join(' && ')

@@ -8,3 +8,5 @@ node_modules/
 templates.local.json
 node_modules
 CLAUDE.local.md
+mods.local/
+mod/.claude-plugin/types/

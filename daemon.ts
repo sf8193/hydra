@@ -37,6 +37,7 @@ writeFileSync(PID_FILE, `${process.pid}\n`)
 process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
 
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
+import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
 import { engines, resolveEngine } from './daemon/engines/instances.js'
@@ -255,6 +256,12 @@ gateway.onReconnectAfterOutage = sendRecoveryReport
 // ---------------------------------------------------------------------------
 
 setupPermissionHandler(gateway)
+
+// ---------------------------------------------------------------------------
+// Mods — copy mod/ and mods.local/* where every session loads them (shared/mods.ts)
+// ---------------------------------------------------------------------------
+
+process.stderr.write(`daemon: synced mods into ${STATE_DIR}/mods: ${syncMods(import.meta.dir, STATE_DIR).join(', ')}\n`)
 
 // ---------------------------------------------------------------------------
 // Bridge sync — keep plugin cache in sync with repo bridge.ts

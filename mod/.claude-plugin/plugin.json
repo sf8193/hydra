@@ -1,0 +1,5 @@
+{
+  "name": "hydra",
+  "description": "Hydra's Claude Code mod. The daemon copies mod/ to <state dir>/mods/hydra; sessions load it via CLAUDE_CODE_PLUGIN_DIRS (shared/mods.ts)",
+  "version": "0.1.0"
+}
