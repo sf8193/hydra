@@ -1,17 +1,16 @@
 import { randomUUID } from 'crypto'
 import { execSync, execFileSync, spawn } from 'child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync, openSync, readSync, closeSync } from 'fs'
-import { basename, dirname, join, resolve } from 'path'
-import { homedir } from 'os'
-import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, SOCK_PATH, STATE_DIR } from './config.js'
+import { writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync } from 'fs'
+import { basename, dirname, join } from 'path'
+import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
 import { authorityId, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
-import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
+import type { Predecessor, SessionInfo, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
-import { isKnownModel, resolveModelAlias, spawnModel, withContextSuffix } from '../shared/constants.js'
+import { resolveModelAlias, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter } from './engines/engine-adapter.js'
@@ -111,30 +110,6 @@ export async function backfillAnchorChannelIds(): Promise<void> {
     threadRegistry.persist()
   }
   process.stderr.write(`daemon: backfill: ${filled} filled, ${failed} failed, ${missing.length - filled - failed} skipped\n`)
-}
-
-// Per-session pane logfile — `tmux pipe-pane` captures each spawn's output so a
-// crash still leaves it on disk.
-
-const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
-
-// ---------------------------------------------------------------------------
-// Spawn env whitelist — explicit construction, not ambient inheritance
-// ---------------------------------------------------------------------------
-// Each env var the byte carries gets a conscious routing decision here:
-//   pass-through: shared between byte and sessions (platform, socket, config)
-//   override:     session-specific identity
-//   strip:        byte-only (HYDRA_ROLE) — prevented from leaking into sessions
-
-function buildSpawnEnv(sessionId: string, tmuxName: string): string[] {
-  return [
-    `export HYDRA_SESSION_ID=${shq(sessionId)}`,
-    `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
-    `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
-    `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
-    `export CHAT_PLATFORM=${shq(PLATFORM)}`,
-    `unset HYDRA_ROLE`, // prevent spawned session from inheriting byte's HYDRA_ROLE=main
-  ]
 }
 
 // ---------------------------------------------------------------------------
@@ -762,7 +737,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
-  const channelFlag = `plugin:discord@claude-plugins-official`
   const spawnCwd = process.env.SPAWN_CWD
   if (!spawnCwd) throw new Error('SPAWN_CWD env var is required -- set it to the working directory for spawned sessions')
 

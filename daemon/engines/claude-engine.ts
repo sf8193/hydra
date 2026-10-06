@@ -31,6 +31,11 @@ import { modsExport } from '../../shared/mods.js'
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
+// Spawn env whitelist: explicit construction, not ambient inheritance. Each env var the byte
+// carries gets a conscious routing decision here:
+//   pass-through: shared between byte and sessions (platform, socket, config, mods)
+//   override:     session-specific identity
+//   strip:        byte-only (HYDRA_ROLE), kept from leaking into sessions
 function buildSpawnEnv(sessionId: string, tmuxName: string): string[] {
   return [
     `export HYDRA_SESSION_ID=${shq(sessionId)}`,
