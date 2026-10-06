@@ -10,7 +10,7 @@ async function run($: any, on: any, command: string, text: string, failOn?: numb
   const watched: string[] = []
   on('tool.call', () => ({ result: { stdout: text }, text }))
   on('mcp.call', ($: any, e: any) => {
-    if (failOn && e.args?.pr_url.endsWith(`/${failOn}`)) throw new Error('refused')
+    if (failOn && e.args?.pr_url.endsWith(`/${failOn}`)) return { deny: 'refused' }
     watched.push(`${e.server} ${e.tool} ${e.args?.pr_url}`)
     return { value: { content: [] } }
   })
