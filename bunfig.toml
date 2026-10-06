@@ -1,3 +1,5 @@
 [test]
 # Isolate daemon state to a temp dir for the whole suite — see test-setup.ts.
 preload = ["./test-setup.ts"]
+# Mod tests run under Claude Code (`claude plugin test mod`), not bun.
+pathIgnorePatterns = ["mod/**", "mods.local/**"]

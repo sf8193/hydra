@@ -1,0 +1,4 @@
+{
+  "description": "Hydra's Claude Code mod: runs inside every session that loads the discord plugin",
+  "modules": ["./register.ts"]
+}

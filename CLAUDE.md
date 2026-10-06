@@ -20,6 +20,7 @@ bun build cli/hydra.ts --target bun --outdir /tmp/hb  # CLI
 bun build bridge.ts --target bun --outdir /tmp/hb     # bridge
 bun scripts/check-owners.ts                           # destructive tmux/git + raw liveness only in owner files (CI gate)
 DISCORD_BOT_TOKEN=dummy bun run test --isolate        # all tests, each file isolated, as CI runs them, on a private tmux server (plain `bun test` refuses: it would reach live sessions)
+claude plugin validate mod   # the Claude Code mod (needs claude >= 2.1.287; bun test skips mod/)
 ```
 
 Compile-check all three entry points before committing — they are independent module graphs.
@@ -34,4 +35,5 @@ Compile-check all three entry points before committing — they are independent 
 - Late-bind runtime reads (functions, not module-scope constants) — see `spawnModel()`, `maxChunkLimit()`.
 - No daemon-internal imports in `bridge-tools.ts` (cycle guard).
 - Creating a tmux session goes through `tmuxNewSession()` in `shared/spawn-env.ts`; spawning `codex` goes through `codexSpawnEnv()`; shell entrypoints source `scrub-raindrop.sh`. Nothing else may — a test pins the exact set of files that do. A tmux server freezes its environment at first launch and hands it to every session for that server's life.
+- Claude Code mods: hydra-coupled ones live in `mod/` (tracked); personal ones in `mods.local/<name>/` (gitignored, each a full plugin dir). The daemon copies both to `<state dir>/mods/` at boot and every Claude session loads them via `CLAUDE_CODE_PLUGIN_DIRS` (`shared/mods.ts`). A daemon restart hot-reloads running sessions' mods.
 - Never special-case a specific caller/script by name or initiator string inside shared daemon code. Add a generic parameter (CLI flag, `SpawnOpts` field) the caller opts into instead.
