@@ -379,6 +379,20 @@ describe('notify-green: delivery is a thread post, never a session turn', () => 
     expect(e.greenAnnouncedSha).toBe('abc')
   })
 
+  test('overlapping poll cycles post once', async () => {
+    mock()
+    const e = mkEntry()
+    await Promise.all([applyCheckResult(e, ok('abc')), applyCheckResult(e, ok('abc'))])
+    expect(sends).toHaveLength(1)
+    expect(e.greenAnnouncedSha).toBe('abc')
+  })
+
+  test('brackets and backslashes in the title cannot break the link', async () => {
+    mock()
+    await applyCheckResult(mkEntry({ title: 'Fix [x] path\\' }), ok('abcdef1234'))
+    expect(sends[0].text).toContain('[#9 Fix x path](https://github.com/o/r/pull/9)')
+  })
+
   test('failure path unchanged: returns ciChanged, no green post', async () => {
     mock()
     const e = mkEntry()

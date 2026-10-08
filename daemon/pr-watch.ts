@@ -94,7 +94,7 @@ export function shouldNotifyGreen(
 }
 
 export function formatGreenNotice(entry: WatchEntry, check: { headSha: string; total: number }): string {
-  const title = entry.title ? ` ${entry.title.replace(/[[\]]/g, '')}` : ''
+  const title = entry.title ? ` ${entry.title.replace(/[[\]\\]/g, '')}` : ''
   return `✅ CI green · [#${entry.prNumber}${title}](${entry.prUrl}) · \`${check.headSha.slice(0, 7)}\` · ${check.total} check${check.total !== 1 ? 's' : ''} passed`
 }
 
@@ -387,8 +387,8 @@ async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckR
 // Fold one poll's CI result into the entry. Returns whether the failure path
 // should notify the session (unchanged behavior). The opt-in green notice is a
 // visible thread post, never a session delivery: no model turn, no Codex cost.
-// greenAnnouncedSha advances only once a post lands, so a failed send retries
-// on the next poll.
+// greenAnnouncedSha is claimed before the send and released if it fails, so a
+// failed send retries on the next poll.
 export async function applyCheckResult(entry: WatchEntry, check: CheckResult | null): Promise<boolean> {
   if (!check) return false
   const ciChanged = shouldNotifyCiChange(entry.lastCheckStatus, entry.lastHeadSha, check.status, check.headSha)
@@ -396,8 +396,10 @@ export async function applyCheckResult(entry: WatchEntry, check: CheckResult | n
   entry.lastHeadSha = check.headSha
   entry.lastCheckStatus = check.status
   if (announceGreen) {
+    // Claim the SHA before the await: poll cycles can overlap, and the second must not post too.
+    entry.greenAnnouncedSha = check.headSha
     const sent = await safeSend(entry.threadId, formatGreenNotice(entry, check), { unfurl: false })
-    if (sent.length > 0) entry.greenAnnouncedSha = check.headSha
+    if (sent.length === 0 && entry.greenAnnouncedSha === check.headSha) entry.greenAnnouncedSha = undefined
   }
   return ciChanged
 }
