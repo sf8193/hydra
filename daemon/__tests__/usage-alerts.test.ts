@@ -137,6 +137,22 @@ describe('pane fallback', () => {
     expect(pcts()).toEqual(['91 weekly'])
   })
 
+  test('a stale pane footer text does not re-arm a window the claude source alerted in', () => {
+    reportUsage(pane(85, 'Sep 25, 6am (America/Los_Angeles)')) // last week's text, saved
+    reportUsage(claude('seven_day', 90, RESET_A))
+    now += 90 * 60_000 // claude stale, its window (resets at +2h) still running
+    reportUsage(pane(91, 'Oct 2, 6am (America/Los_Angeles)'))
+    expect(pcts()).toEqual(['85 weekly', '90 weekly'])
+  })
+
+  test('once the claude window has reset, a new pane footer text re-arms', () => {
+    reportUsage(claude('seven_day', 91, RESET_A))
+    reportUsage(pane(91, 'Sep 25, 6am (America/Los_Angeles)'))
+    now += 3 * H // past RESET_A; claude silent
+    reportUsage(pane(91, 'Oct 2, 6am (America/Los_Angeles)'))
+    expect(pcts()).toEqual(['91 weekly', '91 weekly'])
+  })
+
   test('a threshold the pane posted is not posted again by the claude source', () => {
     reportUsage(pane(91))
     reportUsage(claude('seven_day', 91.4, RESET_A))

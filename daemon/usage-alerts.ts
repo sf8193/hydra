@@ -88,9 +88,14 @@ function windowState(kind: UsageKind): WindowState {
 }
 
 /** Is `next` a later window than `prev`, for this source's way of naming one? */
-function isNewWindow(source: UsageSource, prev: string | undefined, next: string | undefined): boolean {
+function isNewWindow(w: WindowState, source: UsageSource, prev: string | undefined, next: string | undefined, now: number): boolean {
   if (!prev || !next || prev === next) return false
-  if (source === 'pane') return true
+  if (source === 'pane') {
+    // The pane's saved text can be weeks old (the footer only shows at high usage), so a change
+    // in it proves nothing while the claude source's window has not yet reset.
+    const claudeReset = w.windows.claude ? Date.parse(w.windows.claude) : NaN
+    return Number.isNaN(claudeReset) || now >= claudeReset
+  }
   const a = Date.parse(prev), b = Date.parse(next)
   return Number.isNaN(a) || Number.isNaN(b) || Math.abs(b - a) > SAME_WINDOW_MS
 }
@@ -123,7 +128,7 @@ export function reportUsage(r: UsageReading): void {
   // While the claude source is fresh it decides this window; the pane's reading was only the cross-check.
   if (!claudeFresh) {
     const thresholds = USAGE_THRESHOLDS[r.kind]
-    if (isNewWindow(r.source, prevWindow, r.resetsAt)) w.alerted = 0
+    if (isNewWindow(w, r.source, prevWindow, r.resetsAt, now)) w.alerted = 0
     else if (w.alerted && r.percentUsed < w.alerted - REARM_HYSTERESIS) w.alerted = thresholds.filter(t => t <= r.percentUsed).pop() ?? 0
     const crossed = thresholds.filter(t => r.percentUsed >= t && t > w.alerted).pop()
     if (crossed) {
