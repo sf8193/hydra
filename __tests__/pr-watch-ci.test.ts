@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { shouldNotifyCiChange, type CheckStatusType } from '../daemon/pr-watch.js'
+import { shouldNotifyCiChange, shouldNotifyGreen, type CheckStatusType } from '../daemon/pr-watch.js'
 
 const SHA_A = 'aaaa'
 const SHA_B = 'bbbb'
@@ -48,5 +48,32 @@ describe('shouldNotifyCiChange — new SHA (force push / new commit)', () => {
     for (const last of ['unknown', 'pending', 'success', 'failure'] as CheckStatusType[]) {
       expect(shouldNotifyCiChange(last, SHA_A, 'pending', SHA_B)).toBe(false)
     }
+  })
+})
+
+describe('shouldNotifyGreen — opt-in edge trigger, once per head commit', () => {
+  const ok = (headSha: string) => ({ status: 'success' as CheckStatusType, headSha })
+  const cases: Array<[string, { notifyGreen?: boolean; greenAnnouncedSha?: string }, { status: CheckStatusType; headSha: string } | null, boolean]> = [
+    ['not opted in: never', {}, ok(SHA_A), false],
+    ['opted out explicitly: never', { notifyGreen: false }, ok(SHA_A), false],
+    ['first success on a head: announce', { notifyGreen: true }, ok(SHA_A), true],
+    ['already green at opt-in (nothing announced yet): announce once', { notifyGreen: true, greenAnnouncedSha: undefined }, ok(SHA_A), true],
+    ['same sha already announced: repeat poll is silent', { notifyGreen: true, greenAnnouncedSha: SHA_A }, ok(SHA_A), false],
+    ['restart with persisted greenAnnouncedSha: silent', JSON.parse(JSON.stringify({ notifyGreen: true, greenAnnouncedSha: SHA_A })), ok(SHA_A), false],
+    ['new push goes green: announce again', { notifyGreen: true, greenAnnouncedSha: SHA_A }, ok(SHA_B), true],
+    ['pending: never', { notifyGreen: true }, { status: 'pending', headSha: SHA_A }, false],
+    ['failure: never', { notifyGreen: true }, { status: 'failure', headSha: SHA_A }, false],
+    ['unknown (no checks): never', { notifyGreen: true }, { status: 'unknown', headSha: SHA_A }, false],
+    ['null fetch (API failure/partial): hold', { notifyGreen: true }, null, false],
+    ['success with empty sha: never', { notifyGreen: true }, ok(''), false],
+  ]
+  for (const [label, entry, check, expected] of cases) {
+    test(label, () => { expect(shouldNotifyGreen(entry, check)).toBe(expected) })
+  }
+
+  test('failure→success on the same head announces (failure never set greenAnnouncedSha)', () => {
+    const entry = { notifyGreen: true } as { notifyGreen: boolean; greenAnnouncedSha?: string }
+    expect(shouldNotifyGreen(entry, { status: 'failure', headSha: SHA_A })).toBe(false)
+    expect(shouldNotifyGreen(entry, ok(SHA_A))).toBe(true)
   })
 })

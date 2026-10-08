@@ -687,7 +687,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
         const threadId = (args.chat_id as string | undefined) ?? info?.threadId ?? ''
         if (!threadId) throw new Error('could not determine thread — pass chat_id')
-        const result = await watchPr(prUrl, sessionId, threadId)
+        const result = await watchPr(prUrl, sessionId, threadId, { notifyGreen: args.notify_green === true })
         return { content: [{ type: 'text', text: result }] }
       }
 

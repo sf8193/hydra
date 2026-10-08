@@ -432,6 +432,12 @@ Spawn isolated Claude sessions from chat:
 
 Sessions get cute names (spark, pixel, nova...) and run in their own tmux sessions. State persists across daemon restarts.
 
+### PR watching
+
+`watch [pr-url]` in a session thread watches a PR (no URL: the PR for the session's current branch). The daemon polls every 3 minutes and delivers new review feedback and CI failures to the session. `unwatch <pr-url>` stops; `watches` lists them.
+
+Add `+green` (`watch <pr-url> +green`, or `watch_pr` with `notify_green: true`) to also post `✅ CI green` in the thread when CI passes, once per head commit. It is a plain thread message, not a session turn. Using it on an already-watched PR turns it on for that watch; `watches` marks these with 🟢.
+
 ### Handoff
 
 `handoff [model]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.

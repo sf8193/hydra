@@ -282,7 +282,7 @@ export async function handleCommandsIntercept(msg: InboundMessage): Promise<void
     '• 🔮 `recover [name]` — revive dead sessions from a crash',
     '',
     '**PR watching** (thread):',
-    '• 👁️ `watch [pr-url]` — auto-detect or specify PR to watch',
+    '• 👁️ `watch [pr-url]` — auto-detect or specify PR to watch (`+green` also posts when CI goes green)',
     '• 🙈 `unwatch <pr-url>` · 📡 `watches` — list watched PRs',
     '',
     '**Daemon:**',
