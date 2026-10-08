@@ -144,6 +144,8 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
     'spawn_session', 'kill_session',
     'factory_build', 'factory_retry', 'factory_accept', 'factory_abandon',
     'factory_status', 'factory_review',
+    // Account-wide usage: byte's mod reports it, so one reporter feeds the alerts.
+    'report_usage',
   ]),
   thread_owner: new Set([
     'reply', 'react', 'edit_message', 'delete_message', 'fetch_messages',

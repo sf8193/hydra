@@ -4,12 +4,15 @@
 import type { On } from 'claude-code'
 import { channelChats } from './reply.ts'
 import { submittedPrUrls } from './watch.ts'
+import { usageReport } from './usage.ts'
 
 const BRIDGE = 'plugin:discord:discord'
 // Chats with a Discord message this session hasn't answered (reply) or acknowledged (react) yet.
 const unanswered = new Set<string>()
 // Two chats were waiting at once (byte): which one an answer is for is unknown, so the daemon's guard handles them.
 let ambiguous = false
+// Rate-limit windows moved (or none reported yet) and the daemon has not been told.
+let usageUnsent = true
 
 export function register(on: On) {
   // A PR this session opened or pushed gets watched, so review comments reach its thread.
@@ -17,6 +20,20 @@ export function register(on: On) {
     const r = await next(e)
     // Settled together, so one refused watch doesn't skip the rest. Output redirected to a file or run in the background shows no URLs.
     await Promise.allSettled(submittedPrUrls(e.command, r.text ?? '').map(pr_url => $.mcp.call(BRIDGE, 'watch_pr', { pr_url })))
+    return r
+  })
+
+  // Account-wide rate limits, for the daemon's usage alerts. Byte alone reports: the limits are the account's, so
+  // one reporter is enough. An observer: the measurement goes on first, and a failed report is retried next time.
+  on('session.measure', async ($, e, next) => {
+    const r = await next(e)
+    if (e.changed.includes('rateLimits')) usageUnsent = true
+    if (!usageUnsent || e.rateLimits.length === 0) return r
+    try {
+      if (await $.env.get('HYDRA_ROLE') !== 'main') return r
+      const sent = await $.mcp.call(BRIDGE, 'report_usage', usageReport(e.rateLimits))
+      if (!sent.isError) usageUnsent = false
+    } catch {}
     return r
   })
 

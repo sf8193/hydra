@@ -21,6 +21,7 @@ import { safeSend } from './util.js'
 import { transport } from './bridge-transport.js'
 import { byteTmuxName } from '../shared/constants.js'
 import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from './engines/claude-status.js'
+import { reportUsage, type UsageReading } from './usage-alerts.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -82,6 +83,8 @@ export type PaneProbeIO = {
   loadAccess: () => { allowFrom: string[] }
   platform: string
   defaultChannel: string
+  // Hands a usage reading to the alert owner; optional so tests need not fake it.
+  reportUsage?: (reading: UsageReading) => void
   // Claude's own status for a session (its status file); optional so tests need not fake it.
   claudeStatus?: (tmuxName: string) => ClaudeLiveStatus | null
 }
@@ -404,32 +407,18 @@ async function notifyUsageLimit(entry: ProbeEntry, now: number): Promise<void> {
   }
 }
 
-// Claude Code's footer shows "You've used 91% of your weekly limit · resets …"
-// once usage gets high. The limit is account-wide, so byte's pane is enough.
-// Alert once per threshold; a new "resets …" date (next weekly window) re-arms them.
-// Keyed on the date, not a drop in %, so footer jitter (91→90→91) can't re-alert.
+// Claude Code's footer shows "You've used 91% of your weekly limit · resets …" once usage
+// gets high. The limit is account-wide, so byte's pane is enough. A fallback reading: the
+// alert owner (usage-alerts.ts) dedupes it with the mod's report_usage figures.
 const WEEKLY_USAGE_RE = /You've used (\d+)% of your weekly limit(?: · resets ([^\n]*?))?\s*$/m
-const WEEKLY_USAGE_THRESHOLDS = [80, 90, 95]
-let weeklyUsageAlerted = 0
-let weeklyUsageWindow = ''
 
 function checkWeeklyUsage(tail: string): void {
   const m = tail.match(WEEKLY_USAGE_RE)
   if (!m) return
-  const pct = Number(m[1])
-  const window = m[2]?.trim() ?? ''
-  if (window && window !== weeklyUsageWindow) {
-    if (weeklyUsageWindow) weeklyUsageAlerted = 0
-    weeklyUsageWindow = window
-  }
-  const crossed = WEEKLY_USAGE_THRESHOLDS.filter(t => pct >= t && t > weeklyUsageAlerted).pop()
-  if (!crossed || !io.defaultChannel) return
-  weeklyUsageAlerted = crossed
-  const resets = m[2] ? ` · resets ${m[2].trim()}` : ''
-  void io.safeSend(io.defaultChannel, `> ⚠️ Claude usage at **${pct}%** of weekly limit${resets}.`)
+  const resetsAt = m[2]?.trim()
+  const report = io.reportUsage ?? reportUsage
+  report({ kind: 'seven_day', percentUsed: Number(m[1]), source: 'pane', ...(resetsAt ? { resetsAt } : {}) })
 }
-
-export function _resetWeeklyUsage(): void { weeklyUsageAlerted = 0; weeklyUsageWindow = '' }
 
 // Alert only: an unknown dialog may be a permission or confirmation where any
 // keypress is a real decision, so leave it to a human.

@@ -273,6 +273,12 @@
       "desc": "Transcript location + incremental token-counter cursor"
     },
     {
+      "id": "daemon_usage-alerts",
+      "label": "daemon/usage-alerts.ts",
+      "layer": "domain",
+      "desc": "Account rate-limit alerts: report_usage + pane fallback, one dedupe per window"
+    },
+    {
       "id": "daemon_usage-phase",
       "label": "daemon/usage-phase.ts",
       "layer": "shared",
@@ -521,6 +527,10 @@
     [
       "daemon_bridge-dispatch",
       "daemon_tool-surface"
+    ],
+    [
+      "daemon_bridge-dispatch",
+      "daemon_usage-alerts"
     ],
     [
       "daemon_bridge-server",
@@ -961,6 +971,14 @@
     [
       "daemon_usage",
       "daemon_usage-phase"
+    ],
+    [
+      "daemon_usage-alerts",
+      "daemon_config"
+    ],
+    [
+      "daemon_usage-alerts",
+      "daemon_util"
     ],
     [
       "daemon_commands_global",

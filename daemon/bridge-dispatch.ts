@@ -17,6 +17,7 @@ import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 import { normalizeReviewRounds, resolveCodexModelAlias } from '../shared/constants.js'
 import { isToolAllowed } from './tool-surface.js'
+import { parseRateLimits, reportUsage } from './usage-alerts.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -879,6 +880,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!result.ok) throw new Error(result.reason)
 
         return { content: [{ type: 'text', text: `phase extended by ${minutes}m: ${reason}` }] }
+      }
+
+      case 'report_usage': {
+        // An observer's report: malformed or unknown entries are dropped, never an error to the caller.
+        const readings = parseRateLimits(args)
+        for (const r of readings) reportUsage(r)
+        return { content: [{ type: 'text', text: `recorded ${readings.length} window(s)` }] }
       }
 
       default:

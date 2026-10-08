@@ -59,6 +59,7 @@ graph TD
     daemon_phase-budget["phase-budget.ts"]
     daemon_session-health["session-health.ts"]
     daemon_raindrop["raindrop.ts"]
+    daemon_usage-alerts["usage-alerts.ts"]
   end
 
   subgraph protocols["Protocols"]
@@ -123,6 +124,7 @@ graph TD
   daemon_bridge-dispatch --> daemon_dashboard
   daemon_bridge-dispatch --> shared_constants
   daemon_bridge-dispatch --> daemon_tool-surface
+  daemon_bridge-dispatch --> daemon_usage-alerts
   daemon_bridge-server --> daemon_config
   daemon_bridge-server --> daemon_sessions
   daemon_bridge-server --> daemon_bridge-transport
@@ -233,6 +235,8 @@ graph TD
   daemon_raindrop-payload --> daemon_usage-phase
   daemon_usage --> shared_constants
   daemon_usage --> daemon_usage-phase
+  daemon_usage-alerts --> daemon_config
+  daemon_usage-alerts --> daemon_util
   daemon_commands_global --> daemon_config
   daemon_commands_global --> daemon_sessions
   daemon_commands_global --> daemon_bridge-transport

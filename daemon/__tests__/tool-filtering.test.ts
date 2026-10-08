@@ -77,6 +77,14 @@ describe('computeToolsForSession', () => {
     expect(BASE_TOOLS.thread_guest.has('kill_session')).toBe(false)
   })
 
+  test('report_usage is main-only: no other session type or capability grants it', () => {
+    expect(computeToolsForSession('master_orchestrator', new Set()).map(t => t.name)).toContain('report_usage')
+    for (const type of ['thread_owner', 'thread_guest', 'factory_builder'] as const) {
+      expect(computeToolsForSession(type, new Set(['protocol_context', 'protocol_spawn'])).map(t => t.name)).not.toContain('report_usage')
+    }
+    expect(codexStaticTools().map(t => t.name)).not.toContain('report_usage')
+  })
+
   test('all UNIVERSAL_TOOLS have required schema fields', () => {
     for (const tool of UNIVERSAL_TOOLS) {
       expect(tool.name).toBeTruthy()
@@ -108,7 +116,7 @@ describe('computeToolsForSession', () => {
   })
 
   test('BASE_TOOLS sizes match design spec', () => {
-    expect(BASE_TOOLS.master_orchestrator.size).toBe(22)
+    expect(BASE_TOOLS.master_orchestrator.size).toBe(23)
     expect(BASE_TOOLS.thread_owner.size).toBe(16)
     expect(BASE_TOOLS.thread_guest.size).toBe(8)
     expect(BASE_TOOLS.factory_builder.size).toBe(6)
