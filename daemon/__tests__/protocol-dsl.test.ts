@@ -127,11 +127,12 @@ describe('review protocol (TypeScript DSL)', () => {
     }
   })
 
-  test('onFallback applies default Ponytail and honors both opt-outs', () => {
+  test('onFallback omits default Ponytail and honors both opt-outs', () => {
     const ctx = { mode: 'direct' as const }
     const automatic = review.notifications.onFallback!({ params: { autoReviewLenses: true }, currentRound: 1, rounds: 3 } as any, ctx)
-    expect(automatic).toContain('Required lenses')
-    expect(automatic).toContain('/ponytail review')
+    expect(automatic).not.toContain('Required lenses')
+    expect(automatic).not.toContain('/ponytail review')
+    expect(automatic).toContain('Pick the lenses')
 
     const noPonytail = review.notifications.onFallback!({ params: { autoReviewLenses: true, noPonytail: true }, currentRound: 1, rounds: 3 } as any, ctx)
     expect(noPonytail).toContain('Pick the lenses')
