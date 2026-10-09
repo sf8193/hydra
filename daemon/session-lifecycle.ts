@@ -351,8 +351,14 @@ const PRE_HANDOFF_OUTPUT_MAX = 1500
 /**
  * User extension point: if <STATE_DIR>/hooks/pre-handoff is executable, run it with the letter
  * path before a handoff. A non-zero exit refuses the handoff and returns the hook's output.
- * Fails open: a hook that times out or can't start must never trap a session.
+ * Fails open: a hook that gives no verdict (times out, can't start, dies from a signal, or
+ * exits 126/127 because it couldn't run a command) must never trap a session.
  */
+/** Where the session works: its Hydra worktree, else the cwd it was launched in. */
+export function sessionDir(info: SessionInfo): string | undefined {
+  return info.worktreePath ?? info.sessionMetadata?.cwd
+}
+
 export async function runPreHandoffHook(
   info: SessionInfo, letterPath: string, hookPath = PRE_HANDOFF_HOOK_PATH, timeoutMs = 15_000,
 ): Promise<{ ok: true } | { ok: false; output: string }> {
@@ -367,7 +373,7 @@ export async function runPreHandoffHook(
   }
   // A missing session dir must not become the daemon's own cwd: a `git` check would judge the
   // wrong repo. Run from the temp dir and say so through an empty HYDRA_CWD.
-  const sessionCwd = info.worktreePath ?? info.sessionMetadata?.cwd
+  const sessionCwd = sessionDir(info)
   const cwd = sessionCwd && existsSync(sessionCwd) ? sessionCwd : undefined
   if (sessionCwd && !cwd) process.stderr.write(`daemon: pre-handoff hook: session dir ${sessionCwd} is gone — running from ${tmpdir()} with HYDRA_CWD empty\n`)
   // Async, so a slow hook never stalls the daemon. Its own process group, so a timeout kills

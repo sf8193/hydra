@@ -5,7 +5,7 @@ import { gateway, INBOX_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf, runPreHandoffHook } from './session-lifecycle.js'
+import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf, runPreHandoffHook, sessionDir } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
@@ -464,7 +464,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (!info) throw new Error('handoff: calling session not found')
         // One absolute path for every reader: a relative one means the session's dir, not the daemon's.
         const raw = args.path as string | undefined
-        const path = raw && (isAbsolute(raw) ? raw : resolvePath(info.worktreePath ?? info.sessionMetadata?.cwd ?? process.cwd(), raw))
+        const path = raw && (isAbsolute(raw) ? raw : resolvePath(sessionDir(info) ?? process.cwd(), raw))
         let size = 0
         try { size = path ? statSync(path).size : 0 } catch {}
         if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
