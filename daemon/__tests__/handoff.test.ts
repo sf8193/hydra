@@ -417,18 +417,86 @@ test('handoff command: a note is confirmed under the notice, local or built-in',
   try {
     const run = (note?: string) => handleHandoffIntercept({ channelId: 'ho-thread-8', id: 'm', isThread: true, content: 'handoff' } as any, undefined, note)
     await run('watch the PRs\nand refine'); await Bun.sleep(0)
-    expect(sent[0]).toEndWith('\n> Note passed on: watch the PRs\n> and refine')
+    expect(sent[0]).toEndWith('\n> Note to pass on: watch the PRs\n> and refine')
     await run(); await Bun.sleep(0)
-    expect(sent[1]).not.toContain('Note passed on')
+    expect(sent[1]).not.toContain('Note to pass on')
     mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
     writeFileSync(file, 'local')
     await run('x'); await Bun.sleep(0)
-    expect(sent[2]).toBe('local\n> Note passed on: x')
+    expect(sent[2]).toBe('local\n> Note to pass on: x')
   } finally {
     rmSync(file, { force: true })
     ;(transport as any).sendOrQueue = origSend
     ;(gateway as any).react = origReact
     ;(gateway as any).send = origGSend
     registry.delete('ho-8'); registry.deleteThread('ho-thread-8')
+  }
+})
+
+test('the echoed note cannot ping: mentions are defused', async () => {
+  const origSend = transport.sendOrQueue, origReact = gateway.react, origGSend = gateway.send
+  const sent: string[] = []
+  ;(transport as any).sendOrQueue = () => {}
+  ;(gateway as any).react = async () => {}
+  ;(gateway as any).send = async (_c: string, text: string) => { sent.push(text); return { id: 'm' } }
+  mk('ho-9', 'pulse', 'ho-thread-9')
+  registry.setThread('ho-thread-9', 'ho-9')
+  try {
+    await handleHandoffIntercept({ channelId: 'ho-thread-9', id: 'm', isThread: true, content: 'handoff' } as any, undefined, 'tell @everyone and <@&123>')
+    await Bun.sleep(0)
+    expect(sent[0]).not.toContain('@everyone')
+    expect(sent[0]).toContain('@​everyone')
+  } finally {
+    ;(transport as any).sendOrQueue = origSend
+    ;(gateway as any).react = origReact
+    ;(gateway as any).send = origGSend
+    registry.delete('ho-9'); registry.deleteThread('ho-thread-9')
+  }
+})
+
+test('handoffNoteFate: same letter however spelled is carried; another letter is dropped; no note is none', async () => {
+  const { handoffNoteFate, handoffSpawnOpts } = await import('../session-lifecycle.js')
+  const { mkdtempSync, writeFileSync: wf, realpathSync } = await import('fs')
+  const { tmpdir } = await import('os')
+  const d = mkdtempSync(join(tmpdir(), 'fate-'))   // /var/… on macOS, which realpaths to /private/var/…
+  const letter = join(d, 'l.md'); wf(letter, 'x')
+  mk('ho-10', 'flint', 'ho-thread-10')
+  const info = registry.get('ho-10')!
+  try {
+    expect(handoffNoteFate(info, letter)).toBe('none')
+    info.handoffNote = { text: 'n', artifact: letter }
+    expect(handoffNoteFate(info, realpathSync(letter))).toBe('carried')
+    expect(handoffNoteFate(info, join(d, '.', 'l.md'))).toBe('carried')
+    expect(handoffSpawnOpts(info, realpathSync(letter)).handoffNote).toBe('n')
+    expect(handoffNoteFate(info, join(d, 'other.md'))).toBe('dropped')
+    expect(handoffSpawnOpts(info, join(d, 'other.md')).handoffNote).toBeUndefined()
+  } finally {
+    registry.delete('ho-10'); rmSync(d, { recursive: true, force: true })
+  }
+})
+
+test('handoff tool: the handed-off message says whether the note reached the successor', async () => {
+  const { handoffIO } = await import('../session-lifecycle.js')
+  const { mkdtempSync, writeFileSync: wf } = await import('fs')
+  const { tmpdir } = await import('os')
+  const d = mkdtempSync(join(tmpdir(), 'fate-'))
+  const asked = join(d, 'asked.md'), other = join(d, 'other.md'); wf(asked, '# Next action\ny\n'); wf(other, '# Next action\ny\n')
+  const orig = { ...handoffIO, send: gateway.send }
+  const sent: string[] = []
+  handoffIO.killSession = (async (i: any) => { registry.delete(i.sessionId) }) as any
+  handoffIO.doSpawnSession = (async () => ({ name: 'fresh', sessionId: 'ho-11b', threadId: 'ho-thread-11', url: '' })) as any
+  ;(gateway as any).send = async (_c: string, text: string) => { sent.push(text); return { id: 'm' } }
+  try {
+    for (const [letter, expected] of [[asked, 'Your note was passed on.'], [other, 'Your note was **not** passed on']] as const) {
+      mk('ho-11', 'flint', 'ho-thread-11')
+      registry.get('ho-11')!.handoffNote = { text: 'n', artifact: asked }
+      await executeTool('handoff', { path: letter }, 'ho-11')
+      await Bun.sleep(700)
+      expect(sent.at(-1)).toContain(expected)
+    }
+  } finally {
+    handoffIO.killSession = orig.killSession; handoffIO.doSpawnSession = orig.doSpawnSession
+    ;(gateway as any).send = orig.send
+    registry.delete('ho-11'); rmSync(d, { recursive: true, force: true })
   }
 })

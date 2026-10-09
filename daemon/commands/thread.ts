@@ -702,8 +702,9 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   // A kill mid-handoff loses whatever the session has not yet written down, so look before killing.
   const notice = readHandoffTemplate('notice', vars)
     ?? `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes, \`peek\` it before you \`kill\` and \`respawn\`._`
-  // The note is confirmed under any notice, local or built-in: a lost note must not look like a passed one.
-  const confirmed = note ? `${notice}\n> Note passed on: ${note.replace(/\n/g, '\n> ')}` : notice
+  // Echoed under any notice, local or built-in, so a note that didn't parse can't look like one that did.
+  // Whether it reached the successor is said when the handoff lands. Mentions are defused: an echo must not ping.
+  const confirmed = note ? `${notice}\n> Note to pass on: ${note.replace(/@/g, '@\u200b').replace(/\n/g, '\n> ')}` : notice
   // safeSend: a local notice can run past the platform's length limit; chunk it and log failures.
   void safeSend(msg.channelId, confirmed, { replyTo: msg.id })
 }
