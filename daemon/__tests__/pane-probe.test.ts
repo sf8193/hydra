@@ -12,8 +12,8 @@ const registryEntries = new Map<string, any>()
 const transportMessages: Array<{ sessionId: string; msg: any }> = []
 const connectedSessions = new Set<string>()
 
+import { reportUsage, _setUsageAlertsIO, _resetUsageAlertsIO, type UsageReading } from '../usage-alerts.js'
 import {
-  _resetWeeklyUsage,
   detectBlockingState,
   probeAllSessions,
   getThreadIntercept,
@@ -620,22 +620,29 @@ describe('probeAllSessions', () => {
   })
 
   it('alerts once per weekly-usage threshold from byte\'s footer, re-arming after a reset', async () => {
-    _resetWeeklyUsage()
-    const footer = (pct: number, resets = 'Oct 2, 6am (America/Los_Angeles)') => `❯ \n─────\n  options_bot git:(main) claude-sonnet-5[1m] ctx:8%        You've used ${pct}% of your weekly limit · resets ${resets}\n  ⏵⏵ bypass permissions on`
-    const usageMsgs = () => sentMessages.filter(m => m.channelId === 'root-channel-123' && m.text.includes('weekly limit')).map(m => m.text)
-    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
-    // 90→89→91 is footer jitter within one window (no re-alert); a new resets date re-arms.
-    const seq: Array<[number, string?]> = [[70], [91], [90], [89], [92], [96], [10, 'Oct 9, 6am (America/Los_Angeles)'], [85, 'Oct 9, 6am (America/Los_Angeles)']]
-    for (const [i, [pct, resets]] of seq.entries()) {
-      paneTails.set('discord-byte', footer(pct, resets))
-      await probeAllSessions(T0 + i * 60_000)
+    const alerts: string[] = []
+    const readings: UsageReading[] = []
+    _setUsageAlertsIO({ send: t => alerts.push(t), log: () => {}, now: () => T0, platform: 'discord', load: () => ({}), save: () => {} })
+    _setIO({ ...makeTestIO(), reportUsage: r => { readings.push(r); reportUsage(r) } })
+    try {
+      const footer = (pct: number, resets = 'Oct 2, 6am (America/Los_Angeles)') => `❯ \n─────\n  options_bot git:(main) claude-sonnet-5[1m] ctx:8%        You've used ${pct}% of your weekly limit · resets ${resets}\n  ⏵⏵ bypass permissions on`
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 60)
+      // 90→89→91 is footer jitter within one window (no re-alert); a new resets date re-arms.
+      const seq: Array<[number, string?]> = [[70], [91], [90], [89], [92], [96], [10, 'Oct 9, 6am (America/Los_Angeles)'], [85, 'Oct 9, 6am (America/Los_Angeles)']]
+      for (const [i, [pct, resets]] of seq.entries()) {
+        paneTails.set('discord-byte', footer(pct, resets))
+        await probeAllSessions(T0 + i * 60_000)
+      }
+      await flush()
+      expect(readings[1]).toEqual({ kind: 'seven_day', percentUsed: 91, source: 'pane', resetsAt: 'Oct 2, 6am (America/Los_Angeles)' })
+      expect(alerts).toEqual([
+        '> ⚠️ Claude usage at **91%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+        '> ⚠️ Claude usage at **96%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
+        '> ⚠️ Claude usage at **85%** of weekly limit · resets Oct 9, 6am (America/Los_Angeles).',
+      ])
+    } finally {
+      _resetUsageAlertsIO()
     }
-    await flush()
-    expect(usageMsgs()).toEqual([
-      '> ⚠️ Claude usage at **91%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
-      '> ⚠️ Claude usage at **96%** of weekly limit · resets Oct 2, 6am (America/Los_Angeles).',
-      '> ⚠️ Claude usage at **85%** of weekly limit · resets Oct 9, 6am (America/Los_Angeles).',
-    ])
   })
 
   it('alerts on an unknown dialog with the pane tail and presses no keys', async () => {
