@@ -256,16 +256,23 @@ function sameLetter(a: string, b: string): boolean {
   return a === b || canon(a) === canon(b)
 }
 
-/** Whether `handoff - <note>`'s note reaches the successor of this letter: none, carried, or dropped (another letter). */
-export function handoffNoteFate(info: SessionInfo, artifact: string): 'none' | 'carried' | 'dropped' {
-  if (!info.handoffNote) return 'none'
-  return sameLetter(info.handoffNote.artifact, artifact) ? 'carried' : 'dropped'
+/** What happens to `handoff - <note>`'s note for this letter, with the data each outcome needs. */
+export type HandoffNoteFate =
+  | { kind: 'none' }
+  | { kind: 'carried'; text: string }        // the successor of this letter gets the note
+  | { kind: 'dropped'; requested: string }   // the session wrote another letter than the one the request named
+
+export function handoffNoteFate(info: SessionInfo, artifact: string): HandoffNoteFate {
+  const note = info.handoffNote
+  if (!note) return { kind: 'none' }
+  return sameLetter(note.artifact, artifact) ? { kind: 'carried', text: note.text } : { kind: 'dropped', requested: note.artifact }
 }
 
 /** Spawn opts for the successor: same thread/label/worktree and carried deliverables; model+engine from `handoff <model>` if given. */
 export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts {
   const sel = info.handoffSelection
   const predecessor = predecessorOf(info)
+  const fate = handoffNoteFate(info, artifact)
   const reuseWorktree = info.worktreePath && info.worktreeRepo
     ? { repo: info.worktreeRepo, path: info.worktreePath, branch: info.worktreeBranch ?? `wt/${info.tmuxName}` }
     : undefined
@@ -276,7 +283,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     ...(predecessor && { predecessor }),
     artifact,
     // Only for the letter that request asked for: an abandoned request's note must not reach a later handoff.
-    ...(handoffNoteFate(info, artifact) === 'carried' && { handoffNote: info.handoffNote!.text }),
+    ...(fate.kind === 'carried' && { handoffNote: fate.text }),
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
     inheritedLabel: info.label,
@@ -385,10 +392,6 @@ export async function runPreHandoffHook(
     process.stderr.write(`daemon: pre-handoff hook ${hookPath} is not executable — skipped\n`)
     return { ok: true }
   }
-  const noVerdict = (why: string) => {
-    process.stderr.write(`daemon: pre-handoff hook gave no verdict (${why}) — handing off anyway\n`)
-    return { ok: true } as const
-  }
   // A missing session dir must not become the daemon's own cwd: a `git` check would judge the
   // wrong repo. Run from the temp dir and say so through an empty HYDRA_CWD.
   const sessionCwd = sessionDir(info)
@@ -397,15 +400,21 @@ export async function runPreHandoffHook(
   // Async, so a slow hook never stalls the daemon. Its own process group, so a timeout kills
   // whatever it started too. The verdict waits for the output streams, but never past a short grace.
   return new Promise(resolve => {
+    const started = Date.now()
     let out = ''
     let settled = false
     let exitCode: number | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
     let exitGrace: ReturnType<typeof setTimeout> | undefined
-    const settle = (r: PreHandoffVerdict) => {
+    // One line per run, so a pass, a refusal and a fail-open can be told apart in the log.
+    const settle = (r: PreHandoffVerdict, outcome: 'pass' | 'refused' | 'fail-open', why?: string) => {
       if (settled) return
-      settled = true; clearTimeout(timer); clearTimeout(exitGrace); resolve(r)
+      settled = true; clearTimeout(timer); clearTimeout(exitGrace)
+      process.stderr.write(`daemon: pre-handoff hook ${info.tmuxName}: ${outcome}, exit ${exitCode ?? 'none'}, ${Date.now() - started}ms${why ? ` (${why})` : ''}\n`)
+      resolve(r)
     }
-    const giveUp = (why: string) => { if (!settled) settle(noVerdict(why)) }
+    // No verdict: hand off anyway.
+    const giveUp = (why: string) => settle({ ok: true }, 'fail-open', why)
     let child: ReturnType<typeof spawn>
     try {
       child = spawn(hookPath, [letterPath], {
@@ -414,21 +423,21 @@ export async function runPreHandoffHook(
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
       })
-    } catch (err) { return resolve(noVerdict(err instanceof Error ? err.message : String(err))) }
+    } catch (err) { return giveUp(err instanceof Error ? err.message : String(err)) }
     const killGroup = () => { try { process.kill(-child.pid!, 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } }
-    const timer = setTimeout(() => { killGroup(); giveUp(`timed out after ${timeoutMs}ms`) }, timeoutMs)
+    timer = setTimeout(() => { killGroup(); giveUp(`timed out after ${timeoutMs}ms`) }, timeoutMs)
     // Keep the tail: a hook prints its reason last.
     const collect = (d: Buffer) => { out = (out + d.toString('utf8')).slice(-PRE_HANDOFF_OUTPUT_MAX * 2) }
     child.stdout?.on('data', collect)
     child.stderr?.on('data', collect)
     child.on('error', err => giveUp(err.message))
     const verdict = () => {
-      if (exitCode === 0) return settle({ ok: true })
+      if (exitCode === 0) return settle({ ok: true }, 'pass')
       // 126/127: the hook couldn't run a command (not executable, not found). That is a broken
       // hook, not a refusal; refusing would trap the session on every retry.
-      if (exitCode === 126 || exitCode === 127) return giveUp(`exit ${exitCode}: the hook could not run a command`)
+      if (exitCode === 126 || exitCode === 127) return giveUp('the hook could not run a command')
       const output = out.trim() || `exit ${exitCode}`
-      settle({ ok: false, output: output.length > PRE_HANDOFF_OUTPUT_MAX ? `…${output.slice(-PRE_HANDOFF_OUTPUT_MAX)}` : output })
+      settle({ ok: false, output: output.length > PRE_HANDOFF_OUTPUT_MAX ? `…${output.slice(-PRE_HANDOFF_OUTPUT_MAX)}` : output }, 'refused')
     }
     child.on('close', () => { if (exitCode !== null) verdict() })
     child.on('exit', (code, signal) => {

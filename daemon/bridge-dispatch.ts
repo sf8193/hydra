@@ -480,9 +480,9 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // Read before handOff: the kill deletes the record. The notice echoed the note as "to pass
         // on", so the handed-off message reports whether it was.
         const fate = handoffNoteFate(info, path)
-        if (fate === 'dropped') process.stderr.write(`daemon: handoff ${info.tmuxName}: note not carried — letter ${path} is not the requested ${info.handoffNote!.artifact}\n`)
-        const noteLine = (successor: string) => fate === 'carried' ? '\nYour note was passed on.'
-          : fate === 'dropped' ? `\n⚠️ Your note was **not** passed on: the session wrote \`${path}\`, not the letter that request asked for. Tell \`${successor}\` the note yourself.`
+        if (fate.kind === 'dropped') process.stderr.write(`daemon: handoff ${info.tmuxName}: note not carried — letter ${path} is not the requested ${fate.requested}\n`)
+        const noteLine = (successor: string) => fate.kind === 'carried' ? '\nYour note was passed on.'
+          : fate.kind === 'dropped' ? `\n⚠️ Your note was **not** passed on: the session wrote \`${path}\`, not the letter that request asked for. Tell \`${successor}\` the note yourself.`
           : ''
         // Answer before acting: the kill inside handOff ends this very session.
         setTimeout(() => {

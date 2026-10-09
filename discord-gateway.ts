@@ -15,6 +15,7 @@ import {
   ButtonStyle,
   ActionRowBuilder,
   type Message,
+  type MessageMentionOptions,
 } from 'discord.js'
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs'
 import { sanitizeFilename, COUNT_EMOJI, SUPERSCRIPT } from './gateway.js'
@@ -86,6 +87,13 @@ export function formatThreadName(opts: SessionVisualOpts): { name: string; prior
   return { name, priority: isStateOverride ? 'high' : 'normal' }
 }
 
+/**
+ * Every message the bot sends may ping users and the author it replies to, never @everyone,
+ * @here or a role. Session text is model output and can quote anything: a stray `@everyone`
+ * must not notify a server. User pings stay, because CLI spawns and auth alerts rely on them.
+ */
+export const DISCORD_ALLOWED_MENTIONS = { parse: ['users'], repliedUser: true } satisfies MessageMentionOptions
+
 export class DiscordGateway implements ChatGateway {
   readonly platform = 'discord' as const
   readonly canThreadInDM = false
@@ -117,6 +125,8 @@ export class DiscordGateway implements ChatGateway {
         GatewayIntentBits.DirectMessageReactions,
       ],
       partials: [Partials.Channel, Partials.Reaction, Partials.Message],
+      // The client-wide default, so it covers every send, reply, edit and interaction response.
+      allowedMentions: DISCORD_ALLOWED_MENTIONS,
     })
     this.health = new GatewayHealth({
       heartbeatPath: opts?.heartbeatPath ?? null,
