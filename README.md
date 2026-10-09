@@ -554,6 +554,9 @@ The byte is a second, headless Claude in tmux using `CLAUDE_CONFIG_DIR` (default
 **Bot connects but never sees inbound (looks healthy, ignores everyone).**
 → Enable **Message Content Intent** (Developer Portal → Bot → Privileged Gateway Intents), or the bot receives empty message content.
 
+**A spawned session runs but its bridge never connects (no `plugin:discord:discord` lines in its debug log).**
+Claude Code keeps `$CLAUDE_CONFIG_DIR/mcp-needs-auth-cache.json`, and while it holds an entry for a server (~15 min) every new Claude process sharing that config dir skips the server silently. The daemon removes the bridge's own entry before every launch it makes and logs `cleared Claude Code needs-auth cache entry for plugin:discord:discord (set Nm ago) before launching <name>`; a session that still ends up bridgeless says "Claude Code had the bridge marked needs-auth (cleared at launch)" in its thread. The byte is launched outside the daemon, so if the byte is the one without a bridge, delete that key by hand and restart it.
+
 **Byte dies instantly, or spawns fail to launch.**
 → Check `SPAWN_CWD` points at a directory that exists. Inspect `~/hydra-<platform>-byte.log` and `~/hydra-<platform>-daemon.log`.
 

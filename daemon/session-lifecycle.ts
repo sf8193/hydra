@@ -989,6 +989,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(launched.exitFilePath ? { exitFilePath: launched.exitFilePath } : {}),
     ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
     ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
+    ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
     initiator: carriedInitiator,
     parentId: carriedParentId ?? null,
     ephemeral: opts?.ephemeral,
@@ -1163,7 +1164,7 @@ export async function tryResume(dead: {
       // connected. Preserve the session — killing it discards recovered context,
       // and returning null would cascade to a tier that spawns a duplicate.
       // The periodic orphan detector (daemon/session-health.ts) will monitor it from here.
-      process.stderr.write(`daemon: resume ${info.tmuxName}: bridge timeout but tmux alive — preserving as orphan\n`)
+      process.stderr.write(`daemon: resume ${info.tmuxName}: bridge timeout but tmux alive — preserving as orphan${info.channelNote ? ` (${info.channelNote})` : ''}\n`)
 
       // One-shot recheck: the periodic detector runs every 5 minutes, so a
       // session that dies right after this check could go undetected for a full

@@ -148,6 +148,15 @@ describe('resume tier matrix — Claude', () => {
     expect(sent.some(s => s.includes('full context restored'))).toBe(false)
   })
 
+  test('bridgeOrphan whose launch recorded a cause → the announcement names it', async () => {
+    resumeOutcome = 'orphan'
+    seedHistory({ claudeSessionId: 'C-1' })
+    registry.set('s-new', { sessionId: 's-new', threadId: THREAD, tmuxName: 'resumed-name', engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner', channelNote: 'Claude Code had the bridge marked needs-auth (cleared at launch)' } as any)
+    seeded.add('s-new')
+    await handleResumeIntercept(msg())
+    expect(sent.some(s => s.includes('bridge not yet connected (may need a moment). Claude Code had the bridge marked needs-auth (cleared at launch)'))).toBe(true)
+  })
+
   test('tryResume fails → fork-from-dead with the Claude id', async () => {
     resumeOutcome = 'null'
     const e = seedHistory({ claudeSessionId: 'C-1' })
