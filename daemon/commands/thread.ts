@@ -5,7 +5,7 @@ import { mkdirSync, unlinkSync } from 'fs'
 import { gateway, STATE_DIR } from '../config.js'
 import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
+import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD, sessionDir } from '../session-lifecycle.js'
 import type { SpawnResult } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -691,7 +691,7 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   const requester = msg.authorUsername || 'the user'
   const vars = {
     artifact, session: info.tmuxName, requester, model: selection?.model ?? '', note: note ?? '',
-    cwd: info.worktreePath ?? info.sessionMetadata?.cwd ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
+    cwd: sessionDir(info) ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
   }
   transport.sendOrQueue(info.sessionId, {
     type: 'notification',

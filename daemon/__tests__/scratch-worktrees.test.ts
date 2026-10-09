@@ -148,14 +148,18 @@ describe('Hydra worktrees: kept work is never destroyed later', () => {
   test('all five names hold kept work → createWorktree throws, touching none of them', async () => {
     const { base, repo } = workspace()
     const cfg = { repoName: 'app', spawnCwd: base, branchName: 'wt/full', dirSuffix: 'app-full' }
-    const shas: string[] = []
-    for (let i = 0; i < 5; i++) {
-      const wt = await createWorktree(cfg)
-      gitCommit(wt.worktreePath, `kept ${i}`, '--allow-empty')
-      shas.push(git(wt.worktreePath, 'rev-parse', 'HEAD'))
-    }
+    // Seed the five kept worktrees with plain git, where createWorktree would put them. Building
+    // them through createWorktree re-checked 1+2+3+4+5 names (~80 git processes), which ran past
+    // bun's 5s test timeout under suite load; only the sixth call is under test.
+    const branches = ['wt/full', 'wt/full-2', 'wt/full-3', 'wt/full-4', 'wt/full-5']
+    const shas = branches.map((b, i) => {
+      const path = join(base, '.worktrees', `app-full${i ? `-${i + 1}` : ''}`)
+      git(repo, 'worktree', 'add', '-q', '-b', b, path, 'main')
+      gitCommit(path, `kept ${i}`, '--allow-empty')
+      return git(path, 'rev-parse', 'HEAD')
+    })
     await expect(createWorktree(cfg)).rejects.toThrow(/all hold kept work/)
-    expect(['wt/full', 'wt/full-2', 'wt/full-3', 'wt/full-4', 'wt/full-5'].map(b => git(repo, 'rev-parse', b))).toEqual(shas)
+    expect(branches.map(b => git(repo, 'rev-parse', b))).toEqual(shas)
   })
 
   test('destroyWorktree keeps uncommitted changes and work on a branch the session switched to', async () => {
