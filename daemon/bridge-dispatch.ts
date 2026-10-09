@@ -477,8 +477,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         try { check = await runPreHandoffHook(info, path) } catch (err) { release(); throw err }
         if (!check.ok) { release(); throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`) }
         if (registry.get(info.sessionId) !== info) { release(); throw new Error(`${info.tmuxName} ended during the pre-handoff check`) }
-        // Read before handOff: the kill deletes the record. The thread was told the note was passed
-        // on, so it hears whether the successor actually got it.
+        // Read before handOff: the kill deletes the record. The notice echoed the note as "to pass
+        // on", so the handed-off message reports whether it was.
         const fate = handoffNoteFate(info, path)
         if (fate === 'dropped') process.stderr.write(`daemon: handoff ${info.tmuxName}: note not carried — letter ${path} is not the requested ${info.handoffNote!.artifact}\n`)
         const noteLine = (successor: string) => fate === 'carried' ? '\nYour note was passed on.'

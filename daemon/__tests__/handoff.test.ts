@@ -445,7 +445,7 @@ test('the echoed note cannot ping: mentions are defused', async () => {
     await handleHandoffIntercept({ channelId: 'ho-thread-9', id: 'm', isThread: true, content: 'handoff' } as any, undefined, 'tell @everyone and <@&123>')
     await Bun.sleep(0)
     expect(sent[0]).not.toContain('@everyone')
-    expect(sent[0]).toContain('@​everyone')
+    expect(sent[0]).toContain('@\u200beveryone')
   } finally {
     ;(transport as any).sendOrQueue = origSend
     ;(gateway as any).react = origReact

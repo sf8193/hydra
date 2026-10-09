@@ -250,8 +250,8 @@ export function predecessorOf(info: SessionInfo): Predecessor | undefined {
   return { engine: info.engine ?? 'claude', fork, cwd, ...(model ? { model } : {}) }
 }
 
-/** Same file, however each side spelled it (relative vs absolute, /var vs /private/var). */
-export function sameLetter(a: string, b: string): boolean {
+/** Same file, however each side spelled it (/var vs /private/var). */
+function sameLetter(a: string, b: string): boolean {
   const canon = (p: string) => { try { return realpathSync(p) } catch { return resolvePath(p) } }
   return a === b || canon(a) === canon(b)
 }
