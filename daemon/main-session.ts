@@ -2,7 +2,6 @@ import { execFileSync } from 'child_process'
 import { PLATFORM } from './config.js'
 import { byteTmuxName } from '../shared/constants.js'
 import { claudeEngine } from './engines/instances.js'
-import { tmuxHasSession } from './util.js'
 import type { InboundMessage } from '../gateway.js'
 
 // Main (the byte) is launched by `hydra up`, not spawned by the daemon, so it has no registry record,
@@ -11,7 +10,7 @@ import type { InboundMessage } from '../gateway.js'
 // tmux pane. Main is always Claude, so it is asked through ClaudeSubject: no forged SessionInfo.
 export const mainTmux = (): string => byteTmuxName(PLATFORM)
 export const mainSubject = () => ({ tmuxName: mainTmux() })
-export const mainAlive = (): boolean => tmuxHasSession(mainTmux())
+export const mainAlive = (): boolean => claudeEngine.isAlive(mainSubject())
 
 /** Context used, as "N%", or null when the pane shows none. */
 export function mainContext(): string | null {
