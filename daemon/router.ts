@@ -13,7 +13,7 @@ import { transcribeDownloads, mergeTranscripts } from './transcription.js'
 import { handleSpawnIntercept, handleTemplateSpawn, handleKillIntercept, handleRestartIntercept, handleReconnectIntercept, handleCommandsIntercept } from './commands/global.js'
 import { handleRecoverIntercept } from './recovery.js'
 import { resolveModelAlias, resolveCodexModelAlias, extractModelPrefix, isDeleteReaction, MODEL_ALIAS_PATTERN, MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, DEFAULT_REVIEW_ROUNDS } from '../shared/constants.js'
-import { inMainChannel } from './main-session.js'
+import { isForMain, noteMainChannel } from './main-session.js'
 import { handleMainHandoffIntercept } from './main-handoff.js'
 import { handleThreadKillIntercept, handleHandoffIntercept, handleDestroyIntercept, handleForkIntercept, handleForksIntercept, handleResumeIntercept, handleRespawnIntercept, handlePeekIntercept } from './commands/thread.js'
 import { handleReviewIntercept, handleCancelReviewIntercept } from './commands/review.js'
@@ -614,7 +614,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
     // "handoff [model] [- note]" — fresh session in this thread, optionally on another model
     const handoffCmd = parseHandoffCommand(msg.content)
-    if (handoffCmd && inMainChannel(msg)) {
+    if (handoffCmd && isForMain(msg)) {
       void handleMainHandoffIntercept(msg, handoffCmd)
       return
     }
@@ -1104,5 +1104,6 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
   }
+  if (targetSessionId === 'main' && !msg.isThread) noteMainChannel(msg.channelId)
   await enqueueUserMessage(msg, targetSessionId, effectiveChatId)
 })

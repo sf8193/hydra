@@ -69,7 +69,7 @@ export function pollSessionsOnce(now: number): void {
   }
   // Main has no registry record, so it is checked on its own.
   const main = mainSession()
-  if (main) alertContext(main)
+  if (main?.threadId) alertContext(main)  // no channel yet → no place to alert, and nothing is marked alerted
 }
 
 function alertContext(info: SessionInfo): void {

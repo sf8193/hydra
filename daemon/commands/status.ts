@@ -9,7 +9,7 @@ import { formatContextPercent } from '../engines/engine-adapter.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import { raindropStatusLine } from '../raindrop.js'
-import { inMainChannel, mainSession } from '../main-session.js'
+import { isForMain, mainSession } from '../main-session.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export const daemonStartedAt = Date.now()
@@ -242,7 +242,7 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
 
 export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   const info = registry.resolveThreadSession(msg.channelId, msg.existingThreadId, msg.isThread)
-    ?? (inMainChannel(msg) ? mainSession() : undefined)
+    ?? (isForMain(msg) ? mainSession() : undefined)
   if (!info) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     return

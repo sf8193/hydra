@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { gateway, DEFAULT_SESSION_CHANNEL, _setDefaultSessionChannel, STATE_DIR } from '../config.js'
+import { gateway, STATE_DIR } from '../config.js'
 import { transport } from '../bridge-transport.js'
 import { registry } from '../sessions.js'
+import { noteMainChannel } from '../main-session.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { handleMainHandoffIntercept, _resetMainHandoff } from '../main-handoff.js'
 import { isToolAllowed } from '../tool-surface.js'
@@ -21,28 +22,25 @@ const cmd = (content = 'handoff') => ({ id: 'cmd1', channelId: 'main-chan-h', is
 
 describe('main handoff', () => {
   let tmux: FakeTmux
-  let delivered: any[]; let sent: string[]; let reacted: string[]
+  let delivered: any[]; let sent: string[]; let sentTo: string[]; let reacted: string[]
   let dir: string
   let orig: Record<string, any>
-  let priorChannel: string
   const keys = () => tmux.calls().filter(c => c.startsWith('send-keys'))
 
   beforeEach(() => {
-    priorChannel = DEFAULT_SESSION_CHANNEL
-    _setDefaultSessionChannel('main-chan-h')
-    _resetMainHandoff()
+    _resetMainHandoff(); noteMainChannel('main-chan-h')
     tmux = withFakeTmux(); tmux.alive(BYTE); tmux.pane(BYTE, idlePane)
     dir = mkdtempSync(join(tmpdir(), 'main-handoff-'))
-    delivered = []; sent = []; reacted = []
+    delivered = []; sent = []; sentTo = []; reacted = []
     orig = { sendOrQueue: transport.sendOrQueue, send: gateway.send, react: gateway.react }
     ;(transport as any).sendOrQueue = (_id: string, m: any) => { delivered.push({ _id, ...m }) }
-    ;(gateway as any).send = async (_c: string, t: string) => { sent.push(t); return { id: 'm' } }
+    ;(gateway as any).send = async (c: string, t: string) => { sentTo.push(c); sent.push(t); return { id: 'm' } }
     ;(gateway as any).react = async (_c: string, _m: string, e: string) => { reacted.push(e) }
   })
   afterEach(() => {
     Object.assign(transport, { sendOrQueue: orig.sendOrQueue }); Object.assign(gateway, { send: orig.send, react: orig.react })
     tmux.restore(); rmSync(dir, { recursive: true, force: true })
-    _setDefaultSessionChannel(priorChannel); _resetMainHandoff()
+    _resetMainHandoff(); noteMainChannel('')
   })
 
   test('only main may call the handoff tool: a registry orchestrator (factory PM) may not', () => {
@@ -112,6 +110,7 @@ describe('main handoff', () => {
 
   test('the tool answers first, then types /clear and a one-line seed naming the letter and note', async () => {
     await handleMainHandoffIntercept(cmd(), { note: 'line one\nline two @x' })
+    noteMainChannel('some-later-chan')  // main was messaged elsewhere since: the status still goes where the command was typed
     const doc = delivered[0].content.match(/path="([^"]+)"/)![1]; writeFileSync(doc, '# Next action\ndo x\n')
     const res = await executeTool('handoff', { path: doc }, 'main')
     expect(res.isError).toBeFalsy()
@@ -122,6 +121,7 @@ describe('main handoff', () => {
     expect(typed.some(c => c.includes(`Read ${doc}`) && c.includes('Note from the user: line one line two @\u200bx'))).toBe(true)
     expect(typed.findIndex(c => c.includes('/clear'))).toBeLessThan(typed.findIndex(c => c.includes(`Read ${doc}`)))
     expect(sent.some(t => t.includes('Your note was passed on'))).toBe(true)
+    expect(sentTo[sentTo.length - 1]).toBe('main-chan-h')  // the channel the command was typed in
   })
 
   test('main at a blocking prompt: nothing is typed and the failure names the letter', async () => {

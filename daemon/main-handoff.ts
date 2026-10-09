@@ -12,7 +12,7 @@ import type { InboundMessage } from '../gateway.js'
 // its context is cleared in place with /clear, and it is seeded to read the letter. Typed keys
 // queue behind a running turn, so the clear lands after the turn that called the handoff tool.
 
-let requested: { artifact: string; note?: string } | undefined
+let requested: { artifact: string; note?: string; channelId: string } | undefined
 let running = false
 
 export async function handleMainHandoffIntercept(msg: InboundMessage, cmd: { model?: string; note?: string }): Promise<void> {
@@ -23,7 +23,7 @@ export async function handleMainHandoffIntercept(msg: InboundMessage, cmd: { mod
   if (running) return reportError(msg.channelId, msg.id, 'handoff', 'main is already handing off')
   const artifact = join(STATE_DIR, 'handoffs', `main-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
-  requested = { artifact, note }  // a new command replaces a pending one
+  requested = { artifact, note, channelId: msg.channelId }  // a new command replaces a pending one
   const requester = msg.authorUsername || 'the user'
   const vars = { artifact, session: info.tmuxName, requester, model: '', note: note ?? '', cwd: '', worktree: '', branch: '', label: '' }
   transport.sendOrQueue('main', {
@@ -40,10 +40,11 @@ export async function handleMainHandoffIntercept(msg: InboundMessage, cmd: { mod
 export function startMainHandoff(path: string): void {
   if (running) throw new Error('main is already handing off')
   running = true
-  // The note rides only with the letter that was asked for.
-  const note = requested?.artifact === path ? requested.note : undefined
+  // The note and the reply channel ride only with the letter that was asked for.
+  const req = requested?.artifact === path ? requested : undefined
   requested = undefined
-  const channel = mainSession()?.threadId
+  const note = req?.note
+  const channel = req?.channelId || mainSession()?.threadId
   const say = (text: string) => { if (channel) void gateway.send(channel, text).catch(() => {}) }
   // Same 500ms the other handoffs wait, so the tool result reaches main before any key is typed.
   new Promise(r => setTimeout(r, 500)).then(() => clearAndSeed(path, note)).then(

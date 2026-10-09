@@ -22,7 +22,7 @@ import { formatContextPercent, type ProviderId } from '../engines/engine-adapter
 import { resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, classifyReachability } from '../session-reachability.js'
 import { readHandoffTemplate } from '../handoff-templates.js'
-import { inMainChannel, mainSession } from '../main-session.js'
+import { isForMain, mainSession } from '../main-session.js'
 
 // Recovery executors, swappable in tests (same pattern as reply-guard's deps).
 type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn }
@@ -601,7 +601,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 
   if (targetName) {
     info = [...registry.values()].find(s => s.tmuxName === targetName)
-    if (!info && inMainChannel(msg)) { const m = mainSession(); if (m && (targetName === m.tmuxName || targetName === 'main')) info = m }
+    if (!info && isForMain(msg)) { const m = mainSession(); if (m && (targetName === m.tmuxName || targetName === 'main')) info = m }
     if (!info) {
       void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
       void gateway.send(msg.channelId, `No session named **${targetName}**`, { replyTo: msg.id }).catch(() => {})
@@ -609,7 +609,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
     }
     name = info.tmuxName
   } else {
-    info = registry.resolveThreadSessionFromMsg(msg) ?? (inMainChannel(msg) ? mainSession() : null)
+    info = registry.resolveThreadSessionFromMsg(msg) ?? (isForMain(msg) ? mainSession() : null)
     if (!info) {
       void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
       return

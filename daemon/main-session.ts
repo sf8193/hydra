@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process'
-import { DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
+import { PLATFORM } from './config.js'
 import { byteTmuxName } from '../shared/constants.js'
 import { engines } from './engines/instances.js'
 import { tmuxHasSession } from './util.js'
@@ -13,20 +13,24 @@ import type { InboundMessage } from '../gateway.js'
 // context % comes from the pane's own `ctx:` footer, not a guessed window.
 export function mainSession(): SessionInfo | undefined {
   const tmuxName = byteTmuxName(PLATFORM)
-  if (!DEFAULT_SESSION_CHANNEL || !tmuxHasSession(tmuxName)) return undefined
+  if (!tmuxHasSession(tmuxName)) return undefined
   let createdAt = Date.now()
   try {
     const sec = Number(execFileSync('tmux', ['display-message', '-p', '-t', tmuxName, '#{session_created}'], { stdio: 'pipe', timeout: 2000 }).toString())
     if (sec > 0) createdAt = sec * 1000
   } catch {}
   return {
-    sessionId: 'main', topic: 'main', description: 'main hydra session', threadId: DEFAULT_SESSION_CHANNEL,
+    sessionId: 'main', topic: 'main', description: 'main hydra session', threadId: lastChannel,
     createdAt, lastActive: Date.now(), tmuxName, listening: true,
     sessionMetadata: { role: 'main', tools: [], model: 'claude', cwd: '', platform: PLATFORM },
     engine: 'claude', sessionType: 'thread_owner', adapter: engines.claude,
   }
 }
 
-/** True for a plain (non-thread) message in the main channel. */
-export const inMainChannel = (msg: Pick<InboundMessage, 'channelId' | 'isThread'>): boolean =>
-  !msg.isThread && !!DEFAULT_SESSION_CHANNEL && msg.channelId === DEFAULT_SESSION_CHANNEL
+/** Main is no one channel: the router sends it every message outside a thread. */
+export const isForMain = (msg: Pick<InboundMessage, 'isThread'>): boolean => !msg.isThread
+
+// Where main's own notices (context alert, handoff status) go: the channel it was last messaged in.
+// Empty until the first message after a daemon start; nothing is sent until then.
+let lastChannel = ''
+export const noteMainChannel = (channelId: string): void => { lastChannel = channelId }
