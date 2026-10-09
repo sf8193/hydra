@@ -5,7 +5,7 @@ import { gateway, INBOX_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
+import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
@@ -477,11 +477,18 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         try { check = await runPreHandoffHook(info, path) } catch (err) { release(); throw err }
         if (!check.ok) { release(); throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`) }
         if (registry.get(info.sessionId) !== info) { release(); throw new Error(`${info.tmuxName} ended during the pre-handoff check`) }
+        // Read before handOff: the kill deletes the record. The notice echoed the note as "to pass
+        // on", so the handed-off message reports whether it was.
+        const fate = handoffNoteFate(info, path)
+        if (fate === 'dropped') process.stderr.write(`daemon: handoff ${info.tmuxName}: note not carried — letter ${path} is not the requested ${info.handoffNote!.artifact}\n`)
+        const noteLine = (successor: string) => fate === 'carried' ? '\nYour note was passed on.'
+          : fate === 'dropped' ? `\n⚠️ Your note was **not** passed on: the session wrote \`${path}\`, not the letter that request asked for. Tell \`${successor}\` the note yourself.`
+          : ''
         // Answer before acting: the kill inside handOff ends this very session.
         setTimeout(() => {
           release()  // handOff holds its own in-flight guard from here
           handOff(info, path).then(
-            r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\``),
+            r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\`${noteLine(r.name)}`),
             err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
           ).catch(() => {})
         }, 500)

@@ -197,7 +197,7 @@ describe('context alert', () => {
     pollSessionsOnce(NOW + 1000)
 
     expect(to(hot, 'context')).toHaveLength(1)
-    expect(to(hot, 'context')[0].text).toBe(`**${hot.tmuxName}** is at **70%** context. Consider a \`handoff\` to a fresh session.`)
+    expect(to(hot, 'context')[0].text).toBe(`**${hot.tmuxName}** is at **70%** context. Consider a \`handoff\` to a fresh session (\`handoff - <note>\` passes a note to it).`)
     expect(to(cool, 'context')).toHaveLength(0)
   })
 
@@ -209,7 +209,7 @@ describe('context alert', () => {
     pollSessionsOnce(NOW)
     pollSessionsOnce(NOW + 1000)
     expect(to(climbing, 'context')).toHaveLength(1)
-    expect(to(climbing, 'context')[0].text).toBe(`**${climbing.tmuxName}** is at **50%** context. Consider a \`handoff\` to a fresh session.`)
+    expect(to(climbing, 'context')[0].text).toBe(`**${climbing.tmuxName}** is at **50%** context. Consider a \`handoff\` to a fresh session (\`handoff - <note>\` passes a note to it).`)
     pct = 70
     pollSessionsOnce(NOW + 2000)
     pollSessionsOnce(NOW + 3000)

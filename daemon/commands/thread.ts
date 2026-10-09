@@ -666,16 +666,17 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 // fresh session (via the `handoff` tool, which does the kill + successor spawn)
 // ---------------------------------------------------------------------------
 
-function handoffRequest(artifact: string, requester: string): string {
+function handoffRequest(artifact: string, requester: string, note?: string): string {
   return [
     `[system] ${requester} asked you to hand off this thread to a fresh session.`,
+    ...(note ? [`Their note for the next session: "${note}". Carry it into Next action.`] : []),
     `Write ${artifact} with these sections: Goal; Non-goals (what is explicitly out of scope); State (branch, last commit, current step);`,
     `Decisions & constraints (including rejected ideas); Open questions for ${requester}; Next action.`,
     `Then call the handoff tool with path="${artifact}". Do nothing else after that.`,
   ].join(' ')
 }
 
-export async function handleHandoffIntercept(msg: InboundMessage, selection?: { model: string; engine: ProviderId }): Promise<void> {
+export async function handleHandoffIntercept(msg: InboundMessage, selection?: { model: string; engine: ProviderId }, note?: string): Promise<void> {
   const threadId = msg.effectiveThreadId ?? msg.channelId
   const liveId = msg.isThread ? registry.getByThread(threadId) : undefined
   const info = liveId ? registry.get(liveId) : undefined
@@ -686,20 +687,24 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
   info.handoffSelection = selection
+  info.handoffNote = note ? { text: note, artifact } : undefined
   const requester = msg.authorUsername || 'the user'
   const vars = {
-    artifact, session: info.tmuxName, requester, model: selection?.model ?? '',
+    artifact, session: info.tmuxName, requester, model: selection?.model ?? '', note: note ?? '',
     cwd: info.worktreePath ?? info.sessionMetadata?.cwd ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
   }
   transport.sendOrQueue(info.sessionId, {
     type: 'notification',
-    content: readHandoffTemplate('departing', vars) ?? handoffRequest(artifact, requester),
+    content: readHandoffTemplate('departing', vars) ?? handoffRequest(artifact, requester, note),
     meta: { chat_id: threadId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
   void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
   // A kill mid-handoff loses whatever the session has not yet written down, so look before killing.
   const notice = readHandoffTemplate('notice', vars)
     ?? `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes, \`peek\` it before you \`kill\` and \`respawn\`._`
+  // Echoed under any notice, local or built-in, so a note that didn't parse can't look like one that did.
+  // Whether it reached the successor is said when the handoff lands. Mentions are defused: an echo must not ping.
+  const confirmed = note ? `${notice}\n> Note to pass on: ${note.replace(/@/g, '@\u200b').replace(/\n/g, '\n> ')}` : notice
   // safeSend: a local notice can run past the platform's length limit; chunk it and log failures.
-  void safeSend(msg.channelId, notice, { replyTo: msg.id })
+  void safeSend(msg.channelId, confirmed, { replyTo: msg.id })
 }

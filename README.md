@@ -444,7 +444,15 @@ The daemon posts account-wide Claude rate-limit alerts to the default channel: t
 
 ### Handoff
 
-`handoff [model]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
+`handoff [model] [- note]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
+
+A note goes after a spaced `-`, `–` or `—`: `handoff - watch the open PRs and refine them`, or `handoff opus - …`.
+
+- **Both sides get it.** The outgoing session is asked to carry it into Next action. The successor's prompt quotes it word for word, so it arrives even if the handoff file leaves it out.
+- **You see what happened.** The thread notice echoes it (`Note to pass on: …`), and the `handed off` message says whether the successor got it.
+- **It belongs to one request.** The note reaches only the successor of the letter that request asked for. If the session writes a different letter, the note is dropped and the `handed off` message says so.
+- **Chat stays chat.** Chat that merely starts with the word (`handoff-related bug`, `handoff looks broken`) is never a command. A line that looks like an attempt but doesn't parse (`handoff -- x`, `handoff: x`, or a non-model word before the dash, `handoff status - x`) also goes to the session as chat, and the daemon replies with the command's form.
+- A local `departing.md` must include `{{note}}`, or the outgoing session never sees the note. The successor still does.
 
 Three optional files in the state dir customize what each side is told. All three are re-read on every handoff, so edits apply without a restart:
 
@@ -464,11 +472,12 @@ Three optional files in the state dir customize what each side is told. All thre
 | `worktree` | ✓ | ✓ |
 | `branch` | ✓ | ✓ |
 | `label` | ✓ | |
+| `note` | ✓ | ✓ |
 | `from` | | ✓ |
 | `from_session` | | ✓ |
 | `from_transcript` | | ✓ |
 
-`from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
+`from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. `note` is empty when the command had none. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
 
 `hooks/on-kill` in the state dir already runs on a handoff, with `HYDRA_KILL_REASON='handed off'`. Use it for post-handoff work nobody waits on.
 

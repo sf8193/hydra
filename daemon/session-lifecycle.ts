@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { execSync, execFileSync, spawn } from 'child_process'
-import { writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, constants as fsConstants } from 'fs'
-import { basename, dirname, join } from 'path'
+import { writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, realpathSync, constants as fsConstants } from 'fs'
+import { basename, dirname, join, resolve as resolvePath } from 'path'
 import { tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
@@ -250,6 +250,18 @@ export function predecessorOf(info: SessionInfo): Predecessor | undefined {
   return { engine: info.engine ?? 'claude', fork, cwd, ...(model ? { model } : {}) }
 }
 
+/** Same file, however each side spelled it (/var vs /private/var). */
+function sameLetter(a: string, b: string): boolean {
+  const canon = (p: string) => { try { return realpathSync(p) } catch { return resolvePath(p) } }
+  return a === b || canon(a) === canon(b)
+}
+
+/** Whether `handoff - <note>`'s note reaches the successor of this letter: none, carried, or dropped (another letter). */
+export function handoffNoteFate(info: SessionInfo, artifact: string): 'none' | 'carried' | 'dropped' {
+  if (!info.handoffNote) return 'none'
+  return sameLetter(info.handoffNote.artifact, artifact) ? 'carried' : 'dropped'
+}
+
 /** Spawn opts for the successor: same thread/label/worktree and carried deliverables; model+engine from `handoff <model>` if given. */
 export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts {
   const sel = info.handoffSelection
@@ -263,6 +275,8 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     handoffFromClaudeSessionId: (info.engine ?? 'claude') === 'claude' ? info.claudeSessionId : undefined,
     ...(predecessor && { predecessor }),
     artifact,
+    // Only for the letter that request asked for: an abandoned request's note must not reach a later handoff.
+    ...(handoffNoteFate(info, artifact) === 'carried' && { handoffNote: info.handoffNote!.text }),
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
     inheritedLabel: info.label,
@@ -278,6 +292,7 @@ export function handoffArrival(opts: SpawnOpts, vars: { from: string; session: s
   return readHandoffTemplate('arriving', {
     ...vars,
     artifact: opts.artifact ?? '',
+    note: opts.handoffNote ?? '',
     from_session: opts.handoffFromClaudeSessionId ?? '',
     from_transcript: transcriptPathFor(opts.handoffFromClaudeSessionId) ?? '',
   })
@@ -904,7 +919,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt = opts.promptBuilder(sessionId, tmuxName)
   } else if (isHandoff) {
     const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktreePath ?? '', branch: worktreeBranch ?? '' })
-    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, arrival, hasPredecessor: carriedPredecessor?.engine === 'claude' })  // only Claude predecessors can be forked today
+    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, note: opts?.handoffNote, arrival, hasPredecessor: carriedPredecessor?.engine === 'claude' })  // only Claude predecessors can be forked today
   } else if (isFork && isHeadless) {
     prompt = buildHeadlessForkPrompt({ ...promptParams, originFrom: originFrom!, readOnly: !!disallowedTools?.length, answerOnce: !!opts?.answerOnce })
   } else if (isFork) {

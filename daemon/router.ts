@@ -106,6 +106,31 @@ export function resolveTmuxKey(t: string): string | null {
 
 type ProtocolModelSelection = { model: string; engine: ProviderId }
 
+/**
+ * `handoff [model] [- note]`. The note follows a spaced `-`, `–` or `—`, so chat that merely starts with
+ * the word ("handoff looks broken?", "handoff-related bug") is never a command. With a note, the
+ * word before it must be a known model; otherwise ("handoff status - is it done?") the line is chat.
+ */
+export function parseHandoffCommand(content: string): { model?: string; note?: string } | null {
+  const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?:\s+[-–—]\s+([\s\S]*?))?\s*$/i)
+  if (!m) return null
+  const [, model, rawNote] = m
+  if (model && rawNote !== undefined && !resolveModelAlias(model) && !resolveCodexModelAlias(model)) return null
+  const note = rawNote?.trim()
+  return { ...(model ? { model } : {}), ...(note ? { note } : {}) }
+}
+
+/**
+ * A line that looks like an attempted `handoff - note` but didn't parse: a separator (`-`, `--`,
+ * `–`, `—`, `:`) right after `handoff [word]`, spaced on at least one side. Hyphenated words
+ * ("handoff-related") don't count. The line still goes to the session as chat; the requester is
+ * told how to write the command, so a lost note is never silent.
+ */
+export function isHandoffNearMiss(content: string): boolean {
+  if (parseHandoffCommand(content)) return false
+  return /^\/?handoff(?:\s+[a-z][\w.-]*)?(?:\s+(?:--?|[–—:])|\s*(?:--?|[–—:])\s)/i.test(content)
+}
+
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
   if (!alias) return undefined
   const claudeModel = resolveModelAlias(alias)
@@ -585,13 +610,16 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    // "handoff" / "handoff <model>" — fresh session in this thread, optionally on another model
-    const handoffMatch = msg.content.match(/^(?:handoff|\/handoff)(?:\s+([a-z][\w.-]*))?\s*$/i)
-    if (handoffMatch && msg.isThread) {
-      const selection = resolveProtocolModel(handoffMatch[1], msg.channelId, msg.id)
+    // "handoff [model] [- note]" — fresh session in this thread, optionally on another model
+    const handoffCmd = parseHandoffCommand(msg.content)
+    if (handoffCmd && msg.isThread) {
+      const selection = resolveProtocolModel(handoffCmd.model, msg.channelId, msg.id)
       if (selection === false) return
-      void handleHandoffIntercept(msg, selection)
+      void handleHandoffIntercept(msg, selection, handoffCmd.note)
       return
+    }
+    if (msg.isThread && isHandoffNearMiss(msg.content)) {
+      void gateway.send(msg.channelId, `_Not run as a handoff. To hand off with a note: \`handoff - <note>\` (or \`handoff <model> - <note>\`)._`, { replyTo: msg.id }).catch(() => {})
     }
 
     const resumeMatch = msg.content.match(/^(?:resume|\/resume)\s*$/i)

@@ -59,7 +59,7 @@ export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; 
 // the greeting's content, and starting the Next action at once — so a local arrival
 // procedure has one owner. Identity, thread ids, the handoff file, the greeting itself,
 // set_description and the fork recipe are plumbing and always stay.
-export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; arrival?: string; hasPredecessor?: boolean }): string {
+export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; note?: string; arrival?: string; hasPredecessor?: boolean }): string {
   const contextLine = p.artifact
     ? `Read your handoff context from \`${p.artifact}\`, then read your memory files.`
     : `Read your memory files and workstream canon for context.`
@@ -69,6 +69,7 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
     ``,
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     contextLine,
+    ...(p.note ? [`The handoff request came with this note, in the requester's words: "${p.note}". Treat it as the requester's instruction; where it conflicts with the letter, follow the note.`] : []),
     ...(p.arrival ? [p.arrival] : []),
     ...(p.hasPredecessor ? [`If a question comes up that only ${p.originFrom} can answer, ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.`] : []),
     ...(p.arrival ? [greet] : [
