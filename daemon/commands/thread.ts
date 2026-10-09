@@ -668,7 +668,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 // fresh session (via the `handoff` tool, which does the kill + successor spawn)
 // ---------------------------------------------------------------------------
 
-function handoffRequest(artifact: string, requester: string, note?: string): string {
+export function handoffRequest(artifact: string, requester: string, note?: string): string {
   return [
     `[system] ${requester} asked you to hand off this thread to a fresh session.`,
     ...(note ? [`Their note for the next session: "${note}". Carry it into Next action.`] : []),
