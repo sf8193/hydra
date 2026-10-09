@@ -40,6 +40,7 @@ export const CLAUDE_CONFIG = claudeConfigDir()
 // Read after .env sourcing — .env values must be available.
 // If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
 export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''
+export function _setDefaultSessionChannel(id: string): void { DEFAULT_SESSION_CHANNEL = id }
 
 export async function resolveDefaultChannel(): Promise<void> {
   if (DEFAULT_SESSION_CHANNEL) return
