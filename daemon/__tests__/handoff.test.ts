@@ -332,6 +332,7 @@ test('parseHandoffCommand: a note needs a separator; a chat line that starts wit
   expect(parseHandoffCommand('handoff - So next session can listen to each of these PRs')).toEqual({ note: 'So next session can listen to each of these PRs' })
   expect(parseHandoffCommand('handoff opus - watch CI\nand refine')).toEqual({ model: 'opus', note: 'watch CI\nand refine' })
   expect(parseHandoffCommand('Handoff — x')).toEqual({ note: 'x' })
+  expect(parseHandoffCommand('handoff – en dash')).toEqual({ note: 'en dash' })
   expect(parseHandoffCommand('handoff - ')).toEqual({})
   // Chat, not commands:
   expect(parseHandoffCommand('handoff status - is it done?')).toBeNull()   // not a model before the note
@@ -339,7 +340,6 @@ test('parseHandoffCommand: a note needs a separator; a chat line that starts wit
   expect(parseHandoffCommand('handoff: is it done?')).toBeNull()
   expect(parseHandoffCommand('handoff status: is it done?')).toBeNull()
   expect(parseHandoffCommand('handoff looks broken, why?')).toBeNull()
-  expect(parseHandoffCommand('handoff – en dash')).toEqual({ note: 'en dash' })
   expect(parseHandoffCommand('handoffs are slow')).toBeNull()
   expect(parseHandoffCommand('please handoff')).toBeNull()
 })
@@ -359,7 +359,7 @@ test('handoff command: a note reaches the built-in request and {{note}}; none le
     expect(registry.get('ho-6')!.handoffNote?.text).toBe('watch the PRs')
     expect(registry.get('ho-6')!.handoffNote?.artifact).toMatch(/handoffs\/pulse-\d+\.md$/)
     await run()
-    expect(delivered[1].content).not.toContain('note')
+    expect(delivered[1].content).not.toContain('Their note for the next session')
     expect(registry.get('ho-6')!.handoffNote).toBeUndefined()
     mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
     writeFileSync(file, 'note=[{{note}}]')

@@ -107,7 +107,7 @@ export function resolveTmuxKey(t: string): string | null {
 type ProtocolModelSelection = { model: string; engine: ProviderId }
 
 /**
- * `handoff [model] [- note]`. The note follows a spaced `-` or `—`, so chat that merely starts with
+ * `handoff [model] [- note]`. The note follows a spaced `-`, `–` or `—`, so chat that merely starts with
  * the word ("handoff looks broken?", "handoff-related bug") is never a command. With a note, the
  * word before it must be a known model; otherwise ("handoff status - is it done?") the line is chat.
  */
