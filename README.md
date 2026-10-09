@@ -446,7 +446,7 @@ The daemon posts account-wide Claude rate-limit alerts to the default channel: t
 
 `handoff [model] [- note]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
 
-A note after `-`, `—` or `:` (`handoff - watch the open PRs and refine them`) goes to both sides: the outgoing session is asked to carry it into Next action, and the successor's prompt quotes it word for word, so it arrives even if the handoff file leaves it out. Without a separator, a line that merely starts with "handoff" stays ordinary chat.
+A note after a spaced `-` or `—` (`handoff - watch the open PRs and refine them`, `handoff opus - …`) goes to both sides: the outgoing session is asked to carry it into Next action, and the successor's prompt quotes it word for word, so it arrives even if the handoff file leaves it out. Chat that merely starts with the word stays chat: no spaced dash (`handoff-related bug`), or a word before the dash that is not a model (`handoff status - is it done?`).
 
 Three optional files in the state dir customize what each side is told. All three are re-read on every handoff, so edits apply without a restart:
 
