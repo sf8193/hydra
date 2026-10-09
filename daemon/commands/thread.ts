@@ -697,5 +697,8 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
     meta: { chat_id: threadId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
   void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
-  void gateway.send(msg.channelId, `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes it may be stuck — \`kill\`, then \`respawn\`._`, { replyTo: msg.id }).catch(() => {})
+  // A kill mid-handoff loses whatever the session has not yet written down, so look before killing.
+  const notice = readHandoffTemplate('notice', vars)
+    ?? `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes, \`peek\` it before you \`kill\` and \`respawn\`._`
+  void gateway.send(msg.channelId, notice, { replyTo: msg.id }).catch(() => {})
 }

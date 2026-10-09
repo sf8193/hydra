@@ -142,6 +142,42 @@ test('handoff command: departing.md is re-read on every handoff, so an edit appl
   }
 })
 
+// Runs the `handoff` command and returns what the thread is told.
+async function noticeText(): Promise<string> {
+  const origSend = gateway.send
+  const sent: string[] = []
+  ;(gateway as any).send = async (_c: string, text: string) => { sent.push(text); return { id: 'm' } }
+  try {
+    await requestText({ authorUsername: 'dan' })
+    await Bun.sleep(0)
+    expect(sent.length).toBe(1)
+    return sent[0]
+  } finally {
+    ;(gateway as any).send = origSend
+  }
+}
+
+test('handoff command: the built-in thread notice says to peek before killing', async () => {
+  const text = await noticeText()
+  expect(text).toContain('`pulse`')
+  expect(text).toContain('`peek` it before you `kill`')
+})
+
+test('handoff command: notice.md replaces the thread notice, re-read each time, placeholders filled', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'notice.md')
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  try {
+    writeFileSync(file, '🤝 {{session}} for {{requester}}')
+    expect(await noticeText()).toBe('🤝 pulse for dan')
+    writeFileSync(file, 'second {{session}}')
+    expect(await noticeText()).toBe('second pulse')
+    writeFileSync(file, '  \n')
+    expect(await noticeText()).toContain('`peek` it before you `kill`')
+  } finally {
+    rmSync(file, { force: true })
+  }
+})
+
 test('handOff: deliverables, PR watches and the `handoff <model>` choice reach the successor; a second concurrent handoff is refused', async () => {
   const { handOff, handoffIO } = await import('../session-lifecycle.js')
   const { restoreWatches, getWatchesBySession, unwatchBySession } = await import('../pr-watch.js')

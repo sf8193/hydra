@@ -436,14 +436,15 @@ Sessions get cute names (spark, pixel, nova...) and run in their own tmux sessio
 
 `handoff [model]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
 
-Two optional files in the state dir customize what each side is told. Both are re-read on every handoff, so edits apply without a restart:
+Three optional files in the state dir customize what each side is told. Both are re-read on every handoff, so edits apply without a restart:
 
 - `actions/handoff/departing.md` **replaces** what the outgoing session is told. It must tell the session to write the file and call the `handoff` tool with `path=` (usually `{{artifact}}`). Nothing enforces this, so a template that omits it never hands off.
 - `actions/handoff/arriving.md` is inserted after the read-your-handoff line and **replaces** the built-in arrival behavior (the Reception note, the greeting's content, starting the Next action at once). Thread ids, the greeting itself, the description and the fork recipe stay.
+- `actions/handoff/notice.md` **replaces** the message the thread sees when the handoff is requested. Useful when your departing steps take longer than the built-in ones, so the advice on when the session looks stuck should change too.
 
 `{{name}}` placeholders are filled per handoff:
 
-| Placeholder | departing | arriving |
+| Placeholder | departing, notice | arriving |
 |---|---|---|
 | `artifact` | ✓ | ✓ |
 | `session` | ✓ (outgoing) | ✓ (successor) |
