@@ -13,7 +13,7 @@ import type { InboundMessage } from '../gateway.js'
 // context % comes from the pane's own `ctx:` footer, not a guessed window.
 export function mainSession(): SessionInfo | undefined {
   const tmuxName = byteTmuxName(PLATFORM)
-  if (!tmuxHasSession(tmuxName)) return undefined
+  if (!DEFAULT_SESSION_CHANNEL || !tmuxHasSession(tmuxName)) return undefined
   let createdAt = Date.now()
   try {
     const sec = Number(execFileSync('tmux', ['display-message', '-p', '-t', tmuxName, '#{session_created}'], { stdio: 'pipe', timeout: 2000 }).toString())

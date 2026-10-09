@@ -2,8 +2,7 @@
 // main has no registry record, and every other channel behaves as before.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 delete process.env.BYTE_SESSION_NAME
-const { gateway, _setDefaultSessionChannel } = await import('../config.js')
-_setDefaultSessionChannel('main-chan-1')
+const { gateway, DEFAULT_SESSION_CHANNEL, _setDefaultSessionChannel } = await import('../config.js')
 const { handleUsageIntercept } = await import('../commands/status.js')
 const { handlePeekIntercept } = await import('../commands/thread.js')
 const { mainSession } = await import('../main-session.js')
@@ -19,15 +18,21 @@ describe('main channel usage / peek', () => {
   let sent: string[]
   let reacted: string[]
   const saved = { send: gateway.send, react: gateway.react }
+  const priorChannel = DEFAULT_SESSION_CHANNEL
   beforeEach(() => {
+    _setDefaultSessionChannel('main-chan-1')
     tmux = withFakeTmux()
     sent = []; reacted = []
     ;(gateway as any).send = async (_c: string, t: string) => { sent.push(t); return 'x' }
     ;(gateway as any).react = async (_c: string, _m: string, e: string) => { reacted.push(e) }
   })
-  afterEach(() => { tmux.restore(); Object.assign(gateway, saved) })
+  afterEach(() => { tmux.restore(); Object.assign(gateway, saved); _setDefaultSessionChannel(priorChannel) })
 
-  test('mainSession is undefined while the byte tmux is down', () => {
+  test('mainSession is undefined while the byte tmux is down, or no default channel is known', () => {
+    expect(mainSession()).toBeUndefined()
+    tmux.alive(BYTE)
+    expect(mainSession()).toBeDefined()
+    _setDefaultSessionChannel('')
     expect(mainSession()).toBeUndefined()
   })
 
