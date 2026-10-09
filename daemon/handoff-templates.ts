@@ -2,10 +2,11 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from './config.js'
 
-// Local handoff text: <STATE_DIR>/actions/handoff/{departing,arriving,notice}.md — uncommitted, read on
-// every handoff so an edit works without a restart. `departing` replaces what the outgoing session
-// is told; `arriving` is added to the successor's prompt; `notice` replaces what the thread is told. `{{key}}` is filled from vars; unknown
-// placeholders are left as written. Missing, empty or unreadable → undefined (built-in text).
+// Local handoff text: <STATE_DIR>/actions/handoff/{departing,arriving,notice}.md — uncommitted, read
+// on every handoff so an edit works without a restart. `departing` replaces what the outgoing
+// session is told; `arriving` is added to the successor's prompt; `notice` replaces what the thread
+// is told. `{{key}}` is filled from vars; unknown placeholders are left as written. Missing, empty
+// or unreadable → undefined (built-in text).
 export const HANDOFF_TEMPLATE_DIR = join(STATE_DIR, 'actions', 'handoff')
 
 const warned = new Set<string>()

@@ -178,6 +178,24 @@ test('handoff command: notice.md replaces the thread notice, re-read each time, 
   }
 })
 
+test('handoff command: a notice.md longer than one message is chunked, not dropped', async () => {
+  const file = join(HANDOFF_TEMPLATE_DIR, 'notice.md')
+  mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+  const origSend = gateway.send
+  const sent: string[] = []
+  ;(gateway as any).send = async (_c: string, text: string) => { sent.push(text); return { id: 'm' } }
+  try {
+    writeFileSync(file, 'word '.repeat(gateway.maxMessageLength))
+    await requestText()
+    await Bun.sleep(0)
+    expect(sent.length).toBeGreaterThan(1)
+    expect(sent.every(t => t.length <= gateway.maxMessageLength)).toBe(true)
+  } finally {
+    ;(gateway as any).send = origSend
+    rmSync(file, { force: true })
+  }
+})
+
 test('handOff: deliverables, PR watches and the `handoff <model>` choice reach the successor; a second concurrent handoff is refused', async () => {
   const { handOff, handoffIO } = await import('../session-lifecycle.js')
   const { restoreWatches, getWatchesBySession, unwatchBySession } = await import('../pr-watch.js')
