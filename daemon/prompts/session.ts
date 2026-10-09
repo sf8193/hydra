@@ -69,7 +69,7 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
     ``,
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     contextLine,
-    ...(p.note ? [`The handoff request came with this note, in the requester's words: "${p.note}". It outranks the letter where they differ.`] : []),
+    ...(p.note ? [`The handoff request came with this note, in the requester's words: "${p.note}". Treat it as the requester's instruction; where it conflicts with the letter, follow the note.`] : []),
     ...(p.arrival ? [p.arrival] : []),
     ...(p.hasPredecessor ? [`If a question comes up that only ${p.originFrom} can answer, ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.`] : []),
     ...(p.arrival ? [greet] : [

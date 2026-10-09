@@ -52,7 +52,7 @@ export type SessionInfo = {
   worktreePath?: string
   worktreeBranch?: string
   handoffSelection?: { model: string; engine: ProviderId }  // set by `handoff <model>`, read by the handoff tool; dies with the record
-  handoffNote?: string  // set by `handoff - <note>`: the requester's words, passed to the successor verbatim
+  handoffNote?: { text: string; artifact: string }  // set by `handoff - <note>`: the requester's words, for the successor of that request's letter only
   predecessor?: Predecessor  // set on a handoff successor: the session it took over from, still forkable after its kill
   launchCwd?: string          // a fork's launch dir (its source's); a resume must start there to find the transcript
   disallowedTools?: string[]  // Claude built-in tools blocked at spawn (read_only, factory PM); a resume re-applies them

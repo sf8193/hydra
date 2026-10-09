@@ -112,12 +112,23 @@ type ProtocolModelSelection = { model: string; engine: ProviderId }
  * word before it must be a known model; otherwise ("handoff status - is it done?") the line is chat.
  */
 export function parseHandoffCommand(content: string): { model?: string; note?: string } | null {
-  const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?:\s+[-—]\s+([\s\S]*?))?\s*$/i)
+  const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?:\s+[-–—]\s+([\s\S]*?))?\s*$/i)
   if (!m) return null
   const [, model, rawNote] = m
   if (model && rawNote !== undefined && !resolveModelAlias(model) && !resolveCodexModelAlias(model)) return null
   const note = rawNote?.trim()
   return { ...(model ? { model } : {}), ...(note ? { note } : {}) }
+}
+
+/**
+ * A line that looks like an attempted `handoff - note` but didn't parse: a separator (`-`, `--`,
+ * `–`, `—`, `:`) right after `handoff [word]`, spaced on at least one side. Hyphenated words
+ * ("handoff-related") don't count. The line still goes to the session as chat; the requester is
+ * told how to write the command, so a lost note is never silent.
+ */
+export function isHandoffNearMiss(content: string): boolean {
+  if (parseHandoffCommand(content)) return false
+  return /^\/?handoff(?:\s+[a-z][\w.-]*)?(?:\s+(?:--?|[–—:])|\s*(?:--?|[–—:])\s)/i.test(content)
 }
 
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
@@ -606,6 +617,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (selection === false) return
       void handleHandoffIntercept(msg, selection, handoffCmd.note)
       return
+    }
+    if (msg.isThread && isHandoffNearMiss(msg.content)) {
+      void gateway.send(msg.channelId, `_Not run as a handoff. To hand off with a note: \`handoff - <note>\` (or \`handoff <model> - <note>\`)._`, { replyTo: msg.id }).catch(() => {})
     }
 
     const resumeMatch = msg.content.match(/^(?:resume|\/resume)\s*$/i)

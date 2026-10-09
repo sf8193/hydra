@@ -446,7 +446,7 @@ The daemon posts account-wide Claude rate-limit alerts to the default channel: t
 
 `handoff [model] [- note]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
 
-A note after a spaced `-` or `—` (`handoff - watch the open PRs and refine them`, `handoff opus - …`) goes to both sides: the outgoing session is asked to carry it into Next action, and the successor's prompt quotes it word for word, so it arrives even if the handoff file leaves it out. Chat that merely starts with the word stays chat: no spaced dash (`handoff-related bug`), or a word before the dash that is not a model (`handoff status - is it done?`).
+A note after a spaced `-`, `–` or `—` (`handoff - watch the open PRs and refine them`, `handoff opus - …`) goes to both sides: the outgoing session is asked to carry it into Next action, and the successor's prompt quotes it word for word, so it arrives even if the handoff file leaves it out. Chat that merely starts with the word stays chat: no spaced dash (`handoff-related bug`), or a word before the dash that is not a model (`handoff status - is it done?`). The daemon confirms a note under its thread notice (`Note passed on: …`), and a line that looks like an attempt but doesn't parse (`handoff -- x`, `handoff: x`, `handoff status - x`) still goes to the session as chat, with a reply showing the command's form. The note reaches only the successor of the letter that request asked for; an abandoned request's note never reaches a later handoff.
 
 Three optional files in the state dir customize what each side is told. All three are re-read on every handoff, so edits apply without a restart:
 

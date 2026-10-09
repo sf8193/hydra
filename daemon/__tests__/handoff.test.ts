@@ -339,6 +339,7 @@ test('parseHandoffCommand: a note needs a separator; a chat line that starts wit
   expect(parseHandoffCommand('handoff: is it done?')).toBeNull()
   expect(parseHandoffCommand('handoff status: is it done?')).toBeNull()
   expect(parseHandoffCommand('handoff looks broken, why?')).toBeNull()
+  expect(parseHandoffCommand('handoff – en dash')).toEqual({ note: 'en dash' })
   expect(parseHandoffCommand('handoffs are slow')).toBeNull()
   expect(parseHandoffCommand('please handoff')).toBeNull()
 })
@@ -355,7 +356,8 @@ test('handoff command: a note reaches the built-in request and {{note}}; none le
     const run = (note?: string) => handleHandoffIntercept({ channelId: 'ho-thread-6', id: 'm', isThread: true, content: 'handoff', authorUsername: 'dan' } as any, undefined, note)
     await run('watch the PRs')
     expect(delivered[0].content).toContain('Their note for the next session: "watch the PRs".')
-    expect(registry.get('ho-6')!.handoffNote).toBe('watch the PRs')
+    expect(registry.get('ho-6')!.handoffNote?.text).toBe('watch the PRs')
+    expect(registry.get('ho-6')!.handoffNote?.artifact).toMatch(/handoffs\/pulse-\d+\.md$/)
     await run()
     expect(delivered[1].content).not.toContain('note')
     expect(registry.get('ho-6')!.handoffNote).toBeUndefined()
@@ -378,7 +380,9 @@ test('handoff note: carried to the successor spawn, quoted in its prompt, and fi
   const info = registry.get('ho-7')!
   try {
     expect(handoffSpawnOpts(info, '/h.md').handoffNote).toBeUndefined()
-    info.handoffNote = 'watch the PRs'
+    info.handoffNote = { text: 'watch the PRs', artifact: '/h.md' }
+    // A later handoff to a different letter (an abandoned request, then the session's own handoff) drops the note.
+    expect(handoffSpawnOpts(info, '/other.md').handoffNote).toBeUndefined()
     const opts = handoffSpawnOpts(info, '/h.md')
     expect(opts.handoffNote).toBe('watch the PRs')
     const p = { sessionId: 's', tmuxName: 'fresh', threadId: 't', topic: 'x', originFrom: 'flint', artifact: '/h.md' }
@@ -390,5 +394,41 @@ test('handoff note: carried to the successor spawn, quoted in its prompt, and fi
   } finally {
     rmSync(join(HANDOFF_TEMPLATE_DIR, 'arriving.md'), { force: true })
     registry.delete('ho-7')
+  }
+})
+
+test('isHandoffNearMiss: an attempted note that did not parse is flagged; chat and real commands are not', async () => {
+  const { isHandoffNearMiss } = await import('../router.js')
+  for (const t of ['handoff -- note', 'handoff -note', 'handoff- note', 'handoff: note', 'handoff status: is it done?', 'handoff status - is it done?'])
+    expect([t, isHandoffNearMiss(t)]).toEqual([t, true])
+  for (const t of ['handoff - note', 'handoff', 'handoff opus', 'handoff-related bug', 'handoff looks broken', 'handoffs are slow', 'please handoff - x'])
+    expect([t, isHandoffNearMiss(t)]).toEqual([t, false])
+})
+
+test('handoff command: a note is confirmed under the notice, local or built-in', async () => {
+  const origSend = transport.sendOrQueue, origReact = gateway.react, origGSend = gateway.send
+  const sent: string[] = []
+  ;(transport as any).sendOrQueue = () => {}
+  ;(gateway as any).react = async () => {}
+  ;(gateway as any).send = async (_c: string, text: string) => { sent.push(text); return { id: 'm' } }
+  mk('ho-8', 'pulse', 'ho-thread-8')
+  registry.setThread('ho-thread-8', 'ho-8')
+  const file = join(HANDOFF_TEMPLATE_DIR, 'notice.md')
+  try {
+    const run = (note?: string) => handleHandoffIntercept({ channelId: 'ho-thread-8', id: 'm', isThread: true, content: 'handoff' } as any, undefined, note)
+    await run('watch the PRs\nand refine'); await Bun.sleep(0)
+    expect(sent[0]).toEndWith('\n> Note passed on: watch the PRs\n> and refine')
+    await run(); await Bun.sleep(0)
+    expect(sent[1]).not.toContain('Note passed on')
+    mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+    writeFileSync(file, 'local')
+    await run('x'); await Bun.sleep(0)
+    expect(sent[2]).toBe('local\n> Note passed on: x')
+  } finally {
+    rmSync(file, { force: true })
+    ;(transport as any).sendOrQueue = origSend
+    ;(gateway as any).react = origReact
+    ;(gateway as any).send = origGSend
+    registry.delete('ho-8'); registry.deleteThread('ho-thread-8')
   }
 })

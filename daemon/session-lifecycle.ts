@@ -263,7 +263,8 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     handoffFromClaudeSessionId: (info.engine ?? 'claude') === 'claude' ? info.claudeSessionId : undefined,
     ...(predecessor && { predecessor }),
     artifact,
-    ...(info.handoffNote && { handoffNote: info.handoffNote }),
+    // Only for the letter that request asked for: an abandoned request's note must not reach a later handoff.
+    ...(info.handoffNote?.artifact === artifact && { handoffNote: info.handoffNote.text }),
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
     inheritedLabel: info.label,
