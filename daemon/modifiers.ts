@@ -119,15 +119,14 @@ export function resolveModifier(name: string): Modifier | undefined {
 
 /**
  * The lenses a review run must cover: every requested lens (explicit + local defaults)
- * plus ponytail by default when automatic lenses run. Single owner for the critic
+ * without adding any built-in lens by default. Single owner for the critic
  * prompt, the +subagent prompt and the advance() gate.
  */
 export function requiredLenses(params: { [key: string]: unknown }): string[] {
   const names = ((params.modifiers as Modifier[] | undefined) ?? [])
     .filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic')
     .map(m => m.name)
-  const autoPonytail = params.autoReviewLenses === true && !params.noAutoLenses && !params.noPonytail
-  return [...new Set(autoPonytail ? [...names, 'ponytail'] : names)]
+  return [...new Set(names)]
 }
 
 /**

@@ -237,7 +237,7 @@ describe('review command → run params', () => {
     expect(mods.map(m => m.name)).toEqual(['readability', 'ponytail', 'security'])
   })
 
-  test('ordinary review enables automatic lenses and default Ponytail', async () => {
+  test('ordinary review enables automatic lenses without default Ponytail', async () => {
     const { threadId, msg } = mkOwner()
     await handleReviewIntercept(msg, 3, 'auth flow')
     const run = getRunByThread(threadId)!
@@ -246,11 +246,11 @@ describe('review command → run params', () => {
     expect(run.params.autoReviewLenses).toBe(true)
     const seed = reviewProtoForTest.seed('critic', { name: 'c', sessionId: 's', threadId: 't', rounds: 3, ...run.params })!
     expect(seed).toContain('Staged fresh passes')
-    expect(seed).toContain('Default +ponytail')
-    expect(seed).toContain('/ponytail review')
+    expect(seed).not.toContain('Default +ponytail')
+    expect(seed).not.toContain('/ponytail review')
   })
 
-  test('+no-ponytail keeps automatic relevant lenses but removes default Ponytail', async () => {
+  test('legacy +no-ponytail remains accepted without enabling Ponytail', async () => {
     const { threadId, msg } = mkOwner()
     await handleReviewIntercept(msg, 3, 'auth flow', undefined, ['no-ponytail'])
     const run = getRunByThread(threadId)!

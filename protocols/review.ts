@@ -1,5 +1,5 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
-import { NATIVE_SUBAGENT, PONYTAIL_INSTRUCTIONS, requiredLenses } from '../daemon/modifiers.js'
+import { NATIVE_SUBAGENT } from '../daemon/modifiers.js'
 
 export default protocol('review', {
   emoji: '⚔️',
@@ -122,14 +122,10 @@ export default protocol('review', {
       const helpersDisabled = run.params.noAutoLenses === true
       const autoLenses = run.params.autoReviewLenses === true && !helpersDisabled
       const helpersAllowed = !helpersDisabled
-      const defaultPonytail = requiredLenses(run.params).includes('ponytail') && !lenses.some(m => m.name === 'ponytail')
-      const effectiveLenses = defaultPonytail
-        ? [...lenses, { name: 'ponytail', instructions: PONYTAIL_INSTRUCTIONS }]
-        : lenses
-      const lensBlock = effectiveLenses.length > 0
+      const lensBlock = lenses.length > 0
         ? [
-            `\n**Required lenses** (${effectiveLenses.map(m => `+${m.name}`).join(' ')}) — delegate each one exactly as instructed:`,
-            ...effectiveLenses.map(m => `\n**+${m.name}:**\n${m.instructions}`),
+            `\n**Required lenses** (${lenses.map(m => `+${m.name}`).join(' ')}) — delegate each one exactly as instructed:`,
+            ...lenses.map(m => `\n**+${m.name}:**\n${m.instructions}`),
           ]
         : []
 
@@ -178,18 +174,16 @@ export default protocol('review', {
 
   seed: {
     critic: (ctx) => {
-      const modifiers = (ctx.modifiers ?? []) as Array<{ name?: string }>
       const helpersDisabled = ctx.noAutoLenses === true
       const autoLenses = ctx.autoReviewLenses === true && !helpersDisabled
       const helpersAllowed = !helpersDisabled
-      const defaultPonytail = requiredLenses(ctx).includes('ponytail') && !modifiers.some(mod => mod.name === 'ponytail')
       const helperPolicy = helpersDisabled
         ? `**Private sub-reviewers disabled.** The caller used \`+no-lenses\`; review directly and do not spawn lens helpers.`
         : autoLenses
           ? `**Staged fresh passes.** Each round, run ONE fresh pass for the current stage in a native subagent ${NATIVE_SUBAGENT}, then verify the owner's fixes yourself. Stages go big → small:
 1. **Architecture** — boundaries, contracts, is this the right shape (use the \`+architecture:\` block below if present).
 2. **Correctness / edge cases** — if the repo under review has \`.claude/commands/review.md\` (or \`.claude/skills/review/SKILL.md\`), paste that file's procedure into the subagent's assignment; otherwise a formal correctness review: build a case matrix of the use cases and input/state permutations the change touches (normal paths, failures, retries, races, boundaries, empty/missing values), then walk the code branch by branch for each case and mark it correct / wrong / uncovered with file:line — report every wrong or uncovered case. Other requested lenses (e.g. \`+security:\`) run here too, each in its own subagent.
-3. **Simplify** — \`+ponytail:\` (and readability).`
+3. **Simplify** — simplification and readability. Run any requested simplification lens here.`
           : `**Optional private sub-reviewers.** Delegate useful lenses when the material warrants it. Explicit \`+name:\` lenses are required; otherwise a small change may be reviewed directly.`
       const helperInstructions = !helpersAllowed ? '' : !autoLenses
         ? `\n- Run each required \`+name:\` lens in its own native subagent ${NATIVE_SUBAGENT}, quoting its block verbatim, and include a \`+<lens>:\` section per lens in your critique.`
@@ -198,14 +192,11 @@ export default protocol('review', {
 - Move to the next stage only when the current stage's pass is clean — and when it is, run the next stage in the same turn (don't spend a round on a clean stage); post when a stage has findings or stage 3 is clean. You track the current stage; the \`Stage N:\` line in each critique records it. After a ⬆ architectural fix, go back to stage 1. Run subagents in parallel where a stage has several; wait for their answers; do not poll other sessions' panes.
 - Each critique: your verification of the owner's fixes, the pass's findings under a \`+<lens>:\` section per lens it ran, a line \`Stage N: clean\` or \`Stage N: <k> findings\`, and the updated **Settled** list.
 - \`approve\` only after \`Stage 3: clean\` with no code change since, or — when the last round was debate only — \`No code changed since last clean pass\`. Every required lens must have had its section in some round. \`advance()\` enforces both.`
-      const ponytailBlock = defaultPonytail
-        ? `\n\n---\n**Default +ponytail (required unless opted out):**\n${PONYTAIL_INSTRUCTIONS}`
-        : ''
       return protocolSeed(ctx.protocol, 'critic', ctx)
       + '\n\n' + (ctx.topic
         ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
         : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
-      ) + `\n\n${helperPolicy}${helperInstructions}${ponytailBlock}`
+      ) + `\n\n${helperPolicy}${helperInstructions}`
         + `\n\nPost a verdict with evidence after orienting. Use approve only when no changes remain. Use approve_with_changes for bounded fixes you will recheck after the owner applies them; use request_changes for blocking work. Recheck every fix and issue another verdict. You may close early by approving. This review has a hard cap of ${ctx.rounds} critic turns; at the cap, a non-approval result stays unresolved.\n\nFormat with clear headers. Be substantive and focused.`
     },
   },

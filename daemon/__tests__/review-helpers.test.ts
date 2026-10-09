@@ -23,9 +23,7 @@ function reviewRun(phase = 'critic_turn') {
   const run = {
     id: 'rh-run', protocol: reviewProto, threadId: 'rh-thread', ownerSessionId: 'rh-owner', phase,
     currentRound: 1, rounds: 3, startedAt: Date.now(), _extensions: 0, _phaseStartedAt: Date.now(),
-    // Most helper lifecycle tests are not about the default Ponytail gate.
-    // Opt out locally; gate tests explicitly request Ponytail below.
-    params: { noPonytail: true }, participants: new Map([['critic', 'rh-critic'], ['owner', 'rh-owner']]),
+    params: {}, participants: new Map([['critic', 'rh-critic'], ['owner', 'rh-owner']]),
     sessionToRole: new Map([['rh-critic', 'critic'], ['rh-owner', 'owner']]),
     protocolChildren: new Map(), disconnectTimers: new Map(), decisions: [], messageIds: [], statusHistory: [],
     strike: false, ext: {},
@@ -314,7 +312,6 @@ describe('staged review gate', () => {
   const seedMod = (name: string) => ({ type: 'seed', name, aliases: [], target: 'critic', instructions: name })
   const staged = (mods: string[] = []) => {
     const run = reviewRun()
-    delete run.params.noPonytail
     run.params.autoReviewLenses = true
     run.params.modifiers = mods.map(seedMod)
     return run
@@ -326,7 +323,7 @@ describe('staged review gate', () => {
   })
 
   test('approve needs every required lens reported in some round; coverage accumulates across rounds', async () => {
-    const run = staged(['architecture'])
+    const run = staged(['architecture', 'ponytail'])
     const early = await onRunAdvance('rh-critic', 'Stage 3: clean', 'approve')
     expect(early.ok).toBe(false)
     expect((early as any).reason).toContain('+architecture:')
