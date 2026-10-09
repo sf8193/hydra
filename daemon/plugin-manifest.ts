@@ -14,6 +14,21 @@ import { join } from 'path'
 const PLUGIN_VERSION = '0.0.4'
 
 /**
+ * The bridge's names, as Claude Code derives them. The plugin is called `discord`
+ * on every platform (historical; the bridge is platform-agnostic), so a Slack
+ * daemon's sessions load the same plugin and see the same server key.
+ *
+ * - `--channels` takes `plugin:<plugin>@<marketplace>`.
+ * - Claude Code keys a plugin's MCP server `plugin:<plugin>:<server>` — in its
+ *   config, its debug log, and its needs-auth cache (engines/claude-needs-auth.ts).
+ */
+const BRIDGE_PLUGIN = 'discord'
+const BRIDGE_MARKETPLACE = 'claude-plugins-official'
+const BRIDGE_SERVER_NAME = 'discord'
+export const BRIDGE_CHANNEL_FLAG = `plugin:${BRIDGE_PLUGIN}@${BRIDGE_MARKETPLACE}`
+export const BRIDGE_MCP_SERVER_KEY = `plugin:${BRIDGE_PLUGIN}:${BRIDGE_SERVER_NAME}`
+
+/**
  * How Claude Code is told to launch the bridge.
  *
  * `${CLAUDE_PLUGIN_ROOT}` is expanded by Claude Code to the directory the plugin
@@ -45,14 +60,14 @@ const BRIDGE_SERVER = {
  * depend on.
  */
 export const PLUGIN_MANIFEST = JSON.stringify({
-  name: 'discord',
+  name: BRIDGE_PLUGIN,
   description: 'Discord channel for Claude Code — messaging bridge with built-in access control.',
   version: PLUGIN_VERSION,
   keywords: ['discord', 'messaging', 'channel', 'mcp'],
-  mcpServers: { discord: BRIDGE_SERVER },
+  mcpServers: { [BRIDGE_SERVER_NAME]: BRIDGE_SERVER },
 }, null, 2)
 
-export const MCP_CONFIG = JSON.stringify({ mcpServers: { discord: BRIDGE_SERVER } }, null, 2)
+export const MCP_CONFIG = JSON.stringify({ mcpServers: { [BRIDGE_SERVER_NAME]: BRIDGE_SERVER } }, null, 2)
 
 /**
  * The bridge start script, with its dependency install removed.

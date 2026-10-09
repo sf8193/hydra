@@ -56,8 +56,9 @@ export function pollSessionsOnce(now: number): void {
       }
       if (!orphanAlerted.has(info.sessionId)) {
         orphanAlerted.add(info.sessionId)
-        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)\n`)
-        void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread. Use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`).catch(() => {})
+        const note = info.channelNote ? ` ${info.channelNote}.` : ''
+        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)${note}\n`)
+        void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread.${note} Use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`).catch(() => {})
       }
     } else {
       orphanAlerted.delete(info.sessionId)

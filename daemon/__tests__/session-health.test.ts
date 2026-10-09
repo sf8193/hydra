@@ -128,6 +128,16 @@ describe('orphan detection', () => {
     expect(info.deadAt).toBeUndefined()
   })
 
+  test("the alert names a launch-time cause when the launch recorded one, and only then", () => {
+    const noted = seed({ ageMs: OLD, claudeSessionId: 'known', channelNote: 'Claude Code had the bridge marked needs-auth (cleared at launch)' })
+    const plain = seed({ ageMs: OLD, claudeSessionId: 'known' })
+    tmux.alive(noted.tmuxName); tmux.alive(plain.tmuxName)
+    pollSessionsOnce(NOW)
+    expect(to(noted, '⚠️')[0].text).toContain("isn't connected — replies can't reach this thread. Claude Code had the bridge marked needs-auth (cleared at launch). Use `resume`")
+    expect(to(plain, '⚠️')[0].text).toContain("replies can't reach this thread. Use `resume`")
+    expect(stderr.join('')).toContain(`orphan detected: ${noted.tmuxName}`)
+  })
+
   test('C4: Claude orphan without an id discovers it and updates the open history entry', () => {
     const info = seed({ ageMs: OLD })
     tmux.alive(info.tmuxName)

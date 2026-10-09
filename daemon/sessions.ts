@@ -75,6 +75,7 @@ export type SessionInfo = {
   exitFilePath?: string    // exit marker file: exit code, wall clock, signal — written by spawn command on exit
   stderrLogPath?: string   // stderr redirect: separate file for spawn's stderr output
   debugLogPath?: string    // CC --debug-file output: internal diagnostics, written throughout session lifetime
+  channelNote?: string     // LaunchResult.channelNote: appended to the bridgeless warnings (orphan, resume-without-bridge)
   engine: ProviderId  // which backend runs this session
   adapter: EngineAdapter // runtime instance, not persisted — reattached on load
   codexThreadId?: string       // persisted codex thread ID for resume on daemon restart

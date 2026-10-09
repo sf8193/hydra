@@ -381,8 +381,9 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
       }
     }
     if (result) {
+      const note = result.bridgeOrphan ? registry.get(result.sessionId)?.channelNote : undefined
       const method = result.bridgeOrphan
-        ? 'resumed — context restored, but bridge not yet connected (may need a moment)'
+        ? `resumed — context restored, but bridge not yet connected (may need a moment)${note ? `. ${note}` : ''}`
         : 'resumed — full context restored'
       if (lastInfo) repointChildren(lastInfo, result.sessionId)
       await announceRecovery(msg, result, thread, method, '⏯️', lastTmuxName)

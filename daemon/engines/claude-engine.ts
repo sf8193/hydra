@@ -27,6 +27,8 @@ import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
+import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
+import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
@@ -158,7 +160,7 @@ export class ClaudeEngine implements EngineAdapter {
     const worktreeAppend = buildWorktreePromptAppend(isFork, worktreePath)
     if (worktreeAppend) prompt += worktreeAppend
 
-    const channelFlag = 'plugin:discord@claude-plugins-official'
+    const channelFlag = BRIDGE_CHANNEL_FLAG
     let claudeArgs: string
     let assignedClaudeSessionId: string | undefined
     const disallowed = input.disallowedTools?.length ? ` --disallowedTools ${shq(input.disallowedTools.join(','))}` : ''
@@ -214,6 +216,10 @@ export class ClaudeEngine implements EngineAdapter {
       `${claudeArgs} 2>>${shq(stderrLog)}`,
     ].join(' && ')
 
+    // A needs-auth entry for the bridge would make this process skip it silently (claude-needs-auth.ts).
+    const cleared = await clearNeedsAuthEntry(BRIDGE_MCP_SERVER_KEY)
+    if (cleared) process.stderr.write(`daemon: cleared Claude Code needs-auth cache entry for ${cleared.key} (set ${describeSetAt(cleared.setAt, Date.now())}) before launching ${tmuxName}\n`)
+
     process.stderr.write(`daemon: spawn ${tmuxName}: creating the tmux session\n`)
     process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
 
@@ -253,6 +259,7 @@ export class ClaudeEngine implements EngineAdapter {
       provider: 'claude', model,
       identity: assignedClaudeSessionId ? { claudeSessionId: assignedClaudeSessionId } : {},
       spawnLogPath, exitFilePath: exitFile, stderrLogPath: stderrLog, debugLogPath: debugLog,
+      ...(cleared ? { channelNote: NEEDS_AUTH_CLEARED_NOTE } : {}),
     }
   }
 

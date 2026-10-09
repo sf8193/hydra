@@ -132,6 +132,9 @@ export type LaunchResult = {
   readonly exitFilePath?: string
   readonly stderrLogPath?: string
   readonly debugLogPath?: string
+  // A launch-time fact that may explain a channel that never connects (Claude: it cleared the
+  // bridge's needs-auth entry). Shown verbatim if the session ends up unreachable; absent otherwise.
+  readonly channelNote?: string
   // The native ids the launch assigned, spread onto the record. Absent keys are
   // omitted, never undefined.
   readonly identity: { readonly claudeSessionId?: string; readonly codexThreadId?: string; readonly codexHomeName?: string }
