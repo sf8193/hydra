@@ -9,7 +9,7 @@ import { formatContextPercent } from '../engines/engine-adapter.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import { raindropStatusLine } from '../raindrop.js'
-import { isForMain, mainSession } from '../main-session.js'
+import { isForMain, mainAlive, mainContext, mainStartedAt, mainTmux } from '../main-session.js'
 import type { InboundMessage } from '../../gateway.js'
 
 export const daemonStartedAt = Date.now()
@@ -242,7 +242,7 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
 
 export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   const info = registry.resolveThreadSession(msg.channelId, msg.existingThreadId, msg.isThread)
-    ?? (isForMain(msg) ? mainSession() : undefined)
+  if (!info && isForMain(msg)) return handleMainUsage(msg)
   if (!info) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     return
@@ -278,6 +278,21 @@ export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
   }
 
   await safeSend(msg.channelId, lines.join('\n'), { replyTo: msg.id })
+}
+
+// Main has no registry record, so no message count, description or lineage: only what its pane and tmux can say.
+async function handleMainUsage(msg: InboundMessage): Promise<void> {
+  if (!mainAlive()) {
+    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
+    return
+  }
+  void gateway.react(msg.channelId, msg.id, '📈').catch(() => {})
+  const ctx = mainContext() ?? '?'
+  const name = mainTmux()
+  await safeSend(msg.channelId, [
+    `${sessionEmoji(name)} \`${name}\` — main hydra session`,
+    `    ◦ ${ctx} · ${formatDuration(Date.now() - mainStartedAt())} · ${transport.has('main') ? 'connected' : 'disconnected'}`,
+  ].join('\n'), { replyTo: msg.id })
 }
 
 export async function handleHealthIntercept(msg: InboundMessage): Promise<void> {

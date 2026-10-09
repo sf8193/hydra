@@ -5,7 +5,7 @@ delete process.env.BYTE_SESSION_NAME
 const { gateway } = await import('../config.js')
 const { handleUsageIntercept } = await import('../commands/status.js')
 const { handlePeekIntercept } = await import('../commands/thread.js')
-const { mainSession } = await import('../main-session.js')
+const { mainAlive, mainContext } = await import('../main-session.js')
 const { withFakeTmux } = await import('./fake-tmux.js')
 type FakeTmux = ReturnType<typeof withFakeTmux>
 
@@ -26,10 +26,20 @@ describe('main channel usage / peek', () => {
   })
   afterEach(() => { tmux.restore(); Object.assign(gateway, saved) })
 
-  test('mainSession is undefined while the byte tmux is down', () => {
-    expect(mainSession()).toBeUndefined()
-    tmux.alive(BYTE)
-    expect(mainSession()).toBeDefined()
+  test('main is alive only while the byte tmux is up; its context comes from the pane footer', () => {
+    expect(mainAlive()).toBe(false)
+    tmux.alive(BYTE); tmux.pane(BYTE, pane(42))
+    expect(mainAlive()).toBe(true)
+    expect(mainContext()).toBe('42%')
+    tmux.pane(BYTE, 'no footer here')
+    expect(mainContext()).toBeNull()
+  })
+
+  test('usage with no readable footer still answers, with ?', async () => {
+    tmux.alive(BYTE); tmux.pane(BYTE, 'no footer here')
+    await handleUsageIntercept(msg('chan-a'))
+    expect(reacted).toEqual(['📈'])
+    expect(sent.join('\n')).toContain('?')
   })
 
   test('usage in the main channel reports main context', async () => {
@@ -59,7 +69,13 @@ describe('main channel usage / peek', () => {
     await handlePeekIntercept(msg('chan-a'))
     await handlePeekIntercept(msg('chan-b'), 'main')
     expect(reacted.filter(e => e === '📸').length).toBe(2)
-    expect(sent.every(t => t.startsWith('📸 **discord-byte**') && t.includes('7%'))).toBe(true)
+    expect(sent.every(t => /^📸 \*\*discord-byte\*\* · main · 7% · \S+/.test(t))).toBe(true)
+  })
+
+  test('peek with the byte down says the surface is unavailable', async () => {
+    await handlePeekIntercept(msg('chan-a'))
+    expect(reacted).toEqual(['❌'])
+    expect(sent.join('\n')).toContain('interactive surface unavailable')
   })
 
   test('peek of the byte name from inside a thread is not found', async () => {

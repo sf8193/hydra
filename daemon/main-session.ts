@@ -1,36 +1,42 @@
 import { execFileSync } from 'child_process'
 import { PLATFORM } from './config.js'
 import { byteTmuxName } from '../shared/constants.js'
-import { engines } from './engines/instances.js'
+import { claudeEngine } from './engines/instances.js'
 import { tmuxHasSession } from './util.js'
-import type { SessionInfo } from './sessions.js'
 import type { InboundMessage } from '../gateway.js'
 
-// Main (the byte) is launched by `hydra up`, not spawned by the daemon, so it has no registry
-// record, and a registered one would run every registry loop's thread/lifecycle logic on it. This builds
-// the record on demand for the few features that opt in (usage, peek) and never stores it.
-// The model is a placeholder (contextWindowOf → null): the byte's real model isn't known here, so
-// context % comes from the pane's own `ctx:` footer, not a guessed window.
-export function mainSession(): SessionInfo | undefined {
-  const tmuxName = byteTmuxName(PLATFORM)
-  if (!tmuxHasSession(tmuxName)) return undefined
-  let createdAt = Date.now()
-  try {
-    const sec = Number(execFileSync('tmux', ['display-message', '-p', '-t', tmuxName, '#{session_created}'], { stdio: 'pipe', timeout: 2000 }).toString())
-    if (sec > 0) createdAt = sec * 1000
-  } catch {}
-  return {
-    sessionId: 'main', topic: 'main', description: 'main hydra session', threadId: lastChannel,
-    createdAt, lastActive: Date.now(), tmuxName, listening: true,
-    sessionMetadata: { role: 'main', tools: [], model: 'claude', cwd: '', platform: PLATFORM },
-    engine: 'claude', sessionType: 'thread_owner', adapter: engines.claude,
-  }
+// Main (the byte) is launched by `hydra up`, not spawned by the daemon, so it has no registry record,
+// and a registered one would run every registry loop's thread/lifecycle logic on it. These are the few
+// questions the features that opt in (usage, peek, alerts, handoff) ask about it, answered from its
+// tmux pane. Main is always Claude, so it is asked through ClaudeSubject: no forged SessionInfo.
+export const mainTmux = (): string => byteTmuxName(PLATFORM)
+export const mainSubject = () => ({ tmuxName: mainTmux() })
+export const mainAlive = (): boolean => tmuxHasSession(mainTmux())
+
+/** Context used, as "N%", or null when the pane shows none. */
+export function mainContext(): string | null {
+  const u = claudeEngine.usage(mainSubject())
+  return u ? `${u.percent}%` : null
 }
 
-/** Main is no one channel: the router sends it every message outside a thread. */
+/** When the byte's tmux session started, in ms; now if tmux won't say. */
+export function mainStartedAt(): number {
+  try {
+    const sec = Number(execFileSync('tmux', ['display-message', '-p', '-t', mainTmux(), '#{session_created}'], { stdio: 'pipe', timeout: 2000 }).toString())
+    if (sec > 0) return sec * 1000
+  } catch {}
+  return Date.now()
+}
+
+/**
+ * Whether usage/peek/handoff typed here are about main: any message outside a thread, which the router
+ * sends to main. Narrower than the router on purpose: a message in a thread whose session died is routed
+ * to main too, but there `usage` says ❌ (the thread has no session) rather than answering about main.
+ */
 export const isForMain = (msg: Pick<InboundMessage, 'isThread'>): boolean => !msg.isThread
 
-// Where main's own notices (context alert, handoff status) go: the channel it was last messaged in.
+// Where main's own notices (context alert) go: the channel it was last messaged in.
 // Empty until the first message after a daemon start; nothing is sent until then.
 let lastChannel = ''
 export const noteMainChannel = (channelId: string): void => { lastChannel = channelId }
+export const mainChannel = (): string => lastChannel

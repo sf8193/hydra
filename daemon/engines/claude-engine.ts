@@ -28,6 +28,9 @@ import { gateway } from '../config.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 
+// What the pane-and-transcript methods read. The byte (main) has no SessionInfo, so these take only this.
+export type ClaudeSubject = Pick<SessionInfo, 'tmuxName'> & Partial<Pick<SessionInfo, 'claudeSessionId' | 'sessionMetadata'>>
+
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 
@@ -282,11 +285,11 @@ export class ClaudeEngine implements EngineAdapter {
     }
   }
 
-  isAlive(info: SessionInfo): boolean {
+  isAlive(info: ClaudeSubject): boolean {
     return tmuxHasSession(info.tmuxName)
   }
 
-  peek(info: SessionInfo, lines: number = 50): string {
+  peek(info: ClaudeSubject, lines: number = 50): string {
     try {
       return execSync(
         `tmux capture-pane -t ${shq(info.tmuxName)} -p -S -${lines}`,
@@ -298,7 +301,7 @@ export class ClaudeEngine implements EngineAdapter {
   // From the transcript: the last turn's context tokens over the window the session was launched with. The id comes
   // from the status file (a /clear starts a new transcript; the stored id goes stale). The pane's `ctx:` number is
   // the fallback (unknown model, no transcript yet) and is cross-checked, at most every CONTEXT_CHECK_EVERY_MS.
-  usage(info: SessionInfo): ContextUsage | null {
+  usage(info: ClaudeSubject): ContextUsage | null {
     const window = contextWindowOf(info.sessionMetadata?.model)
     const path = window ? transcriptPathFor(readClaudeStatus(info.tmuxName)?.sessionId ?? info.claudeSessionId) : undefined
     const used = path ? lastContextTokens(path) : null
@@ -318,7 +321,7 @@ export class ClaudeEngine implements EngineAdapter {
     return { usedTokens: used, contextWindow: window, percent }
   }
 
-  private panePercent(info: SessionInfo): number | null {
+  private panePercent(info: ClaudeSubject): number | null {
     try {
       const pane = execFileSync('tmux', ['capture-pane', '-t', info.tmuxName, '-p'],
         { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
@@ -340,9 +343,9 @@ export class ClaudeEngine implements EngineAdapter {
     }
   }
 
-  surface(info: SessionInfo): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }
+  surface(info: ClaudeSubject): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }
 
-  async sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
+  async sendKeys(info: ClaudeSubject, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
     if (opts?.raw) {
       execFileSync('tmux', ['send-keys', '-t', info.tmuxName, ...keys.split(/\s+/)], { timeout: 3000 })
     } else {
@@ -356,7 +359,7 @@ export class ClaudeEngine implements EngineAdapter {
     Bun.spawn(['tmux', 'send-keys', '-t', info.tmuxName, 'Escape'], { stdio: ['pipe', 'pipe', 'pipe'] })
   }
 
-  detectBlockingState(_info: SessionInfo, tailText: string): BlockingState | null {
+  detectBlockingState(_info: ClaudeSubject, tailText: string): BlockingState | null {
     return detectBlockingStateFn(tailText)
   }
 

@@ -4,7 +4,8 @@ import { gateway, STATE_DIR } from './config.js'
 import { transport } from './bridge-transport.js'
 import { handoffRequest } from './commands/thread.js'
 import { readHandoffTemplate } from './handoff-templates.js'
-import { mainSession } from './main-session.js'
+import { claudeEngine } from './engines/instances.js'
+import { mainAlive, mainChannel, mainSubject, mainTmux } from './main-session.js'
 import { reportError, safeSend } from './util.js'
 import type { InboundMessage } from '../gateway.js'
 
@@ -18,14 +19,13 @@ let running = false
 export async function handleMainHandoffIntercept(msg: InboundMessage, cmd: { model?: string; note?: string }): Promise<void> {
   const { note } = cmd
   if (cmd.model) return reportError(msg.channelId, msg.id, 'handoff', 'main hands off in place, on its own model', 'Use `handoff` or `handoff - <note>`.')
-  const info = mainSession()
-  if (!info) return reportError(msg.channelId, msg.id, 'handoff', 'main is not running')
+  if (!mainAlive()) return reportError(msg.channelId, msg.id, 'handoff', 'main is not running')
   if (running) return reportError(msg.channelId, msg.id, 'handoff', 'main is already handing off')
   const artifact = join(STATE_DIR, 'handoffs', `main-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
   requested = { artifact, note, channelId: msg.channelId }  // a new command replaces a pending one
   const requester = msg.authorUsername || 'the user'
-  const vars = { artifact, session: info.tmuxName, requester, model: '', note: note ?? '', cwd: '', worktree: '', branch: '', label: '' }
+  const vars = { artifact, session: mainTmux(), requester, model: '', note: note ?? '', cwd: '', worktree: '', branch: '', label: '' }
   transport.sendOrQueue('main', {
     type: 'notification',
     content: readHandoffTemplate('departing', vars) ?? handoffRequest(artifact, requester, note),
@@ -44,7 +44,7 @@ export function startMainHandoff(path: string): void {
   const req = requested?.artifact === path ? requested : undefined
   requested = undefined
   const note = req?.note
-  const channel = req?.channelId || mainSession()?.threadId
+  const channel = req?.channelId || mainChannel()
   const say = (text: string) => { if (channel) void gateway.send(channel, text).catch(() => {}) }
   // Same 500ms the other handoffs wait, so the tool result reaches main before any key is typed.
   new Promise(r => setTimeout(r, 500)).then(() => clearAndSeed(path, note)).then(
@@ -54,15 +54,15 @@ export function startMainHandoff(path: string): void {
 }
 
 async function clearAndSeed(path: string, note?: string): Promise<void> {
-  const info = mainSession()
-  if (!info) throw new Error('main is not running')
-  const blocked = info.adapter.detectBlockingState(info, info.adapter.peek(info, 40))
+  if (!mainAlive()) throw new Error('main is not running')
+  const main = mainSubject()
+  const blocked = claudeEngine.detectBlockingState(main, claudeEngine.peek(main, 40))
   if (blocked) throw new Error(`main is at a ${blocked.kind} prompt, so keys would go into it`)
-  await info.adapter.sendKeys(info, '/clear')
+  await claudeEngine.sendKeys(main, '/clear')
   await new Promise(r => setTimeout(r, 1500))
   // One line: a newline in typed text would submit early.
   const seed = `[system] You handed off and your context was cleared. Read ${path} and continue from its Next action.${note ? ` Note from the user: ${note.replace(/\s+/g, ' ').replace(/@/g, '@\u200b')}` : ''}`
-  await info.adapter.sendKeys(info, seed)
+  await claudeEngine.sendKeys(main, seed)
 }
 
 export function _resetMainHandoff(): void { requested = undefined; running = false }
