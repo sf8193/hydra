@@ -4,7 +4,7 @@ import { join } from 'path'
 import { STATE_DIR, gateway } from './config.js'
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { atomicWriteFileSync, formatDuration, executionAlive } from './util.js'
+import { atomicWriteFileSync, formatDuration, executionAlive, safeSend } from './util.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,6 +44,11 @@ export type WatchEntry = {
   lastCheckStatus: 'pending' | 'success' | 'failure' | 'unknown'
   createdAt: number
   pinMessageId?: string
+  // Opt-in: post a visible "CI green" message in the thread (not a session turn)
+  // once per head commit. greenAnnouncedSha is the head that was announced, so a
+  // restart never re-announces and a new push that goes green announces again.
+  notifyGreen?: boolean
+  greenAnnouncedSha?: string
 }
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
@@ -73,6 +78,24 @@ export function shouldNotifyCiChange(
   // delivery is a full context-window turn for codex; success is silent).
   if (newStatus !== 'failure') return false
   return newStatus !== lastStatus || newSha !== lastSha
+}
+
+// Edge trigger for the opt-in green post. Level-checked against the announced
+// head rather than edge-checked against lastCheckStatus, so opting in while the
+// PR is already green announces once on the next poll. null = the CI fetch
+// failed (or was partial): hold, never announce from missing data.
+export function shouldNotifyGreen(
+  entry: Pick<WatchEntry, 'notifyGreen' | 'greenAnnouncedSha'>,
+  check: { status: CheckStatusType; headSha: string } | null,
+): boolean {
+  if (!entry.notifyGreen || !check) return false
+  if (check.status !== 'success' || !check.headSha) return false
+  return entry.greenAnnouncedSha !== check.headSha
+}
+
+export function formatGreenNotice(entry: WatchEntry, check: { headSha: string; total: number }): string {
+  const title = entry.title ? ` ${entry.title.replace(/[[\]\\]/g, '')}` : ''
+  return `✅ CI green · [#${entry.prNumber}${title}](${entry.prUrl}) · \`${check.headSha.slice(0, 7)}\` · ${check.total} check${check.total !== 1 ? 's' : ''} passed`
 }
 
 // ---------------------------------------------------------------------------
@@ -117,14 +140,21 @@ function unpinWatch(entry: WatchEntry): void {
     process.stderr.write(`daemon: pr-watch: unpin failed for ${entry.prUrl}: ${err}\n`))
 }
 
+// Backfill fields older persisted data lacks. notifyGreen/greenAnnouncedSha are
+// optional: absent reads as opted out / nothing announced.
+export function parsePersistedWatches(raw: string): WatchEntry[] {
+  const data = JSON.parse(raw) as WatchEntry[]
+  for (const entry of data) {
+    if (!entry.lastHeadSha) entry.lastHeadSha = ''
+    if (!entry.lastCheckStatus) entry.lastCheckStatus = 'unknown'
+  }
+  return data
+}
+
 function loadPersisted(): void {
   try {
     const raw = readFileSync(PERSIST_FILE, 'utf8')
-    const data = JSON.parse(raw) as WatchEntry[]
-    for (const entry of data) {
-      // Backfill new fields from older persisted data
-      if (!entry.lastHeadSha) entry.lastHeadSha = ''
-      if (!entry.lastCheckStatus) entry.lastCheckStatus = 'unknown'
+    for (const entry of parsePersistedWatches(raw)) {
       if (registry.has(entry.sessionId) || entry.sessionId === 'main') {
         watches.set(entry.prUrl, entry)
       }
@@ -290,10 +320,11 @@ async function fetchNewIssueComments(entry: WatchEntry): Promise<PRComment[] | n
 // CI status
 // ---------------------------------------------------------------------------
 
-type CheckResult = {
+export type CheckResult = {
   headSha: string
   status: 'pending' | 'success' | 'failure' | 'unknown'
   failed: Array<{ name: string; conclusion: string; url: string }>
+  total: number // check runs + commit statuses on headSha
 }
 
 async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckResult | null> {
@@ -318,10 +349,12 @@ async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckR
   const failed: Array<{ name: string; conclusion: string; url: string }> = []
   let hasPending = false
   let hasAnyCheck = false
+  let total = 0
 
   if (checks?.check_runs) {
     const runs = checks.check_runs as Array<{ name: string; status: string; conclusion: string | null; html_url: string }>
     hasAnyCheck = hasAnyCheck || runs.length > 0
+    total += runs.length
     hasPending = hasPending || runs.some((r: any) => r.status !== 'completed')
     for (const r of runs) {
       if (r.conclusion === 'failure' || r.conclusion === 'cancelled' || r.conclusion === 'timed_out' || r.conclusion === 'startup_failure' || r.conclusion === 'action_required') {
@@ -336,6 +369,7 @@ async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckR
       process.stderr.write(`daemon: pr-watch: ${entry.prUrl} hit 100 commit statuses — some may be missed\n`)
     }
     hasAnyCheck = hasAnyCheck || statuses.length > 0
+    total += statuses.length
     hasPending = hasPending || statuses.some((s: any) => s.state === 'pending')
     for (const s of statuses) {
       if (s.state === 'failure' || s.state === 'error') {
@@ -344,10 +378,30 @@ async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckR
     }
   }
 
-  if (!hasAnyCheck) return { headSha, status: 'unknown', failed: [] }
-  if (hasPending && failed.length === 0) return { headSha, status: 'pending', failed: [] }
-  if (failed.length > 0) return { headSha, status: 'failure', failed }
-  return { headSha, status: 'success', failed: [] }
+  if (!hasAnyCheck) return { headSha, status: 'unknown', failed: [], total }
+  if (hasPending && failed.length === 0) return { headSha, status: 'pending', failed: [], total }
+  if (failed.length > 0) return { headSha, status: 'failure', failed, total }
+  return { headSha, status: 'success', failed: [], total }
+}
+
+// Fold one poll's CI result into the entry. Returns whether the failure path
+// should notify the session (unchanged behavior). The opt-in green notice is a
+// visible thread post, never a session delivery: no model turn, no Codex cost.
+// greenAnnouncedSha is claimed before the send and released if it fails, so a
+// failed send retries on the next poll.
+export async function applyCheckResult(entry: WatchEntry, check: CheckResult | null): Promise<boolean> {
+  if (!check) return false
+  const ciChanged = shouldNotifyCiChange(entry.lastCheckStatus, entry.lastHeadSha, check.status, check.headSha)
+  const announceGreen = shouldNotifyGreen(entry, check)
+  entry.lastHeadSha = check.headSha
+  entry.lastCheckStatus = check.status
+  if (announceGreen) {
+    // Claim the SHA before the await: poll cycles can overlap, and the second must not post too.
+    entry.greenAnnouncedSha = check.headSha
+    const sent = await safeSend(entry.threadId, formatGreenNotice(entry, check), { unfurl: false })
+    if (sent.length === 0 && entry.greenAnnouncedSha === check.headSha) entry.greenAnnouncedSha = undefined
+  }
+  return ciChanged
 }
 
 // ---------------------------------------------------------------------------
@@ -412,13 +466,8 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   const reviews = reviewsRaw ?? []
   const issueComments = issueCommentsRaw ?? []
 
-  // Detect CI status changes
-  let ciChanged = false
-  if (checkResult) {
-    ciChanged = shouldNotifyCiChange(entry.lastCheckStatus, entry.lastHeadSha, checkResult.status, checkResult.headSha)
-    entry.lastHeadSha = checkResult.headSha
-    entry.lastCheckStatus = checkResult.status
-  }
+  // Detect CI status changes (and post the opt-in green notice)
+  const ciChanged = await applyCheckResult(entry, checkResult)
 
   if (reviewComments.length === 0 && issueComments.length === 0 && reviews.length === 0 && !ciChanged) {
     if (watches.get(entry.prUrl) === entry) persist()
@@ -563,9 +612,19 @@ export async function detectPrUrl(cwd: string): Promise<DetectResult> {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function watchPr(prUrl: string, sessionId: string, threadId: string): Promise<string> {
-  if (watches.has(prUrl)) {
-    const existing = watches.get(prUrl)!
+export type WatchOpts = { notifyGreen?: boolean }
+
+export async function watchPr(prUrl: string, sessionId: string, threadId: string, opts: WatchOpts = {}): Promise<string> {
+  const existing = watches.get(prUrl)
+  if (existing) {
+    // Opting in to green notices upgrades the existing watch in place (its owner
+    // and thread are kept). Plain re-watches stay a no-op; nothing downgrades.
+    if (opts.notifyGreen && !existing.notifyGreen) {
+      existing.notifyGreen = true
+      persist()
+      process.stderr.write(`daemon: pr-watch: ${prUrl} upgraded to notify-green\n`)
+      return `already watching ${prUrl} (session: ${existing.sessionId}) — will now post when CI goes green`
+    }
     return `already watching ${prUrl} (session: ${existing.sessionId})`
   }
 
@@ -588,6 +647,7 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
     lastHeadSha: '',
     lastCheckStatus: 'unknown',
     createdAt: Date.now(),
+    ...(opts.notifyGreen ? { notifyGreen: true } : {}),
   }
 
   // Seed watermarks with max IDs so we only report NEW comments/status
@@ -614,8 +674,8 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
   watches.set(prUrl, entry)
   persist()
   void pinWatch(entry)
-  process.stderr.write(`daemon: pr-watch: watching ${prUrl} → session ${sessionId}, thread ${threadId}\n`)
-  return `watching ${prUrl} — will poll every ${POLL_INTERVAL_MS / 60000} minutes`
+  process.stderr.write(`daemon: pr-watch: watching ${prUrl} → session ${sessionId}, thread ${threadId}${entry.notifyGreen ? ' (notify-green)' : ''}\n`)
+  return `watching ${prUrl} — will poll every ${POLL_INTERVAL_MS / 60000} minutes${entry.notifyGreen ? ' and post when CI goes green' : ''}`
 }
 
 export function unwatchPr(prUrl: string, callerSessionId?: string): string {
@@ -686,7 +746,7 @@ export function formatWatchEntry(e: WatchEntry): string {
   const age = formatDuration(Date.now() - e.createdAt)
   const sessionInfo = registry.get(e.sessionId)
   const name = sessionInfo?.tmuxName ?? e.sessionId
-  return `[#${e.prNumber}](${e.prUrl}) → **${name}** (${age})`
+  return `[#${e.prNumber}](${e.prUrl})${e.notifyGreen ? ' 🟢' : ''} → **${name}** (${age})`
 }
 
 export async function backfillTitles(): Promise<number> {

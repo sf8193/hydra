@@ -1,10 +1,19 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
-import { watchPr, unwatchPr, listWatches, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from '../pr-watch.js'
+import { watchPr, unwatchPr, listWatches, formatWatchEntry, detectPrUrl, WATCH_ERRORS, type WatchOpts } from '../pr-watch.js'
 import { reportError } from '../util.js'
 import type { InboundMessage } from '../../gateway.js'
 
-export async function handleWatchIntercept(msg: InboundMessage, url?: string): Promise<void> {
+// `watch [pr-url] [+green]` — the URL may arrive Slack-wrapped (<url|label>).
+const WATCH_RE = /^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?(\s+\+green)?\s*$/i
+
+export function parseWatchCommand(content: string): { url?: string; notifyGreen: boolean } | null {
+  const m = content.match(WATCH_RE)
+  if (!m) return null
+  return { url: m[1]?.trim(), notifyGreen: !!m[2] }
+}
+
+export async function handleWatchIntercept(msg: InboundMessage, url?: string, opts: WatchOpts = {}): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '👁️').catch(e => process.stderr.write(`daemon: watch react failed: ${e}\n`))
 
   const resolvedThreadId = registry.resolveThreadId(msg)
@@ -35,7 +44,7 @@ export async function handleWatchIntercept(msg: InboundMessage, url?: string): P
   }
 
   try {
-    const result = await watchPr(resolvedUrl, targetSessionId, threadId)
+    const result = await watchPr(resolvedUrl, targetSessionId, threadId, opts)
     await gateway.send(msg.channelId, result, { replyTo: msg.id })
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'watch', err instanceof Error ? err.message : String(err))

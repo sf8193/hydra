@@ -23,7 +23,7 @@ import { isThreadOccupied } from './protocol-registry.js'
 import { getRunByThread, cancelRun } from './protocol-runner.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept, handleHistoryIntercept } from './commands/status.js'
-import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept } from './commands/watch.js'
+import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept, parseWatchCommand } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
@@ -796,9 +796,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
 
-      const watchMatch = msg.content.match(/^(?:\/watch|watch)(?:\s+<?(?:(https:\/\/[^\s|>]+)(?:\|[^>]*)?)>?)?\s*$/i)
-      if (watchMatch) {
-        void handleWatchIntercept(msg, watchMatch[1]?.trim())
+      const watchCmd = parseWatchCommand(msg.content)
+      if (watchCmd) {
+        void handleWatchIntercept(msg, watchCmd.url, { notifyGreen: watchCmd.notifyGreen })
         return
       }
 

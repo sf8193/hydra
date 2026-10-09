@@ -1,5 +1,8 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { deliverPrUpdate, parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, restoreWatches, listWatches, type WatchEntry } from '../pr-watch.js'
+import { gateway } from '../config.js'
+import { deliverPrUpdate, parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, restoreWatches, listWatches, parsePersistedWatches, applyCheckResult, formatWatchEntry, type WatchEntry, type CheckResult } from '../pr-watch.js'
+import { parseWatchCommand } from '../commands/watch.js'
+import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
@@ -226,5 +229,180 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
   test('an unknown session id does not throw', () => {
     delivered = []
     expect(() => deliverPrUpdate('no-such-session', 'thread-1', 'content')).not.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Opt-in green CI notice
+// ---------------------------------------------------------------------------
+
+describe('notify-green: persistence', () => {
+  const base = { prUrl: 'https://github.com/o/r/pull/7', owner: 'o', repo: 'r', prNumber: 7, sessionId: 's', threadId: 't', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, createdAt: 1 }
+
+  test('old JSON without the fields loads as opted out, with backfilled CI fields', () => {
+    const [e] = parsePersistedWatches(JSON.stringify([base]))
+    expect(e.notifyGreen).toBeUndefined()
+    expect(!!e.notifyGreen).toBe(false)
+    expect(e.greenAnnouncedSha).toBeUndefined()
+    expect(e.lastHeadSha).toBe('')
+    expect(e.lastCheckStatus).toBe('unknown')
+  })
+
+  test('new fields round-trip', () => {
+    const entry = { ...base, lastHeadSha: 'abc', lastCheckStatus: 'success', notifyGreen: true, greenAnnouncedSha: 'abc' }
+    const [e] = parsePersistedWatches(JSON.stringify([entry], null, 2))
+    expect(e.notifyGreen).toBe(true)
+    expect(e.greenAnnouncedSha).toBe('abc')
+  })
+})
+
+describe('notify-green: watch_pr schema + upgrade path', () => {
+  const URL7 = 'https://github.com/o/r/pull/7'
+  const entry = () => listWatches().find(w => w.prUrl === URL7)!
+  function seed(extra: Partial<WatchEntry> = {}) {
+    restoreWatches([{ prUrl: URL7, owner: 'o', repo: 'r', prNumber: 7, sessionId: 'sess-1', threadId: 'thread-1', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'unknown', createdAt: Date.now(), ...extra } as WatchEntry], 'sess-1', 'thread-1')
+  }
+  afterEach(() => { unwatchPr(URL7) })
+
+  test('watch_pr declares an optional boolean notify_green', () => {
+    const def = UNIVERSAL_TOOLS.find(t => t.name === 'watch_pr')! as any
+    expect(def.inputSchema.properties.notify_green.type).toBe('boolean')
+    expect(def.inputSchema.required ?? []).not.toContain('notify_green')
+  })
+
+  test('notify_green on an already-watched PR upgrades in place (owner + thread kept)', async () => {
+    seed()
+    const res = await watchPr(URL7, 'sess-2', 'thread-2', { notifyGreen: true })
+    expect(res).toContain('will now post when CI goes green')
+    expect(entry().notifyGreen).toBe(true)
+    expect(entry().sessionId).toBe('sess-1')
+    expect(entry().threadId).toBe('thread-1')
+  })
+
+  test('plain duplicate watch keeps the existing message and never downgrades', async () => {
+    seed({ notifyGreen: true })
+    expect(await watchPr(URL7, 'sess-2', 'thread-2')).toBe(`already watching ${URL7} (session: sess-1)`)
+    expect(entry().notifyGreen).toBe(true)
+  })
+
+  test('upgrade preserves a persisted greenAnnouncedSha (no re-announce)', async () => {
+    seed({ notifyGreen: true, greenAnnouncedSha: 'abc' })
+    await watchPr(URL7, 'sess-1', 'thread-1', { notifyGreen: true })
+    expect(entry().greenAnnouncedSha).toBe('abc')
+  })
+
+  test('watches listing marks notify-green entries', () => {
+    seed({ notifyGreen: true })
+    expect(formatWatchEntry(entry())).toContain('🟢')
+    seed({ notifyGreen: false })
+    expect(formatWatchEntry(entry())).not.toContain('🟢')
+  })
+})
+
+describe('notify-green: chat parse', () => {
+  test.each([
+    ['watch', { url: undefined, notifyGreen: false }],
+    ['watch +green', { url: undefined, notifyGreen: true }],
+    ['/watch +GREEN', { url: undefined, notifyGreen: true }],
+    ['watch https://github.com/o/r/pull/1', { url: 'https://github.com/o/r/pull/1', notifyGreen: false }],
+    ['watch https://github.com/o/r/pull/1 +green', { url: 'https://github.com/o/r/pull/1', notifyGreen: true }],
+    ['watch <https://github.com/o/r/pull/1|o/r#1> +green', { url: 'https://github.com/o/r/pull/1', notifyGreen: true }],
+  ] as const)('%p', (input, expected) => {
+    expect(parseWatchCommand(input)).toEqual(expected as any)
+  })
+
+  test.each(['watches', 'watch +blue', 'watch green', 'unwatch https://github.com/o/r/pull/1', 'watch +green https://github.com/o/r/pull/1'])('%p does not match', input => {
+    expect(parseWatchCommand(input)).toBeNull()
+  })
+})
+
+describe('notify-green: delivery is a thread post, never a session turn', () => {
+  let sends: Array<{ channelId: string; text: string; opts?: any }>
+  let queued: number
+  let sendFails = false
+  // Captured lazily: config.ts creates the gateway behind a top-level await.
+  let origSend: any
+  const origQueue = transport.sendOrQueue
+  const ok = (headSha: string): CheckResult => ({ headSha, status: 'success', failed: [], total: 4 })
+
+  function mkEntry(extra: Partial<WatchEntry> = {}): WatchEntry {
+    return { prUrl: 'https://github.com/o/r/pull/9', owner: 'o', repo: 'r', prNumber: 9, title: 'Add [thing]', sessionId: 'sess-g', threadId: 'thread-g', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'pending', createdAt: 1, notifyGreen: true, ...extra }
+  }
+
+  afterEach(() => {
+    if (origSend) (gateway as any).send = origSend
+    ;(transport as any).sendOrQueue = origQueue
+  })
+  function mock() {
+    sends = []; queued = 0; sendFails = false
+    origSend ??= gateway.send
+    ;(gateway as any).send = async (channelId: string, text: string, opts?: any) => {
+      if (sendFails) throw new Error('discord down')
+      sends.push({ channelId, text, opts }); return { id: `m${sends.length}` }
+    }
+    ;(transport as any).sendOrQueue = () => { queued++ }
+  }
+
+  test('posts once per head in the watch thread; no transport delivery; no ciChanged', async () => {
+    mock()
+    const e = mkEntry()
+    expect(await applyCheckResult(e, ok('abcdef1234'))).toBe(false)
+    expect(sends).toHaveLength(1)
+    expect(sends[0].channelId).toBe('thread-g')
+    expect(sends[0].text).toBe('✅ CI green · [#9 Add thing](https://github.com/o/r/pull/9) · `abcdef1` · 4 checks passed')
+    expect(e.greenAnnouncedSha).toBe('abcdef1234')
+    expect(queued).toBe(0)
+    await applyCheckResult(e, ok('abcdef1234'))
+    expect(sends).toHaveLength(1)
+    await applyCheckResult(e, { headSha: 'fff0000', status: 'pending', failed: [], total: 4 })
+    await applyCheckResult(e, ok('fff0000'))
+    expect(sends).toHaveLength(2)
+    expect(queued).toBe(0)
+  })
+
+  test('null fetch holds state and posts nothing', async () => {
+    mock()
+    const e = mkEntry({ lastHeadSha: 'a', lastCheckStatus: 'pending' })
+    expect(await applyCheckResult(e, null)).toBe(false)
+    expect(sends).toHaveLength(0)
+    expect(e.lastCheckStatus).toBe('pending')
+  })
+
+  test('a failed send leaves greenAnnouncedSha unset so the next poll retries', async () => {
+    mock(); sendFails = true
+    const e = mkEntry()
+    await applyCheckResult(e, ok('abc'))
+    expect(e.greenAnnouncedSha).toBeUndefined()
+    sendFails = false
+    await applyCheckResult(e, ok('abc'))
+    expect(sends).toHaveLength(1)
+    expect(e.greenAnnouncedSha).toBe('abc')
+  })
+
+  test('overlapping poll cycles post once', async () => {
+    mock()
+    const e = mkEntry()
+    await Promise.all([applyCheckResult(e, ok('abc')), applyCheckResult(e, ok('abc'))])
+    expect(sends).toHaveLength(1)
+    expect(e.greenAnnouncedSha).toBe('abc')
+  })
+
+  test('brackets and backslashes in the title cannot break the link', async () => {
+    mock()
+    await applyCheckResult(mkEntry({ title: 'Fix [x] path\\' }), ok('abcdef1234'))
+    expect(sends[0].text).toContain('[#9 Fix x path](https://github.com/o/r/pull/9)')
+  })
+
+  test('failure path unchanged: returns ciChanged, no green post', async () => {
+    mock()
+    const e = mkEntry()
+    expect(await applyCheckResult(e, { headSha: 'abc', status: 'failure', failed: [{ name: 'ci', conclusion: 'failure', url: '' }], total: 1 })).toBe(true)
+    expect(sends).toHaveLength(0)
+  })
+
+  test('not opted in: success posts nothing', async () => {
+    mock()
+    await applyCheckResult(mkEntry({ notifyGreen: undefined }), ok('abc'))
+    expect(sends).toHaveLength(0)
   })
 })
