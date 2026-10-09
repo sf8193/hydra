@@ -1,10 +1,11 @@
 import { existsSync, statSync } from 'fs'
+import { isAbsolute, resolve as resolvePath } from 'path'
 import { execSync } from 'child_process'
 import { gateway, INBOX_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf } from './session-lifecycle.js'
+import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
@@ -157,6 +158,9 @@ async function retrySend<T>(fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export type ToolResult = { content: Array<{type: string; text: string}>; isError?: boolean; sentIds?: string[] }
+
+// Sessions whose `handoff` call is between the file check and handOff (the pre-handoff hook runs here).
+const handoffChecksInFlight = new Set<string>()
 
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
   try {
@@ -456,14 +460,26 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'handoff': {
-        const path = args.path as string | undefined
         const info = callerSessionId ? registry.get(callerSessionId) : undefined
         if (!info) throw new Error('handoff: calling session not found')
+        // One absolute path for every reader: a relative one means the session's dir, not the daemon's.
+        const raw = args.path as string | undefined
+        const path = raw && (isAbsolute(raw) ? raw : resolvePath(sessionDir(info) ?? process.cwd(), raw))
         let size = 0
         try { size = path ? statSync(path).size : 0 } catch {}
         if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
+        // Claimed before the hook's await: a second call must not run the hook again and then report a false failure.
+        if (handoffChecksInFlight.has(info.sessionId)) throw new Error(`${info.tmuxName} is already handing off`)
+        handoffChecksInFlight.add(info.sessionId)
+        const release = () => handoffChecksInFlight.delete(info.sessionId)
+        let check: PreHandoffVerdict
+        // The hook resolves on every path it knows; this guards the claim against one it doesn't (a leaked claim blocks every later handoff).
+        try { check = await runPreHandoffHook(info, path) } catch (err) { release(); throw err }
+        if (!check.ok) { release(); throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`) }
+        if (registry.get(info.sessionId) !== info) { release(); throw new Error(`${info.tmuxName} ended during the pre-handoff check`) }
         // Answer before acting: the kill inside handOff ends this very session.
         setTimeout(() => {
+          release()  // handOff holds its own in-flight guard from here
           handOff(info, path).then(
             r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\``),
             err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
