@@ -444,7 +444,9 @@ The daemon posts account-wide Claude rate-limit alerts to the default channel: t
 
 ### Handoff
 
-`handoff [model]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
+`handoff [model] [- note]` in a session thread asks the live session to write a handoff file and call the `handoff` tool. A fresh session then continues in the same thread, worktree, and label, optionally on another model.
+
+A note after `-`, `—` or `:` (`handoff - watch the open PRs and refine them`) goes to both sides: the outgoing session is asked to carry it into Next action, and the successor's prompt quotes it word for word, so it arrives even if the handoff file leaves it out. Without a separator, a line that merely starts with "handoff" stays ordinary chat.
 
 Three optional files in the state dir customize what each side is told. All three are re-read on every handoff, so edits apply without a restart:
 
@@ -464,11 +466,12 @@ Three optional files in the state dir customize what each side is told. All thre
 | `worktree` | ✓ | ✓ |
 | `branch` | ✓ | ✓ |
 | `label` | ✓ | |
+| `note` | ✓ | ✓ |
 | `from` | | ✓ |
 | `from_session` | | ✓ |
 | `from_transcript` | | ✓ |
 
-`from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
+`from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. `note` is empty when the command had none. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
 
 `hooks/on-kill` in the state dir already runs on a handoff, with `HYDRA_KILL_REASON='handed off'`. Use it for post-handoff work nobody waits on.
 

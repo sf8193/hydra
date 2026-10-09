@@ -324,3 +324,66 @@ test('successor prompt: with arriving.md and a predecessor, the fork recipe stay
   expect(lines[at + 2]).toBe('Send a greeting to your thread using reply(chat_id=th-2).')
   expect(lines.join('\n')).not.toMatch(/### Reception|In your greeting, include|begin executing the Next action/)
 })
+
+test('parseHandoffCommand: a note needs a separator; a chat line that starts with "handoff" is not a command', async () => {
+  const { parseHandoffCommand } = await import('../router.js')
+  expect(parseHandoffCommand('handoff')).toEqual({})
+  expect(parseHandoffCommand('/handoff opus')).toEqual({ model: 'opus' })
+  expect(parseHandoffCommand('handoff - So next session can listen to each of these PRs')).toEqual({ note: 'So next session can listen to each of these PRs' })
+  expect(parseHandoffCommand('handoff opus: watch CI\nand refine')).toEqual({ model: 'opus', note: 'watch CI\nand refine' })
+  expect(parseHandoffCommand('Handoff — x')).toEqual({ note: 'x' })
+  expect(parseHandoffCommand('handoff -')).toEqual({})
+  expect(parseHandoffCommand('handoff looks broken, why?')).toBeNull()
+  expect(parseHandoffCommand('handoffs are slow')).toBeNull()
+  expect(parseHandoffCommand('please handoff')).toBeNull()
+})
+
+test('handoff command: a note reaches the built-in request and {{note}}; none leaves no trace', async () => {
+  const origSend = transport.sendOrQueue, origReact = gateway.react
+  const delivered: any[] = []
+  ;(transport as any).sendOrQueue = (_id: string, m: any) => { delivered.push(m) }
+  ;(gateway as any).react = async () => {}
+  mk('ho-6', 'pulse', 'ho-thread-6')
+  registry.setThread('ho-thread-6', 'ho-6')
+  const file = join(HANDOFF_TEMPLATE_DIR, 'departing.md')
+  try {
+    const run = (note?: string) => handleHandoffIntercept({ channelId: 'ho-thread-6', id: 'm', isThread: true, content: 'handoff', authorUsername: 'dan' } as any, undefined, note)
+    await run('watch the PRs')
+    expect(delivered[0].content).toContain('Their note for the next session: "watch the PRs".')
+    expect(registry.get('ho-6')!.handoffNote).toBe('watch the PRs')
+    await run()
+    expect(delivered[1].content).not.toContain('note')
+    expect(registry.get('ho-6')!.handoffNote).toBeUndefined()
+    mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+    writeFileSync(file, 'note=[{{note}}]')
+    await run('x y')
+    expect(delivered[2].content).toBe('note=[x y]')
+  } finally {
+    rmSync(file, { force: true })
+    ;(transport as any).sendOrQueue = origSend
+    ;(gateway as any).react = origReact
+    registry.delete('ho-6'); registry.deleteThread('ho-thread-6')
+  }
+})
+
+test('handoff note: carried to the successor spawn, quoted in its prompt, and filled into arriving {{note}}', async () => {
+  const { handoffSpawnOpts, handoffArrival } = await import('../session-lifecycle.js')
+  const { buildHandoffPrompt } = await import('../prompts/session.js')
+  mk('ho-7', 'flint', 'ho-thread-7')
+  const info = registry.get('ho-7')!
+  try {
+    expect(handoffSpawnOpts(info, '/h.md').handoffNote).toBeUndefined()
+    info.handoffNote = 'watch the PRs'
+    const opts = handoffSpawnOpts(info, '/h.md')
+    expect(opts.handoffNote).toBe('watch the PRs')
+    const p = { sessionId: 's', tmuxName: 'fresh', threadId: 't', topic: 'x', originFrom: 'flint', artifact: '/h.md' }
+    expect(buildHandoffPrompt({ ...p, note: opts.handoffNote })).toContain(`in the requester's words: "watch the PRs".`)
+    expect(buildHandoffPrompt(p)).not.toContain("requester's words")
+    mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+    writeFileSync(join(HANDOFF_TEMPLATE_DIR, 'arriving.md'), 'n={{note}}')
+    expect(handoffArrival(opts, { from: 'flint', session: 'fresh', cwd: '', worktree: '', branch: '' })).toBe('n=watch the PRs')
+  } finally {
+    rmSync(join(HANDOFF_TEMPLATE_DIR, 'arriving.md'), { force: true })
+    registry.delete('ho-7')
+  }
+})

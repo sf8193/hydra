@@ -106,6 +106,17 @@ export function resolveTmuxKey(t: string): string | null {
 
 type ProtocolModelSelection = { model: string; engine: ProviderId }
 
+/**
+ * `handoff [model] [- note]`. The note needs a separator (`-`, `—` or `:`), so a chat line that
+ * merely starts with the word ("handoff looks broken?") is never a command.
+ */
+export function parseHandoffCommand(content: string): { model?: string; note?: string } | null {
+  const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?:\s*[-—:]\s*([\s\S]*?))?\s*$/i)
+  if (!m) return null
+  const note = m[2]?.trim()
+  return { ...(m[1] ? { model: m[1] } : {}), ...(note ? { note } : {}) }
+}
+
 function resolveProtocolModel(alias: string | undefined, channelId: string, replyTo: string): ProtocolModelSelection | undefined | false {
   if (!alias) return undefined
   const claudeModel = resolveModelAlias(alias)
@@ -585,12 +596,12 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    // "handoff" / "handoff <model>" — fresh session in this thread, optionally on another model
-    const handoffMatch = msg.content.match(/^(?:handoff|\/handoff)(?:\s+([a-z][\w.-]*))?\s*$/i)
-    if (handoffMatch && msg.isThread) {
-      const selection = resolveProtocolModel(handoffMatch[1], msg.channelId, msg.id)
+    // "handoff [model] [- note]" — fresh session in this thread, optionally on another model
+    const handoffCmd = parseHandoffCommand(msg.content)
+    if (handoffCmd && msg.isThread) {
+      const selection = resolveProtocolModel(handoffCmd.model, msg.channelId, msg.id)
       if (selection === false) return
-      void handleHandoffIntercept(msg, selection)
+      void handleHandoffIntercept(msg, selection, handoffCmd.note)
       return
     }
 

@@ -73,7 +73,7 @@ export function pollSessionsOnce(now: number): void {
     if (threshold !== undefined && !contextAlerted.has(key)) {
       for (const t of CONTEXT_ALERT_THRESHOLDS) if (t <= threshold) contextAlerted.add(`${info.sessionId}:${t}`)
       process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
-      void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider a \`handoff\` to a fresh session.`).catch(() => {})
+      void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider a \`handoff\` to a fresh session (\`handoff - <note>\` passes a note to it).`).catch(() => {})
     }
   }
 }

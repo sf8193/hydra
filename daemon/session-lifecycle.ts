@@ -263,6 +263,7 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     handoffFromClaudeSessionId: (info.engine ?? 'claude') === 'claude' ? info.claudeSessionId : undefined,
     ...(predecessor && { predecessor }),
     artifact,
+    ...(info.handoffNote && { handoffNote: info.handoffNote }),
     model: sel?.model ?? info.sessionMetadata?.model,
     engine: sel?.engine ?? info.engine,
     inheritedLabel: info.label,
@@ -278,6 +279,7 @@ export function handoffArrival(opts: SpawnOpts, vars: { from: string; session: s
   return readHandoffTemplate('arriving', {
     ...vars,
     artifact: opts.artifact ?? '',
+    note: opts.handoffNote ?? '',
     from_session: opts.handoffFromClaudeSessionId ?? '',
     from_transcript: transcriptPathFor(opts.handoffFromClaudeSessionId) ?? '',
   })
@@ -904,7 +906,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt = opts.promptBuilder(sessionId, tmuxName)
   } else if (isHandoff) {
     const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktreePath ?? '', branch: worktreeBranch ?? '' })
-    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, arrival, hasPredecessor: carriedPredecessor?.engine === 'claude' })  // only Claude predecessors can be forked today
+    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, note: opts?.handoffNote, arrival, hasPredecessor: carriedPredecessor?.engine === 'claude' })  // only Claude predecessors can be forked today
   } else if (isFork && isHeadless) {
     prompt = buildHeadlessForkPrompt({ ...promptParams, originFrom: originFrom!, readOnly: !!disallowedTools?.length, answerOnce: !!opts?.answerOnce })
   } else if (isFork) {
