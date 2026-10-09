@@ -348,6 +348,9 @@ export function runKillHook(info: SessionInfo, reason: string, hookPath = KILL_H
 
 const PRE_HANDOFF_OUTPUT_MAX = 1500
 
+/** The pre-handoff hook's answer: go, or refuse with the hook's output. */
+export type PreHandoffVerdict = { ok: true } | { ok: false; output: string }
+
 /** Where the session works: its Hydra worktree, else the cwd it was launched in. */
 export function sessionDir(info: SessionInfo): string | undefined {
   return info.worktreePath ?? info.sessionMetadata?.cwd
@@ -361,7 +364,7 @@ export function sessionDir(info: SessionInfo): string | undefined {
  */
 export async function runPreHandoffHook(
   info: SessionInfo, letterPath: string, hookPath = PRE_HANDOFF_HOOK_PATH, timeoutMs = 15_000,
-): Promise<{ ok: true } | { ok: false; output: string }> {
+): Promise<PreHandoffVerdict> {
   if (!existsSync(hookPath)) return { ok: true }
   try { accessSync(hookPath, fsConstants.X_OK) } catch {
     process.stderr.write(`daemon: pre-handoff hook ${hookPath} is not executable — skipped\n`)
@@ -383,7 +386,7 @@ export async function runPreHandoffHook(
     let settled = false
     let exitCode: number | null = null
     let exitGrace: ReturnType<typeof setTimeout> | undefined
-    const settle = (r: { ok: true } | { ok: false; output: string }) => {
+    const settle = (r: PreHandoffVerdict) => {
       if (settled) return
       settled = true; clearTimeout(timer); clearTimeout(exitGrace); resolve(r)
     }

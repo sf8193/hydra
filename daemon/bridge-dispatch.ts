@@ -5,7 +5,7 @@ import { gateway, INBOX_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf, runPreHandoffHook, sessionDir } from './session-lifecycle.js'
+import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
@@ -472,7 +472,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         if (handoffChecksInFlight.has(info.sessionId)) throw new Error(`${info.tmuxName} is already handing off`)
         handoffChecksInFlight.add(info.sessionId)
         const release = () => handoffChecksInFlight.delete(info.sessionId)
-        let check: Awaited<ReturnType<typeof runPreHandoffHook>>
+        let check: PreHandoffVerdict
         // The hook resolves on every path it knows; this guards the claim against one it doesn't (a leaked claim blocks every later handoff).
         try { check = await runPreHandoffHook(info, path) } catch (err) { release(); throw err }
         if (!check.ok) { release(); throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`) }
