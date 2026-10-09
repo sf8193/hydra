@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { execSync, execFileSync, spawn } from 'child_process'
 import { writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join } from 'path'
+import { tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
 import { authorityId, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
@@ -360,38 +361,57 @@ export async function runPreHandoffHook(
     process.stderr.write(`daemon: pre-handoff hook ${hookPath} is not executable — skipped\n`)
     return { ok: true }
   }
-  const cwd = info.worktreePath ?? info.sessionMetadata?.cwd
   const noVerdict = (why: string) => {
     process.stderr.write(`daemon: pre-handoff hook gave no verdict (${why}) — handing off anyway\n`)
     return { ok: true } as const
   }
-  // Async, so a slow hook never stalls the daemon; settled by the exit or the timer, never by
-  // stream close (a grandchild holding stdout open must not stretch the timeout).
+  // A missing session dir must not become the daemon's own cwd: a `git` check would judge the
+  // wrong repo. Run from the temp dir and say so through an empty HYDRA_CWD.
+  const sessionCwd = info.worktreePath ?? info.sessionMetadata?.cwd
+  const cwd = sessionCwd && existsSync(sessionCwd) ? sessionCwd : undefined
+  if (sessionCwd && !cwd) process.stderr.write(`daemon: pre-handoff hook: session dir ${sessionCwd} is gone — running from ${tmpdir()} with HYDRA_CWD empty\n`)
+  // Async, so a slow hook never stalls the daemon. Its own process group, so a timeout kills
+  // whatever it started too. The verdict waits for the output streams, but never past a short grace.
   return new Promise(resolve => {
     let out = ''
     let settled = false
-    const settle = (r: { ok: true } | { ok: false; output: string }) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r) } }
+    let exitCode: number | null = null
+    let exitGrace: ReturnType<typeof setTimeout> | undefined
+    const settle = (r: { ok: true } | { ok: false; output: string }) => {
+      if (settled) return
+      settled = true; clearTimeout(timer); clearTimeout(exitGrace); resolve(r)
+    }
+    const giveUp = (why: string) => { if (!settled) settle(noVerdict(why)) }
     let child: ReturnType<typeof spawn>
     try {
       child = spawn(hookPath, [letterPath], {
-        cwd: cwd && existsSync(cwd) ? cwd : undefined,
+        cwd: cwd ?? tmpdir(),
         env: { ...process.env, ...hookEnv(info), HYDRA_CWD: cwd ?? '' },
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
       })
     } catch (err) { return resolve(noVerdict(err instanceof Error ? err.message : String(err))) }
-    const timer = setTimeout(() => { child.kill('SIGKILL'); settle(noVerdict(`timed out after ${timeoutMs}ms`)) }, timeoutMs)
-    const collect = (d: Buffer) => { if (out.length <= PRE_HANDOFF_OUTPUT_MAX) out += d.toString('utf8') }
+    const killGroup = () => { try { process.kill(-child.pid!, 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } }
+    const timer = setTimeout(() => { killGroup(); giveUp(`timed out after ${timeoutMs}ms`) }, timeoutMs)
+    // Keep the tail: a hook prints its reason last.
+    const collect = (d: Buffer) => { out = (out + d.toString('utf8')).slice(-PRE_HANDOFF_OUTPUT_MAX * 2) }
     child.stdout?.on('data', collect)
     child.stderr?.on('data', collect)
-    child.on('error', err => settle(noVerdict(err.message)))
+    child.on('error', err => giveUp(err.message))
+    const verdict = () => {
+      if (exitCode === 0) return settle({ ok: true })
+      // 126/127: the hook couldn't run a command (not executable, not found). That is a broken
+      // hook, not a refusal; refusing would trap the session on every retry.
+      if (exitCode === 126 || exitCode === 127) return giveUp(`exit ${exitCode}: the hook could not run a command`)
+      const output = out.trim() || `exit ${exitCode}`
+      settle({ ok: false, output: output.length > PRE_HANDOFF_OUTPUT_MAX ? `…${output.slice(-PRE_HANDOFF_OUTPUT_MAX)}` : output })
+    }
+    child.on('close', () => { if (exitCode !== null) verdict() })
     child.on('exit', (code, signal) => {
-      if (code === null) return settle(noVerdict(`signal ${signal}`))
-      if (code === 0) return settle({ ok: true })
-      // Let already-buffered output drain before reporting it.
-      setImmediate(() => {
-        const output = out.trim() || `exit ${code}`
-        settle({ ok: false, output: output.length > PRE_HANDOFF_OUTPUT_MAX ? `${output.slice(0, PRE_HANDOFF_OUTPUT_MAX)}…` : output })
-      })
+      if (code === null) return giveUp(`signal ${signal}`)
+      exitCode = code
+      // 'close' follows once the streams drain; a background child holding them open must not stall the verdict.
+      exitGrace = setTimeout(verdict, 200)
     })
   })
 }

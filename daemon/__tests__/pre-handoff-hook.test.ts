@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { executeTool } from '../bridge-dispatch.js'
@@ -108,4 +108,70 @@ test('non-executable hook: treated as no hook, with a warning', async () => {
   expect(stderr.some(l => l.includes('pre-handoff hook') && l.includes('not executable'))).toBe(true)
   await Bun.sleep(700)
   expect(spawned).toEqual(['flint'])
+})
+
+test('exit 126/127 (the hook could not run a command) is no verdict, not a refusal', async () => {
+  writeHook('no-such-command-xyz "$1"')
+  expect(await runPreHandoffHook(registry.get('ph-1')!, letter)).toEqual({ ok: true })
+  expect(stderr.some(l => l.includes('exit 127'))).toBe(true)
+})
+
+test('the reason survives: large output is read to the end, and the tail is kept', async () => {
+  writeHook(`head -c 200000 /dev/zero | tr '\\0' x\necho\necho "REASON: push first"\nexit 1`)
+  const r = await runPreHandoffHook(registry.get('ph-1')!, letter)
+  expect(r.ok).toBe(false)
+  if (!r.ok) { expect(r.output.endsWith('REASON: push first')).toBe(true); expect(r.output.length).toBeLessThanOrEqual(1501) }
+})
+
+test('a second handoff call during the hook is refused at once; the first proceeds', async () => {
+  writeHook('sleep 0.3\nexit 0')
+  const [a, b] = await Promise.all([executeTool('handoff', { path: letter }, 'ph-1'), Bun.sleep(50).then(() => executeTool('handoff', { path: letter }, 'ph-1'))])
+  expect(a.isError).toBeFalsy()
+  expect(b.isError).toBe(true)
+  expect(JSON.stringify(b)).toContain('already handing off')
+  await Bun.sleep(700)
+  expect(spawned).toEqual(['flint'])
+})
+
+test('a session killed during the hook does not hand off', async () => {
+  writeHook('sleep 0.3\nexit 0')
+  const call = executeTool('handoff', { path: letter }, 'ph-1')
+  await Bun.sleep(50); registry.delete('ph-1')
+  const r = await call
+  expect(r.isError).toBe(true)
+  expect(JSON.stringify(r)).toContain('ended during the pre-handoff check')
+  await Bun.sleep(700)
+  expect(spawned).toEqual([])
+})
+
+test('a relative letter path resolves against the session dir, for the daemon and the hook alike', async () => {
+  const out = join(dir, 'arg')
+  writeHook(`echo "$1|$HYDRA_CWD|$(pwd -P)" > ${out}`)
+  registry.get('ph-1')!.worktreePath = dir
+  expect((await executeTool('handoff', { path: 'HANDOFF.md' }, 'ph-1')).isError).toBeFalsy()
+  const [arg, cwdVar, pwd] = readFileSync(out, 'utf8').trim().split('|')
+  expect(arg).toBe(letter)
+  expect(cwdVar).toBe(dir)
+  expect(pwd).toBe(realpathSync(dir))
+})
+
+test('a session dir that is gone: the hook runs from the temp dir with HYDRA_CWD empty', async () => {
+  const out = join(dir, 'cwd')
+  writeHook(`echo "[$HYDRA_CWD]|$(pwd -P)" > ${out}`)
+  registry.get('ph-1')!.worktreePath = join(dir, 'gone')
+  await runPreHandoffHook(registry.get('ph-1')!, letter)
+  const [cwdVar, pwd] = readFileSync(out, 'utf8').trim().split('|')
+  expect(cwdVar).toBe('[]')
+  expect(pwd).toBe(realpathSync(tmpdir()))
+})
+
+test('a timeout kills the hook\'s whole process group', async () => {
+  const pidFile = join(dir, 'pid')
+  writeHook(`sleep 30 &\necho $! > ${pidFile}\nwait`)
+  expect(await runPreHandoffHook(registry.get('ph-1')!, letter, PRE_HANDOFF_HOOK_PATH, 300)).toEqual({ ok: true })
+  await Bun.sleep(100)
+  const pid = Number(readFileSync(pidFile, 'utf8'))
+  let alive = true
+  try { process.kill(pid, 0) } catch { alive = false }
+  expect(alive).toBe(false)
 })

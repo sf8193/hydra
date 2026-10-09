@@ -474,10 +474,10 @@ Three optional files in the state dir customize what each side is told. All thre
 
 `hooks/pre-handoff` in the state dir runs before a handoff, and can refuse it. A handoff can't be undone once it starts, so this is the place to check your own definition of done. If the file exists and is executable, the `handoff` tool runs it and waits:
 
-- The letter path is the first argument. The env has the same `HYDRA_*` identity vars as `on-kill`, plus `HYDRA_CWD`: the session's worktree, or its working directory. The hook runs in that directory.
+- The letter path is the first argument, always absolute (a relative path from the session is resolved against the session's directory). The env has the same `HYDRA_*` identity vars as `on-kill`, plus `HYDRA_CWD`: the session's worktree, or its working directory. The hook runs in that directory. If the directory is gone or unknown, the hook runs from the temp dir with `HYDRA_CWD` empty, so a `git` check can tell rather than judge the wrong repo.
 - Exit 0 and the handoff goes ahead.
-- Any other exit refuses it. The session is not killed. It gets an error that starts `handoff refused by hooks/pre-handoff:`, followed by the hook's output, so it can fix the problem and call `handoff` again.
-- A hook that runs past 15 seconds, or can't start, is ignored and the handoff goes ahead. The daemon logs a line. A broken script never traps a session.
+- Any other exit refuses it, except 126 and 127 (below). The session is not killed. It gets an error that starts `handoff refused by hooks/pre-handoff:`, followed by the hook's output (the last 1500 characters, since a reason usually comes last), so it can fix the problem and call `handoff` again.
+- No verdict means the handoff goes ahead, and the daemon logs a line: the hook runs past 15 seconds (its whole process group is killed), can't start, dies from a signal, or exits 126 or 127 (it couldn't run a command it needed). A script that refuses for any other reason refuses every retry, so make its message say what to fix.
 - A file that isn't executable is skipped with a warning.
 
 For example, to refuse letters with no Next action:
