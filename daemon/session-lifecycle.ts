@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { execSync, execFileSync, spawn, spawnSync } from 'child_process'
+import { execSync, execFileSync, spawn } from 'child_process'
 import { writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join } from 'path'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
@@ -352,29 +352,48 @@ const PRE_HANDOFF_OUTPUT_MAX = 1500
  * path before a handoff. A non-zero exit refuses the handoff and returns the hook's output.
  * Fails open: a hook that times out or can't start must never trap a session.
  */
-export function runPreHandoffHook(
+export async function runPreHandoffHook(
   info: SessionInfo, letterPath: string, hookPath = PRE_HANDOFF_HOOK_PATH, timeoutMs = 15_000,
-): { ok: true } | { ok: false; output: string } {
+): Promise<{ ok: true } | { ok: false; output: string }> {
   if (!existsSync(hookPath)) return { ok: true }
   try { accessSync(hookPath, fsConstants.X_OK) } catch {
     process.stderr.write(`daemon: pre-handoff hook ${hookPath} is not executable — skipped\n`)
     return { ok: true }
   }
   const cwd = info.worktreePath ?? info.sessionMetadata?.cwd
-  const r = spawnSync(hookPath, [letterPath], {
-    cwd: cwd && existsSync(cwd) ? cwd : undefined,
-    env: { ...process.env, ...hookEnv(info), HYDRA_CWD: cwd ?? '' },
-    encoding: 'utf8',
-    timeout: timeoutMs,
-  })
-  // Timed out, killed, or never started: no verdict, so the handoff goes ahead.
-  if (r.error || r.status === null) {
-    process.stderr.write(`daemon: pre-handoff hook gave no verdict (${r.error?.message ?? `signal ${r.signal}`}) — handing off anyway\n`)
-    return { ok: true }
+  const noVerdict = (why: string) => {
+    process.stderr.write(`daemon: pre-handoff hook gave no verdict (${why}) — handing off anyway\n`)
+    return { ok: true } as const
   }
-  if (r.status === 0) return { ok: true }
-  const output = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() || `exit ${r.status}`
-  return { ok: false, output: output.length > PRE_HANDOFF_OUTPUT_MAX ? `${output.slice(0, PRE_HANDOFF_OUTPUT_MAX)}…` : output }
+  // Async, so a slow hook never stalls the daemon; settled by the exit or the timer, never by
+  // stream close (a grandchild holding stdout open must not stretch the timeout).
+  return new Promise(resolve => {
+    let out = ''
+    let settled = false
+    const settle = (r: { ok: true } | { ok: false; output: string }) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r) } }
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(hookPath, [letterPath], {
+        cwd: cwd && existsSync(cwd) ? cwd : undefined,
+        env: { ...process.env, ...hookEnv(info), HYDRA_CWD: cwd ?? '' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (err) { return resolve(noVerdict(err instanceof Error ? err.message : String(err))) }
+    const timer = setTimeout(() => { child.kill('SIGKILL'); settle(noVerdict(`timed out after ${timeoutMs}ms`)) }, timeoutMs)
+    const collect = (d: Buffer) => { if (out.length <= PRE_HANDOFF_OUTPUT_MAX) out += d.toString('utf8') }
+    child.stdout?.on('data', collect)
+    child.stderr?.on('data', collect)
+    child.on('error', err => settle(noVerdict(err.message)))
+    child.on('exit', (code, signal) => {
+      if (code === null) return settle(noVerdict(`signal ${signal}`))
+      if (code === 0) return settle({ ok: true })
+      // Let already-buffered output drain before reporting it.
+      setImmediate(() => {
+        const output = out.trim() || `exit ${code}`
+        settle({ ok: false, output: output.length > PRE_HANDOFF_OUTPUT_MAX ? `${output.slice(0, PRE_HANDOFF_OUTPUT_MAX)}…` : output })
+      })
+    })
+  })
 }
 
 /** Claude session ids whose scratchpads a kill of info cleans: its own, plus a thread owner's handoff chain; never a live session's. */

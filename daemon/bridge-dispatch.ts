@@ -462,7 +462,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         let size = 0
         try { size = path ? statSync(path).size : 0 } catch {}
         if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
-        const check = runPreHandoffHook(info, path)
+        const check = await runPreHandoffHook(info, path)
         if (!check.ok) throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`)
         // Answer before acting: the kill inside handOff ends this very session.
         setTimeout(() => {

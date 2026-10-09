@@ -71,19 +71,35 @@ test('hook exits non-zero: the tool errors with its output and the session is no
   expect(registry.has('ph-1')).toBe(true)
 })
 
-test('hook output is capped', () => {
+test('hook output is capped', async () => {
   writeHook(`head -c 5000 /dev/zero | tr '\\0' x\nexit 1`)
-  const r = runPreHandoffHook(registry.get('ph-1')!, letter)
+  const r = await runPreHandoffHook(registry.get('ph-1')!, letter)
   expect(r.ok).toBe(false)
   if (!r.ok) expect(r.output.length).toBeLessThanOrEqual(1501)
 })
 
-test('hook times out: fails open with one log line', () => {
+test('hook times out: fails open with one log line', async () => {
   writeHook('exec sleep 5')
   const t = Date.now()
-  expect(runPreHandoffHook(registry.get('ph-1')!, letter, PRE_HANDOFF_HOOK_PATH, 200)).toEqual({ ok: true })
+  expect(await runPreHandoffHook(registry.get('ph-1')!, letter, PRE_HANDOFF_HOOK_PATH, 200)).toEqual({ ok: true })
   expect(Date.now() - t).toBeLessThan(3000)
   expect(stderr.filter(l => l.startsWith('daemon: pre-handoff hook')).length).toBe(1)
+})
+
+test('the daemon keeps running while a hook runs', async () => {
+  writeHook('sleep 1\nexit 0')
+  const start = Date.now()
+  let tickedAfter = Infinity
+  setTimeout(() => { tickedAfter = Date.now() - start }, 50)
+  expect(await runPreHandoffHook(registry.get('ph-1')!, letter)).toEqual({ ok: true })
+  expect(tickedAfter).toBeLessThan(500)  // a blocking run would hold the timer until the hook's 1s sleep ends
+})
+
+test('a background child holding stdout open does not delay the verdict', async () => {
+  writeHook('sleep 4 &\necho not ready\nexit 1')
+  const t = Date.now()
+  expect(await runPreHandoffHook(registry.get('ph-1')!, letter)).toEqual({ ok: false, output: 'not ready' })
+  expect(Date.now() - t).toBeLessThan(2000)
 })
 
 test('non-executable hook: treated as no hook, with a warning', async () => {
