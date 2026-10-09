@@ -4,7 +4,7 @@ import { gateway, INBOX_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
-import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf } from './session-lifecycle.js'
+import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, killSession, predecessorOf, runPreHandoffHook } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
@@ -462,6 +462,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         let size = 0
         try { size = path ? statSync(path).size : 0 } catch {}
         if (!path || size === 0) throw new Error(`handoff file missing or empty: ${path ?? '(no path)'} — write it first`)
+        const check = runPreHandoffHook(info, path)
+        if (!check.ok) throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`)
         // Answer before acting: the kill inside handOff ends this very session.
         setTimeout(() => {
           handOff(info, path).then(

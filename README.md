@@ -472,6 +472,21 @@ Three optional files in the state dir customize what each side is told. All thre
 
 `hooks/on-kill` in the state dir already runs on a handoff, with `HYDRA_KILL_REASON='handed off'`. Use it for post-handoff work nobody waits on.
 
+`hooks/pre-handoff` in the state dir runs before a handoff, and can refuse it. A handoff can't be undone once it starts, so this is the place to check your own definition of done. If the file exists and is executable, the `handoff` tool runs it and waits:
+
+- The letter path is the first argument. The env has the same `HYDRA_*` identity vars as `on-kill`, plus `HYDRA_CWD`: the session's worktree, or its working directory. The hook runs in that directory.
+- Exit 0 and the handoff goes ahead.
+- Any other exit refuses it. The session is not killed. It gets an error that starts `handoff refused by hooks/pre-handoff:`, followed by the hook's output, so it can fix the problem and call `handoff` again.
+- A hook that runs past 15 seconds, or can't start, is ignored and the handoff goes ahead. The daemon logs a line. A broken script never traps a session.
+- A file that isn't executable is skipped with a warning.
+
+For example, to refuse letters with no Next action:
+
+```sh
+#!/bin/sh
+grep -q '^#* *Next action' "$1" || { echo "letter has no Next action heading"; exit 1; }
+```
+
 ### Forking sessions
 
 `spawn_session` can start from a copy of another Claude session's conversation instead of from scratch:

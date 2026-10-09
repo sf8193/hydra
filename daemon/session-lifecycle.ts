@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
-import { execSync, execFileSync, spawn } from 'child_process'
-import { writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync } from 'fs'
+import { execSync, execFileSync, spawn, spawnSync } from 'child_process'
+import { writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join } from 'path'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
@@ -309,8 +309,22 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
   }
 }
 
-// Under STATE_DIR so the test preload's temp state dir keeps `bun test` from ever running the real hook
+// Under STATE_DIR so the test preload's temp state dir keeps `bun test` from ever running the real hooks
 export const KILL_HOOK_PATH = join(STATE_DIR, 'hooks', 'on-kill')
+export const PRE_HANDOFF_HOOK_PATH = join(STATE_DIR, 'hooks', 'pre-handoff')
+
+/** The session's identity as HYDRA_* env vars, shared by the user hooks. */
+function hookEnv(info: SessionInfo): Record<string, string> {
+  return {
+    HYDRA_SESSION_NAME: info.tmuxName,
+    HYDRA_SESSION_ID: info.sessionId,
+    HYDRA_THREAD_ID: info.threadId,
+    HYDRA_ENGINE: info.engine ?? 'claude',
+    HYDRA_CLAUDE_SESSION_ID: info.claudeSessionId ?? '',
+    HYDRA_CODEX_HOME_NAME: info.codexHomeName ?? '',
+    HYDRA_SESSION_TYPE: info.sessionType ?? '',
+  }
+}
 
 /**
  * User extension point: if <STATE_DIR>/hooks/on-kill exists, run it detached after a
@@ -322,23 +336,45 @@ export function runKillHook(info: SessionInfo, reason: string, hookPath = KILL_H
     const child = spawn(hookPath, [], {
       detached: true,
       stdio: 'ignore',
-      env: {
-        ...process.env,
-        HYDRA_SESSION_NAME: info.tmuxName,
-        HYDRA_SESSION_ID: info.sessionId,
-        HYDRA_THREAD_ID: info.threadId,
-        HYDRA_KILL_REASON: reason,
-        HYDRA_ENGINE: info.engine ?? 'claude',
-        HYDRA_CLAUDE_SESSION_ID: info.claudeSessionId ?? '',
-        HYDRA_CODEX_HOME_NAME: info.codexHomeName ?? '',
-        HYDRA_SESSION_TYPE: info.sessionType ?? '',
-      },
+      env: { ...process.env, ...hookEnv(info), HYDRA_KILL_REASON: reason },
     })
     child.on('error', err => process.stderr.write(`daemon: on-kill hook failed: ${err.message}\n`))
     child.unref()
   } catch (err) {
     process.stderr.write(`daemon: on-kill hook failed: ${err instanceof Error ? err.message : err}\n`)
   }
+}
+
+const PRE_HANDOFF_OUTPUT_MAX = 1500
+
+/**
+ * User extension point: if <STATE_DIR>/hooks/pre-handoff is executable, run it with the letter
+ * path before a handoff. A non-zero exit refuses the handoff and returns the hook's output.
+ * Fails open: a hook that times out or can't start must never trap a session.
+ */
+export function runPreHandoffHook(
+  info: SessionInfo, letterPath: string, hookPath = PRE_HANDOFF_HOOK_PATH, timeoutMs = 15_000,
+): { ok: true } | { ok: false; output: string } {
+  if (!existsSync(hookPath)) return { ok: true }
+  try { accessSync(hookPath, fsConstants.X_OK) } catch {
+    process.stderr.write(`daemon: pre-handoff hook ${hookPath} is not executable — skipped\n`)
+    return { ok: true }
+  }
+  const cwd = info.worktreePath ?? info.sessionMetadata?.cwd
+  const r = spawnSync(hookPath, [letterPath], {
+    cwd: cwd && existsSync(cwd) ? cwd : undefined,
+    env: { ...process.env, ...hookEnv(info), HYDRA_CWD: cwd ?? '' },
+    encoding: 'utf8',
+    timeout: timeoutMs,
+  })
+  // Timed out, killed, or never started: no verdict, so the handoff goes ahead.
+  if (r.error || r.status === null) {
+    process.stderr.write(`daemon: pre-handoff hook gave no verdict (${r.error?.message ?? `signal ${r.signal}`}) — handing off anyway\n`)
+    return { ok: true }
+  }
+  if (r.status === 0) return { ok: true }
+  const output = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() || `exit ${r.status}`
+  return { ok: false, output: output.length > PRE_HANDOFF_OUTPUT_MAX ? `${output.slice(0, PRE_HANDOFF_OUTPUT_MAX)}…` : output }
 }
 
 /** Claude session ids whose scratchpads a kill of info cleans: its own, plus a thread owner's handoff chain; never a live session's. */
