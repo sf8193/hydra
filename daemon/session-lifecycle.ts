@@ -348,17 +348,17 @@ export function runKillHook(info: SessionInfo, reason: string, hookPath = KILL_H
 
 const PRE_HANDOFF_OUTPUT_MAX = 1500
 
+/** Where the session works: its Hydra worktree, else the cwd it was launched in. */
+export function sessionDir(info: SessionInfo): string | undefined {
+  return info.worktreePath ?? info.sessionMetadata?.cwd
+}
+
 /**
  * User extension point: if <STATE_DIR>/hooks/pre-handoff is executable, run it with the letter
  * path before a handoff. A non-zero exit refuses the handoff and returns the hook's output.
  * Fails open: a hook that gives no verdict (times out, can't start, dies from a signal, or
  * exits 126/127 because it couldn't run a command) must never trap a session.
  */
-/** Where the session works: its Hydra worktree, else the cwd it was launched in. */
-export function sessionDir(info: SessionInfo): string | undefined {
-  return info.worktreePath ?? info.sessionMetadata?.cwd
-}
-
 export async function runPreHandoffHook(
   info: SessionInfo, letterPath: string, hookPath = PRE_HANDOFF_HOOK_PATH, timeoutMs = 15_000,
 ): Promise<{ ok: true } | { ok: false; output: string }> {

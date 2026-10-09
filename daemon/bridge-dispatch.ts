@@ -471,13 +471,15 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // Claimed before the hook's await: a second call must not run the hook again and then report a false failure.
         if (handoffChecksInFlight.has(info.sessionId)) throw new Error(`${info.tmuxName} is already handing off`)
         handoffChecksInFlight.add(info.sessionId)
+        const release = () => handoffChecksInFlight.delete(info.sessionId)
         let check: Awaited<ReturnType<typeof runPreHandoffHook>>
-        try { check = await runPreHandoffHook(info, path) } catch (err) { handoffChecksInFlight.delete(info.sessionId); throw err }
-        if (!check.ok) { handoffChecksInFlight.delete(info.sessionId); throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`) }
-        if (registry.get(info.sessionId) !== info) { handoffChecksInFlight.delete(info.sessionId); throw new Error(`${info.tmuxName} ended during the pre-handoff check`) }
+        // The hook resolves on every path it knows; this guards the claim against one it doesn't (a leaked claim blocks every later handoff).
+        try { check = await runPreHandoffHook(info, path) } catch (err) { release(); throw err }
+        if (!check.ok) { release(); throw new Error(`handoff refused by hooks/pre-handoff:\n${check.output}`) }
+        if (registry.get(info.sessionId) !== info) { release(); throw new Error(`${info.tmuxName} ended during the pre-handoff check`) }
         // Answer before acting: the kill inside handOff ends this very session.
         setTimeout(() => {
-          handoffChecksInFlight.delete(info.sessionId)  // handOff holds its own in-flight guard from here
+          release()  // handOff holds its own in-flight guard from here
           handOff(info, path).then(
             r => gateway.send(info.threadId, `🤝 \`${info.tmuxName}\` handed off to \`${r.name}\` — fresh context from \`${path}\``),
             err => gateway.send(info.threadId, `⚠️ handoff from \`${info.tmuxName}\` failed: ${err instanceof Error ? err.message : err}\nRecover: type \`respawn\`, then tell it to read \`${path}\` and continue from its Next action.`),
