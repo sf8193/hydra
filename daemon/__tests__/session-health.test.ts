@@ -13,6 +13,7 @@ import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { gateway } from '../config.js'
+import { noteMainChannel } from '../main-session.js'
 import { ORPHAN_GRACE_MS } from '../session-reachability.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
@@ -225,6 +226,39 @@ describe('context alert', () => {
     pollSessionsOnce(NOW + 3000)
     expect(to(climbing, 'context')).toHaveLength(2)
     expect(to(jumping, 'context')).toHaveLength(1)
+  })
+
+  test('a drop in context (/clear, /compact) re-arms the alerts', () => {
+    let pct = 70
+    const info = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: pct }) }) })
+    pollSessionsOnce(NOW)
+    pct = 10
+    pollSessionsOnce(NOW + 1000)
+    pct = 70
+    pollSessionsOnce(NOW + 2000)
+    expect(to(info, 'context')).toHaveLength(2)
+  })
+
+  test('the main session alerts into the main channel, once per climb', () => {
+    noteMainChannel('')
+    try {
+      const pane = (p: number) => `text\n${'─'.repeat(20)}\n❯ \n${'─'.repeat(20)}\n  main ctx:${p}%\n`
+      const mainSent = () => sent.filter(m => m.threadId === 'main-chan-ctx' && m.text.includes('context'))
+      tmux.alive('discord-byte')
+      tmux.pane('discord-byte', pane(72))
+      pollSessionsOnce(NOW)  // main has not been messaged yet: nowhere to alert, and nothing is marked alerted
+      expect(sent.filter(m => m.text.includes('discord-byte'))).toHaveLength(0)
+      noteMainChannel('main-chan-ctx')
+      pollSessionsOnce(NOW + 500)
+      pollSessionsOnce(NOW + 1000)
+      expect(mainSent()).toHaveLength(1)
+      expect(mainSent()[0].text).toContain('**discord-byte** is at **72%**')
+      tmux.pane('discord-byte', pane(5))
+      pollSessionsOnce(NOW + 2000)
+      tmux.pane('discord-byte', pane(72))
+      pollSessionsOnce(NOW + 3000)
+      expect(mainSent()).toHaveLength(2)
+    } finally { noteMainChannel('') }
   })
 
   test('unknown usage ("?") never alerts', () => {

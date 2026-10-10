@@ -10,7 +10,7 @@ const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<string>>> = TYPE
 
 export function getToolsForSession(sessionId: string): SessionTool[] {
   if (sessionId === 'main') {
-    return computeToolsForSession('master_orchestrator', new Set())
+    return computeToolsForSession('master_orchestrator', new Set<Capability>(['main_handoff']))
   }
   const info = registry.get(sessionId)
   if (!info) {
@@ -30,7 +30,7 @@ export function getToolsForSession(sessionId: string): SessionTool[] {
 /** O(1) name-only check — avoids rebuilding the full tool list on every tool_call. */
 export function isToolAllowed(sessionId: string, toolName: string): boolean {
   if (sessionId === 'main') {
-    return BASE_TOOLS.master_orchestrator.has(toolName)
+    return BASE_TOOLS.master_orchestrator.has(toolName) || CAPABILITY_TOOLS.main_handoff.has(toolName)
   }
   const info = registry.get(sessionId)
   if (!info) return BASE_TOOLS.thread_owner.has(toolName)

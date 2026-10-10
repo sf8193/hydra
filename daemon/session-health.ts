@@ -3,6 +3,7 @@ import { transport } from './bridge-transport.js'
 import { gateway } from './config.js'
 import { tmuxHasSession } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
+import { mainChannel, mainContext, mainTmux } from './main-session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 
@@ -64,17 +65,25 @@ export function pollSessionsOnce(now: number): void {
       orphanAlerted.delete(info.sessionId)
     }
 
-    // Context alert
-    const pct = formatContextPercent(info.adapter, info)
-    if (pct === '?') continue
-    const num = parseInt(pct)
-    // Highest crossed threshold not yet alerted; a jump past both fires once.
-    const threshold = CONTEXT_ALERT_THRESHOLDS.findLast(t => num >= t)
-    const key = `${info.sessionId}:${threshold}`
-    if (threshold !== undefined && !contextAlerted.has(key)) {
-      for (const t of CONTEXT_ALERT_THRESHOLDS) if (t <= threshold) contextAlerted.add(`${info.sessionId}:${t}`)
-      process.stderr.write(`daemon: context alert: ${info.tmuxName} at ${pct}\n`)
-      void gateway.send(info.threadId, `**${info.tmuxName}** is at **${pct}** context. Consider a \`handoff\` to a fresh session (\`handoff - <note>\` passes a note to it).`).catch(() => {})
-    }
+    alertContext(info.sessionId, info.tmuxName, formatContextPercent(info.adapter, info), info.threadId)
+  }
+  // Main has no registry record, so it is checked on its own. With no channel yet there is nowhere to alert,
+  // and nothing is marked alerted.
+  const channel = mainChannel()
+  if (channel) alertContext('main', mainTmux(), mainContext() ?? '?', channel)
+}
+
+function alertContext(id: string, name: string, pct: string, channel: string): void {
+  if (pct === '?') return
+  const num = parseInt(pct)
+  // A drop (/clear, /compact) re-arms the thresholds it fell below; the main session keeps its id across a /clear.
+  for (const t of CONTEXT_ALERT_THRESHOLDS) if (num < t) contextAlerted.delete(`${id}:${t}`)
+  // Highest crossed threshold not yet alerted; a jump past both fires once.
+  const threshold = CONTEXT_ALERT_THRESHOLDS.findLast(t => num >= t)
+  const key = `${id}:${threshold}`
+  if (threshold !== undefined && !contextAlerted.has(key)) {
+    for (const t of CONTEXT_ALERT_THRESHOLDS) if (t <= threshold) contextAlerted.add(`${id}:${t}`)
+    process.stderr.write(`daemon: context alert: ${name} at ${pct}\n`)
+    void gateway.send(channel, `**${name}** is at **${pct}** context. Consider a \`handoff\` to a fresh session (\`handoff - <note>\` passes a note to it).`).catch(() => {})
   }
 }

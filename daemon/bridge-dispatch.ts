@@ -5,6 +5,7 @@ import { gateway, INBOX_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
+import { beginMainHandoff } from './main-handoff.js'
 import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
@@ -460,6 +461,16 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'handoff': {
+        if (callerSessionId === 'main') {
+          const raw = args.path as string | undefined
+          if (!raw || !isAbsolute(raw)) throw new Error('handoff: path must be absolute')
+          let size = 0
+          try { size = statSync(raw).size } catch {}
+          if (size === 0) throw new Error(`handoff file missing or empty: ${raw} — write it first`)
+          // The hook may refuse; the clear itself waits for this turn to end, after the answer below.
+          await beginMainHandoff(raw)
+          return { content: [{ type: 'text', text: `handing off — your context clears after this turn, then read ${raw}` }] }
+        }
         const info = callerSessionId ? registry.get(callerSessionId) : undefined
         if (!info) throw new Error('handoff: calling session not found')
         // One absolute path for every reader: a relative one means the session's dir, not the daemon's.

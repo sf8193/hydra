@@ -165,11 +165,13 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
   ]),
 }
 
-export type Capability = 'protocol_context' | 'protocol_spawn'
+export type Capability = 'protocol_context' | 'protocol_spawn' | 'main_handoff'
 
 export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>>> = {
   protocol_context: new Set<ToolName>(['advance', 'extend_phase']),
   protocol_spawn: new Set<ToolName>(['spawn_session', 'kill_session', 'peek_session']),
+  // Main only: it clears its own context in place. A registry orchestrator (factory PM) must not get it — its successor would lose the orchestrator tools.
+  main_handoff: new Set<ToolName>(['handoff']),
 }
 
 export type Sentiment = 'POSITIVE' | 'NEGATIVE'

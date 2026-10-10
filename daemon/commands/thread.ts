@@ -19,9 +19,10 @@ import type { InboundMessage } from '../../gateway.js'
 import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-selection.js'
 import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
-import { resolveEngine } from '../engines/instances.js'
+import { claudeEngine, resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, classifyReachability } from '../session-reachability.js'
 import { readHandoffTemplate } from '../handoff-templates.js'
+import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../main-session.js'
 
 // Recovery executors, swappable in tests (same pattern as reply-guard's deps).
 type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn }
@@ -601,6 +602,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 
   if (targetName) {
     info = [...registry.values()].find(s => s.tmuxName === targetName)
+    if (!info && isForMain(msg) && (targetName === mainTmux() || targetName === 'main')) return peekMain(msg)
     if (!info) {
       void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
       void gateway.send(msg.channelId, `No session named **${targetName}**`, { replyTo: msg.id }).catch(() => {})
@@ -609,6 +611,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
     name = info.tmuxName
   } else {
     info = registry.resolveThreadSessionFromMsg(msg)
+    if (!info && isForMain(msg)) return peekMain(msg)
     if (!info) {
       void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
       return
@@ -617,7 +620,21 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   }
 
   const adapter = adapterFor(info)
-  const target = adapter.surface(info)
+  await sendPeek(msg, name, adapter.surface(info), () => {
+    const model = info.sessionMetadata?.model ?? info.engine ?? '?'
+    return `📸 **${name}** · \`${model}\` · ${formatContextPercent(adapter, info)} · ${info.messageCount ?? 0} msgs · ${formatDuration(Date.now() - info.createdAt)}`
+  })
+}
+
+// Main has no registry record: no message count or model, only what its pane and tmux can say.
+async function peekMain(msg: InboundMessage): Promise<void> {
+  const name = mainTmux()
+  await sendPeek(msg, name, claudeEngine.surface(mainSubject()), () =>
+    `📸 **${name}** · main · ${mainContext() ?? '?'} · ${formatDuration(Date.now() - mainStartedAt())}`)
+}
+
+/** The pane screenshot (or text) of a session, under a header. target is the tmux surface, or null when there is none. */
+async function sendPeek(msg: InboundMessage, name: string, target: string | null, header: () => string): Promise<void> {
   if (target === null) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `**${name}** interactive surface unavailable`, { replyTo: msg.id }).catch(() => {})
@@ -625,12 +642,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
   }
 
   void gateway.react(msg.channelId, msg.id, '📸').catch(() => {})
-
-  const ctx = formatContextPercent(adapter, info)
-  const duration = formatDuration(Date.now() - info.createdAt)
-  const msgs = info.messageCount ?? 0
-  const model = info.sessionMetadata?.model ?? info.engine ?? '?'
-  const header = `📸 **${name}** · \`${model}\` · ${ctx} · ${msgs} msgs · ${duration}`
+  const head = header()
 
   if (hasFreeze()) {
     const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
@@ -640,7 +652,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
         `tmux capture-pane -t '${safeName}' -e -p | freeze -o '${outPath}' --language bash`,
         { stdio: 'pipe', timeout: 10000 },
       )
-      await gateway.send(msg.channelId, header, { files: [outPath], replyTo: msg.id })
+      await gateway.send(msg.channelId, head, { files: [outPath], replyTo: msg.id })
       try { unlinkSync(outPath) } catch {}
       return
     } catch (err) {
@@ -656,7 +668,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
       `tmux capture-pane -t '${safeName}' -p -S -60`,
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
     ).trimEnd()
-    await safeSend(msg.channelId, `${header}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``, { replyTo: msg.id })
+    await safeSend(msg.channelId, `${head}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``, { replyTo: msg.id })
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'peek', `capture failed: ${err}`)
   }
@@ -667,7 +679,7 @@ export async function handlePeekIntercept(msg: InboundMessage, targetName?: stri
 // fresh session (via the `handoff` tool, which does the kill + successor spawn)
 // ---------------------------------------------------------------------------
 
-function handoffRequest(artifact: string, requester: string, note?: string): string {
+export function handoffRequest(artifact: string, requester: string, note?: string): string {
   return [
     `[system] ${requester} asked you to hand off this thread to a fresh session.`,
     ...(note ? [`Their note for the next session: "${note}". Carry it into Next action.`] : []),

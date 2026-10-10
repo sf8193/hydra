@@ -6,8 +6,11 @@ import type { EngineAdapter, ProviderId } from './engine-adapter.js'
 
 export { codexEngine }
 
+// Exported by itself: main is always Claude and talks to it through ClaudeSubject, not the provider-neutral interface.
+export const claudeEngine = new ClaudeEngine(transport)
+
 export const engines: Record<ProviderId, EngineAdapter> = {
-  claude: new ClaudeEngine(transport),
+  claude: claudeEngine,
   codex: new CodexEngineAdapter(codexEngine),
 }
 

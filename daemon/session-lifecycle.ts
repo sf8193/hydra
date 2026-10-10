@@ -6,7 +6,7 @@ import { tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
 import { authorityId, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
-import type { Predecessor, SessionInfo, SpawnOpts, SpawnResult } from './sessions.js'
+import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
@@ -337,11 +337,11 @@ export const KILL_HOOK_PATH = join(STATE_DIR, 'hooks', 'on-kill')
 export const PRE_HANDOFF_HOOK_PATH = join(STATE_DIR, 'hooks', 'pre-handoff')
 
 /** The session's identity as HYDRA_* env vars, shared by the user hooks. */
-function hookEnv(info: SessionInfo): Record<string, string> {
+function hookEnv(info: HookSubject): Record<string, string> {
   return {
     HYDRA_SESSION_NAME: info.tmuxName,
     HYDRA_SESSION_ID: info.sessionId,
-    HYDRA_THREAD_ID: info.threadId,
+    HYDRA_THREAD_ID: info.threadId ?? '',
     HYDRA_ENGINE: info.engine ?? 'claude',
     HYDRA_CLAUDE_SESSION_ID: info.claudeSessionId ?? '',
     HYDRA_CODEX_HOME_NAME: info.codexHomeName ?? '',
@@ -373,8 +373,13 @@ const PRE_HANDOFF_OUTPUT_MAX = 1500
 /** The pre-handoff hook's answer: go, or refuse with the hook's output. */
 export type PreHandoffVerdict = { ok: true } | { ok: false; output: string }
 
+/** What the hooks read about a session. Main has no SessionInfo, so hooks take only this (it has no thread and no worktree). */
+export type HookSubject = Pick<SessionInfo, 'tmuxName' | 'sessionId'>
+  & Partial<Pick<SessionInfo, 'threadId' | 'engine' | 'claudeSessionId' | 'codexHomeName' | 'sessionType' | 'worktreePath'>>
+  & { sessionMetadata?: Pick<SessionMetadata, 'cwd'> }
+
 /** Where the session works: its Hydra worktree, else the cwd it was launched in. */
-export function sessionDir(info: SessionInfo): string | undefined {
+export function sessionDir(info: Pick<HookSubject, 'worktreePath' | 'sessionMetadata'>): string | undefined {
   return info.worktreePath ?? info.sessionMetadata?.cwd
 }
 
@@ -385,7 +390,7 @@ export function sessionDir(info: SessionInfo): string | undefined {
  * exits 126/127 because it couldn't run a command) must never trap a session.
  */
 export async function runPreHandoffHook(
-  info: SessionInfo, letterPath: string, hookPath = PRE_HANDOFF_HOOK_PATH, timeoutMs = 15_000,
+  info: HookSubject, letterPath: string, hookPath = PRE_HANDOFF_HOOK_PATH, timeoutMs = 15_000,
 ): Promise<PreHandoffVerdict> {
   if (!existsSync(hookPath)) return { ok: true }
   try { accessSync(hookPath, fsConstants.X_OK) } catch {
