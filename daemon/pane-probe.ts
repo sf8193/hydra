@@ -22,6 +22,7 @@ import { transport } from './bridge-transport.js'
 import { byteTmuxName } from '../shared/constants.js'
 import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from './engines/claude-status.js'
 import { reportUsage, type UsageReading } from './usage-alerts.js'
+import { transcriptPathFor } from './usage.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -74,6 +75,10 @@ export type PaneProbeIO = {
   getWindowActivity: (tmuxName: string) => Promise<number | null>
   sendKeys: (tmuxName: string, ...keys: string[]) => Promise<boolean>
   readFile: (path: string) => string | null
+  // Text of the first assistant turn in a Claude session's transcript; null until there is one.
+  firstAssistantText: (info: SessionInfo) => string | null
+  // Paste text into the pane's input box and submit it.
+  pastePrompt: (tmuxName: string, text: string) => Promise<boolean>
   now: () => number
   safeSend: (channelId: string, text: string) => Promise<string[]>
   react: (channelId: string, messageId: string, emoji: string) => Promise<void>
@@ -119,6 +124,24 @@ const defaultIO: PaneProbeIO = {
 
   readFile(path) {
     try { return readFileSync(path, 'utf8') } catch { return null }
+  },
+
+  firstAssistantText(info) {
+    const path = transcriptPathFor(info.claudeSessionId)
+    const raw = path ? this.readFile(path) : null
+    const line = raw?.split('\n').find(l => l.includes('"type":"assistant"'))
+    if (!line) return null
+    const content = JSON.parse(line).message?.content
+    return Array.isArray(content) ? content.find((c: any) => c.type === 'text')?.text ?? '' : ''
+  },
+
+  async pastePrompt(tmuxName, text) {
+    try {
+      await execFileAsync('tmux', ['set-buffer', '-b', 'hydra-resend', text], { timeout: 3000 })
+      await execFileAsync('tmux', ['paste-buffer', '-p', '-d', '-b', 'hydra-resend', '-t', tmuxName], { timeout: 3000 })
+      await execFileAsync('tmux', ['send-keys', '-t', tmuxName, 'Enter'], { timeout: 3000 })
+      return true
+    } catch { return false }
   },
 
   now: () => Date.now(),
@@ -273,6 +296,10 @@ export function detectBlockingState(tailText: string): BlockingState | null {
 // ---------------------------------------------------------------------------
 
 const probeEntries = new Map<string, ProbeEntry>()
+
+// Sessions whose login just succeeded while their spawn prompt is still unanswered.
+const resendAfterLogin = new Set<string>()
+const findSession = (tmuxName: string) => [...io.getSessions()].find(s => s.tmuxName === tmuxName && !s.deadAt)
 
 const threadIntercepts = new Map<string, {
   tmuxName: string
@@ -543,7 +570,9 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
     let lines: string[]
 
     if (stage === 'success') {
-      // Login succeeded — dismiss with Enter
+      // Login succeeded — if the spawn's first turn was lost to the expiry, resend it once the pane is clear
+      if (findSession(name)?.spawnPrompt) resendAfterLogin.add(name)
+      // dismiss with Enter
       const dismissed = await confirmAndDismissLoginSuccess(name)
       lines = [
         `> ✅ **${name}** — login successful.`,
@@ -737,9 +766,23 @@ export async function probeAllSessions(now?: number): Promise<void> {
     if (target.isMain) checkWeeklyUsage(tailText)
 
     const sessionInfo = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
-    const detected = sessionInfo?.adapter
+    let detected = sessionInfo?.adapter
       ? sessionInfo.adapter.detectBlockingState(sessionInfo, tailText)
       : detectBlockingState(tailText)
+
+    // A spawn whose first turn was "Login expired" sits at a live prompt, so the pane
+    // gate above reads the banner as stale. The transcript says it is not.
+    if (!detected && sessionInfo?.spawnPrompt) {
+      if (resendAfterLogin.delete(key)) {
+        if (await io.pastePrompt(key, sessionInfo.spawnPrompt)) delete sessionInfo.spawnPrompt
+        process.stderr.write(`daemon: pane-probe: ${key} login done, resent spawn prompt, ${sessionInfo.spawnPrompt ? 'FAILED' : 'ok'}\n`)
+      } else {
+        const first = io.firstAssistantText(sessionInfo)
+        if (first === null) { /* no turn yet */ }
+        else if (LOGIN_EXPIRED_RE.test(first)) detected = { kind: 'login_required', planPath: null, loginStage: 'blocked', oauthUrl: null }
+        else delete sessionInfo.spawnPrompt // first turn ran
+      }
+    }
 
     if (!detected) {
       clearState(key, t, 'cleared') // no detection — genuine leave; reset latch
@@ -858,6 +901,7 @@ export function _resetForTesting(): void {
   probeEntries.clear()
   threadIntercepts.clear()
   builderNudges.clear()
+  resendAfterLogin.clear()
 }
 
 export const _CONFIRM_PROBES = CONFIRM_PROBES

@@ -995,6 +995,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(launched.stderrLogPath ? { stderrLogPath: launched.stderrLogPath } : {}),
     ...(launched.debugLogPath ? { debugLogPath: launched.debugLogPath } : {}),
     ...(launched.channelNote ? { channelNote: launched.channelNote } : {}),
+    ...(engine === 'claude' && !isHeadless ? { spawnPrompt: prompt } : {}),
     initiator: carriedInitiator,
     parentId: carriedParentId ?? null,
     ephemeral: opts?.ephemeral,

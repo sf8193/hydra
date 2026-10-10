@@ -202,6 +202,9 @@ const windowActivity = new Map<string, number>()
 const keysSent: Array<{ tmuxName: string; keys: string }> = []
 const fileContents = new Map<string, string>()
 
+const firstTurns = new Map<string, string>()
+const pasted: Array<{ tmuxName: string; text: string }> = []
+
 function makeTestIO(): PaneProbeIO {
   return {
     async capturePaneTail(tmuxName, _lines) {
@@ -217,6 +220,8 @@ function makeTestIO(): PaneProbeIO {
     readFile(path) {
       return fileContents.get(path) ?? null
     },
+    firstAssistantText: info => firstTurns.get(info.sessionId) ?? null,
+    async pastePrompt(tmuxName, text) { pasted.push({ tmuxName, text }); return true },
     now: () => T0,
     async safeSend(channelId: string, text: string) {
       sentMessages.push({ channelId, text })
@@ -382,6 +387,8 @@ describe('detectBlockingState (pure)', () => {
 describe('probeAllSessions', () => {
   beforeEach(() => {
     _resetForTesting()
+    firstTurns.clear()
+    pasted.length = 0
     registryEntries.clear()
     sentMessages.length = 0
     reactions.length = 0
@@ -394,6 +401,44 @@ describe('probeAllSessions', () => {
 
   afterEach(() => {
     _resetIO()
+  })
+
+  it('warns when a spawn\'s first turn was "Login expired" under a live prompt, and resends its prompt after login', async () => {
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    registryEntries.get('s1').spawnPrompt = 'You are vale. Topic: replay'
+    firstTurns.set('s1', 'Login expired · Please run /login')
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+    paneTails.set('vale', STALE_EXPIRED_ABOVE_PROMPT) // live prompt: the pane alone calls this stale
+
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+    expect(sentMessages.some(m => m.channelId === 'thread-1' && m.text.includes('needs authentication'))).toBe(true)
+
+    paneTails.set('vale', LOGIN_SUCCESS_TAIL)
+    await probeAllSessions(T0 + 120_000)
+    await flush()
+    expect(pasted).toHaveLength(0) // still on the success screen
+
+    paneTails.set('vale', 'Welcome back\n❯\n  ctx: 1%')
+    await probeAllSessions(T0 + 180_000)
+    expect(pasted).toEqual([{ tmuxName: 'vale', text: 'You are vale. Topic: replay' }])
+    expect(registryEntries.get('s1').spawnPrompt).toBeUndefined()
+  })
+
+  it('drops the kept spawn prompt once the first turn ran normally', async () => {
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    registryEntries.get('s1').spawnPrompt = 'p'
+    firstTurns.set('s1', 'Hello, on it.')
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+    paneTails.set('vale', STALE_EXPIRED_ABOVE_PROMPT)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+    expect(sentMessages).toHaveLength(0)
+    expect(registryEntries.get('s1').spawnPrompt).toBeUndefined()
   })
 
   it('does not probe active sessions (idle gate)', async () => {
