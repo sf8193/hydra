@@ -93,7 +93,7 @@ const defaultIO: PaneProbeIO = {
   async capturePaneTail(tmuxName, lines) {
     try {
       const { stdout } = await execFileAsync(
-        'tmux', ['capture-pane', '-t', tmuxName, '-p', '-S', `-${lines}`],
+        'tmux', ['capture-pane', '-t', tmuxName, '-p', '-J', '-S', `-${lines}`],
         { timeout: 5000 },
       )
       return stdout.trimEnd()
