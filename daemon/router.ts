@@ -109,12 +109,12 @@ export function resolveTmuxKey(t: string): string | null {
 type ProtocolModelSelection = { model: string; engine: ProviderId }
 
 /**
- * `handoff [model][: note]`. The note follows a colon, so chat that merely starts with
+ * `handoff [model][: note]`. The note follows a colon (or a spaced `-`, `–` or `—`), so chat that merely starts with
  * the word ("handoff looks broken?", "handoff-related bug") is never a command. With a note, the
  * word before it must be a known model; otherwise ("handoff status: is it done?") the line is chat.
  */
 export function parseHandoffCommand(content: string): { model?: string; note?: string } | null {
-  const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?::\s*([\s\S]*?))?\s*$/i)
+  const m = content.match(/^\/?handoff(?:\s+([a-z][\w.-]*))?(?:(?::\s*|\s+[-–—]\s+)([\s\S]*?))?\s*$/i)
   if (!m) return null
   const [, model, rawNote] = m
   if (model && rawNote !== undefined && !resolveModelAlias(model) && !resolveCodexModelAlias(model)) return null
