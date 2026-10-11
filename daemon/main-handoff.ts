@@ -29,7 +29,7 @@ const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 export async function handleMainHandoffIntercept(msg: InboundMessage, cmd: { model?: string; note?: string }): Promise<void> {
   const { note } = cmd
-  if (cmd.model) return reportError(msg.channelId, msg.id, 'handoff', 'main hands off in place, on its own model', 'Use `handoff` or `handoff - <note>`.')
+  if (cmd.model) return reportError(msg.channelId, msg.id, 'handoff', 'main hands off in place, on its own model', 'Use `handoff` or `handoff: <note>`.')
   if (!mainAlive()) return reportError(msg.channelId, msg.id, 'handoff', 'main is not running')
   if (running) return reportError(msg.channelId, msg.id, 'handoff', 'main is already handing off')
   const artifact = join(STATE_DIR, 'handoffs', `main-${Date.now()}.md`)

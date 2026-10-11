@@ -84,6 +84,6 @@ function alertContext(id: string, name: string, pct: string, channel: string): v
   if (threshold !== undefined && !contextAlerted.has(key)) {
     for (const t of CONTEXT_ALERT_THRESHOLDS) if (t <= threshold) contextAlerted.add(`${id}:${t}`)
     process.stderr.write(`daemon: context alert: ${name} at ${pct}\n`)
-    void gateway.send(channel, `**${name}** is at **${pct}** context. Consider a \`handoff\` to a fresh session (\`handoff - <note>\` passes a note to it).`).catch(() => {})
+    void gateway.send(channel, `**${name}** is at **${pct}** context. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`).catch(() => {})
   }
 }
