@@ -660,7 +660,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const phaseBudgetMs = opts?.phaseBudgetMs ?? parsed.budgetMs
 
   const sessionId = randomUUID()
-  const tmuxName = registry.pickSessionName()
+  // A handoff is the same session continuing: its killed predecessor's name is free, so the successor keeps it.
+  const tmuxName = opts?.handedOffFrom ?? registry.pickSessionName()
   // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
   // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
   // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
