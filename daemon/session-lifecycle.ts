@@ -256,7 +256,7 @@ function sameLetter(a: string, b: string): boolean {
   return a === b || canon(a) === canon(b)
 }
 
-/** What happens to `handoff - <note>`'s note for this letter, with the data each outcome needs. */
+/** What happens to `handoff: <note>`'s note for this letter, with the data each outcome needs. */
 export type HandoffNoteFate =
   | { kind: 'none' }
   | { kind: 'carried'; text: string }        // the successor of this letter gets the note

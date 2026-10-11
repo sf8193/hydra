@@ -285,16 +285,15 @@ test('parseHandoffCommand: a note needs a separator; a chat line that starts wit
   const { parseHandoffCommand } = await import('../router.js')
   expect(parseHandoffCommand('handoff')).toEqual({})
   expect(parseHandoffCommand('/handoff opus')).toEqual({ model: 'opus' })
-  expect(parseHandoffCommand('handoff - So next session can listen to each of these PRs')).toEqual({ note: 'So next session can listen to each of these PRs' })
-  expect(parseHandoffCommand('handoff opus - watch CI\nand refine')).toEqual({ model: 'opus', note: 'watch CI\nand refine' })
-  expect(parseHandoffCommand('Handoff — x')).toEqual({ note: 'x' })
-  expect(parseHandoffCommand('handoff – en dash')).toEqual({ note: 'en dash' })
-  expect(parseHandoffCommand('handoff - ')).toEqual({})
+  expect(parseHandoffCommand('handoff: So next session can listen to each of these PRs')).toEqual({ note: 'So next session can listen to each of these PRs' })
+  expect(parseHandoffCommand('handoff opus: watch CI\nand refine')).toEqual({ model: 'opus', note: 'watch CI\nand refine' })
+  expect(parseHandoffCommand('Handoff sonnet:let\'s do A')).toEqual({ model: 'sonnet', note: 'let\'s do A' })
+  expect(parseHandoffCommand('handoff: ')).toEqual({})
   // Chat, not commands:
-  expect(parseHandoffCommand('handoff status - is it done?')).toBeNull()   // not a model before the note
-  expect(parseHandoffCommand('handoff-related bug in the tool')).toBeNull() // no space before the dash
-  expect(parseHandoffCommand('handoff: is it done?')).toBeNull()
-  expect(parseHandoffCommand('handoff status: is it done?')).toBeNull()
+  expect(parseHandoffCommand('handoff status: is it done?')).toBeNull()   // not a model before the note
+  expect(parseHandoffCommand('handoff-related bug in the tool')).toBeNull()
+  expect(parseHandoffCommand('handoff - note')).toBeNull()                // the dash form is gone
+  expect(parseHandoffCommand('handoff opus - note')).toBeNull()
   expect(parseHandoffCommand('handoff looks broken, why?')).toBeNull()
   expect(parseHandoffCommand('handoffs are slow')).toBeNull()
   expect(parseHandoffCommand('please handoff')).toBeNull()
@@ -348,9 +347,9 @@ test('handoff note: carried to the successor spawn, quoted in its prompt, and fi
 
 test('isHandoffNearMiss: an attempted note that did not parse is flagged; chat and real commands are not', async () => {
   const { isHandoffNearMiss } = await import('../router.js')
-  for (const t of ['handoff -- note', 'handoff -note', 'handoff- note', 'handoff: note', 'handoff status: is it done?', 'handoff status - is it done?'])
+  for (const t of ['handoff -- note', 'handoff -note', 'handoff- note', 'handoff - note', 'handoff opus - note', 'handoff status: is it done?', 'handoff status - is it done?'])
     expect([t, isHandoffNearMiss(t)]).toEqual([t, true])
-  for (const t of ['handoff - note', 'handoff', 'handoff opus', 'handoff-related bug', 'handoff looks broken', 'handoffs are slow', 'please handoff - x'])
+  for (const t of ['handoff: note', 'handoff opus: note', 'handoff', 'handoff opus', 'handoff-related bug', 'handoff looks broken', 'handoffs are slow', 'please handoff: x'])
     expect([t, isHandoffNearMiss(t)]).toEqual([t, false])
 })
 
