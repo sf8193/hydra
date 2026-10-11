@@ -7,6 +7,7 @@ import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } 
 import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
 import { authorityId, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
+import { notePendingReply } from './reply-guard.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
@@ -930,6 +931,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   const promptParams = { sessionId, tmuxName, threadId: threadId!, topic }
   let prompt: string
+  let armFirstReply = false
   if (opts?.promptBuilder) {
     prompt = opts.promptBuilder(sessionId, tmuxName)
   } else if (isHandoff) {
@@ -943,6 +945,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt = buildResurrectPrompt(promptParams)
   } else {
     prompt = buildSpawnPrompt(promptParams)
+    armFirstReply = true
   }
 
   if (opts?.promptPrefix) {
@@ -1016,6 +1019,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Headless sessions use a synthetic UUID as threadId — don't register it.
   if (!isJoin && !isHeadless) {
     registry.setThread(threadId!, sessionId)
+    // The spawn prompt is a request like any user message: a text-only first answer must still reach the thread.
+    if (armFirstReply && anchorMessageId) notePendingReply(sessionId, { chat_id: threadId!, message_id: anchorMessageId, user: opts?.initiator ?? '' })
   } else if (isJoin) {
     registry.addMember(threadId!, sessionId, opts?.memberLabel)
   }
