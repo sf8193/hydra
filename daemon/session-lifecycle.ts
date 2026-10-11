@@ -945,7 +945,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     prompt = buildResurrectPrompt(promptParams)
   } else {
     prompt = buildSpawnPrompt(promptParams)
-    armFirstReply = true
+    // Only a new thread's spawn is a user request; recovery and respawn reuse a thread (and a stale anchor).
+    armFirstReply = !isResume && !opts?.resumeCodex && !opts?.existingThreadId
   }
 
   if (opts?.promptPrefix) {

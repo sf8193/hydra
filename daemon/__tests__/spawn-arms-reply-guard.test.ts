@@ -66,3 +66,12 @@ test('a CLI spawn with no message id arms it on the anchor message', async () =>
   expect(p).toMatchObject({ chatId: r.threadId, messageId: 'anchor-1', user: 'cron' })
   registry.delete(r.sessionId)
 })
+
+test('a resume or respawn into an existing thread does not arm it', async () => {
+  for (const o of [{ resumeFrom: 'C-old', existingThreadId: 'thread-1' }, { existingThreadId: 'thread-1' }]) {
+    const r = await doSpawnSession('t', undefined, undefined, o)
+    expect([..._pendingForTesting().values()].some(x => x.sessionId === r.sessionId)).toBe(false)
+    registry.delete(r.sessionId)
+    registry.deleteThread('thread-1')
+  }
+})
