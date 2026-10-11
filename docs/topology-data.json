@@ -658,6 +658,10 @@
     ],
     [
       "daemon_session-lifecycle",
+      "daemon_reply-guard"
+    ],
+    [
+      "daemon_session-lifecycle",
       "daemon_bridge-transport"
     ],
     [
