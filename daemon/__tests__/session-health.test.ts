@@ -8,11 +8,12 @@
 
 import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
+import { rmSync, writeFileSync } from 'fs'
 import { pollSessionsOnce } from '../session-health.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { gateway } from '../config.js'
+import { gateway, ACCESS_FILE } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
 import { ORPHAN_GRACE_MS } from '../session-reachability.js'
 import { fakeAdapter } from './test-harness.js'
@@ -131,12 +132,148 @@ describe('orphan detection', () => {
 
   test("the alert names a launch-time cause when the launch recorded one, and only then", () => {
     const noted = seed({ ageMs: OLD, claudeSessionId: 'known', channelNote: 'Claude Code had the bridge marked needs-auth (cleared at launch)' })
-    const plain = seed({ ageMs: OLD, claudeSessionId: 'known' })
-    tmux.alive(noted.tmuxName); tmux.alive(plain.tmuxName)
+    tmux.alive(noted.tmuxName)
     pollSessionsOnce(NOW)
+    const plain = seed({ ageMs: OLD, claudeSessionId: 'known' })
+    tmux.alive(plain.tmuxName)
+    pollSessionsOnce(NOW + 1000)
     expect(to(noted, '⚠️')[0].text).toContain("isn't connected — replies can't reach this thread. Claude Code had the bridge marked needs-auth (cleared at launch). Use `resume`")
     expect(to(plain, '⚠️')[0].text).toContain("replies can't reach this thread. Use `resume`")
     expect(stderr.join('')).toContain(`orphan detected: ${noted.tmuxName}`)
+  })
+
+  describe('several orphans in one pass', () => {
+    let dms: Array<{ userId: string; text: string }> = []
+    let origSendDM: any
+    let failSlowDM: () => void = () => {}
+
+    beforeEach(() => {
+      dms = []
+      origSendDM = gateway.sendDM
+      ;(gateway as any).sendDM = async (userId: string, text: string) => {
+        if (userId.startsWith('U-closed')) throw new Error('DMs closed')
+        if (userId === 'U-slow') return new Promise<void>((_, reject) => { failSlowDM = () => reject(new Error('timed out')) })
+        dms.push({ userId, text })
+      }
+    })
+
+    afterEach(() => {
+      ;(gateway as any).sendDM = origSendDM
+      rmSync(ACCESS_FILE, { force: true })
+    })
+
+    const settle = () => new Promise(r => setTimeout(r, 0))
+    const seedOrphans = (n: number) => Array.from({ length: n }, () => {
+      const info = seed({ ageMs: OLD, claudeSessionId: 'known' })
+      tmux.alive(info.tmuxName)
+      return info
+    })
+
+    test('one operator summary replaces the per-thread alerts', async () => {
+      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-op'] }))
+      const [a, b, c, d] = seedOrphans(4)
+      threadRegistry.get(a.threadId)!.threadUrl = 'https://chat/a'
+      b.description = '  fixing the thing\r\nsecond line'
+      b.channelNote = 'bridge marked needs-auth'
+      threadRegistry.get(a.threadId)!.topic = 'z'.repeat(150)
+      threadRegistry.get(d.threadId)!.topic = `short\n${'y'.repeat(500)}`
+      d.description = '\r\nhidden'
+
+      pollSessionsOnce(NOW)
+      await settle()
+
+      expect(to(a, '⚠️')).toHaveLength(0)
+      expect(to(b, '⚠️')).toHaveLength(0)
+      expect(dms).toHaveLength(1)
+      expect(dms[0].userId).toBe('U-op')
+      expect(dms[0].text).toStartWith('⚠️ **4 sessions lost their bridge**')
+      expect(dms[0].text).toContain(`• [${a.tmuxName}](https://chat/a) — ${'z'.repeat(97)}...\n`)
+      expect(dms[0].text).toContain(`• \`${b.tmuxName}\` — fixing the thing (bridge marked needs-auth)\n`)
+      expect(dms[0].text).toContain(`• \`${c.tmuxName}\` — topic\n`)
+      expect(dms[0].text).toEndWith(`• \`${d.tmuxName}\` — short`)
+
+      pollSessionsOnce(NOW + 1000)
+      await settle()
+      expect(dms).toHaveLength(1)
+    })
+
+    test('a summary past the platform limit is split, not dropped', async () => {
+      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-op'] }))
+      const orphans = seedOrphans(20)
+      for (const info of orphans) {
+        threadRegistry.get(info.threadId)!.threadUrl = `https://chat/${info.threadId}/${'x'.repeat(200)}`
+      }
+
+      pollSessionsOnce(NOW)
+      await settle()
+
+      expect(dms.length).toBeGreaterThan(1)
+      expect(dms[0].text).toStartWith('⚠️ **20 sessions lost their bridge**')
+      for (const dm of dms) expect(dm.text.length).toBeLessThanOrEqual(gateway.maxMessageLength)
+      const joined = dms.map(d => d.text).join('\n')
+      for (const info of orphans) expect(joined).toContain(`[${info.tmuxName}](https://chat/${info.threadId}/${'x'.repeat(200)})`)
+    })
+
+    test('when no operator DM lands, each thread gets its own alert', async () => {
+      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-closed-1', 'U-closed-2'] }))
+      const [a, b] = seedOrphans(2)
+
+      pollSessionsOnce(NOW)
+      await settle()
+
+      expect(dms).toHaveLength(0)
+      expect(to(a, '⚠️')).toHaveLength(1)
+      expect(to(b, '⚠️')).toHaveLength(1)
+    })
+
+    test('the fallback skips sessions that reconnected, died or were replaced while the DMs were failing', async () => {
+      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-closed'] }))
+      const [reconnected, died, replaced, stillOrphaned] = seedOrphans(4)
+
+      pollSessionsOnce(NOW)
+      transport.bridges.set(reconnected.sessionId, {} as any)
+      died.deadAt = NOW
+      registry.set(replaced.sessionId, { ...replaced })
+      await settle()
+
+      expect(to(reconnected, '⚠️')).toHaveLength(0)
+      expect(to(died, '⚠️')).toHaveLength(0)
+      expect(to(replaced, '⚠️')).toHaveLength(0)
+      expect(to(stillOrphaned, '⚠️')).toHaveLength(1)
+
+      transport.bridges.delete(reconnected.sessionId)
+      pollSessionsOnce(NOW + 1000)
+      await settle()
+      expect(to(reconnected, '⚠️')).toHaveLength(1)
+    })
+
+    test('a DM that fails after a newer episode was alerted does not alert again', async () => {
+      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-slow'] }))
+      const [a] = seedOrphans(2)
+
+      pollSessionsOnce(NOW)
+      transport.bridges.set(a.sessionId, {} as any)
+      pollSessionsOnce(NOW + 1000)
+      transport.bridges.delete(a.sessionId)
+      pollSessionsOnce(NOW + 2000)
+      expect(to(a, '⚠️')).toHaveLength(1)
+
+      failSlowDM()
+      await settle()
+      expect(to(a, '⚠️')).toHaveLength(1)
+    })
+
+    test('one recipient failing does not stop the others or trigger the fallback', async () => {
+      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-closed', 'U-op'] }))
+      const [a, b] = seedOrphans(2)
+
+      pollSessionsOnce(NOW)
+      await settle()
+
+      expect(dms.map(d => d.userId)).toEqual(['U-op'])
+      expect(to(a, '⚠️')).toHaveLength(0)
+      expect(to(b, '⚠️')).toHaveLength(0)
+    })
   })
 
   test('C4: Claude orphan without an id discovers it and updates the open history entry', () => {

@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync, readdirSync, rmSync, renameSync, mkdirSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
-import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway } from './config.js'
+import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
+import { chunk, safeSend } from './util.js'
 import type { InboundMessage } from '../gateway.js'
 
 // ---------------------------------------------------------------------------
@@ -104,6 +105,32 @@ function pruneExpired(a: Access): boolean {
     }
   }
   return changed
+}
+
+// Resolves true only if the whole message reached someone.
+export async function notifyOperator(text: string): Promise<boolean> {
+  const access = loadAccess()
+  const parts = chunk(text, gateway.maxMessageLength, 'markdown')
+  if (access.allowFrom.length > 0) {
+    const delivered = await Promise.all(access.allowFrom.map(async userId => {
+      try {
+        for (const part of parts) await gateway.sendDM(userId, part)
+        return true
+      } catch (e) {
+        process.stderr.write(`daemon: operator notify DM failed: ${e}\n`)
+        return false
+      }
+    }))
+    return delivered.includes(true)
+  }
+  if (DEFAULT_SESSION_CHANNEL) {
+    for (const part of parts) {
+      const sent = await safeSend(DEFAULT_SESSION_CHANNEL, part)
+      if (sent.length === 0) return false
+    }
+    return true
+  }
+  return false
 }
 
 // ---------------------------------------------------------------------------

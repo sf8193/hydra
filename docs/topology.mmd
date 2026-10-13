@@ -196,6 +196,7 @@ graph TD
   daemon_router --> daemon_util
   daemon_router --> daemon_templates
   daemon_access --> daemon_config
+  daemon_access --> daemon_util
   daemon_templates --> shared_constants
   daemon_pr-watch --> daemon_config
   daemon_pr-watch --> daemon_sessions
@@ -226,6 +227,7 @@ graph TD
   daemon_session-health --> daemon_config
   daemon_session-health --> daemon_util
   daemon_session-health --> daemon_anchor-state
+  daemon_session-health --> daemon_access
   daemon_raindrop --> daemon_config
   daemon_raindrop --> daemon_access
   daemon_raindrop --> daemon_sessions

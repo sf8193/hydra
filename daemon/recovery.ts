@@ -6,15 +6,15 @@
 // recovery (autoRecoverAfterBoot, boot-wired in daemon.ts) share the recoverOne cascade,
 // work-key dedup, and the single-flight guard here.
 import { existsSync } from 'fs'
-import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
+import { gateway } from './config.js'
 import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, SessionInfo } from './sessions.js'
 import { doSpawnSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
-import { tmuxHasSession, isAlive, executionAlive, safeSend, baseNameFromBranch } from './util.js'
+import { tmuxHasSession, isAlive, executionAlive, baseNameFromBranch } from './util.js'
 import { parsePrUrl, getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import type { WatchEntry } from './pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
-import { loadAccess } from './access.js'
+import { notifyOperator } from './access.js'
 import { deadSessionLabel, recoveryEntry } from './recovery-selection.js'
 import type { InboundMessage } from '../gateway.js'
 
@@ -434,25 +434,6 @@ async function postAutoRecoverySummary(
   }
 
   await notifyOperator(lines.join('\n'))
-}
-
-// Surface an auto-recovery message to the operator: DM the access allowlist if set,
-// else fall back to the default channel so the run is visible. Awaits all sends
-// (Promise.all; each send self-catches) so a caller's `await` genuinely means the sends
-// were attempted, while a single failing recipient never rejects or blocks the others.
-async function notifyOperator(text: string): Promise<void> {
-  const access = loadAccess()
-  if (access.allowFrom.length > 0) {
-    // Each send has its own .catch (logs + swallows), so no element ever rejects —
-    // Promise.all suffices; it still awaits all sends without one failure blocking others.
-    await Promise.all(access.allowFrom.map(userId =>
-      gateway.sendDM(userId, text).catch(e =>
-        process.stderr.write(`daemon: auto-recovery notify DM failed: ${e}\n`),
-      ),
-    ))
-  } else if (DEFAULT_SESSION_CHANNEL) {
-    await safeSend(DEFAULT_SESSION_CHANNEL, text).catch(() => {})
-  }
 }
 
 // Opt-in via HYDRA_AUTO_RECOVER=1. Runs once at daemon startup: reads persisted

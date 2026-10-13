@@ -1,11 +1,13 @@
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { gateway } from './config.js'
-import { tmuxHasSession } from './util.js'
+import { tmuxHasSession, fallbackDescription } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { mainChannel, mainContext, mainTmux } from './main-session.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
+import { notifyOperator } from './access.js'
+import type { SessionInfo } from './sessions.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
@@ -15,7 +17,7 @@ const CONTEXT_ALERT_THRESHOLDS = [50, 70]
 
 const contextAlerted = new Set<string>()
 const crashAlerted = new Set<string>()
-const orphanAlerted = new Set<string>()
+const orphanAlerted = new Map<string, number>()
 
 export function startSessionHealthPoll(): void {
   setInterval(() => pollSessionsOnce(Date.now()), SESSION_CHECK_INTERVAL_MS)
@@ -23,6 +25,7 @@ export function startSessionHealthPoll(): void {
 
 /** One session-health pass: crash detection, orphan detection (+ id discovery), context alert. */
 export function pollSessionsOnce(now: number): void {
+  const newOrphans: SessionInfo[] = []
   for (const info of registry.values()) {
     // Crash detection — both tmux AND bridge must be gone. Bridge-only disconnects are handled
     // by the bridge-server disconnect handler (3s delay + tmux check). Skip sessions in spawn
@@ -56,10 +59,9 @@ export function pollSessionsOnce(now: number): void {
         process.stderr.write(`daemon: orphan ${info.tmuxName}: discovered claudeSessionId=${discovered}\n`)
       }
       if (!orphanAlerted.has(info.sessionId)) {
-        orphanAlerted.add(info.sessionId)
-        const note = info.channelNote ? ` ${info.channelNote}.` : ''
-        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)${note}\n`)
-        void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread.${note} Use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`).catch(() => {})
+        orphanAlerted.set(info.sessionId, now)
+        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)${channelNoteSentence(info)}\n`)
+        newOrphans.push(info)
       }
     } else {
       orphanAlerted.delete(info.sessionId)
@@ -71,6 +73,8 @@ export function pollSessionsOnce(now: number): void {
   // and nothing is marked alerted.
   const channel = mainChannel()
   if (channel) alertContext('main', mainTmux(), mainContext() ?? '?', channel)
+
+  alertOrphans(newOrphans, now)
 }
 
 function alertContext(id: string, name: string, pct: string, channel: string): void {
@@ -86,4 +90,36 @@ function alertContext(id: string, name: string, pct: string, channel: string): v
     process.stderr.write(`daemon: context alert: ${name} at ${pct}\n`)
     void gateway.send(channel, `**${name}** is at **${pct}** context. Consider a \`handoff\` to a fresh session (\`handoff: <note>\` passes a note to it).`).catch(() => {})
   }
+}
+
+function channelNoteSentence(info: SessionInfo): string {
+  return info.channelNote ? ` ${info.channelNote}.` : ''
+}
+
+function alertOrphanThread(info: SessionInfo): void {
+  void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** is running but its bridge isn't connected — replies can't reach this thread.${channelNoteSentence(info)} Use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`).catch(() => {})
+}
+
+function alertOrphans(orphans: SessionInfo[], detectedAt: number): void {
+  if (orphans.length === 0) return
+  if (orphans.length === 1) return alertOrphanThread(orphans[0])
+  const lines = orphans.map(info => {
+    const thread = threadRegistry.get(info.threadId)
+    const name = thread?.threadUrl ? `[${info.tmuxName}](${thread.threadUrl})` : `\`${info.tmuxName}\``
+    const label = info.description?.split('\n')[0].trim() || fallbackDescription(thread?.topic ?? '')
+    const note = info.channelNote ? ` (${info.channelNote})` : ''
+    return label ? `• ${name} — ${label}${note}` : `• ${name}${note}`
+  })
+  const text = [
+    `⚠️ **${orphans.length} sessions lost their bridge** — they're still running, but replies can't reach their threads. In each thread, use \`resume\` to reattach with its context, or \`respawn\` to start fresh.`,
+    ...lines,
+  ].join('\n')
+  void notifyOperator(text).then(sent => {
+    if (sent) return
+    for (const info of orphans) {
+      if (orphanAlerted.get(info.sessionId) !== detectedAt) continue
+      if (registry.get(info.sessionId) === info && !info.deadAt && !transport.has(info.sessionId)) alertOrphanThread(info)
+      else orphanAlerted.delete(info.sessionId)
+    }
+  })
 }

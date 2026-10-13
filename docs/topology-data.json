@@ -817,6 +817,10 @@
       "daemon_config"
     ],
     [
+      "daemon_access",
+      "daemon_util"
+    ],
+    [
       "daemon_templates",
       "shared_constants"
     ],
@@ -935,6 +939,10 @@
     [
       "daemon_session-health",
       "daemon_anchor-state"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_access"
     ],
     [
       "daemon_raindrop",
