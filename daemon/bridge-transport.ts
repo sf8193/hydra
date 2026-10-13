@@ -19,6 +19,7 @@ export type BridgeConn = {
   connectionRole?: 'session' | 'control'
   lastToolsPushAt?: number // request_tools throttle; held on the conn so it dies with it
   backpressureLogged?: boolean // first stall per connection is news, the rest is volume
+  bridgePid?: number
 }
 
 // ---------------------------------------------------------------------------

@@ -1,11 +1,12 @@
 import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
 import { execSync, execFileSync } from 'child_process'
 import { createServer, type Socket } from 'net'
+import { dirname } from 'path'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
 import { registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
-import { spawnModel } from '../shared/constants.js'
+import { BRIDGE_SHUTDOWN_GRACE_MS, spawnModel } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
 import { loadAccess } from './access.js'
@@ -23,9 +24,12 @@ import { clearInterceptsForSession } from './pane-probe.js'
 import { safeSend } from './util.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import { emit } from './event-bus.js'
+import { bridgeLifePath, describeBridgeExit, pidAlive, pruneBridgeLife, readBridgeLife } from '../shared/bridge-life.js'
 import type { ButtonDef } from '../gateway.js'
 
 const DEATH_DETECT_DELAY_MS = 3_000
+const BRIDGE_LIFE_READ_DELAY_MS = BRIDGE_SHUTDOWN_GRACE_MS + 1_000
+const BRIDGE_LIFE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
 // ---------------------------------------------------------------------------
 // Auto-watch: scan session replies for GitHub PR URLs
@@ -166,6 +170,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
     case 'register': {
       const sessionId = msg.sessionId as string
       conn.sessionId = sessionId
+      if (Number.isInteger(msg.pid) && (msg.pid as number) > 0) conn.bridgePid = msg.pid as number
 
       const claudeSessionId = msg.claudeSessionId as string | undefined
       const info = registry.get(sessionId)
@@ -492,6 +497,18 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 // Session death detection
 // ---------------------------------------------------------------------------
 
+function reportBridgeExit(sessionId: string, pid: number): void {
+  setTimeout(() => {
+    const path = bridgeLifePath(dirname(SOCK_PATH), sessionId, pid)
+    const events = readBridgeLife(path)
+    const alive = pidAlive(pid)
+    process.stderr.write(`daemon: bridge exit check for session ${sessionId} pid ${pid}: ${describeBridgeExit(events, alive, Date.now())}${alive ? ` [record kept: ${path}]` : ''}\n`)
+    if (!alive) {
+      try { unlinkSync(path) } catch {}
+    }
+  }, BRIDGE_LIFE_READ_DELAY_MS)
+}
+
 async function checkSessionDeath(sessionId: string): Promise<void> {
   if (transport.has(sessionId)) return
 
@@ -588,6 +605,7 @@ export const socketServer = createServer((socket: Socket) => {
       conn.mainCloseRecorded = true
       mainBridge.disconnect(reason, Date.now())
     }
+    if (isOwner && conn.bridgePid) reportBridgeExit(conn.sessionId, conn.bridgePid)
     if (isOwner) {
       transport.delete(conn.sessionId)
     }
@@ -625,6 +643,7 @@ export function startBridgeServer(): void {
     }
   }
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  pruneBridgeLife(dirname(SOCK_PATH), BRIDGE_LIFE_MAX_AGE_MS, Date.now())
 
   socketServer.listen(SOCK_PATH, () => {
     try { chmodSync(SOCK_PATH, 0o700) } catch (err) {
