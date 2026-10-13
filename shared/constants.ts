@@ -7,6 +7,8 @@ export function normalizeReviewRounds(value?: number): number {
 }
 export const TRANSCRIBE_TMUX = 'hydra-transcribe'
 
+export const BRIDGE_SHUTDOWN_GRACE_MS = 1_000
+
 export const KNOWN_MODELS = new Set([
   'claude-opus-5-5',
   'claude-opus-5',

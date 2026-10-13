@@ -24,7 +24,8 @@ import { readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 
 import { ToolsWaiterSet, type ToolsWaiter } from './shared/tools-waiters.js'
-import { SESSION_INSTRUCTIONS } from './shared/constants.js'
+import { appendBridgeLife, bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
+import { BRIDGE_SHUTDOWN_GRACE_MS, SESSION_INSTRUCTIONS } from './shared/constants.js'
 
 // Resolve daemon socket path. Priority:
 // 1. DAEMON_SOCK env var (explicit override — needed when multiple daemons share a plugin cache)
@@ -94,7 +95,25 @@ function resolveSessionIdentity(): { sessionId: string; isMain: boolean } {
 }
 
 const { sessionId: SESSION_ID, isMain: IS_MAIN } = resolveSessionIdentity()
+const IS_STRAY = SESSION_ID.startsWith('stray-')
 const RECONNECT_INTERVAL = 5000
+
+const LIFE_PATH = bridgeLifePath(dirname(SOCKET_PATH), SESSION_ID, process.pid)
+const WAKE_TICK_MS = 10_000
+const WAKE_GAP_MS = 60_000
+const MAX_ERROR_RECORDS = 20
+let errorRecords = 0
+
+function recordLife(event: BridgeLifeEvent): void {
+  if (IS_STRAY) return
+  appendBridgeLife(LIFE_PATH, event)
+}
+
+function recordError(kind: string, err: unknown): void {
+  if (errorRecords >= MAX_ERROR_RECORDS) return
+  errorRecords++
+  recordLife({ ev: 'error', ts: Date.now(), detail: `${kind}: ${err instanceof Error ? err.stack ?? err.message : String(err)}` })
+}
 
 const CLAUDE_SESSION_ID_ENV_NAMES = ['CLAUDE_CODE_SESSION_ID', 'SESSION_ID']
 
@@ -284,7 +303,7 @@ function connectSocket(): void {
     process.stderr.write(`bridge: connected to daemon\n`)
     lineBuf = ''
     const claudeId = resolveClaudeSessionId()
-    sendToSocket({ type: 'register', sessionId: SESSION_ID, claudeSessionId: claudeId })
+    sendToSocket({ type: 'register', sessionId: SESSION_ID, claudeSessionId: claudeId, pid: IS_STRAY ? undefined : process.pid })
   })
 
   sock.on('data', (data: Buffer) => {
@@ -322,7 +341,7 @@ function connectSocket(): void {
       pendingCalls.delete(id)
     }
 
-    if (!SESSION_ID.startsWith('stray-')) {
+    if (!IS_STRAY) {
       scheduleReconnect()
     } else {
       process.stderr.write('bridge: stray bridge — not reconnecting\n')
@@ -476,24 +495,31 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 // ── Safety nets ────────────────────────────────────────────────────────
 
 process.on('unhandledRejection', err => {
+  recordError('unhandledRejection', err)
   process.stderr.write(`bridge: unhandled rejection: ${err}\n`)
 })
 process.on('uncaughtException', err => {
+  recordError('uncaughtException', err)
   process.stderr.write(`bridge: uncaught exception: ${err}\n`)
 })
 
-// ── Start ──────────────────────────────────────────────────────────────
-
-await mcp.connect(new StdioServerTransport())
-connectSocket()
-
 // ── Shutdown ───────────────────────────────────────────────────────────
 
+let lastTick = Date.now()
+function noteWake(): void {
+  const now = Date.now()
+  if (now - lastTick > WAKE_GAP_MS) recordLife({ ev: 'wake', ts: now, gapMs: now - lastTick })
+  lastTick = now
+}
+
 let shuttingDown = false
-function shutdown(): void {
+function shutdown(ev: 'stdin' | 'signal', detail: string): void {
   if (shuttingDown) return
   shuttingDown = true
-  process.stderr.write('bridge: shutting down\n')
+  noteWake()
+  const cause: BridgeLifeEvent = { ev, ts: Date.now(), ppid: process.ppid, detail }
+  recordLife(cause)
+  process.stderr.write(`bridge: shutting down: ${JSON.stringify(cause)}\n`)
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
@@ -506,10 +532,20 @@ function shutdown(): void {
     pending.reject(new Error('bridge shutting down'))
     pendingCalls.delete(id)
   }
-  setTimeout(() => process.exit(0), 1000)
+  setTimeout(() => process.exit(0), BRIDGE_SHUTDOWN_GRACE_MS)
 }
 
-process.stdin.on('end', shutdown)
-process.stdin.on('close', shutdown)
-process.on('SIGTERM', shutdown)
-process.on('SIGINT', shutdown)
+process.stdin.on('end', () => shutdown('stdin', 'end'))
+process.stdin.on('close', () => shutdown('stdin', 'close'))
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+  process.on(signal, () => shutdown('signal', signal))
+}
+process.on('exit', code => recordLife({ ev: 'exit', ts: Date.now(), code }))
+
+recordLife({ ev: 'start', ts: Date.now(), pid: process.pid, ppid: process.ppid, sessionId: SESSION_ID })
+setInterval(noteWake, WAKE_TICK_MS).unref()
+
+// ── Start ──────────────────────────────────────────────────────────────
+
+await mcp.connect(new StdioServerTransport())
+connectSocket()

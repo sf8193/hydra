@@ -8,6 +8,7 @@
 import { readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { claudeConfigDir } from '../../shared/constants.js'
+import { pidAlive } from '../../shared/bridge-life.js'
 import type { LiveState } from './engine-adapter.js'
 
 // Claude's status vocabulary (busy = thinking, shell = a Bash tool is running); anything else is
@@ -24,10 +25,6 @@ export function blockedReason(status: ClaudeLiveStatus | null): string | null {
   if (status?.status !== 'waiting') return null
   // Control/format chars (newlines, ANSI, bidi) and backticks out; callers wrap the result in inline code so @mentions and markdown stay inert.
   return Array.from((status.waitingFor ?? 'waiting').replace(/[\p{C}`]+/gu, ' ').trim()).slice(0, 120).join('') || 'waiting'
-}
-
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch (e: any) { return e?.code === 'EPERM' }
 }
 
 export function readClaudeStatus(tmuxName: string, dir: string = join(claudeConfigDir(), 'sessions')): ClaudeLiveStatus | null {
