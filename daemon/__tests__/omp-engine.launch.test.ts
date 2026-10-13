@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { OmpEngine } from '../engines/omp-engine.js'
+import { ompSessionDir } from '../engines/omp-session.js'
 
 // The omp launch command, with tmux faked (the real-omp proof needs HYDRA_OMP_E2E=1 and a model; this runs in CI).
 async function launchCommand(prompt: string): Promise<string> {
@@ -29,7 +30,8 @@ test('launch names the model without [1m], loads only hydra\'s extension config,
   expect(cmd).toContain('hydra-omp.yml')
   expect(cmd).toContain('--approval-mode yolo')
   expect(cmd).toContain('hydra-bridge.ts')
-  expect(cmd).toContain('--no-session')
+  expect(cmd).toContain(`--session-dir '${ompSessionDir('s1')}'`)
+  expect(cmd).not.toContain('--no-session')
   expect(cmd).toContain('unset HYDRA_ROLE CLAUDE_CONFIG_DIR')
 })
 

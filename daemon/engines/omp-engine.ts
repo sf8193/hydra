@@ -15,6 +15,8 @@ import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { tmuxWindowActivity } from '../util.js'
+import { ompContextTokens, ompSessionDir, ompTurn } from './omp-session.js'
+import { contextWindowOf } from '../../shared/constants.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -36,7 +38,7 @@ export class OmpEngine implements EngineAdapter {
     const omp = process.env.HYDRA_OMP_BIN || 'omp'
     // hydra records the 1M window as `[1m]`; omp names the same model without it.
     const ompModel = model.replace(/\[1m\]$/, '')
-    const args = [omp, `--model ${shq(`anthropic/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', '--no-session']
+    const args = [omp, `--model ${shq(`anthropic/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`]
     const inner = [
       `cd ${shq(input.cwd)}`,
       `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
@@ -61,16 +63,26 @@ export class OmpEngine implements EngineAdapter {
   sendKeys(info: SessionInfo, keys: string, opts?: { raw?: boolean; trailingKey?: string }) { return this.claude.sendKeys(info, keys, opts) }
   interrupt(info: SessionInfo): Promise<void> { return this.claude.interrupt(info) }
 
-  // Not read yet: no turn outcome, so callers fall back to tmux pane activity.
-  turn(info: SessionInfo, _sinceMs: number): Turn {
+  // omp's own session file (omp-session.ts): the turn is over when its last message is the assistant's final answer
+  // and was written at or after sinceMs; that answer's text is what the reply guard relays.
+  turn(info: SessionInfo, sinceMs: number): Turn {
+    const { complete, text } = ompTurn(info.sessionId, sinceMs)
     return {
-      confirmedComplete: false, answer: () => null, live: null,
+      confirmedComplete: complete,
+      answer: () => (complete && text?.trim() ? text : null),
+      live: null,
       get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
     }
   }
-  usage(_info: SessionInfo): ContextUsage | null { return null }
+
+  // Context tokens of the last request over the window hydra recorded at launch (as for Claude).
+  usage(info: SessionInfo): ContextUsage | null {
+    const used = ompContextTokens(info.sessionId)
+    const window = contextWindowOf(info.sessionMetadata?.model)
+    return used === null || !window ? null : { usedTokens: used, contextWindow: window, percent: Math.min(100, Math.round(used * 100 / window)) }
+  }
   usageTotals(): UsageReading | null { return null }
   detectBlockingState(_info: SessionInfo, _tail: string): BlockingState | null { return null }
-  // Sessions run with --no-session, so there is nothing to resume or fork.
+  // Resume and fork come with a later step.
   recoveryPlan(): RecoveryPlan { return { generic: false, resume: null, fork: null } }
 }

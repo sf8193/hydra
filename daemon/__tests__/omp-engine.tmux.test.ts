@@ -62,6 +62,14 @@ test.skipIf(!run)('omp session: first turn, reply rules, one bridge, no second M
     await engine.deliver(info, { type: 'notification', content: 'Do your instructions say that your transcript output never reaches the sender\'s chat? Answer the sender with YES or NO only.', meta: { chat_id: '1', message_id: '2', user: 'sam' } })
     expect(await until(() => replies().some(t => /^\W*yes\W*$/i.test(t)), 90_000)).toBe(true)
 
+    // A text-only answer (no reply tool) is what the reply guard relays: the engine reads omp's own session file and reports the turn complete with its text.
+    const since = Date.now()
+    await engine.deliver(info, { type: 'notification', content: 'Answer the sender with the single word PINEAPPLE in plain text. Do not use any tool.', meta: { chat_id: '1', message_id: '9', user: 'sam' } })
+    expect(await until(() => engine.turn(info, since).confirmedComplete, 90_000)).toBe(true)
+    expect(engine.turn(info, since).answer()).toContain('PINEAPPLE')
+    // omp's own file also gives the context size.
+    expect(engine.usage({ ...info, sessionMetadata: { model: 'claude-sonnet-5-5[1m]' } })?.percent).toBeGreaterThan(0)
+
     // A Task subagent re-runs the extension in the same process: still one registration.
     await engine.deliver(info, { type: 'notification', content: 'Use the task tool to start a subagent that only answers "ok", then call reply with text "sub-done".', meta: { chat_id: '1', message_id: '5', user: 'sam' } })
     expect(await until(() => replies().includes('sub-done'), 120_000)).toBe(true)
