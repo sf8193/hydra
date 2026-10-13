@@ -1,3 +1,4 @@
-# Passed to every hydra omp session with `omp --config`. omp reads ~/.claude and a cwd's .mcp.json through
-# these providers; a hydra session must not pick up Claude's plugins or a second Discord MCP server.
-disabledProviders: [claude, claude-plugins, mcp-json]
+# Passed to every hydra omp session with `omp --config`. The claude provider stays on so omp sees ~/.claude and a repo's
+# .claude/ skills and commands. These two stay off: claude-plugins and mcp-json would start a second Discord MCP server
+# (the plugin, and the repo's .mcp.json) next to the extension's bridge.
+disabledProviders: [claude-plugins, mcp-json]
