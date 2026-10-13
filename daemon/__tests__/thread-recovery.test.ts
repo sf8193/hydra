@@ -433,6 +433,23 @@ describe('handleRespawnIntercept', () => {
     expect(respawnArgs()[3]).toBe('dead-model')
   })
 
+  test('an omp thread respawns as omp, with no live record to say so', async () => {
+    seedHistory({ engine: 'omp' })
+    await handleRespawnIntercept(msg('respawn'))
+    expect(respawnArgs()[4].engine).toBe('omp')
+  })
+
+  test('a template respawn of an omp thread is refused before anything is respawned; Claude still takes it', async () => {
+    seedHistory({ engine: 'omp' })
+    await handleRespawnIntercept(msg('respawn'), undefined, 'factory')
+    expect(calls).toEqual([])
+    expect(sent.some(s => s.includes('not available for omp sessions'))).toBe(true)
+
+    seedHistory({ claudeSessionId: 'C-1' })
+    await handleRespawnIntercept(msg('respawn'), undefined, 'factory')
+    expect(fns()).toEqual(['tryRespawn'])
+  })
+
   test('the record engine beats the history inference', async () => {
     seedHistory({ codexThreadId: 'T-1' }, { engine: 'claude' })
     await handleRespawnIntercept(msg('respawn'))

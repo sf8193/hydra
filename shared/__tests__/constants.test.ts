@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds } from '../constants.js'
+import { OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
@@ -146,6 +146,26 @@ describe('Codex spawn command regex integration', () => {
   })
 })
 
+describe('omp model aliases', () => {
+  test('omp-sonnet names a known Claude model with the 1M window, case-insensitively', () => {
+    expect(resolveOmpModelAlias('omp-sonnet')).toBe('claude-sonnet-5-5[1m]')
+    expect(resolveOmpModelAlias('OMP-Sonnet')).toBe('claude-sonnet-5-5[1m]')
+    expect(isKnownModel(resolveOmpModelAlias('omp-sonnet')!)).toBe(true)
+  })
+
+  test('an omp alias is no Claude or Codex alias, so it selects only the omp engine', () => {
+    for (const alias of Object.keys(OMP_MODEL_ALIASES)) {
+      expect(resolveModelAlias(alias)).toBeUndefined()
+      expect(resolveCodexModelAlias(alias)).toBeUndefined()
+    }
+    for (const alias of [...Object.keys(MODEL_ALIASES), ...Object.keys(CODEX_MODEL_ALIASES)]) expect(resolveOmpModelAlias(alias)).toBeUndefined()
+  })
+
+  test('the pattern lists every alias', () => {
+    expect(OMP_MODEL_ALIAS_PATTERN.split('|').sort()).toEqual(Object.keys(OMP_MODEL_ALIASES).sort())
+  })
+})
+
 describe('prototype-key safety', () => {
   // Plain object literals inherit from Object.prototype, so a bare index
   // returns the constructor for 'constructor'. These feed an egress allowlist.
@@ -153,6 +173,7 @@ describe('prototype-key safety', () => {
     '%p is not a model', (key) => {
       expect(isKnownModel(key)).toBe(false)
       expect(resolveCodexModelAlias(key)).toBeUndefined()
+      expect(resolveOmpModelAlias(key)).toBeUndefined()
       expect(resolveModelAlias(key)).toBeUndefined()
       expect(canonicalModel(key)).toBeUndefined()
     })

@@ -442,21 +442,34 @@ describe('spawn_session fork_from and read_only', () => {
     recoveryPlan: (s: any, o: any) => orig.claude.recoveryPlan(s, o),
   }
 
+  const ompLaunches: LaunchInput[] = []
+  const fakeOmp = {
+    provider: 'omp', channel: 'bridge',
+    launch: async (input: LaunchInput) => { ompLaunches.push(input); return { provider: 'omp', model: input.model, identity: {} } },
+    stop: async () => ({ status: 'stopped' }),
+    isAlive: () => false,
+    surface: () => null,
+    recoveryPlan: () => ({ generic: false, resume: null, fork: null }),
+  }
+
   beforeAll(() => {
     orig.claude = engines.claude
+    orig.omp = engines.omp
     orig.persist = registry.persist; orig.tpersist = threadRegistry.persist
     orig.spawnCwd = process.env.SPAWN_CWD
     engines.claude = fakeClaude as any
+    engines.omp = fakeOmp as any
     ;(registry as any).persist = () => {}
     ;(threadRegistry as any).persist = () => {}
     process.env.SPAWN_CWD = process.cwd()
   })
   afterAll(() => {
     engines.claude = orig.claude
+    engines.omp = orig.omp
     ;(registry as any).persist = orig.persist; (threadRegistry as any).persist = orig.tpersist
     if (orig.spawnCwd === undefined) delete process.env.SPAWN_CWD; else process.env.SPAWN_CWD = orig.spawnCwd
   })
-  beforeEach(() => { fake = withFakeTmux(); dir = mkdtempSync(join(tmpdir(), 'fp-src-')); launches.length = 0 })
+  beforeEach(() => { fake = withFakeTmux(); dir = mkdtempSync(join(tmpdir(), 'fp-src-')); launches.length = 0; ompLaunches.length = 0 })
   afterEach(() => {
     for (const s of [...registry.values()]) if (s.sessionId.startsWith('fs-') || s.initiator?.startsWith('fs')) registry.delete(s.sessionId)
     rmSync(dir, { recursive: true, force: true })
@@ -470,6 +483,19 @@ describe('spawn_session fork_from and read_only', () => {
     expect(r.isError).toBe(true)
     return (r.content[0] as { text: string }).text
   }
+
+  test('an omp model alias launches the omp engine on that model; fork_from and read_only are refused with it', async () => {
+    mk('fs-caller', 'fscaller')
+    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    expect((await spawn({ model: 'omp-sonnet' })).isError).toBeFalsy()
+    expect(launches).toHaveLength(0)
+    expect(ompLaunches).toHaveLength(1)
+    expect(ompLaunches[0].model).toBe('claude-sonnet-5-5[1m]')
+    expect(registry.get(ompLaunches[0].sessionId)?.engine).toBe('omp')
+    expect(await errorOf({ model: 'omp-sonnet', fork_from: 'fssrc' })).toContain('omp sessions cannot be forked')
+    expect(await errorOf({ model: 'omp-sonnet', read_only: true })).toContain('read_only is not enforced on omp sessions')
+    expect(ompLaunches).toHaveLength(1)
+  })
 
   test('a session name resolves to its fork plan, launched in its cwd on its model', async () => {
     mk('fs-caller', 'fscaller')

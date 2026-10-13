@@ -455,6 +455,13 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
   const threadId = msg.effectiveThreadId ?? msg.channelId
   const thread = threadRegistry.get(threadId)
 
+  // A template layers tools and a session type onto the respawn; omp takes neither. Refused before anything is torn down.
+  const earlier = recoveryEntry(thread?.sessionHistory ?? [])
+  if (template && (selection?.engine ?? recoveryEngine(earlier, registry.get(earlier?.sessionId ?? ''))) === 'omp') {
+    await reportError(msg.channelId, msg.id, 'respawn', 'templates (`+f`) are not available for omp sessions', 'Use a plain `respawn`.')
+    return
+  }
+
   const respawnLiveId = registry.getByThread(threadId)
   if (respawnLiveId) {
     const liveInfo = registry.get(respawnLiveId)

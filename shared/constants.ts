@@ -50,6 +50,11 @@ export const CODEX_MODEL_ALIASES: Record<string, string> = {
   'luna': 'gpt-5.6-luna',
 }
 
+/** omp (oh-my-pi) model aliases. Selecting one also selects the omp engine, as for Codex. */
+export const OMP_MODEL_ALIASES: Record<string, string> = {
+  'omp-sonnet': 'claude-sonnet-5-5[1m]',
+}
+
 // Validate aliases at load time.
 const ALIAS_KEY_RE = /^[a-z0-9-]+$/
 for (const [key, id] of Object.entries(MODEL_ALIASES)) {
@@ -67,6 +72,10 @@ export const CODEX_MODEL_ALIAS_PATTERN = Object.keys(CODEX_MODEL_ALIASES)
   .sort((a, b) => b.length - a.length)
   .join('|')
 
+export const OMP_MODEL_ALIAS_PATTERN = Object.keys(OMP_MODEL_ALIASES)
+  .sort((a, b) => b.length - a.length)
+  .join('|')
+
 /** Look up a chat alias. Returns the full model ID or undefined.
  *  Lowercases input — router regex 'i' flag handles matching, this handles lookup. */
 function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -81,6 +90,10 @@ export function resolveModelAlias(alias: string): string | undefined {
 export function resolveCodexModelAlias(alias: string): string | undefined {
   const key = alias.toLowerCase()
   return lookup(CODEX_MODEL_ALIASES, key)
+}
+
+export function resolveOmpModelAlias(alias: string): string | undefined {
+  return lookup(OMP_MODEL_ALIASES, alias.toLowerCase())
 }
 
 /** Strip [1m] context-window suffix and check against known models. */

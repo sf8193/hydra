@@ -17,7 +17,7 @@ import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
-import { normalizeReviewRounds, resolveCodexModelAlias } from '../shared/constants.js'
+import { normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
 import { isToolAllowed } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
 
@@ -362,9 +362,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const modelArg = (args.model as string | undefined)?.trim()
         // A Codex alias (astra, sol, ...) selects the Codex engine, as in chat spawns; otherwise it would launch `claude --model astra`.
         const codexModel = modelArg ? resolveCodexModelAlias(modelArg) : undefined
+        const ompModel = modelArg ? resolveOmpModelAlias(modelArg) : undefined
         if (codexModel && source) throw new Error('fork_from cannot be combined with a Codex model — Codex sessions cannot be forked')
         if (codexModel && readOnly) throw new Error('read_only is not enforced on Codex sessions — use a Claude model')
-        const model = codexModel ?? (modelArg || source?.model)
+        if (ompModel && source) throw new Error('fork_from cannot be combined with an omp model — omp sessions cannot be forked')
+        if (ompModel && readOnly) throw new Error('read_only is not enforced on omp sessions — use a Claude model')
+        const model = codexModel ?? ompModel ?? (modelArg || source?.model)
         if (model) process.stderr.write(`daemon: spawn_session model override: ${model}\n`)
         const budgetRaw = (args.phase_budget as string | undefined)?.trim() || undefined
         const phaseBudgetMs = budgetRaw ? parseDuration(budgetRaw) ?? undefined : undefined
@@ -392,6 +395,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           // engine: always 'claude' while Codex sources are refused; it matters once Codex forks are supported.
           ...(source ? { forkFrom: source.fork, launchCwd: source.cwd, engine: source.engine } : {}),
           ...(codexModel ? { engine: 'codex' as const } : {}),
+          ...(ompModel ? { engine: 'omp' as const } : {}),
           ...(readOnly ? { disallowedTools: READ_ONLY_DISALLOWED_TOOLS } : {}),
           ...(phaseBudgetMs ? { phaseBudgetMs } : {}),
           ...(headless ? { headless: true } : {}),
