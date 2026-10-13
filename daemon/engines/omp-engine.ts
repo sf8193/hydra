@@ -4,12 +4,12 @@
 // spoken by an omp extension (omp/hydra-bridge.ts) instead of an MCP server. The tmux and bridge
 // mechanics are Claude's, so this delegates them; only launch, observation and recovery differ.
 
-import { mkdirSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
-  ContextUsage, RecoveryPlan, Turn, UsageReading, UsageSubject,
+  ContextUsage, RecoveryPlan, RecoverySource, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
@@ -38,7 +38,16 @@ export class OmpEngine implements EngineAdapter {
     const omp = process.env.HYDRA_OMP_BIN || 'omp'
     // hydra records the 1M window as `[1m]`; omp names the same model without it.
     const ompModel = model.replace(/\[1m\]$/, '')
-    const args = [omp, `--model ${shq(`anthropic/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`]
+    // Resume: the dead session's file is copied into this session's directory (the old one stays as it was) and omp continues it.
+    // With no file omp would start a fresh session that the caller reports as resumed, so that fails the resume instead.
+    if (input.resumeOmp) {
+      const from = ompSessionDir(input.resumeOmp.fromSessionId)
+      const files = existsSync(from) ? readdirSync(from).filter(n => n.endsWith('.jsonl')) : []
+      if (!files.length) throw new Error(`omp session ${input.resumeOmp.fromSessionId} has no session file to resume`)
+      mkdirSync(ompSessionDir(sessionId), { recursive: true })
+      for (const n of files) copyFileSync(join(from, n), join(ompSessionDir(sessionId), n))
+    }
+    const args = [omp, `--model ${shq(`anthropic/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(input.resumeOmp ? ['-c'] : [])]
     const inner = [
       `cd ${shq(input.cwd)}`,
       `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
@@ -84,6 +93,8 @@ export class OmpEngine implements EngineAdapter {
   // Spend so far, from every assistant message in omp's session file (omp-session.ts); no phase split, as for Codex.
   usageTotals(info: UsageSubject, prev: unknown): UsageReading | null { return ompUsageTotals(info.sessionId, prev as OmpUsageCursor | undefined) }
   detectBlockingState(_info: SessionInfo, _tail: string): BlockingState | null { return null }
-  // Resume and fork come with a later step.
-  recoveryPlan(): RecoveryPlan { return { generic: false, resume: null, fork: null } }
+  // Resume continues the dead session's file (`launch` copies it). Not `generic`: boot recovery and the `recover` list skip omp (they would relaunch it as Claude). No fork.
+  recoveryPlan(src: RecoverySource): RecoveryPlan {
+    return { generic: false, resume: src.sessionId ? { kind: 'at-launch', resumeOmp: { fromSessionId: src.sessionId } } : null, fork: null }
+  }
 }

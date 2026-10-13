@@ -122,6 +122,7 @@ export type LaunchInput = {
   readonly forkFrom?: { claudeSessionId?: string; codexThreadId?: string }
   readonly resumeFrom?: string
   readonly resumeCodex?: { threadId: string; homeName: string }  // Codex: resume this thread in its original CODEX_HOME
+  readonly resumeOmp?: { fromSessionId: string }                 // omp: continue the session file of this dead hydra session
   readonly threadId?: string
 }
 
@@ -144,7 +145,7 @@ export type LaunchResult = {
 // Recovery
 // ---------------------------------------------------------------------------
 
-export type RecoverySource = { tmuxName: string; claudeSessionId?: string; codexThreadId?: string; codexHomeName?: string }
+export type RecoverySource = { tmuxName: string; sessionId?: string; claudeSessionId?: string; codexThreadId?: string; codexHomeName?: string }
 export type RecoveryPlan = {
   // May the neutral recoverOne cascade (manual recover, boot auto-recover) act
   // on this record? Claude: yes. Codex: no — it would relaunch it as Claude.
@@ -155,6 +156,7 @@ export type RecoveryPlan = {
   resume:
     | { kind: 'await-bridge'; resumeFrom: string }                                // relaunch takes no prompt; confirmed when its bridge registers
     | { kind: 'at-launch'; resumeCodex: { threadId: string; homeName: string } }  // launch resumes and takes the prompt
+    | { kind: 'at-launch'; resumeOmp: { fromSessionId: string } }                  // omp: launch continues the dead session's file
     | null
   fork: NonNullable<SpawnOpts['forkFrom']> | null
 }

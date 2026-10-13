@@ -46,7 +46,8 @@ function stubDeps() {
     doSpawnSession: async (topic: string, chatId?: string, messageId?: string, opts?: any) => {
       calls.push({ fn: 'doSpawnSession', args: [topic, chatId, messageId, opts] })
       if (opts?.resumeCodex) reservedDuringSpawn.push(registry.reservedNames.has(opts.resumeCodex.homeName))
-      const kind = opts?.resumeCodex ? 'resume' : opts?.forkFrom ? 'fork' : 'fresh'
+      if (opts?.resumeOmp) reservedDuringSpawn.push(registry.reservedNames.has(opts.resumeOmp.fromSessionId))
+      const kind = opts?.resumeCodex || opts?.resumeOmp ? 'resume' : opts?.forkFrom ? 'fork' : 'fresh'
       if ((spawnFails as string[]).includes(kind)) throw new Error(`${kind} failed`)
       return { name: `${kind}-name`, sessionId: 's-new' } as any
     },
@@ -119,7 +120,7 @@ function seedHistory(entry: Partial<ThreadSessionEntry>, info?: Partial<SessionI
 }
 
 const fns = () => calls.map(c => c.fn === 'doSpawnSession'
-  ? (c.args[3]?.resumeCodex ? 'spawn:resume' : c.args[3]?.forkFrom ? 'spawn:fork' : 'spawn:fresh') : c.fn)
+  ? (c.args[3]?.resumeCodex || c.args[3]?.resumeOmp ? 'spawn:resume' : c.args[3]?.forkFrom ? 'spawn:fork' : 'spawn:fresh') : c.fn)
 const opts = (i: number) => calls.filter(c => c.fn === 'doSpawnSession')[i].args[3]
 const respawnArgs = () => calls.find(c => c.fn === 'tryRespawn')!.args
 const logged = () => stderr.join('')
@@ -281,6 +282,40 @@ describe('resume stamps a gone live record dead (Z5)', () => {
 // ---------------------------------------------------------------------------
 // handleResumeIntercept — Codex
 // ---------------------------------------------------------------------------
+
+describe('resume tier matrix — omp', () => {
+  test('history engine omp → spawn with the dead session id + reverify guard, holding the reservation', async () => {
+    const e = seedHistory({ engine: 'omp' })
+    await handleResumeIntercept(msg())
+    expect(fns()).toEqual(['spawn:resume'])
+    expect(opts(0)).toEqual({ existingThreadId: THREAD, resumeOmp: { fromSessionId: e.sessionId }, preserveWorktree: true,
+      promptPrefix: RECOVERY_REVERIFY_GUARD, model: 'dead-model', engine: 'omp', label: 'build' })
+    expect(reservedDuringSpawn).toEqual([true])
+    expect(registry.reservedNames.has(e.sessionId)).toBe(false)
+    expect(sent.some(s => s.includes('`resume-name` resumed — full context restored'))).toBe(true)
+  })
+
+  test('a resume already in progress on the dead session → bail, nothing spawned or respawned', async () => {
+    const e = seedHistory({ engine: 'omp' })
+    registry.reservedNames.add(e.sessionId)
+    try { await handleResumeIntercept(msg()) } finally { registry.reservedNames.delete(e.sessionId) }
+    expect(calls).toEqual([])
+    expect(sent.some(s => s.includes('A resume of this session is already in progress.'))).toBe(true)
+  })
+
+  test('the resume launch fails (no session directory) → no fork exists, respawn as omp; reservation released', async () => {
+    spawnFails = ['resume']
+    const e = seedHistory({ engine: 'omp' })
+    await handleResumeIntercept(msg())
+    expect(fns()).toEqual(['spawn:resume', 'tryRespawn'])
+    expect(respawnArgs()[4]).toMatchObject({ engine: 'omp', label: 'build' })
+    expect(logged()).toContain(`omp resume of session ${e.sessionId} failed`)
+    expect(logged()).toContain(TIER1_FAIL)
+    expect(logged()).toContain(TIER2_FAIL)
+    expect(registry.reservedNames.has(e.sessionId)).toBe(false)
+    expect(sent.some(s => s.includes('respawned (resume unavailable'))).toBe(true)
+  })
+})
 
 describe('resume tier matrix — Codex', () => {
   test('thread → spawn with resumeCodex + reverify guard, holding the home reservation', async () => {
