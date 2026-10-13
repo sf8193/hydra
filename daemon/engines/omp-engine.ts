@@ -9,13 +9,13 @@ import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import type {
   EngineAdapter, LaunchInput, LaunchResult, DeliveryResult, Notification, StopResult,
-  ContextUsage, RecoveryPlan, Turn, UsageReading,
+  ContextUsage, RecoveryPlan, Turn, UsageReading, UsageSubject,
 } from './engine-adapter.js'
 import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { tmuxWindowActivity } from '../util.js'
-import { ompContextTokens, ompSessionDir, ompTurn } from './omp-session.js'
+import { ompContextTokens, ompSessionDir, ompTurn, ompUsageTotals, type OmpUsageCursor } from './omp-session.js'
 import { contextWindowOf } from '../../shared/constants.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 
@@ -81,7 +81,8 @@ export class OmpEngine implements EngineAdapter {
     const window = contextWindowOf(info.sessionMetadata?.model)
     return used === null || !window ? null : { usedTokens: used, contextWindow: window, percent: Math.min(100, Math.round(used * 100 / window)) }
   }
-  usageTotals(): UsageReading | null { return null }
+  // Spend so far, from every assistant message in omp's session file (omp-session.ts); no phase split, as for Codex.
+  usageTotals(info: UsageSubject, prev: unknown): UsageReading | null { return ompUsageTotals(info.sessionId, prev as OmpUsageCursor | undefined) }
   detectBlockingState(_info: SessionInfo, _tail: string): BlockingState | null { return null }
   // Resume and fork come with a later step.
   recoveryPlan(): RecoveryPlan { return { generic: false, resume: null, fork: null } }

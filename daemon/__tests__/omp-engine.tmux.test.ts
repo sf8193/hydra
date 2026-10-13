@@ -69,6 +69,8 @@ test.skipIf(!run)('omp session: first turn, reply rules, one bridge, no second M
     expect(engine.turn(info, since).answer()).toContain('PINEAPPLE')
     // omp's own file also gives the context size.
     expect(engine.usage({ ...info, sessionMetadata: { model: 'claude-sonnet-5-5[1m]' } })?.percent).toBeGreaterThan(0)
+    // and the spend Raindrop reads.
+    expect(engine.usageTotals(info, undefined)?.totals.outputTokens).toBeGreaterThan(0)
 
     // A Task subagent re-runs the extension in the same process: still one registration.
     await engine.deliver(info, { type: 'notification', content: 'Use the task tool to start a subagent that only answers "ok", then call reply with text "sub-done".', meta: { chat_id: '1', message_id: '5', user: 'sam' } })
