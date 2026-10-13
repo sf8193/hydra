@@ -95,6 +95,7 @@ graph TD
   daemon --> daemon_reply-guard
   daemon --> daemon_util
   daemon --> daemon_session-health
+  bridge --> shared_constants
   cli_hydra --> shared_constants
   shared_constants --> shared_tool-definitions
   daemon_config --> shared_constants

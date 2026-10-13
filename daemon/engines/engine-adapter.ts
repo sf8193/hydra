@@ -14,7 +14,7 @@ export type { BlockingState } from '../pane-probe.js'
 // Provider identity
 // ---------------------------------------------------------------------------
 
-export type ProviderId = 'claude' | 'codex'
+export type ProviderId = 'claude' | 'codex' | 'omp'
 
 // ---------------------------------------------------------------------------
 // Delivery
