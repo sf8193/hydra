@@ -16,7 +16,7 @@ import type { ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { tmuxWindowActivity } from '../util.js'
 import { ompContextTokens, ompSessionDir, ompTurn, ompUsageTotals, type OmpUsageCursor } from './omp-session.js'
-import { contextWindowOf } from '../../shared/constants.js'
+import { contextWindowOf, ompProvider } from '../../shared/constants.js'
 import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -47,7 +47,7 @@ export class OmpEngine implements EngineAdapter {
       mkdirSync(ompSessionDir(sessionId), { recursive: true })
       for (const n of files) copyFileSync(join(from, n), join(ompSessionDir(sessionId), n))
     }
-    const args = [omp, `--model ${shq(`anthropic/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(input.resumeOmp ? ['-c'] : [])]
+    const args = [omp, `--model ${shq(`${ompProvider(ompModel)}/${ompModel}`)}`, `-e ${shq(EXTENSION)}`, `--config ${shq(OMP_CONFIG)}`, '--approval-mode yolo', `--session-dir ${shq(ompSessionDir(sessionId))}`, ...(input.resumeOmp ? ['-c'] : [])]
     const inner = [
       `cd ${shq(input.cwd)}`,
       `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,

@@ -51,8 +51,13 @@ export const CODEX_MODEL_ALIASES: Record<string, string> = {
 }
 
 /** omp (oh-my-pi) model aliases. Selecting one also selects the omp engine, as for Codex. */
-export const OMP_MODEL_ALIASES: Record<string, string> = {
-  'omp-sonnet': 'claude-sonnet-5-5[1m]',
+export const OMP_MODEL_ALIASES: Record<string, string> = Object.fromEntries(
+  Object.entries({ ...MODEL_ALIASES, ...CODEX_MODEL_ALIASES }).map(([alias, id]) => [`omp-${alias}`, id]),
+)
+
+/** omp provider for a model id: Codex models are gpt-*, everything else is Claude. */
+export function ompProvider(model: string): 'openai-codex' | 'anthropic' {
+  return model.startsWith('gpt-') ? 'openai-codex' : 'anthropic'
 }
 
 // Validate aliases at load time.

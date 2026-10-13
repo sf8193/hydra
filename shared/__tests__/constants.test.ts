@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds } from '../constants.js'
+import { ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
@@ -159,6 +159,15 @@ describe('omp model aliases', () => {
       expect(resolveCodexModelAlias(alias)).toBeUndefined()
     }
     for (const alias of [...Object.keys(MODEL_ALIASES), ...Object.keys(CODEX_MODEL_ALIASES)]) expect(resolveOmpModelAlias(alias)).toBeUndefined()
+  })
+
+  test('every Claude and Codex alias has an omp twin on the same model', () => {
+    for (const [alias, id] of Object.entries({ ...MODEL_ALIASES, ...CODEX_MODEL_ALIASES })) expect(resolveOmpModelAlias(`omp-${alias}`)).toBe(id)
+  })
+
+  test('Codex models go to the openai-codex provider, Claude models to anthropic', () => {
+    expect(ompProvider(resolveOmpModelAlias('omp-sol')!)).toBe('openai-codex')
+    expect(ompProvider(resolveOmpModelAlias('omp-opus')!)).toBe('anthropic')
   })
 
   test('the pattern lists every alias', () => {

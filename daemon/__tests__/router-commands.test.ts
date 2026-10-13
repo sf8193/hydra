@@ -64,7 +64,7 @@ describe('omp spawn commands', () => {
   })
 
   test('only an omp alias matches: not a Claude alias, not omp alone, not a missing topic', () => {
-    for (const text of ['spawn sonnet: x', 'spawn omp: x', 'spawn omp-opus: x', 'spawn: omp-sonnet x', 'spawn omp-sonnet:']) {
+    for (const text of ['spawn sonnet: x', 'spawn omp: x', 'spawn omp-gpt: x', 'spawn: omp-sonnet x', 'spawn omp-sonnet:']) {
       expect(text.match(SPAWN_OMP_ALIAS_RE)).toBeNull()
     }
   })
