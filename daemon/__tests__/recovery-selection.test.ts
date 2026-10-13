@@ -67,6 +67,13 @@ describe('recoveryEngine', () => {
   test('the record engine wins over the history id', () => {
     expect(recoveryEngine({ codexThreadId: 'T' }, { engine: 'claude' })).toBe('claude')
     expect(recoveryEngine({}, { engine: 'codex' })).toBe('codex')
+    expect(recoveryEngine({ engine: 'codex' }, { engine: 'claude' })).toBe('claude')
+  })
+
+  test('no record: the engine the history entry recorded wins over the codexThreadId guess', () => {
+    expect(recoveryEngine({ engine: 'codex' }, undefined)).toBe('codex') // no codexThreadId: the old guess said Claude
+    expect(recoveryEngine({ engine: 'codex' }, {})).toBe('codex')
+    expect(recoveryEngine({ engine: 'claude', codexThreadId: 'T' }, undefined)).toBe('claude')
   })
 
   test('no record engine: a history codexThreadId means Codex', () => {
