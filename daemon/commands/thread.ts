@@ -346,19 +346,39 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
     tmuxName: lastTmuxName, claudeSessionId,
     codexThreadId: lastSession?.codexThreadId ?? lastInfo?.codexThreadId,
     codexHomeName: lastSession?.codexHomeName ?? lastInfo?.codexHomeName,
+    sessionId: lastSession?.sessionId,
   })
 
   void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
 
   // Three-tier cascade: resume → fork-from-dead → respawn. The gate reads both ids
   // (PINNED R9: a mixed-ID record logs both tier failures, then respawns).
-  if (claudeSessionId || lastSession?.codexThreadId || lastInfo?.codexThreadId) {
+  if (claudeSessionId || lastSession?.codexThreadId || lastInfo?.codexThreadId || plan.resume) {
     // Tier 1: full resume, translated from the plan onto the unchanged executors
     let result: (SpawnResult & { bridgeOrphan?: boolean }) | null = null
     const r = plan.resume
     if (r?.kind === 'await-bridge') {
       result = await recoveryDeps.tryResume({ topic: thread.topic, threadId: thread.threadId, claudeSessionId: r.resumeFrom, threadUrl: thread.threadUrl, model: deadModel, label: deadLabel })
-    } else if (r?.kind === 'at-launch') {
+    } else if (r && 'resumeOmp' in r) {
+      // The reservation is the lock: two resumes of one dead session would each copy its file into a live session.
+      const from = r.resumeOmp.fromSessionId
+      if (registry.reservedNames.has(from)) {
+        await gateway.send(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id }).catch(() => {})
+        return
+      }
+      registry.reservedNames.add(from)
+      try {
+        result = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
+          existingThreadId: thread.threadId, resumeOmp: r.resumeOmp, preserveWorktree: true,
+          promptPrefix: RECOVERY_REVERIFY_GUARD, model: deadModel, engine: engineType, label: deadLabel,
+        })
+      } catch (err) {
+        process.stderr.write(`daemon: omp resume of session ${from} failed: ${err}\n`)
+        result = null
+      } finally {
+        registry.reservedNames.delete(from)
+      }
+    } else if (r && 'resumeCodex' in r) {
       const home = r.resumeCodex.homeName
       // The reservation is the lock: a held home means another resume (or spawn) is
       // mid-launch on it; a second one would double-launch the same CODEX_HOME.
@@ -434,6 +454,13 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
 
   const threadId = msg.effectiveThreadId ?? msg.channelId
   const thread = threadRegistry.get(threadId)
+
+  // A template layers tools and a session type onto the respawn; omp takes neither. Refused before anything is torn down.
+  const earlier = recoveryEntry(thread?.sessionHistory ?? [])
+  if (template && (selection?.engine ?? recoveryEngine(earlier, registry.get(earlier?.sessionId ?? ''))) === 'omp') {
+    await reportError(msg.channelId, msg.id, 'respawn', 'templates (`+f`) are not available for omp sessions', 'Use a plain `respawn`.')
+    return
+  }
 
   const respawnLiveId = registry.getByThread(threadId)
   if (respawnLiveId) {

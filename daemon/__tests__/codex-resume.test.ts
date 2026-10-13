@@ -6,6 +6,7 @@
 //      Codex and Claude cascades.
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, spyOn } from 'bun:test'
+import { tmpdir } from 'os'
 import * as worktreeManager from '../worktree-manager.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
 import { codexSocketPath } from '../codex-engine.js'
@@ -110,7 +111,7 @@ const connected = new Set<string>()
 
 const orig: Record<string, any> = {}
 
-function fakeAdapter(provider: 'claude' | 'codex') {
+function fakeAdapter(provider: 'claude' | 'codex' | 'omp') {
   return {
     provider,
     launch: async (input: LaunchInput) => {
@@ -129,6 +130,7 @@ function fakeAdapter(provider: 'claude' | 'codex') {
           },
         }
       }
+      if (provider === 'omp') return { provider, model: 'omp-x', identity: {} }
       return { provider, model: 'claude-x', identity: claudeLearnsNoId ? {} : { claudeSessionId: input.resumeFrom ?? 'new-claude' } }
     },
     stop: async (info: SessionInfo) => {
@@ -144,6 +146,7 @@ function fakeAdapter(provider: 'claude' | 'codex') {
 beforeAll(() => {
   orig.codex = engines.codex
   orig.claude = engines.claude
+  orig.omp = engines.omp
   orig.send = gateway.send
   orig.react = gateway.react
   orig.edit = gateway.edit
@@ -156,6 +159,7 @@ beforeAll(() => {
   orig.spawnCwd = process.env.SPAWN_CWD
   engines.codex = fakeAdapter('codex') as any
   engines.claude = fakeAdapter('claude') as any
+  engines.omp = fakeAdapter('omp') as any
   ;(gateway as any).send = async (c: string, text: string) => { sent.push(text); return { id: `m${sent.length}`, channelId: c } }
   ;(gateway as any).react = async () => {}
   ;(gateway as any).edit = async () => {}
@@ -171,6 +175,7 @@ beforeAll(() => {
 afterAll(() => {
   engines.codex = orig.codex
   engines.claude = orig.claude
+  engines.omp = orig.omp
   ;(gateway as any).send = orig.send
   ;(gateway as any).react = orig.react
   ;(gateway as any).edit = orig.edit
@@ -210,13 +215,13 @@ function msg(): InboundMessage {
 }
 
 /** A dead record owning THREAD, plus its history entry. Names never exist in tmux. */
-function seedDead(engine: 'claude' | 'codex', extra: Partial<SessionInfo> = {}): SessionInfo {
+function seedDead(engine: 'claude' | 'codex' | 'omp', extra: Partial<SessionInfo> = {}): SessionInfo {
   const n = ++seq
   const info: SessionInfo = {
     sessionId: `sess-r16-${n}`, topic: 'topic', threadId: THREAD, createdAt: Date.now() - 1e6, lastActive: Date.now(),
     tmuxName: `r16dead${n}`, listening: false, engine, sessionType: 'thread_owner', anchorChannelId: PARENT,
     deadAt: Date.now(), adapter: engines[engine],
-    ...(engine === 'codex' ? { codexThreadId: `T-${n}` } : { claudeSessionId: `C-${n}` }),
+    ...(engine === 'codex' ? { codexThreadId: `T-${n}` } : engine === 'claude' ? { claudeSessionId: `C-${n}` } : {}),
     ...extra,
   } as SessionInfo
   registry.set(info.sessionId, info)
@@ -313,6 +318,39 @@ describe('handleResumeIntercept — Codex', () => {
     const next = registry.pickSessionName()
     seedDead('codex', { codexHomeName: next, deadAt: undefined })
     expect(registry.pickSessionName()).not.toBe(next)
+  })
+})
+
+describe('handleResumeIntercept — omp', () => {
+  test('tier 1 continues the dead session\'s file: the launch names it, and the resumed session keeps its launch dir and initiator', async () => {
+    const dead = seedDead('omp', { launchCwd: tmpdir(), initiator: 'u-init' })
+    await handleResumeIntercept(msg())
+
+    expect(launches).toHaveLength(1)
+    expect(launches[0].provider).toBe('omp')
+    expect(launches[0].input.resumeOmp).toEqual({ fromSessionId: dead.sessionId })
+    expect(launches[0].input.cwd).toBe(tmpdir())
+    const live = registry.get(registry.getByThread(THREAD)!)!
+    expect(live.engine).toBe('omp')
+    expect(live.initiator).toBe('u-init')
+    expect(announced()).toContain('resumed — full context restored')
+    expect(registry.reservedNames.has(dead.sessionId)).toBe(false)
+  })
+
+  test('a worktree session resumes in its own worktree, which the resume does not destroy', async () => {
+    const dead = seedDead('omp', { worktreeRepo: 'some-repo', worktreePath: tmpdir(), worktreeBranch: 'wt/b' })
+    await handleResumeIntercept(msg())
+    expect(launches[0].input.cwd).toBe(tmpdir())
+    const live = registry.get(registry.getByThread(THREAD)!)!
+    expect([live.worktreeRepo, live.worktreePath, live.worktreeBranch]).toEqual(['some-repo', tmpdir(), 'wt/b'])
+    expect(registry.reservedNames.has(dead.sessionId)).toBe(false)
+  })
+
+  test('two concurrent resumes of the same session launch once; the second is told one is in progress', async () => {
+    seedDead('omp')
+    await Promise.all([handleResumeIntercept(msg()), handleResumeIntercept(msg())])
+    expect(launches).toHaveLength(1)
+    expect(sent.some(s => s.includes('already in progress'))).toBe(true)
   })
 })
 

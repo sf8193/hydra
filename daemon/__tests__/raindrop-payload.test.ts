@@ -88,6 +88,10 @@ describe('raindrop-payload: envelope', () => {
     expect('is_pending' in body).toBe(false)
   })
 
+  test('an omp session reports its engine', () => {
+    expect(ev({ facts: { threadId: 't', createdAt: CREATED, engine: 'omp', tmuxName: '' } }).properties).toStrictEqual({ engine: 'omp', threadId: 't' })
+  })
+
   test('drops undefined and empty-string properties', () => {
     const body = ev({ facts: { threadId: 't', createdAt: CREATED, engine: 'codex', tmuxName: '' } })
     expect(body.properties).toStrictEqual({ engine: 'codex', threadId: 't' })

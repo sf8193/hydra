@@ -809,7 +809,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
         carriedDescription ??= existing.description
         // A resume continues the dead session itself. Other tiers (fork, respawn) name it
         // via carryOver; any other replacement has a different predecessor.
-        if (opts?.resumeFrom || opts?.resumeCodex) {
+        if (opts?.resumeFrom || opts?.resumeCodex || opts?.resumeOmp) {
           carriedPredecessor ??= existing.predecessor
           launchCwd ??= existing.launchCwd
           disallowedTools ??= existing.disallowedTools
@@ -861,7 +861,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   let effectiveCwd = spawnCwd
   // Only a fork or a resume continues a transcript filed under launchCwd. A fresh launch
   // (respawn) starts as usual — the dir may be a worktree that died with its session.
-  if (!isFork && !isResume && !opts?.resumeCodex) launchCwd = undefined
+  if (!isFork && !isResume && !opts?.resumeCodex && !opts?.resumeOmp) launchCwd = undefined
   if (launchCwd) {
     // A fork (and its resume) must start where its source started, or --resume can't find the transcript.
     if (!existsSync(launchCwd)) throw new Error(`cannot fork: the source's launch directory ${launchCwd} no longer exists`)
@@ -969,7 +969,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools,
-    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex,
+    forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeOmp: opts?.resumeOmp,
     threadId,
   })
 

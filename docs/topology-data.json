@@ -413,6 +413,10 @@
       "daemon_session-health"
     ],
     [
+      "bridge",
+      "shared_constants"
+    ],
+    [
       "cli_hydra",
       "shared_constants"
     ],
