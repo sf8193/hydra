@@ -132,3 +132,10 @@ test('a failed send is retried at the next stop; a sent one is not repeated', as
   await $.classic.Stop(stop('third'))
   expect(seen.sent).toEqual([R('111', 'FAILS'), R('111', 'second')])
 })
+
+test('the guard fences a table in the answer it sends', async ($, on) => {
+  const seen = stubs(on)
+  await $.prompt.submit({ text: msg('111'), wait: false, origin: CH })
+  await $.classic.Stop(stop('| a | b |\n|---|---|'))
+  expect(seen.sent).toEqual([R('111', '```\n| a | b |\n|---|---|\n```')])
+})
