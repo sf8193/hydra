@@ -10,7 +10,10 @@ function bullets(run: string[]): string | null {
   if (run.length < 3 || !/^[\s|:-]+$/.test(run[1]) || !run[1].includes('-')) return null
   if (!run.every(l => /^\s*\|.*\|\s*$/.test(l))) return null
   const head = cells(run[0])
-  return run.slice(2).map(l => {
+  // Shapes bullets would mangle stay fenced: escaped pipes, rows not as wide as the header, empty or starred first cells, a second table.
+  const rows = run.slice(2)
+  if (rows.some(l => l.includes('\\|') || cells(l).length !== head.length || /^$|\*/.test(cells(l)[0]) || /^[\s|:-]+$/.test(l))) return null
+  return rows.map(l => {
     const [first, ...rest] = cells(l)
     const more = rest.map((c, i) => (head.length > 2 ? `${head[i + 1]}: ${c}` : c))
     return `- **${first}**${more.length ? ' — ' + more.join(' · ') : ''}`
