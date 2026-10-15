@@ -5,6 +5,7 @@ import type { On } from 'claude-code'
 import { channelChats } from './reply.ts'
 import { submittedPrUrls } from './watch.ts'
 import { usageReport } from './usage.ts'
+import { fenceArt } from './fence.ts'
 
 const BRIDGE = 'plugin:discord:discord'
 // Chats with a Discord message this session hasn't answered (reply) or acknowledged (react) yet.
@@ -37,6 +38,9 @@ export function register(on: On) {
     return r
   })
 
+  // Discord collapses spacing in tables and box art, so they go out inside a code fence.
+  on('tool.call', { tool: 'mcp__plugin_discord_discord__reply' }, ($, e, next) => next({ ...e, text: fenceArt(e.text) }))
+
   // Reply guard: a turn that answered a Discord message in the transcript only gets its answer sent to the chat.
   on('prompt.submit', async ($, e, next) => {
     for (const chat of channelChats(e.text)) unanswered.add(chat)
@@ -57,7 +61,7 @@ export function register(on: On) {
       ambiguous = false
     } else if (e.last_assistant_message && unanswered.size === 1) {
       const [chat_id] = unanswered
-      const r = await $.mcp.call(BRIDGE, 'reply', { chat_id, text: e.last_assistant_message })
+      const r = await $.mcp.call(BRIDGE, 'reply', { chat_id, text: fenceArt(e.last_assistant_message) })
       if (!r.isError) unanswered.clear()
     }
     return next(e)
