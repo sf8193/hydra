@@ -1,5 +1,5 @@
 // Discord collapses spacing and drops box art outside a code fence. Wrap runs of table or box-drawing lines in one.
-const art = (l: string) => /^\s*\|.*\|\s*$/.test(l) || /[─-╿▀-▟]/.test(l)
+const art = (l: string) => /^\s*\+[-=+]+\+\s*$/.test(l) || /^\s*\|.*\|\s*$/.test(l) || /[─-╿▀-▟]/.test(l)
 
 export function fenceArt(text: string): string {
   const out: string[] = []
