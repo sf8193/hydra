@@ -20,3 +20,8 @@ test('a longer or ~~~ fence is not closed by a nested marker', () => {
 test('a +---+ table is one block, borders included', () => {
   expect(fenceArt('+--+\n| a |\n+--+')).toBe('```\n+--+\n| a |\n+--+\n```')
 })
+test('a wide markdown table becomes bullets, a narrow one stays fenced', () => {
+  const wide = '| Piece | State |\n|---|---|\n| Orchestrator #1 pipeline, #2 File Station sync | Merged into `main` |'
+  expect(fenceArt(wide)).toBe('- **Orchestrator #1 pipeline, #2 File Station sync** — Merged into `main`')
+  expect(fenceArt('| a | b |\n|---|---|\n| 1 | 2 |')).toBe('```\n| a | b |\n|---|---|\n| 1 | 2 |\n```')
+})
