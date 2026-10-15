@@ -17,3 +17,6 @@ test('a longer or ~~~ fence is not closed by a nested marker', () => {
   expect(fenceArt(a)).toBe(a)
   expect(fenceArt(b)).toBe(b)
 })
+test('a +---+ table is one block, borders included', () => {
+  expect(fenceArt('+--+\n| a |\n+--+')).toBe('```\n+--+\n| a |\n+--+\n```')
+})
