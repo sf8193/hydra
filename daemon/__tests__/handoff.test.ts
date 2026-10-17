@@ -188,7 +188,7 @@ test('successor prompt: no arriving.md leaves the prompt as built without one', 
   expect(arrival).toBeUndefined()
   expect(buildHandoffPrompt({ ...p, arrival })).toBe(buildHandoffPrompt(p))
   // Pinned to the bytes main produced before arriving.md could replace behavior lines.
-  expect(buildHandoffPrompt(p)).toBe("You are fresh, a session created by handoff from flint. Topic: t\n\nYour chat thread chat_id is th-1. Your session_id is s-1.\nRead your handoff context from `/h.md`, then read your memory files.\nAfter reading the artifact, append a \"### Reception (by fresh)\" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.\nSend a greeting to your thread using reply(chat_id=th-1). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.\nThen call set_description(session_id=\"s-1\", description=\"...\") to name this thread. Lead with the domain if one is clear. 5 words max. Rewrite it whenever your focus shifts — the thread name updates live.\nAfter greeting, begin executing the Next action from the artifact immediately. Do not wait for user input unless there are critical questions that need the user's answer.")
+  expect(buildHandoffPrompt(p)).toBe("You are fresh, a session created by handoff from flint. Topic: <request>t</request>\n\nYour chat thread chat_id is th-1. Your session_id is s-1.\nRead your handoff context from `/h.md`, then read your memory files.\nAfter reading the artifact, append a \"### Reception (by fresh)\" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.\nSend a greeting to your thread using reply(chat_id=th-1). In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.\nThen call set_description(session_id=\"s-1\", description=\"...\") to name this thread. Lead with the domain if one is clear. 5 words max. Rewrite it whenever your focus shifts — the thread name updates live.\nAfter greeting, begin executing the Next action from the artifact immediately. Do not wait for user input unless there are critical questions that need the user's answer.")
 })
 
 test('successor prompt: arriving.md is filled, placed after the context line, and replaces the built-in arrival behavior', async () => {
@@ -204,7 +204,7 @@ test('successor prompt: arriving.md is filled, placed after the context line, an
     const at = lines.indexOf(arrival!)
     expect(lines[at - 1]).toStartWith('Read your handoff context from `/h.md`')
     // Plumbing stays.
-    expect(lines[0]).toBe('You are fresh, a session created by handoff from flint. Topic: t')
+    expect(lines[0]).toBe('You are fresh, a session created by handoff from flint. Topic: <request>t</request>')
     expect(lines).toContain('Your chat thread chat_id is th-1. Your session_id is s-1.')
     expect(lines[at + 1]).toBe('Send a greeting to your thread using reply(chat_id=th-1).')
     expect(lines[at + 2]).toStartWith('Then call set_description(session_id="s-1"')
@@ -339,7 +339,7 @@ test('handoff note: carried to the successor spawn, quoted in its prompt, and fi
     const opts = handoffSpawnOpts(info, '/h.md')
     expect(opts.handoffNote).toBe('watch the PRs')
     const p = { sessionId: 's', tmuxName: 'fresh', threadId: 't', topic: 'x', originFrom: 'flint', artifact: '/h.md' }
-    expect(buildHandoffPrompt({ ...p, note: opts.handoffNote })).toContain(`in the requester's words: "watch the PRs".`)
+    expect(buildHandoffPrompt({ ...p, note: opts.handoffNote })).toContain(`in the requester's words: "<request>watch the PRs</request>".`)
     expect(buildHandoffPrompt(p)).not.toContain("requester's words")
     mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
     writeFileSync(join(HANDOFF_TEMPLATE_DIR, 'arriving.md'), 'n={{note}}')

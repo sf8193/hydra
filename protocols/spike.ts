@@ -1,4 +1,5 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
+import { request } from '../daemon/prompts/request.js'
 
 export default protocol('spike', {
   emoji: '🔬',
@@ -55,7 +56,7 @@ export default protocol('spike', {
 
   seed: {
     explorer: (ctx) => protocolSeed(ctx.protocol, 'explorer', ctx)
-      + `\n\n**Your question:** ${ctx.topic ?? 'Investigate the topic discussed in the thread.'}\n\nUse \`advance({ content: "your report" })\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
+      + `\n\n**Your question:** ${ctx.topic ? request(ctx.topic) : 'Investigate the topic discussed in the thread.'}\n\nUse \`advance({ content: "your report" })\` in the reporting phase.\n\n**Report shape:**\n- **Finding** — what you found, in one sentence\n- **Evidence** — what you read, tested, observed\n- **Implications** — what this means\n- **Unknowns** — what you couldn't determine`,
   },
 
   notifications: {

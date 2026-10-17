@@ -1,4 +1,5 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
+import { request } from '../daemon/prompts/request.js'
 
 // The original delegated-build graph, preserved as the explicitly quick path.
 export default protocol('delegated-build-quick', {
@@ -17,7 +18,7 @@ export default protocol('delegated-build-quick', {
   grace: { pm: '2m', builder: '30s' },
   decisions: { pm_verdict: { phase: 'reviewing', actor: 'pm', options: ['approve', 'request_changes'] as const, descriptions: { approve: 'why it ships', request_changes: 'what to fix' }, events: { approve: 'pm_approve', request_changes: 'pm_changes' }, finalEvent: 'pm_approve' } },
   roleConfig: { builder: { cadence: 'per-round', waits: true } },
-  seed: { builder: (ctx) => protocolSeed(ctx.protocol, 'builder', ctx) + `\n\n${ctx.task ? `**Task:** ${ctx.task}` : `Read this thread for context — the PM's conversation describes what needs to be done.`}\n\nImplement the task. When done, call \`advance({ content: "summary of what you built" })\`.\n\nUse \`fetch_messages\` to read the thread if you need more context.` },
+  seed: { builder: (ctx) => protocolSeed(ctx.protocol, 'builder', ctx) + `\n\n${ctx.task ? `**Task:** ${request(ctx.task)}` : `Read this thread for context — the PM's conversation describes what needs to be done.`}\n\nImplement the task. When done, call \`advance({ content: "summary of what you built" })\`.\n\nUse \`fetch_messages\` to read the thread if you need more context.` },
   notifications: {
     onKickoff: { pm: () => null, builder: () => null },
     onFallback: () => `[system] The builder died and couldn't be recovered. Implement the task yourself, then call \`advance({ content: "summary" })\`.`,

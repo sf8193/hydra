@@ -18,6 +18,7 @@ import { resolveEngine } from './engines/instances.js'
 import type { EngineAdapter, ProviderId } from './engines/engine-adapter.js'
 import { resumeHomeOwner } from './engines/codex-engine-adapter.js'
 import { buildSpawnPrompt, buildForkPrompt, buildHeadlessForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from './prompts/session.js'
+import { hydraPrompt } from './prompts/request.js'
 import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from './usage.js'
 import { refreshSessionVisual } from './anchor-state.js'
@@ -974,7 +975,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
 
-  const promptParams = { sessionId, tmuxName, threadId: threadId!, topic }
+  const promptParams = { sessionId, tmuxName, threadId: threadId!, topic, topicIsRequest: opts?.topicIsRequest }
   let prompt: string
   let armFirstReply = false
   if (opts?.promptBuilder) {
@@ -997,6 +998,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   if (opts?.promptPrefix) {
     prompt = `${opts.promptPrefix}\n\n${prompt}`
   }
+  prompt = hydraPrompt(prompt)
 
   // Central model resolution: alias → full ID → validate. All callers can pass
   // raw aliases (e.g. "sonnet") or full IDs (e.g. "claude-sonnet-5[1m]").

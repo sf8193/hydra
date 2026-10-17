@@ -241,6 +241,7 @@ export type SpawnOpts = {
   beforeInitialTurn?: (sessionId: string) => void                 // register dynamic capabilities before Codex snapshots MCP tools
   quiet?: boolean                                                // suppress spawn announcements (private protocol helpers)
   promptPrefix?: string                                        // prepended to the generated prompt (used by templates)
+  topicIsRequest?: boolean                                    // false when promptPrefix carries the <request> instead
   memberLabel?: string   // label for thread member (e.g. 'critic', 'judge')
   initiator?: string
   parentId?: string                    // the spawner's sessionId: authority over the new session (see isParentOf)

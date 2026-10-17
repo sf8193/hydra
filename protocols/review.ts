@@ -1,5 +1,6 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
 import { NATIVE_SUBAGENT } from '../daemon/modifiers.js'
+import { request } from '../daemon/prompts/request.js'
 
 export default protocol('review', {
   emoji: '⚔️',
@@ -194,7 +195,7 @@ export default protocol('review', {
 - \`approve\` only after \`Stage 3: clean\` with no code change since, or — when the last round was debate only — \`No code changed since last clean pass\`. Every required lens must have had its section in some round. \`advance()\` enforces both.`
       return protocolSeed(ctx.protocol, 'critic', ctx)
       + '\n\n' + (ctx.topic
-        ? `**Your focus:** ${ctx.topic}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
+        ? `**Your focus:** ${request(ctx.topic)}\nFind weaknesses, challenge assumptions, and identify risks related to this focus. Be specific — cite code lines, data, or logical gaps.`
         : `**Your mandate:** Find weaknesses, challenge assumptions, identify risks, and argue AGAINST the design.\nBe specific — cite code lines, data, or logical gaps. Concede strong points but push hard on weak ones.`
       ) + `\n\n${helperPolicy}${helperInstructions}`
         + `\n\nPost a verdict with evidence after orienting. Use approve only when no changes remain. Use approve_with_changes for bounded fixes you will recheck after the owner applies them; use request_changes for blocking work. Recheck every fix and issue another verdict. You may close early by approving. This review has a hard cap of ${ctx.rounds} critic turns; at the cap, a non-approval result stays unresolved.\n\nFormat with clear headers. Be substantive and focused.`
