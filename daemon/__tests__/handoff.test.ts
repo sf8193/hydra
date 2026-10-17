@@ -6,7 +6,8 @@ import { executeTool } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
 import { gateway, STATE_DIR } from '../config.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
-import { mkSession as mk, waitFor, withHandoffThread } from './handoff-thread.js'
+import { requestHandoff } from '../commands/thread.js'
+import { mkSession as mk, waitFor, withHandoffThread, type HandoffThread } from './handoff-thread.js'
 
 process.stderr.write = (() => true) as any
 
@@ -421,4 +422,30 @@ test('handoff tool: the handed-off message says whether the note reached the suc
   } finally {
     rmSync(d, { recursive: true, force: true })
   }
+})
+
+// What a handoff request ties itself to: the `handoff` command's own message, or nothing when the daemon starts it.
+async function requestTies(start: (t: HandoffThread) => Promise<void> | void) {
+  return withHandoffThread(async t => {
+    const reacted: unknown[][] = [], replyTo: unknown[] = []
+    ;(gateway as any).react = async (...a: unknown[]) => { reacted.push(a) }
+    ;(gateway as any).send = async (_c: string, _text: string, o?: { replyTo?: string }) => { replyTo.push(o?.replyTo); return { id: 'm' } }
+    await start(t)
+    await Bun.sleep(0)
+    return { reacted, replyTo, meta: t.delivered[0].meta }
+  })
+}
+
+test('handoff command: reacts 🤝 to the command message, replies to it, and tags the request with it', async () => {
+  const r = await requestTies(t => t.intercept({ id: 'cmd-1' }))
+  expect(r.reacted.map(a => [a[1], a[2]])).toEqual([['cmd-1', '🤝']])
+  expect(r.replyTo).toEqual(['cmd-1'])
+  expect(r.meta.message_id).toBe('cmd-1')
+})
+
+test('a daemon-started handoff has no message to react to or reply to', async () => {
+  const r = await requestTies(t => requestHandoff(t.info, { channelId: t.info.threadId, threadId: t.info.threadId, requester: 'hydra' }))
+  expect(r.reacted).toEqual([])
+  expect(r.replyTo).toEqual([undefined])
+  expect(r.meta.message_id).toBe('')
 })

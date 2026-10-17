@@ -6,7 +6,7 @@ import { gateway, STATE_DIR } from '../config.js'
 import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD, sessionDir } from '../session-lifecycle.js'
-import type { SpawnResult } from '../sessions.js'
+import type { SessionInfo, SpawnResult } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
@@ -724,11 +724,15 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
     await reportError(msg.channelId, msg.id, 'handoff', 'no live session in this thread', 'Use `respawn` to start one from the thread history.')
     return
   }
+  requestHandoff(info, { channelId: msg.channelId, msgId: msg.id, threadId, requester: msg.authorUsername || 'the user', selection, note })
+}
+
+/** Ask the live session to write its state and hand off. `msgId` is the command message to react and reply to; absent for a daemon-started handoff. */
+export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, requester, selection, note }: { channelId: string; msgId?: string; threadId: string; requester: string; selection?: { model: string; engine: ProviderId }; note?: string }): void {
   const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
   info.handoffSelection = selection
   info.handoffNote = note ? { text: note, artifact } : undefined
-  const requester = msg.authorUsername || 'the user'
   const vars = {
     artifact, session: info.tmuxName, requester, model: selection?.model ?? '', note: note ?? '',
     cwd: sessionDir(info) ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
@@ -736,9 +740,9 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   transport.sendOrQueue(info.sessionId, {
     type: 'notification',
     content: readHandoffTemplate('departing', vars) ?? handoffRequest(artifact, requester, note),
-    meta: { chat_id: threadId, message_id: msg.id, user: 'system', user_id: 'system', ts: new Date().toISOString() },
+    meta: { chat_id: threadId, message_id: msgId ?? '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
   })
-  void gateway.react(msg.channelId, msg.id, '🤝').catch(() => {})
+  if (msgId) void gateway.react(channelId, msgId, '🤝').catch(() => {})
   // A kill mid-handoff loses whatever the session has not yet written down, so look before killing.
   const notice = readHandoffTemplate('notice', vars)
     ?? `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes, \`peek\` it before you \`kill\` and \`respawn\`._`
@@ -746,5 +750,5 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   // Whether it reached the successor is said when the handoff lands. Mentions are defused: an echo must not ping.
   const confirmed = note ? `${notice}\n> Note to pass on: ${note.replace(/@/g, '@\u200b').replace(/\n/g, '\n> ')}` : notice
   // safeSend: a local notice can run past the platform's length limit; chunk it and log failures.
-  void safeSend(msg.channelId, confirmed, { replyTo: msg.id })
+  void safeSend(channelId, confirmed, msgId ? { replyTo: msgId } : undefined)
 }
