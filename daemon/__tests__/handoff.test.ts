@@ -6,7 +6,7 @@ import { executeTool } from '../bridge-dispatch.js'
 import { registry } from '../sessions.js'
 import { gateway, STATE_DIR } from '../config.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
-import { requestHandoff } from '../commands/thread.js'
+import { requestHandoff } from '../session-lifecycle.js'
 import { mkSession as mk, waitFor, withHandoffThread, type HandoffThread } from './handoff-thread.js'
 
 process.stderr.write = (() => true) as any

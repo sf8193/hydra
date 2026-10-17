@@ -1,11 +1,11 @@
 import { execSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { mkdirSync, unlinkSync } from 'fs'
-import { gateway, STATE_DIR } from '../config.js'
+import { unlinkSync } from 'fs'
+import { gateway } from '../config.js'
 import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD, sessionDir } from '../session-lifecycle.js'
+import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD, requestHandoff } from '../session-lifecycle.js'
 import type { SessionInfo, SpawnResult } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
@@ -21,7 +21,6 @@ import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { claudeEngine, resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, classifyReachability } from '../session-reachability.js'
-import { readHandoffTemplate } from '../handoff-templates.js'
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../main-session.js'
 
 // Recovery executors, swappable in tests (same pattern as reply-guard's deps).
@@ -706,16 +705,6 @@ async function sendPeek(msg: InboundMessage, name: string, target: string | null
 // fresh session (via the `handoff` tool, which does the kill + successor spawn)
 // ---------------------------------------------------------------------------
 
-export function handoffRequest(artifact: string, requester: string, note?: string): string {
-  return [
-    `[system] ${requester} asked you to hand off this thread to a fresh session.`,
-    ...(note ? [`Their note for the next session: "${note}". Carry it into Next action.`] : []),
-    `Write ${artifact} with these sections: Goal; Non-goals (what is explicitly out of scope); State (branch, last commit, current step);`,
-    `Decisions & constraints (including rejected ideas); Open questions for ${requester}; Next action.`,
-    `Then call the handoff tool with path="${artifact}". Do nothing else after that.`,
-  ].join(' ')
-}
-
 export async function handleHandoffIntercept(msg: InboundMessage, selection?: { model: string; engine: ProviderId }, note?: string): Promise<void> {
   const threadId = msg.effectiveThreadId ?? msg.channelId
   const liveId = msg.isThread ? registry.getByThread(threadId) : undefined
@@ -725,32 +714,4 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
     return
   }
   requestHandoff(info, { channelId: msg.channelId, msgId: msg.id, threadId, requester: msg.authorUsername || 'the user', selection, note })
-}
-
-/** Ask the live session to write its state and hand off; returns the path it is asked to write. `msgId` is the command message to react and reply to; absent for a daemon-started handoff. */
-export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, requester, selection, note }: { channelId: string; msgId?: string; threadId: string; requester: string; selection?: { model: string; engine: ProviderId }; note?: string }): string {
-  const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
-  mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
-  info.handoffArtifact = artifact
-  info.handoffSelection = selection
-  info.handoffNote = note ? { text: note, artifact } : undefined
-  const vars = {
-    artifact, session: info.tmuxName, requester, model: selection?.model ?? '', note: note ?? '',
-    cwd: sessionDir(info) ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
-  }
-  transport.sendOrQueue(info.sessionId, {
-    type: 'notification',
-    content: readHandoffTemplate('departing', vars) ?? handoffRequest(artifact, requester, note),
-    meta: { chat_id: threadId, message_id: msgId ?? '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
-  })
-  if (msgId) void gateway.react(channelId, msgId, '🤝').catch(() => {})
-  // A kill mid-handoff loses whatever the session has not yet written down, so look before killing.
-  const notice = readHandoffTemplate('notice', vars)
-    ?? `_Asked \`${info.tmuxName}\` to write \`${artifact}\` and hand off. If nothing happens in a few minutes, \`peek\` it before you \`kill\` and \`respawn\`._`
-  // Echoed under any notice, local or built-in, so a note that didn't parse can't look like one that did.
-  // Whether it reached the successor is said when the handoff lands. Mentions are defused: an echo must not ping.
-  const confirmed = note ? `${notice}\n> Note to pass on: ${note.replace(/@/g, '@\u200b').replace(/\n/g, '\n> ')}` : notice
-  // safeSend: a local notice can run past the platform's length limit; chunk it and log failures.
-  void safeSend(channelId, confirmed, msgId ? { replyTo: msgId } : undefined)
-  return artifact
 }
