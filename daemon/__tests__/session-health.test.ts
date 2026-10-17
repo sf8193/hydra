@@ -442,12 +442,14 @@ describe('auto handoff', () => {
     if (o.bridge !== false) transport.bridges.set(info.sessionId, {} as any)
     return info
   }
-  const LATER = NOW + 51 * MIN  // past the 50-minute idle line, counted from the daemon start at the earliest
+  const LATER = NOW + 51 * MIN  // past the 50-minute idle line
+  // The idle clock starts at the first poll that sees a session idle, so a first poll one minute in comes before the one under test.
+  const pollAt = (t: number) => { pollSessionsOnce(NOW + MIN); pollSessionsOnce(t) }
 
   test('50%+ and untouched 50 min: asks once, tells the thread', () => {
     const info = session()
-    pollSessionsOnce(LATER)
-    pollSessionsOnce(LATER + MIN)
+    pollAt(LATER)
+    pollAt(LATER + MIN)
     expect(asked).toEqual([info.sessionId])
     expect(to(info, 'Asked')).toHaveLength(1)
   })
@@ -455,23 +457,23 @@ describe('auto handoff', () => {
   test('below 50%: nothing; climbing back past it after a drop asks again', () => {
     let pct = 49
     const info = session({ pct: () => pct })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toEqual([])
-    pct = 60; pollSessionsOnce(LATER)
-    pct = 40; pollSessionsOnce(LATER)
-    pct = 60; pollSessionsOnce(LATER)
+    pct = 60; pollAt(LATER)
+    pct = 40; pollAt(LATER)
+    pct = 60; pollAt(LATER)
     expect(asked).toEqual([info.sessionId, info.sessionId])
   })
 
   test('touched less than 50 min ago: nothing', () => {
     session({ lastActive: LATER - 49 * MIN })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toEqual([])
   })
 
-  test('a stale lastActive does not count from before the daemon started', () => {
+  test('a session seen for the first time (a daemon restart) is not idle for 50 minutes yet, however stale its lastActive', () => {
     session({ lastActive: NOW - 600 * MIN })
-    pollSessionsOnce(NOW + 10 * MIN)
+    pollSessionsOnce(LATER)
     expect(asked).toEqual([])
   })
 
@@ -480,7 +482,7 @@ describe('auto handoff', () => {
     const waiting = session()
     pendingPermissions.set('req1', { tool_name: 't', description: 'd', input_preview: 'p', sessionId: waiting.sessionId })
     session({ engine: 'codex' })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toEqual([])
   })
 
@@ -488,7 +490,7 @@ describe('auto handoff', () => {
     session({ type: 'thread_guest' })
     session({ type: 'factory_builder' })
     session({ bridge: false })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toEqual([])
   })
 
@@ -496,7 +498,7 @@ describe('auto handoff', () => {
     ;(transport as any).sendOrQueue = () => { throw new Error('disk full') }
     session()
     const crashed = seed({ ageMs: OLD })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(to(crashed, '💀')).toHaveLength(1)
     expect(stderr.join('')).toContain('auto-handoff failed')
   })
@@ -504,15 +506,15 @@ describe('auto handoff', () => {
   test('AUTO_HANDOFF_CACHE=0 turns it off', () => {
     process.env.AUTO_HANDOFF_CACHE = '0'
     session()
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toEqual([])
   })
 
   test('85%+ and idle: asks even when touched a minute ago, on any engine', () => {
     const claude = session({ pct: () => 85, lastActive: LATER - MIN })
     const codex = session({ pct: () => 90, lastActive: LATER - MIN, engine: 'codex' })
-    pollSessionsOnce(LATER)
-    pollSessionsOnce(LATER + MIN)
+    pollAt(LATER)
+    pollAt(LATER + MIN)
     expect(asked.sort()).toEqual([claude.sessionId, codex.sessionId].sort())
   })
 
@@ -520,18 +522,18 @@ describe('auto handoff', () => {
     session({ pct: () => 84, lastActive: LATER - MIN })
     session({ pct: () => 95, live: 'working', lastActive: LATER - MIN })
     session({ pct: () => 95, type: 'thread_guest', lastActive: LATER - MIN })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toEqual([])
   })
 
   test('a session due for both is asked once, and a drop below 85% re-arms the full handoff', () => {
     let pct = 90
     const info = session({ pct: () => pct })
-    pollSessionsOnce(LATER)
-    pollSessionsOnce(LATER + MIN)
+    pollAt(LATER)
+    pollAt(LATER + MIN)
     expect(asked).toEqual([info.sessionId])
-    pct = 60; pollSessionsOnce(LATER)  // re-arms the full one; the cache one stays asked while above 50%
-    pct = 90; pollSessionsOnce(LATER)
+    pct = 60; pollAt(LATER)  // re-arms the full one; the cache one stays asked while above 50%
+    pct = 90; pollAt(LATER)
     expect(asked).toEqual([info.sessionId, info.sessionId])
   })
 
@@ -539,13 +541,13 @@ describe('auto handoff', () => {
     process.env.AUTO_HANDOFF_FULL = '0'
     session({ pct: () => 95, lastActive: LATER - MIN })
     const stale = session({ pct: () => 95 })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toEqual([stale.sessionId])
   })
 
   test('still the same session and no letter after 3 minutes: asks once more, and not a third time', () => {
     const info = session()
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(timers).toHaveLength(1)
     timers[0].fn()
     expect(asked).toEqual([info.sessionId, info.sessionId])
@@ -554,11 +556,11 @@ describe('auto handoff', () => {
 
   test('no retry when the session wrote its letter, or is already gone', () => {
     const wrote = session()
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     const letter = requests[0].match(/path="([^"]+)"/)![1]
     writeFileSync(letter, '# Goal\nx')
     const gone = session()
-    pollSessionsOnce(LATER + MIN)
+    pollAt(LATER + MIN)
     registry.delete(gone.sessionId)
     for (const t of timers) t.fn()
     rmSync(letter, { force: true })
@@ -567,7 +569,7 @@ describe('auto handoff', () => {
 
   test('a manual handoff after the automatic ask keeps its model and note: no retry', async () => {
     const info = session()
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     await Bun.sleep(2)  // the letter path carries the millisecond
     requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'sam', options: { selection: { model: 'claude-opus-5-5', engine: 'claude' }, note: 'keep X' } })
     timers[0].fn()
@@ -579,7 +581,7 @@ describe('auto handoff', () => {
   test('an automatic ask leaves the model choice and note of a pending manual handoff alone', () => {
     const info = session()
     requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'sam', options: { selection: { model: 'claude-opus-5-5', engine: 'claude' }, note: 'keep X' } })
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(asked).toHaveLength(2)
     expect(info.handoffSelection?.model).toBe('claude-opus-5-5')
     expect(info.handoffNote?.text).toBe('keep X')
@@ -595,7 +597,7 @@ describe('auto handoff', () => {
       }),
     })
     transport.bridges.set(info.sessionId, {} as any)
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     live = 'working'
     timers[0].fn()
     expect(asked).toEqual([info.sessionId])
@@ -603,8 +605,66 @@ describe('auto handoff', () => {
 
   test('the request an automatic ask sends does not claim anyone typed it', () => {
     session()
-    pollSessionsOnce(LATER)
+    pollAt(LATER)
     expect(requests[0]).toStartWith('[system] hydra is handing this thread off')
     expect(requests[0]).toContain('Open questions for the user;')
+  })
+
+  test('the retry skips a session that was messaged or called a tool after the ask', () => {
+    const info = session()
+    pollAt(LATER)
+    info.lastActive = Date.now() + 1000
+    timers[0].fn()
+    expect(asked).toEqual([info.sessionId])
+  })
+
+  test('a session that only ran native tools is idle from the first poll that saw it idle, not from its last hydra activity', () => {
+    const info = session()  // lastActive two hours before NOW
+    pollSessionsOnce(NOW + 60 * MIN)
+    pollSessionsOnce(NOW + 100 * MIN)
+    expect(asked).toEqual([])
+    pollSessionsOnce(NOW + 112 * MIN)
+    expect(asked).toEqual([info.sessionId])
+  })
+
+  test('a poll that sees the session working restarts that clock', () => {
+    let live = 'idle'
+    const info = seed({
+      ageMs: OLD, lastActive: NOW - 120 * MIN, engine: 'claude',
+      adapter: fakeAdapter({
+        usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 60 }),
+        turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null, live }),
+      }),
+    })
+    transport.bridges.set(info.sessionId, {} as any)
+    pollSessionsOnce(NOW + 60 * MIN)
+    live = 'working'; pollSessionsOnce(NOW + 90 * MIN)
+    live = 'idle'; pollSessionsOnce(NOW + 120 * MIN)
+    pollSessionsOnce(NOW + 160 * MIN)
+    expect(asked).toEqual([])
+    pollSessionsOnce(NOW + 175 * MIN)
+    expect(asked).toEqual([info.sessionId])
+  })
+
+  test('dropping below 50% resets the idle clock: the climb back starts a fresh one', () => {
+    let pct = 60
+    const info = session({ pct: () => pct })
+    pollSessionsOnce(NOW + 60 * MIN)       // idle clock starts here
+    pct = 40; pollSessionsOnce(NOW + 70 * MIN)
+    pct = 60; pollSessionsOnce(NOW + 100 * MIN)  // fresh clock; the old one would make this 40 minutes
+    pollSessionsOnce(NOW + 140 * MIN)
+    expect(asked).toEqual([])
+    pollSessionsOnce(NOW + 151 * MIN)
+    expect(asked).toEqual([info.sessionId])
+  })
+
+  test('a request that threw before it went out is tried again on the next poll', () => {
+    const info = session()
+    let fail = true
+    ;(transport as any).sendOrQueue = (sid: string) => { if (fail) throw new Error('disk full'); asked.push(sid) }
+    pollAt(LATER)
+    fail = false
+    pollSessionsOnce(LATER + 5 * MIN)
+    expect(asked).toEqual([info.sessionId])
   })
 })
