@@ -417,6 +417,8 @@ describe('auto handoff', () => {
     asked = []; requests = []; timers = []
     origSendOrQueue = transport.sendOrQueue
     ;(transport as any).sendOrQueue = (sid: string, m: { content: string }) => { asked.push(sid); requests.push(m.content) }
+    process.env.AUTO_HANDOFF_CACHE = '1'
+    process.env.AUTO_HANDOFF_FULL = '1'
     origSetTimeout = globalThis.setTimeout
     // Only the handoff retry timer is captured; everything else keeps its real delay.
     ;(globalThis as any).setTimeout = (fn: () => void, ms?: number, ...rest: unknown[]) =>
@@ -503,11 +505,23 @@ describe('auto handoff', () => {
     expect(stderr.join('')).toContain('auto-handoff failed')
   })
 
-  test('AUTO_HANDOFF_CACHE=0 turns it off', () => {
-    process.env.AUTO_HANDOFF_CACHE = '0'
-    session()
+  test('both are off until their flag is 1: unset or 0 asks nothing', () => {
+    session({ pct: () => 90 })
+    delete process.env.AUTO_HANDOFF_CACHE
+    delete process.env.AUTO_HANDOFF_FULL
     pollAt(LATER)
+    process.env.AUTO_HANDOFF_CACHE = '0'
+    process.env.AUTO_HANDOFF_FULL = '0'
+    pollAt(LATER + MIN)
     expect(asked).toEqual([])
+  })
+
+  test('AUTO_HANDOFF_CACHE=1 alone turns on only the cache handoff', () => {
+    delete process.env.AUTO_HANDOFF_FULL
+    session({ pct: () => 95, lastActive: LATER - MIN })  // full-context only: needs the other flag
+    const stale = session({ pct: () => 60 })
+    pollAt(LATER)
+    expect(asked).toEqual([stale.sessionId])
   })
 
   test('85%+ and idle: asks even when touched a minute ago, on any engine', () => {
@@ -537,12 +551,12 @@ describe('auto handoff', () => {
     expect(asked).toEqual([info.sessionId, info.sessionId])
   })
 
-  test('AUTO_HANDOFF_FULL=0 turns off only the full handoff', () => {
-    process.env.AUTO_HANDOFF_FULL = '0'
-    session({ pct: () => 95, lastActive: LATER - MIN })
-    const stale = session({ pct: () => 95 })
+  test('AUTO_HANDOFF_FULL=1 alone turns on only the full handoff', () => {
+    delete process.env.AUTO_HANDOFF_CACHE
+    const fresh = session({ pct: () => 95, lastActive: LATER - MIN })
+    session({ pct: () => 60 })  // cache-only case: needs the other flag
     pollAt(LATER)
-    expect(asked).toEqual([stale.sessionId])
+    expect(asked).toEqual([fresh.sessionId])
   })
 
   test('still the same session and no letter after 3 minutes: asks once more, and not a third time', () => {

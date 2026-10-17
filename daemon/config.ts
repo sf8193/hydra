@@ -37,8 +37,8 @@ export const RAINDROP_ENV = captureSpawnVars()
 
 export const CLAUDE_CONFIG = claudeConfigDir()
 
-/** The automatic handoffs (daemon/auto-handoff.ts), each on unless its env var is 0. Read per call so a flip needs no code path of its own. */
-export const autoHandoffOn = (feature: 'CACHE' | 'FULL'): boolean => process.env[`AUTO_HANDOFF_${feature}`] !== '0'
+/** The automatic handoffs (daemon/auto-handoff.ts) are opt-in: each runs only when its env var (AUTO_HANDOFF_CACHE, AUTO_HANDOFF_FULL) is 1. Read per call. */
+export const autoHandoffOn = (feature: 'CACHE' | 'FULL'): boolean => process.env[`AUTO_HANDOFF_${feature}`] === '1'
 
 // Read after .env sourcing — .env values must be available.
 // If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
