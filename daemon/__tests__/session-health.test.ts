@@ -667,4 +667,24 @@ describe('auto handoff', () => {
     pollSessionsOnce(LATER + 5 * MIN)
     expect(asked).toEqual([info.sessionId])
   })
+
+  test('a full-context request that threw before it went out is tried again on the next poll', () => {
+    const info = session({ pct: () => 90, lastActive: LATER - MIN })
+    let fail = true
+    ;(transport as any).sendOrQueue = (sid: string) => { if (fail) throw new Error('disk full'); asked.push(sid) }
+    pollAt(LATER)
+    fail = false
+    pollSessionsOnce(LATER + 5 * MIN)
+    expect(asked).toEqual([info.sessionId])
+  })
+
+  test('the cache request also answers the full-context case: one ask when both become due together', () => {
+    const info = session({ pct: () => 90 })
+    pendingPermissions.set('req1', { tool_name: 't', description: 'd', input_preview: 'p', sessionId: info.sessionId })
+    pollAt(LATER)
+    expect(asked).toEqual([])
+    pendingPermissions.clear()
+    pollSessionsOnce(LATER + MIN)
+    expect(asked).toEqual([info.sessionId])
+  })
 })
