@@ -945,6 +945,14 @@
       "daemon_access"
     ],
     [
+      "daemon_session-health",
+      "daemon_permission"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_commands_thread"
+    ],
+    [
       "daemon_raindrop",
       "daemon_config"
     ],

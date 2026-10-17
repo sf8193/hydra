@@ -8,12 +8,24 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { notifyOperator } from './access.js'
 import type { SessionInfo } from './sessions.js'
+import { isSessionWorking } from './session-activity.js'
+import { getProtocolContext } from './protocol-runner.js'
+import { pendingPermissions } from './permission.js'
+import { requestHandoff } from './commands/thread.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
 // SYNC: shared with the recovery commands' reachability check, which must agree
 // on what counts as an orphan. See daemon/session-reachability.ts.
 const CONTEXT_ALERT_THRESHOLDS = [50, 70]
+
+// Cache handoff, on unless AUTO_HANDOFF_CACHE=0: a Claude session at 50%+ context that nobody has touched for 50 minutes
+// hands off while its 1-hour prompt cache is still warm (the 5-minute poll lands the request 50-55 minutes after the last touch).
+const CACHE_HANDOFF_PCT = 50
+const CACHE_HANDOFF_IDLE_MS = 50 * 60_000
+// lastActive is saved only for chat messages, not tool calls, so after a restart it can be stale: idle counts from here at the earliest.
+const DAEMON_STARTED_AT = Date.now()
+const cacheHandoffAsked = new Set<string>()
 
 const contextAlerted = new Set<string>()
 const crashAlerted = new Set<string>()
@@ -67,7 +79,10 @@ export function pollSessionsOnce(now: number): void {
       orphanAlerted.delete(info.sessionId)
     }
 
-    alertContext(info.sessionId, info.tmuxName, formatContextPercent(info.adapter, info), info.threadId)
+    const pct = formatContextPercent(info.adapter, info)
+    alertContext(info.sessionId, info.tmuxName, pct, info.threadId)
+    // A failure here (disk, template) must not skip the other sessions' crash and orphan checks.
+    try { cacheHandoff(info, parseInt(pct), now) } catch (err) { process.stderr.write(`daemon: cache handoff failed for ${info.tmuxName}: ${err}\n`) }
   }
   // Main has no registry record, so it is checked on its own. With no channel yet there is nowhere to alert,
   // and nothing is marked alerted.
@@ -75,6 +90,22 @@ export function pollSessionsOnce(now: number): void {
   if (channel) alertContext('main', mainTmux(), mainContext() ?? '?', channel)
 
   alertOrphans(newOrphans, now)
+}
+
+function cacheHandoff(info: SessionInfo, pct: number, now: number): void {
+  if (process.env.AUTO_HANDOFF_CACHE === '0' || Number.isNaN(pct)) return
+  // Below the threshold, re-arm: a later climb past it asks again.
+  if (pct < CACHE_HANDOFF_PCT) { cacheHandoffAsked.delete(info.sessionId); return }
+  if (cacheHandoffAsked.has(info.sessionId)) return
+  if (info.engine !== 'claude' || info.sessionType !== 'thread_owner' || !transport.has(info.sessionId)) return
+  if (isSessionWorking(info) || getProtocolContext(info.sessionId)) return
+  if ([...pendingPermissions.values()].some(p => p.sessionId === info.sessionId)) return
+  const idleMs = now - Math.max(info.lastActive, DAEMON_STARTED_AT)
+  if (idleMs < CACHE_HANDOFF_IDLE_MS) return
+  cacheHandoffAsked.add(info.sessionId)
+  const idleMin = Math.round(idleMs / 60_000)
+  process.stderr.write(`daemon: cache handoff: ${info.tmuxName} at ${pct}%, idle ${idleMin}m\n`)
+  requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'hydra (auto-handoff)' })
 }
 
 function alertContext(id: string, name: string, pct: string, channel: string): void {

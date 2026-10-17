@@ -16,6 +16,7 @@ import { transport } from '../bridge-transport.js'
 import { gateway, ACCESS_FILE } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
 import { ORPHAN_GRACE_MS } from '../session-reachability.js'
+import { pendingPermissions } from '../permission.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -402,5 +403,98 @@ describe('context alert', () => {
     const info = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => null }) })
     pollSessionsOnce(NOW)
     expect(to(info, 'context')).toHaveLength(0)
+  })
+})
+
+describe('cache handoff', () => {
+  let asked: string[] = []
+  let origSendOrQueue: any
+  beforeEach(() => {
+    asked = []
+    origSendOrQueue = transport.sendOrQueue
+    ;(transport as any).sendOrQueue = (sid: string) => { asked.push(sid) }
+  })
+  afterEach(() => {
+    ;(transport as any).sendOrQueue = origSendOrQueue
+    delete process.env.AUTO_HANDOFF_CACHE
+    pendingPermissions.clear()
+  })
+
+  const MIN = 60_000
+  const session = (o: { pct?: () => number; live?: string; engine?: 'claude' | 'codex'; lastActive?: number; type?: SessionInfo['sessionType']; bridge?: boolean } = {}) => {
+    const info = seed({
+      ageMs: OLD, lastActive: o.lastActive ?? NOW - 120 * MIN, engine: o.engine ?? 'claude', sessionType: o.type ?? 'thread_owner',
+      adapter: fakeAdapter({
+        usage: () => ({ usedTokens: 0, contextWindow: 0, percent: (o.pct ?? (() => 60))() }),
+        turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null, live: o.live ?? 'idle' }),
+      }),
+    })
+    if (o.bridge !== false) transport.bridges.set(info.sessionId, {} as any)
+    return info
+  }
+  const LATER = NOW + 51 * MIN  // past the 50-minute idle line, counted from the daemon start at the earliest
+
+  test('50%+ and untouched 50 min: asks once, tells the thread', () => {
+    const info = session()
+    pollSessionsOnce(LATER)
+    pollSessionsOnce(LATER + MIN)
+    expect(asked).toEqual([info.sessionId])
+    expect(to(info, 'Asked')).toHaveLength(1)
+  })
+
+  test('below 50%: nothing; climbing back past it after a drop asks again', () => {
+    let pct = 49
+    const info = session({ pct: () => pct })
+    pollSessionsOnce(LATER)
+    expect(asked).toEqual([])
+    pct = 60; pollSessionsOnce(LATER)
+    pct = 40; pollSessionsOnce(LATER)
+    pct = 60; pollSessionsOnce(LATER)
+    expect(asked).toEqual([info.sessionId, info.sessionId])
+  })
+
+  test('touched less than 50 min ago: nothing', () => {
+    session({ lastActive: LATER - 49 * MIN })
+    pollSessionsOnce(LATER)
+    expect(asked).toEqual([])
+  })
+
+  test('a stale lastActive does not count from before the daemon started', () => {
+    session({ lastActive: NOW - 600 * MIN })
+    pollSessionsOnce(NOW + 10 * MIN)
+    expect(asked).toEqual([])
+  })
+
+  test('working, waiting on a permission, or a Codex session: nothing', () => {
+    session({ live: 'working' })
+    const waiting = session()
+    pendingPermissions.set('req1', { tool_name: 't', description: 'd', input_preview: 'p', sessionId: waiting.sessionId })
+    session({ engine: 'codex' })
+    pollSessionsOnce(LATER)
+    expect(asked).toEqual([])
+  })
+
+  test('a guest or builder session, or one with no bridge: nothing', () => {
+    session({ type: 'thread_guest' })
+    session({ type: 'factory_builder' })
+    session({ bridge: false })
+    pollSessionsOnce(LATER)
+    expect(asked).toEqual([])
+  })
+
+  test('a failed request does not stop the pass for the other sessions', () => {
+    ;(transport as any).sendOrQueue = () => { throw new Error('disk full') }
+    session()
+    const crashed = seed({ ageMs: OLD })
+    pollSessionsOnce(LATER)
+    expect(to(crashed, '💀')).toHaveLength(1)
+    expect(stderr.join('')).toContain('cache handoff failed')
+  })
+
+  test('AUTO_HANDOFF_CACHE=0 turns it off', () => {
+    process.env.AUTO_HANDOFF_CACHE = '0'
+    session()
+    pollSessionsOnce(LATER)
+    expect(asked).toEqual([])
   })
 })
