@@ -346,7 +346,7 @@ export function handoffRequest(artifact: string, requester: string | undefined, 
 /**
  * Ask the live session to write its state and hand off; returns the path it is asked to write. `msgId` is the
  * command message to react and reply to; absent for a daemon-started handoff, which also has no `requester` and no
- * `options`: only the `handoff` command writes the model choice and note, so an automatic ask never erases a pending one.
+ * `options`: only the `handoff` command writes the model choice and note, so an automatic ask keeps a pending one. If the automatic letter is the one that lands, `handoffNoteFate` reports the note as not carried.
  */
 export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, requester, options }: { channelId: string; msgId?: string; threadId: string; requester?: string; options?: { selection?: { model: string; engine: ProviderId }; note?: string } }): string {
   const { selection, note } = options ?? {}
