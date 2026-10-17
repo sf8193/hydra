@@ -960,6 +960,10 @@
     ],
     [
       "daemon_auto-handoff",
+      "daemon_config"
+    ],
+    [
+      "daemon_auto-handoff",
       "daemon_bridge-transport"
     ],
     [

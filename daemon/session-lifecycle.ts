@@ -333,25 +333,32 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
   }
 }
 
-export function handoffRequest(artifact: string, requester: string, note?: string): string {
+export function handoffRequest(artifact: string, requester: string | undefined, note?: string): string {
   return [
-    `[system] ${requester} asked you to hand off this thread to a fresh session.`,
+    requester ? `[system] ${requester} asked you to hand off this thread to a fresh session.` : `[system] hydra is handing this thread off to a fresh session automatically.`,
     ...(note ? [`Their note for the next session: "${note}". Carry it into Next action.`] : []),
     `Write ${artifact} with these sections: Goal; Non-goals (what is explicitly out of scope); State (branch, last commit, current step);`,
-    `Decisions & constraints (including rejected ideas); Open questions for ${requester}; Next action.`,
+    `Decisions & constraints (including rejected ideas); Open questions for ${requester ?? 'the user'}; Next action.`,
     `Then call the handoff tool with path="${artifact}". Do nothing else after that.`,
   ].join(' ')
 }
 
-/** Ask the live session to write its state and hand off; returns the path it is asked to write. `msgId` is the command message to react and reply to; absent for a daemon-started handoff. */
-export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, requester, selection, note }: { channelId: string; msgId?: string; threadId: string; requester: string; selection?: { model: string; engine: ProviderId }; note?: string }): string {
+/**
+ * Ask the live session to write its state and hand off; returns the path it is asked to write. `msgId` is the
+ * command message to react and reply to; absent for a daemon-started handoff, which also has no `requester` and no
+ * `options`: only the `handoff` command writes the model choice and note, so an automatic ask never erases a pending one.
+ */
+export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, requester, options }: { channelId: string; msgId?: string; threadId: string; requester?: string; options?: { selection?: { model: string; engine: ProviderId }; note?: string } }): string {
+  const { selection, note } = options ?? {}
   const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
   info.handoffArtifact = artifact
-  info.handoffSelection = selection
-  info.handoffNote = note ? { text: note, artifact } : undefined
+  if (options) {
+    info.handoffSelection = selection
+    info.handoffNote = note ? { text: note, artifact } : undefined
+  }
   const vars = {
-    artifact, session: info.tmuxName, requester, model: selection?.model ?? '', note: note ?? '',
+    artifact, session: info.tmuxName, requester: requester ?? 'hydra', model: selection?.model ?? '', note: note ?? '',
     cwd: sessionDir(info) ?? '', worktree: info.worktreePath ?? '', branch: info.worktreeBranch ?? '', label: info.label ?? '',
   }
   transport.sendOrQueue(info.sessionId, {

@@ -713,5 +713,5 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
     await reportError(msg.channelId, msg.id, 'handoff', 'no live session in this thread', 'Use `respawn` to start one from the thread history.')
     return
   }
-  requestHandoff(info, { channelId: msg.channelId, msgId: msg.id, threadId, requester: msg.authorUsername || 'the user', selection, note })
+  requestHandoff(info, { channelId: msg.channelId, msgId: msg.id, threadId, requester: msg.authorUsername || 'the user', options: { selection, note } })
 }

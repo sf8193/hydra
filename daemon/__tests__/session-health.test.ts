@@ -569,10 +569,42 @@ describe('auto handoff', () => {
     const info = session()
     pollSessionsOnce(LATER)
     await Bun.sleep(2)  // the letter path carries the millisecond
-    requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'sam', selection: { model: 'claude-opus-5-5', engine: 'claude' }, note: 'keep X' })
+    requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'sam', options: { selection: { model: 'claude-opus-5-5', engine: 'claude' }, note: 'keep X' } })
     timers[0].fn()
     expect(asked).toHaveLength(2)
     expect(info.handoffSelection?.model).toBe('claude-opus-5-5')
     expect(info.handoffNote?.text).toBe('keep X')
+  })
+
+  test('an automatic ask leaves the model choice and note of a pending manual handoff alone', () => {
+    const info = session()
+    requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'sam', options: { selection: { model: 'claude-opus-5-5', engine: 'claude' }, note: 'keep X' } })
+    pollSessionsOnce(LATER)
+    expect(asked).toHaveLength(2)
+    expect(info.handoffSelection?.model).toBe('claude-opus-5-5')
+    expect(info.handoffNote?.text).toBe('keep X')
+  })
+
+  test('the retry waits for the session to be idle: one that is busy again at 3 minutes is not asked a third time', () => {
+    let live = 'idle'
+    const info = seed({
+      ageMs: OLD, lastActive: NOW - 120 * MIN, engine: 'claude',
+      adapter: fakeAdapter({
+        usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 60 }),
+        turn: () => ({ activityAt: null, confirmedComplete: false, answer: () => null, live }),
+      }),
+    })
+    transport.bridges.set(info.sessionId, {} as any)
+    pollSessionsOnce(LATER)
+    live = 'working'
+    timers[0].fn()
+    expect(asked).toEqual([info.sessionId])
+  })
+
+  test('the request an automatic ask sends does not claim anyone typed it', () => {
+    session()
+    pollSessionsOnce(LATER)
+    expect(requests[0]).toStartWith('[system] hydra is handing this thread off')
+    expect(requests[0]).toContain('Open questions for the user;')
   })
 })
