@@ -406,7 +406,7 @@ describe('context alert', () => {
   })
 })
 
-describe('cache handoff', () => {
+describe('auto handoff', () => {
   let asked: string[] = []
   let origSendOrQueue: any
   beforeEach(() => {
@@ -417,6 +417,7 @@ describe('cache handoff', () => {
   afterEach(() => {
     ;(transport as any).sendOrQueue = origSendOrQueue
     delete process.env.AUTO_HANDOFF_CACHE
+    delete process.env.AUTO_HANDOFF_FULL
     pendingPermissions.clear()
   })
 
@@ -488,7 +489,7 @@ describe('cache handoff', () => {
     const crashed = seed({ ageMs: OLD })
     pollSessionsOnce(LATER)
     expect(to(crashed, '💀')).toHaveLength(1)
-    expect(stderr.join('')).toContain('cache handoff failed')
+    expect(stderr.join('')).toContain('auto-handoff failed')
   })
 
   test('AUTO_HANDOFF_CACHE=0 turns it off', () => {
@@ -496,5 +497,40 @@ describe('cache handoff', () => {
     session()
     pollSessionsOnce(LATER)
     expect(asked).toEqual([])
+  })
+
+  test('85%+ and idle: asks even when touched a minute ago, on any engine', () => {
+    const claude = session({ pct: () => 85, lastActive: LATER - MIN })
+    const codex = session({ pct: () => 90, lastActive: LATER - MIN, engine: 'codex' })
+    pollSessionsOnce(LATER)
+    pollSessionsOnce(LATER + MIN)
+    expect(asked.sort()).toEqual([claude.sessionId, codex.sessionId].sort())
+  })
+
+  test('84%, or working, or a guest: the full handoff leaves it alone', () => {
+    session({ pct: () => 84, lastActive: LATER - MIN })
+    session({ pct: () => 95, live: 'working', lastActive: LATER - MIN })
+    session({ pct: () => 95, type: 'thread_guest', lastActive: LATER - MIN })
+    pollSessionsOnce(LATER)
+    expect(asked).toEqual([])
+  })
+
+  test('a session due for both is asked once, and a drop below 85% re-arms the full handoff', () => {
+    let pct = 90
+    const info = session({ pct: () => pct })
+    pollSessionsOnce(LATER)
+    pollSessionsOnce(LATER + MIN)
+    expect(asked).toEqual([info.sessionId])
+    pct = 60; pollSessionsOnce(LATER)  // re-arms the full one; the cache one stays asked while above 50%
+    pct = 90; pollSessionsOnce(LATER)
+    expect(asked).toEqual([info.sessionId, info.sessionId])
+  })
+
+  test('AUTO_HANDOFF_FULL=0 turns off only the full handoff', () => {
+    process.env.AUTO_HANDOFF_FULL = '0'
+    session({ pct: () => 95, lastActive: LATER - MIN })
+    const stale = session({ pct: () => 95 })
+    pollSessionsOnce(LATER)
+    expect(asked).toEqual([stale.sessionId])
   })
 })
