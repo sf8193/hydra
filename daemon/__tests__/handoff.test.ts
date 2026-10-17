@@ -444,7 +444,7 @@ test('handoff command: reacts 🤝 to the command message, replies to it, and ta
 })
 
 test('a daemon-started handoff has no message to react to or reply to', async () => {
-  const r = await requestTies(t => requestHandoff(t.info, { channelId: t.info.threadId, threadId: t.info.threadId, requester: 'hydra' }))
+  const r = await requestTies(async t => { requestHandoff(t.info, { channelId: t.info.threadId, threadId: t.info.threadId, requester: 'hydra' }) })
   expect(r.reacted).toEqual([])
   expect(r.replyTo).toEqual([undefined])
   expect(r.meta.message_id).toBe('')

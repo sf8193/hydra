@@ -727,10 +727,11 @@ export async function handleHandoffIntercept(msg: InboundMessage, selection?: { 
   requestHandoff(info, { channelId: msg.channelId, msgId: msg.id, threadId, requester: msg.authorUsername || 'the user', selection, note })
 }
 
-/** Ask the live session to write its state and hand off. `msgId` is the command message to react and reply to; absent for a daemon-started handoff. */
-export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, requester, selection, note }: { channelId: string; msgId?: string; threadId: string; requester: string; selection?: { model: string; engine: ProviderId }; note?: string }): void {
+/** Ask the live session to write its state and hand off; returns the path it is asked to write. `msgId` is the command message to react and reply to; absent for a daemon-started handoff. */
+export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, requester, selection, note }: { channelId: string; msgId?: string; threadId: string; requester: string; selection?: { model: string; engine: ProviderId }; note?: string }): string {
   const artifact = join(STATE_DIR, 'handoffs', `${info.tmuxName}-${Date.now()}.md`)
   mkdirSync(join(STATE_DIR, 'handoffs'), { recursive: true })
+  info.handoffArtifact = artifact
   info.handoffSelection = selection
   info.handoffNote = note ? { text: note, artifact } : undefined
   const vars = {
@@ -751,4 +752,5 @@ export function requestHandoff(info: SessionInfo, { channelId, msgId, threadId, 
   const confirmed = note ? `${notice}\n> Note to pass on: ${note.replace(/@/g, '@\u200b').replace(/\n/g, '\n> ')}` : notice
   // safeSend: a local notice can run past the platform's length limit; chunk it and log failures.
   void safeSend(channelId, confirmed, msgId ? { replyTo: msgId } : undefined)
+  return artifact
 }

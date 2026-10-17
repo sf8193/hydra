@@ -16,6 +16,7 @@ import { transport } from '../bridge-transport.js'
 import { gateway, ACCESS_FILE } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
 import { ORPHAN_GRACE_MS } from '../session-reachability.js'
+import { requestHandoff } from '../commands/thread.js'
 import { pendingPermissions } from '../permission.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
@@ -408,13 +409,21 @@ describe('context alert', () => {
 
 describe('auto handoff', () => {
   let asked: string[] = []
+  let requests: string[] = []   // what each request told the session
+  let timers: Array<{ fn: () => void; ms: number }> = []
   let origSendOrQueue: any
+  let origSetTimeout: any
   beforeEach(() => {
-    asked = []
+    asked = []; requests = []; timers = []
     origSendOrQueue = transport.sendOrQueue
-    ;(transport as any).sendOrQueue = (sid: string) => { asked.push(sid) }
+    ;(transport as any).sendOrQueue = (sid: string, m: { content: string }) => { asked.push(sid); requests.push(m.content) }
+    origSetTimeout = globalThis.setTimeout
+    // Only the handoff retry timer is captured; everything else keeps its real delay.
+    ;(globalThis as any).setTimeout = (fn: () => void, ms?: number, ...rest: unknown[]) =>
+      ms === 3 * 60_000 ? (timers.push({ fn, ms }), 0) : origSetTimeout(fn, ms, ...rest)
   })
   afterEach(() => {
+    globalThis.setTimeout = origSetTimeout
     ;(transport as any).sendOrQueue = origSendOrQueue
     delete process.env.AUTO_HANDOFF_CACHE
     delete process.env.AUTO_HANDOFF_FULL
@@ -532,5 +541,38 @@ describe('auto handoff', () => {
     const stale = session({ pct: () => 95 })
     pollSessionsOnce(LATER)
     expect(asked).toEqual([stale.sessionId])
+  })
+
+  test('still the same session and no letter after 3 minutes: asks once more, and not a third time', () => {
+    const info = session()
+    pollSessionsOnce(LATER)
+    expect(timers).toHaveLength(1)
+    timers[0].fn()
+    expect(asked).toEqual([info.sessionId, info.sessionId])
+    expect(timers).toHaveLength(1)  // the retry sets no timer of its own
+  })
+
+  test('no retry when the session wrote its letter, or is already gone', () => {
+    const wrote = session()
+    pollSessionsOnce(LATER)
+    const letter = requests[0].match(/path="([^"]+)"/)![1]
+    writeFileSync(letter, '# Goal\nx')
+    const gone = session()
+    pollSessionsOnce(LATER + MIN)
+    registry.delete(gone.sessionId)
+    for (const t of timers) t.fn()
+    rmSync(letter, { force: true })
+    expect(asked).toEqual([wrote.sessionId, gone.sessionId])
+  })
+
+  test('a manual handoff after the automatic ask keeps its model and note: no retry', async () => {
+    const info = session()
+    pollSessionsOnce(LATER)
+    await Bun.sleep(2)  // the letter path carries the millisecond
+    requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'sam', selection: { model: 'claude-opus-5-5', engine: 'claude' }, note: 'keep X' })
+    timers[0].fn()
+    expect(asked).toHaveLength(2)
+    expect(info.handoffSelection?.model).toBe('claude-opus-5-5')
+    expect(info.handoffNote?.text).toBe('keep X')
   })
 })

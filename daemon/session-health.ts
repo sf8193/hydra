@@ -25,6 +25,8 @@ const CACHE_HANDOFF_PCT = 50
 const CACHE_HANDOFF_IDLE_MS = 50 * 60_000
 // lastActive is saved only for chat messages, not tool calls, so after a restart it can be stale: idle counts from here at the earliest.
 const DAEMON_STARTED_AT = Date.now()
+// An automatic request is repeated once if, this long after, the session is still the same one and has written no letter.
+const HANDOFF_RETRY_MS = 3 * 60_000
 const cacheHandoffAsked = new Set<string>()
 
 // Full handoff, on unless AUTO_HANDOFF_FULL=0: an idle worker at 85%+ context hands off before it hits "Prompt is too long"
@@ -97,6 +99,16 @@ export function pollSessionsOnce(now: number): void {
   alertOrphans(newOrphans, now)
 }
 
+function askHandoff(info: SessionInfo): void {
+  const ask = () => requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'hydra (auto-handoff)' })
+  const letter = ask()
+  setTimeout(() => {
+    // A handed-off session has left the registry; a newer request (a manual `handoff`) owns the session now; a session that wrote its letter is already on its way.
+    if (registry.get(info.sessionId) !== info || info.handoffArtifact !== letter || Bun.file(letter).size > 0) return
+    try { ask() } catch (err) { process.stderr.write(`daemon: auto-handoff retry failed for ${info.tmuxName}: ${err}\n`) }
+  }, HANDOFF_RETRY_MS)
+}
+
 /** A live worker nobody is waiting on: safe to interrupt with a handoff request. */
 function canAskHandoff(info: SessionInfo): boolean {
   if (info.sessionType !== 'thread_owner' || !transport.has(info.sessionId)) return false
@@ -114,7 +126,7 @@ function cacheHandoff(info: SessionInfo, pct: number, now: number): void {
   cacheHandoffAsked.add(info.sessionId)
   if (pct >= FULL_HANDOFF_PCT) fullHandoffAsked.add(info.sessionId)  // this request already answers the full-context case
   process.stderr.write(`daemon: cache handoff: ${info.tmuxName} at ${pct}%, idle ${Math.round(idleMs / 60_000)}m\n`)
-  requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'hydra (auto-handoff)' })
+  askHandoff(info)
 }
 
 function fullHandoff(info: SessionInfo, pct: number): void {
@@ -123,7 +135,7 @@ function fullHandoff(info: SessionInfo, pct: number): void {
   if (fullHandoffAsked.has(info.sessionId) || !canAskHandoff(info)) return
   fullHandoffAsked.add(info.sessionId)
   process.stderr.write(`daemon: full handoff: ${info.tmuxName} at ${pct}%\n`)
-  requestHandoff(info, { channelId: info.threadId, threadId: info.threadId, requester: 'hydra (auto-handoff)' })
+  askHandoff(info)
 }
 
 function alertContext(id: string, name: string, pct: string, channel: string): void {
