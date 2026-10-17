@@ -8,6 +8,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { notifyOperator } from './access.js'
 import type { SessionInfo } from './sessions.js'
+import { autoHandoff } from './auto-handoff.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const SPAWN_GRACE_MS = 60_000
@@ -67,7 +68,10 @@ export function pollSessionsOnce(now: number): void {
       orphanAlerted.delete(info.sessionId)
     }
 
-    alertContext(info.sessionId, info.tmuxName, formatContextPercent(info.adapter, info), info.threadId)
+    const pct = formatContextPercent(info.adapter, info)
+    alertContext(info.sessionId, info.tmuxName, pct, info.threadId)
+    // A failure here (disk, template) must not skip the other sessions' crash and orphan checks.
+    try { autoHandoff(info, parseInt(pct), now) } catch (err) { process.stderr.write(`daemon: auto-handoff failed for ${info.tmuxName}: ${err}\n`) }
   }
   // Main has no registry record, so it is checked on its own. With no channel yet there is nowhere to alert,
   // and nothing is marked alerted.

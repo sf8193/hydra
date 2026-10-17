@@ -255,6 +255,12 @@
       "desc": "Session health poll: crash detection, orphan detection, context alerts"
     },
     {
+      "id": "daemon_auto-handoff",
+      "label": "daemon/auto-handoff.ts",
+      "layer": "domain",
+      "desc": "Automatic handoff of idle high-context sessions (cache and full-context rules)"
+    },
+    {
       "id": "daemon_raindrop",
       "label": "daemon/raindrop.ts",
       "layer": "domain",
@@ -943,6 +949,30 @@
     [
       "daemon_session-health",
       "daemon_access"
+    ],
+    [
+      "daemon_session-health",
+      "daemon_auto-handoff"
+    ],
+    [
+      "daemon_auto-handoff",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_auto-handoff",
+      "daemon_config"
+    ],
+    [
+      "daemon_auto-handoff",
+      "daemon_bridge-transport"
+    ],
+    [
+      "daemon_auto-handoff",
+      "daemon_permission"
+    ],
+    [
+      "daemon_auto-handoff",
+      "daemon_session-lifecycle"
     ],
     [
       "daemon_raindrop",
