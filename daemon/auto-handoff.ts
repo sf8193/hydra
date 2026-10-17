@@ -7,7 +7,7 @@ import { getProtocolContext } from './protocol-runner.js'
 import { pendingPermissions } from './permission.js'
 import { requestHandoff } from './session-lifecycle.js'
 
-// Cache handoff, on unless AUTO_HANDOFF_CACHE=0: a Claude session at 50%+ context that nobody has touched for 50 minutes
+// Cache handoff, opt-in with AUTO_HANDOFF_CACHE=1: a Claude session at 50%+ context that nobody has touched for 50 minutes
 // hands off while its 1-hour prompt cache is still warm (the 5-minute poll lands the request 50-55 minutes after the last touch).
 const CACHE_HANDOFF_PCT = 50
 const CACHE_HANDOFF_IDLE_MS = 50 * 60_000
@@ -18,7 +18,7 @@ const cacheHandoffAsked = new Set<string>()
 // counts from the first poll at 50%+ that saw the session not working (cleared when a poll sees it working or context drops below 50%).
 const idleSince = new Map<string, number>()
 
-// Full handoff, on unless AUTO_HANDOFF_FULL=0: an idle worker at 85%+ context hands off before it hits "Prompt is too long"
+// Full handoff, opt-in with AUTO_HANDOFF_FULL=1: an idle worker at 85%+ context hands off before it hits "Prompt is too long"
 // (a full session cannot answer anything, including a handoff request). Any engine.
 const FULL_HANDOFF_PCT = 85
 const fullHandoffAsked = new Set<string>()
