@@ -489,20 +489,6 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
     case 'deliver':
       console.log(`${data.status}: ${data.sessionName} (${data.proof})`)
       return
-    case 'factory': {
-      if (data.accepted) { console.log(`accepted: ${data.accepted}`); return }
-      if (data.abandoned) { console.log(`abandoned: ${data.abandoned}`); return }
-      const builds = (data.builds ?? []) as any[]
-      if (builds.length === 0) { console.log('(no active builds)'); return }
-      for (const b of builds) {
-        const secs = Math.round((b.elapsed ?? 0) / 1000)
-        const wt = b.worktree ? ` wt:${b.worktree}` : ''
-        const builder = b.builderName ? ` builder:${b.builderName}` : ''
-        console.log(`${b.ticket}  ${b.phase}  (${secs}s, retries:${b.retries}${builder}${wt})`)
-        if (b.spec) console.log(`    ${b.spec.split('\n')[0].slice(0, 100)}`)
-      }
-      return
-    }
     default:
       console.log(JSON.stringify(data, null, 2))
   }

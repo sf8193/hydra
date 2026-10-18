@@ -21,14 +21,6 @@ describe('getTemplate', () => {
 
 
 
-  test('returns builtin factory template', () => {
-    const t = getTemplate('factory')
-    expect(t).not.toBeNull()
-    expect(t!.prompt).toContain('senior tech lead')
-    expect(t!.disallowedTools).toContain('Edit')
-    expect(t!.disallowedTools).toContain('Write')
-    expect(t!.sessionType).toBe('master_orchestrator')
-  })
 
   test('returns null for unknown template', () => {
     expect(getTemplate('nonexistent-template-xyz')).toBeNull()
@@ -46,11 +38,6 @@ describe('getTemplate', () => {
     expect(mixed).toEqual(lower)
   })
 
-  test('is case-insensitive — "FACTORY" finds factory', () => {
-    const t = getTemplate('FACTORY')
-    expect(t).not.toBeNull()
-    expect(t!.sessionType).toBe('master_orchestrator')
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -62,7 +49,6 @@ describe('listTemplates', () => {
     const list = listTemplates()
     const names = list.map(t => t.name)
     expect(names).toContain('review')
-            expect(names).toContain('factory')
   })
 
   test('is sorted alphabetically', () => {
@@ -90,12 +76,6 @@ describe('listTemplates', () => {
 
 
 
-  test('factory has no action (uses disallowedTools instead)', () => {
-    const list = listTemplates()
-    const factory = list.find(t => t.name === 'factory')
-    expect(factory).toBeDefined()
-    expect(factory?.action).toBeUndefined()
-  })
 })
 
 // ---------------------------------------------------------------------------
@@ -191,15 +171,14 @@ describe('buildTemplateSpawnOpts', () => {
   })
 
   test('a template that declares no label sets none', () => {
-    const t = getTemplate('factory')!
-    expect(t.label).toBeUndefined()
-    expect(buildTemplateSpawnOpts('factory', t).label).toBeUndefined()
+    const t = { prompt: 'test prompt' }
+    expect(buildTemplateSpawnOpts('custom', t).label).toBeUndefined()
     // And a name that happens to spell a bucket does not conjure one.
     expect(buildTemplateSpawnOpts('build', t).label).toBeUndefined()
   })
 
   test('trigger matches template name with colon', () => {
-    for (const name of ['review', 'factory']) {
+    for (const name of ['review']) {
       const t = getTemplate(name)!
       const opts = buildTemplateSpawnOpts(name, t)
       expect(opts.trigger).toBe(`${name}:`)
@@ -224,30 +203,15 @@ describe('buildTemplateSpawnOpts', () => {
     expect(opts.model).toBeUndefined()
   })
 
-  test('factory template includes disallowedTools', () => {
-    const t = getTemplate('factory')!
-    const opts = buildTemplateSpawnOpts('factory', t)
-    expect(Array.isArray(opts.disallowedTools)).toBe(true)
-    expect((opts.disallowedTools as string[])).toContain('Edit')
-    expect((opts.disallowedTools as string[])).toContain('Write')
-  })
 
-  test('factory template includes sessionType=master_orchestrator', () => {
-    const t = getTemplate('factory')!
-    const opts = buildTemplateSpawnOpts('factory', t)
+
+  test('a template carries its disallowedTools and sessionType; one without them sets neither', () => {
+    const opts = buildTemplateSpawnOpts('custom', { prompt: 'p', disallowedTools: ['Edit'], sessionType: 'master_orchestrator' })
+    expect(opts.disallowedTools).toEqual(['Edit'])
     expect(opts.sessionType).toBe('master_orchestrator')
-  })
-
-  test('non-factory template does not include disallowedTools', () => {
-    const t = getTemplate('review')!
-    const opts = buildTemplateSpawnOpts('review', t)
-    expect(opts.disallowedTools).toBeUndefined()
-  })
-
-  test('non-factory template does not include sessionType', () => {
-    const t = getTemplate('review')!
-    const opts = buildTemplateSpawnOpts('review', t)
-    expect(opts.sessionType).toBeUndefined()
+    const plain = buildTemplateSpawnOpts('review', getTemplate('review')!)
+    expect(plain.disallowedTools).toBeUndefined()
+    expect(plain.sessionType).toBeUndefined()
   })
 
   test('promptPrefix matches template prompt', () => {

@@ -16,7 +16,6 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { factoryBuild, factoryRetry, factoryAccept, factoryAbandon, factoryStatus, factoryReview, onBuilderDone, suggestWorktreeFromCwd, VALID_DIFFICULTIES, type Difficulty, type FactoryDoneArgs } from './factory.js'
 import { normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
 import { isToolAllowed } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
@@ -237,11 +236,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
             info.lastReplyId = sentIds[sentIds.length - 1]
             // lastReplyId drives the session's dashboard/list link — refresh (debounced) so it tracks the latest reply.
             refreshDashboard()
-            // A live reply means the session is working. If the factory sweep parked it as an
-            // awaiting_pm builder (suppressAutoRecover + clearFactoryIdentity, left alive) and a
-            // user then adopted it, clear the now-stale flag so a later reboot auto-recovers it.
-            // Only live sessions reach here — dead branch-gone / mid-build-preserved records
-            // (also suppressAutoRecover) never reply, so their suppression stays intact.
+            // A live reply means the session is working: clear a stale suppressAutoRecover so a
+            // later reboot auto-recovers it. Dead records with the flag never reply, so theirs stays.
             if (info.suppressAutoRecover) delete info.suppressAutoRecover
             // Capture artifact links the session produced in its own thread, so
             // they surface under its Home item (chat_id === threadId scopes this
@@ -558,159 +554,6 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         await killSession(info, reason)
         return { content: [{ type: 'text', text: `killed session ${targetId}` }] }
-      }
-
-      case 'factory_build': {
-        const difficulty = str(args.difficulty)
-        if (difficulty && !(VALID_DIFFICULTIES as readonly string[]).includes(difficulty)) {
-          throw new Error(`invalid difficulty "${difficulty}" — must be one of: ${VALID_DIFFICULTIES.join(', ')}`)
-        }
-
-        if (!callerSessionId) throw new Error('factory_build requires a session context')
-        const callerInfo = registry.get(callerSessionId)
-        if (!callerInfo) throw new Error('session not found')
-        if (callerInfo.sessionType === 'factory_builder') throw new Error('factory builders cannot call factory_build (recursion guard)')
-
-        const fresh = args.fresh === true
-
-        const worktreeRaw = args.worktree
-        let worktreeResolved: string | undefined
-        if (worktreeRaw === true) {
-          const spawnCwd = process.env.SPAWN_CWD
-          const pmCwd = callerInfo?.sessionMetadata?.cwd
-          if (!spawnCwd) throw new Error('worktree: true requires SPAWN_CWD to be set')
-          if (!pmCwd) throw new Error('worktree: true could not read your CWD (bridge may not have connected yet). Pass an explicit path relative to SPAWN_CWD instead, e.g. worktree="Documents/hydra".')
-          worktreeResolved = suggestWorktreeFromCwd(pmCwd, spawnCwd)
-          if (!worktreeResolved) throw new Error(`worktree: true but your CWD (${pmCwd}) is not inside a git repo nested under SPAWN_CWD (${spawnCwd}) — the root repo itself cannot be isolated. Call factory_status to list valid repos, or pass an explicit path like worktree="Documents/hydra".`)
-        } else {
-          // worktreeRaw is a string path, false (explicit "no isolation"), or undefined
-          worktreeResolved = str(worktreeRaw)
-        }
-
-        const result = factoryBuild({
-          pmThreadId: callerInfo.threadId,
-          pmSessionId: callerSessionId,
-          spec: args.spec as string,
-          builderModel: str(args.builder_model),
-          reviewerModel: str(args.reviewer_model),
-          reviewRounds: num(args.review_rounds),
-          difficulty: difficulty as Difficulty | undefined,
-          worktree: worktreeResolved,
-          fresh,
-        })
-
-        if ('error' in result) {
-          return { content: [{ type: 'text', text: `Factory build failed: ${result.error}` }], isError: true }
-        }
-
-        const warningNote = result.warning ? ` Note: ${result.warning}` : ''
-        return {
-          content: [{ type: 'text', text: `Build started. Ticket: ${result.ticket}.${warningNote}` }],
-        }
-      }
-
-      case 'factory_retry': {
-        if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
-        if (!args.instructions || typeof args.instructions !== 'string') throw new Error('instructions is required')
-        const ticket = args.ticket
-        const instructions = args.instructions
-        if (!callerSessionId) throw new Error('factory_retry requires a session context')
-
-        const result = factoryRetry(ticket, instructions, callerSessionId)
-        if ('error' in result) {
-          return { content: [{ type: 'text', text: `Factory retry failed: ${result.error}` }], isError: true }
-        }
-        return { content: [{ type: 'text', text: `Retry instructions sent to builder. Ticket: ${ticket}. Waiting for factory_done.` }] }
-      }
-
-      case 'factory_accept': {
-        if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
-        const ticket = args.ticket
-        const allowUnreviewed = args.allow_unreviewed === true
-        if (!callerSessionId) throw new Error('factory_accept requires a session context')
-
-        const result = factoryAccept(ticket, callerSessionId, allowUnreviewed)
-        if ('error' in result) {
-          return { content: [{ type: 'text', text: `Factory accept failed: ${result.error}` }], isError: true }
-        }
-        return { content: [{ type: 'text', text: `Build accepted. Ticket: ${ticket}. Builder killed.` }] }
-      }
-
-      case 'factory_abandon': {
-        if (!args.ticket || typeof args.ticket !== 'string') throw new Error('ticket is required')
-        const ticket = args.ticket
-        if (!callerSessionId) throw new Error('factory_abandon requires a session context')
-        const reason = str(args.reason)
-
-        const result = factoryAbandon(ticket, callerSessionId, reason)
-        if ('error' in result) {
-          return { content: [{ type: 'text', text: `Factory abandon failed: ${result.error}` }], isError: true }
-        }
-        return { content: [{ type: 'text', text: `Build abandoned. Ticket: ${ticket}. Builder killed.` }] }
-      }
-
-      case 'factory_done': {
-        if (!callerSessionId) throw new Error('factory_done requires a session context')
-        const callerInfo = registry.get(callerSessionId)
-        if (callerInfo?.sessionType !== 'factory_builder') throw new Error('factory_done can only be called by factory builders')
-        if (!Array.isArray(args.files_changed)) throw new Error('files_changed must be an array of strings')
-        if (typeof args.test_results !== 'string') throw new Error('test_results must be a string')
-        const doneArgs: FactoryDoneArgs = {
-          files_changed: (args.files_changed as unknown[]).filter((f): f is string => typeof f === 'string'),
-          test_results: args.test_results as string,
-          rationale: typeof args.rationale === 'string' ? args.rationale : undefined,
-          known_issues: typeof args.known_issues === 'string' ? args.known_issues : undefined,
-          branch: typeof args.branch === 'string' ? args.branch : undefined,
-        }
-        const result = onBuilderDone(callerSessionId, doneArgs)
-        if ('error' in result) {
-          return { content: [{ type: 'text', text: result.error }], isError: true }
-        }
-        return { content: [{ type: 'text', text: 'Build complete. Adversarial review will start shortly — you will defend your implementation as the review owner.' }] }
-      }
-
-      case 'factory_status': {
-        const ticket = str(args.ticket)
-        if (!callerSessionId) throw new Error('factory_status requires a session context')
-        const callerInfo = registry.get(callerSessionId)
-        if (!callerInfo) throw new Error('session not found')
-
-        const result = factoryStatus(callerInfo.threadId, ticket)
-        const reposLine = result.availableRepos.length
-          ? `\n\nValid worktree targets: ${result.availableRepos.join(', ')}`
-          : ''
-        if (result.builds.length === 0) {
-          return { content: [{ type: 'text', text: `No active factory builds.${reposLine}` }] }
-        }
-        return { content: [{ type: 'text', text: `${JSON.stringify(result.builds, null, 2)}${reposLine}` }] }
-      }
-
-      case 'factory_review': {
-        const name = str(args.name)
-        if (!name) throw new Error('name is required')
-        const topic = str(args.topic)
-        const reviewerModel = str(args.reviewer_model)
-        const reviewRounds = normalizeReviewRounds(num(args.review_rounds))
-        if (!callerSessionId) throw new Error('factory_review requires a session context')
-        const callerInfo = registry.get(callerSessionId)
-        if (!callerInfo) throw new Error('session not found')
-
-        const target = registry.findByName(name)
-        if (!target) throw new Error(`session "${name}" not found`)
-        if (!target.threadId) throw new Error(`session "${name}" has no thread`)
-        if (target.sessionId === callerSessionId) throw new Error('cannot review yourself')
-
-        await factoryReview({
-          callerThreadId: callerInfo.threadId,
-          targetSessionId: target.sessionId,
-          targetThreadId: target.threadId,
-          targetName: name,
-          topic,
-          reviewerModel,
-          reviewRounds,
-        })
-
-        return { content: [{ type: 'text', text: `Review started on ${name} (up to ${reviewRounds} rounds). Results will be delivered to your thread.` }] }
       }
 
       case 'watch_pr': {

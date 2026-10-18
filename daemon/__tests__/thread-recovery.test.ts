@@ -441,12 +441,12 @@ describe('handleRespawnIntercept', () => {
 
   test('a template respawn of an omp thread is refused before anything is respawned; Claude still takes it', async () => {
     seedHistory({ engine: 'omp' })
-    await handleRespawnIntercept(msg('respawn'), undefined, 'factory')
+    await handleRespawnIntercept(msg('respawn'), undefined, 'review')
     expect(calls).toEqual([])
     expect(sent.some(s => s.includes('not available for omp sessions'))).toBe(true)
 
     seedHistory({ claudeSessionId: 'C-1' })
-    await handleRespawnIntercept(msg('respawn'), undefined, 'factory')
+    await handleRespawnIntercept(msg('respawn'), undefined, 'review')
     expect(fns()).toEqual(['tryRespawn'])
   })
 

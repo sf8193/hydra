@@ -105,7 +105,6 @@ function escapeMrkdwn(text: string): string {
 }
 
 function buildOriginBadge(s: SessionRow): string {
-  if (s.sessionType === 'factory_builder') return 'factory'
   if (s.originType === 'fork') return 'fork'
   if (s.originType === 'handoff') return 'handoff'
   if (s.originType === 'resurrect') return 'resurrect'

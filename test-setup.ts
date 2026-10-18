@@ -13,7 +13,7 @@
 // (it's how the session's bridge connects back to the daemon) — so respecting an "explicitly
 // set" state dir here meant every `bun test` run FROM one of those sessions silently wrote test
 // fixtures into the real, live ~/.claude/channels/discord state instead of a temp dir. Confirmed
-// in production: message-queue.json, idempotency.json, threads.json, and factory/history.jsonl
+// in production: message-queue.json, idempotency.json, and threads.json
 // all had real test-fixture pollution dating back to at least 2026-09-09, cleaned up 2026-09-15.
 // A developer who genuinely wants tests to target a specific directory for inspection can set
 // HYDRA_TEST_STATE_DIR instead — a name that can never collide with the daemon's own vars.

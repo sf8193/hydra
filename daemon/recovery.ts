@@ -346,9 +346,7 @@ async function skipReason(info: SessionInfo, base: string): Promise<string> {
 
 // Shared dedup for BOTH auto-recovery and manual `recover all`: collapse candidates to
 // one session per real work-key (PR/ticket), so a batch never puts two sessions on one
-// PR. Reserves keys owned by ALREADY-LIVE sessions (tmux-alive, incl. an awaiting_pm
-// factory builder a restart left alive — a real competitor); a full reboot kills that
-// builder's tmux so it won't reserve (and the auto filter separately excludes it). Watches
+// PR. Reserves keys owned by ALREADY-LIVE sessions (tmux-alive). Watches
 // of a skipped session are handed to the surviving owner (live → in place; dead winner →
 // via siblingWatches) so PR feedback is never stranded on a never-revived record. Null
 // work-key → always unique (no shared identity to collapse).
@@ -460,8 +458,8 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
     // constructor — runs before this) stamps deadAt on EVERY tmux-gone non-guest session at boot,
     // so a session that was alive at crash time (never gracefully stamped) is already deadAt here.
     !!info.deadAt
-    && info.sessionType === 'thread_owner'  // only plain workers — excludes thread_guest, factory PMs (master_orchestrator), and factory_builders (recovered by their own subsystem)
-    && !info.suppressAutoRecover  // e.g. awaiting_pm builder preserved by sweepOrphanedBuilders for PM peek/kill
+    && info.sessionType === 'thread_owner'  // only plain workers — excludes thread_guest and master_orchestrator
+    && !info.suppressAutoRecover
     && !info.ephemeral
     && !info.headless
     && info.adapter.recoveryPlan(info).generic  // Codex: no — its runtime's start() reconnects it at boot; recoverOne would relaunch it as Claude

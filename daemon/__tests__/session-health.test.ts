@@ -488,9 +488,8 @@ describe('auto handoff', () => {
     expect(asked).toEqual([])
   })
 
-  test('a guest or builder session, or one with no bridge: nothing', () => {
+  test('a guest session, or one with no bridge: nothing', () => {
     session({ type: 'thread_guest' })
-    session({ type: 'factory_builder' })
     session({ bridge: false })
     pollAt(LATER)
     expect(asked).toEqual([])

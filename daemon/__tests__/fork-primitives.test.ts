@@ -16,7 +16,6 @@ import { handleResumeIntercept } from '../commands/thread.js'
 import { projectDirName } from '../usage.js'
 import { buildForkPrompt, buildHandoffPrompt } from '../prompts/session.js'
 import { hydraPrompt } from '../prompts/request.js'
-import { factoryBuild, __test as factoryTest } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -369,17 +368,6 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
 
     await doSpawnSession('q3', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' }, promptPrefix: 'PREFIX' })
     expect(launches[2].prompt.startsWith('<hydra-prompt>\nPREFIX\n\n')).toBe(true)
-  })
-
-  test('prompts: a factory builder tags its spec', async () => {
-    const createThread = gateway.createThread
-    ;(gateway as any).createThread = async () => ({ id: THREAD })
-    registry.set('fp-pm', { sessionId: 'fp-pm', threadId: THREAD, tmuxName: 'fppm', anchorChannelId: PARENT } as any as SessionInfo)
-    factoryBuild({ pmThreadId: THREAD, pmSessionId: 'fp-pm', spec: 'add retries', fresh: true })
-    for (let i = 0; i < 50 && !launches.length; i++) await new Promise(res => setTimeout(res, 10))
-    ;(gateway as any).createThread = createThread
-    factoryTest!.reset()
-    expect([...launches[0].prompt.matchAll(/<request>([\s\S]*?)<\/request>/g)].map(m => m[1])).toEqual(['add retries'])
   })
 
   test('prompts: a handoff successor with a predecessor gets the fork recipe; without one the prompt is unchanged', async () => {

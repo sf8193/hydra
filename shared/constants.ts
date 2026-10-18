@@ -153,7 +153,7 @@ export function claudeConfigDir(): string {
 }
 export type { ToolName }
 
-export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest' | 'factory_builder'
+export type SessionType = 'master_orchestrator' | 'thread_owner' | 'thread_guest'
 
 export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = {
   master_orchestrator: new Set([
@@ -162,8 +162,6 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
     'list_sessions', 'peek_session', 'create_thread',
     'watch_pr', 'unwatch_pr', 'list_watches',
     'spawn_session', 'kill_session',
-    'factory_build', 'factory_retry', 'factory_accept', 'factory_abandon',
-    'factory_status', 'factory_review',
     // Account-wide usage: byte's mod reports it, so one reporter feeds the alerts.
     'report_usage',
   ]),
@@ -178,11 +176,6 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
     'download_attachment', 'set_description',
     'advance', 'extend_phase',
   ]),
-  factory_builder: new Set([
-    'reply', 'fetch_messages', 'send_to_thread',
-    'download_attachment', 'set_description',
-    'factory_done',
-  ]),
 }
 
 export type Capability = 'protocol_context' | 'protocol_spawn' | 'main_handoff'
@@ -190,7 +183,7 @@ export type Capability = 'protocol_context' | 'protocol_spawn' | 'main_handoff'
 export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>>> = {
   protocol_context: new Set<ToolName>(['advance', 'extend_phase']),
   protocol_spawn: new Set<ToolName>(['spawn_session', 'kill_session', 'peek_session']),
-  // Main only: it clears its own context in place. A registry orchestrator (factory PM) must not get it — its successor would lose the orchestrator tools.
+  // Main only: it clears its own context in place. A registry orchestrator must not get it — its successor would lose the orchestrator tools.
   main_handoff: new Set<ToolName>(['handoff']),
 }
 

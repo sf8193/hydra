@@ -84,20 +84,6 @@ for (const adapter of Object.values(engines)) {
   })
 }
 
-// Sweep orphaned factory builders left by previous daemon instance
-import { sweepOrphanedBuilders } from './daemon/factory.js'
-// Retain the promise: auto-recovery must run AFTER the sweep so it sees factory
-// builders in their post-sweep state (awaiting_pm ones marked suppressAutoRecover,
-// others killed) rather than racing it.
-// The .catch swallows a sweep failure so `await factorySweep` never blocks auto-recovery.
-// A partial sweep is safe: auto-recover targets only thread_owner workers that are neither
-// factory_builder (un-swept builders keep that type → excluded) nor suppressAutoRecover
-// (swept ones → excluded), so sweep completeness never changes what auto-recover acts on.
-// Re-throwing would be worse — it would skip recovery of healthy, unrelated workers.
-const factorySweep = sweepOrphanedBuilders().catch(err => {
-  process.stderr.write(`daemon: factory sweep failed: ${err}\n`)
-})
-
 import { register as registerRaindrop } from './daemon/raindrop.js'
 registerRaindrop()
 
@@ -137,7 +123,7 @@ if ('homeSpawnHandler' in gateway) {
       let modelOverride: string | undefined
       let engine: ProviderId | undefined
 
-      // "factory sonnet: topic" — parseTemplateTopic sees "factory sonnet" as candidate, misses it.
+      // "review sonnet: topic" — parseTemplateTopic sees "review sonnet" as candidate, misses it.
       // Fall back: split prefix on space to find "template model: topic".
       if (!parsed) {
         const colonIdx = topic.indexOf(':')
@@ -166,7 +152,7 @@ if ('homeSpawnHandler' in gateway) {
         cleanTopic = cleanTopic.replace(/\s*--codex\b/, '').trim()
       }
       if (!cleanTopic.trim()) {
-        const hint = parsed?.templateName ?? 'factory'
+        const hint = parsed?.templateName ?? 'review'
         void gateway.send(userId, `_Need a topic — e.g. \`${hint}: describe the task\`_`).catch(() => {})
         return
       }
@@ -361,9 +347,7 @@ void startGateway().then(async () => {
   }
   await backfillArtifacts()
   // Opt-in (HYDRA_AUTO_RECOVER=1): revive dead workers after a reboot. Runs after
-  // the gateway is up (respawns post to their threads) AND after the factory sweep
-  // settled (so it doesn't race sweepOrphanedBuilders over factory records). No-op otherwise.
-  await factorySweep
+  // the gateway is up (respawns post to their threads). No-op otherwise.
   await autoRecoverAfterBoot(startupGapMs ?? undefined).catch(err =>
     process.stderr.write(`daemon: auto-recovery failed: ${err instanceof Error ? err.message : err}\n`),
   )

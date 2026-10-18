@@ -135,35 +135,6 @@ describe('cli-handler', () => {
     expect(res.error).toContain('not found')
   })
 
-  test('factory status without ticket returns error', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'factory', params: { sub: 'status' } }))
-    expect(res.ok).toBe(false)
-    expect(res.error).toContain('ticket is required')
-  })
-
-  test('factory status with unknown ticket returns error', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'factory', params: { sub: 'status', ticket: 'fb-unknown-xyz' } }))
-    expect(res.ok).toBe(false)
-    expect(res.error).toContain('not found')
-  })
-
-  test('factory accept with unknown ticket returns error', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'factory', params: { sub: 'accept', ticket: 'fb-unknown-xyz' } }))
-    expect(res.ok).toBe(false)
-    expect(res.error).toContain('Unknown ticket')
-  })
-
-  test('factory abandon with unknown ticket returns error', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'factory', params: { sub: 'abandon', ticket: 'fb-unknown-xyz' } }))
-    expect(res.ok).toBe(false)
-    expect(res.error).toContain('Unknown ticket')
-  })
-
-  test('factory with unknown subcommand returns error', async () => {
-    const res = await handleCLIRequest(makeReq({ command: 'factory', params: { sub: 'frobnicate' } }))
-    expect(res.ok).toBe(false)
-    expect(res.error).toContain('unknown factory subcommand')
-  })
 })
 
 describe('cli-handler: raindrop in health', () => {

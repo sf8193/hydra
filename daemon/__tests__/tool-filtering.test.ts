@@ -39,33 +39,12 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('peek_session')
     expect(names).toContain('spawn_session')
     expect(names).toContain('kill_session')
-    expect(names).not.toContain('factory_build')
   })
 
   test('protocol_spawn grants only spawn/kill from the orchestrator-only tools', () => {
     const names = computeToolsForSession('thread_owner', new Set(['protocol_spawn'])).map(t => t.name)
     expect(names).toContain('spawn_session')
     expect(names).toContain('kill_session')
-    expect(names).not.toContain('factory_build')
-  })
-
-  test('factory_builder gets restricted tool set with factory_done', () => {
-    const tools = computeToolsForSession('factory_builder', new Set())
-    const names = tools.map(t => t.name)
-    expect(names).toContain('reply')
-    expect(names).toContain('fetch_messages')
-    expect(names).toContain('send_to_thread')
-    expect(names).toContain('factory_done')
-    expect(names).not.toContain('react')
-    expect(names).not.toContain('edit_message')
-    expect(names).not.toContain('spawn_session')
-    expect(tools).toHaveLength(6)
-  })
-
-  test('factory_builder description override applies to factory_done', () => {
-    const tools = computeToolsForSession('factory_builder', new Set(), { descriptions: { factory_done: 'Signal build complete.' } })
-    const factoryDone = tools.find(t => t.name === 'factory_done')!
-    expect(factoryDone.description).toBe('Signal build complete.')
   })
 
   test('spawn_session and kill_session only in master_orchestrator base set', () => {
@@ -79,7 +58,7 @@ describe('computeToolsForSession', () => {
 
   test('report_usage is main-only: no other session type or capability grants it', () => {
     expect(computeToolsForSession('master_orchestrator', new Set()).map(t => t.name)).toContain('report_usage')
-    for (const type of ['thread_owner', 'thread_guest', 'factory_builder'] as const) {
+    for (const type of ['thread_owner', 'thread_guest'] as const) {
       expect(computeToolsForSession(type, new Set(['protocol_context', 'protocol_spawn'])).map(t => t.name)).not.toContain('report_usage')
     }
     expect(codexStaticTools().map(t => t.name)).not.toContain('report_usage')
@@ -116,10 +95,9 @@ describe('computeToolsForSession', () => {
   })
 
   test('BASE_TOOLS sizes match design spec', () => {
-    expect(BASE_TOOLS.master_orchestrator.size).toBe(23)
+    expect(BASE_TOOLS.master_orchestrator.size).toBe(17)
     expect(BASE_TOOLS.thread_owner.size).toBe(16)
     expect(BASE_TOOLS.thread_guest.size).toBe(8)
-    expect(BASE_TOOLS.factory_builder.size).toBe(6)
   })
 
   test('thread_guest base set includes advance and extend_phase', () => {
@@ -129,7 +107,6 @@ describe('computeToolsForSession', () => {
     expect(names).toContain('extend_phase')
     expect(names).toContain('reply')
     expect(names).not.toContain('spawn_session')
-    expect(names).not.toContain('factory_build')
     expect(tools).toHaveLength(8)
   })
 
@@ -141,15 +118,6 @@ describe('computeToolsForSession', () => {
     expect(advance.description).toBe('Custom advance description')
     const extendPhase = tools.find(t => t.name === 'extend_phase')!
     expect(extendPhase.description).not.toBe('Custom advance description')
-  })
-
-  test('factory_builder with protocol_context gets advance alongside factory_done', () => {
-    const tools = computeToolsForSession('factory_builder', new Set(['protocol_context']))
-    const names = tools.map(t => t.name)
-    expect(names).toContain('factory_done')
-    expect(names).toContain('advance')
-    expect(names).toContain('extend_phase')
-    expect(names).toContain('reply')
   })
 
   test('inputSchema overrides replace tool schema', () => {

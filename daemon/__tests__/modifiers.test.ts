@@ -75,8 +75,8 @@ describe('flag modifiers', () => {
   })
 
   test('a flag is not a spawn template — spawn ignores it and says so', () => {
-    const { template, ignored } = partitionSpawnModifiers(['subagent', 'factory'])
-    expect(template?.name).toBe('factory')
+    const { template, ignored } = partitionSpawnModifiers(['subagent'])
+    expect(template).toBeUndefined()
     expect(ignored).toEqual(['subagent'])
   })
 })

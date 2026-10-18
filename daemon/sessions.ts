@@ -56,7 +56,7 @@ export type SessionInfo = {
   handoffNote?: { text: string; artifact: string }  // set by `handoff: <note>`: the requester's words, for the successor of that request's letter only
   predecessor?: Predecessor  // set on a handoff successor: the session it took over from, still forkable after its kill
   launchCwd?: string          // a fork's launch dir (its source's); a resume must start there to find the transcript
-  disallowedTools?: string[]  // Claude built-in tools blocked at spawn (read_only, factory PM); a resume re-applies them
+  disallowedTools?: string[]  // Claude built-in tools blocked at spawn (read_only); a resume re-applies them
   deadAt?: number
   contextLinks?: string[]
   artifacts?: string[]   // deliverable URLs (PRs, Arti docs, Claude artifacts) the session emitted in its own replies
@@ -66,10 +66,7 @@ export type SessionInfo = {
   headless?: boolean       // no Discord thread — worker communicates via send_to_thread
   answerOnce?: boolean     // a headless fork: ended once its first result is delivered
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
-  factoryPmThreadId?: string   // PM's thread ID — for startup sweep notifications
-  factoryTicket?: string       // factory ticket ID — for restart recovery info
-  factoryPhase?: string        // last known factory phase — for restart recovery info
-  suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. awaiting_pm factory builder preserved for PM peek/kill); manual `recover` still works
+  suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. a dead record whose worktree is gone); manual `recover` still works
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
   spawnAnnounceId?: string // message ID of the spawn announce line — edited on death to show completion
   spawnLogPath?: string    // black-box recorder: tmux pane output captured via `pipe-pane`, read on crash
@@ -87,8 +84,8 @@ export type SessionInfo = {
   sessionType: SessionType
   label?: SessionLabel
   capabilities?: Capability[]
-  // Keys are subsystem-owned: factory owns 'factory_done', protocol owns 'advance'/'extend_phase'.
-  // clearFactoryIdentity and clearProtocolOverrides are the canonical cleanup paths.
+  // Keys are subsystem-owned: protocol owns 'advance'/'extend_phase'.
+  // clearProtocolOverrides is the canonical cleanup path.
   toolDescriptions?: Partial<Record<ToolName, string>>
   toolInputSchemas?: Partial<Record<ToolName, object>>
 }
@@ -255,7 +252,7 @@ export type SpawnOpts = {
   engine?: ProviderId  // which backend to use (default: claude)
   headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
   answerOnce?: boolean   // end the session once its first result is delivered (headless forks)
-  disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'] for factory PM)
+  disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'])
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   sessionType?: SessionType  // declared at spawn — determines base tool set
@@ -498,9 +495,11 @@ export class SessionRegistry {
         if (raw.isJoinMember && !raw.sessionType) {
           raw.sessionType = 'thread_guest'
         }
-        if ((raw.factorySupervised || raw.supervised || raw.isFactoryBuilder) && !raw.sessionType) {
-          raw.sessionType = 'factory_builder'
-        }
+        // Factory is gone: its builders become plain workers, its bookkeeping fields are dropped.
+        if (raw.sessionType === 'factory_builder') raw.sessionType = 'thread_owner'
+        delete raw.factoryPmThreadId
+        delete raw.factoryTicket
+        delete raw.factoryPhase
         delete raw.allowMainTools
         delete raw.isJoinMember
         delete raw.isFactoryBuilder
