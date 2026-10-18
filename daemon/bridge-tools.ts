@@ -2,8 +2,8 @@
 //
 // Tool access is determined by session type (base set) + capabilities (dynamic addons).
 // Definitions live in shared/tool-definitions.ts. Name sets live in shared/constants.ts.
-import { BASE_TOOLS, CAPABILITY_TOOLS } from '../shared/constants.js'
-import type { SessionType, Capability, ToolName } from '../shared/constants.js'
+import { BASE_TOOLS, ALL_CAPABILITY_TOOLS } from '../shared/constants.js'
+import type { SessionType, Capability, DerivedCapability, ToolName } from '../shared/constants.js'
 import { UNIVERSAL_TOOLS } from '../shared/tool-definitions.js'
 
 export { UNIVERSAL_TOOLS }
@@ -22,10 +22,10 @@ export function defaultToolDescription(name: string): string {
   return tool.description
 }
 
-export function computeToolsForSession(type: SessionType, capabilities: Set<Capability>, overrides?: ToolOverrides): SessionTool[] {
+export function computeToolsForSession(type: SessionType, capabilities: Set<Capability | DerivedCapability>, overrides?: ToolOverrides): SessionTool[] {
   const allowed = new Set(BASE_TOOLS[type])
   for (const cap of capabilities) {
-    const extra = CAPABILITY_TOOLS[cap]
+    const extra = ALL_CAPABILITY_TOOLS[cap]
     if (extra) for (const t of extra) allowed.add(t)
   }
   const tools = UNIVERSAL_TOOLS.filter(t => allowed.has(t.name))

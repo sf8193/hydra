@@ -138,6 +138,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     isAlive: () => false,
     surface: () => null,
     recoveryPlan: (s: any, o: any) => orig.claude.recoveryPlan(s, o),
+    askFork: async () => 'answer',
   }
 
   beforeAll(() => {
@@ -195,6 +196,22 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     seedDead()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, predecessor: pred })
     expect(live().predecessor).toEqual(pred)
+  })
+
+  test.each([
+    ['a handoff (opts.predecessor)', { predecessor: pred }],
+    ['a recovery of the successor (carryOver.predecessor)', { carryOver: { predecessor: pred } }],
+  ] as const)('ask_predecessor is pushed to a bridge that registered before the record, for %s', async (_label, opts) => {
+    const pushed: any[] = []
+    ;(transport as any).sendOrQueue = (id: string, msg: any) => { pushed.push([id, msg]) }
+    try {
+      seedDead()
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, ...opts })
+      const update = pushed.find(([id, m]) => id === live().sessionId && m.type === 'tools_update')
+      expect(update?.[1].tools.map((t: any) => t.name)).toContain('ask_predecessor')
+    } finally {
+      ;(transport as any).sendOrQueue = () => {}
+    }
   })
 
   // A read_only fork's launch options: a real dir that is not SPAWN_CWD, and the blocked tools.
@@ -380,7 +397,8 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     live().deadAt = Date.now()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: 'elder', artifact: '/h.md', predecessor: pred })
     expect(launches[1].prompt).toContain('spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>")')
-    expect(launches[1].prompt).toBe(hydraPrompt(buildHandoffPrompt({ ...base(launches[1]), hasPredecessor: true })))
+    expect(launches[1].prompt).toContain('call ask_predecessor(question)')
+    expect(launches[1].prompt).toBe(hydraPrompt(buildHandoffPrompt({ ...base(launches[1]), hasPredecessor: true, canAsk: true })))
 
     // A Codex predecessor can't be forked yet, so its successor gets no recipe.
     live().deadAt = Date.now()

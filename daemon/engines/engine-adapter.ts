@@ -158,8 +158,9 @@ export type RecoveryPlan = {
     | { kind: 'at-launch'; resumeCodex: { threadId: string; homeName: string } }  // launch resumes and takes the prompt
     | { kind: 'at-launch'; resumeOmp: { fromSessionId: string } }                  // omp: launch continues the dead session's file
     | null
-  fork: NonNullable<SpawnOpts['forkFrom']> | null
+  fork: ForkPlan | null
 }
+export type ForkPlan = NonNullable<SpawnOpts['forkFrom']>
 
 // ---------------------------------------------------------------------------
 // Engine adapter interface
@@ -218,6 +219,13 @@ export interface EngineAdapter {
   // report it as learnedId. Claude: pane discovery. Codex: never (launch and
   // reconnect assign its id).
   recoveryPlan(src: RecoverySource, opts?: { discover?: boolean }): RecoveryPlan
+
+  // Ask a gone session one question through a read-only fork of its conversation
+  // (a plan's fork, run in cwd, on model if given) and resolve with the answer text.
+  // The original conversation is untouched, and the fork cannot reach Hydra. Rejects
+  // on timeout, failure or an empty answer. Absent when this provider has no read-only,
+  // Hydra-free headless fork; then no successor is offered ask_predecessor.
+  askFork?(plan: ForkPlan, cwd: string, question: string, timeoutMs: number, model?: string): Promise<string>
 }
 
 // Compat — flat serializable ref used by retirement journal persistence

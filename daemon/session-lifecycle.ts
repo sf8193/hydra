@@ -10,6 +10,7 @@ import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult 
 import { notePendingReply } from './reply-guard.js'
 import { transport } from './bridge-transport.js'
 import { computeToolsForSession } from './bridge-tools.js'
+import { canAskPredecessor, pushToolSurface } from './tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
 import { resolveModelAlias, spawnModel, withContextSuffix } from '../shared/constants.js'
@@ -976,13 +977,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   }
 
   const promptParams = { sessionId, tmuxName, threadId: threadId!, topic, topicIsRequest: opts?.topicIsRequest }
+  const engine = opts?.engine ?? 'claude'
   let prompt: string
   let armFirstReply = false
   if (opts?.promptBuilder) {
     prompt = opts.promptBuilder(sessionId, tmuxName)
   } else if (isHandoff) {
+    // Only Claude predecessors can be forked today.
+    const hasPredecessor = carriedPredecessor?.engine === 'claude'
     const arrival = handoffArrival(opts ?? {}, { from: originFrom!, session: tmuxName, cwd: effectiveCwd, worktree: worktreePath ?? '', branch: worktreeBranch ?? '' })
-    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, note: opts?.handoffNote, arrival, hasPredecessor: carriedPredecessor?.engine === 'claude' })  // only Claude predecessors can be forked today
+    prompt = buildHandoffPrompt({ ...promptParams, originFrom: originFrom!, artifact: opts?.artifact, note: opts?.handoffNote, arrival, hasPredecessor, canAsk: canAskPredecessor({ engine, predecessor: carriedPredecessor }) })
   } else if (isFork && isHeadless) {
     prompt = buildHeadlessForkPrompt({ ...promptParams, originFrom: originFrom!, readOnly: !!disallowedTools?.length, answerOnce: !!opts?.answerOnce })
   } else if (isFork) {
@@ -1005,7 +1009,6 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const rawModel = opts?.model
   const model = rawModel ? (resolveModelAlias(rawModel) ?? withContextSuffix(rawModel)) : withContextSuffix(spawnModel())
 
-  const engine = opts?.engine ?? 'claude'
 
   // --- Launch via engine adapter ---
   // Private protocol children use this hook to install their fail-closed policy
@@ -1061,6 +1064,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     adapter,
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)
+  // A bridge that registered before the record existed was given the tools of a session without a predecessor.
+  if (carriedPredecessor && adapter.channel === 'bridge') pushToolSurface(sessionId)
   // Thread ownership: setThread claims the thread for message routing. Only the
   // thread OWNER calls setThread — join members (protocol critics, guest agents)
   // use addMember and must never touch the mapping, or they'd hijack routing.

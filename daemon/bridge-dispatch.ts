@@ -16,8 +16,8 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
 import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
-import { normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
-import { isToolAllowed } from './tool-surface.js'
+import { ASK_PREDECESSOR_TIMEOUT_MS, normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
+import { isToolAllowed, predecessorAsker } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
 
 const SEND_RETRY_ATTEMPTS = 3
@@ -161,6 +161,8 @@ export type ToolResult = { content: Array<{type: string; text: string}>; isError
 
 // Sessions whose `handoff` call is between the file check and handOff (the pre-handoff hook runs here).
 const handoffChecksInFlight = new Set<string>()
+
+const askingPredecessor = new Set<string>()  // session ids with an ask_predecessor fork running
 
 export async function executeTool(name: string, args: Record<string, unknown>, callerSessionId?: string): Promise<ToolResult> {
   try {
@@ -504,6 +506,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           ).catch(() => {})
         }, 500)
         return { content: [{ type: 'text', text: `handing off — a fresh session will continue from ${path}` }] }
+      }
+
+      case 'ask_predecessor': {
+        const question = str(args.question)
+        if (!question) throw new Error('ask_predecessor: question is required')
+        // The gate above has already refused a session that can't ask; this also covers a caller without a session id.
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        const ask = caller ? predecessorAsker(caller) : undefined
+        if (!caller || !ask) throw new Error('ask_predecessor: this session has no predecessor it can ask')
+        // One fork per session at a time: each is a full-context turn of up to 180s.
+        if (askingPredecessor.has(caller.sessionId)) throw new Error('ask_predecessor: an earlier question from this session is still running; wait for its answer')
+        askingPredecessor.add(caller.sessionId)
+        try {
+          return { content: [{ type: 'text', text: await ask(question, ASK_PREDECESSOR_TIMEOUT_MS) }] }
+        } finally {
+          askingPredecessor.delete(caller.sessionId)
+        }
       }
 
       case 'set_description': {

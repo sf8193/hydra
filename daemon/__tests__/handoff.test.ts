@@ -274,10 +274,11 @@ test('arriving {{from_transcript}}: the predecessor\'s transcript path when it e
 
 test('successor prompt: with arriving.md and a predecessor, the fork recipe stays and the built-in behavior is gone', async () => {
   const { buildHandoffPrompt } = await import('../prompts/session.js')
-  const p = { sessionId: 's-2', tmuxName: 'fresh', threadId: 'th-2', topic: 't', originFrom: 'flint', artifact: '/h.md', arrival: 'Run /workstream-orient.', hasPredecessor: true }
+  const p = { sessionId: 's-2', tmuxName: 'fresh', threadId: 'th-2', topic: 't', originFrom: 'flint', artifact: '/h.md', arrival: 'Run /workstream-orient.', hasPredecessor: true, canAsk: true }
   const lines = buildHandoffPrompt(p).split('\n')
   const at = lines.indexOf('Run /workstream-orient.')
-  expect(lines[at + 1]).toStartWith('If a question comes up that only flint can answer, ask a fork of it: spawn_session(fork_from="predecessor"')
+  expect(lines[at + 1]).toStartWith('If a question comes up that only flint can answer, call ask_predecessor(question)')
+  expect(lines[at + 1]).toContain('spawn_session(fork_from="predecessor"')
   expect(lines[at + 2]).toBe('Send a greeting to your thread using reply(chat_id=th-2).')
   expect(lines.join('\n')).not.toMatch(/### Reception|In your greeting, include|begin executing the Next action/)
 })
