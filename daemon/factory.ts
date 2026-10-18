@@ -34,6 +34,7 @@ import { on } from './event-bus.js'
 import { pushToolSurface } from './tool-surface.js'
 import { registerProtocol } from './protocol-registry.js'
 import { clearBuilderNudge } from './pane-probe.js'
+import { request } from './prompts/request.js'
 
 // Late-bound so tests can substitute a recording fake (mirrors
 // protocol-runner's setLifecycle). Production always uses the real kill.
@@ -1439,7 +1440,7 @@ async function spawnBuilder(
     ...(pmName ? [`If the spec is ambiguous or you need design guidance, ask the PM via send_to_thread(target="${pmName}", type="question", text="...").`] : []),
     ``,
     `YOUR TASK:`,
-    state.spec,
+    request(state.spec),
     ...worktreeInstructions,
     ``,
     `WHEN DONE:`,
@@ -1473,6 +1474,7 @@ async function spawnBuilder(
     ...(forkInfo ? { forkFrom: { claudeSessionId: forkInfo.claudeSessionId, parentName: forkInfo.tmuxName } } : {}),
     model: state.builderModel,
     promptPrefix: builderPrompt,
+    topicIsRequest: false,
     ...(initiator ? { initiator, parentId: state.pmSessionId } : {}),
     ...(state.worktree ? { worktree: state.worktree } : {}),
     // The builder owns the review protocol, so every reviewer round inherits this.

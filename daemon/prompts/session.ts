@@ -6,12 +6,17 @@
 // themselves. No side effects — pure string construction.
 // ---------------------------------------------------------------------------
 
+import { request } from './request.js'
+
 type PromptParams = {
   sessionId: string
   tmuxName: string
   threadId: string
   topic: string
+  topicIsRequest?: boolean
 }
+
+const topicOf = (p: PromptParams): string => p.topicIsRequest === false ? p.topic : request(p.topic)
 
 export const DESCRIPTION_INSTRUCTION = (sessionId: string) =>
   `call set_description(session_id="${sessionId}", description="...") to name this thread. ` +
@@ -20,7 +25,7 @@ export const DESCRIPTION_INSTRUCTION = (sessionId: string) =>
 
 export function buildSpawnPrompt(p: PromptParams): string {
   return [
-    `You are ${p.tmuxName}, a spawned session. Topic: ${p.topic}`,
+    `You are ${p.tmuxName}, a spawned session. Topic: ${topicOf(p)}`,
     ``,
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     `Read your memory files for context.`,
@@ -33,7 +38,7 @@ export function buildSpawnPrompt(p: PromptParams): string {
 export function buildForkPrompt(p: PromptParams & { originFrom: string }): string {
   return [
     `You are ${p.tmuxName}, forked from ${p.originFrom}.`,
-    `Topic: ${p.topic}`,
+    `Topic: ${topicOf(p)}`,
     ``,
     `Your new thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     `Greet your new thread using reply(chat_id=${p.threadId}).`,
@@ -48,7 +53,7 @@ export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; 
     `You are ${p.tmuxName}, a headless${p.readOnly ? ' read-only' : ''} fork of ${p.originFrom}. You have its conversation up to here, but you are not ${p.originFrom} and you have no thread of your own.`,
     `Your session_id is ${p.sessionId}.`,
     ``,
-    `Question: ${p.topic}`,
+    `Question: ${topicOf(p)}`,
     ``,
     `Answer it from that conversation and anything you can look up${p.readOnly ? ' (Edit, Write and NotebookEdit are blocked)' : ''}.`,
     `Reply once with send_to_thread(target="parent", type="result", text="<your answer>")${p.answerOnce ? ' — you are ended once it is delivered' : ', then stop'}.`,
@@ -65,11 +70,11 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
     : `Read your memory files and workstream canon for context.`
   const greet = `Send a greeting to your thread using reply(chat_id=${p.threadId}).`
   return [
-    `You are ${p.tmuxName}, a session created by handoff from ${p.originFrom}. Topic: ${p.topic}`,
+    `You are ${p.tmuxName}, a session created by handoff from ${p.originFrom}. Topic: ${topicOf(p)}`,
     ``,
     `Your chat thread chat_id is ${p.threadId}. Your session_id is ${p.sessionId}.`,
     contextLine,
-    ...(p.note ? [`The handoff request came with this note, in the requester's words: "${p.note}". Treat it as the requester's instruction; where it conflicts with the letter, follow the note.`] : []),
+    ...(p.note ? [`The handoff request came with this note, in the requester's words: "${request(p.note)}". Treat it as the requester's instruction; where it conflicts with the letter, follow the note.`] : []),
     ...(p.arrival ? [p.arrival] : []),
     ...(p.hasPredecessor ? [`If a question comes up that only ${p.originFrom} can answer, ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.`] : []),
     ...(p.arrival ? [greet] : [

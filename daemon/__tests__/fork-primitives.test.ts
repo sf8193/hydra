@@ -15,6 +15,8 @@ import { handleRecoverIntercept } from '../recovery.js'
 import { handleResumeIntercept } from '../commands/thread.js'
 import { projectDirName } from '../usage.js'
 import { buildForkPrompt, buildHandoffPrompt } from '../prompts/session.js'
+import { hydraPrompt } from '../prompts/request.js'
+import { factoryBuild, __test as factoryTest } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -357,31 +359,45 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     await doSpawnSession('q?', undefined, undefined, { forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' }, headless: true, initiator: 'asker', disallowedTools: kept.disallowedTools })
     const headless = launches[0].prompt
     expect(headless).toContain('a headless read-only fork of elder')
-    expect(headless).toContain('Question: q?')
+    expect(headless).toContain('Question: <request>q?</request>')
     expect(headless).toContain('send_to_thread(target="parent", type="result"')
     expect(headless).not.toContain('Greet')
 
     await doSpawnSession('q2', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' } })
     const l = launches[1]
-    expect(l.prompt).toBe(buildForkPrompt({ sessionId: l.sessionId, tmuxName: l.tmuxName, threadId: THREAD, topic: 'q2', originFrom: 'elder' }))
+    expect(l.prompt).toBe(hydraPrompt(buildForkPrompt({ sessionId: l.sessionId, tmuxName: l.tmuxName, threadId: THREAD, topic: 'q2', originFrom: 'elder' })))
+
+    await doSpawnSession('q3', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' }, promptPrefix: 'PREFIX' })
+    expect(launches[2].prompt.startsWith('<hydra-prompt>\nPREFIX\n\n')).toBe(true)
+  })
+
+  test('prompts: a factory builder tags its spec', async () => {
+    const createThread = gateway.createThread
+    ;(gateway as any).createThread = async () => ({ id: THREAD })
+    registry.set('fp-pm', { sessionId: 'fp-pm', threadId: THREAD, tmuxName: 'fppm', anchorChannelId: PARENT } as any as SessionInfo)
+    factoryBuild({ pmThreadId: THREAD, pmSessionId: 'fp-pm', spec: 'add retries', fresh: true })
+    for (let i = 0; i < 50 && !launches.length; i++) await new Promise(res => setTimeout(res, 10))
+    ;(gateway as any).createThread = createThread
+    factoryTest!.reset()
+    expect([...launches[0].prompt.matchAll(/<request>([\s\S]*?)<\/request>/g)].map(m => m[1])).toEqual(['add retries'])
   })
 
   test('prompts: a handoff successor with a predecessor gets the fork recipe; without one the prompt is unchanged', async () => {
     const base = (l: LaunchInput) => ({ sessionId: l.sessionId, tmuxName: l.tmuxName, threadId: THREAD, topic: 't', originFrom: 'elder', artifact: '/h.md' })
     seedDead()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: 'elder', artifact: '/h.md' })
-    expect(launches[0].prompt).toBe(buildHandoffPrompt(base(launches[0])))
+    expect(launches[0].prompt).toBe(hydraPrompt(buildHandoffPrompt(base(launches[0]))))
     expect(launches[0].prompt).not.toContain('fork_from')
 
     live().deadAt = Date.now()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: 'elder', artifact: '/h.md', predecessor: pred })
     expect(launches[1].prompt).toContain('spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>")')
-    expect(launches[1].prompt).toBe(buildHandoffPrompt({ ...base(launches[1]), hasPredecessor: true }))
+    expect(launches[1].prompt).toBe(hydraPrompt(buildHandoffPrompt({ ...base(launches[1]), hasPredecessor: true })))
 
     // A Codex predecessor can't be forked yet, so its successor gets no recipe.
     live().deadAt = Date.now()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: 'elder', artifact: '/h.md', predecessor: { engine: 'codex', fork: { codexThreadId: 'th-1', codexHomeName: 'elder', parentName: 'elder' }, cwd: '/src/dir' } })
-    expect(launches[2].prompt).toBe(buildHandoffPrompt(base(launches[2])))
+    expect(launches[2].prompt).toBe(hydraPrompt(buildHandoffPrompt(base(launches[2]))))
     expect(launches[2].prompt).not.toContain('fork_from')
   })
 

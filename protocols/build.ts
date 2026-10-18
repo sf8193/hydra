@@ -1,4 +1,5 @@
 import { protocol, protocolSeed } from '../daemon/protocol-dsl.js'
+import { request } from '../daemon/prompts/request.js'
 
 export default protocol('build', {
   emoji: '🔨',
@@ -49,7 +50,7 @@ export default protocol('build', {
 
   seed: {
     critic: (ctx) => protocolSeed(ctx.protocol, 'critic', ctx)
-      + `\n\n**Task:** ${ctx.task ?? 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
+      + `\n\n**Task:** ${ctx.task ? request(ctx.task) : 'Review the implementation.'}\n\nReview the implementation. Be specific — cite code lines. Focus on correctness first.`,
   },
 
   notifications: {
