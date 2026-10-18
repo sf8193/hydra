@@ -440,15 +440,14 @@ gateway.onMessage(async (msg: InboundMessage) => {
       }
     }
 
-    // "spawn +f: topic" / "spawn +factory: topic" — spawn applying a template
-    // modifier. `+f` composes the factory template exactly like `factory: topic`.
+    // "spawn +mod: topic" — spawn applying a template modifier.
     const spawnModMatch = msg.content.match(/^(?:new session|spawn)\s+((?:\+\w+\s*)+):\s*([\s\S]+)/i)
     if (spawnModMatch) {
       const modNames = [...spawnModMatch[1].matchAll(/\+(\w+)/g)].map(m => m[1].toLowerCase())
       const { template: templateMod, ignored } = partitionSpawnModifiers(modNames)
       const topic = spawnModMatch[2].trim()
       if (!templateMod) {
-        void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. Available: \`+f\`/\`+factory\`._`, { replyTo: msg.id }).catch(() => {})
+        void gateway.send(msg.channelId, `_No spawn template matched \`${modNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
         return
       }
       const template = getTemplate(templateMod.templateName)
@@ -457,7 +456,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
         return
       }
       if (ignored.length > 0) {
-        void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier (\`+f\`/\`+factory\`)._`, { replyTo: msg.id }).catch(() => {})
+        void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a spawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
       }
       void handleTemplateSpawn(msg, templateMod.templateName, topic, template, access)
       return
@@ -593,9 +592,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    // `kill` is gentle — factory builders in this thread survive it.
-    // `kill!` / `kill --cascade` is the destructive variant: it tears down
-    // every build this thread owns before killing the session.
+    // `kill!` / `kill --cascade` still parse (so they never read as a session name) and kill the session.
     // `+d` / `+destroy` appends the `destroy` step, collapsing the two-command
     // sequence `destroy` itself demands (it refuses while a session is alive).
     // The modifiers compose: `kill! +d` cascades, kills, then deletes the thread.
@@ -611,8 +608,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       return
     }
 
-    // "respawn" / "respawn: topic" / "respawn +f:" / "respawn +factory: topic"
-    // — the optional `+mods` group applies a template (e.g. factory) to the respawn.
+    // "respawn" / "respawn: topic" / "respawn +mod:" — the optional `+mods` group applies a template to the respawn.
     const respawnMatch = msg.content.match(RESPAWN_RE)
     if (respawnMatch) {
       const selection = resolveProtocolModel(respawnMatch[1], msg.channelId, msg.id)
@@ -622,11 +618,11 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (respawnModNames.length > 0) {
         const { template: respawnTemplateMod, ignored } = partitionSpawnModifiers(respawnModNames)
         if (!respawnTemplateMod) {
-          void gateway.send(msg.channelId, `_No template matched \`${respawnModNames.map(n => `+${n}`).join(' ')}\`. Available: \`+f\`/\`+factory\`._`, { replyTo: msg.id }).catch(() => {})
+          void gateway.send(msg.channelId, `_No template matched \`${respawnModNames.map(n => `+${n}`).join(' ')}\`. There are no template modifiers._`, { replyTo: msg.id }).catch(() => {})
           return
         }
         if (ignored.length > 0) {
-          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier (\`+f\`/\`+factory\`)._`, { replyTo: msg.id }).catch(() => {})
+          void gateway.send(msg.channelId, `_Ignored ${ignored.map(n => `\`+${n}\``).join(' ')} — a respawn applies a single template modifier._`, { replyTo: msg.id }).catch(() => {})
         }
         void handleRespawnIntercept(msg, respawnTopic, respawnTemplateMod.templateName, selection)
       } else {

@@ -15,8 +15,7 @@ export type SeedModifier = {
 }
 
 // A template modifier applies a spawn template's settings (prompt, disallowed
-// tools, main-tool access) to a spawn or respawn — so `spawn +f: topic` composes
-// the factory template the same way `factory: topic` does.
+// tools, main-tool access) to a spawn or respawn.
 export type TemplateModifier = {
   type: 'template'
   name: string
@@ -270,15 +269,6 @@ register({
 export function listLensNames(): string[] {
   return [...new Set([...registry.values(), ...localLenses()].filter((m): m is SeedModifier => m.type === 'seed' && m.target === 'critic').map(m => m.name))]
 }
-
-// Factory-as-modifier: `spawn +f: topic` / `respawn +f:` apply the factory
-// template. The template itself lives in templates.ts; this just names it.
-register({
-  type: 'template',
-  name: 'factory',
-  aliases: ['f'],
-  templateName: 'factory',
-})
 
 // `review +subagent` — skip the adversarial critic and go straight to the
 // owner-run subagent review that a critic death would have fallen back to.

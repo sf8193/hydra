@@ -48,12 +48,12 @@ export type WorktreeResult = {
 }
 
 // ---------------------------------------------------------------------------
-// Validation — shared by factory_build (sync pre-check) and createWorktree
+// Validation — shared by spawn_session and createWorktree
 // ---------------------------------------------------------------------------
 
 /**
  * Resolve a worktree target to an absolute repo path and verify it contains a
- * git repo. Single source of truth so factory_build's early check and
+ * git repo. Single source of truth so a caller's early check and
  * createWorktree's actual creation can never disagree on resolution.
  */
 export function resolveAndValidateRepo(repoName: string, spawnCwd: string): string {
@@ -62,7 +62,7 @@ export function resolveAndValidateRepo(repoName: string, spawnCwd: string): stri
   // Mirror validateWorktreeTarget's bounds check: the target must be strictly
   // nested under SPAWN_CWD, else createWorktree's resolve(repoDir, '..', '.worktrees')
   // escapes above/outside the sandbox. This is the true sink — guard here protects
-  // every caller (factory_build, spawn_session), not just the factory pre-check.
+  // every caller, not just a pre-check.
   if (repoDir === base || !repoDir.startsWith(base + '/')) {
     throw new Error(`worktree target "${repoName}" resolves to ${repoDir}, not a repo nested under SPAWN_CWD (${base}) — the root repo cannot be isolated and out-of-bounds paths are refused`)
   }

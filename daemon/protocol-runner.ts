@@ -457,7 +457,7 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
     // Capture the closing summary whenever the owner advances INTO terminal
     // completion, not only from the cleanup phase — the subagent_review phase
     // also ends at `complete` and its summary must reach CompletionEvent.summary
-    // (the factory PM notification reads it). A non-terminal advance is a
+    // (CompletionEvent.summary). A non-terminal advance is a
     // mid-run post and joins messageIds.
     if (isTerminal(run) && result.to !== run.protocol.cancelPhase) {
       run.summary = content

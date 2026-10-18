@@ -121,7 +121,7 @@ function persistListMsgsToDisk(): void {
 }
 
 // Late-bound so a test can drive refreshListDisplay without writing into the
-// operator's live daemon state (mirrors factory.ts's killSession seam).
+// operator's live daemon state.
 let persistListMsgs = persistListMsgsToDisk
 
 function loadPersistedListMsgs(): void {

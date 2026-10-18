@@ -14,7 +14,6 @@ import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
-import { factoryCascadeKill } from '../factory.js'
 import type { InboundMessage } from '../../gateway.js'
 import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-selection.js'
 import { recoveryEngine } from '../engines/history.js'
@@ -76,16 +75,6 @@ export async function handleThreadKillIntercept(
     return
   }
   void gateway.react(msg.channelId, msg.id, cascade ? '🧨' : '☠️').catch(() => {})
-
-  // Cascade BEFORE the kill: killSession emits session:death, whose gentle
-  // factory handler would otherwise post an orphan notice for builds this
-  // command is about to destroy.
-  if (cascade) {
-    const torn = factoryCascadeKill(info.sessionId)
-    if (torn > 0) {
-      void safeSend(msg.channelId, `🏭 cascade — tore down ${torn} build${torn > 1 ? 's' : ''}`).catch(() => {})
-    }
-  }
 
   // initiator is the only authz input destroy consumes that killSession invalidates
   const initiator = info.initiator
@@ -442,8 +431,8 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
     return
   }
 
-  // `respawn +f:` / `respawn +factory:` — respawn applying a spawn template
-  // (e.g. factory). The template's prompt/tool settings are layered onto the
+  // `respawn +mod:` — respawn applying a spawn template
+  // modifier. The template's prompt/tool settings are layered onto the
   // resurrect spawn, which already instructs the session to reread the thread.
   const template = templateName ? getTemplate(templateName) : undefined
   if (templateName && !template) {
@@ -491,7 +480,7 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
 
   // A template respawn layers the template's prompt/tool settings onto the
   // resurrect spawn. `trigger` is kept so the session's origin still reads as the
-  // template (e.g. `factory:`) in the spawn announce + `list sessions`.
+  // template in the spawn announce + `list sessions`.
   // A template's own label wins over the dead session's bucket.
   const extraOpts = { inheritedLabel: respawnLabel, ...(template ? buildTemplateSpawnOpts(templateName!, template) : {}), engine: respawnEngine }
 

@@ -26,7 +26,6 @@ const REQUIRED_WIRING: Record<string, Record<string, number>> = {
     // And into the durable history entry a later resume reads.
     'label: sessionLabel,': 1,
   },
-  'factory.ts': { 'inheritedLabel:': 1 },
   // commonOpts (tiers 2 and 3) and tryResume (tier 1).
   'recovery.ts': { 'label: recoveredLabel': 2 },
   // Three fork paths (native, thread-reconstruct, failed-fork fallback) and respawn.

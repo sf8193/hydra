@@ -52,12 +52,6 @@ Deliver (whisper channel — message to session context, not thread):
     --idempotency-key <key>            Prevent duplicate delivery (optional, 15min TTL)
     --queue                            Queue if bridge disconnected (default: fail)
 
-Factory:
-  hydra factory list                   List all active factory builds
-  hydra factory status <ticket>        Show a build's phase, spec, retries
-  hydra factory accept <ticket>        Accept a build (--allow-unreviewed to bypass review gate)
-  hydra factory abandon <ticket>       Abandon a build
-
 Platform: slack | discord (required for lifecycle commands)
 
 Spawn options:
@@ -278,28 +272,6 @@ async function main(): Promise<void> {
       }
       const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'check-key', id: randomUUID(), params: { key },
-      })
-      printResponse(response, json)
-      break
-    }
-
-    case 'factory': {
-      const sub = filtered[1]
-      // First non-flag arg after the subcommand is the ticket (order-independent vs flags).
-      const ticket = filtered.slice(2).find(a => !a.startsWith('--'))
-      const validSubs = ['list', 'status', 'accept', 'abandon']
-      if (!sub || !validSubs.includes(sub)) {
-        console.error('error: usage: hydra factory <list|status|accept|abandon> [ticket]')
-        process.exit(1)
-      }
-      if (sub !== 'list' && !ticket) {
-        console.error(`error: hydra factory ${sub} requires a ticket`)
-        process.exit(1)
-      }
-      const allowUnreviewed = filtered.includes('--allow-unreviewed')
-      const response = await sendRequest(socketPath(), {
-        type: 'cli', command: 'factory', id: randomUUID(),
-        params: { sub, ...(ticket && { ticket }), ...(allowUnreviewed && { allowUnreviewed }) },
       })
       printResponse(response, json)
       break
