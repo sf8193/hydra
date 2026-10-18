@@ -25,7 +25,7 @@ import { fileURLToPath } from 'url'
 
 import { ToolsWaiterSet, type ToolsWaiter } from './shared/tools-waiters.js'
 import { appendBridgeLife, bridgeLifePath, type BridgeLifeEvent } from './shared/bridge-life.js'
-import { BRIDGE_SHUTDOWN_GRACE_MS, SESSION_INSTRUCTIONS } from './shared/constants.js'
+import { BRIDGE_SHUTDOWN_GRACE_MS, LONG_TOOL_TIMEOUTS_MS, SESSION_INSTRUCTIONS } from './shared/constants.js'
 
 // Resolve daemon socket path. Priority:
 // 1. DAEMON_SOCK env var (explicit override — needed when multiple daemons share a plugin cache)
@@ -472,7 +472,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         content: [{ type: 'text', text: `${name} failed: timeout waiting for daemon response` }],
         isError: true,
       })
-    }, 60_000)
+    }, LONG_TOOL_TIMEOUTS_MS[name] ?? 60_000)
 
     pendingCalls.set(id, {
       resolve: (result) => {

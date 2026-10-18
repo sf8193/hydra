@@ -505,7 +505,13 @@ grep -q '^#* *Next action' "$1" || { echo "letter has no Next action heading"; e
 - `read_only=true` blocks Edit, Write and NotebookEdit. Bash stays available, so it is a guard, not a sandbox. A resume keeps it; a handoff successor starts without it.
 - Codex sessions can't be forked yet: a fork would need the source's `CODEX_HOME`, and launching there restarts the source's app-server.
 
-To ask the session you took over from a question only it can answer:
+To ask the session you took over from a question only it can answer, a handoff successor has `ask_predecessor({ question })`. It runs one turn on a fork of the predecessor's conversation and returns the answer as the tool result, without creating a session, thread or bridge. For Claude that's `claude --resume <id> --fork-session -p` in plan mode, limited to Read, Grep and Glob, with no MCP servers and no session persistence: the fork can't reach Hydra or change anything, and it leaves no transcript.
+
+Each call re-reads the predecessor's whole context, so it costs one full-context turn; it gives up after 180s, and a session runs one at a time. Claude prunes old transcripts (`cleanupPeriodDays`), so after about a month the tool reports that the conversation is gone.
+
+The tool appears only where it works: the predecessor's engine can fork it headless (today only Claude), and the successor's client waits long enough (today only Claude's bridge; Codex's MCP client stops at its default `tool_timeout_sec` of 60s, omp's bridge at a fixed 60s). A Codex or omp successor of a Claude predecessor uses the spawned fork below instead; a Codex predecessor can't be forked either way yet.
+
+For a question that needs more than one turn, spawn a fork session instead:
 
 ```
 spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>")

@@ -60,11 +60,13 @@ export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; 
   ].join('\n')
 }
 
+const FORK_RECIPE = 'ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.'
+
 // A deployment's arriving.md replaces the built-in arrival *behavior* — the Reception note,
 // the greeting's content, and starting the Next action at once — so a local arrival
 // procedure has one owner. Identity, thread ids, the handoff file, the greeting itself,
 // set_description and the fork recipe are plumbing and always stay.
-export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; note?: string; arrival?: string; hasPredecessor?: boolean }): string {
+export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artifact?: string; note?: string; arrival?: string; hasPredecessor?: boolean; canAsk?: boolean }): string {
   const contextLine = p.artifact
     ? `Read your handoff context from \`${p.artifact}\`, then read your memory files.`
     : `Read your memory files and workstream canon for context.`
@@ -76,7 +78,9 @@ export function buildHandoffPrompt(p: PromptParams & { originFrom: string; artif
     contextLine,
     ...(p.note ? [`The handoff request came with this note, in the requester's words: "${request(p.note)}". Treat it as the requester's instruction; where it conflicts with the letter, follow the note.`] : []),
     ...(p.arrival ? [p.arrival] : []),
-    ...(p.hasPredecessor ? [`If a question comes up that only ${p.originFrom} can answer, ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.`] : []),
+    ...(p.hasPredecessor ? [`If a question comes up that only ${p.originFrom} can answer, ${p.canAsk
+      ? `call ask_predecessor(question) for a one-turn answer. For digging that takes more than one turn, ${FORK_RECIPE}`
+      : FORK_RECIPE}`] : []),
     ...(p.arrival ? [greet] : [
       `After reading the artifact, append a "### Reception (by ${p.tmuxName})" section to the artifact file noting what oriented you immediately, what needed code verification, and what was missing.`,
       `${greet} In your greeting, include one sentence on what the previous session was working on and one sentence on where this session is heading.`,

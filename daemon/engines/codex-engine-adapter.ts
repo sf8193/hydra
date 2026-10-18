@@ -81,6 +81,13 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
   }
 
+  // No askFork, so a Codex predecessor is never offered to ask_predecessor. A Codex fork is
+  // thread/fork on an app-server in the predecessor's CODEX_HOME, which (1) the kill stopped,
+  // (2) Hydra starts with approval_policy=never and sandbox_mode=danger-full-access, so the fork
+  // could write, and (3) registers the hydra MCP sidecar under the dead session's
+  // HYDRA_SESSION_ID, so the fork would get Hydra tools as that session. A read-only, MCP-free
+  // one-shot needs app-server overrides this code has never run against a real codex binary.
+
   // The live app-server socket, or the runtime reconnecting it (the grace), is the
   // truth. A queued turn waits out a reconnect, so deliverable == alive.
   isConnected(info: SessionInfo): boolean {

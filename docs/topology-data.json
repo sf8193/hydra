@@ -680,6 +680,10 @@
     ],
     [
       "daemon_session-lifecycle",
+      "daemon_tool-surface"
+    ],
+    [
+      "daemon_session-lifecycle",
       "daemon_phase-budget"
     ],
     [

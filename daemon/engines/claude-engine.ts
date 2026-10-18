@@ -3,14 +3,14 @@
 // Claude engine adapter — wraps tmux + bridge socket communication.
 
 import { randomUUID } from 'crypto'
-import { execFileSync, execSync } from 'child_process'
+import { execFileSync, execSync, spawn } from 'child_process'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
 import { detectBlockingState as detectBlockingStateFn } from '../pane-probe.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
-  EngineAdapter, LaunchInput, LaunchResult,
+  EngineAdapter, ForkPlan, LaunchInput, LaunchResult,
   DeliveryResult, Notification,
   StopResult,
   ContextUsage, RecoverySource, RecoveryPlan, Turn, UsageReading, UsageSubject,
@@ -25,7 +25,7 @@ import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
-import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { scrubbedSpawnEnv, tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
@@ -97,6 +97,72 @@ export function discoverClaudeSessionId(tmuxName: string): string | null {
   }
 }
 
+// ---------------------------------------------------------------------------
+// ask_predecessor: a one-shot read-only fork of a finished conversation
+// ---------------------------------------------------------------------------
+
+// Read-only by construction, not by instruction: only the read tools exist, in plan mode.
+// No MCP servers (plugins' included), so the fork can't register with Hydra; no session
+// persistence, so it leaves no transcript. `--` keeps a question starting with '-' from being a flag.
+export function askForkArgv(claudeSessionId: string, question: string, model?: string): string[] {
+  return [
+    '--resume', claudeSessionId, '--fork-session', '--no-session-persistence',
+    '--strict-mcp-config', '--permission-mode', 'plan', '--tools', 'Read,Grep,Glob',
+    ...(model ? ['--model', model] : []),
+    '-p', '--', `${question}\n\nAnswer only; change nothing.`,
+  ]
+}
+
+// The fork must not look like any Hydra session: no identity or daemon socket to register with.
+export function askForkEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = scrubbedSpawnEnv(base)
+  for (const v of ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_ROLE', 'DAEMON_SOCK', 'TMUX', 'TMUX_PANE']) delete env[v]
+  return { ...env, CLAUDE_CONFIG_DIR: CLAUDE_CONFIG }
+}
+
+/** Injectable for tests: the real one runs `claude`, detached so a timeout can kill its whole process group (rg, hooks). */
+export const claudeForkProcess = { spawn: (args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }) => spawn('claude', args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'], detached: true }) }
+
+const FORK_KILL_GRACE_MS = 5_000
+const FORK_OUTPUT_CHARS = 400
+
+function killFork(child: { pid?: number; kill: (sig: NodeJS.Signals) => boolean }, sig: NodeJS.Signals): void {
+  try { if (child.pid) { process.kill(-child.pid, sig); return } } catch { /* group already gone: fall through to the pid */ }
+  try { child.kill(sig) } catch { /* already exited */ }
+}
+
+// Both streams, each from its start (an error's message line comes first; a stack's tail is its deepest frames).
+export function forkFailureOutput(stdout: string, stderr: string): string {
+  const parts = [['stderr', stderr.trim()], ['stdout', stdout.trim()]].filter(([, t]) => t)
+  return parts.length ? parts.map(([name, t]) => `${name}: ${t.length > FORK_OUTPUT_CHARS ? t.slice(0, FORK_OUTPUT_CHARS) + '…' : t}`).join(' | ') : 'no output'
+}
+
+function runFork(args: string[], cwd: string, timeoutMs: number): Promise<string> {
+  // Otherwise spawn's ENOENT reads as "claude is not installed".
+  if (!existsSync(cwd)) return Promise.reject(new Error(`ask_predecessor: the predecessor's directory ${cwd} no longer exists`))
+  return new Promise((resolve, reject) => {
+    const child = claudeForkProcess.spawn(args, { cwd, env: askForkEnv() })
+    let out = '', err = ''
+    child.stdout?.setEncoding('utf8'); child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (d: string) => { out += d })
+    child.stderr?.on('data', (d: string) => { err += d })
+    const timer = setTimeout(() => {
+      killFork(child, 'SIGTERM')
+      // The group, not just claude: its children can outlive it.
+      setTimeout(() => killFork(child, 'SIGKILL'), FORK_KILL_GRACE_MS).unref()
+      reject(new Error(`ask_predecessor: the fork gave no answer within ${Math.round(timeoutMs / 1000)}s`))
+    }, timeoutMs)
+    child.on('error', e => { clearTimeout(timer); reject(new Error(`ask_predecessor: could not run claude: ${e.message}`)) })
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      const answer = out.trim()
+      if (code !== 0) reject(new Error(`ask_predecessor: the fork ${signal ? `was killed by ${signal}` : `exited ${code}`}: ${forkFailureOutput(out, err)}`))
+      else if (!answer) reject(new Error('ask_predecessor: the fork returned an empty answer'))
+      else resolve(answer)
+    })
+  })
+}
+
 // The pane's `ctx:` number is cross-checked against the transcript at most this often per session.
 const CONTEXT_CHECK_EVERY_MS = 10 * 60_000
 const lastContextCheckAt = new Map<string, number>()
@@ -125,6 +191,12 @@ export class ClaudeEngine implements EngineAdapter {
     const discovered = discoverClaudeSessionId(s.tmuxName)
     if (discovered) s.claudeSessionId = discovered
     return discovered
+  }
+
+  askFork(plan: ForkPlan, cwd: string, question: string, timeoutMs: number, model?: string): Promise<string> {
+    // Narrows the shared ForkPlan type: Claude's recoveryPlan only yields a fork that has the id.
+    if (!plan.claudeSessionId) return Promise.reject(new Error(`ask_predecessor: ${plan.parentName} has no Claude session id to fork`))
+    return runFork(askForkArgv(plan.claudeSessionId, question, model), cwd, timeoutMs)
   }
 
   isConnected(info: SessionInfo): boolean {

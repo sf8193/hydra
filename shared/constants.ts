@@ -179,12 +179,26 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
 }
 
 export type Capability = 'protocol_context' | 'protocol_spawn' | 'main_handoff'
+// Derived by tool-surface from session state, never stored: not a Capability, so addCapability, a protocol phase and the loader all refuse it.
+export type DerivedCapability = 'predecessor'
 
 export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>>> = {
   protocol_context: new Set<ToolName>(['advance', 'extend_phase']),
   protocol_spawn: new Set<ToolName>(['spawn_session', 'kill_session', 'peek_session']),
   // Main only: it clears its own context in place. A registry orchestrator must not get it — its successor would lose the orchestrator tools.
   main_handoff: new Set<ToolName>(['handoff']),
+}
+
+export const DERIVED_CAPABILITY_TOOLS: Readonly<Record<DerivedCapability, ReadonlySet<ToolName>>> = {
+  predecessor: new Set<ToolName>(['ask_predecessor']),
+}
+
+export const ALL_CAPABILITY_TOOLS: Readonly<Record<Capability | DerivedCapability, ReadonlySet<ToolName>>> = { ...CAPABILITY_TOOLS, ...DERIVED_CAPABILITY_TOOLS }
+
+// One fork turn of ask_predecessor: the daemon's limit, and the client-side wait for tools that run longer than the default.
+export const ASK_PREDECESSOR_TIMEOUT_MS = 180_000
+export const LONG_TOOL_TIMEOUTS_MS: Readonly<Record<string, number | undefined>> = {
+  ask_predecessor: ASK_PREDECESSOR_TIMEOUT_MS + 30_000,
 }
 
 export type Sentiment = 'POSITIVE' | 'NEGATIVE'
