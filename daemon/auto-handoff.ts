@@ -1,11 +1,12 @@
 import { registry } from './sessions.js'
-import { autoHandoffOn } from './config.js'
+import { autoHandoffOn, envPercent } from './config.js'
 import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { isSessionWorking } from './session-activity.js'
 import { getProtocolContext } from './protocol-runner.js'
 import { pendingPermissions } from './permission.js'
 import { requestHandoff } from './session-lifecycle.js'
+import { readHandoffTemplate } from './handoff-templates.js'
 
 // Cache handoff, opt-in with AUTO_HANDOFF_CACHE=1: a Claude session at 50%+ context that nobody has touched for 50 minutes
 // hands off while its 1-hour prompt cache is still warm (the 5-minute poll lands the request 50-55 minutes after the last touch).
@@ -18,10 +19,15 @@ const cacheHandoffAsked = new Set<string>()
 // counts from the first poll at 50%+ that saw the session not working (cleared when a poll sees it working or context drops below 50%).
 const idleSince = new Map<string, number>()
 
-// Full handoff, opt-in with AUTO_HANDOFF_FULL=1: an idle worker at 85%+ context hands off before it hits "Prompt is too long"
-// (a full session cannot answer anything, including a handoff request). Any engine.
-const FULL_HANDOFF_PCT = 85
+// Full handoff, opt-in with AUTO_HANDOFF_FULL=1: an idle worker at 85%+ context (AUTO_HANDOFF_FULL_PCT moves the line) hands off
+// before it hits "Prompt is too long" (a full session cannot answer anything, including a handoff request). Any engine.
+const fullHandoffPct = () => envPercent('AUTO_HANDOFF_FULL_PCT', 85)
 const fullHandoffAsked = new Set<string>()
+
+// Converge nudge, opt-in with AUTO_CONVERGE_PCT=<percent>: once per climb past it, a worker is told to start converging toward a
+// handoff (land side work, write down what it learned). Only told, never asked to hand off: it may be mid-task, so no idle check.
+// Known limit: a manual `handoff` already in progress does not stop it (only automatic requests are tracked here).
+const convergeTold = new Set<string>()
 
 function askHandoff(info: SessionInfo): void {
   const ask = () => requestHandoff(info, { channelId: info.threadId, threadId: info.threadId })
@@ -55,12 +61,12 @@ function cacheHandoff(info: SessionInfo, pct: number, now: number): void {
   askHandoff(info)
   // Marked once the request went out: one that threw (disk) is tried again on the next poll.
   cacheHandoffAsked.add(info.sessionId)
-  if (pct >= FULL_HANDOFF_PCT) fullHandoffAsked.add(info.sessionId)  // this request already answers the full-context case
+  if (pct >= fullHandoffPct()) fullHandoffAsked.add(info.sessionId)  // this request already answers the full-context case
 }
 
 function fullHandoff(info: SessionInfo, pct: number): void {
   if (!autoHandoffOn('FULL') || Number.isNaN(pct)) return
-  if (pct < FULL_HANDOFF_PCT) { fullHandoffAsked.delete(info.sessionId); return }
+  if (pct < fullHandoffPct()) { fullHandoffAsked.delete(info.sessionId); return }
   if (fullHandoffAsked.has(info.sessionId) || !canAskHandoff(info)) return
   process.stderr.write(`daemon: full handoff: ${info.tmuxName} at ${pct}%\n`)
   askHandoff(info)
@@ -68,8 +74,31 @@ function fullHandoff(info: SessionInfo, pct: number): void {
   cacheHandoffAsked.add(info.sessionId)  // this request already answers the cold-cache case
 }
 
-/** Both automatic handoffs for one session; called by the session-health poll with the session's context percent. */
+function convergeNudge(info: SessionInfo, pct: number, now: number, handoffAsked: boolean): void {
+  const at = envPercent('AUTO_CONVERGE_PCT')
+  if (at === undefined || Number.isNaN(pct)) return
+  if (pct < at) { convergeTold.delete(info.sessionId); return }
+  // Pointless once a handoff was asked for.
+  if (handoffAsked || convergeTold.has(info.sessionId) || info.sessionType !== 'thread_owner' || !transport.has(info.sessionId) || getProtocolContext(info.sessionId)) return
+  const full = autoHandoffOn('FULL') ? String(fullHandoffPct()) : ''
+  const then = !full ? 'Then hand off at the next natural break.'
+    : pct >= fullHandoffPct() ? 'Hydra asks you to hand off the next time you are idle.' : `At ${full}% hydra asks you to hand off.`
+  process.stderr.write(`daemon: converge nudge: ${info.tmuxName} at ${pct}%\n`)
+  transport.sendOrQueue(info.sessionId, {
+    type: 'notification',
+    content: readHandoffTemplate('converge', { pct: String(pct), full, session: info.tmuxName })
+      ?? `[system] You are at ${pct}% context. Start converging toward a handoff: finish or park side work, and write what you've learned where your successor will read it. ${then}`,
+    meta: { chat_id: info.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date(now).toISOString() },
+  })
+  convergeTold.add(info.sessionId)
+}
+
+/** The converge nudge and both automatic handoffs for one session; called by the session-health poll with the session's context percent. */
 export function autoHandoff(info: SessionInfo, pct: number, now: number): void {
   cacheHandoff(info, pct, now)
   fullHandoff(info, pct)
+  // Last, so a nudge that throws can't stop a handoff. Each set is cleared only by its own feature (and each also marks the
+  // other's), so a set whose feature is off may hold an entry from an earlier climb: only a live feature's set counts.
+  const asked = (autoHandoffOn('CACHE') && cacheHandoffAsked.has(info.sessionId)) || (autoHandoffOn('FULL') && fullHandoffAsked.has(info.sessionId))
+  convergeNudge(info, pct, now, asked)
 }

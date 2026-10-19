@@ -454,11 +454,12 @@ A note goes after a colon: `handoff: watch the open PRs and refine them`, or `ha
 - **Chat stays chat.** Chat that merely starts with the word (`handoff-related bug`, `handoff looks broken`) is never a command. A line that looks like an attempt but doesn't parse (`handoff -- x`, or a non-model word before the colon, `handoff status: x`) also goes to the session as chat, and the daemon replies with the command's form.
 - A local `departing.md` must include `{{note}}`, or the outgoing session never sees the note. The successor still does.
 
-Three optional files in the state dir customize what each side is told. All three are re-read on every handoff, so edits apply without a restart:
+Four optional files in the state dir customize what each side is told. All are re-read each time they are used, so edits apply without a restart:
 
 - `actions/handoff/departing.md` **replaces** what the outgoing session is told. It must tell the session to write the file and call the `handoff` tool with `path=` (usually `{{artifact}}`). Nothing enforces this, so a template that omits it never hands off.
 - `actions/handoff/arriving.md` is inserted after the read-your-handoff line and **replaces** the built-in arrival behavior (the Reception note, the greeting's content, starting the Next action at once). Thread ids, the greeting itself, the description and the fork recipe stay.
 - `actions/handoff/notice.md` **replaces** the message the thread sees when the handoff is requested. Useful when your departing steps take longer than the built-in ones, so the advice on when the session looks stuck should change too.
+- `actions/handoff/converge.md` **replaces** the converge nudge (below). Its placeholders are `pct` (the session's context now), `full` (the full-handoff line, empty when that handoff is off) and `session`.
 
 `{{name}}` placeholders are filled per handoff:
 
@@ -478,6 +479,16 @@ Three optional files in the state dir customize what each side is told. All thre
 | `from_transcript` | | ✓ |
 
 `from_session` is the predecessor's Claude session id and `from_transcript` its transcript path. Each is empty when unknown, and always for a Codex predecessor. `note` is empty when the command had none. Unknown placeholders are left as written. A missing file uses the built-in text. An empty or unreadable one does too, and the daemon logs a one-time warning.
+
+#### Automatic handoff
+
+Off by default. Each is turned on in the state dir's `.env` and read on every 5-minute health poll; changing the `.env` takes a daemon restart.
+
+- `AUTO_CONVERGE_PCT=<percent>`: when a session's context climbs past this, it is told once to start converging toward a handoff: finish or park side work, and write down what it learned where its successor will read it. It is told, not asked to hand off, so it may be mid-task. It is told again only after its context drops below the line and climbs back.
+- `AUTO_HANDOFF_FULL=1`: an idle session at 85%+ context is asked to hand off, exactly as if `handoff` had been typed, before it is too full to answer anything. `AUTO_HANDOFF_FULL_PCT=<percent>` moves the line (a whole number 1–99; anything else keeps 85).
+- `AUTO_HANDOFF_CACHE=1`: a Claude session at 50%+ context that nobody has touched for 50 minutes is asked to hand off while its prompt cache is still warm.
+
+Only ordinary session owners with a connected bridge, no protocol run and no pending permission are asked; a request unanswered after 3 minutes is repeated once. For example, `AUTO_CONVERGE_PCT=50`, `AUTO_HANDOFF_FULL=1` and `AUTO_HANDOFF_FULL_PCT=70` nudge at 50% and hand off at 70%.
 
 `hooks/on-kill` in the state dir already runs on a handoff, with `HYDRA_KILL_REASON='handed off'`. Use it for post-handoff work nobody waits on.
 

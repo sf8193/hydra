@@ -8,16 +8,18 @@
 
 import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
-import { rmSync, writeFileSync } from 'fs'
+import { rmSync, writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import { pollSessionsOnce } from '../session-health.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { gateway, ACCESS_FILE } from '../config.js'
+import { gateway, ACCESS_FILE, envPercent } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
 import { ORPHAN_GRACE_MS } from '../session-reachability.js'
 import { requestHandoff } from '../session-lifecycle.js'
 import { pendingPermissions } from '../permission.js'
+import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -429,6 +431,8 @@ describe('auto handoff', () => {
     ;(transport as any).sendOrQueue = origSendOrQueue
     delete process.env.AUTO_HANDOFF_CACHE
     delete process.env.AUTO_HANDOFF_FULL
+    delete process.env.AUTO_HANDOFF_FULL_PCT
+    delete process.env.AUTO_CONVERGE_PCT
     pendingPermissions.clear()
   })
 
@@ -699,5 +703,108 @@ describe('auto handoff', () => {
     pendingPermissions.clear()
     pollSessionsOnce(LATER + MIN)
     expect(asked).toEqual([info.sessionId])
+  })
+
+  test('AUTO_HANDOFF_FULL_PCT moves the full-handoff line', () => {
+    process.env.AUTO_HANDOFF_FULL_PCT = '70'
+    delete process.env.AUTO_HANDOFF_CACHE
+    const at70 = session({ pct: () => 70, lastActive: LATER - MIN })
+    session({ pct: () => 69, lastActive: LATER - MIN })
+    pollAt(LATER)
+    expect(asked).toEqual([at70.sessionId])
+  })
+
+  test('an AUTO_HANDOFF_FULL_PCT that is not a whole number 1-99 keeps 85', () => {
+    delete process.env.AUTO_HANDOFF_CACHE
+    for (const bad of ['abc', '0', '100', '70.5', '0x46', '1e1', '+70', '']) {
+      process.env.AUTO_HANDOFF_FULL_PCT = bad
+      expect(envPercent('AUTO_HANDOFF_FULL_PCT', 85)).toBe(85)
+    }
+    process.env.AUTO_HANDOFF_FULL_PCT = ' 70 '
+    expect(envPercent('AUTO_HANDOFF_FULL_PCT', 85)).toBe(70)
+    process.env.AUTO_HANDOFF_FULL_PCT = 'abc'
+    session({ pct: () => 80, lastActive: LATER - MIN })
+    pollAt(LATER)
+    expect(asked).toEqual([])
+  })
+
+  describe('converge nudge', () => {
+    const nudges = () => requests.filter(r => r.includes('converg'))
+    beforeEach(() => { delete process.env.AUTO_HANDOFF_CACHE; delete process.env.AUTO_HANDOFF_FULL })
+
+    test('off unless AUTO_CONVERGE_PCT is set', () => {
+      session({ pct: () => 60, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(requests).toEqual([])
+    })
+
+    test('told once per climb, working or not; a drop below re-arms it', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      let pct = 55
+      const info = session({ pct: () => pct, live: 'working', lastActive: LATER - MIN })
+      pollAt(LATER)
+      pollAt(LATER + MIN)
+      expect(asked).toEqual([info.sessionId])
+      expect(nudges()[0]).toContain('55% context')
+      pct = 40; pollAt(LATER)
+      pct = 52; pollAt(LATER)
+      expect(asked).toEqual([info.sessionId, info.sessionId])
+    })
+
+    test('names the full-handoff line when that handoff is on', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      process.env.AUTO_HANDOFF_FULL_PCT = '70'
+      session({ pct: () => 55, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(nudges()).toHaveLength(1)
+      expect(nudges()[0]).toContain('At 70% hydra asks you to hand off')
+    })
+
+    test('not sent to a guest, a session with no bridge, or one already asked to hand off', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      session({ pct: () => 60, type: 'thread_guest' })
+      session({ pct: () => 60, bridge: false })
+      const full = session({ pct: () => 90, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([full.sessionId])
+      expect(nudges()).toEqual([])
+    })
+
+    test('an old handoff ask by a feature that is now off, or by the other feature, does not block a later climb', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      process.env.AUTO_HANDOFF_FULL = '1'   // cache off: the full ask also marks the cache set, which nothing clears
+      let pct = 90
+      const info = session({ pct: () => pct, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([info.sessionId])
+      expect(nudges()).toEqual([])
+      pct = 40; pollAt(LATER + MIN)
+      pct = 60; pollAt(LATER + 2 * MIN)
+      expect(nudges()).toHaveLength(1)
+    })
+
+    test('a converge line at or above the full line: the text says the handoff comes when idle, not at a passed line', () => {
+      process.env.AUTO_CONVERGE_PCT = '90'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      session({ pct: () => 92, live: 'working', lastActive: LATER - MIN })  // working: the full ask waits
+      pollAt(LATER)
+      expect(nudges()).toHaveLength(1)
+      expect(nudges()[0]).toContain('the next time you are idle')
+      expect(nudges()[0]).not.toContain('At 85%')
+    })
+
+    test('a local converge.md replaces the text, with {{pct}} and {{full}} filled', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+      const file = join(HANDOFF_TEMPLATE_DIR, 'converge.md')
+      writeFileSync(file, 'Local: converge now at {{pct}}% (full line: "{{full}}")')
+      try {
+        session({ pct: () => 61, lastActive: LATER - MIN })
+        pollAt(LATER)
+        expect(nudges()).toEqual(['Local: converge now at 61% (full line: "")'])
+      } finally { rmSync(file) }
+    })
   })
 })
