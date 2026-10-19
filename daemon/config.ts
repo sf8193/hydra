@@ -40,6 +40,15 @@ export const CLAUDE_CONFIG = claudeConfigDir()
 /** The automatic handoffs (daemon/auto-handoff.ts) are opt-in: each runs only when its env var (AUTO_HANDOFF_CACHE, AUTO_HANDOFF_FULL) is 1. Read per call. */
 export const autoHandoffOn = (feature: 'CACHE' | 'FULL'): boolean => process.env[`AUTO_HANDOFF_${feature}`] === '1'
 
+/** A context percent from env var `name`: a whole number 1–99 (a leading zero is fine), else `fallback`. Read per call. */
+export function envPercent(name: string): number | undefined
+export function envPercent(name: string, fallback: number): number
+export function envPercent(name: string, fallback?: number): number | undefined {
+  const raw = (process.env[name] || '').trim()
+  const n = /^\d{1,2}$/.test(raw) ? Number(raw) : 0
+  return n >= 1 ? n : fallback
+}
+
 // Read after .env sourcing — .env values must be available.
 // If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
 export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''

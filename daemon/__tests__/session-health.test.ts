@@ -8,16 +8,18 @@
 
 import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
-import { rmSync, writeFileSync } from 'fs'
+import { rmSync, writeFileSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import { pollSessionsOnce } from '../session-health.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { gateway, ACCESS_FILE } from '../config.js'
+import { gateway, ACCESS_FILE, envPercent } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
 import { ORPHAN_GRACE_MS } from '../session-reachability.js'
 import { requestHandoff } from '../session-lifecycle.js'
 import { pendingPermissions } from '../permission.js'
+import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
@@ -410,13 +412,14 @@ describe('context alert', () => {
 describe('auto handoff', () => {
   let asked: string[] = []
   let requests: string[] = []   // what each request told the session
+  let sent: any[] = []           // each message as sent
   let timers: Array<{ fn: () => void; ms: number }> = []
   let origSendOrQueue: any
   let origSetTimeout: any
   beforeEach(() => {
-    asked = []; requests = []; timers = []
+    asked = []; requests = []; sent = []; timers = []
     origSendOrQueue = transport.sendOrQueue
-    ;(transport as any).sendOrQueue = (sid: string, m: { content: string }) => { asked.push(sid); requests.push(m.content) }
+    ;(transport as any).sendOrQueue = (sid: string, m: { content: string }) => { asked.push(sid); requests.push(m.content); sent.push(m) }
     process.env.AUTO_HANDOFF_CACHE = '1'
     process.env.AUTO_HANDOFF_FULL = '1'
     origSetTimeout = globalThis.setTimeout
@@ -429,6 +432,8 @@ describe('auto handoff', () => {
     ;(transport as any).sendOrQueue = origSendOrQueue
     delete process.env.AUTO_HANDOFF_CACHE
     delete process.env.AUTO_HANDOFF_FULL
+    delete process.env.AUTO_HANDOFF_FULL_PCT
+    delete process.env.AUTO_CONVERGE_PCT
     pendingPermissions.clear()
   })
 
@@ -699,5 +704,156 @@ describe('auto handoff', () => {
     pendingPermissions.clear()
     pollSessionsOnce(LATER + MIN)
     expect(asked).toEqual([info.sessionId])
+  })
+
+  test('AUTO_HANDOFF_FULL_PCT moves the full-handoff line', () => {
+    process.env.AUTO_HANDOFF_FULL_PCT = '70'
+    delete process.env.AUTO_HANDOFF_CACHE
+    const at70 = session({ pct: () => 70, lastActive: LATER - MIN })
+    session({ pct: () => 69, lastActive: LATER - MIN })
+    pollAt(LATER)
+    expect(asked).toEqual([at70.sessionId])
+  })
+
+  test('an AUTO_HANDOFF_FULL_PCT that is not a whole number 1-99 keeps 85', () => {
+    delete process.env.AUTO_HANDOFF_CACHE
+    for (const bad of ['abc', '0', '00', '100', '70.5', '0x46', '1e1', '+70', '-5', '']) {
+      process.env.AUTO_HANDOFF_FULL_PCT = bad
+      expect(envPercent('AUTO_HANDOFF_FULL_PCT', 85)).toBe(85)
+    }
+    process.env.AUTO_HANDOFF_FULL_PCT = ' 70 '
+    expect(envPercent('AUTO_HANDOFF_FULL_PCT', 85)).toBe(70)
+    process.env.AUTO_HANDOFF_FULL_PCT = '07'
+    expect(envPercent('AUTO_HANDOFF_FULL_PCT', 85)).toBe(7)
+    process.env.AUTO_HANDOFF_FULL_PCT = 'abc'
+    session({ pct: () => 80, lastActive: LATER - MIN })
+    pollAt(LATER)
+    expect(asked).toEqual([])
+  })
+
+  describe('converge nudge', () => {
+    const nudges = () => requests.filter(r => r.includes('converg'))
+    beforeEach(() => { delete process.env.AUTO_HANDOFF_CACHE; delete process.env.AUTO_HANDOFF_FULL })
+
+    test('off unless AUTO_CONVERGE_PCT is set', () => {
+      session({ pct: () => 60, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(requests).toEqual([])
+    })
+
+    test('told once per climb, working or not; a drop below re-arms it', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      let pct = 55
+      const info = session({ pct: () => pct, live: 'working', lastActive: LATER - MIN })
+      pollAt(LATER)
+      pollAt(LATER + MIN)
+      expect(asked).toEqual([info.sessionId])
+      expect(nudges()[0]).toContain('55% context')
+      expect(nudges()[0]).toEndWith('Hand off at the next natural break.')
+      expect(sent[0]).toMatchObject({ type: 'notification', meta: { chat_id: info.threadId, user: 'system' } })
+      pct = 40; pollAt(LATER)
+      pct = 52; pollAt(LATER)
+      expect(asked).toEqual([info.sessionId, info.sessionId])
+    })
+
+    test('names the full-handoff line when that handoff is on', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      process.env.AUTO_HANDOFF_FULL_PCT = '70'
+      session({ pct: () => 55, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(nudges()).toHaveLength(1)
+      expect(nudges()[0]).toContain('At 70% hydra asks you to hand off')
+    })
+
+    test('not sent to a guest, a session with no bridge, or one already asked to hand off', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      session({ pct: () => 60, type: 'thread_guest' })
+      session({ pct: () => 60, bridge: false })
+      const full = session({ pct: () => 90, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([full.sessionId])
+      expect(nudges()).toEqual([])
+    })
+
+    test('a handoff ask is forgotten once context drops below the converge line, so the next climb is told', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      let pct = 90
+      const info = session({ pct: () => pct, lastActive: LATER - MIN })
+      pollAt(LATER)
+      expect(asked).toEqual([info.sessionId])
+      expect(nudges()).toEqual([])
+      pct = 40; pollAt(LATER + MIN)
+      pct = 60; pollAt(LATER + 2 * MIN)
+      expect(nudges()).toHaveLength(1)
+    })
+
+    test('with both handoffs on, a full ask does not mute the nudge on a later climb above the cache line', () => {
+      process.env.AUTO_HANDOFF_CACHE = '1'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      process.env.AUTO_HANDOFF_FULL_PCT = '70'
+      process.env.AUTO_CONVERGE_PCT = '60'
+      let pct = 72
+      const info = session({ pct: () => pct, lastActive: LATER - MIN })
+      pollAt(LATER)   // full ask at 72 (which also marks the cache set)
+      expect(asked).toEqual([info.sessionId])
+      expect(nudges()).toEqual([])
+      pct = 55; pollAt(LATER + MIN)   // /compact: below converge and full, still above the cache line's 50
+      pct = 62; pollAt(LATER + 2 * MIN)
+      expect(nudges()).toHaveLength(1)
+    })
+
+    test('a converge line at or above the full line: the text says the handoff comes when idle, not at a passed line', () => {
+      process.env.AUTO_CONVERGE_PCT = '90'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      session({ pct: () => 92, live: 'working', lastActive: LATER - MIN })  // working: the full ask waits
+      pollAt(LATER)
+      expect(nudges()).toHaveLength(1)
+      expect(nudges()[0]).toContain('the next time you are idle')
+      expect(nudges()[0]).not.toContain('At 85%')
+    })
+
+    test('a converge line above the full line, after an ignored full ask: the text does not promise another ask', () => {
+      process.env.AUTO_CONVERGE_PCT = '90'
+      process.env.AUTO_HANDOFF_FULL = '1'
+      let pct = 86
+      const info = session({ pct: () => pct, lastActive: LATER - MIN })
+      pollAt(LATER)   // the full ask at 86
+      expect(asked).toEqual([info.sessionId])
+      pct = 91; pollAt(LATER + MIN)
+      expect(nudges()).toHaveLength(1)
+      expect(nudges()[0]).toEndWith('Hydra has already asked you to hand off: do it at the next natural break.')
+    })
+
+    test('an automatic ask made below the converge line does not mute the nudge when the session climbs to it', () => {
+      process.env.AUTO_CONVERGE_PCT = '70'
+      delete process.env.AUTO_HANDOFF_FULL
+      process.env.AUTO_HANDOFF_CACHE = '1'
+      let pct = 55
+      const info = session({ pct: () => pct, lastActive: LATER - 60 * MIN })
+      pollAt(LATER); pollAt(LATER + 5 * MIN)   // the cache ask at 55
+      expect(asked).toEqual([info.sessionId])
+      pct = 72; pollAt(LATER + 10 * MIN)
+      expect(nudges()).toHaveLength(1)
+    })
+
+    test('a local converge.md replaces the text, with {{pct}} and {{full}} filled', () => {
+      process.env.AUTO_CONVERGE_PCT = '50'
+      mkdirSync(HANDOFF_TEMPLATE_DIR, { recursive: true })
+      const file = join(HANDOFF_TEMPLATE_DIR, 'converge.md')
+      writeFileSync(file, 'Local: {{session}} converge now at {{pct}}% (full line: "{{full}}"). {{then}}')
+      try {
+        const info = session({ pct: () => 61, lastActive: LATER - MIN })
+        pollAt(LATER)
+        expect(nudges()).toEqual([`Local: ${info.tmuxName} converge now at 61% (full line: ""). Hand off at the next natural break.`])
+        process.env.AUTO_HANDOFF_FULL = '1'
+        process.env.AUTO_HANDOFF_FULL_PCT = '70'
+        const past = session({ pct: () => 75, live: 'working', lastActive: LATER - MIN })
+        pollAt(LATER)
+        expect(nudges()[1]).toBe(`Local: ${past.tmuxName} converge now at 75% (full line: "70"). Hydra asks you to hand off the next time you are idle.`)
+      } finally { rmSync(file) }
+    })
   })
 })
