@@ -747,6 +747,17 @@ describe('Claude fork argv', () => {
     expect(restricted).toContain("cd '/src/dir'")
     expect(await launchFork()).not.toContain('--disallowedTools')
   })
+
+  test('a fork exports the Claude session it continues; a fresh launch and a resume export none', async () => {
+    expect(await launchFork()).toContain("export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID='cl-argv'")
+    for (const extra of [{}, { resumeFrom: 'cl-forked' }]) {
+      const name = `fplineage${Math.random().toString(36).slice(2, 8)}`
+      await new ClaudeEngine(transport).launch({ sessionId: `sid-${name}`, tmuxName: name, cwd: '/src/dir', originalCwd: '/spawn', model: 'm', prompt: 'P', ...extra })
+      const line = fake.calls().find(c => c.startsWith('new-session') && c.includes(name)) ?? ''
+      expect(line).toContain(`export HYDRA_SESSION_ID='sid-${name}'`)
+      expect(line).not.toContain('HYDRA_FORKED_FROM_CLAUDE_SESSION_ID')
+    }
+  })
 })
 
 test('isParentOf: by session id when set; legacy records by name, guarded against recycled names, lineage only for forks', () => {

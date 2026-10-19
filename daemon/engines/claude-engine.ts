@@ -41,10 +41,12 @@ const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 //   pass-through: shared between byte and sessions (platform, socket, config, mods)
 //   override:     session-specific identity
 //   strip:        byte-only (HYDRA_ROLE), kept from leaking into sessions
-function buildSpawnEnv(sessionId: string, tmuxName: string): string[] {
+//   lineage:      the Claude session a fork continues, for hooks keyed on Claude's session_id (fresh: unset)
+function buildSpawnEnv(sessionId: string, tmuxName: string, forkedFromClaudeSessionId?: string): string[] {
   return [
     `export HYDRA_SESSION_ID=${shq(sessionId)}`,
     `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
+    ...(forkedFromClaudeSessionId ? [`export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID=${shq(forkedFromClaudeSessionId)}`] : []),
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
     `export CHAT_PLATFORM=${shq(PLATFORM)}`,
@@ -287,7 +289,7 @@ export class ClaudeEngine implements EngineAdapter {
     const inner = [
       `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
       `cd ${shq(spawnCd)}`,
-      ...buildSpawnEnv(sessionId, tmuxName),
+      ...buildSpawnEnv(sessionId, tmuxName, input.forkFrom?.claudeSessionId),
       `${claudeArgs} 2>>${shq(stderrLog)}`,
     ].join(' && ')
 
