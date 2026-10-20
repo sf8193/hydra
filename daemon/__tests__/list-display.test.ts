@@ -77,7 +77,7 @@ afterEach(() => {
 
 describe('auto-refreshing /list display', () => {
   test('a successful edit keeps the message tracked', async () => {
-    status.setTrackedListMsgs([{ channelId: 'c1', messageId: 'm1' }])
+    status.setTrackedListMsgs([{ channelId: 'c1', messageIds: ['m1'] }])
 
     await status.refreshListDisplay()
 
@@ -95,7 +95,7 @@ describe('auto-refreshing /list display', () => {
     // "the message is gone". Forgetting it is permanent — the display would
     // never refresh again.
     for (const [message, code] of [['rate limited', 429], ['Invalid Form Body', 50035]] as const) {
-      status.setTrackedListMsgs([{ channelId: 'c1', messageId: 'm1' }])
+      status.setTrackedListMsgs([{ channelId: 'c1', messageIds: ['m1'] }])
       editImpl = async () => { throw Object.assign(new Error(message), { code }) }
 
       await status.refreshListDisplay()
@@ -105,7 +105,7 @@ describe('auto-refreshing /list display', () => {
   })
 
   test('a deleted message is the one case worth forgetting', async () => {
-    status.setTrackedListMsgs([{ channelId: 'c1', messageId: 'm1' }])
+    status.setTrackedListMsgs([{ channelId: 'c1', messageIds: ['m1'] }])
     editImpl = async () => { throw Object.assign(new Error('Unknown Message'), { code: 10008 }) }
 
     await status.refreshListDisplay()
@@ -115,9 +115,9 @@ describe('auto-refreshing /list display', () => {
 
   test('one dead message does not take the others with it', async () => {
     status.setTrackedListMsgs([
-      { channelId: 'c1', messageId: 'm1' },
-      { channelId: 'c1', messageId: 'm2' },
-      { channelId: 'c1', messageId: 'm3' },
+      { channelId: 'c1', messageIds: ['m1'] },
+      { channelId: 'c1', messageIds: ['m2'] },
+      { channelId: 'c1', messageIds: ['m3'] },
     ])
     editImpl = async (_c, m) => {
       if (m === 'm2') throw Object.assign(new Error('Unknown Message'), { code: 10008 })
@@ -127,6 +127,77 @@ describe('auto-refreshing /list display', () => {
     await status.refreshListDisplay()
 
     expect(editAttempts.sort()).toEqual(['m1', 'm2', 'm3'])
-    expect(status.trackedListMsgs().map(m => m.messageId)).toEqual(['m1', 'm3'])
+    expect(status.trackedListMsgs().map(m => m.messageIds[0])).toEqual(['m1', 'm3'])
+  })
+
+  test('every chunk of a long list is rewritten, not just the first', async () => {
+    for (let n = 0; n < 60; n++) {
+      const sid = `list-sess-many-${n}`
+      registry.set(sid, {
+        sessionId: sid, topic: 'topic', threadId: `list-thread-many-${n}`,
+        createdAt: Date.now(), lastActive: Date.now(), tmuxName: `many${n}`, description: `session description number ${n}`,
+        listening: false, engine: 'claude', adapter: fakeAdapter({ usage: () => null, isAlive: () => true }),
+        sessionType: 'thread_owner',
+      } as SessionInfo)
+      trackedSessions.add(sid)
+    }
+    const texts = new Map<string, string>()
+    editImpl = async (_c, m) => m
+    ;(gateway as any).edit = async (_c: string, m: string, text: string) => { texts.set(m, text); return m }
+    const sent: string[] = []
+    const origSend = gateway.send
+    ;(gateway as any).send = async (_c: string, text: string) => { sent.push(text); return { id: `new${sent.length}` } }
+    status.setTrackedListMsgs([{ channelId: 'c1', messageIds: ['a', 'b'] }])
+
+    await status.refreshListDisplay()
+    ;(gateway as any).send = origSend
+
+    const [lm] = status.trackedListMsgs()
+    const all = [...lm.messageIds.map(id => texts.get(id) ?? sent[Number(id.slice(3)) - 1])].join('\n')
+    expect(lm.messageIds.length).toBeGreaterThan(2)
+    expect(all).not.toContain('truncated')
+    for (let n = 0; n < 60; n++) expect(all).toContain(`many${n}`)
+  })
+
+  test('two overlapping refreshes of a growing list send each new chunk once', async () => {
+    for (let n = 0; n < 60; n++) {
+      const sid = `list-sess-race-${n}`
+      registry.set(sid, {
+        sessionId: sid, topic: 'topic', threadId: `list-thread-race-${n}`,
+        createdAt: Date.now(), lastActive: Date.now(), tmuxName: `race${n}`, description: `session description number ${n}`,
+        listening: false, engine: 'claude', adapter: fakeAdapter({ usage: () => null, isAlive: () => true }),
+        sessionType: 'thread_owner',
+      } as SessionInfo)
+      trackedSessions.add(sid)
+    }
+    let sends = 0
+    const origSend = gateway.send
+    ;(gateway as any).send = async () => { await Promise.resolve(); return { id: `new${++sends}` } }
+    status.setTrackedListMsgs([{ channelId: 'c1', messageIds: ['a'] }])
+    await status.refreshListDisplay()
+    const expected = sends
+    sends = 0
+    status.setTrackedListMsgs([{ channelId: 'c1', messageIds: ['a'] }])
+
+    await Promise.all([status.refreshListDisplay(), status.refreshListDisplay()])
+    ;(gateway as any).send = origSend
+
+    expect(expected).toBeGreaterThan(0)
+    expect(sends).toBe(expected)
+  })
+
+  test('a leftover chunk whose delete is rate-limited stays tracked until it is deleted', async () => {
+    let deleteFails = true
+    const origDelete = gateway.delete
+    ;(gateway as any).delete = async () => { if (deleteFails) throw Object.assign(new Error('rate limited'), { code: 429 }) }
+    status.setTrackedListMsgs([{ channelId: 'c1', messageIds: ['a', 'b', 'c'] }])
+
+    await status.refreshListDisplay()
+    expect(status.trackedListMsgs()[0].messageIds).toEqual(['a', 'b', 'c'])
+
+    deleteFails = false
+    await status.refreshListDisplay()
+    ;(gateway as any).delete = origDelete
+    expect(status.trackedListMsgs()[0].messageIds).toEqual(['a'])
   })
 })
