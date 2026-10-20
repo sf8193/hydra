@@ -4,7 +4,7 @@ import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { fallbackDescription, formatDuration, atomicWriteFileSync, executionAlive, isAlive, safeSend, safeEdit } from '../util.js'
+import { fallbackDescription, formatDuration, atomicWriteFileSync, executionAlive, isAlive, safeSend, safeEdit, chunk, editErrorOutcome, type EditOutcome } from '../util.js'
 import { formatContextPercent } from '../engines/engine-adapter.js'
 import { getWatchesBySession } from '../pr-watch.js'
 import { getActiveRuns } from '../protocol-runner.js'
@@ -110,7 +110,8 @@ function buildListOutput(list: SessionEntry[], now: number): string {
 
 const LIST_MSGS_FILE = join(STATE_DIR, 'list-messages.json')
 const MAX_LIST_MSGS = 5
-let lastListMsgs: Array<{ channelId: string; messageId: string }> = []
+type ListMsg = { channelId: string; messageIds: string[] }
+let lastListMsgs: ListMsg[] = []
 
 function persistListMsgsToDisk(): void {
   try {
@@ -127,7 +128,9 @@ let persistListMsgs = persistListMsgsToDisk
 function loadPersistedListMsgs(): void {
   try {
     const raw = readFileSync(LIST_MSGS_FILE, 'utf8')
-    lastListMsgs = JSON.parse(raw) as Array<{ channelId: string; messageId: string }>
+    // Older files stored one `messageId` per list; they hold the first chunk only.
+    lastListMsgs = (JSON.parse(raw) as Array<ListMsg & { messageId?: string }>)
+      .map(m => ({ channelId: m.channelId, messageIds: m.messageIds ?? [m.messageId!] }))
     if (lastListMsgs.length > 0) {
       process.stderr.write(`daemon: restored ${lastListMsgs.length} list message(s)\n`)
     }
@@ -140,6 +143,47 @@ function loadPersistedListMsgs(): void {
 
 loadPersistedListMsgs()
 
+/**
+ * Rewrite a posted list in place. The text is re-chunked across the list's
+ * messages: extra chunks are sent, leftover messages deleted. safeEdit alone
+ * would cut the text to one message and drop the sessions after it.
+ */
+function editListMsgs(lm: ListMsg, text: string): Promise<EditOutcome> {
+  // One at a time: two overlapping edits of a growing list would each send the new chunk.
+  const run = listEdits.then(async () => {
+    const outcome = await rewriteListMsgs(lm, text)
+    persistListMsgs() // chunk IDs may have changed
+    return outcome
+  })
+  listEdits = run.then(() => {}, () => {})
+  return run
+}
+let listEdits: Promise<void> = Promise.resolve()
+
+async function rewriteListMsgs(lm: ListMsg, text: string): Promise<EditOutcome> {
+  const chunks = chunk(text, gateway.maxMessageLength, 'markdown')
+  const ids = lm.messageIds
+  for (let i = 0; i < chunks.length; i++) {
+    if (i >= ids.length) {
+      const sent = await safeSend(lm.channelId, chunks[i], { unfurl: false })
+      if (sent.length === 0) return 'failed'
+      ids.push(...sent)
+      continue
+    }
+    const outcome = await safeEdit(lm.channelId, ids[i], chunks[i])
+    if (outcome !== 'ok') return outcome
+  }
+  persistListMsgs() // before the deletes: a crash must not leave deleted IDs on file
+  // A leftover stays tracked until it is deleted (or already gone), so a rate limit retries next refresh.
+  for (const id of ids.slice(chunks.length)) {
+    try { await gateway.delete(lm.channelId, id) } catch (err) {
+      if (editErrorOutcome(err) !== 'message-gone') continue
+    }
+    ids.splice(ids.indexOf(id), 1)
+  }
+  return 'ok'
+}
+
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
 export function debouncedRefreshListDisplay(): void {
@@ -150,32 +194,26 @@ export function debouncedRefreshListDisplay(): void {
   }, 500)
 }
 
+/** The list text for the live sessions, each row with its thread's latest message. */
+async function renderLiveList(): Promise<string> {
+  const all = [...registry.values()].filter(s => isAlive(s)).sort((a, b) => b.lastActive - a.lastActive)
+  if (all.length === 0) return 'No active sessions.'
+  const latestInfos = await Promise.all(all.map(async (session): Promise<string | undefined> => {
+    try {
+      const msgs = await gateway.fetchMessages(session.threadId, 1)
+      if (msgs.length === 0) return undefined
+      const m = msgs[0]
+      const who = m.authorId === gateway.botId ? `<@${gateway.botId}>` : 'you'
+      const msgUrl = gateway.getMessageUrl(session.threadId, m.id)
+      return msgUrl ? `[📩 latest](${msgUrl}) — by ${who}` : `📩 latest — by ${who}`
+    } catch { return undefined }
+  }))
+  return buildListOutput(all.map((session, i) => ({ session, latestLine: latestInfos[i] })), Date.now())
+}
+
 async function refreshListDisplay(): Promise<void> {
   if (lastListMsgs.length === 0) return
-  const now = Date.now()
-  const all = [...registry.values()].filter(s => isAlive(s)).sort((a, b) => b.lastActive - a.lastActive)
-
-  let output: string
-  if (all.length === 0) {
-    output = 'No active sessions.'
-  } else {
-    const entries: SessionEntry[] = all.map(s => ({ session: s }))
-
-    // Phase 2: fetch latest message per thread in parallel (mirrors handleListIntercept)
-    const latestInfos = await Promise.all(entries.map(async (e): Promise<string | undefined> => {
-      try {
-        const msgs = await gateway.fetchMessages(e.session.threadId, 1)
-        if (msgs.length === 0) return undefined
-        const m = msgs[0]
-        const who = m.authorId === gateway.botId ? `<@${gateway.botId}>` : 'you'
-        const msgUrl = gateway.getMessageUrl(e.session.threadId, m.id)
-        return msgUrl ? `[📩 latest](${msgUrl}) — by ${who}` : `📩 latest — by ${who}`
-      } catch { return undefined }
-    }))
-
-    const enriched = entries.map((e, i) => ({ ...e, latestLine: latestInfos[i] }))
-    output = buildListOutput(enriched, now)
-  }
+  const output = await renderLiveList()
 
   let changed = false
   for (let i = lastListMsgs.length - 1; i >= 0; i--) {
@@ -183,7 +221,7 @@ async function refreshListDisplay(): Promise<void> {
     // Forget a message only when it is really gone. Dropping it on a
     // rate-limit or a dropped connection retires the auto-refreshing display
     // permanently — it is persisted, so it never comes back on its own.
-    const outcome = await safeEdit(lm.channelId, lm.messageId, output)
+    const outcome = await editListMsgs(lm, output)
     if (outcome === 'message-gone' || outcome === 'channel-gone') {
       lastListMsgs.splice(i, 1)
       changed = true
@@ -198,46 +236,16 @@ async function refreshListDisplay(): Promise<void> {
 
 export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   void gateway.react(msg.channelId, msg.id, '📊').catch(() => {})
-  const liveSessions = [...registry.values()].filter(s => isAlive(s))
-  if (liveSessions.length === 0) {
-    try { await gateway.send(msg.channelId, 'No active sessions.', { replyTo: msg.id }) } catch {}
-    return
-  }
-
-  const now = Date.now()
-  const all = liveSessions.sort((a, b) => b.lastActive - a.lastActive)
-
-  const entries: SessionEntry[] = all.map(s => ({ session: s }))
-
-  // Phase 1: post immediately without latest-message info, grouped by time.
+  const text = await renderLiveList()
   // safeSend chunks over-length output — a raw gateway.send silently drops
   // the whole list once enough sessions push it past Discord's 2000-char cap.
-  const sentIds = await safeSend(msg.channelId, buildListOutput(entries, now), { replyTo: msg.id, unfurl: false })
-  const sentMsg = sentIds[0] ? { id: sentIds[0] } : undefined
-  if (!sentMsg) return
+  const sentIds = await safeSend(msg.channelId, text, { replyTo: msg.id, unfurl: false })
+  if (sentIds.length === 0) return
 
   // Track for auto-refresh on lifecycle events (FILO — most recent first)
-  lastListMsgs.unshift({ channelId: msg.channelId, messageId: sentMsg.id })
+  lastListMsgs.unshift({ channelId: msg.channelId, messageIds: sentIds })
   if (lastListMsgs.length > MAX_LIST_MSGS) lastListMsgs.pop()
   persistListMsgs()
-
-  // Phase 2: fetch latest message per thread in parallel, then edit
-  const latestInfos = await Promise.all(entries.map(async (e): Promise<string | undefined> => {
-    try {
-      const msgs = await gateway.fetchMessages(e.session.threadId, 1)
-      if (msgs.length === 0) return undefined
-      const m = msgs[0]
-      const who = m.authorId === gateway.botId ? `<@${gateway.botId}>` : 'you'
-      const msgUrl = gateway.getMessageUrl(e.session.threadId, m.id)
-      return msgUrl ? `[📩 latest](${msgUrl}) — by ${who}` : `📩 latest — by ${who}`
-    } catch { return undefined }
-  }))
-
-  const enriched = entries.map((e, i) => ({ ...e, latestLine: latestInfos[i] }))
-  const richText = buildListOutput(enriched, now)
-  if (sentMsg) {
-    await safeEdit(msg.channelId, sentMsg.id, richText)
-  }
 }
 
 export async function handleUsageIntercept(msg: InboundMessage): Promise<void> {
@@ -406,7 +414,7 @@ export const __test = process.env.NODE_ENV === 'test'
   ? {
       refreshListDisplay,
       trackedListMsgs: () => lastListMsgs,
-      setTrackedListMsgs(msgs: Array<{ channelId: string; messageId: string }>): void {
+      setTrackedListMsgs(msgs: ListMsg[]): void {
         lastListMsgs = msgs
       },
       /** Keep persistence off the real STATE_DIR for the duration of a test. */

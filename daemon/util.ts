@@ -384,7 +384,7 @@ export async function reportError(
  */
 export type EditOutcome = 'ok' | 'message-gone' | 'channel-gone' | 'failed'
 
-function editErrorOutcome(err: unknown): EditOutcome {
+export function editErrorOutcome(err: unknown): EditOutcome {
   const code = (err as { code?: unknown })?.code
   const slack = (err as { data?: { error?: unknown } })?.data?.error
   const text = err instanceof Error ? err.message : String(err)
