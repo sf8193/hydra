@@ -201,3 +201,25 @@ describe('auto-refreshing /list display', () => {
     expect(status.trackedListMsgs()[0].messageIds).toEqual(['a'])
   })
 })
+
+describe('/list grouping', () => {
+  const session = (name: string, originFrom?: string): SessionInfo => ({
+    sessionId: `list-sess-${name}`, topic: name, threadId: `list-thread-${name}`,
+    createdAt: Date.now(), lastActive: Date.now(), tmuxName: name, listening: false,
+    engine: 'claude', adapter: fakeAdapter({ usage: () => null }), sessionType: 'thread_owner',
+    originType: originFrom ? 'handoff' : undefined, originFrom,
+  })
+
+  test('a handoff session whose origin is its own name is still listed', () => {
+    const out = status.renderGrouped([{ session: session('haze', 'haze') }])
+    expect(out).toContain('`haze`')
+  })
+
+  test('every session is printed, whatever its origin chain', () => {
+    const names = (es: SessionInfo[]) => status.renderGrouped(es.map(session => ({ session })))
+    const chain = names([session('foo'), session('haze', 'foo'), session('reef', 'haze')])
+    const cycle = names([session('haze', 'reef'), session('reef', 'haze')])
+    for (const n of ['foo', 'haze', 'reef']) expect(chain).toContain(`\`${n}\``)
+    for (const n of ['haze', 'reef']) expect(cycle).toContain(`\`${n}\``)
+  })
+})
