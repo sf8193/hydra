@@ -6,7 +6,7 @@
 // rate-limit or a dropped connection must leave it tracked.
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { __test as statusTest } from '../commands/status.js'
+import { __test as statusTest, handleListIntercept } from '../commands/status.js'
 import { registry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
@@ -184,6 +184,37 @@ describe('auto-refreshing /list display', () => {
 
     expect(expected).toBeGreaterThan(0)
     expect(sends).toBe(expected)
+  })
+
+  test('a new /list in a channel retires its older lists, so growth sends one new chunk', async () => {
+    const origSend = gateway.send
+    const origReact = gateway.react
+    let sends = 0
+    ;(gateway as any).react = async () => {}
+    ;(gateway as any).send = async () => ({ id: `new${++sends}` })
+    const inbound = { channelId: 'c1', id: 'in1' } as any
+    await handleListIntercept(inbound)
+    await handleListIntercept(inbound)
+    expect(status.trackedListMsgs()).toHaveLength(1)
+
+    for (let n = 0; n < 60; n++) {
+      const sid = `list-sess-grow-${n}`
+      registry.set(sid, {
+        sessionId: sid, topic: 'topic', threadId: `list-thread-grow-${n}`,
+        createdAt: Date.now(), lastActive: Date.now(), tmuxName: `grow${n}`, description: `session description number ${n}`,
+        listening: false, engine: 'claude', adapter: fakeAdapter({ usage: () => null, isAlive: () => true }),
+        sessionType: 'thread_owner',
+      } as SessionInfo)
+      trackedSessions.add(sid)
+    }
+    sends = 0
+    await status.refreshListDisplay()
+    ;(gateway as any).send = origSend
+    ;(gateway as any).react = origReact
+
+    const [lm] = status.trackedListMsgs()
+    expect(lm.messageIds.length).toBeGreaterThan(1)
+    expect(sends).toBe(lm.messageIds.length - 1)
   })
 
   test('a leftover chunk whose delete is rate-limited stays tracked until it is deleted', async () => {

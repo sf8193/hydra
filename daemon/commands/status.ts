@@ -247,7 +247,9 @@ export async function handleListIntercept(msg: InboundMessage): Promise<void> {
   const sentIds = await safeSend(msg.channelId, text, { replyTo: msg.id, unfurl: false })
   if (sentIds.length === 0) return
 
-  // Track for auto-refresh on lifecycle events (FILO — most recent first)
+  // Track for auto-refresh on lifecycle events (FILO — most recent first).
+  // One list per channel: a growing refresh would otherwise send a new chunk per old list.
+  lastListMsgs = lastListMsgs.filter(m => m.channelId !== msg.channelId)
   lastListMsgs.unshift({ channelId: msg.channelId, messageIds: sentIds })
   if (lastListMsgs.length > MAX_LIST_MSGS) lastListMsgs.pop()
   persistListMsgs()
