@@ -49,6 +49,14 @@ export type WatchEntry = {
   // restart never re-announces and a new push that goes green announces again.
   notifyGreen?: boolean
   greenAnnouncedSha?: string
+  // Last seen merge-conflict state (GitHub mergeable === false). Alert only on the flip to true.
+  lastConflict?: boolean
+}
+
+// GitHub computes `mergeable` lazily: null right after a push, so keep the last value then.
+export function conflictChange(last: boolean | undefined, mergeable: boolean | null | undefined) {
+  const conflict = typeof mergeable === 'boolean' ? !mergeable : !!last
+  return { conflict, newConflict: conflict && !last }
 }
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
@@ -184,7 +192,7 @@ export function parsePrUrl(url: string): { owner: string; repo: string; prNumber
 export async function fetchPrTitle(url: string): Promise<string | null> {
   const parsed = parsePrUrl(url)
   if (!parsed) return null
-  const data = await ghApi(`repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.prNumber}`)
+  const data = await fetchPr(parsed)
   return data?.title ?? null
 }
 
@@ -247,6 +255,11 @@ async function ghApi(endpoint: string): Promise<any> {
   }
 }
 
+// Both WatchEntry and a parsed PR URL carry these three fields.
+type PrRef = { owner: string; repo: string; prNumber: number }
+const prPath = (r: PrRef) => `repos/${r.owner}/${r.repo}/pulls/${r.prNumber}`
+const fetchPr = (r: PrRef) => ghApi(prPath(r))
+
 export function maxId(items: any[] | null): number {
   if (!items || !Array.isArray(items) || items.length === 0) return 0
   return Math.max(...items.map((i: any) => i.id ?? 0))
@@ -257,7 +270,7 @@ export function maxId(items: any[] | null): number {
 // ---------------------------------------------------------------------------
 
 async function fetchNewReviewComments(entry: WatchEntry): Promise<PRComment[] | null> {
-  const data = await ghApi(`repos/${entry.owner}/${entry.repo}/pulls/${entry.prNumber}/comments?since=${entry.lastCheckedAt}&per_page=100`)
+  const data = await ghApi(`${prPath(entry)}/comments?since=${entry.lastCheckedAt}&per_page=100`)
   if (!data || !Array.isArray(data)) return null
 
   if (data.length >= 100) {
@@ -279,7 +292,7 @@ async function fetchNewReviewComments(entry: WatchEntry): Promise<PRComment[] | 
 
 async function fetchNewReviews(entry: WatchEntry): Promise<PRReview[] | null> {
   // Fetch newest-first, small page — most PRs have few reviews
-  const data = await ghApi(`repos/${entry.owner}/${entry.repo}/pulls/${entry.prNumber}/reviews?per_page=10&sort=created&direction=desc`)
+  const data = await ghApi(`${prPath(entry)}/reviews?per_page=10&sort=created&direction=desc`)
   if (!data || !Array.isArray(data)) return null
 
   const results: PRReview[] = []
@@ -328,7 +341,7 @@ export type CheckResult = {
 }
 
 async function fetchCheckStatus(entry: WatchEntry, prData?: any): Promise<CheckResult | null> {
-  const pr = prData ?? await ghApi(`repos/${entry.owner}/${entry.repo}/pulls/${entry.prNumber}`)
+  const pr = prData ?? await fetchPr(entry)
   if (!pr?.head?.sha) return null
 
   const headSha = pr.head.sha as string
@@ -424,7 +437,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   // Fetch PR state once — reused for merge check and check status
   let prData: any = null
   try {
-    prData = await ghApi(`repos/${entry.owner}/${entry.repo}/pulls/${entry.prNumber}`)
+    prData = await fetchPr(entry)
     if (prData?.merged || prData?.state === 'closed') {
       const reason = prData.merged ? 'merged' : 'closed'
       process.stderr.write(`daemon: pr-watch: #${entry.prNumber} ${reason}, auto-unwatching\n`)
@@ -469,7 +482,10 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   // Detect CI status changes (and post the opt-in green notice)
   const ciChanged = await applyCheckResult(entry, checkResult)
 
-  if (reviewComments.length === 0 && issueComments.length === 0 && reviews.length === 0 && !ciChanged) {
+  const { conflict, newConflict } = conflictChange(entry.lastConflict, prData?.mergeable)
+  entry.lastConflict = conflict
+
+  if (reviewComments.length === 0 && issueComments.length === 0 && reviews.length === 0 && !ciChanged && !newConflict) {
     if (watches.get(entry.prUrl) === entry) persist()
     return
   }
@@ -486,7 +502,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   }
 
   const allComments = [...reviewComments, ...issueComments]
-  const totalItems = allComments.length + reviews.length + (ciChanged ? 1 : 0)
+  const totalItems = allComments.length + reviews.length + (ciChanged ? 1 : 0) + (newConflict ? 1 : 0)
 
   const parts: string[] = []
   parts.push(`[PR Feedback] **${entry.owner}/${entry.repo}#${entry.prNumber}** — ${totalItems} new item(s)`)
@@ -512,6 +528,11 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     for (const f of checkResult.failed) {
       parts.push(`  • \`${f.name}\` — ${f.conclusion}${f.url ? ` — ${f.url}` : ''}`)
     }
+    parts.push('')
+  }
+
+  if (newConflict) {
+    parts.push('⚠️ **Merge conflict** — this PR no longer merges cleanly into its base. Rebase it and resolve the conflicts.')
     parts.push('')
   }
 
@@ -653,11 +674,11 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
   // Seed watermarks with max IDs so we only report NEW comments/status
   try {
     const [reviewComments, issueComments, reviews, checkResult, prData] = await Promise.all([
-      ghApi(`repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.prNumber}/comments?per_page=1&sort=created&direction=desc`),
+      ghApi(`${prPath(parsed)}/comments?per_page=1&sort=created&direction=desc`),
       ghApi(`repos/${parsed.owner}/${parsed.repo}/issues/${parsed.prNumber}/comments?per_page=1&sort=created_at&direction=desc`),
-      ghApi(`repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.prNumber}/reviews?per_page=1&sort=id&direction=desc`),
+      ghApi(`${prPath(parsed)}/reviews?per_page=1&sort=id&direction=desc`),
       fetchCheckStatus(entry),
-      ghApi(`repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.prNumber}`),
+      fetchPr(parsed),
     ])
     entry.lastReviewCommentId = maxId(reviewComments)
     entry.lastIssueCommentId = maxId(issueComments)
@@ -754,7 +775,7 @@ export async function backfillTitles(): Promise<number> {
   let filled = 0
   for (const entry of missing) {
     try {
-      const pr = await ghApi(`repos/${entry.owner}/${entry.repo}/pulls/${entry.prNumber}`)
+      const pr = await fetchPr(entry)
       if (pr?.title) {
         entry.title = pr.title
         filled++
