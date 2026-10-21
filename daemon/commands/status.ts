@@ -61,15 +61,20 @@ function formatSessionEntry(e: SessionEntry, indent?: string): string {
 function renderGrouped(items: SessionEntry[]): string {
   // Build name→entry lookup for parent resolution
   const byName = new Map<string, SessionEntry>(items.map(e => [e.session.tmuxName, e]))
-  // Identify roots (no parent in the list) and children
+  // The tree draws one level, so a session nests only under a parent that is itself top-level.
+  // Self-origins (a handoff keeps its name), chains and cycles therefore all stay printed as roots.
+  const parentOf = (e: SessionEntry) => {
+    const n = e.session.originFrom
+    return n && n !== e.session.tmuxName ? byName.get(n) : undefined
+  }
   const children = new Map<string, SessionEntry[]>() // parent tmuxName → children
   const roots: SessionEntry[] = []
   for (const e of items) {
-    const parentName = e.session.originFrom
-    if (parentName && byName.has(parentName)) {
-      const arr = children.get(parentName) ?? []
+    const parent = parentOf(e)
+    if (parent && !parentOf(parent)) {
+      const arr = children.get(parent.session.tmuxName) ?? []
       arr.push(e)
-      children.set(parentName, arr)
+      children.set(parent.session.tmuxName, arr)
     } else {
       roots.push(e)
     }
@@ -413,6 +418,7 @@ export async function handleProtocolsIntercept(msg: InboundMessage): Promise<voi
 export const __test = process.env.NODE_ENV === 'test'
   ? {
       refreshListDisplay,
+      renderGrouped,
       trackedListMsgs: () => lastListMsgs,
       setTrackedListMsgs(msgs: ListMsg[]): void {
         lastListMsgs = msgs
