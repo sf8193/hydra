@@ -53,6 +53,12 @@ export type WatchEntry = {
   lastConflict?: boolean
 }
 
+// GitHub computes `mergeable` lazily: null right after a push, so keep the last value then.
+export function conflictChange(last: boolean | undefined, mergeable: boolean | null | undefined) {
+  const conflict = typeof mergeable === 'boolean' ? !mergeable : !!last
+  return { conflict, newConflict: conflict && !last }
+}
+
 export type CheckStatusType = WatchEntry['lastCheckStatus']
 
 // A PR update is low priority: an engine where every delivery is a priced turn
@@ -476,9 +482,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   // Detect CI status changes (and post the opt-in green notice)
   const ciChanged = await applyCheckResult(entry, checkResult)
 
-  // GitHub computes `mergeable` lazily: null right after a push, so keep the last value then.
-  const conflict = typeof prData?.mergeable === 'boolean' ? !prData.mergeable : !!entry.lastConflict
-  const newConflict = conflict && !entry.lastConflict
+  const { conflict, newConflict } = conflictChange(entry.lastConflict, prData?.mergeable)
   entry.lastConflict = conflict
 
   if (reviewComments.length === 0 && issueComments.length === 0 && reviews.length === 0 && !ciChanged && !newConflict) {

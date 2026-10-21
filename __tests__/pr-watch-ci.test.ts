@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { shouldNotifyCiChange, shouldNotifyGreen, type CheckStatusType } from '../daemon/pr-watch.js'
+import { conflictChange, shouldNotifyCiChange, shouldNotifyGreen, type CheckStatusType } from '../daemon/pr-watch.js'
 
 const SHA_A = 'aaaa'
 const SHA_B = 'bbbb'
@@ -76,4 +76,23 @@ describe('shouldNotifyGreen — opt-in edge trigger, once per head commit', () =
     expect(shouldNotifyGreen(entry, { status: 'failure', headSha: SHA_A })).toBe(false)
     expect(shouldNotifyGreen(entry, ok(SHA_A))).toBe(true)
   })
+})
+
+describe('conflictChange', () => {
+  const cases: Array<[boolean | undefined, boolean | null | undefined, boolean, boolean, string]> = [
+    [undefined, false, true,  true,  'first poll, conflicting: alert'],
+    [false,     false, true,  true,  'clean→conflict: alert'],
+    [true,      false, true,  false, 'still conflicting: quiet'],
+    [true,      true,  false, false, 'conflict→clean: quiet, state resets'],
+    [false,     true,  false, false, 'clean stays clean'],
+    [false,     null,  false, false, 'null (GitHub computing) keeps clean'],
+    [true,      null,  true,  false, 'null keeps conflict, no re-alert'],
+    [undefined, null,  false, false, 'null on first poll: nothing'],
+    [true,      undefined, true, false, 'fetch failed (no PR data) keeps conflict'],
+  ]
+  for (const [last, mergeable, conflict, newConflict, label] of cases) {
+    test(label, () => {
+      expect(conflictChange(last, mergeable)).toEqual({ conflict, newConflict })
+    })
+  }
 })
