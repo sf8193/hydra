@@ -49,6 +49,8 @@ export type WatchEntry = {
   // restart never re-announces and a new push that goes green announces again.
   notifyGreen?: boolean
   greenAnnouncedSha?: string
+  // Last seen merge-conflict state (GitHub mergeable === false). Alert only on the flip to true.
+  lastConflict?: boolean
 }
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
@@ -469,7 +471,12 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   // Detect CI status changes (and post the opt-in green notice)
   const ciChanged = await applyCheckResult(entry, checkResult)
 
-  if (reviewComments.length === 0 && issueComments.length === 0 && reviews.length === 0 && !ciChanged) {
+  // GitHub computes `mergeable` lazily: null right after a push, so keep the last value then.
+  const conflict = typeof prData?.mergeable === 'boolean' ? !prData.mergeable : !!entry.lastConflict
+  const newConflict = conflict && !entry.lastConflict
+  entry.lastConflict = conflict
+
+  if (reviewComments.length === 0 && issueComments.length === 0 && reviews.length === 0 && !ciChanged && !newConflict) {
     if (watches.get(entry.prUrl) === entry) persist()
     return
   }
@@ -486,7 +493,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   }
 
   const allComments = [...reviewComments, ...issueComments]
-  const totalItems = allComments.length + reviews.length + (ciChanged ? 1 : 0)
+  const totalItems = allComments.length + reviews.length + (ciChanged ? 1 : 0) + (newConflict ? 1 : 0)
 
   const parts: string[] = []
   parts.push(`[PR Feedback] **${entry.owner}/${entry.repo}#${entry.prNumber}** — ${totalItems} new item(s)`)
@@ -512,6 +519,11 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     for (const f of checkResult.failed) {
       parts.push(`  • \`${f.name}\` — ${f.conclusion}${f.url ? ` — ${f.url}` : ''}`)
     }
+    parts.push('')
+  }
+
+  if (newConflict) {
+    parts.push('⚠️ **Merge conflict** — this PR no longer merges cleanly into its base. Rebase it and resolve the conflicts.')
     parts.push('')
   }
 
