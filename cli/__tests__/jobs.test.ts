@@ -51,6 +51,8 @@ describe('parseJobs', () => {
     ['channel that is not a string', `channel = 123\n[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"`, /channel must be a quoted string/],
     ['a job named channel', `[channel]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"`, /channel must be a quoted string/],
     ['prompt over the size limit', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="${'x'.repeat(4001)}"`, /over 4000 bytes/],
+    ['headless on a main job', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nheadless=true`, /headless only applies to mode spawn/],
+    ['headless that is not a boolean', `channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\nheadless="yes"`, /headless must be true or false/],
     ['unknown key', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nretries=3`, /unknown key retries/],
     ['bad name', `[Vuln_Scan]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"`, /name must be/],
   ]
@@ -160,6 +162,16 @@ describe('runJob', () => {
     calls.length = 0
     await runJob(spawnJob, 'discord', dir)
     expect(calls).toHaveLength(1)
+  })
+
+  test('a headless job passes --headless to spawn, an ordinary one does not', async () => {
+    checkResult.out = 'x'
+    const quiet = parseJobs(`channel="9"\n[w]\nschedule="0 1 * * MON"\nmode="spawn"\nprompt="Do it."\nheadless=true`)[0]
+    expect(quiet.headless).toBe(true)
+    await runJob(quiet, 'discord', dir)
+    await runJob(spawnJob, 'discord', dir)
+    expect(calls[0]).toContain('--headless')
+    expect(calls[1]).not.toContain('--headless')
   })
 
   test('every hydra call targets the job platform daemon', async () => {

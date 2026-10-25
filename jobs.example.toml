@@ -7,6 +7,9 @@
 # mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
 # mode = "main"   the prompt goes to the main session
 # mode = "none"   no agent: the check runs and the result is recorded
+#
+# headless = true  (spawn only) no Discord thread and no @mention; the agent works and writes to files.
+#                  Needs a daemon restart to take effect.
 
 # Default for spawn jobs. Use a server channel: Discord cannot open a thread inside a DM, and a DM id
 # makes every spawn fail with "no channel to spawn in".
