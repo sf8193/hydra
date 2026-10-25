@@ -76,7 +76,8 @@ export const jobsIO = {
   now: () => new Date(),
   // stdout is the contract: findings go there. The deadline covers a child that outlives `sh` and holds the pipe open.
   async check(cmd: string, timeoutMs = CHECK_TIMEOUT_MS): Promise<{ code: number; out: string; err: string }> {
-    const p = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs })
+    // env is passed explicitly: Bun.spawn does not see later edits to process.env.PATH, and resolveConfig adds Homebrew to it.
+    const p = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs, env: process.env })
     const done = Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
       .then(([out, err, code]) => ({ code, out, err }))
     let timer: ReturnType<typeof setTimeout>
@@ -86,7 +87,7 @@ export const jobsIO = {
     try { return await Promise.race([done, late]) } finally { clearTimeout(timer!) }
   },
   async hydra(args: string[]): Promise<{ code: number; err: string }> {
-    const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'ignore', stderr: 'pipe' })
+    const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'ignore', stderr: 'pipe', env: process.env })
     const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited])
     return { code, err: err.trim().slice(-200) }
   },
