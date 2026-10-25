@@ -1,0 +1,27 @@
+# Copy to <state dir>/jobs.toml, then run: hydra jobs sync <platform>
+# Run sync from the main hydra checkout: the launchd plist points at the checkout it ran from.
+#
+# A job's check script prints nothing when all is well. Anything it prints is passed to the agent.
+# A nonzero exit posts one "job failed" message per day.
+#
+# mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
+# mode = "main"   the prompt goes to the main session
+# mode = "none"   no agent: the check runs and the result is recorded
+
+channel = "000000000000000000"   # default for spawn jobs
+
+[dependency-scan]
+schedule = "0 6 * * *"            # 5-field cron, local time
+check = "~/scripts/dependency_scan.sh"
+mode = "spawn"
+prompt = "Triage the scan output below. Report only new, reachable findings."
+
+[security-digest]
+schedule = "0 9 * * MON"
+mode = "main"
+prompt = "Summarize this week's security scan results for the user."
+
+[log-cleanup]
+schedule = "0 1 * * *"
+check = "~/scripts/cleanup_logs.sh"
+mode = "none"

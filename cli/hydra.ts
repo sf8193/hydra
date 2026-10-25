@@ -9,6 +9,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
+import { isPlatform, jobsList, jobsRun, jobsSync } from './jobs.js'
 import { MODEL_ALIASES } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
@@ -22,6 +23,11 @@ Setup:
     --cwd <path>                       Working directory for spawned sessions
     --config-dir <path>                Claude config dir (default: ~/.claude)
   hydra uninstall <platform>           Remove launchd watchdog
+
+Jobs (recurring, from <state dir>/jobs.toml):
+  hydra jobs list <platform>           Each job's next run and last result
+  hydra jobs sync <platform>           Register jobs with launchd; drop removed ones
+  hydra jobs run <platform> <name>     Run one job now
 
 Lifecycle:
   hydra up <platform>                  Start daemon + byte
@@ -96,6 +102,23 @@ async function main(): Promise<void> {
   }
 
   const command = filtered[0]
+
+  if (command === 'jobs') {
+    const [, sub, platform, name] = filtered
+    if (!['list', 'sync', 'run'].includes(sub) || !platform || !isPlatform(platform) || (sub === 'run' && !name)) {
+      console.error('usage: hydra jobs list|sync <platform>   |   hydra jobs run <platform> <name>')
+      process.exit(1)
+    }
+    try {
+      if (sub === 'list') jobsList(platform)
+      else if (sub === 'sync') await jobsSync(platform)
+      else if ((await jobsRun(platform, name)).outcome === 'failed') process.exit(1)
+    } catch (err) {
+      console.error(`error: ${err instanceof Error ? err.message : err}`)
+      process.exit(1)
+    }
+    process.exit(0)
+  }
 
   // Lifecycle commands
   if (['install', 'uninstall', 'up', 'down', 'restart', 'watchdog', 'preflight'].includes(command)) {
