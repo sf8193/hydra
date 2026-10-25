@@ -8,7 +8,9 @@
 # mode = "main"   the prompt goes to the main session
 # mode = "none"   no agent: the check runs and the result is recorded
 
-channel = "000000000000000000"   # default for spawn jobs
+# Default for spawn jobs. Use a server channel: Discord cannot open a thread inside a DM, and a DM id
+# makes every spawn fail with "no channel to spawn in".
+channel = "000000000000000000"
 
 [dependency-scan]
 schedule = "0 6 * * *"            # 5-field cron, local time
