@@ -808,6 +808,10 @@
     ],
     [
       "daemon_router",
+      "daemon_bridge-server"
+    ],
+    [
+      "daemon_router",
       "daemon_permission"
     ],
     [
