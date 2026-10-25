@@ -215,19 +215,7 @@ describe('titles, sync plan, records', () => {
 })
 
 describe('jobsIO.check (real subprocess)', () => {
-  test('a finished check leaves no timer holding the process open', async () => {
-    const start = Date.now()
-    const p = Bun.spawn([process.execPath, '-e', `import { jobsIO } from '${import.meta.dir}/../jobs.ts'; await jobsIO.check('true', 30000)`], { stdout: 'ignore', stderr: 'ignore' })
-    await p.exited
-    expect(Date.now() - start).toBeLessThan(5000)
-  })
   const check = real0.check
-  test('a child that outlives sh and holds the pipe cannot hang the fire', async () => {
-    const start = Date.now()
-    const r = await check('sleep 20 & echo hi; sleep 20', 1000)
-    expect(r.code).not.toBe(0)
-    expect(Date.now() - start).toBeLessThan(4000)
-  })
   test('stdout and exit code come back', async () => {
     expect(await check('echo found; exit 0')).toMatchObject({ code: 0, out: 'found\n' })
     expect(await check('echo bad >&2; exit 3')).toMatchObject({ code: 3, err: 'bad\n' })

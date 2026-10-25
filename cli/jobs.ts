@@ -66,21 +66,14 @@ export function parseJobs(text: string): Job[] {
 export type Outcome = 'nothing' | 'findings' | 'failed'
 export type RunRecord = { at: string; outcome: Outcome; note?: string }
 
-const CHECK_TIMEOUT_MS = 30 * 60_000
-
 // Everything a run does to the outside world goes through here, so tests swap it.
 export const jobsIO = {
   now: () => new Date(),
-  // stdout is the contract: findings go there. The deadline covers a child that outlives `sh` and holds the pipe open.
-  async check(cmd: string, timeoutMs = CHECK_TIMEOUT_MS): Promise<{ code: number; out: string; err: string }> {
-    const p = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs })
-    const done = Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
-      .then(([out, err, code]) => ({ code, out, err }))
-    let timer: ReturnType<typeof setTimeout>
-    const late = new Promise<{ code: number; out: string; err: string }>(res => {
-      timer = setTimeout(() => res({ code: 124, out: '', err: `timed out after ${timeoutMs / 1000}s` }), timeoutMs + 500)
-    })
-    try { return await Promise.race([done, late]) } finally { clearTimeout(timer!) }
+  // stdout is the contract: findings go there. No deadline: a long check (backtest, pipeline) runs to the end.
+  async check(cmd: string): Promise<{ code: number; out: string; err: string }> {
+    const p = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe' })
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
+    return { code, out, err }
   },
   async hydra(args: string[]): Promise<{ code: number; err: string }> {
     const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'ignore', stderr: 'pipe' })
