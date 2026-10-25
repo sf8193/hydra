@@ -240,6 +240,11 @@ describe('jobsIO.check (real subprocess)', () => {
     expect(r.code).not.toBe(0)
     expect(Date.now() - start).toBeLessThan(4000)
   })
+  test('a check sees PATH edits made after startup (launchd gives only /usr/bin:/bin)', async () => {
+    const saved = process.env.PATH
+    process.env.PATH = `/opt/homebrew/bin:${saved}`
+    try { expect((await check('echo $PATH')).out).toStartWith('/opt/homebrew/bin:') } finally { process.env.PATH = saved }
+  })
   test('stdout and exit code come back', async () => {
     expect(await check('echo found; exit 0')).toMatchObject({ code: 0, out: 'found\n' })
     expect(await check('echo bad >&2; exit 3')).toMatchObject({ code: 3, err: 'bad\n' })
