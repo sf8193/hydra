@@ -69,6 +69,7 @@ Spawn options:
   --read-thread [limit] [thread-id]    Read thread history first (default: 50 msgs from --channel, max 200)
   --quiet                              Suppress spawn announcement in chat
   --ephemeral                          Auto-kill on [done], skip death visuals
+  --headless                           No Discord thread; the session just works (output goes to files, not chat)
   --force-cleanup                      Remove worktree + branch on kill even with uncommitted/unpushed work (unpushed commits become unreachable)
 
 Model aliases:
@@ -162,6 +163,7 @@ async function main(): Promise<void> {
       let message: string | undefined
       let quiet = false
       let ephemeral = false
+      let headless = false
       let forceWorktreeCleanup = false
       let readThreadLimit = 0  // 0 = disabled
       let model: string | undefined
@@ -180,6 +182,8 @@ async function main(): Promise<void> {
           quiet = true
         } else if (filtered[i] === '--ephemeral') {
           ephemeral = true
+        } else if (filtered[i] === '--headless') {
+          headless = true
         } else if (filtered[i] === '--force-cleanup') {
           forceWorktreeCleanup = true
         } else if (filtered[i] === '--read-thread') {
@@ -226,7 +230,7 @@ async function main(): Promise<void> {
         type: 'cli',
         command: 'spawn',
         id: randomUUID(),
-        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
+        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(headless && { headless }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
       })
       printResponse(response, json)
       break
