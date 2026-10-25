@@ -38,7 +38,7 @@ const BRIDGE_LIFE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const PR_URL_RE = /https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/g
 
 // ---------------------------------------------------------------------------
-// Ephemeral TTL — safety net for stuck ephemeral sessions
+// Ephemeral TTL — safety net for stuck ephemeral sessions. Idle limit: restarted whenever a user posts in the thread (router.ts).
 // ---------------------------------------------------------------------------
 
 const EPHEMERAL_TTL_MS = 30 * 60 * 1000 // 30 minutes
