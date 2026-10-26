@@ -6,9 +6,10 @@
  * similar to Discord's gateway model.
  */
 
-import { App, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
+import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { sanitizeFilename, COUNT_EMOJI } from './gateway.js'
+import { sanitizeFilename } from './gateway.js'
+import { ThrottledQueue } from './throttled-queue.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -21,6 +22,7 @@ import type {
   ButtonClick,
   AttachmentInfo,
   ReactionEvent,
+  SessionVisualOpts,
 } from './gateway.js'
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
@@ -50,6 +52,35 @@ function applyMessageBody(payload: Record<string, unknown>, text: string, hasBut
   else payload.markdown_text = text
 }
 
+const SLACK_TITLE_MAX = 200
+const SLACK_TITLE_UNSAFE = /[^\p{L}\p{M}\p{Nd} .,()'!?&_=|-]/gu
+const SLACK_VISUAL_DRAIN_MS = 2_500
+const SLACK_VISUAL_TIMEOUT_MS = 10_000
+const SLACK_VISUALS_UNAVAILABLE = new Set(['missing_scope', 'feature_disabled'])
+
+export function slackSessionStatus(state: SessionVisualOpts['state']): 'active' | 'suspended' | 'closed' {
+  return state === 'killed' ? 'closed' : state === 'crashed' ? 'suspended' : 'active'
+}
+
+/** Slack's title validator rejects characters it never documents, so callers try each title until one is accepted. */
+export function slackSessionTitles(opts: SessionVisualOpts): string[] {
+  const cap = (s: string) => {
+    let out = ''
+    for (const ch of s) {
+      if (out.length + ch.length > SLACK_TITLE_MAX) break
+      out += ch
+    }
+    return out.trim()
+  }
+  const clean = (s = '') => cap(s.normalize('NFC').replace(SLACK_TITLE_UNSAFE, ' ').replace(/\s+/g, ' ').trim())
+  const dead = opts.state === 'killed' || opts.state === 'crashed'
+  const icon = opts.state === 'killed' ? '☠️' : opts.state === 'crashed' ? '💥' : opts.emoji
+  const name = clean(opts.sessionName)
+  const focus = clean(opts.description || opts.topic)
+  const text = cap((focus ? `${name} - ${focus}` : name) + (opts.paused && !dead ? ' (paused)' : ''))
+  return [...new Set([cap(`${icon} ${text}`), text, name])].filter(Boolean)
+}
+
 export class SlackGateway implements ChatGateway {
   readonly platform = 'slack' as const
   readonly canThreadInDM = true
@@ -67,6 +98,10 @@ export class SlackGateway implements ChatGateway {
   private buttonClickHandler: ((click: ButtonClick) => void) | null = null
   private reactionHandler: ((event: ReactionEvent) => Promise<void>) | null = null
   private recentSentIds = new Set<string>()
+  private visualApi: webApi.WebClient | null = null
+  private visualsUnavailable = false
+  private appliedVisuals = new Map<string, string>()
+  private visualQueue = new ThrottledQueue<SessionVisualOpts>((threadId, opts) => this.applySessionVisual(threadId, opts), SLACK_VISUAL_DRAIN_MS)
   // Serial rate limiter for chat.postMessage and chat.update (Slack Tier 4: ~50/min).
   // A promise chain ensures at most one outbound send per SEND_RATE_MS, preventing 429s
   // when many sessions post simultaneously.
@@ -136,6 +171,12 @@ export class SlackGateway implements ChatGateway {
       socketMode: true,
       // Don't log to stdout — we write to stderr like the Discord gateway
       logLevel: 'ERROR' as any,
+    })
+    this.visualApi = new webApi.WebClient(token, {
+      logLevel: webApi.LogLevel.ERROR,
+      retryConfig: { retries: 0 },
+      rejectRateLimitedCalls: true,
+      timeout: SLACK_VISUAL_TIMEOUT_MS,
     })
 
     // Handle all messages
@@ -489,8 +530,7 @@ export class SlackGateway implements ChatGateway {
 
   async react(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
     // no-op: bot reactions trigger push notifications on Slack
-    // NOTE: updateSessionVisual also depends on react/unreact being live — re-enable all three together
-    // (and drop the PLATFORM check on reply-guard's react-settle in bridge-server.ts)
+    // NOTE: re-enable with unreact, and drop the PLATFORM check on reply-guard's react-settle in bridge-server.ts
   }
 
   async unreact(_channelId: string, _messageId: string, _emoji: string): Promise<void> {
@@ -757,55 +797,40 @@ export class SlackGateway implements ChatGateway {
     return `${msg.channelId}:${msg.id}`
   }
 
-  private static readonly COUNT_EMOJI = COUNT_EMOJI
+  async updateSessionVisual(threadId: string, opts: SessionVisualOpts): Promise<void> {
+    if (this.visualsUnavailable || !this.getThreadAnchor(threadId)) return
+    const urgent = opts.state === 'killed' || opts.state === 'crashed' || !!opts.paused
+    this.visualQueue.enqueue(threadId, opts, urgent ? 'high' : 'normal')
+  }
 
-  async updateSessionVisual(threadId: string, opts: {
-    state: 'live' | 'killed' | 'crashed' | 'zombie'
-    emoji: string
-    sessionName: string
-    description?: string
-    topic?: string
-    badge?: string
-    respawnCount?: number
-    paused?: boolean
-    anchorChannelId?: string
-    anchorMessageId?: string
-  }): Promise<void> {
-    return; // no-op: visual state communicated via reactions, disabled on Slack
-
+  private async applySessionVisual(threadId: string, opts: SessionVisualOpts): Promise<void> {
     const anchor = this.getThreadAnchor(threadId)
-    if (!anchor) return
+    if (!this.visualApi || !anchor || this.visualsUnavailable) return
+    const status = slackSessionStatus(opts.state)
+    const titles = slackSessionTitles(opts)
+    const applied = `${status} ${titles[0]}`
+    if (this.appliedVisuals.get(threadId) === applied) return
+    const session = { channel_id: anchor.channelId, thread_ts: anchor.messageId }
+    this.appliedVisuals.delete(threadId)
 
-    await Promise.allSettled([
-      this.unreact(anchor.channelId, anchor.messageId, '🚀'),
-      this.unreact(anchor.channelId, anchor.messageId, '☠️'),
-      this.unreact(anchor.channelId, anchor.messageId, '💥'),
-      this.unreact(anchor.channelId, anchor.messageId, '🧟'),
-    ])
-
-    switch (opts.state) {
-      case 'live':
-        await this.react(anchor.channelId, anchor.messageId, '🚀')
-        break
-      case 'killed':
-        await this.react(anchor.channelId, anchor.messageId, '☠️')
-        break
-      case 'crashed':
-        await this.react(anchor.channelId, anchor.messageId, '💥')
-        break
-      case 'zombie':
-        await this.react(anchor.channelId, anchor.messageId, '🚀')
-        await this.react(anchor.channelId, anchor.messageId, '🧟')
-        if (opts.respawnCount && opts.respawnCount > 0) {
-          const idx = Math.min(opts.respawnCount - 1, SlackGateway.COUNT_EMOJI.length - 1)
-          await this.react(anchor.channelId, anchor.messageId, SlackGateway.COUNT_EMOJI[idx])
-          if (opts.respawnCount > 1) {
-            await this.unreact(anchor.channelId, anchor.messageId,
-              SlackGateway.COUNT_EMOJI[Math.min(opts.respawnCount - 2, SlackGateway.COUNT_EMOJI.length - 1)])
-          }
-        }
-        break
+    try {
+      await this.visualApi.apiCall('agents.sessions.setStatus', { ...session, status })
+    } catch (e: any) {
+      if (!SLACK_VISUALS_UNAVAILABLE.has(e?.data?.error)) throw e
+      this.visualsUnavailable = true
+      process.stderr.write(`slack gateway: session titles off (${e.data.error}): the app needs the Agents feature and assistant:write\n`)
+      return
     }
+    for (const title of titles) {
+      try {
+        await this.visualApi.apiCall('agents.sessions.rename', { ...session, title })
+        this.appliedVisuals.set(threadId, applied)
+        return
+      } catch (e: any) {
+        if (e?.data?.error !== 'invalid_name') throw e
+      }
+    }
+    process.stderr.write(`slack gateway: slack rejected every session title for ${threadId}\n`)
   }
 
   /** Get thread context (starter info). */

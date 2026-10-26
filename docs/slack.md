@@ -18,11 +18,12 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** �
   "display_information": { "name": "YourBot", "description": "Claude Code chat bridge", "background_color": "#2c2c2c" },
   "features": {
     "app_home": { "home_tab_enabled": true, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false },
-    "bot_user": { "display_name": "YourBot", "always_online": true }
+    "bot_user": { "display_name": "YourBot", "always_online": true },
+    "agent_view": { "agent_description": "Claude Code chat bridge" }
   },
   "oauth_config": {
     "scopes": { "bot": [
-      "app_mentions:read", "channels:history", "channels:read", "chat:write",
+      "app_mentions:read", "assistant:write", "channels:history", "channels:read", "chat:write",
       "files:read", "files:write", "groups:history", "groups:read",
       "im:history", "im:read", "im:write", "mpim:history",
       "reactions:read", "reactions:write", "users:read"
@@ -41,6 +42,8 @@ Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** �
 > **Use your own app — don't share one.** A Slack app is a single event stream: pointing a second daemon at the same app token splits messages unpredictably across both. One app per deployment.
 
 **Already installed?** App Manifest → add `"reaction_added"` to `settings.event_subscriptions.bot_events` → Save → Reinstall. `reactions:read` is already in the scopes.
+
+**Thread titles:** each session thread is titled with its emoji, name and description through Slack's Agents feature. On an existing app: Agents → turn on **Agent experience** (this adds `assistant:write`) → Reinstall, then restart the daemon. This also moves the bot's DMs to Slack's agent layout. Without it, threads stay untitled and the daemon logs why.
 
 ## 2. Generate the two tokens
 
