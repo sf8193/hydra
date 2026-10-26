@@ -42,11 +42,11 @@ export class ThrottledQueue<V> {
     this.action(nextKey, value).catch(err => {
       const attempts = (this.retries.get(nextKey!) ?? 0) + 1
       if (attempts < this.maxRetries && !this.queue.has(nextKey!)) {
-        process.stderr.write(`throttled-queue: action failed (retry ${attempts}/${this.maxRetries}): ${err instanceof Error ? err.message : String(err)}\n`)
+        process.stderr.write(`throttled-queue: action failed for ${nextKey} (retry ${attempts}/${this.maxRetries}): ${err instanceof Error ? err.message : String(err)}\n`)
         this.queue.set(nextKey!, { value, priority })
         this.retries.set(nextKey!, attempts)
       } else {
-        process.stderr.write(`throttled-queue: action failed (dropped${this.queue.has(nextKey!) ? ', newer value queued' : ''}): ${err instanceof Error ? err.message : String(err)}\n`)
+        process.stderr.write(`throttled-queue: action failed for ${nextKey} (dropped${this.queue.has(nextKey!) ? ', newer value queued' : ''}): ${err instanceof Error ? err.message : String(err)}\n`)
         this.retries.delete(nextKey!)
       }
     }).finally(() => {
