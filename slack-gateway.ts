@@ -651,7 +651,7 @@ export class SlackGateway implements ChatGateway {
       }
     }
 
-    const url = this.buildMessageUrl(channel, threadTs)
+    const url = this.buildMessageUrl(channel, threadTs, threadTs)
     // In Slack, the "thread ID" is the parent message timestamp
     // We encode it as channel:threadTs for the daemon to use
     return { id: `${channel}:${threadTs}`, url }
@@ -786,7 +786,7 @@ export class SlackGateway implements ChatGateway {
   async getThreadUrl(threadId: string): Promise<string> {
     const anchor = this.getThreadAnchor(threadId)
     if (!anchor) return ''
-    return this.buildMessageUrl(anchor.channelId, anchor.messageId)
+    return this.buildMessageUrl(anchor.channelId, anchor.messageId, anchor.messageId)
   }
 
   /** Start a thread on a message (for threadReply policy). In Slack this just means replying in-thread. */
