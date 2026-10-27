@@ -10,6 +10,7 @@
 #
 # headless = true  (spawn only) no Discord thread and no @mention; the agent works and writes to files.
 #                  Needs a daemon restart to take effect.
+# model = "haiku"  (spawn only) model id or alias for the spawned session; default is the daemon's default.
 
 # Default for spawn jobs. Use a server channel: Discord cannot open a thread inside a DM, and a DM id
 # makes every spawn fail with "no channel to spawn in".
