@@ -15,6 +15,23 @@
 # makes every spawn fail with "no channel to spawn in".
 channel = "000000000000000000"
 
+# Worked example: a morning "where did we leave off" digest. No check script, so it fires every day.
+# The prompt tells main to hand the reading to a cheap subagent and post only the bullets.
+[thread-digest]
+schedule = "30 7 * * *"
+mode = "main"
+prompt = """Daily thread digest for Sam. Start a Haiku subagent (Agent tool, model haiku) to do the work, then post its result to Sam.
+
+Subagent steps:
+1. List live sessions (list_sessions). Keep this output out of the message.
+2. For each thread, fetch its messages from the last 24 hours. Skip threads with no activity.
+3. Find the thread's emoji: it starts the thread's title line, like "🪐 topic · name".
+4. Write each thread as a link bullet, then two sub-bullets: `- 🪐 [name](thread link)` / `  - Blockers: what it waits on Sam for, or none` / `  - Next: the single next step`. Max 15 words per sub-bullet.
+5. If nothing is open, write `done, safe to kill` as the only sub-bullet.
+6. Put threads with blockers first.
+
+Post only the bullets under a one-line heading. No session list, no tables, no "nothing to report" message if there were no active threads."""
+
 [dependency-scan]
 schedule = "0 6 * * *"            # 5-field cron, local time
 check = "~/scripts/dependency_scan.sh"
