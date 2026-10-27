@@ -17,6 +17,7 @@ export type Job = {
   prompt?: string    // required for spawn and main
   channel?: string   // spawn only; falls back to the file's top-level channel
   headless?: boolean // spawn only: no Discord thread, so nothing is posted; the agent writes its results to files
+  model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
 }
 
 const MODES: readonly Mode[] = ['spawn', 'main', 'none']
@@ -40,7 +41,7 @@ export function parseJobs(text: string): Job[] {
       return t[k] as string
     }
     for (const k of Object.keys(t)) {
-      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'headless'].includes(k)) fail(`unknown key ${k}`)
+      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'headless', 'model'].includes(k)) fail(`unknown key ${k}`)
     }
     const schedule = str('schedule') ?? fail('schedule is required')
     try { Bun.cron.parse(schedule) } catch { fail(`schedule "${schedule}" is not a cron expression`) }
@@ -55,9 +56,12 @@ export function parseJobs(text: string): Job[] {
     if (mode === 'spawn' && !channel) fail('mode spawn needs a channel (job or top-level)')
     if (t.headless !== undefined && typeof t.headless !== 'boolean') fail('headless must be true or false')
     if (t.headless === true && mode !== 'spawn') fail('headless only applies to mode spawn')
+    const model = str('model')
+    if (model && mode !== 'spawn') fail('model only applies to mode spawn')
+    if (model?.startsWith('-')) fail('model must not start with "-"')
     const check = str('check')
     if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
-    jobs.push({ name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(mode === 'spawn' && { channel }), ...(t.headless === true && { headless: true }) })
+    jobs.push({ name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(mode === 'spawn' && { channel }), ...(t.headless === true && { headless: true }), ...(model && { model }) })
   }
   return jobs
 }
@@ -148,7 +152,7 @@ export async function runJob(job: Job, platform: string, stateDir: string): Prom
   }
   const message = shown ? `${job.prompt}\n\nCheck output:\n${shown}` : job.prompt!
   const args = job.mode === 'spawn'
-    ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', job.channel!, '--ephemeral', ...(job.headless ? ['--headless'] : []), message]
+    ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', job.channel!, '--ephemeral', ...(job.headless ? ['--headless'] : []), ...(job.model ? ['--model', job.model] : []), message]
     : ['deliver', '--session', 'main', '--queue', '--initiator', initiator, '--idempotency-key', key, '--message', message]
   const r = await jobsIO.hydra(['--daemon', platform, ...args])
   if (sent(r.code)) return { at, outcome: 'findings' }
