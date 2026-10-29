@@ -709,7 +709,8 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
 
   const sessionId = randomUUID()
   // A handoff is the same session continuing: its killed predecessor's name is free, so the successor keeps it.
-  const tmuxName = opts?.handedOffFrom ?? registry.pickSessionName()
+  const replacing = opts?.existingThreadId ? registry.getByThread(opts.existingThreadId) : undefined
+  const tmuxName = opts?.handedOffFrom ?? registry.pickSessionName(opts?.reuseName && replacing ? { name: opts.reuseName, replacing } : undefined)
   // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
   // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
   // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
@@ -1170,6 +1171,7 @@ export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boo
 }
 
 export async function tryResume(dead: {
+  reuseName?: string
   topic: string
   threadId: string
   claudeSessionId?: string
@@ -1187,6 +1189,7 @@ export async function tryResume(dead: {
   try {
     const result = await doSpawnSession(dead.topic, undefined, undefined, {
       existingThreadId: dead.threadId,
+      reuseName: dead.reuseName,
       resumeFrom: dead.claudeSessionId,
       model: dead.model,
       label: dead.label,

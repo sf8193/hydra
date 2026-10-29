@@ -138,7 +138,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   try {
     if (claudeSessionId) {
       // Tier 1: full resume
-      const result = await tryResume({ topic: thread.topic, threadId: thread.threadId, claudeSessionId, threadUrl: thread.threadUrl, model, worktree, preserveWorktree: true, label: recoveredLabel })
+      const result = await tryResume({ reuseName: lastTmuxName, topic: thread.topic, threadId: thread.threadId, claudeSessionId, threadUrl: thread.threadUrl, model, worktree, preserveWorktree: true, label: recoveredLabel })
       if (result) {
         restoreOnto(result)
         return { name: lastTmuxName, method: 'resumed', newName: result.name, threadUrl: thread.threadUrl, displayName }
