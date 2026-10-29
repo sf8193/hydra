@@ -110,6 +110,19 @@ describe('SessionRegistry', () => {
   })
 })
 
+describe('SessionRegistry.pickSessionName reuse', () => {
+  test('a recovered session keeps its old name unless another session took it', () => {
+    const reg = new SessionRegistry()
+    reg.set('sid-dead', makeInfo({ sessionId: 'sid-dead', tmuxName: 'reuse-me', deadAt: 1 }))
+    const reuse = { name: 'reuse-me', replacing: 'sid-dead' }
+    expect(reg.pickSessionName(reuse)).toBe('reuse-me')
+    expect(reg.pickSessionName()).not.toBe('reuse-me')
+
+    reg.set('sid-thief', makeInfo({ sessionId: 'sid-thief', tmuxName: 'reuse-me' }))
+    expect(reg.pickSessionName(reuse)).not.toBe('reuse-me')
+  })
+})
+
 describe('ThreadRegistry', () => {
   test('set and get', () => {
     const tr = new ThreadRegistry()

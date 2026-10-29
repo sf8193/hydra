@@ -224,6 +224,7 @@ export type Predecessor = { engine: ProviderId; fork: NonNullable<SpawnOpts['for
 export type SpawnOpts = {
   forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string; codexHomeName?: string }
   handedOffFrom?: string
+  reuseName?: string // recovery: keep the dead session's name if still free
   handoffFromClaudeSessionId?: string  // predecessor's Claude session id (undefined for Codex), for the arriving template's {{from_session}} and {{from_transcript}}
   predecessor?: Predecessor            // handoff: persisted on the successor's record so it can fork the session it replaced
   artifact?: string
@@ -409,14 +410,16 @@ export class SessionRegistry {
     this.onPersist?.()
   }
 
-  pickSessionName(): string {
-    const used = new Set([...this.sessions.values()].map(s => s.tmuxName))
+  /** `reuse`: a recovered session's old name, kept unless something other than the record it replaces holds it. */
+  pickSessionName(reuse?: { name: string; replacing: string }): string {
+    const others = [...this.sessions.values()].filter(s => s.sessionId !== reuse?.replacing)
+    const used = new Set(others.map(s => s.tmuxName))
     // Also reserve names still referenced by a record's worktree branch (`wt/<name>`).
     // A recovered session keeps its predecessor's branch (its tmuxName differs), so the
     // old name looks free — but handing it to a new spawn would make createWorktree's
     // stale-cleanup `git branch -D wt/<name>` destroy that preserved branch and any
     // unpushed commits on it.
-    for (const s of this.sessions.values()) {
+    for (const s of others) {
       if (s.worktreeBranch?.startsWith('wt/')) used.add(baseNameFromBranch(s.worktreeBranch))
       // A resumed Codex session keeps its predecessor's CODEX_HOME; a new spawn named
       // after that home would restart the owner's app-server.
@@ -424,13 +427,15 @@ export class SessionRegistry {
     }
     // In-flight reservations cover the recovery window between deleting a dead record and
     // persisting its replacement, when the record-based reservation above doesn't yet apply.
-    for (const n of this.reservedNames) used.add(n)
+    // The reuse name is reserved by recovery for this very spawn.
+    for (const n of this.reservedNames) if (n !== reuse?.name) used.add(n)
     try {
       const tmuxOut = execSync('tmux ls -F "#{session_name}" 2>/dev/null', { encoding: 'utf8' })
       for (const line of tmuxOut.split('\n')) {
         if (line.trim()) used.add(line.trim())
       }
     } catch {}
+    if (reuse && !used.has(reuse.name)) return reuse.name
     for (const name of SESSION_NAMES) {
       if (!used.has(name)) return name
     }
