@@ -2,17 +2,17 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { oneLine, quietSend, shouldQuiet, spillIfLong, tickerLine, SPILL_THRESHOLD } from '../quiet-send.js'
+import { oneLine, quietSend, shouldQuiet, spillIfLong, noteLine, SPILL_THRESHOLD } from '../quiet-send.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'quiet-'))
 const big = () => Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n')
 
-test('ticker line uses the sender summary when given', () => {
-  expect(tickerLine('cedar', 'atlas', 'progress', 'long body\nmore', 'API pages scored 7')).toBe('cedar → atlas · API pages scored 7')
+test('one-line note uses the sender summary when given', () => {
+  expect(noteLine('cedar', 'atlas', 'progress', 'long body\nmore', 'API pages scored 7')).toBe('cedar → atlas · API pages scored 7')
 })
 
-test('ticker line falls back to the first non-empty line without its markdown marker', () => {
-  expect(tickerLine('glyph', 'atlas', 'result', '\n\n## **Cold score 5.4** (structure 6)\nrest')).toBe('glyph → atlas ✓ Cold score 5.4 (structure 6)')
+test('one-line note falls back to the first non-empty line without its markdown marker', () => {
+  expect(noteLine('glyph', 'atlas', 'result', '\n\n## **Cold score 5.4** (structure 6)\nrest')).toBe('glyph → atlas ✓ Cold score 5.4 (structure 6)')
 })
 
 test('identifiers survive: underscores, hashes, backticks, angle brackets in words', () => {
@@ -59,42 +59,41 @@ test('spill files older than a week are removed on the next spill', () => {
   expect(readdirSync(dir).includes('old.md')).toBe(false)
 })
 
-test('quietSend posts the ticker line and returns what the session is shown', async () => {
+test('quietSend posts the one-line note and returns what the session is shown', async () => {
   const lines: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'progress', text: 'hello', dir: tmp() }, { postTicker: async l => { lines.push(l) }, log: () => {} })
-  expect(out).toEqual({ delivered: 'hello', ticked: true })
+  const out = await quietSend({ from: 'a', to: 'b', type: 'progress', text: 'hello', dir: tmp() }, { postLine: async l => { lines.push(l) }, log: () => {} })
+  expect(out).toEqual({ delivered: 'hello', posted: true })
   expect(lines).toEqual(['a → b · hello'])
 })
 
-test('a ticker failure never stops delivery: ticked is false and the session still gets its text', async () => {
+test('a note failure never stops delivery: posted is false and the session still gets its text', async () => {
   const logs: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: tmp() }, { postTicker: async () => { throw new Error('Unknown Channel') }, log: m => logs.push(m) })
-  expect(out.ticked).toBe(false)
+  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: tmp() }, { postLine: async () => { throw new Error('Unknown Channel') }, log: m => logs.push(m) })
+  expect(out.posted).toBe(false)
   expect(out.delivered).toContain('[full text: ')
   expect(logs[0]).toContain('Unknown Channel')
 })
 
-test('a spill failure delivers the full text and still posts the ticker', async () => {
+test('a spill failure delivers the full text and still posts the note', async () => {
   const blocker = join(tmp(), 'file')
   writeFileSync(blocker, 'x')
   const lines: string[] = []
   const logs: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: join(blocker, 'sub') }, { postTicker: async l => { lines.push(l) }, log: m => logs.push(m) })
-  expect(out).toEqual({ delivered: big(), ticked: true })
+  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: join(blocker, 'sub') }, { postLine: async l => { lines.push(l) }, log: m => logs.push(m) })
+  expect(out).toEqual({ delivered: big(), posted: true })
   expect(lines).toEqual(['a → b ✓ line 0'])
   expect(logs[0]).toContain('spill failed')
 })
 
-test('a spilled message puts its path on the ticker line', async () => {
+test('a spilled message puts its path on the one-line note', async () => {
   const lines: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: tmp() }, { postTicker: async l => { lines.push(l) }, log: () => {} })
+  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: tmp() }, { postLine: async l => { lines.push(l) }, log: () => {} })
   expect(lines[0]).toMatch(/^a → b ✓ line 0 · `.+\.md`$/)
   expect(out.delivered).toContain('[full text: ')
 })
 
-test('shouldQuiet: only with a ticker thread and not for a protocol participant', () => {
-  expect(shouldQuiet({ tickerThreadId: 't1', protocolParticipant: false })).toBe(true)
-  expect(shouldQuiet({ tickerThreadId: undefined, protocolParticipant: false })).toBe(false)
-  expect(shouldQuiet({ tickerThreadId: '', protocolParticipant: false })).toBe(false)
-  expect(shouldQuiet({ tickerThreadId: 't1', protocolParticipant: true })).toBe(false)
+test('shouldQuiet: quiet unless a protocol participant or the send carries files', () => {
+  expect(shouldQuiet({ protocolParticipant: false, hasFiles: false })).toBe(true)
+  expect(shouldQuiet({ protocolParticipant: true, hasFiles: false })).toBe(false)
+  expect(shouldQuiet({ protocolParticipant: false, hasFiles: true })).toBe(false)
 })
