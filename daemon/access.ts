@@ -36,6 +36,8 @@ export type Access = {
   textChunkLimit?: number
   chunkMode?: 'length' | 'newline' | 'markdown'
   defaultListen?: boolean
+  /** Thread that receives one line per session-to-session send; when set, such sends are delivered to the recipient session only and never posted to its thread. */
+  tickerThreadId?: string
 }
 
 export type GateResult =

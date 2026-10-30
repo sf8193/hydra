@@ -1,10 +1,11 @@
 import { existsSync, statSync } from 'fs'
-import { isAbsolute, resolve as resolvePath } from 'path'
+import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { execSync } from 'child_process'
-import { gateway, INBOX_DIR } from './config.js'
+import { gateway, INBOX_DIR, STATE_DIR } from './config.js'
 import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
+import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { ANSWERED_KILL_REASON, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
@@ -614,6 +615,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const VALID_TYPES = ['progress', 'question', 'result']
         if (!msgType || !VALID_TYPES.includes(msgType)) throw new Error(`type is required: ${VALID_TYPES.join(', ')}`)
         if (!text) throw new Error('text is required')
+        const summary = args.summary as string | undefined
         const visibility = (args.visibility as string | undefined)?.trim() || 'public'
         if (visibility !== 'public' && visibility !== 'private') throw new Error('visibility must be "public" or "private"')
         const isPrivate = visibility === 'private'
@@ -683,7 +685,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
         const access = loadAccess()
         const sendLimit = Math.max(1, Math.min(access.textChunkLimit ?? maxChunkLimit(), maxChunkLimit()))
-        const chunks = chunk(text, sendLimit, access.chunkMode ?? 'markdown')
+        const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'
+        // With a ticker thread configured, a session-to-session send reaches the recipient
+        // session in full and Discord shows one line in the ticker. It is never posted to the
+        // recipient's thread: the recipient decides what, if anything, to tell the human. A
+        // protocol child's result must be posted to count as complete, so it stays loud.
+        const wantsQuiet = shouldQuiet({ tickerThreadId: access.tickerThreadId, protocolParticipant: !!callerSessionId && isProtocolParticipant(callerSessionId) })
+        if (wantsQuiet && files.length > 0) {
+          throw new Error('attachments are not posted when a ticker thread is set — save the file and put its path in text')
+        }
+        const quietOutcome = wantsQuiet
+          ? await quietSend(
+              { from: senderName, to: targetSession.tmuxName, type: msgType as 'progress' | 'question' | 'result', text, summary, dir: join(STATE_DIR, 'messages') },
+              { postTicker: line => retrySend(() => gateway.send(access.tickerThreadId!, line)), log: m => process.stderr.write(`daemon: ${m}\n`) },
+            )
+          : undefined
+        const quiet = wantsQuiet
+        const chunks = quiet ? [] : chunk(text, sendLimit, access.chunkMode ?? 'markdown')
         const sentIds: string[] = []
 
         try {
@@ -705,13 +723,13 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         }
 
         // Deliver to the target's Claude session so it actually receives the message
-        const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'
+        const delivered = quietOutcome?.delivered ?? text
         const replyInstruction = msgType === 'question'
           ? `\nRespond via send_to_thread(target="${senderName}", type="result", text="...").`
           : ''
         transport.sendOrQueue(targetSession.sessionId, {
           type: 'notification',
-          content: `[${msgType} from ${senderName}] ${text}${replyInstruction}`,
+          content: `[${msgType} from ${senderName}] ${delivered}${replyInstruction}`,
           meta: {
             chat_id: threadId,
             message_id: sentIds[0] ?? '',
@@ -722,6 +740,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         })
 
         if (msgType === 'result' && caller) endIfAnswered(caller)
+        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.ticked ? '' : ' (ticker line failed, logged)'}; not posted to their thread${redirectNote}` }], sentIds }
         const result = sentIds.length === 1
           ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}`
           : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}`
