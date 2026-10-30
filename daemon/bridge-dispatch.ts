@@ -686,18 +686,15 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const access = loadAccess()
         const sendLimit = Math.max(1, Math.min(access.textChunkLimit ?? maxChunkLimit(), maxChunkLimit()))
         const senderName = callerSessionId ? registry.get(callerSessionId)?.tmuxName ?? callerSessionId : 'unknown'
-        // With a ticker thread configured, a session-to-session send reaches the recipient
-        // session in full and Discord shows one line in the ticker. It is never posted to the
-        // recipient's thread: the recipient decides what, if anything, to tell the human. A
-        // protocol child's result must be posted to count as complete, so it stays loud.
-        const wantsQuiet = shouldQuiet({ tickerThreadId: access.tickerThreadId, protocolParticipant: !!callerSessionId && isProtocolParticipant(callerSessionId) })
-        if (wantsQuiet && files.length > 0) {
-          throw new Error('attachments are not posted when a ticker thread is set — save the file and put its path in text')
-        }
+        // A session-to-session send reaches the recipient session in full and shows one line in
+        // the recipient's thread. The recipient decides what, if anything, to tell the human. A
+        // protocol child's result must be posted in full to count as complete, and attachments
+        // need a real post, so both stay loud.
+        const wantsQuiet = shouldQuiet({ protocolParticipant: !!callerSessionId && isProtocolParticipant(callerSessionId), hasFiles: files.length > 0 })
         const quietOutcome = wantsQuiet
           ? await quietSend(
               { from: senderName, to: targetSession.tmuxName, type: msgType as 'progress' | 'question' | 'result', text, summary, dir: join(STATE_DIR, 'messages') },
-              { postTicker: line => retrySend(() => gateway.send(access.tickerThreadId!, line)), log: m => process.stderr.write(`daemon: ${m}\n`) },
+              { postLine: line => retrySend(() => gateway.send(threadId, line)), log: m => process.stderr.write(`daemon: ${m}\n`) },
             )
           : undefined
         const quiet = wantsQuiet
@@ -740,7 +737,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         })
 
         if (msgType === 'result' && caller) endIfAnswered(caller)
-        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.ticked ? '' : ' (ticker line failed, logged)'}; not posted to their thread${redirectNote}` }], sentIds }
+        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.posted ? '' : ' (note failed, logged)'}; one-line note in their thread${redirectNote}` }], sentIds }
         const result = sentIds.length === 1
           ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}`
           : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}`

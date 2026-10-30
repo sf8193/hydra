@@ -2,14 +2,14 @@ import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
 
-// Session-to-session sends reach the recipient's session in full. Discord shows a
-// one-line ticker entry instead of the whole text, unless the send is for the human.
+// Session-to-session sends reach the recipient's session in full. The recipient's thread
+// shows a one-line note instead of the whole text.
 
 /** Past this many characters the recipient gets a file path and the opening lines, not the whole text. */
 export const SPILL_THRESHOLD = 4000
 const HEAD_LINES = 6
 const HEAD_MAX_CHARS = 600
-const TICKER_SUMMARY_MAX = 140
+const NOTE_SUMMARY_MAX = 140
 const SPILL_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 const TYPE_MARK = { progress: '·', question: '?', result: '✓' } as const
@@ -24,10 +24,10 @@ export function oneLine(text: string, summary?: string): string {
     .replace(/\s+/g, ' ')
     .replace(/@/g, '@\u200b')
     .replace(/<(?=[@#&])/g, '<\u200b')
-  return flat.length > TICKER_SUMMARY_MAX ? `${flat.slice(0, TICKER_SUMMARY_MAX - 1)}…` : flat
+  return flat.length > NOTE_SUMMARY_MAX ? `${flat.slice(0, NOTE_SUMMARY_MAX - 1)}…` : flat
 }
 
-export function tickerLine(from: string, to: string, type: SendType, text: string, summary?: string, path?: string): string {
+export function noteLine(from: string, to: string, type: SendType, text: string, summary?: string, path?: string): string {
   const line = `${from} → ${to} ${TYPE_MARK[type]} ${oneLine(text, summary)}`
   return path ? `${line} · \`${path}\`` : line
 }
@@ -53,23 +53,23 @@ export function spillIfLong(text: string, dir: string, from: string, to: string,
   return { text: `${head}\n[full text: ${path}]`, path }
 }
 
-/** Whether a send goes to the ticker instead of the recipient's thread. A protocol child's result must be posted to count, so it stays loud. */
-export function shouldQuiet(o: { tickerThreadId?: string; protocolParticipant: boolean }): boolean {
-  return !!o.tickerThreadId && !o.protocolParticipant
+/** Whether a send is shown as a one-line note. A protocol child's result must be posted in full to count, so it stays loud. */
+export function shouldQuiet(o: { protocolParticipant: boolean; hasFiles: boolean }): boolean {
+  return !o.protocolParticipant && !o.hasFiles
 }
 
-export type QuietIO = { postTicker: (line: string) => Promise<unknown>; log: (msg: string) => void }
+export type QuietIO = { postLine: (line: string) => Promise<unknown>; log: (msg: string) => void }
 
 /**
- * Prepares what the recipient session is shown and posts the ticker line. Neither step
- * may stop delivery: a spill failure delivers the full text, and a ticker failure is
- * logged and reported as ticked=false. Nothing is ever posted to the recipient's thread
- * in its place: only a session's own reply reaches the human.
+ * Prepares what the recipient session is shown and posts the one-line note. Neither step
+ * may stop delivery: a spill failure delivers the full text, and a note failure is
+ * logged and reported as posted=false. The note is a notice, not the sender speaking to
+ * the human: only a session's own reply does that.
  */
 export async function quietSend(
   o: { from: string; to: string; type: SendType; text: string; summary?: string; dir: string },
   io: QuietIO,
-): Promise<{ delivered: string; ticked: boolean }> {
+): Promise<{ delivered: string; posted: boolean }> {
   let delivered = o.text
   let path: string | undefined
   try {
@@ -80,10 +80,10 @@ export async function quietSend(
     io.log(`quiet-send: spill failed, delivering full text: ${err instanceof Error ? err.message : err}`)
   }
   try {
-    await io.postTicker(tickerLine(o.from, o.to, o.type, o.text, o.summary, path))
-    return { delivered, ticked: true }
+    await io.postLine(noteLine(o.from, o.to, o.type, o.text, o.summary, path))
+    return { delivered, posted: true }
   } catch (err) {
-    io.log(`quiet-send: ticker post failed, line skipped: ${err instanceof Error ? err.message : err}`)
-    return { delivered, ticked: false }
+    io.log(`quiet-send: note post failed, line skipped: ${err instanceof Error ? err.message : err}`)
+    return { delivered, posted: false }
   }
 }
