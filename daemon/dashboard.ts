@@ -3,7 +3,7 @@
  */
 
 import { gateway, PLATFORM } from './config.js'
-import { registry, threadRegistry, sessionEmoji } from './sessions.js'
+import { registry, threadRegistry, sessionEmoji, type SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration, executionAlive } from './util.js'
 import { loadAccess } from './access.js'
@@ -33,6 +33,13 @@ type SessionRow = {
   artifacts: string[]
   originType?: string
   sessionType: string
+  parent?: { name: string; url: string }
+}
+
+function sessionUrl(s: SessionInfo): string {
+  return s.lastReplyId
+    ? gateway.getMessageUrl(s.threadId, s.lastReplyId) || s.threadUrl || ''
+    : s.threadUrl ?? ''
 }
 
 function getActiveSessions(): SessionRow[] {
@@ -46,9 +53,8 @@ function getActiveSessions(): SessionRow[] {
     if (!executionAlive(s)) continue
     const rawDesc = s.description || s.topic || s.tmuxName
     const desc = rawDesc.length > 80 ? rawDesc.slice(0, 77) + '...' : rawDesc
-    const url = s.lastReplyId
-      ? gateway.getMessageUrl(s.threadId, s.lastReplyId) || s.threadUrl || ''
-      : s.threadUrl ?? ''
+    const url = sessionUrl(s)
+    const parentInfo = s.parentId ? registry.get(s.parentId) : undefined
     rows.push({
       name: s.tmuxName,
       sessionId: s.sessionId,
@@ -63,6 +69,7 @@ function getActiveSessions(): SessionRow[] {
       artifacts: s.artifacts ?? [],
       originType: s.originType,
       sessionType: s.sessionType,
+      parent: parentInfo ? { name: parentInfo.tmuxName, url: sessionUrl(parentInfo) } : undefined,
     })
   }
 
@@ -115,7 +122,8 @@ function buildSessionText(s: SessionRow): string {
   const link = s.url ? `<${s.url}|${s.name}>` : s.name
   const origin = buildOriginBadge(s)
   const originBadge = origin ? ` · ${origin}` : ''
-  return `${s.emoji} *${link}* — ${escapeMrkdwn(s.desc)} · _${s.age}_${originBadge}`
+  const parent = s.parent ? ` ← ${s.parent.url ? `<${s.parent.url}|${s.parent.name}>` : s.parent.name}` : ''
+  return `${s.emoji} *${link}*${parent} — ${escapeMrkdwn(s.desc)} · _${s.age}_${originBadge}`
 }
 
 
