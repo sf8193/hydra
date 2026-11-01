@@ -112,6 +112,18 @@ describe('cli-handler', () => {
     expect(res.id).toBe(id)
   })
 
+  test('spawn rejects --idle-ttl without --ephemeral, and a bad or over-limit duration', async () => {
+    const base = { prompt: 'p', initiator: 'i', idempotencyKey: `ttl-${Date.now()}` }
+    const notEph = await handleCLIRequest(makeReq({ command: 'spawn', params: { ...base, idleTtl: '4d' } }))
+    expect(notEph.ok).toBe(false)
+    expect(notEph.error).toContain('only applies to --ephemeral')
+    for (const bad of ['soon', '8d', '0m', '']) {
+      const res = await handleCLIRequest(makeReq({ command: 'spawn', params: { ...base, ephemeral: true, idleTtl: bad } }))
+      expect(res.ok).toBe(false)
+      expect(res.error).toContain('is not a duration')
+    }
+  })
+
   test('clear-key with missing key returns error', async () => {
     const res = await handleCLIRequest(makeReq({ command: 'clear-key', params: {} }))
     expect(res.ok).toBe(false)

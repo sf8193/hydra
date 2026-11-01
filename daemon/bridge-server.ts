@@ -22,6 +22,7 @@ import { sessionFlapAction, shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { safeSend } from './util.js'
+import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import { emit } from './event-bus.js'
 import { bridgeLifePath, describeBridgeExit, pidAlive, pruneBridgeLife, readBridgeLife } from '../shared/bridge-life.js'
@@ -38,13 +39,6 @@ const BRIDGE_LIFE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const PR_URL_RE = /https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/g
 
 // ---------------------------------------------------------------------------
-// Ephemeral TTL — safety net for stuck ephemeral sessions. Idle limit: restarted whenever a user posts in the thread (router.ts).
-// ---------------------------------------------------------------------------
-
-const EPHEMERAL_TTL_MS = 30 * 60 * 1000 // 30 minutes
-const ephemeralTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-// ---------------------------------------------------------------------------
 // request_tools floor — the daemon's own guard against a client that won't stop
 // ---------------------------------------------------------------------------
 
@@ -55,37 +49,6 @@ const ephemeralTimers = new Map<string, ReturnType<typeof setTimeout>>()
 // This is a floor on a pathological rate, not a debounce on a normal one — no
 // legitimate caller comes back inside a second.
 const TOOLS_PUSH_FLOOR_MS = 1_000
-
-export function startEphemeralTtl(sessionId: string): void {
-  clearEphemeralTtl(sessionId)
-  ephemeralTimers.set(sessionId, setTimeout(() => {
-    const info = registry.get(sessionId)
-    if (info?.ephemeral) {
-      process.stderr.write(`daemon: ephemeral session ${info.tmuxName} TTL expired (${EPHEMERAL_TTL_MS / 60000}min), killing\n`)
-      void killSession(info, 'ephemeral TTL expired').catch(err => {
-        process.stderr.write(`daemon: ephemeral TTL kill failed: ${err}\n`)
-      })
-    }
-    ephemeralTimers.delete(sessionId)
-  }, EPHEMERAL_TTL_MS))
-}
-
-function clearEphemeralTtl(sessionId: string): void {
-  const timer = ephemeralTimers.get(sessionId)
-  if (timer) {
-    clearTimeout(timer)
-    ephemeralTimers.delete(sessionId)
-  }
-}
-
-/** Boot-time sweep: start TTL for any restored ephemeral sessions */
-export function initEphemeralTimers(): void {
-  for (const info of registry.values()) {
-    if (info.ephemeral) {
-      startEphemeralTtl(info.sessionId)
-    }
-  }
-}
 
 function autoWatchPrUrls(sessionId: string, text: string): void {
   if (!text) return
@@ -328,7 +291,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         else if (!r.throttled) process.stderr.write(formatReconnectLine(r) + '\n')
       } else if (info) {
         process.stderr.write(`daemon: bridge registered for session ${sessionId}\n`)
-        if (info.ephemeral) startEphemeralTtl(sessionId)
+        resumeIdleLimit(sessionId)
         // A session is only reachable once its bridge is up, so this — not
         // spawn — is the moment thread-scoped work can be handed to it.
         emit('session:bridge-registered', { sessionId, threadId: info.threadId })
@@ -391,7 +354,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
 
             if (replyInfo?.ephemeral && /^\[done\]$/m.test(replyText)) {
               process.stderr.write(`daemon: ephemeral session ${replyInfo.tmuxName} posted [done], killing\n`)
-              clearEphemeralTtl(conn.sessionId)
+              clearIdleLimit(conn.sessionId)
               const sid = conn.sessionId
               setTimeout(() => {
                 const current = registry.get(sid)

@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds } from '../constants.js'
+import { ompProvider, OMP_MODEL_ALIASES, OMP_MODEL_ALIAS_PATTERN, resolveOmpModelAlias, SESSION_LABELS, isSessionLabel, parseSessionLabel, resolveModelAlias, resolveCodexModelAlias, isKnownModel, canonicalModel, byteTmuxName, MODEL_ALIASES, MODEL_ALIAS_PATTERN, CODEX_MODEL_ALIASES, CODEX_MODEL_ALIAS_PATTERN, KNOWN_MODELS, normalizeReviewRounds, parseIdleTtl, MAX_IDLE_TTL_MS } from '../constants.js'
 
 test('review rounds have a twenty-round default and hard cap', () => {
   expect(normalizeReviewRounds()).toBe(20)
@@ -323,4 +323,12 @@ describe('SESSION_LABELS', () => {
     for (const l of SESSION_LABELS) expect(isSessionLabel(l)).toBe(true)
     for (const n of ['fix', 'factory', 'Review', 'design', '', 'constructor']) expect(isSessionLabel(n)).toBe(false)
   })
+})
+
+test('idle TTL parses m/h/d up to a 7-day cap', () => {
+  expect(parseIdleTtl('90m')).toBe(90 * 60_000)
+  expect(parseIdleTtl('12h')).toBe(12 * 3_600_000)
+  expect(parseIdleTtl('4d')).toBe(4 * 86_400_000)
+  expect(parseIdleTtl('7d')).toBe(MAX_IDLE_TTL_MS)
+  for (const bad of ['8d', '0m', '30s', '4', 'a while', '']) expect(parseIdleTtl(bad)).toBeNull()
 })

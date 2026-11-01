@@ -69,6 +69,7 @@ Spawn options:
   --read-thread [limit] [thread-id]    Read thread history first (default: 50 msgs from --channel, max 200)
   --quiet                              Suppress spawn announcement in chat
   --ephemeral                          Auto-kill on [done], skip death visuals
+  --idle-ttl <dur>                     With --ephemeral: how long with no message in the thread before nudge-then-reap (default 30m, max 7d; e.g. 4d)
   --headless                           No Discord thread; the session just works (output goes to files, not chat)
   --force-cleanup                      Remove worktree + branch on kill even with uncommitted/unpushed work (unpushed commits become unreachable)
 
@@ -163,6 +164,7 @@ async function main(): Promise<void> {
       let message: string | undefined
       let quiet = false
       let ephemeral = false
+      let idleTtl: string | undefined
       let headless = false
       let forceWorktreeCleanup = false
       let readThreadLimit = 0  // 0 = disabled
@@ -182,6 +184,12 @@ async function main(): Promise<void> {
           quiet = true
         } else if (filtered[i] === '--ephemeral') {
           ephemeral = true
+        } else if (filtered[i] === '--idle-ttl') {
+          if (i + 1 >= filtered.length) {
+            console.error('error: --idle-ttl needs a duration, e.g. 90m, 12h or 4d')
+            process.exit(1)
+          }
+          idleTtl = filtered[++i]
         } else if (filtered[i] === '--headless') {
           headless = true
         } else if (filtered[i] === '--force-cleanup') {
@@ -230,7 +238,7 @@ async function main(): Promise<void> {
         type: 'cli',
         command: 'spawn',
         id: randomUUID(),
-        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(headless && { headless }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
+        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(idleTtl !== undefined && { idleTtl }), ...(headless && { headless }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
       })
       printResponse(response, json)
       break

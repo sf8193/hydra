@@ -3,7 +3,7 @@
 // phase_budget field). At the deadline the session is nudged to write its
 // checkpoint and post its result; at deadline+grace it is reaped. The
 // deadline persists in the session registry, so a daemon restart re-arms
-// every budget instead of forgetting it (the ephemeral TTL's known flaw).
+// every budget instead of forgetting it (idle-limit.ts does the same).
 //
 // The reaper is injected at boot rather than imported: the invariant is that
 // THIS module must never import session-lifecycle (which imports us to arm

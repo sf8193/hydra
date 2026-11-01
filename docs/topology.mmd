@@ -57,6 +57,7 @@ graph TD
     daemon_advance-nudge["advance-nudge.ts"]
     daemon_reply-guard["reply-guard.ts"]
     daemon_phase-budget["phase-budget.ts"]
+    daemon_idle-limit["idle-limit.ts"]
     daemon_session-health["session-health.ts"]
     daemon_auto-handoff["auto-handoff.ts"]
     daemon_raindrop["raindrop.ts"]
@@ -88,6 +89,7 @@ graph TD
   daemon --> daemon_recovery
   daemon --> daemon_raindrop
   daemon --> daemon_phase-budget
+  daemon --> daemon_idle-limit
   daemon --> daemon_session-lifecycle
   daemon --> daemon_dashboard
   daemon --> daemon_commands_status
@@ -144,6 +146,7 @@ graph TD
   daemon_bridge-server --> daemon_pr-watch
   daemon_bridge-server --> daemon_main-guard
   daemon_bridge-server --> daemon_util
+  daemon_bridge-server --> daemon_idle-limit
   daemon_protocol-registry --> daemon_sessions
   daemon_permission --> daemon_bridge-transport
   daemon_permission --> daemon_access
@@ -151,6 +154,7 @@ graph TD
   daemon_cli-handler --> daemon_bridge-transport
   daemon_cli-handler --> daemon_session-lifecycle
   daemon_cli-handler --> daemon_util
+  daemon_cli-handler --> shared_constants
   daemon_cli-handler --> daemon_idempotency
   daemon_cli-handler --> daemon_config
   daemon_cli-handler --> daemon_access
@@ -163,6 +167,7 @@ graph TD
   daemon_session-lifecycle --> daemon_bridge-tools
   daemon_session-lifecycle --> daemon_tool-surface
   daemon_session-lifecycle --> daemon_phase-budget
+  daemon_session-lifecycle --> daemon_idle-limit
   daemon_session-lifecycle --> shared_constants
   daemon_session-lifecycle --> daemon_usage
   daemon_session-lifecycle --> daemon_anchor-state
@@ -193,7 +198,7 @@ graph TD
   daemon_router --> daemon_commands_status
   daemon_router --> daemon_commands_watch
   daemon_router --> daemon_session-lifecycle
-  daemon_router --> daemon_bridge-server
+  daemon_router --> daemon_idle-limit
   daemon_router --> daemon_permission
   daemon_router --> daemon_reply-guard
   daemon_router --> daemon_util
@@ -225,6 +230,10 @@ graph TD
   daemon_phase-budget --> daemon_sessions
   daemon_phase-budget --> daemon_bridge-transport
   daemon_phase-budget --> daemon_util
+  daemon_idle-limit --> daemon_sessions
+  daemon_idle-limit --> daemon_bridge-transport
+  daemon_idle-limit --> daemon_util
+  daemon_idle-limit --> shared_constants
   daemon_session-health --> daemon_sessions
   daemon_session-health --> daemon_bridge-transport
   daemon_session-health --> daemon_config

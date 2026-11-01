@@ -249,6 +249,12 @@
       "desc": "Per-session max lifetime: nudge → grace → reap"
     },
     {
+      "id": "daemon_idle-limit",
+      "label": "daemon/idle-limit.ts",
+      "layer": "domain",
+      "desc": "Ephemeral idle limit: persisted deadline, nudge → grace → reap"
+    },
+    {
       "id": "daemon_session-health",
       "label": "daemon/session-health.ts",
       "layer": "domain",
@@ -385,6 +391,10 @@
     [
       "daemon",
       "daemon_phase-budget"
+    ],
+    [
+      "daemon",
+      "daemon_idle-limit"
     ],
     [
       "daemon",
@@ -611,6 +621,10 @@
       "daemon_util"
     ],
     [
+      "daemon_bridge-server",
+      "daemon_idle-limit"
+    ],
+    [
       "daemon_protocol-registry",
       "daemon_sessions"
     ],
@@ -637,6 +651,10 @@
     [
       "daemon_cli-handler",
       "daemon_util"
+    ],
+    [
+      "daemon_cli-handler",
+      "shared_constants"
     ],
     [
       "daemon_cli-handler",
@@ -685,6 +703,10 @@
     [
       "daemon_session-lifecycle",
       "daemon_phase-budget"
+    ],
+    [
+      "daemon_session-lifecycle",
+      "daemon_idle-limit"
     ],
     [
       "daemon_session-lifecycle",
@@ -808,7 +830,7 @@
     ],
     [
       "daemon_router",
-      "daemon_bridge-server"
+      "daemon_idle-limit"
     ],
     [
       "daemon_router",
@@ -933,6 +955,22 @@
     [
       "daemon_phase-budget",
       "daemon_util"
+    ],
+    [
+      "daemon_idle-limit",
+      "daemon_sessions"
+    ],
+    [
+      "daemon_idle-limit",
+      "daemon_bridge-transport"
+    ],
+    [
+      "daemon_idle-limit",
+      "daemon_util"
+    ],
+    [
+      "daemon_idle-limit",
+      "shared_constants"
     ],
     [
       "daemon_session-health",

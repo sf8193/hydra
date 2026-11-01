@@ -53,6 +53,9 @@ describe('parseJobs', () => {
     ['prompt over the size limit', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="${'x'.repeat(4001)}"`, /over 4000 bytes/],
     ['headless on a main job', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nheadless=true`, /headless only applies to mode spawn/],
     ['model on a main job', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nmodel="haiku"`, /model only applies to mode spawn/],
+    ['idle_ttl on a main job', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nidle_ttl="4d"`, /idle_ttl only applies to mode spawn/],
+    ['idle_ttl over the 7d cap', `channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\nidle_ttl="8d"`, /at most 7d/],
+    ['idle_ttl that is not a duration', `channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\nidle_ttl="a while"`, /must be a duration/],
     ['headless that is not a boolean', `channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\nheadless="yes"`, /headless must be true or false/],
     ['unknown key', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nretries=3`, /unknown key retries/],
     ['bad name', `[Vuln_Scan]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"`, /name must be/],
@@ -182,6 +185,15 @@ describe('runJob', () => {
     await runJob(spawnJob, 'discord', dir)
     expect(calls[0].join(' ')).toContain('--model haiku')
     expect(calls[1]).not.toContain('--model')
+  })
+
+  test('a job with idle_ttl passes --idle-ttl to spawn, one without does not', async () => {
+    checkResult.out = 'x'
+    const patient = parseJobs(`channel="9"\n[w]\nschedule="0 1 * * MON"\nmode="spawn"\nprompt="Do it."\nidle_ttl="4d"`)[0]
+    await runJob(patient, 'discord', dir)
+    await runJob(spawnJob, 'discord', dir)
+    expect(calls[0].join(' ')).toContain('--ephemeral --idle-ttl 4d')
+    expect(calls[1]).not.toContain('--idle-ttl')
   })
 
   test('every hydra call targets the job platform daemon', async () => {

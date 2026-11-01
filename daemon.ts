@@ -45,7 +45,7 @@ import { engineRecords } from './daemon/engines/boot.js'
 import { transport } from './daemon/bridge-transport.js'
 import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
-import { socketServer, startBridgeServer, initEphemeralTimers } from './daemon/bridge-server.js'
+import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
 
@@ -74,7 +74,6 @@ if (existsSync(SOCK_PATH)) {
 }
 
 startBridgeServer()
-initEphemeralTimers()
 
 // Start each engine over its persisted records (Codex reconnects its sessions to
 // their app-server sockets). Not awaited; each start logs its own outcome.
@@ -91,8 +90,10 @@ import { logSubscriptions } from './daemon/event-bus.js'
 queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './daemon/phase-budget.js'
+import { initIdleLimits } from './daemon/idle-limit.js'
 import { killSession, backfillAnchorChannelIds } from './daemon/session-lifecycle.js'
 initPhaseBudgets(killSession)
+initIdleLimits(killSession)
 
 backfillAnchorChannelIds().catch(err => {
   process.stderr.write(`daemon: anchorChannelId backfill failed: ${err}\n`)
