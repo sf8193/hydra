@@ -7,6 +7,22 @@ export function normalizeReviewRounds(value?: number): number {
 }
 export const TRANSCRIBE_TMUX = 'hydra-transcribe'
 
+// Idle limit: how long an ephemeral session may go without a person posting in its thread
+// before the daemon nudges it, then reaps it. The daemon enforces it; the jobs CLI validates
+// `idle_ttl` with the same parser when jobs.toml is read, before any spawn.
+export const DEFAULT_IDLE_TTL_MS = 30 * 60_000
+// Long enough for a session that waits days on a reply; well under setTimeout's ~24.8-day ceiling.
+export const MAX_IDLE_TTL_MS = 7 * 86_400_000
+
+/** `90m`, `12h`, `4d` → ms. Null when malformed, zero, or over MAX_IDLE_TTL_MS. */
+export function parseIdleTtl(s: string): number | null {
+  const m = s.trim().match(/^(\d+)(m|h|d)$/i)
+  if (!m) return null
+  const unit = m[2].toLowerCase()
+  const ms = parseInt(m[1], 10) * (unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : 86_400_000)
+  return ms > 0 && ms <= MAX_IDLE_TTL_MS ? ms : null
+}
+
 export const BRIDGE_SHUTDOWN_GRACE_MS = 1_000
 
 export const KNOWN_MODELS = new Set([

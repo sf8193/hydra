@@ -13,6 +13,7 @@ import { computeToolsForSession } from './bridge-tools.js'
 import { canAskPredecessor, pushToolSurface } from './tool-surface.js'
 import { parseSpawnTopic, resolveSpawnLabel } from './util.js'
 import { startPhaseBudget, clearPhaseBudget } from './phase-budget.js'
+import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { resolveModelAlias, spawnModel, withContextSuffix } from '../shared/constants.js'
 import type { SessionType, SessionLabel } from '../shared/constants.js'
 import { resolveEngine } from './engines/instances.js'
@@ -577,6 +578,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
+    clearIdleLimit(info.sessionId)
     clearInterceptsForSession(info.tmuxName)
 
     if (info.worktreePath && info.worktreeRepo && !opts?.skipWorktreeDestroy) {
@@ -1055,6 +1057,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     initiator: carriedInitiator,
     parentId: carriedParentId ?? null,
     ephemeral: opts?.ephemeral,
+    ...(opts?.ephemeral && opts.idleTtlMs ? { idleTtlMs: opts.idleTtlMs } : {}),
     forceWorktreeCleanup: opts?.forceWorktreeCleanup,
     ...(opts?.answerOnce ? { answerOnce: true } : {}),
     ...(isHeadless ? { headless: true } : {}),
@@ -1065,6 +1068,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     adapter,
   })
   if (phaseBudgetMs) startPhaseBudget(sessionId)
+  if (opts?.ephemeral) resumeIdleLimit(sessionId)
   // A bridge that registered before the record existed was given the tools of a session without a predecessor.
   if (carriedPredecessor && adapter.channel === 'bridge') pushToolSurface(sessionId)
   // Thread ownership: setThread claims the thread for message routing. Only the

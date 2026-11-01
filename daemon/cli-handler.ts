@@ -2,6 +2,7 @@ import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, isAlive } from './util.js'
+import { parseIdleTtl } from '../shared/constants.js'
 import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
@@ -66,13 +67,14 @@ function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?
 // ---------------------------------------------------------------------------
 
 async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
-  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, headless, forceWorktreeCleanup, quiet, model } = req.params as {
+  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, headless, forceWorktreeCleanup, quiet, model } = req.params as {
     prompt?: string
     initiator?: string
     idempotencyKey?: string
     channel?: string
     message?: string
     ephemeral?: boolean
+    idleTtl?: string
     headless?: boolean
     forceWorktreeCleanup?: boolean
     quiet?: boolean
@@ -80,6 +82,12 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
   }
 
   if (!prompt) return respond(req, false, 'prompt is required')
+  let idleTtlMs: number | undefined
+  if (idleTtl !== undefined) {
+    if (!ephemeral) return respond(req, false, '--idle-ttl only applies to --ephemeral spawns')
+    idleTtlMs = parseIdleTtl(idleTtl) ?? undefined
+    if (!idleTtlMs) return respond(req, false, `--idle-ttl "${idleTtl}" is not a duration like 90m, 12h or 4d (max 7d)`)
+  }
   if (!idempotencyKey) return respond(req, false, 'idempotency-key is required')
   if (!initiator) return respond(req, false, 'initiator is required')
 
@@ -95,7 +103,7 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
 
   let result
   try {
-    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, headless: headless === true, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
+    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, headless: headless === true, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
   } catch (err) {
     updateIdempotency(idempotencyKey, { status: 'failed' })
     throw err

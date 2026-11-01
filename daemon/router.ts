@@ -27,7 +27,7 @@ import { refreshSessionVisual } from './anchor-state.js'
 import { handleListIntercept, handleUsageIntercept, handleHealthIntercept, handleProtocolsIntercept, handleHistoryIntercept } from './commands/status.js'
 import { handleWatchIntercept, handleUnwatchIntercept, handleWatchesIntercept, parseWatchCommand } from './commands/watch.js'
 import { killSession } from './session-lifecycle.js'
-import { startEphemeralTtl } from './bridge-server.js'
+import { touchIdleLimit } from './idle-limit.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
 import { emit } from './event-bus.js'
@@ -889,8 +889,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
       if (mappedSession) {
         const info = registry.get(mappedSession)
         if (info && isAlive(info)) {
-          // Someone is talking to it: the ephemeral cap is an idle limit, not a hard 30 minutes from spawn.
-          if (info.ephemeral) startEphemeralTtl(mappedSession)
+          // Someone is talking to it: an ephemeral session's idle window starts over.
+          touchIdleLimit(mappedSession)
           const listenMatch = msg.content.match(LISTEN_RE)
           if (listenMatch) {
             info.listening = listenMatch[1].toLowerCase() === 'listen'
