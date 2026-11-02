@@ -55,6 +55,7 @@ test.skipIf(!CHILD)('a dying Codex session reports its final growth under provid
     usageFor: rd.defaultUsageFor,
     recordDryRun: (_e: string, body: any) => { sent.push(...body) },
     allowedUsers: () => new Set(['U1']),
+    groupChannels: () => new Set(),
     projectFor: () => undefined,
     env: () => process.env,
   })

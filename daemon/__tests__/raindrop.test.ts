@@ -5,7 +5,7 @@ import {
   register,
   raindropState,
   resolveUserId,
-  drivableBy,
+  attributedUser,
   _TRACKED_MESSAGE_CAP,
   _setDeps,
   _resetDeps,
@@ -23,6 +23,7 @@ import {
   bytePaneArgv,
   raindropStatusLine,
   defaultAllowedUsers,
+  defaultGroupChannels,
   defaultUsageFor,
   defaultProjectFor,
   projectFromGitDir,
@@ -88,6 +89,8 @@ function stubDeps(over: Partial<RaindropDeps> = {}): void {
     postEvent: async () => { throw new Error('postEvent must not run outside live mode') },
     recordDryRun: record,
     allowedUsers: () => new Set([DRIVER]),
+    groupChannels: () => new Set(),
+    platform: () => 'slack',
     projectFor: (p) => p.split('/').pop(),
     usageFor: () => [],
     // Without this every defaultUsageFor call reaches the real protocol-runner
@@ -333,10 +336,6 @@ describe('raindrop: mode', () => {
 describe('raindrop: resolveUserId', () => {
   test('a single allowed user is unambiguous', () => {
     expect(resolveUserId(new Set(['U1']))).toBe('U1')
-  })
-
-  test('an unbounded channel group makes the owner unknowable', () => {
-    expect(resolveUserId('unbounded')).toBe('')
   })
 
   test('refuses to guess an owner among several', () => {
@@ -754,11 +753,13 @@ describe('raindrop: status', () => {
     )
   })
 
-  test('an unbounded install stops nagging once an owner is pinned', () => {
-    stubDeps({ allowedUsers: () => 'unbounded' })
-    expect(raindropStatusLine('cli')).toContain('no attributable user')
-    process.env.RAINDROP_USER_ID = 'U-owner'
-    expect(raindropStatusLine('cli')).not.toContain('no attributable user')
+  test('configured group channels are named on the status line', () => {
+    stubDeps({ groupChannels: () => new Set(['C-OPEN']) })
+    expect(raindropStatusLine('cli')).toContain('sessions in 1 group channel not recorded')
+    stubDeps({ groupChannels: () => new Set(['C-OPEN']), platform: () => 'discord' })
+    expect(raindropStatusLine('cli')).toContain('channel groups are configured, so nothing is recorded on this platform')
+    stubDeps()
+    expect(raindropStatusLine('cli')).not.toContain('not recorded')
   })
 
   test('an owner who is not an allowlisted driver is named, not silently broken', () => {
@@ -770,12 +771,6 @@ describe('raindrop: status', () => {
   test('an owner who is a driver draws no complaint', () => {
     process.env.RAINDROP_USER_ID = 'U-owner'
     stubDeps({ allowedUsers: () => new Set(['U-owner', 'U-dana']) })
-    expect(raindropStatusLine('cli')).not.toContain('not an allowlisted user')
-  })
-
-  test('an unbounded install cannot check the owner, so it does not complain', () => {
-    process.env.RAINDROP_USER_ID = 'U-owner'
-    stubDeps({ allowedUsers: () => 'unbounded' })
     expect(raindropStatusLine('cli')).not.toContain('not an allowlisted user')
   })
 
@@ -796,12 +791,10 @@ describe('raindrop: status', () => {
     emit('session:bridge-registered', { sessionId: 'sess-1', threadId: 'THREAD-1' })
     await tick()
     // The history an operator is debugging must survive an attribution lapse.
-    stubDeps({ allowedUsers: () => 'unbounded' })
+    stubDeps({ allowedUsers: () => new Set(['U1', 'U2']) })
     const line = raindropStatusLine('cli')!
     expect(line).toContain('no attributable user')
     expect(line).toContain('1 recorded, last 0m ago')
-    stubDeps({ allowedUsers: () => new Set(['U1', 'U2']) })
-    expect(raindropStatusLine('cli')).toContain('no attributable user')
   })
 
   test('counts send failures and how long ago the last one was', async () => {
@@ -1609,6 +1602,30 @@ describe('raindrop: events', () => {
     fire(); await tick()
     expect(sent.filter(x => x.body.event === 'hydra.session.usage'), 'nothing egresses').toHaveLength(0)
     expect(_deliveredCountForTesting(), 'and no baseline advanced').toBe(0)
+  })
+
+  test('a group-channel session is skipped without holding back a DM session in the same tick', async () => {
+    const claudeIds: Record<string, string> = {}
+    const ids = ['grp-1', 'dm-1'].map(id => {
+      const claudeId = claudeIds[id] = uniqueClaudeId(id)
+      const planted = plantTranscript(claudeId, turnLines('a', 5, ['Edit']))
+      cleanups.push(planted.cleanup)
+      const threadId = id === 'grp-1' ? 'C-OPEN:1793.1' : 'D-DM:1793.2'
+      registry.set(id, sessionInfo({ sessionId: id, threadId, claudeSessionId: claudeId }))
+      cleanups.push(() => registry.delete(id))
+      return id
+    })
+    stubDeps({
+      liveSessionIds: () => ids, factsFor: factsFromRegistry, usageFor: defaultUsageFor,
+      groupChannels: () => new Set(['C-OPEN']),
+    })
+
+    const fire = registerWithIntervals()
+    fire(); await tick()
+    const usage = sent.filter(x => x.body.event === 'hydra.session.usage').map(x => x.body)
+    expect(usage.length).toBeGreaterThan(0)
+    expect(new Set(usage.map(b => b.properties.providerSessionId))).toEqual(new Set([claudeIds['dm-1']]))
+    expect(raindropStatusLine('cli')).not.toContain('failure')
   })
 
   // A protocol run is a fact the daemon holds, so it takes the whole window
@@ -2583,23 +2600,6 @@ describe('raindrop: reaction signals', () => {
     expectNoListenerErrors()
   })
 
-  test('an unbounded install records the owner\'s own reaction and nobody else\'s', async () => {
-    process.env.RAINDROP_USER_ID = 'U-owner'
-    stubDeps({ allowedUsers: () => 'unbounded' })
-    dispose = register()
-    emit('reply', { sessionId: 'sess-1', text: 'a', chatId: 'THREAD-1', sentIds: ['msg-9'] })
-    await tick()
-    expect(sent.map(s => s.endpoint)).toEqual([EVENT_ENDPOINT])
-    sent.length = 0
-    emit('reaction', { channelId: 'C1', messageId: 'msg-9', userId: 'U-any-member', emoji: '👎' })
-    await tick()
-    expect(sent).toEqual([])
-    emit('reaction', { channelId: 'C1', messageId: 'msg-9', userId: 'U-owner', emoji: '👎' })
-    await tick()
-    expect(sent.map(s => s.endpoint)).toEqual([SIGNAL_ENDPOINT])
-    expectNoListenerErrors()
-  })
-
   test('a second driver is not the attributed user, and their reaction is dropped', async () => {
     process.env.RAINDROP_USER_ID = 'U-owner'
     stubDeps({ allowedUsers: () => new Set(['U-owner', 'U-dana']) })
@@ -2648,16 +2648,51 @@ describe('raindrop: reaction signals', () => {
     expect(sent).toHaveLength(2)
   })
 
-  test('a group added after the reply stops signals for that reply', async () => {
+  test('a channel made a group after the reply stops signals for that reply', async () => {
+    let groups = new Set<string>()
+    stubDeps({ groupChannels: () => groups })
     dispose = register()
     emit('reply', { sessionId: 'sess-1', text: 'a', chatId: 'THREAD-1', sentIds: ['msg-9'] })
     await tick()
     expect(sent).toHaveLength(1)
     sent.length = 0
-    stubDeps({ allowedUsers: () => 'unbounded' })
+    groups = new Set(['C1'])
     emit('reaction', { channelId: 'C1', messageId: 'msg-9', userId: DRIVER, emoji: '-1' })
     await tick()
     expect(sent).toEqual([])
+  })
+
+  test('a main-session reply into a group channel is not recorded', async () => {
+    stubDeps({ groupChannels: () => new Set(['C-OPEN']) })
+    dispose = register()
+    emit('reply', { sessionId: 'main', text: 'a', chatId: 'C-OPEN:1793.1', sentIds: ['msg-9'] })
+    emit('reply', { sessionId: 'main', text: 'b', chatId: 'D-DM:1793.2', sentIds: ['msg-10'] })
+    await tick()
+    expect(sent).toHaveLength(1)
+    expectNoListenerErrors()
+  })
+
+  test('a group-channel session records neither its spawn nor its death', async () => {
+    stubDeps({
+      groupChannels: () => new Set(['C-OPEN']),
+      factsFor: (id) => (id === 'sess-1' ? { ...facts, threadId: 'C-OPEN:1793.1' } : undefined),
+    })
+    dispose = register()
+    emit('session:bridge-registered', { sessionId: 'sess-1', threadId: 'C-OPEN:1793.1' })
+    await tick()
+    emit('session:death', { sessionId: 'sess-1', threadId: 'C-OPEN:1793.1', wasOwner: true, tmuxName: 'atlas' })
+    await tick()
+    expect(sent).toEqual([])
+    expectNoListenerErrors()
+  })
+
+  test('a DM session posting into a group channel is not recorded', async () => {
+    stubDeps({ groupChannels: () => new Set(['C-OPEN']) })
+    dispose = register()
+    emit('reply', { sessionId: 'sess-1', text: 'a', chatId: 'C-OPEN:1793.1', sentIds: ['msg-9'] })
+    await tick()
+    expect(sent).toEqual([])
+    expectNoListenerErrors()
   })
 
   test('attribution lost after a delivered reply stops the signal on it', async () => {
@@ -2676,22 +2711,30 @@ describe('raindrop: reaction signals', () => {
   })
 })
 
-describe('raindrop: drivableBy', () => {
-  test('folds channel groups in alongside the DM allowlist', () => {
-    expect(drivableBy({ allowFrom: ['U1'], groups: { C1: { allowFrom: ['U2'] } } })).toEqual(new Set(['U1', 'U2']))
+describe('raindrop: attributedUser', () => {
+  test('a DM-driven thread is attributed even while an open group channel exists', () => {
+    stubDeps({ groupChannels: () => new Set(['C-OPEN']) })
+    expect(attributedUser('D-DM:1793.1')).toBe(DRIVER)
+    expect(attributedUser(''), 'fleet events carry no thread').toBe(DRIVER)
   })
 
-  test('a group with an empty allowFrom admits anyone, so the owner is unbounded', () => {
-    expect(drivableBy({ allowFrom: ['U1'], groups: { C1: { allowFrom: [] } } })).toBe('unbounded')
-    expect(drivableBy({ allowFrom: ['U1'], groups: { C1: {} } })).toBe('unbounded')
+  test('a thread in a group channel is ignored, even with RAINDROP_USER_ID pinned', () => {
+    process.env.RAINDROP_USER_ID = 'U-owner'
+    stubDeps({ groupChannels: () => new Set(['C-OPEN']) })
+    expect(attributedUser('C-OPEN:1793.1')).toBe('')
+    expect(attributedUser('C-OPEN')).toBe('')
   })
 
-  test('the documented single-user install with no groups stays attributable', () => {
-    expect(resolveUserId(drivableBy({ allowFrom: ['U1'], groups: {} }))).toBe('U1')
+  test('off Slack a thread id names no channel, so any group blocks attribution', () => {
+    stubDeps({ groupChannels: () => new Set(['G-DISCORD']), platform: () => 'discord' })
+    expect(attributedUser('1300000000000000001')).toBe('')
+    stubDeps({ platform: () => 'discord' })
+    expect(attributedUser('1300000000000000001')).toBe(DRIVER)
   })
 
-  test('a colleague reachable through a channel blocks attribution', () => {
-    expect(resolveUserId(drivableBy({ allowFrom: ['U1'], groups: { C1: { allowFrom: ['U-dana'] } } }))).toBe('')
+  test('matches the whole channel id, not a prefix of it', () => {
+    stubDeps({ groupChannels: () => new Set(['C-OPEN']) })
+    expect(attributedUser('C-OPENER:1793.1')).toBe(DRIVER)
   })
 })
 
@@ -2813,7 +2856,7 @@ describe('raindrop: correlation only after a successful send', () => {
 
   test('an unattributable reply leaves nothing for a later reaction to resolve', async () => {
     // The reply is suppressed, so a later 👎 has no delivered event to attach to.
-    stubDeps({ allowedUsers: () => 'unbounded' })
+    stubDeps({ allowedUsers: () => new Set(['U1', 'U2']) })
     dispose = register()
     emit('reply', { sessionId: 'sess-1', text: 'x', chatId: 'THREAD-1', sentIds: ['msg-9'] })
     await tick()
@@ -3012,10 +3055,10 @@ describe('raindrop: default allowedUsers and liveSessionIds', () => {
 
   afterEach(() => { try { unlinkSync(accessPath) } catch {} ; registry.delete('live-1'); registry.delete('dead-1') })
 
-  test('a group entry that is not an object fails closed, not open', () => {
-    // drivableBy — not loadAccess — is what throws here; the catch is live.
-    writeFileSync(accessPath, JSON.stringify({ allowFrom: ['U1'], groups: { C1: null } }))
-    expect(defaultAllowedUsers()).toEqual(new Set())
+  test('groups never widen the drivers; every group, open or not, is an ignored channel', () => {
+    writeFileSync(accessPath, JSON.stringify({ allowFrom: ['U1'], groups: { C1: { allowFrom: [] }, C2: { allowFrom: ['U2'] } } }))
+    expect(defaultAllowedUsers()).toEqual(new Set(['U1']))
+    expect(defaultGroupChannels()).toEqual(new Set(['C1', 'C2']))
   })
 
   test('a corrupt access.json yields no drivers, so nothing is attributable', () => {
@@ -3023,6 +3066,7 @@ describe('raindrop: default allowedUsers and liveSessionIds', () => {
     // access.ts moves the file aside and returns defaults rather than throwing.
     expect(defaultAllowedUsers()).toEqual(new Set())
     expect(resolveUserId(defaultAllowedUsers())).toBe('')
+    expect(defaultGroupChannels()).toEqual(new Set())
     for (const f of readdirSync(STATE_DIR)) if (f.startsWith('access.json.corrupt-')) unlinkSync(join(STATE_DIR, f))
   })
 

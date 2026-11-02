@@ -208,9 +208,10 @@ RAINDROP_WRITE_KEY="..."
 # value that isn't the literal 1.
 # RAINDROP_OMIT_REPO=1
 # Your own platform user id (Slack U…/Discord snowflake), stamped on EVERY
-# session's events. Required once more than one person can drive a session — a
-# second allowFrom entry, or any channel group (an empty group allowFrom admits
-# every member); until then the module refuses to guess and sends nothing.
+# session's events. Required once the top-level allowFrom has more than one
+# entry; until then the module refuses to guess and sends nothing. On Slack,
+# channel groups are skipped rather than counted; on Discord any group stops
+# recording entirely.
 # Leave blank rather than guessing: a wrong id attributes every event to a
 # stranger, silently.
 RAINDROP_USER_ID=
@@ -546,10 +547,12 @@ write key is still on disk.
 
 "no allowlisted user" means nobody can be identified at all: nobody has paired
 yet, or `access.json` was corrupt and got reset (hydra moves it aside and
-starts from defaults). If it says "no attributable user", the opposite —
-more than one person can
-drive a session — most often a channel group with an empty `allowFrom`, which
-admits every member — and nothing is sent until `RAINDROP_USER_ID` is set. That
+starts from defaults). If it says "no attributable user", the opposite — the
+top-level `allowFrom` has more than one id — and nothing is sent until
+`RAINDROP_USER_ID` is set. Channel groups don't count: on Slack their sessions
+and replies are skipped and health says how many group channels that covers; on
+Discord, where a thread id doesn't name its channel, any group stops recording
+and health says so. That
 can start happening long after boot, because `access.json` is re-read on every
 message. Signals are narrower than events: an event is *attributed* to
 `RAINDROP_USER_ID`, so only a reaction from that same id records one. Anyone

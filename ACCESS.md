@@ -58,12 +58,11 @@ With the default `requireMention: true`, the bot responds only when @mentioned o
 /discord:access group rm 846209781206941736
 ```
 
-If you use Raindrop observability, the driver set is everyone in the top-level
-`allowFrom` **plus** everyone in every group's `allowFrom` — so pairing yourself
-and then adding a group with one *different* `--allow` id is already two, and
-`RAINDROP_USER_ID` has to be set or nothing is reported. A group without
-`--allow` makes every channel member a driver, which has the same effect.
-Only reactions from that same id become 👍/👎 signals. See the Raindrop section
+If you use Raindrop observability, events are attributed to the single id in the
+top-level `allowFrom` (or `RAINDROP_USER_ID`). On Slack, anything in a group
+channel is not recorded, whoever the group admits. On Discord a thread id
+doesn't name its channel, so configuring any group stops recording entirely. Only reactions
+from the attributed id become 👍/👎 signals. See the Raindrop section
 of the README for what that means and what `hydra health` reports. Outside static mode
 this takes effect on the next message, with no restart.
 
