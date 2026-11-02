@@ -268,7 +268,9 @@ async function announceRecovery(
 // Resume / Respawn
 // ---------------------------------------------------------------------------
 
-export async function handleResumeIntercept(msg: InboundMessage): Promise<void> {
+// `resume <claudeSessionId>` reattaches an earlier conversation from this thread's
+// history instead of the latest one (e.g. after an unwanted handoff).
+export async function handleResumeIntercept(msg: InboundMessage, claudeSessionIdArg?: string): Promise<void> {
   if (!msg.isThread) {
     await reportError(msg.channelId, msg.id, 'resume', 'must be used in a thread')
     return
@@ -317,8 +319,14 @@ export async function handleResumeIntercept(msg: InboundMessage): Promise<void> 
     }
   }
 
-  // Thread is detached — find claudeSessionId from last session in history
-  const lastSession = recoveryEntry(thread.sessionHistory)
+  // Thread is detached — find claudeSessionId from last session in history, or the named one
+  const lastSession = claudeSessionIdArg
+    ? thread.sessionHistory.findLast(e => e.claudeSessionId === claudeSessionIdArg)
+    : recoveryEntry(thread.sessionHistory)
+  if (claudeSessionIdArg && !lastSession) {
+    await reportError(msg.channelId, msg.id, 'resume', `no session \`${claudeSessionIdArg}\` in this thread's history`)
+    return
+  }
   const lastInfo = registry.get(lastSession?.sessionId ?? '')
   const claudeSessionId = lastSession?.claudeSessionId
   const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)

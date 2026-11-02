@@ -141,6 +141,18 @@ describe('resume tier matrix — Claude', () => {
     expect(logged()).not.toContain(TIER1_FAIL)
   })
 
+  test('resume <id> → resumes that earlier conversation, not the latest; unknown id spawns nothing', async () => {
+    const latest = seedHistory({ claudeSessionId: 'C-new' })
+    threadRegistry.threads.get(THREAD)!.sessionHistory.unshift({ ...latest, sessionId: 'sess-old', claudeSessionId: 'C-old' })
+    await handleResumeIntercept(msg('resume C-old'), 'C-old')
+    expect(fns()).toEqual(['tryResume'])
+    expect(calls[0].args[0].claudeSessionId).toBe('C-old')
+
+    calls.length = 0
+    await handleResumeIntercept(msg('resume C-missing'), 'C-missing')
+    expect(fns()).toEqual([])
+  })
+
   test('bridgeOrphan → says the bridge is not yet connected', async () => {
     resumeOutcome = 'orphan'
     seedHistory({ claudeSessionId: 'C-1' })
