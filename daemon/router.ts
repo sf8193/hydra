@@ -648,9 +648,9 @@ gateway.onMessage(async (msg: InboundMessage) => {
       void gateway.send(msg.channelId, `_Not run as a handoff. To hand off with a note: \`handoff: <note>\` (or \`handoff <model>: <note>\`)._`, { replyTo: msg.id }).catch(() => {})
     }
 
-    const resumeMatch = msg.content.match(/^(?:resume|\/resume)\s*$/i)
+    const resumeMatch = msg.content.match(/^(?:resume|\/resume)(?:\s+([\w-]+))?\s*$/i)
     if (resumeMatch) {
-      void handleResumeIntercept(msg)
+      void handleResumeIntercept(msg, resumeMatch[1])
       return
     }
 
