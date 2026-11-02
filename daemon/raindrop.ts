@@ -93,23 +93,16 @@ export function raindropState(): RaindropState {
   }
 }
 
-type Drivers = Set<string> | 'unbounded'
-
-export function drivableBy(access: { allowFrom?: string[]; groups?: Record<string, { allowFrom?: string[] }> }): Drivers {
-  const users = new Set(access.allowFrom ?? [])
-  for (const policy of Object.values(access.groups ?? {})) {
-    const group = policy.allowFrom ?? []
-    if (group.length === 0) return 'unbounded'
-    for (const id of group) users.add(id)
-  }
-  return users
-}
-
-export function resolveUserId(drivers: Drivers): string {
+export function resolveUserId(drivers: Set<string>): string {
   const explicit = (deps.env().RAINDROP_USER_ID || '').trim()
   if (explicit) return explicit
-  if (drivers === 'unbounded') return ''
   return drivers.size === 1 ? drivers.values().next().value! : ''
+}
+
+export function attributedUser(chatId: string): string {
+  const groups = deps.groupChannels()
+  if (groups.size > 0 && (deps.platform() !== 'slack' || groups.has(chatId.split(':')[0]!))) return ''
+  return resolveUserId(deps.allowedUsers())
 }
 
 export function parseModelFlag(paneCommand: string): string | undefined {
@@ -248,7 +241,9 @@ export type RaindropDeps = {
   knownSessionIds: () => string[]
   postEvent: (endpoint: string, body: WireBody) => Promise<void>
   recordDryRun: (endpoint: string, body: WireBody) => void
-  allowedUsers: () => Drivers
+  allowedUsers: () => Set<string>
+  groupChannels: () => Set<string>
+  platform: () => typeof PLATFORM
   projectFor: (repoPath: string) => string | undefined
   usageFor: (sessionId: string, hint?: UsageHint) => SessionUsage[]
   protocolPhaseFor: (sessionId: string) => UsagePhase | undefined
@@ -332,9 +327,12 @@ export function defaultLiveSessionIds(): string[] {
   return [...registry.values()].filter(s => !s.deadAt).map(s => s.sessionId)
 }
 
-export function defaultAllowedUsers(): Drivers {
-  // Empty, not 'unbounded': a malformed group must not read as "admits everyone".
-  try { return drivableBy(loadAccess()) } catch { return new Set() }
+export function defaultAllowedUsers(): Set<string> {
+  try { return new Set(loadAccess().allowFrom ?? []) } catch { return new Set() }
+}
+
+export function defaultGroupChannels(): Set<string> {
+  try { return new Set(Object.keys(loadAccess().groups ?? {})) } catch { return new Set() }
 }
 
 export function defaultProtocolPhaseFor(sessionId: string): UsagePhase | undefined {
@@ -444,6 +442,8 @@ const defaultDeps: RaindropDeps = {
     appendFileSync(RAINDROP_DRYRUN_FILE, `${JSON.stringify({ endpoint, body })}\n`, { mode: 0o600 })
   },
   allowedUsers: defaultAllowedUsers,
+  groupChannels: defaultGroupChannels,
+  platform: () => PLATFORM,
   projectFor: defaultProjectFor,
   usageFor: defaultUsageFor,
   protocolPhaseFor: defaultProtocolPhaseFor,
@@ -526,11 +526,17 @@ export function raindropStatusLine(surface: 'cli' | 'chat'): string | undefined 
   if (omit === 'unrecognized') detail.push('RAINDROP_OMIT_REPO not understood — expected literal 1, repo omitted anyway')
   const user = resolveUserId(drivers)
   if (!user) {
-    detail.push(drivers !== 'unbounded' && drivers.size === 0
+    detail.push(drivers.size === 0
       ? 'no allowlisted user — nobody is paired, or access.json was reset'
       : 'no attributable user — set RAINDROP_USER_ID')
-  } else if (drivers !== 'unbounded' && !drivers.has(user)) {
+  } else if (!drivers.has(user)) {
     detail.push(`RAINDROP_USER_ID=${user} is not an allowlisted user — events are attributed to nobody real and no reaction of yours becomes a signal`)
+  }
+  const groups = deps.groupChannels().size
+  if (groups > 0) {
+    detail.push(deps.platform() === 'slack'
+      ? `sessions in ${plural(groups, 'group channel')} not recorded`
+      : 'channel groups are configured, so nothing is recorded on this platform')
   }
   const { sent, lastSentAt, failures, lastFailureAt, sweepFailures, lastSweepFailureAt, usageFailures, lastUsageFailureAt, rootFailures, lastRootFailureAt } = counters
   const usageUnresolved = unresolved.size
@@ -574,8 +580,8 @@ export function register(): () => void {
   const usageBodies = (
     sessionId: string, facts: SessionFacts, stamp: string, at: number, rows: readonly SessionUsage[],
   ): EventBody[] | undefined => {
-    // Hoisted: defaultAllowedUsers re-reads access.json on every call.
-    const user = resolveUserId(deps.allowedUsers())
+    // Hoisted: attributedUser re-reads access.json on every call.
+    const user = attributedUser(facts.threadId)
     if (!user) return undefined
     const bodies: EventBody[] = []
     for (const usage of rows) {
@@ -623,9 +629,9 @@ export function register(): () => void {
     } catch (err) { onError(err); return false }
   }
 
-  // Cached per burst: defaultAllowedUsers re-reads access.json on every call.
+  // Cached per burst: attributedUser re-reads access.json on every call.
   const buildTracked = (input: Omit<EventInput, 'userId' | 'omitRepo'>, cachedUser?: string): EventBody | undefined => {
-    const user = cachedUser ?? resolveUserId(deps.allowedUsers())
+    const user = cachedUser ?? attributedUser(input.threadId)
     if (!user) return undefined
     const body = buildEvent({ ...input, userId: user, omitRepo: omitRepoSetting() !== 'off' })
     if (!body) onError(new Error(`refused to build ${input.event}: event_id or user_id failed its shape gate`))
@@ -714,6 +720,7 @@ export function register(): () => void {
       const facts = sessionId === 'main' ? factsForMain(deps.now()) : deps.factsFor(sessionId)
       if (!facts) return
       if (sessionId !== 'main') tracked.set(sessionId, facts)
+      if (!attributedUser(chatId)) return
       const threadId = sessionId === 'main' ? chatId : facts.threadId
       const eventId = sentIds[sentIds.length - 1] ?? `${sessionId}:${deps.now()}`
       const delivered = track({
@@ -747,13 +754,13 @@ export function register(): () => void {
       })
     }, 'raindrop:death', { onError }),
 
-    on('reaction', async ({ messageId, userId: reactorId, emoji }) => {
+    on('reaction', async ({ channelId, messageId, userId: reactorId, emoji }) => {
       const signal = sentimentForReaction(emoji)
       if (!signal) return
       const entry = messageEvents.get(messageId)
       if (!entry) return
       // Membership is not identity: a second driver is not the attributed user.
-      const user = resolveUserId(deps.allowedUsers())
+      const user = attributedUser(channelId)
       if (!user || reactorId !== user) return
       if (entry.signalled.has(signal.name)) return
       entry.signalled.add(signal.name)
