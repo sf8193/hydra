@@ -76,7 +76,8 @@ export type PaneProbeIO = {
   // Text of the first assistant turn in a Claude session's transcript; null until there is one.
   firstAssistantText: (info: SessionInfo) => string | null
   // Paste text into the pane's input box and submit it.
-  pastePrompt: (tmuxName: string, text: string) => Promise<boolean>
+  // opts.buffer names the tmux paste buffer (default 'hydra-resend'); concurrent callers use distinct names.
+  pastePrompt: (tmuxName: string, text: string, opts?: { buffer?: string }) => Promise<boolean>
   now: () => number
   safeSend: (channelId: string, text: string) => Promise<string[]>
   react: (channelId: string, messageId: string, emoji: string) => Promise<void>
@@ -133,10 +134,11 @@ const defaultIO: PaneProbeIO = {
     return Array.isArray(content) ? content.find((c: any) => c.type === 'text')?.text ?? '' : ''
   },
 
-  async pastePrompt(tmuxName, text) {
+  async pastePrompt(tmuxName, text, opts) {
+    const buffer = opts?.buffer ?? 'hydra-resend'
     try {
-      await execFileAsync('tmux', ['set-buffer', '-b', 'hydra-resend', text], { timeout: 3000 })
-      await execFileAsync('tmux', ['paste-buffer', '-p', '-d', '-b', 'hydra-resend', '-t', tmuxName], { timeout: 3000 })
+      await execFileAsync('tmux', ['set-buffer', '-b', buffer, text], { timeout: 3000 })
+      await execFileAsync('tmux', ['paste-buffer', '-p', '-d', '-b', buffer, '-t', tmuxName], { timeout: 3000 })
       await execFileAsync('tmux', ['send-keys', '-t', tmuxName, 'Enter'], { timeout: 3000 })
       return true
     } catch { return false }
@@ -287,6 +289,23 @@ export function detectBlockingState(tailText: string): BlockingState | null {
     return { kind: 'unknown_dialog', planPath: null, loginStage: null, oauthUrl: null }
   }
   return null
+}
+
+// A permission/confirmation dialog the blocking-state table does not name still
+// says "Esc to cancel" or asks "Do you want to ..." in the tail. Typed input
+// would answer it by accident, so treat either as not-an-input-box.
+const OPEN_DIALOG_RE = /Esc to cancel|Do you want to /
+
+/**
+ * Type `text` into a Claude session's input box as if the user had typed it, then
+ * submit. Returns false — caller must use another delivery path — when the pane
+ * cannot be read, shows a dialog or other non-input state, or tmux fails.
+ */
+export async function pasteTypedInput(info: SessionInfo, text: string): Promise<boolean> {
+  const tail = await io.capturePaneTail(info.tmuxName, PANE_TAIL_LINES)
+  if (tail === null) return false
+  if (info.adapter.detectBlockingState(info, tail) || OPEN_DIALOG_RE.test(tail)) return false
+  return io.pastePrompt(info.tmuxName, text, { buffer: 'hydra-typed' })
 }
 
 // ---------------------------------------------------------------------------

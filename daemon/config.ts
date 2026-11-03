@@ -49,6 +49,32 @@ export function envPercent(name: string, fallback?: number): number | undefined 
   return n >= 1 ? n : fallback
 }
 
+/**
+ * Chat user ids whose messages get typed delivery (daemon/typed-delivery.ts). Env
+ * HYDRA_TYPED_DELIVERY_USER_IDS, comma-separated; empty (the default) means nobody. Read per call.
+ */
+export const typedDeliveryUserIds = (): Set<string> =>
+  new Set((process.env.HYDRA_TYPED_DELIVERY_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean))
+
+export type TypedDeliveryMode = 'off' | 'paste' | 'hold'
+let warnedBadMode = false
+/** HYDRA_TYPED_DELIVERY_MODE: off (default) | paste | hold. An unknown value means off and is logged once. Read per call. */
+export function typedDeliveryMode(): TypedDeliveryMode {
+  const raw = (process.env.HYDRA_TYPED_DELIVERY_MODE || '').trim().toLowerCase()
+  if (raw === 'paste' || raw === 'hold') return raw
+  if (raw && raw !== 'off' && !warnedBadMode) {
+    warnedBadMode = true
+    process.stderr.write(`daemon: HYDRA_TYPED_DELIVERY_MODE="${raw}" is not off|paste|hold; typed delivery is off\n`)
+  }
+  return 'off'
+}
+
+/** HYDRA_TYPED_DELIVERY_HOLD_MAX_S: the longest a held message waits for idle before it is pasted instead (default 120). Read per call. */
+export function typedDeliveryHoldMaxMs(): number {
+  const n = Number((process.env.HYDRA_TYPED_DELIVERY_HOLD_MAX_S || '').trim())
+  return (Number.isFinite(n) && n > 0 ? n : 120) * 1000
+}
+
 // Read after .env sourcing — .env values must be available.
 // If not set, resolveDefaultChannel() will auto-detect the bot's DM with the primary user.
 export let DEFAULT_SESSION_CHANNEL = process.env.DEFAULT_SESSION_CHANNEL ?? ''

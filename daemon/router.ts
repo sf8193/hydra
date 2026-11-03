@@ -30,6 +30,7 @@ import { killSession } from './session-lifecycle.js'
 import { touchIdleLimit } from './idle-limit.js'
 import { pendingPermissions } from './permission.js'
 import { notePendingReply } from './reply-guard.js'
+import { deliverUserMessage } from './typed-delivery.js'
 import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
 import { isAlive, reportError } from './util.js'
@@ -316,10 +317,12 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
 function enqueueUserMessage(msg: InboundMessage, targetSessionId: string, chatId: string, before?: Promise<unknown>): Promise<void> {
   return reserveUserIngress(targetSessionId, async () => {
     const { content, meta } = await buildNotificationPayload(msg, chatId)
-    transport.sendOrQueue(targetSessionId, {
+    // Trusted senders may be pasted or held (typed-delivery.ts) to avoid the harness's mid-turn "not from your user" warning.
+    // A pasted or held message does not reach the bridge now, so the reply guard is armed here for every outcome.
+    await deliverUserMessage(targetSessionId, content, meta, () => transport.sendOrQueue(targetSessionId, {
       type: 'notification', content, allowPiggyback: true,
       deferUntilTurnComplete: true, meta,
-    })
+    }))
     notePendingReply(targetSessionId, meta)
   }, { before })
 }
