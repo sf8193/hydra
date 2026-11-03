@@ -208,6 +208,7 @@ if ('homeSpawnHandler' in gateway) {
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
+import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
 import { tmuxHasSession } from './daemon/util.js'
 
@@ -461,8 +462,12 @@ void (async () => {
 import { startSessionHealthPoll } from './daemon/session-health.js'
 startSessionHealthPoll()
 
-// Reply guard: poll session activity every 20s (see pollActivityOnce).
-setInterval(() => pollActivityOnce(Math.floor(Date.now() / 1000)), 20_000)
+// Reply guard: poll session activity every 20s (see pollActivityOnce). The same tick releases
+// typed-delivery messages held for an idle session (daemon/typed-delivery.ts): no timer of its own.
+setInterval(() => {
+  pollActivityOnce(Math.floor(Date.now() / 1000))
+  void flushAllHeld()
+}, 20_000)
 
 // Pane probe: detect CC sessions stuck on interactive prompts (plan mode, login).
 // Lower cadence than reply guard — these stalls are minutes-scale.
