@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from 'crypto'
+import { resolve } from 'path'
 import { resolveSocket, sendRequest, printResponse } from './helpers.js'
 import {
   lifecycleUp, lifecycleDown, lifecycleRestart,
@@ -51,12 +52,18 @@ Session management:
 Deliver (whisper channel — message to session context, not thread):
   hydra deliver --session <name> --message "..."
   hydra deliver --thread <id> --message "..."
+  hydra deliver --specialist <name> --message "..."
     --session <name>                   Target session by name (primary)
     --thread <id>                      Target session by thread ID (alternative)
+    --specialist <name>                      Target a specialist: its occupant, spawned from the specialist's kickoff if vacant (always queues)
     --message <text>                   Message to deliver (required)
     --initiator <who>                  Who sent this (default: $USER)
     --idempotency-key <key>            Prevent duplicate delivery (optional, 15min TTL)
     --queue                            Queue if bridge disconnected (default: fail)
+
+Specialists (named addresses that refill themselves):
+  hydra specialist set <name> --thread <id> [--channel <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
+  hydra specialist show <name> | list | rm <name>
 
 Platform: slack | discord (required for lifecycle commands)
 
@@ -311,6 +318,7 @@ async function main(): Promise<void> {
     case 'deliver': {
       let thread: string | undefined
       let session: string | undefined
+      let specialist: string | undefined
       let message: string | undefined
       let initiator: string | undefined
       let idempotencyKey: string | undefined
@@ -321,6 +329,8 @@ async function main(): Promise<void> {
           thread = filtered[++i]
         } else if (filtered[i] === '--session' && i + 1 < filtered.length) {
           session = filtered[++i]
+        } else if (filtered[i] === '--specialist' && i + 1 < filtered.length) {
+          specialist = filtered[++i]
         } else if (filtered[i] === '--message' && i + 1 < filtered.length) {
           message = filtered[++i]
         } else if (filtered[i] === '--initiator' && i + 1 < filtered.length) {
@@ -336,8 +346,8 @@ async function main(): Promise<void> {
         console.error('error: --message is required')
         process.exit(1)
       }
-      if (!thread && !session) {
-        console.error('error: --session or --thread is required')
+      if (!thread && !session && !specialist) {
+        console.error('error: --session, --thread or --specialist is required')
         process.exit(1)
       }
 
@@ -348,10 +358,42 @@ async function main(): Promise<void> {
         params: {
           ...(thread && { thread }),
           ...(session && { session }),
+          ...(specialist && { specialist }),
           message,
           initiator,
           ...(idempotencyKey && { idempotencyKey }),
           ...(queue && { queue }),
+        },
+      })
+      printResponse(response, json)
+      break
+    }
+
+    case 'specialist': {
+      const [action, name] = [filtered[1], filtered[2]]
+      if (!['set', 'show', 'rm', 'list'].includes(action ?? '')) {
+        console.error('error: usage: hydra specialist set|show|rm|list <name> [flags]')
+        process.exit(1)
+      }
+      const flags: Record<string, string> = {}
+      for (let i = 3; i < filtered.length; i++) {
+        const f = filtered[i]
+        if (!['--thread', '--channel', '--kickoff', '--kickoff-file', '--model'].includes(f) || i + 1 >= filtered.length) {
+          console.error(`error: unknown or incomplete flag ${f}`)
+          process.exit(1)
+        }
+        flags[f.slice(2)] = filtered[++i]
+      }
+      const response = await sendRequest(socketPath(), {
+        type: 'cli', command: 'specialist', id: randomUUID(),
+        params: {
+          action, ...(name && { name }),
+          ...(flags.thread && { thread: flags.thread }),
+          ...(flags.channel && { channel: flags.channel }),
+          ...(flags.kickoff && { kickoff: flags.kickoff }),
+          // The daemon reads the file, so it must see a path that means the same there.
+          ...(flags['kickoff-file'] && { kickoffFile: resolve(flags['kickoff-file']) }),
+          ...(flags.model && { model: flags.model }),
         },
       })
       printResponse(response, json)

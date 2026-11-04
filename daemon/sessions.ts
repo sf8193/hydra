@@ -749,7 +749,7 @@ export const threadRegistry = new ThreadRegistry()
 /**
  * Resolve a session name to the session that should receive the message.
  *
- * A session name identifies a seat in a thread, not an immortal process. When
+ * A session name identifies a specialist in a thread, not an immortal process. When
  * the named session is gone but its thread has a new occupant, that occupant is
  * who the sender meant — so deliver there and say so, rather than failing with
  * "no session named" and leaving the sender to rediscover names by hand.

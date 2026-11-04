@@ -4,7 +4,11 @@ import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, isAlive } from './util.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
-import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
+import { existsSync } from 'fs'
+import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
+import { deliveryOutcome } from './delivery-outcome.js'
+import { deliverToSpecialist } from './specialist-deliver.js'
+import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
@@ -237,12 +241,12 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 // ---------------------------------------------------------------------------
 
 const DELIVER_MAX_MESSAGE_BYTES = 10_000
-const DELIVER_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000
 
 async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
-  const { thread, session, message, initiator, idempotencyKey, queue } = req.params as {
+  const { thread, session, specialist, message, initiator, idempotencyKey, queue } = req.params as {
     thread?: string
     session?: string
+    specialist?: string
     message?: string
     initiator?: string
     idempotencyKey?: string
@@ -253,7 +257,8 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (Buffer.byteLength(message) > DELIVER_MAX_MESSAGE_BYTES) {
     return respond(req, false, `message too large (${Buffer.byteLength(message)} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`)
   }
-  if (!thread && !session) return respond(req, false, '--thread or --session is required')
+  if (!thread && !session && !specialist) return respond(req, false, '--thread, --session or --specialist is required')
+  if (specialist && (thread || session)) return respond(req, false, '--specialist is its own address: drop --thread/--session')
 
   if (idempotencyKey) {
     const check = checkIdempotency(idempotencyKey)
@@ -265,6 +270,11 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     if (check.blocked) {
       return respond(req, false, `already delivered with key "${idempotencyKey}"`, { existing: check.entry }, 2)
     }
+  }
+
+  if (specialist) {
+    const r = await deliverToSpecialist({ specialist, message, initiator, idempotencyKey })
+    return r.ok ? respond(req, true, r.data) : respond(req, false, r.error, r.data, r.exitCode)
   }
 
   // 'main' (the platform's byte session) has no registry record; it's reached by its bridge id.
@@ -332,33 +342,56 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     result = { status: 'unknown', reason: String(err) }
   }
 
-  // Today's labels, read from the adapter's result. Claude's via is where the
-  // write went: its CLI contract fails (exit 6) unless it hit the socket or the
-  // caller asked to queue.
-  const queued = queue && !bridgeConnected
-  const via = result.status === 'accepted' ? result.via : undefined
-  const fail =
-    result.status === 'rejected' ? respond(req, false, `delivery rejected: ${result.reason}`)
-    : result.status === 'unknown' ? respond(req, false, `delivery outcome unknown: ${result.reason} — transient, retry`, undefined, 6)
-    : via === 'requeued' ? respond(req, false, 'bridge write failed (socket destroyed) — transient, retry', undefined, 6)
-    : via === 'queued' && !queued ? respond(req, false, 'bridge unexpectedly absent after reachability check', undefined, 6)
-    : null
-  if (fail) {
+  const outcome = deliveryOutcome(result, !!queue && !bridgeConnected)
+  if (!outcome.ok) {
     if (idempotencyKey) clearIdempotency(idempotencyKey)
-    return fail
+    return respond(req, false, outcome.error, undefined, outcome.exitCode)
   }
 
   if (idempotencyKey) registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
-  const [status, proof] = via === 'queued' ? ['queued', 'persisted']
-    : via === 'bridge-socket' ? ['delivered', 'socket_write']
-    : ['delivered', 'adapter']
   return respond(req, true, {
-    status,
-    proof,
+    status: outcome.status,
+    proof: outcome.proof,
     sessionId: info.sessionId,
     sessionName: info.tmuxName,
     threadId: info.threadId,
   })
+}
+
+// ---------------------------------------------------------------------------
+// Specialists — named, refillable addresses (see specialists.ts)
+// ---------------------------------------------------------------------------
+
+function handleSpecialist(req: CLIRequest): CLIResponse {
+  const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string }
+  const view = (name: string, s: Specialist) => ({ name, ...s })
+  switch (p.action) {
+    case 'list': return respond(req, true, listSpecialists().map(([name, s]) => view(name, s)))
+    case 'show': {
+      const s = p.name ? getSpecialist(p.name) : undefined
+      return s ? respond(req, true, view(p.name!, s)) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
+    }
+    case 'rm': return p.name && removeSpecialist(p.name) ? respond(req, true, { removed: p.name }) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
+    case 'set': {
+      if (!p.name) return respond(req, false, 'specialist name is required')
+      const existing = getSpecialist(p.name)
+      const threadId = p.thread ?? existing?.threadId
+      if (!threadId) return respond(req, false, '--thread is required for a new specialist')
+      if (p.kickoffFile && !existsSync(p.kickoffFile)) return respond(req, false, `kickoff file not found: ${p.kickoffFile}`)
+      // Fields not passed keep their current value, so re-pointing a specialist's thread leaves its kickoff alone.
+      const { updatedAt: _t, ...rest } = existing ?? { updatedAt: 0 }
+      const specialist = setSpecialist(p.name, {
+        ...rest,
+        threadId,
+        ...(p.channel && { channel: p.channel }),
+        ...(p.kickoff && { kickoff: p.kickoff }),
+        ...(p.kickoffFile && { kickoffFile: p.kickoffFile }),
+        ...(p.model && { model: p.model }),
+      })
+      return respond(req, true, view(p.name, specialist))
+    }
+    default: return respond(req, false, 'specialist action must be set, show, rm or list')
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +414,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
       case 'deliver': response = await handleDeliver(req); break
+      case 'specialist': response = handleSpecialist(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }

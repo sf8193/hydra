@@ -13,6 +13,8 @@ export type IdempotencyEntry = {
 
 const REGISTRY_PATH = join(STATE_DIR, 'idempotency.json')
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000
+/** How long a `hydra deliver` key is remembered. */
+export const DELIVER_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000
 
 let entries: Map<string, IdempotencyEntry> = new Map()
 
