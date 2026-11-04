@@ -9,7 +9,7 @@ import { deliveryOutcome } from './delivery-outcome.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { pushToolSurface } from './tool-surface.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
-import { getSpecialist, setSpecialist, readKickoff, withSpecialistLock } from './specialists.js'
+import { getSpecialist, setSpecialist, readKickoff, withSpecialistLock, type Specialist } from './specialists.js'
 import type { DeliveryResult } from './engines/engine-adapter.js'
 
 export type SpecialistDeliverResult =
@@ -66,13 +66,34 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
   if (!specialist) throw new Error(`specialist "${name}" was removed`)
   const live = liveOccupant(specialist.threadId)
   if (live) return { info: live, spawned: false }
+  const { info } = await fill(name, specialist, initiator)
+  return { info, spawned: true }
+}
 
+/**
+ * `hydra spawn --specialist <name>`: start the specialist's session by hand. The same lock and the same
+ * fill as a delivery's refill, but a spawn that finds the specialist already filled refuses (exit 3) instead of
+ * doing nothing, and an operator's spawn is not held back by the refill back-off meant for message storms.
+ */
+export async function spawnSpecialist(name: string, initiator: string): Promise<{ info: SessionInfo; url: string }> {
+  if (!getSpecialist(name)) throw new Error(`specialist "${name}" not found`)
+  return withSpecialistLock(name, async () => {
+    const specialist = getSpecialist(name)
+    if (!specialist) throw new Error(`specialist "${name}" was removed`)
+    const live = liveOccupant(specialist.threadId)
+    if (live) throw new SpecialistError(`specialist "${name}" is already filled by ${live.tmuxName} (thread ${live.threadId}); kill it first to replace it`, 3)
+    return fill(name, specialist, initiator, { ignoreBackoff: true })
+  })
+}
+
+/** Start a session for a vacant specialist: from its kickoff, named for it, in its thread when Discord still has it. */
+async function fill(name: string, specialist: Specialist, initiator: string | undefined, opts: { ignoreBackoff?: boolean } = {}): Promise<{ info: SessionInfo; url: string }> {
   const kickoff = readKickoff(specialist)
   if (!kickoff) throw new Error(`specialist "${name}" has no live session and no kickoff to spawn one with`)
 
   const now = specialistDeps.now()
   const backoff = spawnBackoff.get(name)
-  if (backoff && now < backoff.nextAt) {
+  if (!opts.ignoreBackoff && backoff && now < backoff.nextAt) {
     throw new SpecialistError(`specialist "${name}": refilling is backing off for ${Math.ceil((backoff.nextAt - now) / 1000)}s after ${backoff.failures} failed attempt(s)`, 6)
   }
 
@@ -124,7 +145,7 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
   if (!info) throw new Error(`specialist "${name}": spawned session ${result.sessionId} is gone before delivery`)
   // The occupant's tools depend on the specialist it now fills (see tool-surface.ts).
   if (info.adapter.channel === 'bridge') pushToolSurface(info.sessionId)
-  return { info, spawned: true }
+  return { info, url: result.url }
 }
 
 /**
@@ -132,7 +153,7 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
  * refill, so it is safe to call at any time and from many callers. A live occupant is returned
  * untouched (`spawned: false`); a vacant specialist is filled once.
  */
-export async function ensureSpecialist(name: string, initiator?: string): Promise<{ info: SessionInfo; spawned: boolean }> {
+async function ensureSpecialist(name: string, initiator?: string): Promise<{ info: SessionInfo; spawned: boolean }> {
   if (!getSpecialist(name)) throw new Error(`specialist "${name}" not found`)
   return withSpecialistLock(name, () => occupant(name, initiator))
 }

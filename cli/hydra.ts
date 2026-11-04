@@ -43,6 +43,7 @@ Lifecycle:
 
 Session management:
   hydra spawn <prompt>                 Spawn a new session
+  hydra spawn --specialist <name>      Spawn the session for a declared specialist (its kickoff is the prompt; refuses if it is already filled)
   hydra list                           List active sessions
   hydra status <name>                  Session details
   hydra kill <name>                    Kill a session
@@ -67,7 +68,6 @@ Deliver (whisper channel — message to session context, not thread):
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
                                        a new specialist needs --channel (its first session opens a thread there) or --thread
-  hydra specialist up <name>           Make sure it has a live session now (a no-op if one is alive)
   hydra specialist show <name> | list | rm <name>
 
 Slack watches (threads whose replies reach a specialist):
@@ -184,6 +184,7 @@ async function main(): Promise<void> {
       let forceWorktreeCleanup = false
       let readThreadLimit = 0  // 0 = disabled
       let model: string | undefined
+      let specialist: string | undefined
       const promptParts: string[] = []
 
       for (let i = 1; i < filtered.length; i++) {
@@ -215,6 +216,8 @@ async function main(): Promise<void> {
           }
         } else if (filtered[i] === '--model' && i + 1 < filtered.length) {
           model = filtered[++i]
+        } else if (filtered[i] === '--specialist' && i + 1 < filtered.length) {
+          specialist = filtered[++i]
         } else if (filtered[i].startsWith('--')) {
           console.error(`error: unknown flag ${filtered[i]}`)
           process.exit(1)
@@ -224,7 +227,11 @@ async function main(): Promise<void> {
       }
 
       let prompt = promptParts.join(' ')
-      if (!prompt) {
+      if (specialist && (prompt || readThreadLimit > 0)) {
+        console.error("error: --specialist uses the specialist's own kickoff as the prompt; drop the prompt and --read-thread")
+        process.exit(1)
+      }
+      if (!prompt && !specialist) {
         console.error('error: prompt is required')
         process.exit(1)
       }
@@ -251,8 +258,8 @@ async function main(): Promise<void> {
         type: 'cli',
         command: 'spawn',
         id: randomUUID(),
-        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(idleTtl !== undefined && { idleTtl }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
-      })
+        params: { ...(specialist ? { specialist } : { prompt }), idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(idleTtl !== undefined && { idleTtl }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
+      }, specialist ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }
@@ -381,8 +388,8 @@ async function main(): Promise<void> {
 
     case 'specialist': {
       const [action, name] = [filtered[1], filtered[2]]
-      if (!['set', 'show', 'up', 'rm', 'list'].includes(action ?? '')) {
-        console.error('error: usage: hydra specialist set|show|up|rm|list <name> [flags]')
+      if (!['set', 'show', 'rm', 'list'].includes(action ?? '')) {
+        console.error('error: usage: hydra specialist set|show|rm|list <name> [flags]')
         process.exit(1)
       }
       const flags: Record<string, string> = {}
@@ -405,7 +412,7 @@ async function main(): Promise<void> {
           ...(flags['kickoff-file'] && { kickoffFile: resolve(flags['kickoff-file']) }),
           ...(flags.model && { model: flags.model }),
         },
-      }, action === 'up' ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
+      })
       printResponse(response, json)
       break
     }

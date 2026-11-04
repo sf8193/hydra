@@ -7,7 +7,7 @@ import { formatContextPercent, type DeliveryResult } from './engines/engine-adap
 import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
-import { deliverToSpecialist, ensureSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
+import { deliverToSpecialist, spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
@@ -72,7 +72,8 @@ function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?
 // ---------------------------------------------------------------------------
 
 async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
-  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, forceWorktreeCleanup, quiet, model } = req.params as {
+  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, forceWorktreeCleanup, quiet, model, specialist } = req.params as {
+    specialist?: string
     prompt?: string
     initiator?: string
     idempotencyKey?: string
@@ -85,7 +86,11 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
     model?: string
   }
 
-  if (!prompt) return respond(req, false, 'prompt is required')
+  if (specialist) {
+    // The declaration is the recipe: its kickoff is the prompt, and its channel and model are the spawn's.
+    const given = Object.entries({ prompt, channel, message, model, ephemeral, idleTtl, forceWorktreeCleanup }).filter(([, v]) => v !== undefined && v !== false).map(([k]) => k)
+    if (given.length) return respond(req, false, `--specialist takes the prompt, channel and model from the specialist's declaration; remove: ${given.join(', ')}`)
+  } else if (!prompt) return respond(req, false, 'prompt is required')
   let idleTtlMs: number | undefined
   if (idleTtl !== undefined) {
     if (!ephemeral) return respond(req, false, '--idle-ttl only applies to --ephemeral spawns')
@@ -107,9 +112,15 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
 
   let result
   try {
-    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
+    if (specialist) {
+      const filled = await spawnSpecialist(specialist, initiator)
+      result = { sessionId: filled.info.sessionId, name: filled.info.tmuxName, threadId: filled.info.threadId, url: filled.url }
+    } else {
+      result = await doSpawnSession(prompt!, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
+    }
   } catch (err) {
     updateIdempotency(idempotencyKey, { status: 'failed' })
+    if (err instanceof SpecialistError) return respond(req, false, err.message, undefined, err.exitCode)
     throw err
   }
 
@@ -396,16 +407,7 @@ async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
       refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the Slack-watch tools
       return respond(req, true, view(p.name, specialist))
     }
-    case 'up': {
-      if (!p.name) return respond(req, false, 'specialist name is required')
-      try {
-        const { info, spawned } = await ensureSpecialist(p.name)
-        return respond(req, true, { name: p.name, sessionId: info.sessionId, sessionName: info.tmuxName, threadId: info.threadId, spawned, connected: transport.has(info.sessionId) })
-      } catch (err) {
-        return respond(req, false, err instanceof Error ? err.message : String(err), undefined, err instanceof SpecialistError ? err.exitCode : undefined)
-      }
-    }
-    default: return respond(req, false, 'specialist action must be set, show, up, rm or list')
+    default: return respond(req, false, 'specialist action must be set, show, rm or list')
   }
 }
 
