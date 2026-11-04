@@ -151,7 +151,7 @@ describe('specialists', () => {
     threads.push('thread-hist')
     threadRegistry.set('thread-hist', { threadId: 'thread-hist', sessionHistory: [{ tmuxName: 'comet', model: 'claude-opus-5-5' }] } as any)
     expect((await deliver(name)).ok).toBe(true)
-    expect(calls[0][3]).toMatchObject({ existingThreadId: 'thread-hist', resurrectFrom: 'comet', model: 'claude-opus-5-5', trigger: `specialist:${name}` })
+    expect(calls[0][3]).toMatchObject({ existingThreadId: 'thread-hist', resurrectFrom: 'comet', model: 'claude-opus-5-5', trigger: `specialist:${name}`, name })
   })
 
   test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {

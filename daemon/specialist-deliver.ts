@@ -87,6 +87,8 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
     result = await specialistDeps.spawn(kickoff, specialist.channel, undefined, {
       initiator: initiator ?? `specialist:${name}`,
       trigger: `specialist:${name}`,
+      // The session is named for the specialist, so its tmux name, `hydra list` row and thread title all say so, and a refill takes the name back.
+      name,
       ...((specialist.model ?? last?.model) && { model: (specialist.model ?? last?.model)! }),
       ...(reusable && { existingThreadId: specialist.threadId, ...(last && { resurrectFrom: last.tmuxName }) }),
     })

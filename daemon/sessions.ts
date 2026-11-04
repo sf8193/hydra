@@ -225,6 +225,7 @@ export type SpawnOpts = {
   forkFrom?: { claudeSessionId?: string; parentName: string; codexThreadId?: string; codexHomeName?: string }
   handedOffFrom?: string
   reuseName?: string // recovery: keep the dead session's name if still free
+  name?: string      // a caller-chosen session name (and tmux name): spawn fails if it is taken. Ignored by handoff, which keeps its predecessor's name
   handoffFromClaudeSessionId?: string  // predecessor's Claude session id (undefined for Codex), for the arriving template's {{from_session}} and {{from_transcript}}
   predecessor?: Predecessor            // handoff: persisted on the successor's record so it can fork the session it replaced
   artifact?: string
@@ -409,9 +410,9 @@ export class SessionRegistry {
     this.onPersist?.()
   }
 
-  /** `reuse`: a recovered session's old name, kept unless something other than the record it replaces holds it. */
-  pickSessionName(reuse?: { name: string; replacing: string }): string {
-    const others = [...this.sessions.values()].filter(s => s.sessionId !== reuse?.replacing)
+  /** Every name something other than the record `replacing` holds: sessions, tmux, worktree branches, Codex homes, reservations. */
+  private usedNames(replacing?: string, keep?: string): Set<string> {
+    const others = [...this.sessions.values()].filter(s => s.sessionId !== replacing)
     const used = new Set(others.map(s => s.tmuxName))
     // Also reserve names still referenced by a record's worktree branch (`wt/<name>`).
     // A recovered session keeps its predecessor's branch (its tmuxName differs), so the
@@ -427,18 +428,30 @@ export class SessionRegistry {
     // In-flight reservations cover the recovery window between deleting a dead record and
     // persisting its replacement, when the record-based reservation above doesn't yet apply.
     // The reuse name is reserved by recovery for this very spawn.
-    for (const n of this.reservedNames) if (n !== reuse?.name) used.add(n)
+    for (const n of this.reservedNames) if (n !== keep) used.add(n)
     try {
       const tmuxOut = execSync('tmux ls -F "#{session_name}" 2>/dev/null', { encoding: 'utf8' })
       for (const line of tmuxOut.split('\n')) {
         if (line.trim()) used.add(line.trim())
       }
     } catch {}
+    return used
+  }
+
+  /** `reuse`: a recovered session's old name, kept unless something other than the record it replaces holds it. */
+  pickSessionName(reuse?: { name: string; replacing: string }): string {
+    const used = this.usedNames(reuse?.replacing, reuse?.name)
     if (reuse && !used.has(reuse.name)) return reuse.name
     for (const name of SESSION_NAMES) {
       if (!used.has(name)) return name
     }
     return `session-${randomBytes(3).toString('hex')}`
+  }
+
+  /** A caller-chosen name (`SpawnOpts.name`): the name itself or an error, never a substitute. `replacing`: the dead record this spawn takes over from. */
+  claimSessionName(name: string, replacing?: string): string {
+    if (this.usedNames(replacing, name).has(name)) throw new Error(`session name "${name}" is already in use`)
+    return name
   }
 
   resolveThreadId(msg: { channelId: string; effectiveThreadId: string | null }): string {
