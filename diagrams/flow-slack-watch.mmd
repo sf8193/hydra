@@ -3,13 +3,13 @@ flowchart LR
 
   subgraph daemon["Hydra Discord daemon"]
     direction TB
-    lis["Listener (PR 3)<br/>Socket Mode, read-only"]
+    lis["Listener<br/>Socket Mode, read-only"]
     handle{"handle(event)<br/>slack-watch.ts"}
     table[("Watch table, owned by the specialist<br/>active, then idle 7d, then expired<br/>delivered ts and owed ts kept")]
     co["Coalesce 4s<br/>sender id and name, text quoted, cap 8 KB"]
     specialist{"deliverToSpecialist<br/>live, connected session?"}
     refill["Refill: respawn into the specialist's thread<br/>from the kickoff<br/>per-specialist lock, backoff"]
-    catch["Catch-up (PR 3)<br/>boot after recovery, reconnect gap, every 10 min<br/>channel history plus owed threads"]
+    catch["Catch-up<br/>boot after recovery, every reconnect, every 10 min<br/>channel history plus owed and watched threads"]
   end
 
   subgraph discord["Discord, the specialist's thread"]

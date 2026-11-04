@@ -33,7 +33,9 @@ for (const envFile of [LOCAL_ENV_FILE, ENV_FILE]) {
   try { if (!process.env.HYDRA_PROBE_SOCK) chmodSync(envFile, 0o600) } catch {}
 }
 sourceEnvFiles([LOCAL_ENV_FILE, ENV_FILE])
-export const RAINDROP_ENV = captureSpawnVars()
+// Everything scrubbed from the environment, kept for the daemon's own use: Raindrop's settings and the Slack-watch tokens.
+export const SCRUBBED_ENV = captureSpawnVars()
+export const RAINDROP_ENV = SCRUBBED_ENV
 
 export const CLAUDE_CONFIG = claudeConfigDir()
 

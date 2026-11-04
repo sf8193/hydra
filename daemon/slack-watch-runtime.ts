@@ -4,6 +4,9 @@ import { getSpecialist } from './specialists.js'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { isSlackSpecialistOccupant, pushToolSurface } from './tool-surface.js'
+import { SlackListener, boltApp, type ListenerHealth } from './slack-listener.js'
+import { SCRUBBED_ENV } from './config.js'
+import { safeSend } from './util.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 const config = fileConfig(slackWatchConfigPath(), log)
@@ -31,6 +34,37 @@ export function getSlackWatcher(): SlackWatcher {
       return { ok: false, error: r.error, ...(r.permanent && { permanent: true }) }
     },
   })
+}
+
+let listener: SlackListener | undefined
+
+/**
+ * Connects to Slack and begins feeding the watcher. Called once boot recovery has finished,
+ * so a specialist refill never races it. The tokens come from the scrubbed environment: only this
+ * module ever sees them, never a session. A no-op, with a log line, until both are set and
+ * slack-watch.json is valid.
+ */
+export async function startSlackListener(): Promise<void> {
+  if (listener) return
+  const l = new SlackListener({
+    watcher: getSlackWatcher(),
+    config,
+    tokens: () => ({ app: SCRUBBED_ENV.SLOPBOT_SLACK_APP_TOKEN, bot: SCRUBBED_ENV.SLOPBOT_SLACK_BOT_TOKEN }),
+    createApp: boltApp,
+    log,
+    alert: text => {
+      const specialist = config()?.specialist
+      const thread = specialist ? getSpecialist(specialist)?.threadId : undefined
+      if (thread) void safeSend(thread, text).catch(() => {})
+      else log(`daemon: slack listener alert with no specialist thread to send it to: ${text}\n`)
+    },
+  })
+  if (await l.start()) listener = l
+}
+
+export function stopSlackListener(): void {
+  listener?.stop()
+  listener = undefined
 }
 
 /** The occupant of the Slack-watch specialist, if one is running. */
@@ -66,6 +100,7 @@ export function startSlackWatch(): void {
  */
 export function stopSlackWatch(): void {
   if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = undefined }
+  stopSlackListener()
   watcher?.close()
 }
 
@@ -119,7 +154,7 @@ export function formatSlackWatches(now = Date.now()): string[] {
 export function slackWatchChannels(): string[] { return config()?.channels ?? [] }
 
 /** For `hydra health`: null when nothing is configured. */
-export function slackWatchHealth(now = Date.now()): { specialist: string; watches: number; owed: number; oldestOwedAgeMin: number | null } | null {
+export function slackWatchHealth(now = Date.now()): { specialist: string; watches: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } | null {
   const cfg = config()
   if (!cfg) return null
   const entries = getSlackWatcher().list()
@@ -130,5 +165,6 @@ export function slackWatchHealth(now = Date.now()): { specialist: string; watche
     watches: entries.length,
     owed: owed.length,
     oldestOwedAgeMin: oldest ? Math.max(0, Math.round((now / 1000 - parseFloat(oldest)) / 60)) : null,
+    ...(listener && { listener: listener.health() }),
   }
 }
