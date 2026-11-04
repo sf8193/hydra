@@ -1,5 +1,5 @@
 import { App, LogLevel } from '@slack/bolt'
-import { SocketSupervisor, type SocketEmitter } from '../shared/socket-supervisor.js'
+import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../shared/socket-supervisor.js'
 import { catchUp, toEvent, type CatchUpResult, type RawMessage, type SlackApi } from './slack-catchup.js'
 import type { SlackWatchConfig, SlackWatcher } from './slack-watch.js'
 
@@ -61,6 +61,8 @@ export type ListenerDeps = {
   log: (line: string) => void
   now?: () => number
   healthUrl?: string
+  /** First delay before retrying a failed first connection; doubles up to 5 minutes. */
+  firstRetryBaseMs?: number
   fetch?: (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boolean }>
 }
 
@@ -78,6 +80,8 @@ export class SlackListener {
   private lastCatchUp: { at: number; result: CatchUpResult } | null = null
   private lastOkCatchUpAt: number | null = null
   private retryTimer: ReturnType<typeof setTimeout> | undefined
+  private firstTimer: ReturnType<typeof setTimeout> | undefined
+  private firstAttempts = 0
   private timers: ReturnType<typeof setInterval>[] = []
   private alerted = { down: false, catchUp: false }
   private lastMissedLiveAlertAt = 0
@@ -109,9 +113,10 @@ export class SlackListener {
       log: this.d.log,
     })
     try {
-      await this.connect()
+      await this.boundedConnect()
     } catch (err) {
       this.d.log(`daemon: slack listener: first connection failed, will keep trying: ${err instanceof Error ? err.message : err}\n`)
+      this.scheduleFirstRetry()
     }
     this.sup.begin()
     for (const [fn, ms] of [[() => { void this.runCatchUp(true, 'periodic') }, CATCH_UP_INTERVAL_MS], [() => { void this.checkAlerts() }, ALERT_CHECK_MS]] as const) {
@@ -125,11 +130,38 @@ export class SlackListener {
 
   stop(): void {
     this.started = false
+    if (this.firstTimer) clearTimeout(this.firstTimer)
     for (const t of this.timers.splice(0)) clearInterval(t)
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.sup?.stop()
     void this.app?.stop().catch(() => {})
     this.app = null
+  }
+
+  /** The SDK's start can hang, so the first connection is bounded the way the supervisor bounds a reconnect. */
+  private async boundedConnect(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`start() timed out after ${START_TIMEOUT_MS / 1000}s`)), START_TIMEOUT_MS) })
+    try { await Promise.race([this.connect(), timeout]) } finally { clearTimeout(timer) }
+  }
+
+  /**
+   * The supervisor only steps in once a connection that was up goes down, so a first connection
+   * that never came up is retried here, with its backoff and network check, until one succeeds.
+   */
+  private scheduleFirstRetry(): void {
+    if (!this.started || this.everConnected || this.firstTimer) return
+    const delay = Math.min((this.d.firstRetryBaseMs ?? 10_000) * 2 ** this.firstAttempts++, 5 * 60_000)
+    this.firstTimer = setTimeout(() => {
+      this.firstTimer = undefined
+      void (async () => {
+        if (!this.started || this.everConnected || !this.sup) return
+        await this.sup.reconnect()
+        if (this.sup.state.connected) void this.runCatchUp(true, 'boot')
+        else this.scheduleFirstRetry()
+      })()
+    }, delay)
+    ;(this.firstTimer as { unref?: () => void }).unref?.()
   }
 
   /** (Re)create the connection. Also what the supervisor calls to reconnect. */
@@ -220,7 +252,7 @@ export class SlackListener {
     }
   }
 
-  /** Tell the specialist's thread when the listener has been down or catch-up has stalled, and when each recovers. Once per episode. */
+  /** Tell the specialist's thread when the listener has been down or catch-up has stalled, and when the listener is back. Once per episode. */
   async checkAlerts(): Promise<void> {
     if (!this.started) return
     const h = this.health()

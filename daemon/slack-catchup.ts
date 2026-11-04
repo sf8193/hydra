@@ -64,10 +64,14 @@ export function toEvent(channel: string, m: RawMessage): SlackMessageEvent | nul
 
 const nowTs = (now: number) => `${Math.floor(now / 1000)}.000000`
 
+export const MIN_CALLS = 60
+export const MAX_CALLS_CAP = 400
+
 class OutOfBudget extends Error {}
 
 export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWatchConfig, opts: CatchUpOpts): Promise<CatchUpResult> {
-  const maxCalls = opts.maxCalls ?? 60
+  // One call per watched thread on a deep pass, plus the channel scan: the budget grows with the table so a big one can still finish.
+  const maxCalls = opts.maxCalls ?? Math.min(MAX_CALLS_CAP, Math.max(MIN_CALLS, 2 * watcher.list().length + 20))
   const maxPages = opts.maxPages ?? 5
   let calls = 0
   let handled = 0
@@ -110,7 +114,8 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
         for (const m of res.messages) if (m.ts) note(channel, m.ts)
         feed(channel, res.messages)
         for (const m of res.messages) {
-          if (m.ts && (m.reply_count ?? 0) > 0 && watcher.get(channel, m.thread_ts ?? m.ts)) want(channel, m.thread_ts ?? m.ts, cursor)
+          // A thread that began during the gap and has replies may hold a tag, watched or not.
+          if (m.ts && (m.reply_count ?? 0) > 0) want(channel, m.thread_ts ?? m.ts, cursor)
         }
         page = res.next
         if (!page) break

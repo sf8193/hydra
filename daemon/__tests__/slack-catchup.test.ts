@@ -13,13 +13,13 @@ const mention = `<@${BOT}> a cart please`
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(deliver?: () => DeliverResult) {
+function setup(deliver?: () => DeliverResult, config: SlackWatchConfig = cfg) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
   const sent: string[] = []
   const logs: string[] = []
   const w = new SlackWatcher({
-    now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => cfg,
+    now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => config,
     deliver: async (_s, msg) => { sent.push(msg); return deliver ? deliver() : { ok: true } },
   })
   return { w, sent, logs }
@@ -97,7 +97,7 @@ describe('catchUp', () => {
     expect(again.accepted).toBe(0) // nothing the live stream had not already delivered
   })
 
-  test("the bot's own post made during the gap is found by the scan, and its replies are read; unwatched threads are not", async () => {
+  test("the bot's own post made during the gap is found by the scan, and the replies of every thread that began in the gap are read", async () => {
     const { w, sent } = setup()
     w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
     const { api, calls } = fakeApi(
@@ -105,13 +105,16 @@ describe('catchUp', () => {
         { ts: '1200.000001', thread_ts: '1200.000001', reply_count: 1, user: BOT, text: 'cart post' },
         { ts: '1300.000001', thread_ts: '1300.000001', reply_count: 4, user: 'UC', text: 'someone elses thread' },
       ] },
-      { [`${CH}:1200.000001`]: [{ ts: '1250.000001', thread_ts: '1200.000001', user: 'UB', text: 'reply while down' }] },
+      { [`${CH}:1200.000001`]: [{ ts: '1250.000001', thread_ts: '1200.000001', user: 'UB', text: 'reply while down' }],
+        [`${CH}:1300.000001`]: [{ ts: '1310.000001', thread_ts: '1300.000001', user: 'UD', text: 'chatter, no tag' }, { ts: '1320.000001', thread_ts: '1300.000001', user: 'UE', text: mention }] },
     )
     await catchUp(w, api, cfg, opts())
     await w.flush()
-    expect(calls.filter(c => c.kind === 'replies').map(c => c.args.ts)).toEqual(['1200.000001'])
-    expect(sent).toHaveLength(1)
+    expect(calls.filter(c => c.kind === 'replies').map(c => c.args.ts)).toEqual(['1200.000001', '1300.000001'])
+    expect(sent).toHaveLength(2)
     expect(sent[0]).toContain('reply while down')
+    expect(sent[1]).toContain('a cart please') // a tag in a reply of a thread nobody watched, posted while down
+    expect(sent[1]).not.toContain('chatter, no tag')
   })
 
   test('an old watched thread that got replies during the gap is only reachable by a deep pass', async () => {
@@ -152,6 +155,17 @@ describe('catchUp', () => {
     expect(r.complete).toBe(true)
     expect(calls.filter(c => c.kind === 'history')).toHaveLength(2)
     expect(sent.join()).toContain('<@U3>')
+  })
+
+  test('the call budget grows with the watch table, so a deep pass over many watches still completes', async () => {
+    const big = { ...cfg, maxWatches: 200 }
+    const { w } = setup(undefined, big)
+    w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
+    for (let i = 0; i < 100; i++) w.watch(CH, `${2000 + i}.000001`, 'slopbot')
+    const { api, calls } = fakeApi({ [CH]: [] })
+    const r = await catchUp(w, api, big, opts({ deep: true }))
+    expect(r).toMatchObject({ complete: true })
+    expect(calls.filter(c => c.kind === 'replies')).toHaveLength(100)
   })
 
   test('an exhausted call budget or an API error leaves the cursor held; the next pass finishes the job', async () => {

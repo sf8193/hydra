@@ -23,7 +23,7 @@ const dirs: string[] = []
 const listeners: SlackListener[] = []
 afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWatchConfig | null; failStart?: boolean; history?: RawMessage[]; threads?: Record<string, RawMessage[]> } = {}) {
+function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWatchConfig | null; failStart?: boolean; firstRetryBaseMs?: number; history?: RawMessage[]; threads?: Record<string, RawMessage[]> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
   dirs.push(dir)
   let now = 1_793_000_000_000
@@ -46,6 +46,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWa
     log: l => logs.push(l),
     alert: t => alerts.push(t),
     fetch: async () => ({ ok: true }),
+    ...(over.firstRetryBaseMs !== undefined && { firstRetryBaseMs: over.firstRetryBaseMs }),
     createApp: tokens => {
       expect(tokens).toEqual(TOKENS)
       const rec = { handler: (_: RawEvent) => {}, client: new FakeClient(), stopped: false, started: 0, apiCalls: [] as string[] }
@@ -104,6 +105,17 @@ describe('starting', () => {
     expect(t.logs.join()).toContain('first connection failed')
     expect(['connecting', 'down']).toContain(t.listener.health().state)
     expect(t.logs.join()).not.toContain('SECRET')
+  })
+
+  test('a first connection that never came up is retried until it connects, then catches up', async () => {
+    const t = setup({ failStart: true, firstRetryBaseMs: 5, history: [{ ts: '1050.000001', user: 'UB', text: mention }] })
+    await t.listener.start()
+    expect(t.apps[0].started).toBe(1)
+    t.state.failStart = false
+    const until = async (ok: () => boolean) => { for (let i = 0; i < 100 && !ok(); i++) await new Promise(r => setTimeout(r, 10)) }
+    await until(() => t.listener.health().state === 'up' && t.listener.health().catchUp !== null)
+    expect(t.listener.health()).toMatchObject({ state: 'up', catchUp: { ok: true, accepted: 1 } })
+    expect(t.apps.length).toBeGreaterThan(1)
   })
 
   test('a mismatch between the connected bot and slack-watch.json is flagged', async () => {
