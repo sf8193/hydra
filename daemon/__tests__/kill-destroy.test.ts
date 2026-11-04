@@ -189,14 +189,22 @@ describe('kill +destroy', () => {
     expect(deletedThreads).toEqual([])
   })
 
-  test('a thread whose session was started by someone else is destroyed by kill +d', async () => {
+  test('a thread whose session was started by someone else is destroyed by kill +d, and the log says who did it', async () => {
     // No creator guard: whoever the gateway lets send commands may destroy a thread.
     seedSession({ deadAt: Date.now(), initiator: 'someone-else' })
+    const lines: string[] = []
+    const prev = process.stderr.write
+    process.stderr.write = ((chunk: unknown) => { lines.push(String(chunk)); return true }) as typeof process.stderr.write
 
-    await handleThreadKillIntercept(msg('kill +d'), { destroy: true })
+    try {
+      await handleThreadKillIntercept(msg('kill +d'), { destroy: true })
+    } finally {
+      process.stderr.write = prev
+    }
 
     expect(deletedThreads).toEqual([THREAD])
     expect(sent.join('\n')).not.toContain('Only the session creator')
+    expect(lines.join('')).toContain(`deleted thread ${THREAD} (by operator)`)
   })
 
   test('kill +d on a live session started by another initiator kills and destroys it', async () => {

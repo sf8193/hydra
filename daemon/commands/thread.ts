@@ -567,7 +567,8 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
   // stays intact so the thread isn't orphaned from hydra's perspective.
   try {
     await gateway.deleteThread(threadId)
-    process.stderr.write(`daemon: destroy: deleted thread ${threadId}\n`)
+    // No creator check any more, so the log is the record of who did it.
+    process.stderr.write(`daemon: destroy: deleted thread ${threadId} (by ${msg.authorUsername})\n`)
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`daemon: destroy: thread deletion failed: ${errMsg}\n`)
