@@ -11,10 +11,10 @@ import { claudeConfigDir } from '../../shared/constants.js'
 import { pidAlive } from '../../shared/bridge-life.js'
 import type { LiveState } from './engine-adapter.js'
 
-// Claude's status vocabulary (busy = thinking, shell = a Bash tool is running); anything else is
-// unknown, not a guess, and falls back to tmux.
+// Claude's status vocabulary: busy = a turn is running, idle, waiting. shell (idle with a background shell
+// running) and anything else map to null, so tmux pane activity decides.
 export function liveStateOf(status: string): LiveState | null {
-  return status === 'busy' || status === 'shell' ? 'working' : status === 'idle' ? 'idle' : status === 'waiting' ? 'blocked' : null
+  return status === 'busy' ? 'working' : status === 'idle' ? 'idle' : status === 'waiting' ? 'blocked' : null
 }
 
 export type ClaudeLiveStatus = { sessionId: string; status: string; waitingFor?: string; cwd?: string }

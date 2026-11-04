@@ -160,6 +160,14 @@ describe('main handoff', () => {
     expect(keys()[0]).toContain('/clear')
   })
 
+  test('main idle with a background shell running (status shell) still hands off', async () => {
+    const doc = join(dir, 'letter.md'); writeFileSync(doc, 'x')
+    setStatus('sess-1', 'shell'); claudeClearsOnCommand()
+    await executeTool('handoff', { path: doc }, 'main')
+    await doneOk()
+    expect(keys()[0]).toContain('/clear')
+  })
+
   test('main never goes idle: nothing typed, the failure names the letter, and a retry is allowed', async () => {
     const doc = join(dir, 'letter.md'); writeFileSync(doc, 'x')
     setStatus('sess-1', 'busy')

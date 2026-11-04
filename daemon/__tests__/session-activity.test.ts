@@ -81,8 +81,8 @@ describe('isSessionWorking', () => {
 })
 
 describe('adapter live state', () => {
-  test('liveStateOf: busy/idle/waiting map; anything else is unknown', () => {
-    expect(['busy', 'shell', 'idle', 'waiting', 'weird', ''].map(liveStateOf)).toEqual(['working', 'working', 'idle', 'blocked', null, null])
+  test('liveStateOf: busy/idle/waiting map; anything else, shell included, is unknown', () => {
+    expect(['busy', 'shell', 'idle', 'waiting', 'weird', ''].map(liveStateOf)).toEqual(['working', null, 'idle', 'blocked', null, null])
   })
   test('claude: read from the status file, null when unreadable, lazily', () => {
     const fake = withFakeTmux(); fake.activity('cedar', Math.floor(Date.now() / 1000))
@@ -99,8 +99,23 @@ describe('adapter live state', () => {
       expect(engines.claude.turn(info, 0).live).toBe('blocked')
       status = null
       expect(engines.claude.turn(info, 0).live).toBeNull()
-      status = { sessionId: 'c', status: 'shell' } // a Bash tool is running
-      expect(engines.claude.turn(info, 0).live).toBe('working')
+      status = { sessionId: 'c', status: 'shell' }
+      expect(engines.claude.turn(info, 0).live).toBeNull()
+    } finally { Object.assign(defaultTurnSources, saved); fake.restore() }
+  })
+  test('claude shell (idle with a background shell): working only while the pane was active in the last 60s', async () => {
+    const fake = withFakeTmux()
+    const saved = { ...defaultTurnSources }
+    Object.assign(defaultTurnSources, { readClaudeStatus: (n: string) => n === 'cedar' ? { sessionId: 'c', status: 'shell' } : null })
+    try {
+      const info = { sessionId: 's1', tmuxName: 'cedar', adapter: engines.claude } as unknown as SessionInfo
+      const now = Math.floor(Date.now() / 1000)
+      fake.activity('cedar', now - 10)
+      expect(isSessionWorking(info)).toBe(true)
+      expect(await isSessionWorkingAsync(info)).toBe(true)
+      fake.activity('cedar', now - 120)
+      expect(isSessionWorking(info)).toBe(false)
+      expect(await isSessionWorkingAsync(info)).toBe(false)
     } finally { Object.assign(defaultTurnSources, saved); fake.restore() }
   })
   test('claude: live reports working from the status file alone; the engine advertises the silence limit', () => {
