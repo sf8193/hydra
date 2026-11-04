@@ -690,20 +690,63 @@ describe('probeAllSessions', () => {
     }
   })
 
-  it('alerts on an unknown dialog with the pane tail and presses no keys', async () => {
+  const stickDialog = async (tail: string) => {
     addSession('s1', { tmuxName: 'ember', threadId: 'thread-1' })
-    paneTails.set('ember', `Allow access to ~/secrets?\n❯ 1. Yes\n  2. No\n\nEnter to confirm · Esc to cancel`)
+    paneTails.set('ember', tail)
     windowActivity.set('ember', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
-
     await probeAllSessions(T0)
     await probeAllSessions(T0 + 60_000)
     await flush()
+  }
+
+  it.each([
+    ['selection', 'Pick one\n❯ 1. A\n  2. B\n\nEnter to confirm · Esc to cancel'],
+    ['permission', ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel · Tab to amend'],
+    ['navigable', ' Turn on the mods?\n❯ 1. How does this work?\n  2. Turn them on\n Enter to select · ↑/↓ to navigate · Esc to cancel'],
+  ])('presses Esc on a stuck %s dialog and tells the session, linking the alert', async (_name, tail) => {
+    const delivered: Array<{ sessionId: string; msg: any }> = []
+    _setIO({
+      ...makeTestIO(),
+      transportSendOrQueue: (sessionId, msg) => delivered.push({ sessionId, msg }),
+      getMessageUrl: (channelId, messageId) => `https://chat/${channelId}/${messageId}`,
+    })
+    await stickDialog(tail)
+
+    expect(keysSent.filter(k => k.tmuxName === 'ember')).toEqual([{ tmuxName: 'ember', keys: 'Escape' }])
+    const alert = sentMessages.find(m => m.channelId === 'thread-1')
+    expect(alert?.text).toContain('Pressed Esc')
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0].sessionId).toBe('s1')
+    expect(delivered[0].msg.content).toContain('cancelled, not approved')
+    expect(delivered[0].msg.content).toContain(`https://chat/thread-1/`)
+    expect(delivered[0].msg.meta.chat_id).toBe('thread-1')
+  })
+
+  it('only alerts on the workspace trust screen, where Esc would end the session', async () => {
+    const delivered: unknown[] = []
+    _setIO({ ...makeTestIO(), transportSendOrQueue: (_s, msg) => delivered.push(msg) })
+    await stickDialog(' Accessing workspace:\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel')
 
     expect(keysSent.filter(k => k.tmuxName === 'ember')).toEqual([])
-    const msg = sentMessages.find(m => m.channelId === 'thread-1')
-    expect(msg?.text).toContain('stuck on a dialog')
-    expect(msg?.text).toContain('Allow access to ~/secrets?')
+    expect(delivered).toEqual([])
+    expect(sentMessages.find(m => m.channelId === 'thread-1')?.text).toContain('tmux attach -t ember')
+  })
+
+  it('presses nothing when the dialog closed before the second read', async () => {
+    let reads = 0
+    const delivered: unknown[] = []
+    const tail = 'Pick one\n❯ 1. A\n  2. B\nEnter to confirm · Esc to cancel'
+    _setIO({
+      ...makeTestIO(),
+      // Two probe reads see the dialog; the read right before the keypress does not.
+      capturePaneTail: async () => (++reads <= 2 ? tail : '❯ \n'),
+      transportSendOrQueue: (_s, msg) => delivered.push(msg),
+    })
+    await stickDialog(tail)
+
+    expect(keysSent.filter(k => k.tmuxName === 'ember')).toEqual([])
+    expect(delivered).toEqual([])
   })
 
   it('unknown-dialog alert quotes what Claude says it is waiting on', async () => {
