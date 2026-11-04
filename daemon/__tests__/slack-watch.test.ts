@@ -189,6 +189,20 @@ describe('delivery', () => {
     expect(sent).toHaveLength(2)
   })
 
+  test('a replay of a message whose delivery is still in flight is not delivered a second time', async () => {
+    let release!: (r: DeliverResult) => void
+    const gate = new Promise<DeliverResult>(res => { release = res })
+    const { w, sent } = setup({}, () => gate as unknown as DeliverResult)
+    w.handle(ev({ ts: '1000.000001', text: mention }))
+    await new Promise(r => setTimeout(r, 30)) // past the coalescing window: the batch is on the chain, delivery pending
+    expect(sent).toHaveLength(1)
+    expect(w.handle(ev({ ts: '1000.000001', text: mention }))).toBe('ignored')
+    release({ ok: true })
+    await w.flush()
+    expect(sent).toHaveLength(1)
+    expect(w.get(CH, '1000.000001')).toMatchObject({ delivered: ['1000.000001'] })
+  })
+
   test('a permanent refusal drops the message instead of retrying forever', async () => {
     const { w, logs } = setup({}, () => ({ ok: false, error: 'message too large', permanent: true }))
     w.handle(ev({ ts: '1000.000001', text: mention }))

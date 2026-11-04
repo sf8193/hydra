@@ -99,6 +99,7 @@ describe('operator view', () => {
     expect(await handleCLIRequest(req('slack-watch', { action: 'rm', channel: 'C1', threadTs: '9.000001' }))).toMatchObject({ ok: true })
     expect(await handleCLIRequest(req('slack-watch', { action: 'rm', channel: 'C1', threadTs: '9.000001' }))).toMatchObject({ ok: false })
     expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'C1', threadTs: 'nope' }))).toMatchObject({ ok: false })
+    expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'C_ELSEWHERE', threadTs: '9.000002' }))).toMatchObject({ ok: false, error: expect.stringContaining('not one of the channels') })
   })
 
   test('health omits the line when nothing is configured', async () => {

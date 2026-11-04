@@ -9,7 +9,7 @@ import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionI
 import { deliveryOutcome } from './delivery-outcome.js'
 import { deliverToSpecialist } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
-import { getSlackWatcher, slackWatchHealth, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
+import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
@@ -372,7 +372,11 @@ function handleSpecialist(req: CLIRequest): CLIResponse {
       const s = p.name ? getSpecialist(p.name) : undefined
       return s ? respond(req, true, view(p.name!, s)) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
     }
-    case 'rm': return p.name && removeSpecialist(p.name) ? respond(req, true, { removed: p.name }) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
+    case 'rm': {
+      if (!p.name || !removeSpecialist(p.name)) return respond(req, false, `specialist "${p.name ?? ''}" not found`)
+      refreshSlackSpecialistSurface() // its occupant loses the Slack-watch tools
+      return respond(req, true, { removed: p.name })
+    }
     case 'set': {
       if (!p.name) return respond(req, false, 'specialist name is required')
       const existing = getSpecialist(p.name)
@@ -414,6 +418,7 @@ function handleSlackWatch(req: CLIRequest): CLIResponse {
       if (!/^\d{1,12}\.\d{1,6}$/.test(p.threadTs)) return respond(req, false, 'thread must look like 1793732224.093059')
       const specialist = slackWatchHealth()?.specialist
       if (!specialist) return respond(req, false, 'Slack watching is not configured: <state>/slack-watch.json is missing or invalid')
+      if (!slackWatchChannels().includes(p.channel)) return respond(req, false, `${p.channel} is not one of the channels in slack-watch.json, so nothing in it would ever reach the specialist`)
       return w.watch(p.channel, p.threadTs, specialist, 'cli') ? respond(req, true, { watching: `${p.channel}:${p.threadTs}` }) : respond(req, false, 'the watch table is full')
     }
     default: return respond(req, false, 'slack-watch action must be list, add or rm')

@@ -263,6 +263,8 @@ export class SlackWatcher {
   private readonly entries = new Map<string, SlackWatchEntry>()
   private channelCursors: Record<string, string> = {}
   private readonly pending = new Map<string, { items: Item[]; timer: ReturnType<typeof setTimeout> }>()
+  // Handed to the delivery chain but not yet settled. A replay of one of these (a catch-up pass fires on every reconnect, and a refill can take a while) would otherwise open a second batch and deliver it twice.
+  private readonly inflight = new Map<string, Set<string>>()
   private readonly mentionTimes = new Map<string, number[]>()
   private readonly names = new Map<string, { name?: string; at: number }>()
   private readonly nameFlights = new Map<string, Promise<string | undefined>>()
@@ -402,6 +404,7 @@ export class SlackWatcher {
     if (ev.botId && !own) return 'ignored' // other bots are not conversation
     const threadTs = ev.threadTs ?? ev.ts
     const isReply = !!ev.threadTs && ev.threadTs !== ev.ts
+    if (this.inflight.get(watchKey(ev.channel, threadTs))?.has(ev.ts)) return 'ignored'
 
     if (own) {
       // The bot's own top-level post opens a watched thread. Its replies are not echoed back to the specialist.
@@ -493,10 +496,23 @@ export class SlackWatcher {
     const entry = this.entries.get(key)
     if (!entry) return
     const items = [...batch.items].sort((a, b) => cmpTs(a.ts, b.ts))
+    const flying = this.inflight.get(key) ?? new Set<string>()
+    for (const i of items) flying.add(i.ts)
+    this.inflight.set(key, flying)
     this.chain = this.chain.then(() => this.deliverItems(key, entry, items, cfg))
   }
 
   private async deliverItems(key: string, entry: SlackWatchEntry, items: Item[], cfg: SlackWatchConfig): Promise<void> {
+    try {
+      await this.deliverBatches(key, entry, items, cfg)
+    } finally {
+      const flying = this.inflight.get(key)
+      for (const i of items) flying?.delete(i.ts)
+      if (flying && flying.size === 0) this.inflight.delete(key)
+    }
+  }
+
+  private async deliverBatches(key: string, entry: SlackWatchEntry, items: Item[], cfg: SlackWatchConfig): Promise<void> {
     const users = [...new Set(items.map(i => i.user).filter((u): u is string => !!u))]
     const resolved = new Map(await Promise.all(users.map(async u => [u, await this.nameOf(u)] as const)))
     const named = items.map(i => ({ ...i, name: i.user ? resolved.get(i.user) : undefined }))

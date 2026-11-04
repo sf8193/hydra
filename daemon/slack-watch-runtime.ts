@@ -115,6 +115,9 @@ export function formatSlackWatches(now = Date.now()): string[] {
   })
 }
 
+/** The channels slack-watch.json lists; empty when nothing is configured. */
+export function slackWatchChannels(): string[] { return config()?.channels ?? [] }
+
 /** For `hydra health`: null when nothing is configured. */
 export function slackWatchHealth(now = Date.now()): { specialist: string; watches: number; owed: number; oldestOwedAgeMin: number | null } | null {
   const cfg = config()
