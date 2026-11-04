@@ -123,6 +123,24 @@ describe('SessionRegistry.pickSessionName reuse', () => {
   })
 })
 
+describe('SessionRegistry.claimSessionName', () => {
+  test('gives the requested name, also when a dead record being replaced held it, and refuses a taken one', () => {
+    const reg = new SessionRegistry()
+    expect(reg.claimSessionName('claim-me')).toBe('claim-me')
+    reg.set('sid-dead', makeInfo({ sessionId: 'sid-dead', tmuxName: 'claim-me', deadAt: 1 }))
+    expect(() => reg.claimSessionName('claim-me')).toThrow(/already in use/)
+    expect(reg.claimSessionName('claim-me', 'sid-dead')).toBe('claim-me')
+    reg.set('sid-live', makeInfo({ sessionId: 'sid-live', tmuxName: 'claim-me' }))
+    expect(() => reg.claimSessionName('claim-me', 'sid-dead')).toThrow(/already in use/)
+  })
+
+  test('refuses a name recovery has reserved for its own respawn', () => {
+    const reg = new SessionRegistry()
+    reg.reservedNames.add('held-by-recovery')
+    expect(() => reg.claimSessionName('held-by-recovery')).toThrow(/already in use/)
+  })
+})
+
 describe('ThreadRegistry', () => {
   test('set and get', () => {
     const tr = new ThreadRegistry()

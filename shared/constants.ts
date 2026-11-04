@@ -23,6 +23,9 @@ export function parseIdleTtl(s: string): number | null {
   return ms > 0 && ms <= MAX_IDLE_TTL_MS ? ms : null
 }
 
+/** Largest message `hydra deliver` accepts, to any target. */
+export const DELIVER_MAX_MESSAGE_BYTES = 10_000
+
 export const BRIDGE_SHUTDOWN_GRACE_MS = 1_000
 
 export const KNOWN_MODELS = new Set([
