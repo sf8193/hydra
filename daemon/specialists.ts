@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
+import { SESSION_NAMES } from './sessions.js'
 
 /**
  * A specialist is a named pointer to a thread plus the recipe for refilling it.
@@ -53,6 +54,7 @@ export function listSpecialists(): [string, Specialist][] {
 
 export function setSpecialist(name: string, specialist: Omit<Specialist, 'updatedAt'>): Specialist {
   if (!SPECIALIST_NAME_RE.test(name)) throw new Error('specialist name must be lowercase letters, digits and dashes')
+  if (SESSION_NAMES.includes(name)) throw new Error(`"${name}" is a default session name; a specialist needs its own name`)
   const next = { ...specialist, updatedAt: Date.now() }
   specialists.set(name, next)
   persist()

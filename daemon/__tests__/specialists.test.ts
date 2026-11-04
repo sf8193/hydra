@@ -18,6 +18,11 @@ const deliver = (specialist: string, extra: Record<string, unknown> = {}) =>
   handleCLIRequest(req('deliver', { specialist, message: 'a mention', initiator: 'forwarder', ...extra }))
 
 describe('specialists', () => {
+  test('a specialist cannot take a default session name', () => {
+    expect(() => setSpecialist('comet', { threadId: 't-1' })).toThrow(/default session name/)
+    expect(getSpecialist('comet')).toBeUndefined()
+  })
+
   const realDeps = { ...specialistDeps }
   const names: string[] = []
   const sessions: string[] = []
