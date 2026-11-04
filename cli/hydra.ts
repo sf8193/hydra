@@ -17,6 +17,9 @@ import { MODEL_ALIASES } from '../shared/constants.js'
 // CLI entry point
 // ---------------------------------------------------------------------------
 
+/** A request that may spawn a session (creating a thread and a tmux session) outlasts the 10 s default. */
+const SPAWNING_REQUEST_TIMEOUT_MS = 60_000
+
 const USAGE = `hydra — manage hydra daemons and sessions
 
 Setup:
@@ -40,6 +43,7 @@ Lifecycle:
 
 Session management:
   hydra spawn <prompt>                 Spawn a new session
+  hydra spawn --specialist <name>      Spawn the session for a declared specialist (its kickoff is the prompt; refuses if it is already filled)
   hydra list                           List active sessions
   hydra status <name>                  Session details
   hydra kill <name>                    Kill a session
@@ -62,7 +66,8 @@ Deliver (whisper channel — message to session context, not thread):
     --queue                            Queue if bridge disconnected (default: fail)
 
 Specialists (named addresses that refill themselves):
-  hydra specialist set <name> --thread <id> [--channel <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
+  hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
+                                       a new specialist needs --channel (its first session opens a thread there) or --thread
   hydra specialist show <name> | list | rm <name>
 
 Slack watches (threads whose replies reach a specialist):
@@ -179,6 +184,7 @@ async function main(): Promise<void> {
       let forceWorktreeCleanup = false
       let readThreadLimit = 0  // 0 = disabled
       let model: string | undefined
+      let specialist: string | undefined
       const promptParts: string[] = []
 
       for (let i = 1; i < filtered.length; i++) {
@@ -210,6 +216,12 @@ async function main(): Promise<void> {
           }
         } else if (filtered[i] === '--model' && i + 1 < filtered.length) {
           model = filtered[++i]
+        } else if (filtered[i] === '--specialist') {
+          if (i + 1 >= filtered.length) {
+            console.error('error: --specialist needs a name')
+            process.exit(1)
+          }
+          specialist = filtered[++i]
         } else if (filtered[i].startsWith('--')) {
           console.error(`error: unknown flag ${filtered[i]}`)
           process.exit(1)
@@ -219,7 +231,19 @@ async function main(): Promise<void> {
       }
 
       let prompt = promptParts.join(' ')
-      if (!prompt) {
+      if (specialist && (prompt || readThreadLimit > 0)) {
+        console.error("error: --specialist uses the specialist's own kickoff as the prompt; drop the prompt and --read-thread")
+        process.exit(1)
+      }
+      if (specialist) {
+        const owned = Object.entries({ '--channel': channel, '--message': message, '--model': model, '--ephemeral': ephemeral || undefined, '--idle-ttl': idleTtl, '--force-cleanup': forceWorktreeCleanup || undefined })
+          .filter(([, v]) => v !== undefined).map(([k]) => k)
+        if (owned.length) {
+          console.error(`error: --specialist takes its channel and model from the declaration; remove ${owned.join(', ')}`)
+          process.exit(1)
+        }
+      }
+      if (!prompt && !specialist) {
         console.error('error: prompt is required')
         process.exit(1)
       }
@@ -246,8 +270,8 @@ async function main(): Promise<void> {
         type: 'cli',
         command: 'spawn',
         id: randomUUID(),
-        params: { prompt, idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(idleTtl !== undefined && { idleTtl }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
-      })
+        params: { ...(specialist ? { specialist } : { prompt }), idempotencyKey, initiator, model, ...(channel && { channel }), ...(message && { message }), ...(quiet && { quiet }), ...(ephemeral && { ephemeral }), ...(idleTtl !== undefined && { idleTtl }), ...(forceWorktreeCleanup && { forceWorktreeCleanup }) },
+      }, specialist ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }
@@ -369,7 +393,7 @@ async function main(): Promise<void> {
           ...(idempotencyKey && { idempotencyKey }),
           ...(queue && { queue }),
         },
-      })
+      }, specialist ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }

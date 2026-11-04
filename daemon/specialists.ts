@@ -5,7 +5,7 @@ import { atomicWriteFileSync } from './util.js'
 import { SESSION_NAMES } from './sessions.js'
 
 /**
- * A specialist is a named pointer to a thread plus the recipe for refilling it.
+ * A specialist is a named pointer to a thread (or the channel to open one in) plus the recipe for filling it.
  *
  * Sessions come and go; a specialist is the stable address a sender means ("the
  * slopbot session"). `hydra deliver --specialist <name>` resolves the specialist's thread to
@@ -14,8 +14,9 @@ import { SESSION_NAMES } from './sessions.js'
  * is: the specialist's `kickoff` carries all of that.
  */
 export type Specialist = {
-  threadId: string
-  /** Channel to open a fresh thread in when `threadId` is no longer a known thread. */
+  /** Where its session lives. Absent until the first spawn: a specialist declared with only a `channel` opens its thread then. */
+  threadId?: string
+  /** Channel to open a fresh thread in when there is no `threadId`, or it is no longer a known thread. */
   channel?: string
   /** The occupant's first prompt. `kickoffFile` wins when both are set: it is re-read on every spawn. */
   kickoff?: string

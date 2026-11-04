@@ -154,6 +154,165 @@ describe('specialists', () => {
     expect(calls[0][3]).toMatchObject({ existingThreadId: 'thread-hist', resurrectFrom: 'comet', model: 'claude-opus-5-5', trigger: `specialist:${name}`, name })
   })
 
+  const cli = (action: string, name: string | undefined, extra: Record<string, unknown> = {}) => handleCLIRequest(req('specialist', { action, ...(name && { name }), ...extra }))
+
+  const spawnAs = (name: string, extra: Record<string, unknown> = {}) => handleCLIRequest(req('spawn', { specialist: name, initiator: 'tester', idempotencyKey: `spawn-as-${++n}`, ...extra }))
+
+  test('a specialist declared with only a channel opens its thread, named for it, on the first delivery', async () => {
+    const calls = fakeSpawn()
+    const name = `t-specialist-${++n}`
+    names.push(name)
+    expect(await cli('set', name, { channel: 'chan-new', kickoff: 'be the slopbot' })).toMatchObject({ ok: true })
+    expect(getSpecialist(name)!.threadId).toBeUndefined()
+    expect((await deliver(name)).ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toBe('chan-new')
+    expect((calls[0][3] as any).existingThreadId).toBeUndefined()
+    expect((calls[0][3] as any).name).toBe(name)
+    expect(getSpecialist(name)!.threadId).toMatch(/^fresh-thread-/)
+  })
+
+  test('a new specialist needs a channel or a thread', async () => {
+    const name = `t-specialist-${++n}`
+    names.push(name)
+    expect(await cli('set', name, { kickoff: 'x' })).toMatchObject({ ok: false, error: expect.stringContaining('--channel') })
+    expect(getSpecialist(name)).toBeUndefined()
+  })
+
+  test('spawn --specialist fills a vacant specialist; a second spawn, concurrent or later, refuses naming the occupant', async () => {
+    const calls = fakeSpawn()
+    const name = `t-specialist-${++n}`
+    names.push(name)
+    await cli('set', name, { channel: 'chan-up', kickoff: 'be the slopbot' })
+    const results = await Promise.all([spawnAs(name), spawnAs(name)]) as any[]
+    expect(calls).toHaveLength(1) // one spawn, however many callers
+    const ok = results.find(r => r.ok)
+    const refused = results.find(r => !r.ok)
+    const filledBy: string = ok.data.name // read before toMatchObject, which leaves its matchers in the object under Bun
+    expect(ok.data.threadId).toBe(getSpecialist(name)!.threadId)
+    expect(refused.exitCode).toBe(3)
+    expect(refused.error).toContain('already filled by')
+    expect(refused.error).toContain(filledBy)
+    expect(await spawnAs(name)).toMatchObject({ ok: false, exitCode: 3 })
+    expect(calls).toHaveLength(1)
+    expect((calls[0][3] as any).initiator).toBe('tester')
+    expect((calls[0][3] as any).name).toBe(name)
+  })
+
+  test('spawn --specialist: an unknown name, flags the declaration owns, a repeated key, and the refill back-off', async () => {
+    const calls = fakeSpawn()
+    expect(await spawnAs('no-such-one')).toMatchObject({ ok: false, error: expect.stringContaining('not found') })
+    const sid = occupy('thread-spawn-live')
+    const live = specialist('thread-spawn-live')
+    const filled = await spawnAs(live) as any
+    expect(filled).toMatchObject({ ok: false, exitCode: 3 })
+    expect(filled.error).toContain(`${sid}-tmux`)
+    expect(calls).toHaveLength(0)
+
+    const e = await spawnAs(live, { prompt: 'do x', model: 'm', channel: 'c' }) as any
+    expect(e.ok).toBe(false)
+    expect(e.error).toContain('prompt, channel, model')
+
+    const key = `spawn-key-${++n}`
+    const vacant = specialist('thread-spawn-vacant', { channel: 'c' })
+    expect((await spawnAs(vacant, { idempotencyKey: key }) as any).ok).toBe(true)
+    expect(await spawnAs(vacant, { idempotencyKey: key })).toMatchObject({ ok: false, exitCode: 2 })
+
+    let attempts = 0
+    specialistDeps.spawn = (async () => { attempts++; throw new Error('tmux exploded') }) as typeof specialistDeps.spawn
+    const bad = specialist('thread-spawn-bad', { channel: 'c' })
+    expect(await deliver(bad)).toMatchObject({ ok: false, error: 'tmux exploded' })
+    expect(await deliver(bad)).toMatchObject({ ok: false, exitCode: 6 }) // an automatic refill waits out the back-off
+    expect(await spawnAs(bad)).toMatchObject({ ok: false, error: 'tmux exploded' }) // an operator's spawn tries now
+    expect(attempts).toBe(2)
+    expect(((await cli('show', bad)) as any).data.refillBackoff.failures).toBe(2) // and its failure counts
+    fakeSpawn()
+    expect((await spawnAs(bad) as any).ok).toBe(true)
+    expect(((await cli('show', bad)) as any).data.refillBackoff).toBeUndefined() // a manual success clears it
+  })
+
+  test('show and list say who fills the specialist and whether refills are backing off', async () => {
+    const sid = occupy('thread-show')
+    const filled = specialist('thread-show')
+    expect(await cli('show', filled)).toMatchObject({ ok: true, data: { name: filled, occupant: { session: `${sid}-tmux`, connected: false } } })
+    specialistDeps.spawn = (async () => { throw new Error('tmux exploded') }) as typeof specialistDeps.spawn
+    const bad = specialist('thread-show-bad', { channel: 'c' })
+    await deliver(bad)
+    const listed = (await cli('list', undefined) as any).data.find((s: any) => s.name === bad)
+    expect(listed.occupant).toBeUndefined()
+    expect(listed.refillBackoff).toMatchObject({ failures: 1 })
+  })
+
+  test('a set or rm that lands while the spawn is running is not undone when the new thread is recorded', async () => {
+    const name = `t-specialist-${++n}`
+    names.push(name)
+    await cli('set', name, { channel: 'chan-race', kickoff: 'old kickoff' })
+    specialistDeps.spawn = (async () => {
+      await Bun.sleep(30)
+      const threadId = `fresh-thread-${++n}`
+      const sessionId = occupy(threadId)
+      return { name: `${sessionId}-tmux`, sessionId, threadId, url: '' }
+    }) as typeof specialistDeps.spawn
+    const up = spawnAs(name)
+    await Bun.sleep(5)
+    await cli('set', name, { kickoff: 'new kickoff', model: 'm-2' }) // lands mid-spawn
+    expect(await up).toMatchObject({ ok: true })
+    expect(getSpecialist(name)).toMatchObject({ kickoff: 'new kickoff', model: 'm-2' })
+    expect(getSpecialist(name)!.threadId).toMatch(/^fresh-thread-/) // and the new thread is still recorded, on top of the newer declaration
+
+    const gone = `t-specialist-${++n}`
+    names.push(gone)
+    await cli('set', gone, { channel: 'chan-race', kickoff: 'k' })
+    const up2 = spawnAs(gone)
+    await Bun.sleep(5)
+    await cli('rm', gone)
+    await up2
+    expect(getSpecialist(gone)).toBeUndefined() // a removed specialist stays removed
+  })
+
+  test('a set --thread that lands while the spawn is running wins; the call fails naming the stray session, which keeps running', async () => {
+    const name = `t-specialist-${++n}`
+    names.push(name)
+    await cli('set', name, { channel: 'chan-repoint', kickoff: 'k' })
+    let strayThread = ''
+    specialistDeps.spawn = (async () => {
+      await Bun.sleep(30)
+      strayThread = `fresh-thread-${++n}`
+      const sessionId = occupy(strayThread)
+      return { name: `${sessionId}-tmux`, sessionId, threadId: strayThread, url: '' }
+    }) as typeof specialistDeps.spawn
+    const key = `spawn-repoint-${++n}`
+    const up = spawnAs(name, { idempotencyKey: key })
+    await Bun.sleep(5)
+    await cli('set', name, { thread: 'thread-chosen-by-operator' })
+    const res = await up as any
+    const error: string = res.error // read before toMatchObject, which leaves the matcher in its place under Bun
+    expect(res.ok).toBe(false)
+    expect(res.exitCode).toBe(3)
+    expect(getIdempotencyEntry(key)).toMatchObject({ status: 'spawned' }) // a session did start: a retry with this key is blocked
+    expect(error).toContain('re-pointed to thread thread-chosen-by-operator')
+    expect(error).toContain(strayThread)
+    expect(getSpecialist(name)!.threadId).toBe('thread-chosen-by-operator') // the operator's choice survives
+    expect(registry.getByThread(strayThread)).toBeDefined() // and the stray session is left alone
+  })
+
+  test('a live session holding the specialist\'s name elsewhere makes a fill refuse (exit 3, naming it) without counting as a failed refill', async () => {
+    const calls = fakeSpawn()
+    const name = specialist('thread-own', { channel: 'c' })
+    const strayId = occupy('thread-elsewhere', { tmuxName: name })
+    for (const attempt of [1, 2]) {
+      const res = await deliver(name) as any
+      expect(res.ok).toBe(false)
+      expect(res.exitCode).toBe(3) // not 6: this is not a back-off
+      expect(res.error).toContain('thread-elsewhere')
+      void attempt
+    }
+    const manual = await spawnAs(name) as any
+    expect(manual.exitCode).toBe(3)
+    expect(calls).toHaveLength(0)
+    expect(registry.get(strayId)).toBeDefined()
+  })
+
   test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {
     const calls = fakeSpawn()
     specialistDeps.threadExists = async () => false

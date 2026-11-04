@@ -384,14 +384,15 @@ export function resolveSocket(daemonName?: string): string {
   process.exit(1)
 }
 
-export function sendRequest(socketPath: string, request: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** `timeoutMs`: how long to wait for the reply; a request that spawns a session needs more than the default. */
+export function sendRequest(socketPath: string, request: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const socket = connect(socketPath)
     let buf = ''
     const timeout = setTimeout(() => {
       socket.destroy()
       reject(new Error('connection timed out'))
-    }, 10_000)
+    }, timeoutMs)
 
     socket.on('connect', () => {
       socket.write(JSON.stringify(request) + '\n')

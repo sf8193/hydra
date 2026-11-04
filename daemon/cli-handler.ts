@@ -7,7 +7,7 @@ import { formatContextPercent, type DeliveryResult } from './engines/engine-adap
 import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
-import { deliverToSpecialist } from './specialist-deliver.js'
+import { deliverToSpecialist, spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
@@ -72,7 +72,8 @@ function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?
 // ---------------------------------------------------------------------------
 
 async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
-  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, forceWorktreeCleanup, quiet, model } = req.params as {
+  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, forceWorktreeCleanup, quiet, model, specialist } = req.params as {
+    specialist?: string
     prompt?: string
     initiator?: string
     idempotencyKey?: string
@@ -85,7 +86,11 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
     model?: string
   }
 
-  if (!prompt) return respond(req, false, 'prompt is required')
+  if (specialist) {
+    // The declaration is the recipe: its kickoff is the prompt, and its channel and model are the spawn's.
+    const given = Object.entries({ prompt, channel, message, model, ephemeral, idleTtl, forceWorktreeCleanup }).filter(([, v]) => v !== undefined && v !== false).map(([k]) => k)
+    if (given.length) return respond(req, false, `--specialist takes the prompt, channel and model from the specialist's declaration; remove: ${given.join(', ')}`)
+  } else if (!prompt) return respond(req, false, 'prompt is required')
   let idleTtlMs: number | undefined
   if (idleTtl !== undefined) {
     if (!ephemeral) return respond(req, false, '--idle-ttl only applies to --ephemeral spawns')
@@ -107,9 +112,19 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
 
   let result
   try {
-    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
+    if (specialist) {
+      const filled = await spawnSpecialist(specialist, initiator)
+      result = { sessionId: filled.info.sessionId, name: filled.info.tmuxName, threadId: filled.info.threadId, url: filled.url }
+    } else {
+      result = await doSpawnSession(prompt!, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
+    }
   } catch (err) {
-    updateIdempotency(idempotencyKey, { status: 'failed' })
+    if (!(err instanceof SpecialistError && err.sessionId)) updateIdempotency(idempotencyKey, { status: 'failed' })
+    if (err instanceof SpecialistError) {
+      // A session that did start (a re-point during the spawn) keeps the key, so a retry is blocked.
+      if (err.sessionId) updateIdempotency(idempotencyKey, { status: 'spawned', sessionId: err.sessionId })
+      return respond(req, false, err.message, undefined, err.exitCode)
+    }
     throw err
   }
 
@@ -363,9 +378,9 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 // Specialists — named, refillable addresses (see specialists.ts)
 // ---------------------------------------------------------------------------
 
-function handleSpecialist(req: CLIRequest): CLIResponse {
+async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
   const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string }
-  const view = (name: string, s: Specialist) => ({ name, ...s })
+  const view = (name: string, s: Specialist) => ({ name, ...s, ...specialistStatus(name) })
   switch (p.action) {
     case 'list': return respond(req, true, listSpecialists().map(([name, s]) => view(name, s)))
     case 'show': {
@@ -381,13 +396,13 @@ function handleSpecialist(req: CLIRequest): CLIResponse {
       if (!p.name) return respond(req, false, 'specialist name is required')
       const existing = getSpecialist(p.name)
       const threadId = p.thread ?? existing?.threadId
-      if (!threadId) return respond(req, false, '--thread is required for a new specialist')
+      if (!threadId && !(p.channel ?? existing?.channel)) return respond(req, false, '--channel (where to open its thread) or --thread is required for a new specialist')
       if (p.kickoffFile && !existsSync(p.kickoffFile)) return respond(req, false, `kickoff file not found: ${p.kickoffFile}`)
       // Fields not passed keep their current value, so re-pointing a specialist's thread leaves its kickoff alone.
       const { updatedAt: _t, ...rest } = existing ?? { updatedAt: 0 }
       const specialist = setSpecialist(p.name, {
         ...rest,
-        threadId,
+        ...(threadId && { threadId }),
         ...(p.channel && { channel: p.channel }),
         ...(p.kickoff && { kickoff: p.kickoff }),
         ...(p.kickoffFile && { kickoffFile: p.kickoffFile }),
@@ -445,7 +460,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
       case 'deliver': response = await handleDeliver(req); break
-      case 'specialist': response = handleSpecialist(req); break
+      case 'specialist': response = await handleSpecialist(req); break
       case 'slack-watch': response = handleSlackWatch(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
