@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isSessionWorking, isSessionWorkingAsync } from '../session-activity.js'
+import { isSessionWorking, isSessionWorkingAsync, sessionLiveAsync } from '../session-activity.js'
 import { engines } from '../engines/instances.js'
 import { CLAUDE_WORKING_SILENCE_S } from '../engines/claude-engine.js'
 import { CODEX_WORKING_STALE_MS, defaultTurnSources, isCodexWorking, noteCodexTurnState } from '../engines/codex-observation.js'
@@ -16,6 +16,15 @@ const withLive = (live: LiveState | null, extra: Partial<SessionInfo> = {}) =>
   ({ sessionId: 's1', tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ live, activityAt: null, confirmedComplete: false, answer: () => null }) }), ...extra }) as unknown as SessionInfo
 
 describe('isSessionWorking', () => {
+  test('sessionLiveAsync passes the provider state through alongside working', async () => {
+    const fake = withFakeTmux()
+    try {
+      fake.activity('cedar', Math.floor(Date.now() / 1000) - 120)
+      expect(await sessionLiveAsync(withLive('blocked'))).toEqual({ live: 'blocked', working: false })
+      expect(await sessionLiveAsync(withLive('idle'))).toEqual({ live: 'idle', working: false })
+      expect(await sessionLiveAsync(withLive(null))).toEqual({ live: null, working: false })
+    } finally { fake.restore() }
+  })
   test('the provider signal decides when it has one; tmux is not consulted', async () => {
     const fake = withFakeTmux()
     try {

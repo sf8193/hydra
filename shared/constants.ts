@@ -311,3 +311,5 @@ export const SESSION_INSTRUCTIONS = [
     '',
     'Session management: When the user says "new session: <topic>", call spawn_session with that topic, the current chat_id, and the message_id of the triggering message. This threads on their message and spawns an isolated Claude session. Use list_sessions to check active sessions and kill_session to terminate them. IMPORTANT: After spawning, reply with the session name AND the thread URL from the result, e.g. "Spawned session **spark** — <url>". Always include the URL so it renders as a clickable link. When the user asks for a worktree session or mentions working in an isolated branch, pass the worktree parameter with the repo subdirectory name (e.g. worktree: "options_bot").',
   ].join('\n')
+
+export const HOME_STATUS_ACTION_PREFIX = 'home:status:'

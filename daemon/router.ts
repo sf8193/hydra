@@ -37,6 +37,7 @@ import { isAlive, reportError } from './util.js'
 import type { ProviderId, TmuxKeyAction } from './engines/engine-adapter.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
+import { markUserMessaged } from './home-status.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
 // commands (fork, watch, build, respawn, resume) are excluded: those are
@@ -283,6 +284,8 @@ async function deliverToSession(msg: InboundMessage, targetSessionId: string, ac
   const sessionInfo = registry.get(targetSessionId)
   if (sessionInfo) {
     sessionInfo.messageCount = (sessionInfo.messageCount ?? 0) + 1
+    markUserMessaged(sessionInfo)
+    registry.debouncedPersist()
     const thread = threadRegistry.get(sessionInfo.threadId)
     if (thread) thread.totalMessages++
 
@@ -352,6 +355,7 @@ gateway.onMessageDelete((messageId, threadId) => {
   } else {
     if (info.lastReplyId === messageId) {
       info.lastReplyId = undefined
+      info.lastReplyAt = undefined
       registry.persist()
     }
   }

@@ -205,7 +205,9 @@ describe('T0.7 engine events', () => {
     ;(gateway as any).send = async (c: string, text: string) => { sent.push([c, text]); return { id: 'x', channelId: c } }
     try {
       const info = put({ sessionId: 't07-warn' })
+      const before = Date.now()
       codexEngine.emit('turnStalled', 't07-warn', 'no progress for 20 minutes')
+      expect(info.lastReplyAt).toBeGreaterThanOrEqual(before)
       codexEngine.emit('turnStalled', 't07-warn', '')
       codexEngine.emit('turnDeliveryUnknown', 't07-warn', 'text', new Error('socket lost'))
       codexEngine.emit('usageWarning', 't07-warn', 87)

@@ -49,6 +49,7 @@ const T0 = 1_000_000_000
 const testSessions = new Map<string, SessionInfo>()
 const connectedBridges = new Map<string, string[]>()
 const escalations: Array<{ channelId: string; text: string }> = []
+let persists = 0
 
 function fakeBridge(sessionId: string): string[] {
   const sent: string[] = []
@@ -101,7 +102,9 @@ beforeEach(() => {
   testSessions.clear()
   connectedBridges.clear()
   escalations.length = 0
+  persists = 0
   _setDeps({
+    persist: () => { persists++ },
     registryGet: (id) => testSessions.get(id),
     registryValues: () => testSessions.values(),
     transportHas: (id) => connectedBridges.has(id),
@@ -259,6 +262,26 @@ describe('notePendingFromQueue', () => {
 })
 
 describe('handleSilenceEvent — no nudge message, but a real grace window before escalating', () => {
+  test('an escalation in the session\'s own thread marks it as waiting on the user', () => {
+    const info = liveSession('s1')
+    fakeBridge('s1')
+    notePendingReply('s1', meta({ chat_id: 'thread-1' }), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(armThenAdvance('cedar', T0 + 60_000)).toBe(1)
+    expect(info.lastReplyAt).toBe(T0 + 60_000 + _ESCALATION_GRACE_MS)
+    expect(persists).toBe(1)
+  })
+
+  test('an escalation in another chat leaves the session\'s own marker alone', () => {
+    const info = liveSession('s1')
+    fakeBridge('s1')
+    notePendingReply('s1', meta({ chat_id: 'other-chat' }), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(armThenAdvance('cedar', T0 + 60_000)).toBe(1)
+    expect(info.lastReplyAt).toBeUndefined()
+    expect(persists).toBe(0)
+  })
+
   test('the FIRST silence event only arms the grace window — no escalation yet', () => {
     fakeBridge('main')
     notePendingReply('main', meta(), T0)

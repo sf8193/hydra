@@ -48,6 +48,8 @@ export type SessionInfo = {
   resumeCount?: number
   threadUrl?: string
   lastReplyId?: string
+  lastReplyAt?: number
+  lastUserMessageAt?: number
   worktreeRepo?: string
   worktreePath?: string
   worktreeBranch?: string
