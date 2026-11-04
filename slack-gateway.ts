@@ -9,6 +9,7 @@
 import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { sanitizeFilename } from './gateway.js'
+import { SocketSupervisor } from './shared/socket-supervisor.js'
 import { ThrottledQueue } from './throttled-queue.js'
 import type {
   ChatGateway,
@@ -28,14 +29,6 @@ import type {
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200
 
-const HEALTH_CHECK_MS = 60_000
-const HEALTH_CHECK_FAST_MS = 10_000
-const STALE_THRESHOLD_MS = 3 * 60_000
-const HEARTBEAT_WRITE_THROTTLE_MS = 10_000
-const MAX_RECONNECT_ATTEMPTS = 6
-const RECONNECT_BACKOFF_BASE_MS = 10_000
-const RECONNECT_BACKOFF_CAP_MS = 5 * 60_000
-const NETWORK_CHECK_TIMEOUT_MS = 5_000
 
 /**
  * Slack renders FULL Markdown — tables, `-`/`*` lists, headings, code fences — only via the
@@ -110,48 +103,34 @@ export class SlackGateway implements ChatGateway {
   private static readonly SEND_RATE_MS = 1200 // 50 msg/min → 1.2s between calls
   private appToken: string
   private token: string | null = null
-  private lastEventAt = Date.now()
-  private lastHeartbeatWrite = 0
-  private healthInterval: ReturnType<typeof setInterval> | null = null
   private heartbeatPath: string | null = null
-  private staleThresholdMs: number
-  private reconnecting = false
-  private reconnectAttempts = 0
-  private socketConnected = false
-  private transportHooked = false
-  private socketGeneration = 0
-  private disconnectedSince: number | null = null
+  private readonly sup: SocketSupervisor
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
 
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
-    if (this.reconnecting) return { ok: false, message: 'reconnect already in progress' }
-    // Hold the same mutex reconnect() uses so the health-tick reconnect can't
-    // interleave with this and run a second concurrent start() on this.app.
-    this.reconnecting = true
-    try {
-      const networkUp = await this.checkNetwork()
-      if (!networkUp) return { ok: false, message: 'network unreachable' }
-      const gapMs = Date.now() - this.lastEventAt
-      await this.start(this.token!)
-      this.reconnectAttempts = 0
-      this.setHealthCheckInterval(HEALTH_CHECK_MS)
-      if (gapMs > 10 * 60_000 && this.onReconnectAfterOutage) {
-        this.onReconnectAfterOutage(gapMs)
-      }
-      return { ok: true, message: 'reconnected' }
-    } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : String(err) }
-    } finally {
-      this.reconnecting = false
-    }
+    return this.sup.forceReconnect()
   }
 
   constructor(appToken: string, opts?: { heartbeatPath?: string; staleThresholdMs?: number }) {
     this.appToken = appToken
     this.heartbeatPath = opts?.heartbeatPath ?? null
-    this.staleThresholdMs = opts?.staleThresholdMs ?? STALE_THRESHOLD_MS
+    // Keeping the connection alive is the supervisor's job (shared with the Slack-watch listener).
+    // What to do when it cannot is the gateway's call: exit, so the watchdog restarts the daemon.
+    this.sup = new SocketSupervisor({
+      name: 'slack gateway',
+      start: () => this.start(this.token!),
+      emitter: () => (this.app as any)?.receiver?.client ?? null,
+      healthUrl: this.healthCheckUrl,
+      staleThresholdMs: opts?.staleThresholdMs,
+      writeHeartbeat: () => this.writeHeartbeat(),
+      onGap: gapMs => this.onReconnectAfterOutage?.(gapMs),
+      onExhausted: () => {
+        process.stderr.write('slack gateway: exiting for supervisor restart\n')
+        process.exit(1)
+      },
+    })
   }
 
   get botId(): string | null {
@@ -348,10 +327,10 @@ export class SlackGateway implements ChatGateway {
     // recency. (ws_message fires only on Slack data frames, never on the ws-level
     // ping/pong keepalive — so staleness must NOT key off ws_message recency.)
     // Must be attached before start() so the initial 'connected' is observed.
-    this.attachTransportHeartbeat()
+    this.sup.attach()
 
     await this.app.start()
-    // socketConnected/disconnectedSince are set by the generation-guarded
+    // The supervisor's connected/downSince are set by its generation-guarded
     // 'connected' listener, which has already fired by the time start() resolves
     // (Bolt resolves start() on the Connected event). Don't set them unguarded
     // here — a raced/orphaned start() could otherwise stomp a dead socket as
@@ -373,16 +352,11 @@ export class SlackGateway implements ChatGateway {
     }
 
     this.touchHeartbeat()
-    if (!this.healthInterval) {
-      this.startHealthCheck()
-    }
+    this.sup.begin()
   }
 
   async stop(): Promise<void> {
-    if (this.healthInterval) {
-      clearInterval(this.healthInterval)
-      this.healthInterval = null
-    }
+    this.sup.stop()
     if (this.app) {
       await this.app.stop()
     }
@@ -877,56 +851,10 @@ export class SlackGateway implements ChatGateway {
     }
   }
 
-  // --- Heartbeat & self-heal ---
-
-  // Hook the Socket Mode client so liveness reflects the connection itself. The
-  // client pings every 5s, times out the server at 30s, and auto-reconnects on a
-  // real drop; an idle-but-connected socket gets no business events, so the old
-  // "no event in STALE_THRESHOLD_MS" check reconnected a healthy connection every
-  // few minutes, briefly stacking concurrent WebSockets.
-  private attachTransportHeartbeat(): void {
-    try {
-      const client = (this.app as any)?.receiver?.client
-      if (!client || typeof client.on !== 'function') {
-        this.transportHooked = false
-        process.stderr.write('slack gateway: WARN could not hook Socket Mode client; falling back to event-time staleness\n')
-        return
-      }
-      // Bump the generation and capture it in each listener. Bolt's app.stop()
-      // tears the old socket down asynchronously and never removes our listeners,
-      // so a prior client can emit lifecycle events after we've already replaced
-      // it — those must no-op rather than write the shared flags for a dead socket.
-      const gen = ++this.socketGeneration
-      client.on('connected', () => {
-        if (gen !== this.socketGeneration) return
-        this.socketConnected = true
-        this.disconnectedSince = null
-        this.touchHeartbeat()
-      })
-      client.on('ws_message', () => {
-        if (gen !== this.socketGeneration) return
-        this.touchHeartbeat()
-      })
-      for (const down of ['connecting', 'reconnecting', 'disconnecting', 'disconnected']) {
-        client.on(down, () => {
-          if (gen !== this.socketGeneration) return
-          this.socketConnected = false
-          if (this.disconnectedSince === null) this.disconnectedSince = Date.now()
-        })
-      }
-      this.transportHooked = true
-    } catch (err) {
-      this.transportHooked = false
-      process.stderr.write(`slack gateway: WARN failed to hook Socket Mode client: ${err}\n`)
-    }
-  }
+  // --- Heartbeat ---
 
   private touchHeartbeat(): void {
-    this.lastEventAt = Date.now()
-    if (this.heartbeatPath && (this.lastEventAt - this.lastHeartbeatWrite > HEARTBEAT_WRITE_THROTTLE_MS)) {
-      this.lastHeartbeatWrite = this.lastEventAt
-      this.writeHeartbeat()
-    }
+    this.sup.touch()
   }
 
   private writeHeartbeat(): void {
@@ -934,100 +862,6 @@ export class SlackGateway implements ChatGateway {
     try {
       writeFileSync(this.heartbeatPath, String(Date.now()) + '\n')
     } catch {}
-  }
-
-  private healthCheckMs = HEALTH_CHECK_MS
-
-  private startHealthCheck(): void {
-    if (this.healthInterval) clearInterval(this.healthInterval)
-    this.healthInterval = setInterval(async () => {
-      const now = Date.now()
-      // Health is the socket's own connection state: socket-mode pings every 5s,
-      // times out the server at 30s, and auto-reconnects faster than this watchdog.
-      // Only intervene once it has been *continuously* disconnected past the
-      // threshold — a transient reconnect self-heals and clears disconnectedSince,
-      // so a self-healing blip never trips it. Without the transport hook
-      // (unexpected Bolt internals), fall back to the old event-time staleness.
-      const stale = this.transportHooked
-        ? (!this.socketConnected && this.disconnectedSince !== null && (now - this.disconnectedSince) > this.staleThresholdMs)
-        : ((now - this.lastEventAt) > this.staleThresholdMs)
-      if (stale) {
-        const downFor = this.disconnectedSince !== null ? now - this.disconnectedSince : now - this.lastEventAt
-        process.stderr.write(`slack gateway: socket down ${Math.round(downFor / 1000)}s (connected=${this.socketConnected}), attempting reconnect\n`)
-        await this.reconnect()
-      }
-      // While hooked: withhold the file once the socket has been disconnected past
-      // the threshold, so watchdog.sh restarts a wedged daemon. In fallback mode we
-      // can't read socket state, so keep writing unconditionally and rely on the
-      // in-process reconnect()/exit-after-MAX path — a genuinely dead socket makes
-      // start() throw there, which escalates to exit(1) for a supervisor restart.
-      if (!this.transportHooked || !stale) this.writeHeartbeat()
-    }, this.healthCheckMs)
-    this.healthInterval.unref()
-  }
-
-  private setHealthCheckInterval(ms: number): void {
-    if (ms === this.healthCheckMs) return
-    this.healthCheckMs = ms
-    this.startHealthCheck()
-  }
-
-  private async checkNetwork(): Promise<boolean> {
-    try {
-      const resp = await fetch(this.healthCheckUrl, { signal: AbortSignal.timeout(NETWORK_CHECK_TIMEOUT_MS) })
-      return resp.ok
-    } catch {
-      return false
-    }
-  }
-
-  // Network-aware reconnect with exponential backoff. If network is down, poll
-  // fast (10s). If network is up but Slack API fails, back off exponentially
-  // (10s → 20s → 40s … capped at 5min) instead of exiting for supervisor restart.
-  private async reconnect(): Promise<void> {
-    if (this.reconnecting) return
-    this.reconnecting = true
-    try {
-      const networkUp = await this.checkNetwork()
-      if (!networkUp) {
-        this.setHealthCheckInterval(HEALTH_CHECK_FAST_MS)
-        process.stderr.write(`slack gateway: network unreachable, polling every ${HEALTH_CHECK_FAST_MS / 1000}s\n`)
-        this.reconnectAttempts = 0
-        // Keep the heartbeat fresh during a network outage so watchdog.sh doesn't
-        // restart-storm a daemon that can't connect anyway — matches watchdog.sh's
-        // own "skip restart when the health URL is unreachable" policy.
-        this.writeHeartbeat()
-        return
-      }
-      this.reconnectAttempts++
-      if (this.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-        process.stderr.write(`slack gateway: ${this.reconnectAttempts} reconnect attempts exhausted (network is up), exiting for supervisor restart\n`)
-        process.exit(1)
-      }
-      const gapMs = Date.now() - this.lastEventAt
-      // Timeout the reconnect — Bolt SocketMode can hang indefinitely on start()
-      const startTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('start() timed out after 30s')), 30_000),
-      )
-      await Promise.race([this.start(this.token!), startTimeout])
-      this.lastEventAt = Date.now() // prevent immediate stale re-detection
-      this.reconnectAttempts = 0
-      this.setHealthCheckInterval(HEALTH_CHECK_MS)
-      process.stderr.write(`slack gateway: reconnected successfully (gap was ${Math.round(gapMs / 1000)}s)\n`)
-      if (gapMs > 10 * 60_000 && this.onReconnectAfterOutage) {
-        this.onReconnectAfterOutage(gapMs)
-      }
-    } catch (err) {
-      const backoffMs = Math.min(RECONNECT_BACKOFF_BASE_MS * Math.pow(2, this.reconnectAttempts - 1), RECONNECT_BACKOFF_CAP_MS)
-      this.setHealthCheckInterval(backoffMs)
-      process.stderr.write(`slack gateway: reconnect attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} failed, next check in ${Math.round(backoffMs / 1000)}s: ${err}\n`)
-      // Deliberately do NOT refresh the heartbeat file here: the network is up but
-      // the Slack reconnect is failing, so let the file age past watchdog.sh's
-      // threshold and let it restart us — in parallel with the in-process
-      // exit-after-MAX_RECONNECT_ATTEMPTS — instead of masking a wedged socket.
-    } finally {
-      this.reconnecting = false
-    }
   }
 
   async publishHomeTab(userId: string, blocks: any[]): Promise<void> {
