@@ -108,6 +108,16 @@ export function listTemplates(): Array<{ name: string; prompt: string; action?: 
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
+export function formatTemplateList(templates: ReturnType<typeof listTemplates>): string {
+  const blocks = templates.map(t => {
+    const actionTag = t.action ? ` _(+ ${t.action} protocol)_` : ''
+    const modelTag = t.model ? ` \`[${t.model}]\`` : ''
+    const quoted = t.prompt.split('\n').map(line => `> ${line}`).join('\n')
+    return `**${t.name}**${actionTag}${modelTag}\n${quoted}`
+  })
+  return ['**Spawn Templates**', ...blocks].join('\n\n')
+}
+
 export function parseTemplateTopic(raw: string): { templateName: string; template: SpawnTemplate; topic: string } | null {
   const colonIdx = raw.indexOf(':')
   if (colonIdx <= 0) return null
