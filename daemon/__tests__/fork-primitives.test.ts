@@ -373,11 +373,11 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
   test('prompts: a fork keeps buildForkPrompt', async () => {
     seedDead()
     await doSpawnSession('q2', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' } })
-    const l = launches[1]
+    const l = launches[0]
     expect(l.prompt).toBe(hydraPrompt(buildForkPrompt({ sessionId: l.sessionId, tmuxName: l.tmuxName, threadId: THREAD, topic: 'q2', originFrom: 'elder' })))
 
     await doSpawnSession('q3', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' }, promptPrefix: 'PREFIX' })
-    expect(launches[2].prompt.startsWith('<hydra-prompt>\nPREFIX\n\n')).toBe(true)
+    expect(launches[1].prompt.startsWith('<hydra-prompt>\nPREFIX\n\n')).toBe(true)
   })
 
   test('prompts: a handoff successor with a predecessor gets the fork recipe; without one the prompt is unchanged', async () => {
@@ -389,7 +389,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
 
     live().deadAt = Date.now()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: 'elder', artifact: '/h.md', predecessor: pred })
-    expect(launches[1].prompt).toContain('spawn_session(fork_from="predecessor", read_only=true, phase_budget="5m", topic="<question>")')
+    expect(launches[1].prompt).toContain('spawn_session(fork_from="predecessor", read_only=true, phase_budget="5m", topic="<question>; reply with send_to_thread(target=\\"parent\\", type=\\"result\\")")')
     expect(launches[1].prompt).toContain('call ask_predecessor(question)')
     expect(launches[1].prompt).toBe(hydraPrompt(buildHandoffPrompt({ ...base(launches[1]), hasPredecessor: true, canAsk: true })))
 
@@ -484,8 +484,21 @@ describe('spawn_session fork_from and read_only', () => {
     ;(registry as any).persist = orig.persist; (threadRegistry as any).persist = orig.tpersist
     if (orig.spawnCwd === undefined) delete process.env.SPAWN_CWD; else process.env.SPAWN_CWD = orig.spawnCwd
   })
-  beforeEach(() => { fake = withFakeTmux(); dir = mkdtempSync(join(tmpdir(), 'fp-src-')); launches.length = 0; ompLaunches.length = 0 })
+  const THREAD_STUBS = ['send', 'react', 'edit', 'fetchChannel', 'getThreadUrl', 'createThread'] as const
+  const savedGateway: Record<string, unknown> = {}
+  let threadCounter = 0
+  beforeEach(() => {
+    fake = withFakeTmux(); dir = mkdtempSync(join(tmpdir(), 'fp-src-')); launches.length = 0; ompLaunches.length = 0
+    for (const k of THREAD_STUBS) savedGateway[k] = (gateway as any)[k]
+    ;(gateway as any).send = async (c: string) => ({ id: 'm', channelId: c })
+    ;(gateway as any).react = async () => {}
+    ;(gateway as any).edit = async () => {}
+    ;(gateway as any).fetchChannel = async () => ({ isThread: false, isDM: false })
+    ;(gateway as any).getThreadUrl = async () => 'https://x/thread'
+    ;(gateway as any).createThread = async () => ({ id: `fs-spawned-thread-${++threadCounter}`, url: 'https://x/thread' })
+  })
   afterEach(() => {
+    for (const k of THREAD_STUBS) (gateway as any)[k] = savedGateway[k]
     for (const s of [...registry.values()]) if (s.sessionId.startsWith('fs-') || s.initiator?.startsWith('fs')) registry.delete(s.sessionId)
     rmSync(dir, { recursive: true, force: true })
     fake.restore()

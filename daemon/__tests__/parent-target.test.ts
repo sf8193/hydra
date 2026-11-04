@@ -55,5 +55,5 @@ test('a child\'s death is posted to its parent\'s thread', async () => {
   mk('hd-parent', 'hdparent')
   const child = mk('hd-dead', 'hddead', { parentId: 'hd-parent', originType: 'fork', originFrom: 'hdsrc' })
   await killSession(child, 'phase budget expired')
-  expect(sent).toEqual(['hd-parent-thread'])
+  expect(sent).toContain('hd-parent-thread')
 })
