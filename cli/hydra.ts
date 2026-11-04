@@ -17,6 +17,9 @@ import { MODEL_ALIASES } from '../shared/constants.js'
 // CLI entry point
 // ---------------------------------------------------------------------------
 
+/** A request that may spawn a session (creating a thread and a tmux session) outlasts the 10 s default. */
+const SPAWNING_REQUEST_TIMEOUT_MS = 60_000
+
 const USAGE = `hydra — manage hydra daemons and sessions
 
 Setup:
@@ -371,7 +374,7 @@ async function main(): Promise<void> {
           ...(idempotencyKey && { idempotencyKey }),
           ...(queue && { queue }),
         },
-      })
+      }, specialist ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }
@@ -402,7 +405,7 @@ async function main(): Promise<void> {
           ...(flags['kickoff-file'] && { kickoffFile: resolve(flags['kickoff-file']) }),
           ...(flags.model && { model: flags.model }),
         },
-      })
+      }, action === 'up' ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }

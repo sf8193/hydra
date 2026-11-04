@@ -102,8 +102,11 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
   }
   spawnBackoff.delete(name)
 
-  if (result.threadId !== specialist.threadId) {
-    const { updatedAt: _t, ...rest } = specialist
+  // `set` and `rm` do not take the lock and the spawn took seconds: write against what is stored now, not the copy read before it.
+  // A specialist removed meanwhile stays removed; one re-pointed meanwhile keeps its new thread.
+  const current = getSpecialist(name)
+  if (current && current.threadId === specialist.threadId && result.threadId !== current.threadId) {
+    const { updatedAt: _t, ...rest } = current
     // The session is already running in the new thread; a failed write must not fail this delivery.
     try { setSpecialist(name, { ...rest, threadId: result.threadId }) } catch (err) {
       process.stderr.write(`daemon: specialist ${name}: could not record its new thread ${result.threadId}: ${err}\n`)

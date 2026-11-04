@@ -215,6 +215,33 @@ describe('specialists', () => {
     expect(listed.refillBackoff).toMatchObject({ failures: 1 })
   })
 
+  test('a set or rm that lands while the spawn is running is not undone when the new thread is recorded', async () => {
+    const name = `t-specialist-${++n}`
+    names.push(name)
+    await cli('set', name, { channel: 'chan-race', kickoff: 'old kickoff' })
+    specialistDeps.spawn = (async () => {
+      await Bun.sleep(30)
+      const threadId = `fresh-thread-${++n}`
+      const sessionId = occupy(threadId)
+      return { name: `${sessionId}-tmux`, sessionId, threadId, url: '' }
+    }) as typeof specialistDeps.spawn
+    const up = cli('up', name)
+    await Bun.sleep(5)
+    await cli('set', name, { kickoff: 'new kickoff', model: 'm-2' }) // lands mid-spawn
+    expect(await up).toMatchObject({ ok: true })
+    expect(getSpecialist(name)).toMatchObject({ kickoff: 'new kickoff', model: 'm-2' })
+    expect(getSpecialist(name)!.threadId).toMatch(/^fresh-thread-/) // and the new thread is still recorded, on top of the newer declaration
+
+    const gone = `t-specialist-${++n}`
+    names.push(gone)
+    await cli('set', gone, { channel: 'chan-race', kickoff: 'k' })
+    const up2 = cli('up', gone)
+    await Bun.sleep(5)
+    await cli('rm', gone)
+    await up2
+    expect(getSpecialist(gone)).toBeUndefined() // a removed specialist stays removed
+  })
+
   test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {
     const calls = fakeSpawn()
     specialistDeps.threadExists = async () => false
