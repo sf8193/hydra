@@ -198,11 +198,11 @@ describe('private delivery', () => {
     expect(res.isError).toBe(true)
   })
 
-  test('public default is unchanged: posts via the gateway', async () => {
+  test('public default: one line in the thread, the full text to the session', async () => {
     const res = await executeTool('send_to_thread', { target: 'rh-stranger', type: 'progress', text: 'hi' }, 'rh-owner')
     expect(res.isError).toBeUndefined()
     expect(gwSends).toHaveLength(1)
-    expect(res.sentIds).toEqual(['m1'])
+    expect(res.sentIds).toEqual([])
     expect(sends[0].msg.content).toContain('[progress from rh-owner] hi')
   })
 
