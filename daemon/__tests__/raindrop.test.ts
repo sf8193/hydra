@@ -2387,17 +2387,17 @@ describe('raindrop: events', () => {
     expect(factsFromRegistry('mf-1')?.project, 'no stale window at all').toBe('beta')
   })
 
-  // A headless session has no facts ever; reading its transcript would advance
-  // the cursor past spend that nothing will report.
+  // Reading the transcript of a session with no facts would advance the cursor
+  // past spend that nothing will report.
   test('a session with no facts is skipped before its transcript is read', () => {
-    const claudeId = uniqueClaudeId('headless')
+    const claudeId = uniqueClaudeId('nofacts')
     cleanups.push(plantTranscript(claudeId, JSON.stringify({ message: { usage: { output_tokens: 6 } } }) + '\n').cleanup)
-    registry.set('hl-1', sessionInfo({ sessionId: 'hl-1', threadId: 'T-hl', claudeSessionId: claudeId, headless: true }))
+    registry.set('hl-1', sessionInfo({ sessionId: 'hl-1', threadId: 'T-hl', claudeSessionId: claudeId }))
     cleanups.push(() => registry.delete('hl-1'))
     let read = 0
     stubDeps({
       liveSessionIds: () => ['hl-1'],
-      factsFor: factsFromRegistry,
+      factsFor: () => undefined,
       usageFor: (id: string) => { read++; return defaultUsageFor(id) },
     })
     const fireIntervals = registerWithIntervals()
@@ -2498,7 +2498,7 @@ describe('raindrop: events', () => {
     expect(sent[0].body.event_id).toBe(`sess-1:${NOW}`)
   })
 
-  test('an unknown or headless session produces no event', async () => {
+  test('an unknown session produces no event', async () => {
     dispose = register()
     emit('reply', { sessionId: 'ghost', text: 'x', chatId: 'c', sentIds: ['m'] })
     emit('session:bridge-registered', { sessionId: 'ghost', threadId: 't' })
@@ -3165,11 +3165,6 @@ describe('raindrop: factsFromRegistry', () => {
 
   test('an absent session maps to nothing', () => {
     expect(factsFromRegistry('no-such-session')).toBeUndefined()
-  })
-
-  test('a headless worker maps to nothing — it has no conversation', () => {
-    registry.set('reg-1', { ...base, headless: true })
-    expect(factsFromRegistry('reg-1')).toBeUndefined()
   })
 
   test('a session persisted without sessionMetadata still reports a platform', () => {

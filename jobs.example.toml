@@ -8,12 +8,9 @@
 # mode = "main"   the prompt goes to the main session
 # mode = "none"   no agent: the check runs and the result is recorded
 #
-# headless = true  (spawn only) no Discord thread and no @mention; the agent works and writes to files.
-#                  Needs a daemon restart to take effect.
 # model = "haiku"  (spawn only) model id or alias for the spawned session; default is the daemon's default.
 # idle_ttl = "4d"  (spawn only) how long the session may go with no one posting in its thread before it is
 #                  nudged, then ended 5m later (default 30m, max 7d). Raise it when the session waits on a reply.
-#                  A headless job has no thread anyone can post in, so for it this is a total lifetime.
 
 # Default for spawn jobs. Use a server channel: Discord cannot open a thread inside a DM, and a DM id
 # makes every spawn fail with "no channel to spawn in".

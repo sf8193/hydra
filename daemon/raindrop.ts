@@ -298,7 +298,7 @@ function sessionProject(info: { worktreeRepo?: string; claudeSessionId?: string 
 
 export function factsFromRegistry(sessionId: string): SessionFacts | undefined {
   const info = registry.get(sessionId)
-  if (!info || info.headless) return undefined
+  if (!info) return undefined
   return {
     threadId: info.threadId,
     createdAt: info.createdAt,
@@ -663,7 +663,7 @@ export function register(): () => void {
     try { projectDirNames() } catch (err) { rootError(err) }
     const batch: Array<{ sessionId: string; row: SessionUsage; bodies: EventBody[] }> = []
     for (const sessionId of deps.liveSessionIds()) {
-      // Facts first: a headless session would advance its cursor past spend nobody reports.
+      // Facts first: a session without facts would advance its cursor past spend nobody reports.
       let rows: SessionUsage[] = []
       let facts: SessionFacts | undefined
       try {

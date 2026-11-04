@@ -82,14 +82,6 @@ describe('idle limit', () => {
     expect(_idleTimersForTesting().get('a')?.reap).toBeDefined()
   })
 
-  test('a headless session is nudged without being told about a thread it does not have', async () => {
-    add('a', { headless: true, idleDeadline: Date.now() - 1 })
-    resumeIdleLimit('a')
-    await Bun.sleep(20)
-    expect(sent.some(m => m.content.includes('Your idle limit'))).toBe(true)
-    expect(sent.some(m => m.content.includes('your thread'))).toBe(false)
-  })
-
   test('a bridge reconnect during the grace period neither re-nudges nor restarts the reap', async () => {
     add('a', { idleDeadline: Date.now() - 1 })
     resumeIdleLimit('a')

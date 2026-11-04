@@ -27,7 +27,7 @@ const MAX_CONCURRENT = 2
 const STAGGER_MS = 5_000
 
 // Dead, recoverable sessions for the manual `recover` command. Broader than the
-// auto-recover filter (which is thread_owner-only + excludes parked/ephemeral/headless):
+// auto-recover filter (which is thread_owner-only + excludes parked/ephemeral):
 // a user may deliberately recover any dead non-guest session the recoverOne cascade may
 // act on (recoveryPlan().generic: not Codex, which it would relaunch as Claude).
 function findDeadSessions(): SessionInfo[] {
@@ -461,7 +461,6 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
     && info.sessionType === 'thread_owner'  // only plain workers — excludes thread_guest and master_orchestrator
     && !info.suppressAutoRecover
     && !info.ephemeral
-    && !info.headless
     && info.adapter.recoveryPlan(info).generic  // Codex: no — its runtime's start() reconnects it at boot; recoverOne would relaunch it as Claude
     && !tmuxHasSession(info.tmuxName)
     && threadRegistry.has(info.threadId),

@@ -15,18 +15,14 @@ sequenceDiagram
         Note over Probe: Stop: Esc would interrupt a working turn
     else Screen offers "No, exit", or the keypress failed
         Note over Probe: Count the attempt (10m cooldown, 3 max)
-        opt Not headless
-            Probe->>Thread: "is stuck on a dialog", tmux attach command
-        end
+        Probe->>Thread: "is stuck on a dialog", tmux attach command
         Note over Probe,Session: Dialog stays up for a person. Session is not told.
     else Dialog still open
         Probe->>Pane: send-keys Escape
         Pane-->>Session: Dialog cancelled, not approved
         Note over Probe: Count the attempt (10m cooldown, 3 max)
-        opt Not headless
-            Probe->>Thread: "was stuck on a dialog", pressed Esc
-            Thread-->>Probe: alert message id
-        end
+        Probe->>Thread: "was stuck on a dialog", pressed Esc
+        Thread-->>Probe: alert message id
         Note over Probe: A failed post is logged and does not stop the next step
         Probe->>Transport: notification: alert link, what it showed,<br/>rework or skip the step
         Transport->>Session: Delivered as a channel message

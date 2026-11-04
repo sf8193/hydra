@@ -62,15 +62,12 @@ function schedule(sessionId: string): void {
     transport.sendOrQueue(sessionId, {
       type: 'notification',
       content: [
-        live.headless
-          ? `[system] Your idle limit (${idle}) is up. You will be ended in ${grace} minutes.`
-          : `[system] No one has posted in your thread for ${idle}. You will be ended in ${grace} minutes unless someone does.`,
+        `[system] No one has posted in your thread for ${idle}. You will be ended in ${grace} minutes unless someone does.`,
         `Record your result or where things stand now, wherever your task says results go, including the path of any artifact you produced.`,
       ].join('\n'),
       meta: { chat_id: live.threadId, message_id: '', user: 'system', user_id: 'system', ts: new Date().toISOString() },
     })
-    // A headless record's threadId is a placeholder: nothing may post to it.
-    if (!live.headless) safeSend(live.threadId, `_⏳ ${live.tmuxName}: no message here for ${idle} — ending in ${grace}m unless someone replies._`)
+    safeSend(live.threadId, `_⏳ ${live.tmuxName}: no message here for ${idle} — ending in ${grace}m unless someone replies._`)
       .catch(err => process.stderr.write(`daemon: idle-limit: thread notice failed for ${live.tmuxName}: ${err}\n`))
 
     entry.reap = setTimeout(() => {

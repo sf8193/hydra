@@ -65,8 +65,6 @@ export type SessionInfo = {
   idleTtlMs?: number       // see SpawnOpts
   idleDeadline?: number    // epoch ms; idle-limit nudge fires here, reap at +grace (persisted so restarts re-arm with what was left)
   forceWorktreeCleanup?: boolean  // see SpawnOpts
-  headless?: boolean       // no Discord thread — worker communicates via send_to_thread
-  answerOnce?: boolean     // a headless fork: ended once its first result is delivered
   suppressDeathMessage?: boolean // skip "died" notification to parent on kill
   suppressAutoRecover?: boolean // skip the automatic boot recovery batch (e.g. a dead record whose worktree is gone); manual `recover` still works
   budgetDeadline?: number  // epoch ms; phase-budget nudge fires here, reap at +grace (persisted so restarts re-arm)
@@ -254,8 +252,6 @@ export type SpawnOpts = {
   phaseBudgetMs?: number // max lifetime: nudge at T (write checkpoint), reap at T+grace
   trigger?: string       // what caused this spawn, for the announce line (e.g. 'spawn:', 'review 2:', 'CLI'); falls back to originType
   engine?: ProviderId  // which backend to use (default: claude)
-  headless?: boolean     // skip Discord thread creation — worker communicates via send_to_thread
-  answerOnce?: boolean   // end the session once its first result is delivered (headless forks)
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'])
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)

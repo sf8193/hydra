@@ -53,12 +53,6 @@ test('spawning a thread session arms the reply guard on the spawn message', asyn
   registry.delete(r.sessionId)
 })
 
-test('a headless spawn does not arm it', async () => {
-  const r = await doSpawnSession('t', 'P', undefined, { headless: true })
-  expect([..._pendingForTesting().values()].some(x => x.sessionId === r.sessionId)).toBe(false)
-  registry.delete(r.sessionId)
-})
-
 // CLI spawns (weekly-replay-cron) pass no message id: the anchor message the daemon posts stands in.
 test('a CLI spawn with no message id arms it on the anchor message', async () => {
   const r = await doSpawnSession('t', 'P', undefined, { initiator: 'cron', trigger: 'CLI' })

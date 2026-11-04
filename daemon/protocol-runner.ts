@@ -506,9 +506,9 @@ export async function onRunAdvance(sessionId: string, content: string, verdict?:
 
 function validateDelegatedBuildVerification(run: ProtocolRun, content: string): string | null {
   const reviewers = [...(run.protocolChildren?.values() ?? [])].filter(child =>
-    child.phase === run.phase && child.headless && child.readThread && !!child.phaseBudgetMs && !!child.result)
+    child.phase === run.phase && child.readThread && !!child.phaseBudgetMs && !!child.result)
   if (reviewers.length === 0) {
-    return 'step_passed requires a current-phase reviewer spawned with headless=true, read_thread=true, and phase_budget that returned a result'
+    return 'step_passed requires a current-phase reviewer spawned with read_thread=true, and phase_budget that returned a result'
   }
   const verdicts = reviewers.map(reviewer => ({
     verdict: reviewer.result!.match(/(?:^|\n)[ \t]*verdict[ \t]*:[ \t]*(PASS WITH FIXES|PASS|FAIL)\b/i)?.[1]?.toUpperCase(),

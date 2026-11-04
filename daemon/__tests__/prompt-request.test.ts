@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { buildSpawnPrompt, buildForkPrompt, buildHeadlessForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from '../prompts/session.js'
+import { buildSpawnPrompt, buildForkPrompt, buildHandoffPrompt, buildResurrectPrompt } from '../prompts/session.js'
 import { hydraPrompt } from '../prompts/request.js'
 
 let origStderrWrite: typeof process.stderr.write
@@ -19,14 +19,12 @@ describe('the words a person supplied are tagged, and nothing else is', () => {
   test('session prompts tag the topic, question and handoff note', () => {
     expect(requests(buildSpawnPrompt(p))).toEqual([p.topic])
     expect(requests(buildForkPrompt(p))).toEqual([p.topic])
-    expect(requests(buildHeadlessForkPrompt({ ...p, readOnly: true }))).toEqual([p.topic])
     expect(requests(buildHandoffPrompt({ ...p, note: 'watch the PRs', hasPredecessor: true }))).toEqual([p.topic, 'watch the PRs'])
   })
 
   test('a topic the caller marks as not the request is left untagged', () => {
     expect(requests(buildSpawnPrompt({ ...p, topicIsRequest: false }))).toEqual([])
     expect(requests(buildForkPrompt({ ...p, topicIsRequest: false }))).toEqual([])
-    expect(requests(buildHeadlessForkPrompt({ ...p, readOnly: true, topicIsRequest: false }))).toEqual([])
     expect(requests(buildHandoffPrompt({ ...p, note: 'watch the PRs', hasPredecessor: true, topicIsRequest: false }))).toEqual(['watch the PRs'])
   })
 

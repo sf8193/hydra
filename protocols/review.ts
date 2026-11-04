@@ -161,7 +161,7 @@ export default protocol('review', {
           : `1. **Do not spawn lens helpers.** The caller used \`+no-lenses\`; review the material directly.`,
         helpersAllowed
           ? `2. **Run one fresh native subagent per chosen lens** ${NATIVE_SUBAGENT}. Nothing is posted to the thread; only your final \`advance()\` is. Give each the review target (the diff / doc / spec) and the relevant thread excerpt inline — subagents may not have the chat tools — and let it orient on its own; do not fork your own context into them, independence is the point. Run them in parallel; include a \`+<lens>:\` section per required lens in your summary.`
-          : `2. **Review directly** — do not spawn native subagents or headless helpers for lenses.`,
+          : `2. **Review directly** — do not spawn native subagents or helper sessions for lenses.`,
         helpersAllowed
           ? `3. **Synthesize** their findings yourself — resolve conflicts, drop the noise, keep what's real.`
           : `3. **Post your own findings** after checking the material directly.`,

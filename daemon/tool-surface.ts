@@ -10,7 +10,7 @@ import { resolveEngine } from './engines/instances.js'
 const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<string>>> = TYPED_BASE_TOOLS
 const ALL_CAPABILITY_TOOLS: Readonly<Record<Capability | DerivedCapability, ReadonlySet<string>>> = TYPED_ALL_CAPABILITY_TOOLS
 
-/** Whether ask_predecessor works end to end: the predecessor's engine can fork it headless (askFork),
+/** Whether ask_predecessor works end to end: the predecessor's engine can fork it one-shot (askFork),
  * and the successor's MCP client waits out a fork turn. Only Claude's bridge reads LONG_TOOL_TIMEOUTS_MS:
  * Codex's client stops at its default tool_timeout_sec (60s), omp's bridge at a fixed 60s. */
 export function predecessorAsker(info: Pick<SessionInfo, 'engine' | 'predecessor'>): ((question: string, timeoutMs: number) => Promise<string>) | undefined {
