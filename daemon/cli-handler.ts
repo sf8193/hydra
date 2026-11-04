@@ -67,7 +67,7 @@ function respond(req: CLIRequest, ok: boolean, dataOrError?: unknown, maybeData?
 // ---------------------------------------------------------------------------
 
 async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
-  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, headless, forceWorktreeCleanup, quiet, model } = req.params as {
+  const { prompt, initiator, idempotencyKey, channel, message, ephemeral, idleTtl, forceWorktreeCleanup, quiet, model } = req.params as {
     prompt?: string
     initiator?: string
     idempotencyKey?: string
@@ -75,7 +75,6 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
     message?: string
     ephemeral?: boolean
     idleTtl?: string
-    headless?: boolean
     forceWorktreeCleanup?: boolean
     quiet?: boolean
     model?: string
@@ -103,7 +102,7 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
 
   let result
   try {
-    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, headless: headless === true, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
+    result = await doSpawnSession(prompt, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
   } catch (err) {
     updateIdempotency(idempotencyKey, { status: 'failed' })
     throw err
@@ -111,7 +110,7 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
 
   updateIdempotency(idempotencyKey, { status: 'spawned', sessionId: result.sessionId })
 
-  if (!quiet && headless !== true) {   // a headless session has no thread to mention anyone in
+  if (!quiet) {
     const access = loadAccess()
     if (access.allowFrom.length > 0) {
       const mentions = access.allowFrom.map(id => `<@${id}>`).join(' ')

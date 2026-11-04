@@ -119,7 +119,7 @@ test('Claude askFork: exact argv, predecessor cwd, Hydra-free env; answer trimme
   expect(calls.length).toBe(4)
 })
 
-test('only Claude can be forked headless: Codex and omp have no askFork, so dispatch never reaches them', async () => {
+test('only Claude has a one-shot fork: Codex and omp have no askFork, so dispatch never reaches them', async () => {
   expect(typeof engines.claude.askFork).toBe('function')
   expect(engines.codex.askFork).toBeUndefined()
   expect(engines.omp.askFork).toBeUndefined()
@@ -136,7 +136,7 @@ test('only Claude can be forked headless: Codex and omp have no askFork, so disp
 
 test('successor prompt: ask_predecessor first where it works, the spawned fork for longer digging', () => {
   const p = { sessionId: 's-1', tmuxName: 'fresh', threadId: 'th-1', topic: 't', originFrom: 'flint', artifact: '/h.md' }
-  const recipe = 'spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>")'
+  const recipe = 'spawn_session(fork_from="predecessor", read_only=true, phase_budget="5m", topic="<question>; reply with send_to_thread(target=\\"parent\\", type=\\"result\\")")'
   const none = buildHandoffPrompt(p)
   const forkOnly = buildHandoffPrompt({ ...p, hasPredecessor: true })  // a Codex or omp successor
   const both = buildHandoffPrompt({ ...p, hasPredecessor: true, canAsk: true })

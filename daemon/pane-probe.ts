@@ -495,8 +495,7 @@ async function dismissUnknownDialog(entry: ProbeEntry, now: number): Promise<voi
     const alert = dismissed
       ? `> ⏸️ **${name}** was stuck on a dialog${whyClause}. Pressed Esc and told the session.\n${quoted}`
       : `> ⏸️ **${name}** is stuck on a dialog${whyClause}. Run: \`tmux attach -t ${name}\`\n${quoted}`
-    // A headless session's threadId is a placeholder: nothing may post to it.
-    const canPost = !!entry.threadId && !findSession(name)?.headless
+    const canPost = !!entry.threadId
     // A failed alert must not stop the session hearing that its dialog was cancelled.
     const ids = canPost
       ? await io.safeSend(entry.threadId, alert).catch(err => {

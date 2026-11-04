@@ -781,17 +781,6 @@ describe('probeAllSessions', () => {
     expect(sentMessages.find(m => m.channelId === base.defaultChannel)?.text).toContain('Pressed Esc')
   })
 
-  it('tells a headless session without posting to its placeholder thread', async () => {
-    const delivered: Array<{ sessionId: string; msg: any }> = []
-    _setIO({ ...makeTestIO(), transportSendOrQueue: (sessionId, msg) => delivered.push({ sessionId, msg }) })
-    await stickDialog(PICK, { headless: true })
-
-    expect(keysSent.filter(k => k.tmuxName === 'ember')).toEqual([{ tmuxName: 'ember', keys: 'Escape' }])
-    expect(sentMessages.filter(m => m.channelId === 'thread-1')).toEqual([])
-    expect(delivered).toHaveLength(1)
-    expect(delivered[0].msg.content).toContain('cancelled, not approved')
-  })
-
   it('still tells the session when the alert fails to post', async () => {
     const delivered: unknown[] = []
     _setIO({

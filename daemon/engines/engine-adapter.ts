@@ -224,7 +224,7 @@ export interface EngineAdapter {
   // (a plan's fork, run in cwd, on model if given) and resolve with the answer text.
   // The original conversation is untouched, and the fork cannot reach Hydra. Rejects
   // on timeout, failure or an empty answer. Absent when this provider has no read-only,
-  // Hydra-free headless fork; then no successor is offered ask_predecessor.
+  // Hydra-free one-shot fork; then no successor is offered ask_predecessor.
   askFork?(plan: ForkPlan, cwd: string, question: string, timeoutMs: number, model?: string): Promise<string>
 }
 

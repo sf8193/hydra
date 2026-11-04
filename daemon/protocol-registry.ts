@@ -23,7 +23,6 @@ type ProtocolHooks = {
 }
 
 export type ProtocolChildSpawnMetadata = {
-  headless: boolean
   readThread: boolean
   phaseBudgetMs?: number
 }

@@ -32,6 +32,7 @@ const sent: string[] = []
 Object.assign(gateway, {
  send: async (_id: string, text: string) => { sent.push(text); return { id: 'test-message' } },
  edit: async () => {}, react: async () => {}, getThreadUrl: async () => '',
+ createThread: async () => ({ id: `test-thread-${sent.length}-${Date.now()}`, url: '' }),
  fetchChannel: async () => ({ isThread: true, parentId: 'parent', type: 'thread' }),
  getThreadStarterInfo: async () => null, updateSessionVisual: async () => {}, renameThread: async () => {},
 })
@@ -47,7 +48,7 @@ codexEngine.startTurn = async (id: string, text: string) => { starts.push({id,te
 const msg = (threadId: string) => ({ channelId: threadId, effectiveThreadId: threadId, isThread: true, id: 'test', content: '', parentChannelId: 'parent' } as any)
 console.log('Isolated live state:', root)
 try {
- const parent = await doSpawnSession('parity test', undefined, undefined, { headless: true, engine: 'codex', promptBuilder: () => 'Reply only OK.' })
+ const parent = await doSpawnSession('parity test', undefined, undefined, { engine: 'codex', promptBuilder: () => 'Reply only OK.' })
  const info = registry.get(parent.sessionId)!
  const identity = { homeName: info.codexHomeName!, threadId: info.codexThreadId! }
  assert(info.sessionMetadata!.model !== 'codex-default')
@@ -98,7 +99,7 @@ try {
  console.log('PASS retirement fences and discards queued handoff')
  // Resume under a fresh Hydra identity below; keep the old server alive for fork.
 
- const child = await doSpawnSession('fork test', undefined, undefined, { headless: true, engine: 'codex', forkFrom: { codexThreadId: identity.threadId, codexHomeName: identity.homeName, parentName: parent.name }, promptBuilder: () => 'Reply only OK.' })
+ const child = await doSpawnSession('fork test', undefined, undefined, { engine: 'codex', forkFrom: { codexThreadId: identity.threadId, codexHomeName: identity.homeName, parentName: parent.name }, promptBuilder: () => 'Reply only OK.' })
  const ci = registry.get(child.sessionId)!
  assert.notEqual(ci.codexThreadId, identity.threadId)
  assert.notEqual(ci.codexHomeName, identity.homeName)

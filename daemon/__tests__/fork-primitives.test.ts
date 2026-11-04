@@ -370,21 +370,14 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     expect(live().disallowedTools).toEqual(kept.disallowedTools)
   })
 
-  test('prompts: a headless fork answers its spawner instead of greeting; a threaded fork keeps buildForkPrompt', async () => {
+  test('prompts: a fork keeps buildForkPrompt', async () => {
     seedDead()
-    await doSpawnSession('q?', undefined, undefined, { forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' }, headless: true, initiator: 'asker', disallowedTools: kept.disallowedTools })
-    const headless = launches[0].prompt
-    expect(headless).toContain('a headless read-only fork of elder')
-    expect(headless).toContain('Question: <request>q?</request>')
-    expect(headless).toContain('send_to_thread(target="parent", type="result"')
-    expect(headless).not.toContain('Greet')
-
     await doSpawnSession('q2', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' } })
-    const l = launches[1]
+    const l = launches[0]
     expect(l.prompt).toBe(hydraPrompt(buildForkPrompt({ sessionId: l.sessionId, tmuxName: l.tmuxName, threadId: THREAD, topic: 'q2', originFrom: 'elder' })))
 
     await doSpawnSession('q3', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' }, promptPrefix: 'PREFIX' })
-    expect(launches[2].prompt.startsWith('<hydra-prompt>\nPREFIX\n\n')).toBe(true)
+    expect(launches[1].prompt.startsWith('<hydra-prompt>\nPREFIX\n\n')).toBe(true)
   })
 
   test('prompts: a handoff successor with a predecessor gets the fork recipe; without one the prompt is unchanged', async () => {
@@ -396,7 +389,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
 
     live().deadAt = Date.now()
     await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: 'elder', artifact: '/h.md', predecessor: pred })
-    expect(launches[1].prompt).toContain('spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>")')
+    expect(launches[1].prompt).toContain('spawn_session(fork_from="predecessor", read_only=true, phase_budget="5m", topic="<question>; reply with send_to_thread(target=\\"parent\\", type=\\"result\\")")')
     expect(launches[1].prompt).toContain('call ask_predecessor(question)')
     expect(launches[1].prompt).toBe(hydraPrompt(buildHandoffPrompt({ ...base(launches[1]), hasPredecessor: true, canAsk: true })))
 
@@ -491,15 +484,28 @@ describe('spawn_session fork_from and read_only', () => {
     ;(registry as any).persist = orig.persist; (threadRegistry as any).persist = orig.tpersist
     if (orig.spawnCwd === undefined) delete process.env.SPAWN_CWD; else process.env.SPAWN_CWD = orig.spawnCwd
   })
-  beforeEach(() => { fake = withFakeTmux(); dir = mkdtempSync(join(tmpdir(), 'fp-src-')); launches.length = 0; ompLaunches.length = 0 })
+  const THREAD_STUBS = ['send', 'react', 'edit', 'fetchChannel', 'getThreadUrl', 'createThread'] as const
+  const savedGateway: Record<string, unknown> = {}
+  let threadCounter = 0
+  beforeEach(() => {
+    fake = withFakeTmux(); dir = mkdtempSync(join(tmpdir(), 'fp-src-')); launches.length = 0; ompLaunches.length = 0
+    for (const k of THREAD_STUBS) savedGateway[k] = (gateway as any)[k]
+    ;(gateway as any).send = async (c: string) => ({ id: 'm', channelId: c })
+    ;(gateway as any).react = async () => {}
+    ;(gateway as any).edit = async () => {}
+    ;(gateway as any).fetchChannel = async () => ({ isThread: false, isDM: false })
+    ;(gateway as any).getThreadUrl = async () => 'https://x/thread'
+    ;(gateway as any).createThread = async () => ({ id: `fs-spawned-thread-${++threadCounter}`, url: 'https://x/thread' })
+  })
   afterEach(() => {
+    for (const k of THREAD_STUBS) (gateway as any)[k] = savedGateway[k]
     for (const s of [...registry.values()]) if (s.sessionId.startsWith('fs-') || s.initiator?.startsWith('fs')) registry.delete(s.sessionId)
     rmSync(dir, { recursive: true, force: true })
     fake.restore()
   })
 
   const spawn = (args: Record<string, unknown>, caller = 'fs-caller') =>
-    executeTool('spawn_session', { topic: 'q — answer via send_to_thread(type=result)', headless: true, ...args }, caller)
+    executeTool('spawn_session', { topic: 'q — answer via send_to_thread(type=result)', ...args }, caller)
   const errorOf = async (args: Record<string, unknown>, caller?: string) => {
     const r = await spawn(args, caller)
     expect(r.isError).toBe(true)
@@ -610,7 +616,7 @@ describe('spawn_session fork_from and read_only', () => {
     try {
       mk('fs-caller', 'fscaller')
       mk('fs-gone', 'fsgone', { claudeSessionId: 'cl-g', worktreePath: join(dir, 'removed') })
-      expect(await errorOf({ fork_from: 'fsgone', headless: false, chat_id: 'fs-chan' })).toContain(`launch directory ${join(dir, 'removed')} no longer exists`)
+      expect(await errorOf({ fork_from: 'fsgone', chat_id: 'fs-chan' })).toContain(`launch directory ${join(dir, 'removed')} no longer exists`)
       expect(calls).toEqual([])
       expect(launches).toEqual([])
     } finally { Object.assign(gateway, saved) }
@@ -663,38 +669,11 @@ describe('spawn_session fork_from and read_only', () => {
       expect(deathNotices()).toEqual(['fs-caller-thread'])
     })
 
-    test('the headless spawn line goes to the spawner by id, never to a session that took its name', async () => {
-      mk('fs-caller', 'fscaller', old)
-      mk('fs-imposter', 'fsimposter', old)  // holds the name the spawn's initiator string carries
-      await doSpawnSession('t', undefined, undefined, { headless: true, parentId: 'fs-caller', initiator: 'fsimposter' })
-      const announced = sent.filter(m => m.text.includes('headless worker')).map(m => m.channel)
-      expect(announced).toEqual(['fs-caller-thread'])
-    })
-
-    test('the headless spawn line is skipped for a headless parent and still posted for a threaded one', async () => {
-      mk('fs-caller', 'fscaller', old)
-      mk('fs-ghost', 'fsghost', { ...old, headless: true })
-      await doSpawnSession('t', undefined, undefined, { headless: true, parentId: 'fs-ghost', initiator: 'fsghost' })
-      await doSpawnSession('t', undefined, undefined, { headless: true, parentId: 'fs-caller', initiator: 'fscaller' })
-      expect(sent.filter(m => m.text.includes('headless worker')).map(m => m.channel)).toEqual(['fs-caller-thread'])
-    })
-
-    test('only a headless fork_from spawn is answer-once', async () => {
-      mk('fs-caller', 'fscaller', old)
-      mk('fs-src', 'fssrc', { ...old, claudeSessionId: 'cl-src', worktreePath: dir })
-      expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
-      expect((await spawn({})).isError).toBeFalsy()
-      const flags = launches.map(l => registry.get(l.sessionId)?.answerOnce ?? false)
-      expect(flags).toEqual([true, false])
-      expect(launches[0].prompt).toContain('you are ended once it is delivered')
-      expect(launches[1].prompt).not.toContain('you are ended once it is delivered')
-    })
-
     test('a human fork (no spawner) still answers to its source', async () => {
       mk('fs-src', 'fssrc', old)
       mk('fs-other', 'fsother', old)
       // The fork command names the source as parent (commands/thread.ts handleForkIntercept).
-      await doSpawnSession('t', undefined, undefined, { forkFrom: { claudeSessionId: 'cl-src', parentName: 'fssrc' }, parentId: 'fs-src', headless: true })
+      await doSpawnSession('t', undefined, undefined, { forkFrom: { claudeSessionId: 'cl-src', parentName: 'fssrc' }, parentId: 'fs-src' })
       const child = registry.get(launches[0].sessionId)!
       expect(child.initiator).toBeUndefined()
 

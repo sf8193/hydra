@@ -47,20 +47,7 @@ export function buildForkPrompt(p: PromptParams & { originFrom: string }): strin
   ].join('\n')
 }
 
-// A headless fork has no thread: it answers the session that spawned it, then ends.
-export function buildHeadlessForkPrompt(p: PromptParams & { originFrom: string; readOnly: boolean; answerOnce?: boolean }): string {
-  return [
-    `You are ${p.tmuxName}, a headless${p.readOnly ? ' read-only' : ''} fork of ${p.originFrom}. You have its conversation up to here, but you are not ${p.originFrom} and you have no thread of your own.`,
-    `Your session_id is ${p.sessionId}.`,
-    ``,
-    `Question: ${topicOf(p)}`,
-    ``,
-    `Answer it from that conversation and anything you can look up${p.readOnly ? ' (Edit, Write and NotebookEdit are blocked)' : ''}.`,
-    `Reply once with send_to_thread(target="parent", type="result", text="<your answer>")${p.answerOnce ? ' — you are ended once it is delivered' : ', then stop'}.`,
-  ].join('\n')
-}
-
-const FORK_RECIPE = 'ask a fork of it: spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>"). Its answer arrives as a result message.'
+const FORK_RECIPE = 'ask a fork of it: spawn_session(fork_from="predecessor", read_only=true, phase_budget="5m", topic="<question>; reply with send_to_thread(target=\\"parent\\", type=\\"result\\")"). Its answer arrives as a result message.'
 
 // A deployment's arriving.md replaces the built-in arrival *behavior* — the Reception note,
 // the greeting's content, and starting the Next action at once — so a local arrival

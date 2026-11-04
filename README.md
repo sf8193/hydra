@@ -306,9 +306,6 @@ Known limits:
 - Every event carries the one configured `RAINDROP_USER_ID`. On a shared
   install a colleague's session is reported under your id — only their 👍/👎 is
   dropped, not their sessions.
-- Headless sessions report nothing — no spawn, reply, or death. They have no
-  conversation to attribute, so they are skipped by design and a fleet leaning
-  on them exports only its interactive sessions.
 
 #### 🔪 now works in Discord DMs
 
@@ -522,15 +519,15 @@ To ask the session you took over from a question only it can answer, a handoff s
 
 Each call re-reads the predecessor's whole context, so it costs one full-context turn; it gives up after 180s, and a session runs one at a time. Claude prunes old transcripts (`cleanupPeriodDays`), so after about a month the tool reports that the conversation is gone.
 
-The tool appears only where it works: the predecessor's engine can fork it headless (today only Claude), and the successor's client waits long enough (today only Claude's bridge; Codex's MCP client stops at its default `tool_timeout_sec` of 60s, omp's bridge at a fixed 60s). A Codex or omp successor of a Claude predecessor uses the spawned fork below instead; a Codex predecessor can't be forked either way yet.
+The tool appears only where it works: the predecessor's engine can fork it one-shot (today only Claude), and the successor's client waits long enough (today only Claude's bridge; Codex's MCP client stops at its default `tool_timeout_sec` of 60s, omp's bridge at a fixed 60s). A Codex or omp successor of a Claude predecessor uses the spawned fork below instead; a Codex predecessor can't be forked either way yet.
 
 For a question that needs more than one turn, spawn a fork session instead:
 
 ```
-spawn_session(fork_from="predecessor", headless=true, read_only=true, phase_budget="5m", topic="<question>")
+spawn_session(fork_from="predecessor", read_only=true, phase_budget="5m", topic="<question>; reply with send_to_thread(target=\"parent\", type=\"result\")")
 ```
 
-The fork answers with `send_to_thread(type="result")` and stops. Each fork is a full session boot that loads its source's whole context, so it takes seconds and costs that context's tokens.
+The fork gets its own thread, answers with `send_to_thread(type="result")`, and is reaped at its `phase_budget`. Each fork is a full session boot that loads its source's whole context, so it takes seconds and costs that context's tokens.
 
 ## Troubleshooting
 

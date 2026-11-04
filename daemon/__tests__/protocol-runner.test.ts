@@ -226,7 +226,7 @@ describe('protocol runner — phase-scoped spawn lifecycle', () => {
     __test!.setLifecycle({ killSession: (async (info: any) => { killed.push(info.sessionId) }) as any })
     const run = createTestRun({ protocol: scopedProto, phase: 'reviewing' })
 
-    const metadata = { headless: true, readThread: true, phaseBudgetMs: 60_000 }
+    const metadata = { readThread: true, phaseBudgetMs: 60_000 }
     expect(__test!.registerChild(run, 'test-owner', 'review-child', metadata)).toBe(false)
     expect(__test!.registerChild(run, 'test-critic', 'review-child', metadata)).toBe(true)
     await onRunAdvance('test-critic', 'Review finished.')
@@ -762,7 +762,7 @@ function createDelegateRun(overrides: Record<string, unknown> = {}) {
 
 function addPassingReviewer(run: any, pmSid: string, result = 'Verdict: PASS\nEvidence: reviewed exact diff') {
   run.protocolChildren.set(`reviewer-${Math.random()}`, {
-    phase: 'verifying', parentSessionId: pmSid, headless: true, readThread: true,
+    phase: 'verifying', parentSessionId: pmSid, readThread: true,
     phaseBudgetMs: 60_000, result,
   })
 }
@@ -816,7 +816,7 @@ describe('delegated-build protocol', () => {
     expect((result as any).reason).toContain('current-phase reviewer')
 
     run.protocolChildren.set('bad-reviewer', {
-      phase: 'verifying', parentSessionId: pmSid, headless: false, readThread: true,
+      phase: 'verifying', parentSessionId: pmSid, readThread: false,
       phaseBudgetMs: 60_000, result: 'Verdict: PASS\nEvidence: clean',
     })
     result = await onRunAdvance(pmSid, verificationProof, 'step_passed')

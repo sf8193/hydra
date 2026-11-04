@@ -45,7 +45,7 @@ beforeEach(() => {
   process.stderr.write = (() => true) as any
   sess('rh-critic', { sessionType: 'thread_guest', initiator: 'rh-owner' })
   sess('rh-owner')
-  sess('rh-helper', { initiator: 'rh-critic', headless: true })
+  sess('rh-helper', { initiator: 'rh-critic' })
   sess('rh-stranger')
   sends = []; gwSends = []
   spyOn(transport, 'sendOrQueue').mockImplementation(((sid: string, msg: any) => { sends.push({ sid, msg }) }) as any)
@@ -63,19 +63,19 @@ afterEach(() => {
 })
 
 describe('review critic helper capability', () => {
-  test('private phase forces headless quiet spawn while ordinary spawn options stay unchanged', () => {
+  test('private phase forces a quiet spawn while ordinary spawn options stay unchanged', () => {
     reviewRun(); __test!.setRunTools(runs.get('rh-run')!)
     expect(protocolSpawnRequiresPrivate('rh-critic')).toBe(true)
     expect(protocolSpawnRequiresPrivate('rh-owner')).toBe(false)
-    expect(dispatchTest!.resolveProtocolSpawnMode('rh-critic', false)).toEqual({ privateSpawn: true, headless: true, quiet: true })
-    expect(dispatchTest!.resolveProtocolSpawnMode('rh-owner', false)).toEqual({ privateSpawn: false, headless: false, quiet: false })
+    expect(dispatchTest!.resolveProtocolSpawnMode('rh-critic')).toEqual({ privateSpawn: true, quiet: true })
+    expect(dispatchTest!.resolveProtocolSpawnMode('rh-owner')).toEqual({ privateSpawn: false, quiet: false })
   })
 
   test('privacy is installed before launch and survives a phase-exit race', async () => {
     const run = reviewRun(); __test!.setRunTools(run)
     registry.delete('rh-helper') // the child does not exist until launch returns
     markPrivateProtocolChildLaunching('rh-critic', 'rh-helper')
-    expect(registerProtocolChild('rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })).toBe('registered')
+    expect(registerProtocolChild('rh-critic', 'rh-helper', { readThread: true, phaseBudgetMs: 1000 })).toBe('registered')
     expect(protocolChildRequiresPrivate('rh-helper')).toBe(true)
 
     await onRunAdvance('rh-critic', 'Critique.', 'request_changes')
@@ -111,7 +111,7 @@ describe('review critic helper capability', () => {
     const run = reviewRun()
     const killed: string[] = []
     __test!.setLifecycle({ killSession: (async (i: any) => { killed.push(i.sessionId) }) as any })
-    const meta = { headless: true, readThread: true, phaseBudgetMs: 60_000 }
+    const meta = { readThread: true, phaseBudgetMs: 60_000 }
     expect(__test!.registerChild(run, 'rh-owner', 'rh-helper', meta)).toBe(false)
     expect(__test!.registerChild(run, 'rh-critic', 'rh-helper', meta)).toBe(true)
     await onRunAdvance('rh-critic', 'Critique.', 'request_changes')
@@ -168,7 +168,7 @@ describe('private delivery', () => {
 
   test('truncates oversized private results before recording or delivery', async () => {
     const run = reviewRun()
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
+    __test!.registerChild(run, 'rh-critic', 'rh-helper', { readThread: true, phaseBudgetMs: 1000 })
     const res = await executeTool('send_to_thread', {
       target: 'rh-critic', type: 'result', text: 'x'.repeat(70_000), visibility: 'private',
     }, 'rh-helper')
@@ -208,7 +208,7 @@ describe('private delivery', () => {
 
   test('registered review helpers must use private; public is rejected', async () => {
     const run = reviewRun()
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
+    __test!.registerChild(run, 'rh-critic', 'rh-helper', { readThread: true, phaseBudgetMs: 1000 })
     const pub = await executeTool('send_to_thread', { target: 'rh-critic', type: 'result', text: 'x' }, 'rh-helper')
     expect(pub.isError).toBe(true)
     expect(pub.content[0].text).toContain('visibility="private"')
@@ -220,7 +220,7 @@ describe('private delivery', () => {
 
   test('registered private helpers cannot bypass privacy with gateway-mutating tools', async () => {
     const run = reviewRun()
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
+    __test!.registerChild(run, 'rh-critic', 'rh-helper', { readThread: true, phaseBudgetMs: 1000 })
     for (const [name, args] of [
       ['reply', { chat_id: 'rh-thread', text: 'public leak' }],
       ['react', { chat_id: 'rh-thread', message_id: 'm1', emoji: 'x' }],
@@ -240,7 +240,7 @@ describe('private delivery', () => {
     let finishKill!: () => void
     const killPending = new Promise<void>(resolve => { finishKill = resolve })
     __test!.setLifecycle({ killSession: (async () => { await killPending }) as any })
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
+    __test!.registerChild(run, 'rh-critic', 'rh-helper', { readThread: true, phaseBudgetMs: 1000 })
 
     await onRunAdvance('rh-critic', 'Critique.', 'request_changes')
     expect(run.protocolChildren.has('rh-helper')).toBe(false)
@@ -260,7 +260,7 @@ describe('private delivery', () => {
 
   test('privacy survives phase exit when another kill already owns the helper', async () => {
     const run = reviewRun()
-    __test!.registerChild(run, 'rh-critic', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
+    __test!.registerChild(run, 'rh-critic', 'rh-helper', { readThread: true, phaseBudgetMs: 1000 })
     // Model the already-in-progress branch directly: the child record is gone,
     // but the live registry entry means privacy must remain until disappearance.
     run.protocolChildren.delete('rh-helper')
@@ -383,14 +383,14 @@ describe('delegated-build reviewer gate via private results', () => {
     }
     runs.set(run.id, run); threadToRun.set(run.threadId, run.id)
     sessionToRun.set('rh-owner', run.id); sessionToRun.set('rh-critic', run.id)
-    sess('rh-helper', { initiator: 'rh-owner', headless: true })
+    sess('rh-helper', { initiator: 'rh-owner' })
     // not registered as a child → result is not recorded, gate stays closed
     await executeTool('send_to_thread', { target: 'rh-owner', type: 'result', text: 'Verdict: PASS\nEvidence: x', visibility: 'private' }, 'rh-helper')
     const proof = 'Mechanical checks: ok\nReviewer: r\nEvidence: e'
     const denied = await onRunAdvance('rh-owner', proof, 'step_passed')
     expect(denied.ok).toBe(false)
     // qualified child, delivered privately → gate opens (same rules as a public result)
-    __test!.registerChild(run, 'rh-owner', 'rh-helper', { headless: true, readThread: true, phaseBudgetMs: 1000 })
+    __test!.registerChild(run, 'rh-owner', 'rh-helper', { readThread: true, phaseBudgetMs: 1000 })
     await executeTool('send_to_thread', { target: 'rh-owner', type: 'result', text: 'Verdict: PASS\nEvidence: x', visibility: 'private' }, 'rh-helper')
     expect(run.protocolChildren.get('rh-helper').result).toContain('PASS')
     expect((await onRunAdvance('rh-owner', proof, 'step_passed')).ok).toBe(true)

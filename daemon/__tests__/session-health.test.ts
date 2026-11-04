@@ -329,13 +329,11 @@ describe('orphan detection', () => {
     expect(n).toBe(1)
   })
 
-  test('headless and guest sessions are never orphans', () => {
-    const headless = seed({ ageMs: OLD, headless: true, claudeSessionId: 'k1' })
+  test('guest sessions are never orphans', () => {
     const guest = seed({ ageMs: OLD, sessionType: 'thread_guest', claudeSessionId: 'k2' })
-    tmux.alive(headless.tmuxName); tmux.alive(guest.tmuxName)
+    tmux.alive(guest.tmuxName)
 
     pollSessionsOnce(NOW)
-    expect(to(headless, '⚠️')).toHaveLength(0)
     expect(to(guest, '⚠️')).toHaveLength(0)
   })
 })
