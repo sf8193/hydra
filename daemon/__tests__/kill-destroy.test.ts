@@ -16,7 +16,7 @@
 
 import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
-import { handleThreadKillIntercept } from '../commands/thread.js'
+import { handleThreadKillIntercept, handleDestroyIntercept } from '../commands/thread.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
@@ -189,32 +189,36 @@ describe('kill +destroy', () => {
     expect(deletedThreads).toEqual([])
   })
 
-  test('a creator-restricted thread is not destroyed by someone else', async () => {
-    // destroy re-applies its own guards after the kill; this one survives
-    // because the dead entry is still in the registry to carry `initiator`.
+  test('a thread whose session was started by someone else is destroyed by kill +d', async () => {
+    // No creator guard: whoever the gateway lets send commands may destroy a thread.
     seedSession({ deadAt: Date.now(), initiator: 'someone-else' })
 
     await handleThreadKillIntercept(msg('kill +d'), { destroy: true })
 
-    expect(deletedThreads).toEqual([])
-    expect(sent.join('\n')).toContain('Only the session creator')
+    expect(deletedThreads).toEqual([THREAD])
+    expect(sent.join('\n')).not.toContain('Only the session creator')
   })
 
-  test('kill +d on a live session with a different initiator kills but does not destroy', async () => {
-    // The bug: killSession deletes the registry entry, so handleDestroyIntercept
-    // could not look up the initiator and skipped the creator guard. The fix
-    // captures initiator before the kill and passes it through.
+  test('kill +d on a live session started by another initiator kills and destroys it', async () => {
     seedSession({ initiator: 'someone-else' })
 
     await handleThreadKillIntercept(msg('kill +d'), { destroy: true })
 
-    expect(reactions).toContain('☠️')              // the kill ran
+    expect(reactions).toContain('☠️')                    // the kill ran
     expect(registry.getByThread(THREAD)).toBeUndefined() // session is gone
-    expect(deletedThreads).toEqual([])             // but destroy was refused
-    expect(sent.join('\n')).toContain('Only the session creator')
+    expect(deletedThreads).toEqual([THREAD])             // and so is the thread
+    expect(sent.join('\n')).not.toContain('Only the session creator')
   })
 
-  test('kill +d on a live session with the same initiator kills and destroys', async () => {
+  test('destroy on its own, for a dead session another initiator started, deletes the thread', async () => {
+    seedSession({ deadAt: Date.now(), initiator: 'someone-else' })
+
+    await handleDestroyIntercept(msg('destroy'))
+
+    expect(deletedThreads).toEqual([THREAD])
+  })
+
+  test('kill +d on a live session started by the same person kills and destroys', async () => {
     seedSession({ initiator: 'operator' })
 
     await handleThreadKillIntercept(msg('kill +d'), { destroy: true })

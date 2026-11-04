@@ -66,7 +66,7 @@ export async function handleThreadKillIntercept(
   // restart is still in it with `deadAt` set. Both skip straight to the destroy
   // rather than reporting a failed kill.
   if (destroy && (!info || info.deadAt)) {
-    await handleDestroyIntercept(msg, { initiator: info?.initiator })
+    await handleDestroyIntercept(msg)
     return
   }
 
@@ -76,18 +76,16 @@ export async function handleThreadKillIntercept(
   }
   void gateway.react(msg.channelId, msg.id, cascade ? '🧨' : '☠️').catch(() => {})
 
-  // initiator is the only authz input destroy consumes that killSession invalidates
-  const initiator = info.initiator
   await killSession(info, cascade ? 'session ended (cascade)' : 'session ended')
   debouncedRefreshListDisplay()
 
   // Sequential, not atomic: destroy re-applies its own guards (Discord-only, no
-  // protocol in flight, creator-only) against the state the kill just produced.
+  // protocol in flight) against the state the kill just produced.
   // If it declines, the session stays dead and the thread survives — destroy
   // says why, and running `destroy` again once the blocker clears finishes the
   // job. Deliberate: a pre-flight check here would make `kill +d` refuse to
   // kill in cases where a plain `kill` succeeds.
-  if (destroy) await handleDestroyIntercept(msg, { initiator })
+  if (destroy) await handleDestroyIntercept(msg)
 }
 
 export async function handleForkIntercept(msg: InboundMessage, description?: string, model?: string, opts?: { ephemeral?: boolean; engine?: ProviderId }): Promise<void> {
@@ -520,7 +518,7 @@ export async function handleRespawnIntercept(msg: InboundMessage, topic?: string
 // Destroy — permanently delete thread + anchor message (Discord only)
 // ---------------------------------------------------------------------------
 
-export async function handleDestroyIntercept(msg: InboundMessage, opts?: { initiator?: string }): Promise<void> {
+export async function handleDestroyIntercept(msg: InboundMessage): Promise<void> {
   if (!gateway.deleteThread) {
     void safeSend(msg.channelId, `_\`destroy\` is only available on Discord._`)
     return
@@ -541,13 +539,6 @@ export async function handleDestroyIntercept(msg: InboundMessage, opts?: { initi
   if (info && !info.deadAt) {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void safeSend(msg.channelId, `_Session **${info.tmuxName}** is still alive. Kill it first with \`kill\`._`)
-    return
-  }
-
-  const sessionInitiator = opts?.initiator ?? info?.initiator
-  if (sessionInitiator && sessionInitiator !== msg.authorUsername) {
-    void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
-    void safeSend(msg.channelId, `_Only the session creator can destroy this thread._`)
     return
   }
 
