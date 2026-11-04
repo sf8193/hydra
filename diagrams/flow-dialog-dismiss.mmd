@@ -1,0 +1,33 @@
+%% Dialog Dismissal — a dialog nobody answers gets cancelled, and the session is told
+%% Esc only ever cancels. Screens that offer "No, exit" stay alert-only, because Esc would end the session.
+
+sequenceDiagram
+    participant Probe as pane-probe.ts
+    participant Pane as tmux pane<br/>(Claude Code)
+    participant Thread as util.ts safeSend<br/>(chat thread)
+    participant Transport as bridge-transport.ts
+    participant Session as Claude session
+
+    Note over Probe,Pane: Pane idle 30s+ and an "Esc to cancel" footer<br/>seen with no live prompt on two probes
+    Probe->>Pane: capture tail again
+
+    alt Dialog already closed
+        Note over Probe: Stop: Esc would interrupt a working turn
+    else Screen offers "No, exit", or the keypress failed
+        Note over Probe: Count the attempt (10m cooldown, 3 max)
+        opt Not headless
+            Probe->>Thread: "is stuck on a dialog", tmux attach command
+        end
+        Note over Probe,Session: Dialog stays up for a person. Session is not told.
+    else Dialog still open
+        Probe->>Pane: send-keys Escape
+        Pane-->>Session: Dialog cancelled, not approved
+        Note over Probe: Count the attempt (10m cooldown, 3 max)
+        opt Not headless
+            Probe->>Thread: "was stuck on a dialog", pressed Esc
+            Thread-->>Probe: alert message id
+        end
+        Note over Probe: A failed post is logged and does not stop the next step
+        Probe->>Transport: notification: alert link, what it showed,<br/>rework or skip the step
+        Transport->>Session: Delivered as a channel message
+    end
