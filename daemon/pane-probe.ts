@@ -91,6 +91,8 @@ export type PaneProbeIO = {
   reportUsage?: (reading: UsageReading) => void
   // Claude's own status for a session (its status file); optional so tests need not fake it.
   claudeStatus?: (tmuxName: string) => ClaudeLiveStatus | null
+  // Link to a sent message, '' when the platform has none; optional so tests need not fake it.
+  getMessageUrl?: (channelId: string, messageId: string) => string
 }
 
 const defaultIO: PaneProbeIO = {
@@ -153,6 +155,7 @@ const defaultIO: PaneProbeIO = {
   loadAccess: () => loadAccess(),
   platform: PLATFORM,
   claudeStatus: (tmuxName) => readClaudeStatus(tmuxName),
+  getMessageUrl: (channelId, messageId) => gateway.getMessageUrl(channelId, messageId),
   defaultChannel: DEFAULT_SESSION_CHANNEL,
 }
 
@@ -228,7 +231,12 @@ function hasLiveReplPrompt(tail: string): boolean {
 // Resume prompt: CC shows this when a session is resumed and the conversation
 // is large enough to warrant a choice. The three-option menu is unique.
 // Usage-limit dialog (/rate-limit-options): blocks all input until dismissed, even after the limit resets.
-const DIALOG_FOOTER_RE = /Enter to confirm · Esc to cancel/
+// Footers vary by dialog ("Enter to confirm · Esc to cancel", "Esc to cancel · Tab to amend",
+// "Enter to select · ↑/↓ to navigate · Esc to cancel"); the Esc hint is what they share.
+const DIALOG_FOOTER_RE = /Esc to cancel/
+// Startup gates (workspace trust, the bypass-permissions warning) offer "No, exit": cancelling one
+// exits Claude, so Esc would end the session.
+const ESC_ENDS_SESSION_RE = /No, exit/
 const USAGE_OPTION_A = /Stop and wait for limit to reset/
 const USAGE_OPTION_B = /Add funds to continue with extra usage/
 const USAGE_OPTION_C = /Upgrade your plan/
@@ -464,25 +472,65 @@ function checkWeeklyUsage(tail: string): void {
   report({ kind: 'seven_day', percentUsed: Number(m[1]), source: 'pane', ...(resetsAt ? { resetsAt } : {}) })
 }
 
-// Alert only: an unknown dialog may be a permission or confirmation where any
-// keypress is a real decision, so leave it to a human.
-async function notifyUnknownDialog(entry: ProbeEntry, now: number): Promise<void> {
+// A dialog nobody is answering holds the whole session, so cancel it and tell the session.
+// Esc never approves anything: the tool call is refused or the question goes unanswered.
+// By now the pane has sat idle across two probes, so a person at the keyboard has had time to act.
+async function dismissUnknownDialog(entry: ProbeEntry, now: number): Promise<void> {
   if (entry.notifying) return
   entry.notifying = true
   try {
     const name = entry.tmuxName
-    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
     const tail = (await io.capturePaneTail(name, PANE_TAIL_LINES)) ?? ''
-    if (channelId) {
-      const why = blockedReason(io.claudeStatus?.(name) ?? null)
-      await io.safeSend(channelId, `> ⏸️ **${name}** is stuck on a dialog${why ? ` (Claude says it is waiting on: \`${why}\`)` : ''}. Run: \`tmux attach -t ${name}\`\n\`\`\`\n${tail.trim()}\n\`\`\``)
-    }
+    // Esc at a working session would interrupt its turn, so re-read the screen right before pressing.
+    if (detectBlockingState(tail)?.kind !== 'unknown_dialog') return
+    const dismissed = !ESC_ENDS_SESSION_RE.test(tail) && await io.sendKeys(name, 'Escape')
+    // Counted before anything below can fail, so a persistent dialog stays under the cooldown and cap.
     entry.notifiedAt = now
     entry.notifyCount++
-    process.stderr.write(`daemon: pane-probe: ${name} unknown dialog\n`)
+    process.stderr.write(`daemon: pane-probe: ${name} unknown dialog, dismissed=${dismissed}\n`)
+
+    const why = blockedReason(io.claudeStatus?.(name) ?? null)
+    const whyClause = why ? ` (Claude says it is waiting on: \`${why}\`)` : ''
+    const quoted = `\`\`\`\n${tail.trim()}\n\`\`\``
+    const alert = dismissed
+      ? `> ⏸️ **${name}** was stuck on a dialog${whyClause}. Pressed Esc and told the session.\n${quoted}`
+      : `> ⏸️ **${name}** is stuck on a dialog${whyClause}. Run: \`tmux attach -t ${name}\`\n${quoted}`
+    // A headless session's threadId is a placeholder: nothing may post to it.
+    const canPost = !!entry.threadId && !findSession(name)?.headless
+    // A failed alert must not stop the session hearing that its dialog was cancelled.
+    const ids = canPost
+      ? await io.safeSend(entry.threadId, alert).catch(err => {
+        process.stderr.write(`daemon: pane-probe: ${name} dialog alert failed: ${err}\n`)
+        return [] as string[]
+      })
+      : []
+    if (dismissed) tellSessionDialogDismissed(entry, ids[0] ?? '', tail)
+  } catch (err) {
+    process.stderr.write(`daemon: pane-probe: ${entry.tmuxName} dialog handling failed: ${err}\n`)
   } finally {
     entry.notifying = false
   }
+}
+
+function tellSessionDialogDismissed(entry: ProbeEntry, messageId: string, tail: string): void {
+  const sessionId = entry.isMain ? 'main' : findSession(entry.tmuxName)?.sessionId
+  if (!sessionId) return
+  const url = messageId ? io.getMessageUrl?.(entry.threadId, messageId) : ''
+  io.transportSendOrQueue(sessionId, {
+    type: 'notification',
+    content: [
+      `Hydra pressed Esc on a dialog that was blocking this session, because nobody answered it${url ? ` (${url})` : ''}. It was cancelled, not approved.`,
+      `It showed:\n${tail.trim()}`,
+      `Redo the step in a way that needs no answer from a person, or skip it and report that you skipped it. If it was a safety check, only use a rewrite that check would allow.`,
+    ].join('\n\n'),
+    meta: {
+      chat_id: entry.threadId,
+      message_id: messageId,
+      user: 'pane-probe',
+      user_id: 'system',
+      ts: new Date(io.now()).toISOString(),
+    },
+  })
 }
 
 async function extractOauthUrl(tmuxName: string): Promise<string | null> {
@@ -795,7 +843,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
           } else if (detected.kind === 'usage_limit') {
             void notifyUsageLimit(existing, t)
           } else if (detected.kind === 'unknown_dialog') {
-            void notifyUnknownDialog(existing, t)
+            void dismissUnknownDialog(existing, t)
           } else {
             void notifyLoginRequired(existing, t)
           }

@@ -56,6 +56,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
 | `flow-destroy` | Destroy: delete thread + anchor message (Discord only, dead/orphan threads), plus the `kill +d` composite that kills first |
 | `flow-deliver` | **Whisper channel**: CLI deliver → reachability → sendToBridge (default) or sendOrQueue (`--queue`). Codex sessions route through adapter. Delivery proof in response. |
+| `flow-dialog-dismiss` | Stuck dialog: pane-probe → re-read screen → Esc (or alert only on "No, exit" screens) → thread alert → notification to the session |
 
 ### Protocol Flows
 | Diagram | What it shows |
