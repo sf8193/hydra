@@ -2,7 +2,7 @@ import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, isAlive } from './util.js'
-import { parseIdleTtl } from '../shared/constants.js'
+import { parseIdleTtl, DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
 import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
 import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
@@ -240,7 +240,6 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 // Deliver — whisper channel: message to session context, not thread
 // ---------------------------------------------------------------------------
 
-const DELIVER_MAX_MESSAGE_BYTES = 10_000
 
 async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   const { thread, session, specialist, message, initiator, idempotencyKey, queue } = req.params as {

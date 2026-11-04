@@ -2,18 +2,47 @@ import { registry, threadRegistry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession } from './session-lifecycle.js'
+import { gateway } from './config.js'
 import { isAlive } from './util.js'
 import { registerIdempotency, clearIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
+import { ORPHAN_GRACE_MS } from './session-reachability.js'
+import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
 import { getSpecialist, setSpecialist, readKickoff, withSpecialistLock } from './specialists.js'
 import type { DeliveryResult } from './engines/engine-adapter.js'
 
 export type SpecialistDeliverResult =
   | { ok: true; data: unknown }
-  | { ok: false; error: string; data?: unknown; exitCode?: number }
+  // `permanent`: retrying the same message cannot succeed (it is too large). Callers drop it instead of retrying.
+  | { ok: false; error: string; data?: unknown; exitCode?: number; permanent?: true }
 
-/** Test seam: the spawn a vacant specialist is refilled with. */
-export const specialistDeps = { spawn: doSpawnSession }
+/** A refusal that carries the CLI exit code a caller should see. */
+class SpecialistError extends Error {
+  constructor(message: string, readonly exitCode?: number) { super(message) }
+}
+
+export const SPAWN_BACKOFF_BASE_MS = 30_000
+export const SPAWN_BACKOFF_MAX_MS = 10 * 60_000
+
+/** Test seam: the spawn a vacant specialist is refilled with, the clock, and the Discord thread check. */
+export const specialistDeps = {
+  spawn: doSpawnSession,
+  now: () => Date.now(),
+  // Gone only when Discord says so. A network blip must not move a specialist to a new thread.
+  async threadExists(threadId: string): Promise<boolean> {
+    try {
+      await gateway.fetchChannel(threadId)
+      return true
+    } catch (err) {
+      const e = err as { code?: unknown; message?: string }
+      return !(e?.code === 10003 || /not found/i.test(e?.message ?? ''))
+    }
+  },
+}
+
+// A refill that keeps failing (bad kickoff, tmux error) must not be retried by every message that arrives.
+const spawnBackoff = new Map<string, { failures: number; nextAt: number }>()
+export function _resetSpecialistBackoff(): void { spawnBackoff.clear() }
 
 function liveOccupant(threadId: string): SessionInfo | undefined {
   const id = registry.getByThread(threadId)
@@ -25,8 +54,10 @@ function liveOccupant(threadId: string): SessionInfo | undefined {
  * The session sitting in the specialist, spawning one from the specialist's kickoff when the
  * specialist is vacant. Runs under the specialist's lock so concurrent callers share one spawn.
  *
- * The thread is reused whenever hydra still knows it, so a specialist's address survives
- * a death. Only when the thread is gone does the specialist move to a fresh one.
+ * A refill is a respawn into the specialist's own thread: the new session is told it is
+ * resuming there and reads the history, so it does not start amnesiac. The thread is
+ * reused while Discord still has it. Only when it is gone does the specialist move to a
+ * fresh thread opened in the specialist's channel.
  */
 async function occupant(name: string, initiator: string | undefined): Promise<{ info: SessionInfo; spawned: boolean }> {
   // Read inside the lock: an earlier caller may have moved the specialist to a fresh thread while this one waited.
@@ -37,20 +68,41 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
 
   const kickoff = readKickoff(specialist)
   if (!kickoff) throw new Error(`specialist "${name}" has no live session and no kickoff to spawn one with`)
-  const threadKnown = !!threadRegistry.get(specialist.threadId)
-  if (!threadKnown && !specialist.channel) {
-    throw new Error(`specialist "${name}": thread ${specialist.threadId} is unknown and the specialist has no channel to open a new one in`)
+
+  const now = specialistDeps.now()
+  const backoff = spawnBackoff.get(name)
+  if (backoff && now < backoff.nextAt) {
+    throw new SpecialistError(`specialist "${name}": refilling is backing off for ${Math.ceil((backoff.nextAt - now) / 1000)}s after ${backoff.failures} failed attempt(s)`, 6)
   }
 
-  const result = await specialistDeps.spawn(kickoff, specialist.channel, undefined, {
-    initiator: initiator ?? `specialist:${name}`,
-    trigger: `specialist:${name}`,
-    ...(specialist.model && { model: specialist.model }),
-    ...(threadKnown && { existingThreadId: specialist.threadId }),
-  })
+  const thread = threadRegistry.get(specialist.threadId)
+  const reusable = !!thread && await specialistDeps.threadExists(specialist.threadId)
+  if (!reusable && !specialist.channel) {
+    throw new Error(`specialist "${name}": thread ${specialist.threadId} is gone and the specialist has no channel to open a new one in`)
+  }
+  const last = reusable ? thread!.sessionHistory.at(-1) : undefined
+
+  let result
+  try {
+    result = await specialistDeps.spawn(kickoff, specialist.channel, undefined, {
+      initiator: initiator ?? `specialist:${name}`,
+      trigger: `specialist:${name}`,
+      ...((specialist.model ?? last?.model) && { model: (specialist.model ?? last?.model)! }),
+      ...(reusable && { existingThreadId: specialist.threadId, ...(last && { resurrectFrom: last.tmuxName }) }),
+    })
+  } catch (err) {
+    const failures = (backoff?.failures ?? 0) + 1
+    spawnBackoff.set(name, { failures, nextAt: now + Math.min(SPAWN_BACKOFF_BASE_MS * 2 ** (failures - 1), SPAWN_BACKOFF_MAX_MS) })
+    throw err
+  }
+  spawnBackoff.delete(name)
+
   if (result.threadId !== specialist.threadId) {
     const { updatedAt: _t, ...rest } = specialist
-    setSpecialist(name, { ...rest, threadId: result.threadId })
+    // The session is already running in the new thread; a failed write must not fail this delivery.
+    try { setSpecialist(name, { ...rest, threadId: result.threadId }) } catch (err) {
+      process.stderr.write(`daemon: specialist ${name}: could not record its new thread ${result.threadId}: ${err}\n`)
+    }
   }
   const info = registry.get(result.sessionId)
   if (!info) throw new Error(`specialist "${name}": spawned session ${result.sessionId} is gone before delivery`)
@@ -62,10 +114,16 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
  *
  * Always queues. A specialist is an address, not a connection: the occupant may still
  * be booting, and the bridge flushes the queue when it connects, so the message
- * arrives after the kickoff the session was launched with.
+ * arrives after the kickoff the session was launched with. But a session that has
+ * been up past the grace window with no bridge is orphaned: a queued message would
+ * sit unread, so that is a failure the caller keeps owing, not a delivery.
  */
-export async function deliverToSpecialist(p: { specialist: string; message: string; initiator?: string; idempotencyKey?: string }): Promise<SpecialistDeliverResult> {
+export async function deliverToSpecialist(p: { specialist: string; message: string; initiator?: string; idempotencyKey?: string; source?: string }): Promise<SpecialistDeliverResult> {
   if (!getSpecialist(p.specialist)) return { ok: false, error: `specialist "${p.specialist}" not found — create it with 'hydra specialist set ${p.specialist} --thread <id>'` }
+  const bytes = Buffer.byteLength(p.message)
+  if (bytes > DELIVER_MAX_MESSAGE_BYTES) {
+    return { ok: false, error: `message too large (${bytes} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`, permanent: true }
+  }
 
   // Reserved without a session id so the session's death bookkeeping can't claim an in-flight key.
   if (p.idempotencyKey) registerIdempotency(p.idempotencyKey, '', DELIVER_IDEMPOTENCY_TTL_MS, 'pending')
@@ -73,10 +131,15 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
 
   try {
     const { info, spawned } = await withSpecialistLock(p.specialist, () => occupant(p.specialist, p.initiator))
+    const connected = transport.has(info.sessionId)
+    if (!spawned && !connected && specialistDeps.now() - info.createdAt > ORPHAN_GRACE_MS) {
+      release()
+      return { ok: false, error: `specialist "${p.specialist}": occupant ${info.tmuxName} is orphaned (tmux alive, bridge disconnected) — try 'resume' in its thread`, exitCode: 4 }
+    }
     const notification = {
       type: 'notification' as const,
       content: p.message,
-      meta: { source: 'cli-deliver', specialist: p.specialist, ...(p.initiator && { initiator: p.initiator }) },
+      meta: { source: p.source ?? 'cli-deliver', specialist: p.specialist, ...(p.initiator && { initiator: p.initiator }) },
     }
     let result: DeliveryResult
     try {
@@ -84,7 +147,12 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
     } catch (err) {
       result = { status: 'unknown', reason: String(err) }
     }
-    const outcome = deliveryOutcome(result, !transport.has(info.sessionId))
+    const outcome = deliveryOutcome(result, !connected)
+    // Queued behind a session that died after it was chosen: nobody will drain that queue.
+    if (outcome.ok && outcome.status === 'queued' && !spawned && !isAlive(info)) {
+      release()
+      return { ok: false, error: `specialist "${p.specialist}": occupant ${info.tmuxName} died during delivery`, exitCode: 6 }
+    }
     if (!outcome.ok) {
       release()
       return { ok: false, error: outcome.error, exitCode: outcome.exitCode }
@@ -100,6 +168,6 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
     }
   } catch (err) {
     release()
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return { ok: false, error: err instanceof Error ? err.message : String(err), ...(err instanceof SpecialistError && err.exitCode !== undefined && { exitCode: err.exitCode }) }
   }
 }

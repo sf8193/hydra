@@ -5,7 +5,7 @@ import { join } from 'path'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { specialistDeps } from '../specialist-deliver.js'
+import { specialistDeps, _resetSpecialistBackoff, SPAWN_BACKOFF_BASE_MS } from '../specialist-deliver.js'
 import { removeSpecialist, setSpecialist, getSpecialist, withSpecialistLock, listSpecialists } from '../specialists.js'
 import { fakeAdapter } from './test-harness.js'
 import { getIdempotencyEntry } from '../idempotency.js'
@@ -18,12 +18,13 @@ const deliver = (specialist: string, extra: Record<string, unknown> = {}) =>
   handleCLIRequest(req('deliver', { specialist, message: 'a mention', initiator: 'forwarder', ...extra }))
 
 describe('specialists', () => {
-  const realSpawn = specialistDeps.spawn
+  const realDeps = { ...specialistDeps }
   const names: string[] = []
   const sessions: string[] = []
   const threads: string[] = []
   afterEach(() => {
-    specialistDeps.spawn = realSpawn
+    Object.assign(specialistDeps, realDeps)
+    _resetSpecialistBackoff()
     for (const s of sessions.splice(0)) { registry.delete(s); transport.bridges.delete(s) }
     for (const t of threads.splice(0)) { registry.threadToSession.delete(t); threadRegistry.delete(t) }
     for (const name of names.splice(0)) removeSpecialist(name)
@@ -35,10 +36,10 @@ describe('specialists', () => {
     setSpecialist(name, { threadId: thread, kickoff: 'be the slopbot', ...extra })
     return name
   }
-  function occupy(thread: string) {
+  function occupy(thread: string, over: Record<string, unknown> = {}) {
     const sessionId = `specialist-sess-${++n}`
     sessions.push(sessionId)
-    registry.set(sessionId, { sessionId, tmuxName: `${sessionId}-tmux`, threadId: thread, engine: 'claude', createdAt: Date.now(), adapter: fakeAdapter({ isAlive: () => true }) } as any)
+    registry.set(sessionId, { sessionId, tmuxName: `${sessionId}-tmux`, threadId: thread, engine: 'claude', createdAt: Date.now(), adapter: fakeAdapter({ isAlive: () => true }), ...over } as any)
     registry.threadToSession.set(thread, sessionId)
     threads.push(thread)
     return sessionId
@@ -137,6 +138,85 @@ describe('specialists', () => {
     const k2 = `specialist-idem-${++n}`
     expect((await deliver(failing, { idempotencyKey: k2 })).ok).toBe(false)
     expect(getIdempotencyEntry(k2)).toBeUndefined()
+  })
+
+  test('a refill into a known thread is a respawn that names the last occupant and its model', async () => {
+    const calls = fakeSpawn()
+    const name = specialist('thread-hist')
+    threads.push('thread-hist')
+    threadRegistry.set('thread-hist', { threadId: 'thread-hist', sessionHistory: [{ tmuxName: 'comet', model: 'claude-opus-5-5' }] } as any)
+    expect((await deliver(name)).ok).toBe(true)
+    expect(calls[0][3]).toMatchObject({ existingThreadId: 'thread-hist', resurrectFrom: 'comet', model: 'claude-opus-5-5', trigger: `specialist:${name}` })
+  })
+
+  test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {
+    const calls = fakeSpawn()
+    specialistDeps.threadExists = async () => false
+    threads.push('thread-del', 'thread-del2')
+    threadRegistry.set('thread-del', { threadId: 'thread-del', sessionHistory: [] } as any)
+    threadRegistry.set('thread-del2', { threadId: 'thread-del2', sessionHistory: [] } as any)
+    const moved = specialist('thread-del', { channel: 'chan-9' })
+    const res = await deliver(moved)
+    expect(res.ok).toBe(true)
+    expect((calls[0][3] as any).existingThreadId).toBeUndefined()
+    expect(calls[0][1]).toBe('chan-9')
+    expect(getSpecialist(moved)!.threadId).not.toBe('thread-del')
+    expect(await deliver(specialist('thread-del2'))).toMatchObject({ ok: false, error: expect.stringContaining('gone') })
+  })
+
+  test('failed refills back off per specialist, then try again once the wait passes', async () => {
+    let now = 1_000_000
+    specialistDeps.now = () => now
+    let attempts = 0
+    specialistDeps.spawn = (async () => { attempts++; throw new Error('tmux exploded') }) as typeof specialistDeps.spawn
+    const name = specialist('thread-backoff', { channel: 'c' })
+    expect(await deliver(name)).toMatchObject({ ok: false, error: 'tmux exploded' })
+    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('backing off') })
+    expect(attempts).toBe(1)
+    now += SPAWN_BACKOFF_BASE_MS + 1
+    expect(await deliver(name)).toMatchObject({ ok: false, error: 'tmux exploded' })
+    expect(attempts).toBe(2)
+    now += SPAWN_BACKOFF_BASE_MS * 2 + 1 // the second failure doubled the wait
+    fakeSpawn()
+    expect((await deliver(name)).ok).toBe(true)
+  })
+
+  test('an occupant with no bridge past the grace window is orphaned: a failure the caller keeps owing', async () => {
+    const calls = fakeSpawn()
+    occupy('thread-orphan', { createdAt: Date.now() - 10 * 60_000 })
+    const name = specialist('thread-orphan')
+    const k = `specialist-orphan-${++n}`
+    expect(await deliver(name, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 4, error: expect.stringContaining('orphaned') })
+    expect(getIdempotencyEntry(k)).toBeUndefined()
+    expect(calls).toHaveLength(0)
+  })
+
+  test('a freshly booting occupant (no bridge yet, inside the grace window) accepts the queued message', async () => {
+    occupy('thread-booting')
+    const res = await deliver(specialist('thread-booting'))
+    expect(res).toMatchObject({ ok: true, data: { spawned: false } })
+  })
+
+  test('queued behind an occupant that died during delivery is a failure', async () => {
+    let alive = true
+    occupy('thread-dies', { adapter: fakeAdapter({ isAlive: () => alive, deliver: async () => { alive = false; return { status: 'accepted', via: 'queued' } } }) })
+    transport.set(sessions[sessions.length - 1], { sessionId: sessions[sessions.length - 1], socket: { destroyed: false, write: () => true } } as any)
+    // bridge present => not "queued" by the outcome mapping; use a booting session instead
+    transport.bridges.delete(sessions[sessions.length - 1])
+    const res = await deliver(specialist('thread-dies'))
+    expect(res).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('died') })
+  })
+
+  test('the delivery carries the caller\'s source label; an oversized message is refused permanently', async () => {
+    const seen: any[] = []
+    occupy('thread-src', { adapter: fakeAdapter({ isAlive: () => true, deliver: async (_i: unknown, m: unknown) => { seen.push(m); return { status: 'accepted' } } }) })
+    const name = specialist('thread-src')
+    const { deliverToSpecialist } = await import('../specialist-deliver.js')
+    expect((await deliverToSpecialist({ specialist: name, message: 'hi', source: 'slack-watch', initiator: 'slack-watch' })).ok).toBe(true)
+    expect(seen[0].meta).toMatchObject({ source: 'slack-watch', specialist: name, initiator: 'slack-watch' })
+    const big = await deliverToSpecialist({ specialist: name, message: 'x'.repeat(10_001) })
+    expect(big).toMatchObject({ ok: false, permanent: true })
+    expect(seen).toHaveLength(1)
   })
 
   test('--specialist excludes --thread/--session', async () => {
