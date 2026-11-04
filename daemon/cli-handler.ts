@@ -9,6 +9,7 @@ import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionI
 import { deliveryOutcome } from './delivery-outcome.js'
 import { deliverToSpecialist } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
+import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
@@ -216,6 +217,7 @@ function handleHealth(req: CLIRequest): CLIResponse {
     tmux: tmuxRunning ? 'running' : 'not running',
     idempotency: { active: listIdempotencyEntries().length },
     ...(raindropLine ? { raindrop: raindropLine } : {}),
+    ...(slackWatchHealth() ? { slackWatch: slackWatchHealth() } : {}),
   })
 }
 
@@ -370,7 +372,11 @@ function handleSpecialist(req: CLIRequest): CLIResponse {
       const s = p.name ? getSpecialist(p.name) : undefined
       return s ? respond(req, true, view(p.name!, s)) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
     }
-    case 'rm': return p.name && removeSpecialist(p.name) ? respond(req, true, { removed: p.name }) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
+    case 'rm': {
+      if (!p.name || !removeSpecialist(p.name)) return respond(req, false, `specialist "${p.name ?? ''}" not found`)
+      refreshSlackSpecialistSurface() // its occupant loses the Slack-watch tools
+      return respond(req, true, { removed: p.name })
+    }
     case 'set': {
       if (!p.name) return respond(req, false, 'specialist name is required')
       const existing = getSpecialist(p.name)
@@ -387,9 +393,35 @@ function handleSpecialist(req: CLIRequest): CLIResponse {
         ...(p.kickoffFile && { kickoffFile: p.kickoffFile }),
         ...(p.model && { model: p.model }),
       })
+      refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the Slack-watch tools
       return respond(req, true, view(p.name, specialist))
     }
     default: return respond(req, false, 'specialist action must be set, show, rm or list')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Slack watches — operator view (the specialist's own session uses the bridge tools)
+// ---------------------------------------------------------------------------
+
+function handleSlackWatch(req: CLIRequest): CLIResponse {
+  const p = req.params as { action?: string; channel?: string; threadTs?: string }
+  const w = getSlackWatcher()
+  switch (p.action) {
+    case 'list': return respond(req, true, { watches: formatSlackWatches(), health: slackWatchHealth() })
+    case 'rm': {
+      if (!p.channel || !p.threadTs) return respond(req, false, 'channel and thread are required')
+      return w.unwatch(p.channel, p.threadTs) ? respond(req, true, { removed: `${p.channel}:${p.threadTs}` }) : respond(req, false, `${p.channel}:${p.threadTs} is not watched`)
+    }
+    case 'add': {
+      if (!p.channel || !p.threadTs) return respond(req, false, 'channel and thread are required')
+      if (!/^\d{1,12}\.\d{1,6}$/.test(p.threadTs)) return respond(req, false, 'thread must look like 1793732224.093059')
+      const specialist = slackWatchHealth()?.specialist
+      if (!specialist) return respond(req, false, 'Slack watching is not configured: <state>/slack-watch.json is missing or invalid')
+      if (!slackWatchChannels().includes(p.channel)) return respond(req, false, `${p.channel} is not one of the channels in slack-watch.json, so nothing in it would ever reach the specialist`)
+      return w.watch(p.channel, p.threadTs, specialist, 'cli') ? respond(req, true, { watching: `${p.channel}:${p.threadTs}` }) : respond(req, false, 'the watch table is full')
+    }
+    default: return respond(req, false, 'slack-watch action must be list, add or rm')
   }
 }
 
@@ -414,6 +446,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'check-key': response = handleCheckKey(req); break
       case 'deliver': response = await handleDeliver(req); break
       case 'specialist': response = handleSpecialist(req); break
+      case 'slack-watch': response = handleSlackWatch(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }

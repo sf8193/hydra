@@ -13,6 +13,8 @@ import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
+import { watchSlackThread, unwatchSlackThread, formatSlackWatches } from './slack-watch-runtime.js'
+import { isSlackSpecialistOccupant } from './tool-surface.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
@@ -572,9 +574,22 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       case 'list_watches': {
         const all = args.all as boolean | undefined
         const entries = all ? listWatches() : getWatchesBySession(callerSessionId ?? 'main')
-        if (entries.length === 0) return { content: [{ type: 'text', text: 'no PRs being watched' }] }
         const lines = entries.map(e => `• ${formatWatchEntry(e)}`)
-        return { content: [{ type: 'text', text: lines.join('\n') }] }
+        // The specialist's own session also sees the Slack threads it is subscribed to.
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        const slack = caller && isSlackSpecialistOccupant(caller) ? formatSlackWatches().map(l => `• slack ${l}`) : []
+        if (lines.length + slack.length === 0) return { content: [{ type: 'text', text: 'no PRs being watched' }] }
+        return { content: [{ type: 'text', text: [...lines, ...slack].join('\n') }] }
+      }
+
+      case 'watch_slack_thread': {
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        return { content: [{ type: 'text', text: watchSlackThread(caller, args.channel, args.thread_ts) }] }
+      }
+
+      case 'unwatch_slack_thread': {
+        const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+        return { content: [{ type: 'text', text: unwatchSlackThread(caller, args.channel, args.thread_ts) }] }
       }
 
       case 'send_to_thread': {

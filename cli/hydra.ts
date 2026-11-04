@@ -65,6 +65,11 @@ Specialists (named addresses that refill themselves):
   hydra specialist set <name> --thread <id> [--channel <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
   hydra specialist show <name> | list | rm <name>
 
+Slack watches (threads whose replies reach a specialist):
+  hydra slack-watch list               Watched threads and health
+  hydra slack-watch add <channel> <thread-ts>
+  hydra slack-watch rm <channel> <thread-ts>
+
 Platform: slack | discord (required for lifecycle commands)
 
 Spawn options:
@@ -395,6 +400,20 @@ async function main(): Promise<void> {
           ...(flags['kickoff-file'] && { kickoffFile: resolve(flags['kickoff-file']) }),
           ...(flags.model && { model: flags.model }),
         },
+      })
+      printResponse(response, json)
+      break
+    }
+
+    case 'slack-watch': {
+      const [action, channel, threadTs] = [filtered[1], filtered[2], filtered[3]]
+      if (!['list', 'add', 'rm'].includes(action ?? '') || (action !== 'list' && (!channel || !threadTs))) {
+        console.error('error: usage: hydra slack-watch list | add <channel> <thread-ts> | rm <channel> <thread-ts>')
+        process.exit(1)
+      }
+      const response = await sendRequest(socketPath(), {
+        type: 'cli', command: 'slack-watch', id: randomUUID(),
+        params: { action, ...(channel && { channel }), ...(threadTs && { threadTs }) },
       })
       printResponse(response, json)
       break

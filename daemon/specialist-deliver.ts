@@ -7,6 +7,7 @@ import { isAlive } from './util.js'
 import { registerIdempotency, clearIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
+import { pushToolSurface } from './tool-surface.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
 import { getSpecialist, setSpecialist, readKickoff, withSpecialistLock } from './specialists.js'
 import type { DeliveryResult } from './engines/engine-adapter.js'
@@ -108,6 +109,8 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
   }
   const info = registry.get(result.sessionId)
   if (!info) throw new Error(`specialist "${name}": spawned session ${result.sessionId} is gone before delivery`)
+  // The occupant's tools depend on the specialist it now fills (see tool-surface.ts).
+  if (info.adapter.channel === 'bridge') pushToolSurface(info.sessionId)
   return { info, spawned: true }
 }
 
