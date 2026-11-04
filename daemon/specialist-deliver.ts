@@ -19,7 +19,8 @@ export type SpecialistDeliverResult =
 
 /** A refusal that carries the CLI exit code a caller should see. */
 export class SpecialistError extends Error {
-  constructor(message: string, readonly exitCode?: number) { super(message) }
+  /** `sessionId`: a session that did start, so a caller's idempotency key can record it. */
+  constructor(message: string, readonly exitCode?: number, readonly sessionId?: string) { super(message) }
 }
 
 export const SPAWN_BACKOFF_BASE_MS = 30_000
@@ -97,6 +98,11 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
     throw new SpecialistError(`specialist "${name}": refilling is backing off for ${Math.ceil((backoff.nextAt - now) / 1000)}s after ${backoff.failures} failed attempt(s)`, 6)
   }
 
+  // A live session already holding the name in some other thread (a stray from a re-point, or a hand-made one) makes the
+  // spawn impossible: say so plainly, and do not count it as a failed refill.
+  const holder = [...registry.values()].find(i => i.tmuxName === name && isAlive(i))
+  if (holder) throw new SpecialistError(`specialist "${name}": a session named ${name} is already running in thread ${holder.threadId}, which is not the specialist's thread${specialist.threadId ? ` (${specialist.threadId})` : ''}; kill it, or point the specialist at it with 'hydra specialist set ${name} --thread ${holder.threadId}'`, 3, holder.sessionId)
+
   const thread = specialist.threadId ? threadRegistry.get(specialist.threadId) : undefined
   const reusable = !!specialist.threadId && !!thread && await specialistDeps.threadExists(specialist.threadId)
   if (!reusable && !specialist.channel) {
@@ -127,11 +133,11 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
   const current = getSpecialist(name)
   if (current && current.threadId !== specialist.threadId) {
     // Re-pointed meanwhile: the operator's thread wins, and the session we just started is in another one. Say so loudly and
-    // leave it running (nothing here kills a session unasked); the next spawn under this name would refuse, naming it.
+    // leave it running (nothing here kills a session unasked). Later fills refuse while it holds the name (see `fill`).
     const stray = registry.get(result.sessionId)?.tmuxName ?? result.sessionId
     const msg = `specialist "${name}" was re-pointed to thread ${current.threadId ?? '(none)'} while its session ${stray} was starting in thread ${result.threadId}; ${stray} is left running: kill it, or point the specialist back at its thread`
     process.stderr.write(`daemon: ${msg}\n`)
-    throw new Error(msg)
+    throw new SpecialistError(msg, 3, result.sessionId)
   }
   // A specialist removed meanwhile stays removed.
   if (current && result.threadId !== current.threadId) {

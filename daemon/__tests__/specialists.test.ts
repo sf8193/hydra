@@ -225,6 +225,10 @@ describe('specialists', () => {
     expect(await deliver(bad)).toMatchObject({ ok: false, exitCode: 6 }) // an automatic refill waits out the back-off
     expect(await spawnAs(bad)).toMatchObject({ ok: false, error: 'tmux exploded' }) // an operator's spawn tries now
     expect(attempts).toBe(2)
+    expect(((await cli('show', bad)) as any).data.refillBackoff.failures).toBe(2) // and its failure counts
+    fakeSpawn()
+    expect((await spawnAs(bad) as any).ok).toBe(true)
+    expect(((await cli('show', bad)) as any).data.refillBackoff).toBeUndefined() // a manual success clears it
   })
 
   test('show and list say who fills the specialist and whether refills are backing off', async () => {
@@ -277,16 +281,36 @@ describe('specialists', () => {
       const sessionId = occupy(strayThread)
       return { name: `${sessionId}-tmux`, sessionId, threadId: strayThread, url: '' }
     }) as typeof specialistDeps.spawn
-    const up = spawnAs(name)
+    const key = `spawn-repoint-${++n}`
+    const up = spawnAs(name, { idempotencyKey: key })
     await Bun.sleep(5)
     await cli('set', name, { thread: 'thread-chosen-by-operator' })
     const res = await up as any
     const error: string = res.error // read before toMatchObject, which leaves the matcher in its place under Bun
     expect(res.ok).toBe(false)
+    expect(res.exitCode).toBe(3)
+    expect(getIdempotencyEntry(key)).toMatchObject({ status: 'spawned' }) // a session did start: a retry with this key is blocked
     expect(error).toContain('re-pointed to thread thread-chosen-by-operator')
     expect(error).toContain(strayThread)
     expect(getSpecialist(name)!.threadId).toBe('thread-chosen-by-operator') // the operator's choice survives
     expect(registry.getByThread(strayThread)).toBeDefined() // and the stray session is left alone
+  })
+
+  test('a live session holding the specialist\'s name elsewhere makes a fill refuse (exit 3, naming it) without counting as a failed refill', async () => {
+    const calls = fakeSpawn()
+    const name = specialist('thread-own', { channel: 'c' })
+    const strayId = occupy('thread-elsewhere', { tmuxName: name })
+    for (const attempt of [1, 2]) {
+      const res = await deliver(name) as any
+      expect(res.ok).toBe(false)
+      expect(res.exitCode).toBe(3) // not 6: this is not a back-off
+      expect(res.error).toContain('thread-elsewhere')
+      void attempt
+    }
+    const manual = await spawnAs(name) as any
+    expect(manual.exitCode).toBe(3)
+    expect(calls).toHaveLength(0)
+    expect(registry.get(strayId)).toBeDefined()
   })
 
   test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {

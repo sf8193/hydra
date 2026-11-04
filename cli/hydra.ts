@@ -216,7 +216,11 @@ async function main(): Promise<void> {
           }
         } else if (filtered[i] === '--model' && i + 1 < filtered.length) {
           model = filtered[++i]
-        } else if (filtered[i] === '--specialist' && i + 1 < filtered.length) {
+        } else if (filtered[i] === '--specialist') {
+          if (i + 1 >= filtered.length) {
+            console.error('error: --specialist needs a name')
+            process.exit(1)
+          }
           specialist = filtered[++i]
         } else if (filtered[i].startsWith('--')) {
           console.error(`error: unknown flag ${filtered[i]}`)
@@ -230,6 +234,14 @@ async function main(): Promise<void> {
       if (specialist && (prompt || readThreadLimit > 0)) {
         console.error("error: --specialist uses the specialist's own kickoff as the prompt; drop the prompt and --read-thread")
         process.exit(1)
+      }
+      if (specialist) {
+        const owned = Object.entries({ '--channel': channel, '--message': message, '--model': model, '--ephemeral': ephemeral || undefined, '--idle-ttl': idleTtl, '--force-cleanup': forceWorktreeCleanup || undefined })
+          .filter(([, v]) => v !== undefined).map(([k]) => k)
+        if (owned.length) {
+          console.error(`error: --specialist takes its channel and model from the declaration; remove ${owned.join(', ')}`)
+          process.exit(1)
+        }
       }
       if (!prompt && !specialist) {
         console.error('error: prompt is required')

@@ -119,8 +119,12 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
       result = await doSpawnSession(prompt!, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
     }
   } catch (err) {
-    updateIdempotency(idempotencyKey, { status: 'failed' })
-    if (err instanceof SpecialistError) return respond(req, false, err.message, undefined, err.exitCode)
+    if (!(err instanceof SpecialistError && err.sessionId)) updateIdempotency(idempotencyKey, { status: 'failed' })
+    if (err instanceof SpecialistError) {
+      // A session that did start (a re-point during the spawn) keeps the key, so a retry is blocked.
+      if (err.sessionId) updateIdempotency(idempotencyKey, { status: 'spawned', sessionId: err.sessionId })
+      return respond(req, false, err.message, undefined, err.exitCode)
+    }
     throw err
   }
 
