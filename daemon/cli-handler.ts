@@ -400,7 +400,7 @@ async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
       if (!p.name) return respond(req, false, 'specialist name is required')
       try {
         const { info, spawned } = await ensureSpecialist(p.name)
-        return respond(req, true, { name: p.name, sessionId: info.sessionId, sessionName: info.tmuxName, threadId: info.threadId, spawned })
+        return respond(req, true, { name: p.name, sessionId: info.sessionId, sessionName: info.tmuxName, threadId: info.threadId, spawned, connected: transport.has(info.sessionId) })
       } catch (err) {
         return respond(req, false, err instanceof Error ? err.message : String(err), undefined, err instanceof SpecialistError ? err.exitCode : undefined)
       }

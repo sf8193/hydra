@@ -103,9 +103,17 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
   spawnBackoff.delete(name)
 
   // `set` and `rm` do not take the lock and the spawn took seconds: write against what is stored now, not the copy read before it.
-  // A specialist removed meanwhile stays removed; one re-pointed meanwhile keeps its new thread.
   const current = getSpecialist(name)
-  if (current && current.threadId === specialist.threadId && result.threadId !== current.threadId) {
+  if (current && current.threadId !== specialist.threadId) {
+    // Re-pointed meanwhile: the operator's thread wins, and the session we just started is in another one. Say so loudly and
+    // leave it running (nothing here kills a session unasked); the next spawn under this name would refuse, naming it.
+    const stray = registry.get(result.sessionId)?.tmuxName ?? result.sessionId
+    const msg = `specialist "${name}" was re-pointed to thread ${current.threadId ?? '(none)'} while its session ${stray} was starting in thread ${result.threadId}; ${stray} is left running: kill it, or point the specialist back at its thread`
+    process.stderr.write(`daemon: ${msg}\n`)
+    throw new Error(msg)
+  }
+  // A specialist removed meanwhile stays removed.
+  if (current && result.threadId !== current.threadId) {
     const { updatedAt: _t, ...rest } = current
     // The session is already running in the new thread; a failed write must not fail this delivery.
     try { setSpecialist(name, { ...rest, threadId: result.threadId }) } catch (err) {

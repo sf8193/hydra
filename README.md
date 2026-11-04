@@ -443,7 +443,7 @@ A specialist is a standing job with a stable name, filled by one long-lived sess
 | Step | Command | What happens |
 |---|---|---|
 | Declare | `hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> \| --kickoff-file <path>] [--model <id>]` | Creates or updates it; fields you leave out keep their value. A new one needs `--channel` (its first session opens a thread there) or `--thread` (an existing one). |
-| Create | `hydra specialist up <name>`, or the first delivery | Spawns the session if none is alive: named `<name>` (so its tmux session, `hydra list` row and thread title say so), started from the kickoff. A no-op when one is alive, however many callers arrive together. |
+| Create | `hydra specialist up <name>`, or the first delivery | Spawns the session if none is alive: named `<name>` (so its tmux session, `hydra list` row and thread title say so), started from the kickoff. A no-op when one is alive, however many callers arrive together; the reply says whether the occupant is `connected` (alive is not the same as reachable: a delivery refuses an orphaned one). |
 | Deliver | `hydra deliver --specialist <name> --message "..."` (the Slack listener does the same in-process) | Whispers to the live session; if nobody is home, fills the specialist first, then delivers. |
 | Look | `hydra specialist show <name>` / `list` | The stored fields plus who fills it now and whether refills are backing off. `hydra peek\|attach\|kill\|status <name>` work on the session by name. |
 | Change | `hydra specialist set <name> --kickoff-file … --model …` | Applies at the next refill; to apply now, `hydra kill <name>` then `hydra specialist up <name>`. |

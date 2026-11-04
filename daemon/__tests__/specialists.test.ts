@@ -242,6 +242,34 @@ describe('specialists', () => {
     expect(getSpecialist(gone)).toBeUndefined() // a removed specialist stays removed
   })
 
+  test('a set --thread that lands while the spawn is running wins; the call fails naming the stray session, which keeps running', async () => {
+    const name = `t-specialist-${++n}`
+    names.push(name)
+    await cli('set', name, { channel: 'chan-repoint', kickoff: 'k' })
+    let strayThread = ''
+    specialistDeps.spawn = (async () => {
+      await Bun.sleep(30)
+      strayThread = `fresh-thread-${++n}`
+      const sessionId = occupy(strayThread)
+      return { name: `${sessionId}-tmux`, sessionId, threadId: strayThread, url: '' }
+    }) as typeof specialistDeps.spawn
+    const up = cli('up', name)
+    await Bun.sleep(5)
+    await cli('set', name, { thread: 'thread-chosen-by-operator' })
+    const res = await up as any
+    const error: string = res.error // read before toMatchObject, which leaves the matcher in its place under Bun
+    expect(res.ok).toBe(false)
+    expect(error).toContain('re-pointed to thread thread-chosen-by-operator')
+    expect(error).toContain(strayThread)
+    expect(getSpecialist(name)!.threadId).toBe('thread-chosen-by-operator') // the operator's choice survives
+    expect(registry.getByThread(strayThread)).toBeDefined() // and the stray session is left alone
+  })
+
+  test('up reports whether the occupant is connected, since alive is not the same as reachable', async () => {
+    occupy('thread-up-conn')
+    expect(await cli('up', specialist('thread-up-conn'))).toMatchObject({ ok: true, data: { spawned: false, connected: false } })
+  })
+
   test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {
     const calls = fakeSpawn()
     specialistDeps.threadExists = async () => false
