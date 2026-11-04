@@ -234,8 +234,9 @@ function hasLiveReplPrompt(tail: string): boolean {
 // Footers vary by dialog ("Enter to confirm · Esc to cancel", "Esc to cancel · Tab to amend",
 // "Enter to select · ↑/↓ to navigate · Esc to cancel"); the Esc hint is what they share.
 const DIALOG_FOOTER_RE = /Esc to cancel/
-// The workspace trust screen: cancelling it exits Claude, so Esc would end the session.
-const ESC_ENDS_SESSION_RE = /I trust this folder/
+// Startup gates (workspace trust, the bypass-permissions warning) offer "No, exit": cancelling one
+// exits Claude, so Esc would end the session.
+const ESC_ENDS_SESSION_RE = /No, exit/
 const USAGE_OPTION_A = /Stop and wait for limit to reset/
 const USAGE_OPTION_B = /Add funds to continue with extra usage/
 const USAGE_OPTION_C = /Upgrade your plan/
@@ -479,32 +480,42 @@ async function dismissUnknownDialog(entry: ProbeEntry, now: number): Promise<voi
   entry.notifying = true
   try {
     const name = entry.tmuxName
-    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
     const tail = (await io.capturePaneTail(name, PANE_TAIL_LINES)) ?? ''
     // Esc at a working session would interrupt its turn, so re-read the screen right before pressing.
     if (detectBlockingState(tail)?.kind !== 'unknown_dialog') return
     const dismissed = !ESC_ENDS_SESSION_RE.test(tail) && await io.sendKeys(name, 'Escape')
-    const why = blockedReason(io.claudeStatus?.(name) ?? null)
-    const whyClause = why ? ` (Claude says it is waiting on: \`${why}\`)` : ''
-    const quoted = `\`\`\`\n${tail.trim()}\n\`\`\``
-    const ids = channelId
-      ? await io.safeSend(channelId, dismissed
-        ? `> ⏸️ **${name}** was stuck on a dialog${whyClause}. Pressed Esc and told the session.\n${quoted}`
-        : `> ⏸️ **${name}** is stuck on a dialog${whyClause}. Run: \`tmux attach -t ${name}\`\n${quoted}`)
-      : []
-    if (dismissed) tellSessionDialogDismissed(entry, channelId, ids[0] ?? '', tail)
+    // Counted before anything below can fail, so a persistent dialog stays under the cooldown and cap.
     entry.notifiedAt = now
     entry.notifyCount++
     process.stderr.write(`daemon: pane-probe: ${name} unknown dialog, dismissed=${dismissed}\n`)
+
+    const why = blockedReason(io.claudeStatus?.(name) ?? null)
+    const whyClause = why ? ` (Claude says it is waiting on: \`${why}\`)` : ''
+    const quoted = `\`\`\`\n${tail.trim()}\n\`\`\``
+    const alert = dismissed
+      ? `> ⏸️ **${name}** was stuck on a dialog${whyClause}. Pressed Esc and told the session.\n${quoted}`
+      : `> ⏸️ **${name}** is stuck on a dialog${whyClause}. Run: \`tmux attach -t ${name}\`\n${quoted}`
+    // A headless session's threadId is a placeholder: nothing may post to it.
+    const canPost = !!entry.threadId && !findSession(name)?.headless
+    // A failed alert must not stop the session hearing that its dialog was cancelled.
+    const ids = canPost
+      ? await io.safeSend(entry.threadId, alert).catch(err => {
+        process.stderr.write(`daemon: pane-probe: ${name} dialog alert failed: ${err}\n`)
+        return [] as string[]
+      })
+      : []
+    if (dismissed) tellSessionDialogDismissed(entry, ids[0] ?? '', tail)
+  } catch (err) {
+    process.stderr.write(`daemon: pane-probe: ${entry.tmuxName} dialog handling failed: ${err}\n`)
   } finally {
     entry.notifying = false
   }
 }
 
-function tellSessionDialogDismissed(entry: ProbeEntry, channelId: string, messageId: string, tail: string): void {
+function tellSessionDialogDismissed(entry: ProbeEntry, messageId: string, tail: string): void {
   const sessionId = entry.isMain ? 'main' : findSession(entry.tmuxName)?.sessionId
   if (!sessionId) return
-  const url = messageId ? io.getMessageUrl?.(channelId, messageId) : ''
+  const url = messageId ? io.getMessageUrl?.(entry.threadId, messageId) : ''
   io.transportSendOrQueue(sessionId, {
     type: 'notification',
     content: [
@@ -513,7 +524,7 @@ function tellSessionDialogDismissed(entry: ProbeEntry, channelId: string, messag
       `Redo the step in a way that needs no answer from a person, or skip it and report that you skipped it. If it was a safety check, only use a rewrite that check would allow.`,
     ].join('\n\n'),
     meta: {
-      chat_id: channelId,
+      chat_id: entry.threadId,
       message_id: messageId,
       user: 'pane-probe',
       user_id: 'system',
