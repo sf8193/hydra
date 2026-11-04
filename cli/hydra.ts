@@ -62,7 +62,9 @@ Deliver (whisper channel — message to session context, not thread):
     --queue                            Queue if bridge disconnected (default: fail)
 
 Specialists (named addresses that refill themselves):
-  hydra specialist set <name> --thread <id> [--channel <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
+  hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
+                                       a new specialist needs --channel (its first session opens a thread there) or --thread
+  hydra specialist up <name>           Make sure it has a live session now (a no-op if one is alive)
   hydra specialist show <name> | list | rm <name>
 
 Slack watches (threads whose replies reach a specialist):
@@ -376,8 +378,8 @@ async function main(): Promise<void> {
 
     case 'specialist': {
       const [action, name] = [filtered[1], filtered[2]]
-      if (!['set', 'show', 'rm', 'list'].includes(action ?? '')) {
-        console.error('error: usage: hydra specialist set|show|rm|list <name> [flags]')
+      if (!['set', 'show', 'up', 'rm', 'list'].includes(action ?? '')) {
+        console.error('error: usage: hydra specialist set|show|up|rm|list <name> [flags]')
         process.exit(1)
       }
       const flags: Record<string, string> = {}

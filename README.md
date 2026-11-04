@@ -438,7 +438,18 @@ Add `+green` (`watch <pr-url> +green`, or `watch_pr` with `notify_green: true`) 
 
 ### Specialists
 
-A specialist is a standing job with a stable name, filled by one long-lived session: a thread plus the prompt to refill it with. Its name must not be one of the default session names (spark, comet, …), which already address sessions. A handoff successor keeps its predecessor's name and thread, so it keeps filling the specialist. `hydra specialist set <name> --thread <id> [--channel <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]` creates or updates one (fields you leave out keep their value); `hydra specialist show|list|rm` inspect and remove. `hydra deliver --specialist <name> --message "..."` whispers to the thread's live session. When nobody is home the daemon respawns one into the same thread from the kickoff, named for the specialist (so its tmux session, `hydra list` row and thread title all say `slopbot`, and a refill takes the name back; if another session holds it, the refill fails instead of picking a default name), once, however many callers arrive at the same moment, then delivers. A kickoff file is re-read on every refill. A refill that keeps failing backs off (30s, doubling to 10 minutes); an occupant that is more than 90 seconds old and has no bridge connected is reported orphaned (exit 4), not delivered to. If Discord no longer has the thread, the specialist moves to a new one in its `--channel`.
+A specialist is a standing job with a stable name, filled by one long-lived session. It stores where the session lives (a Discord thread, or the channel to open one in) and the prompt to start it with. Spawning is the ordinary `doSpawnSession`, the same function behind `hydra spawn`; a specialist adds the saved arguments and an "only if vacant" check around it. Its name must not be one of the default session names (spark, comet, …), which already address sessions.
+
+| Step | Command | What happens |
+|---|---|---|
+| Declare | `hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> \| --kickoff-file <path>] [--model <id>]` | Creates or updates it; fields you leave out keep their value. A new one needs `--channel` (its first session opens a thread there) or `--thread` (an existing one). |
+| Create | `hydra specialist up <name>`, or the first delivery | Spawns the session if none is alive: named `<name>` (so its tmux session, `hydra list` row and thread title say so), started from the kickoff. A no-op when one is alive, however many callers arrive together. |
+| Deliver | `hydra deliver --specialist <name> --message "..."` (the Slack listener does the same in-process) | Whispers to the live session; if nobody is home, fills the specialist first, then delivers. |
+| Look | `hydra specialist show <name>` / `list` | The stored fields plus who fills it now and whether refills are backing off. `hydra peek\|attach\|kill\|status <name>` work on the session by name. |
+| Change | `hydra specialist set <name> --kickoff-file … --model …` | Applies at the next refill; to apply now, `hydra kill <name>` then `hydra specialist up <name>`. |
+| Retire | `hydra specialist rm <name>` | Removes the declaration; a running session is left alone. |
+
+A handoff successor keeps its predecessor's name and thread, so it keeps filling the specialist. A kickoff file is re-read on every spawn. A refill reuses the specialist's thread while Discord still has it, and tells the new session it is resuming there; if the thread is gone, or the specialist never had one, a new thread opens in its `--channel`. If another session already holds the name, the spawn fails instead of picking a default name. A refill that keeps failing backs off (30s, doubling to 10 minutes; callers get exit 6); an occupant that is more than 90 seconds old and has no bridge connected is reported orphaned (exit 4), not delivered to.
 
 ### Slack watching
 

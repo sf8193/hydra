@@ -18,7 +18,7 @@ export type SpecialistDeliverResult =
   | { ok: false; error: string; data?: unknown; exitCode?: number; permanent?: true }
 
 /** A refusal that carries the CLI exit code a caller should see. */
-class SpecialistError extends Error {
+export class SpecialistError extends Error {
   constructor(message: string, readonly exitCode?: number) { super(message) }
 }
 
@@ -45,8 +45,8 @@ export const specialistDeps = {
 const spawnBackoff = new Map<string, { failures: number; nextAt: number }>()
 export function _resetSpecialistBackoff(): void { spawnBackoff.clear() }
 
-function liveOccupant(threadId: string): SessionInfo | undefined {
-  const id = registry.getByThread(threadId)
+function liveOccupant(threadId: string | undefined): SessionInfo | undefined {
+  const id = threadId ? registry.getByThread(threadId) : undefined
   const info = id ? registry.get(id) : undefined
   return info && isAlive(info) ? info : undefined
 }
@@ -76,10 +76,12 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
     throw new SpecialistError(`specialist "${name}": refilling is backing off for ${Math.ceil((backoff.nextAt - now) / 1000)}s after ${backoff.failures} failed attempt(s)`, 6)
   }
 
-  const thread = threadRegistry.get(specialist.threadId)
-  const reusable = !!thread && await specialistDeps.threadExists(specialist.threadId)
+  const thread = specialist.threadId ? threadRegistry.get(specialist.threadId) : undefined
+  const reusable = !!specialist.threadId && !!thread && await specialistDeps.threadExists(specialist.threadId)
   if (!reusable && !specialist.channel) {
-    throw new Error(`specialist "${name}": thread ${specialist.threadId} is gone and the specialist has no channel to open a new one in`)
+    throw new Error(specialist.threadId
+      ? `specialist "${name}": thread ${specialist.threadId} is gone and the specialist has no channel to open a new one in`
+      : `specialist "${name}" has no thread and no channel to open one in`)
   }
   const last = reusable ? thread!.sessionHistory.at(-1) : undefined
 
@@ -91,7 +93,7 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
       // The session is named for the specialist, so its tmux name, `hydra list` row and thread title all say so, and a refill takes the name back.
       name,
       ...((specialist.model ?? last?.model) && { model: (specialist.model ?? last?.model)! }),
-      ...(reusable && { existingThreadId: specialist.threadId, ...(last && { resurrectFrom: last.tmuxName }) }),
+      ...(reusable && { existingThreadId: specialist.threadId!, ...(last && { resurrectFrom: last.tmuxName }) }),
     })
   } catch (err) {
     const failures = (backoff?.failures ?? 0) + 1
@@ -115,6 +117,28 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
 }
 
 /**
+ * Make sure the specialist has a live session now: the same lock and the same spawn as a delivery's
+ * refill, so it is safe to call at any time and from many callers. A live occupant is returned
+ * untouched (`spawned: false`); a vacant specialist is filled once.
+ */
+export async function ensureSpecialist(name: string, initiator?: string): Promise<{ info: SessionInfo; spawned: boolean }> {
+  if (!getSpecialist(name)) throw new Error(`specialist "${name}" not found`)
+  return withSpecialistLock(name, () => occupant(name, initiator))
+}
+
+/** What `hydra specialist show|list` adds to the stored fields: who fills it now, and whether refills are backing off. */
+export function specialistStatus(name: string): { occupant?: { session: string; connected: boolean }; refillBackoff?: { failures: number; retryInSec: number } } {
+  const s = getSpecialist(name)
+  const live = s ? liveOccupant(s.threadId) : undefined
+  const b = spawnBackoff.get(name)
+  const wait = b ? Math.ceil((b.nextAt - specialistDeps.now()) / 1000) : 0
+  return {
+    ...(live && { occupant: { session: live.tmuxName, connected: transport.has(live.sessionId) } }),
+    ...(b && wait > 0 && { refillBackoff: { failures: b.failures, retryInSec: wait } }),
+  }
+}
+
+/**
  * `hydra deliver --specialist <name>`: whisper `message` to whoever sits in the specialist.
  *
  * Always queues. A specialist is an address, not a connection: the occupant may still
@@ -124,7 +148,7 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
  * sit unread, so that is a failure the caller keeps owing, not a delivery.
  */
 export async function deliverToSpecialist(p: { specialist: string; message: string; initiator?: string; idempotencyKey?: string; source?: string }): Promise<SpecialistDeliverResult> {
-  if (!getSpecialist(p.specialist)) return { ok: false, error: `specialist "${p.specialist}" not found — create it with 'hydra specialist set ${p.specialist} --thread <id>'` }
+  if (!getSpecialist(p.specialist)) return { ok: false, error: `specialist "${p.specialist}" not found — create it with 'hydra specialist set ${p.specialist} --channel <id> --kickoff-file <path>'` }
   const bytes = Buffer.byteLength(p.message)
   if (bytes > DELIVER_MAX_MESSAGE_BYTES) {
     return { ok: false, error: `message too large (${bytes} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`, permanent: true }
@@ -135,7 +159,7 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
   const release = () => { if (p.idempotencyKey) clearIdempotency(p.idempotencyKey) }
 
   try {
-    const { info, spawned } = await withSpecialistLock(p.specialist, () => occupant(p.specialist, p.initiator))
+    const { info, spawned } = await ensureSpecialist(p.specialist, p.initiator)
     const connected = transport.has(info.sessionId)
     if (!spawned && !connected && specialistDeps.now() - info.createdAt > ORPHAN_GRACE_MS) {
       release()

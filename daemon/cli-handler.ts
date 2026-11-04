@@ -7,7 +7,7 @@ import { formatContextPercent, type DeliveryResult } from './engines/engine-adap
 import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
-import { deliverToSpecialist } from './specialist-deliver.js'
+import { deliverToSpecialist, ensureSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { ORPHAN_GRACE_MS } from './session-reachability.js'
@@ -363,9 +363,9 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 // Specialists — named, refillable addresses (see specialists.ts)
 // ---------------------------------------------------------------------------
 
-function handleSpecialist(req: CLIRequest): CLIResponse {
+async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
   const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string }
-  const view = (name: string, s: Specialist) => ({ name, ...s })
+  const view = (name: string, s: Specialist) => ({ name, ...s, ...specialistStatus(name) })
   switch (p.action) {
     case 'list': return respond(req, true, listSpecialists().map(([name, s]) => view(name, s)))
     case 'show': {
@@ -381,13 +381,13 @@ function handleSpecialist(req: CLIRequest): CLIResponse {
       if (!p.name) return respond(req, false, 'specialist name is required')
       const existing = getSpecialist(p.name)
       const threadId = p.thread ?? existing?.threadId
-      if (!threadId) return respond(req, false, '--thread is required for a new specialist')
+      if (!threadId && !(p.channel ?? existing?.channel)) return respond(req, false, '--channel (where to open its thread) or --thread is required for a new specialist')
       if (p.kickoffFile && !existsSync(p.kickoffFile)) return respond(req, false, `kickoff file not found: ${p.kickoffFile}`)
       // Fields not passed keep their current value, so re-pointing a specialist's thread leaves its kickoff alone.
       const { updatedAt: _t, ...rest } = existing ?? { updatedAt: 0 }
       const specialist = setSpecialist(p.name, {
         ...rest,
-        threadId,
+        ...(threadId && { threadId }),
         ...(p.channel && { channel: p.channel }),
         ...(p.kickoff && { kickoff: p.kickoff }),
         ...(p.kickoffFile && { kickoffFile: p.kickoffFile }),
@@ -396,7 +396,16 @@ function handleSpecialist(req: CLIRequest): CLIResponse {
       refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the Slack-watch tools
       return respond(req, true, view(p.name, specialist))
     }
-    default: return respond(req, false, 'specialist action must be set, show, rm or list')
+    case 'up': {
+      if (!p.name) return respond(req, false, 'specialist name is required')
+      try {
+        const { info, spawned } = await ensureSpecialist(p.name)
+        return respond(req, true, { name: p.name, sessionId: info.sessionId, sessionName: info.tmuxName, threadId: info.threadId, spawned })
+      } catch (err) {
+        return respond(req, false, err instanceof Error ? err.message : String(err), undefined, err instanceof SpecialistError ? err.exitCode : undefined)
+      }
+    }
+    default: return respond(req, false, 'specialist action must be set, show, up, rm or list')
   }
 }
 
@@ -445,7 +454,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'clear-key': response = handleClearKey(req); break
       case 'check-key': response = handleCheckKey(req); break
       case 'deliver': response = await handleDeliver(req); break
-      case 'specialist': response = handleSpecialist(req); break
+      case 'specialist': response = await handleSpecialist(req); break
       case 'slack-watch': response = handleSlackWatch(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
