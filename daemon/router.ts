@@ -33,10 +33,10 @@ import { notePendingReply } from './reply-guard.js'
 import { deliverUserMessage } from './typed-delivery.js'
 import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
-import { isAlive, reportError } from './util.js'
+import { isAlive, reportError, safeSend } from './util.js'
 import type { ProviderId, TmuxKeyAction } from './engines/engine-adapter.js'
 import { RESPAWN_RE } from './recovery-selection.js'
-import { listTemplates, getTemplate } from './templates.js'
+import { listTemplates, getTemplate, formatTemplateList } from './templates.js'
 
 // Global command prefixes — gated on top-level allowFrom. Thread-scoped
 // commands (fork, watch, build, respawn, resume) are excluded: those are
@@ -541,16 +541,8 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const templatesMatch = msg.content.match(/^(?:\/templates|templates)\s*$/i)
     if (templatesMatch) {
       const templates = listTemplates()
-      if (templates.length === 0) {
-        void gateway.send(msg.channelId, 'No templates configured.', { replyTo: msg.id })
-      } else {
-        const lines = templates.map(t => {
-          const actionTag = t.action ? ` _(+ ${t.action} protocol)_` : ''
-          const modelTag = t.model ? ` \`[${t.model}]\`` : ''
-          return `**${t.name}**${actionTag}${modelTag} — ${t.prompt.slice(0, 80)}${t.prompt.length > 80 ? '...' : ''}`
-        })
-        void gateway.send(msg.channelId, `**Spawn Templates**\n${lines.join('\n')}`, { replyTo: msg.id })
-      }
+      const text = templates.length === 0 ? 'No templates configured.' : formatTemplateList(templates)
+      void safeSend(msg.channelId, text, { replyTo: msg.id })
       return
     }
 

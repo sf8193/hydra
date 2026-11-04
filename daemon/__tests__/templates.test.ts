@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
-import { getTemplate, listTemplates, parseTemplateTopic, buildTemplateSpawnOpts, loadTemplateFile } from '../templates.js'
+import { getTemplate, listTemplates, parseTemplateTopic, buildTemplateSpawnOpts, loadTemplateFile, formatTemplateList } from '../templates.js'
+import { chunk } from '../util.js'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -38,6 +39,44 @@ describe('getTemplate', () => {
     expect(mixed).toEqual(lower)
   })
 
+})
+
+// ---------------------------------------------------------------------------
+// formatTemplateList
+// ---------------------------------------------------------------------------
+
+describe('formatTemplateList', () => {
+  const longPrompt = 'Investigate the failure. '.repeat(20).trim() + '\nThen write a fix.'
+
+  test('shows the full prompt, not an 80-char preview', () => {
+    const out = formatTemplateList([{ name: 'debug', prompt: longPrompt }])
+    expect(out).toContain('Investigate the failure. '.repeat(19))
+    expect(out).toContain('Then write a fix.')
+    expect(out).not.toContain('...')
+  })
+
+  test('gives each template its own block with action and model tags', () => {
+    const out = formatTemplateList([
+      { name: 'a', prompt: 'first', action: 'review' },
+      { name: 'b', prompt: 'second', model: 'opus' },
+    ])
+    const blocks = out.split('\n\n')
+    expect(blocks[0]).toBe('**Spawn Templates**')
+    expect(blocks[1]).toBe('**a** _(+ review protocol)_\n> first')
+    expect(blocks[2]).toBe('**b** `[opus]`\n> second')
+  })
+
+  test('quotes every line of a multi-line prompt', () => {
+    const out = formatTemplateList([{ name: 'x', prompt: 'line one\nline two' }])
+    expect(out).toContain('> line one\n> line two')
+  })
+
+  test('long output splits on template boundaries under the Discord limit', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ name: `t${i}`, prompt: longPrompt }))
+    const parts = chunk(formatTemplateList(many), 2000, 'markdown')
+    expect(parts.length).toBeGreaterThan(1)
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(2000)
+  })
 })
 
 // ---------------------------------------------------------------------------
