@@ -534,6 +534,10 @@
     ],
     [
       "daemon_bridge-dispatch",
+      "daemon_tool-surface"
+    ],
+    [
+      "daemon_bridge-dispatch",
       "daemon_anchor-state"
     ],
     [
@@ -543,10 +547,6 @@
     [
       "daemon_bridge-dispatch",
       "shared_constants"
-    ],
-    [
-      "daemon_bridge-dispatch",
-      "daemon_tool-surface"
     ],
     [
       "daemon_bridge-dispatch",

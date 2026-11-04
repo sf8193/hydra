@@ -5,6 +5,8 @@ import { BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPAB
 import type { SessionType, Capability, DerivedCapability } from '../shared/constants.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
+import { getSpecialist } from './specialists.js'
+import { fileConfig, slackWatchConfigPath } from './slack-watch.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
 const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<string>>> = TYPED_BASE_TOOLS
@@ -22,10 +24,20 @@ export function predecessorAsker(info: Pick<SessionInfo, 'engine' | 'predecessor
 
 export const canAskPredecessor = (info: Pick<SessionInfo, 'engine' | 'predecessor'>): boolean => !!predecessorAsker(info)
 
-/** Stored capabilities plus the derived ones: a session that can ask its predecessor gets the tool. */
-export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'>): Set<Capability | DerivedCapability> {
+const slackWatchConfig = fileConfig(slackWatchConfigPath())
+
+/** Whether this session sits in the Slack-watch specialist's thread: the one session that steers which threads are watched. */
+export function isSlackSpecialistOccupant(info: Partial<Pick<SessionInfo, 'threadId'>>): boolean {
+  const specialist = slackWatchConfig()?.specialist
+  const thread = specialist ? getSpecialist(specialist)?.threadId : undefined
+  return !!thread && info.threadId === thread
+}
+
+/** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that sits in the Slack-watch specialist, gets those tools. */
+export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId'>>): Set<Capability | DerivedCapability> {
   const caps = new Set<Capability | DerivedCapability>(info.capabilities ?? [])
   if (canAskPredecessor(info)) caps.add('predecessor')
+  if (isSlackSpecialistOccupant(info)) caps.add('slack_specialist')
   return caps
 }
 

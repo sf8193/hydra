@@ -207,6 +207,7 @@ if ('homeSpawnHandler' in gateway) {
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
+import { startSlackWatch, stopSlackWatch } from './daemon/slack-watch-runtime.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
@@ -397,6 +398,7 @@ async function backfillArtifacts(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 startPrWatcher()
+startSlackWatch()
 
 // Reply guard: polls session activity every 20s (see below).
 
@@ -480,6 +482,7 @@ function shutdown(): void {
   shuttingDown = true
   process.stderr.write('daemon: shutting down\n')
 
+  stopSlackWatch()
   registry.persist()
   transport.persistQueues()
   socketServer.close()
