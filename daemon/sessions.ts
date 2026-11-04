@@ -450,7 +450,7 @@ export class SessionRegistry {
 
   /** A caller-chosen name (`SpawnOpts.name`): the name itself or an error, never a substitute. `replacing`: the dead record this spawn takes over from. */
   claimSessionName(name: string, replacing?: string): string {
-    if (this.usedNames(replacing, name).has(name)) throw new Error(`session name "${name}" is already in use`)
+    if (this.usedNames(replacing).has(name)) throw new Error(`session name "${name}" is already in use`)
     return name
   }
 
@@ -762,7 +762,7 @@ export const threadRegistry = new ThreadRegistry()
 /**
  * Resolve a session name to the session that should receive the message.
  *
- * A session name identifies a specialist in a thread, not an immortal process. When
+ * A session name identifies a seat in a thread, not an immortal process. When
  * the named session is gone but its thread has a new occupant, that occupant is
  * who the sender meant — so deliver there and say so, rather than failing with
  * "no session named" and leaving the sender to rediscover names by hand.

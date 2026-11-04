@@ -133,6 +133,12 @@ describe('SessionRegistry.claimSessionName', () => {
     reg.set('sid-live', makeInfo({ sessionId: 'sid-live', tmuxName: 'claim-me' }))
     expect(() => reg.claimSessionName('claim-me', 'sid-dead')).toThrow(/already in use/)
   })
+
+  test('refuses a name recovery has reserved for its own respawn', () => {
+    const reg = new SessionRegistry()
+    reg.reservedNames.add('held-by-recovery')
+    expect(() => reg.claimSessionName('held-by-recovery')).toThrow(/already in use/)
+  })
 })
 
 describe('ThreadRegistry', () => {
