@@ -275,7 +275,9 @@ export class SlackWatcher {
   private botId: string | undefined
   private catchingUp = false
 
-  constructor(private readonly deps: SlackWatchDeps) { this.load() }
+  private resolveName: SlackWatchDeps['resolveName']
+
+  constructor(private readonly deps: SlackWatchDeps) { this.resolveName = deps.resolveName; this.load() }
 
   // -- store ---------------------------------------------------------------
 
@@ -314,6 +316,8 @@ export class SlackWatcher {
   list(): SlackWatchEntry[] { return [...this.entries.values()] }
   get(channel: string, threadTs: string): SlackWatchEntry | undefined { return this.entries.get(watchKey(channel, threadTs)) }
   setBotId(id: string | undefined): void { this.botId = id }
+  /** Supplied once the listener has a Slack client: display names for the senders in deliveries. */
+  setNameResolver(fn: SlackWatchDeps['resolveName']): void { this.resolveName = fn }
 
   /** Watch a thread by hand (the bridge tool). Idempotent. Undefined when the watch table is full. */
   watch(channel: string, threadTs: string, specialist: string, mentionedBy?: string): SlackWatchEntry | undefined {
@@ -469,7 +473,7 @@ export class SlackWatcher {
 
   /** Display name for a user id, cached. A slow or failing lookup yields no name, never a delay. */
   private async nameOf(userId: string): Promise<string | undefined> {
-    const resolve = this.deps.resolveName
+    const resolve = this.resolveName
     if (!resolve) return undefined
     const now = this.deps.now()
     const hit = this.names.get(userId)

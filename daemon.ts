@@ -207,7 +207,7 @@ if ('homeSpawnHandler' in gateway) {
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
-import { startSlackWatch, stopSlackWatch } from './daemon/slack-watch-runtime.js'
+import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/slack-watch-runtime.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
@@ -353,6 +353,10 @@ void startGateway().then(async () => {
   // the gateway is up (respawns post to their threads). No-op otherwise.
   await autoRecoverAfterBoot(startupGapMs ?? undefined).catch(err =>
     process.stderr.write(`daemon: auto-recovery failed: ${err instanceof Error ? err.message : err}\n`),
+  )
+  // After recovery, so a specialist refill never races it. Never throws, never blocks the boot.
+  void startSlackListener().catch(err =>
+    process.stderr.write(`daemon: slack listener failed to start: ${err instanceof Error ? err.message : err}\n`),
   )
 })
 

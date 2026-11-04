@@ -78,9 +78,9 @@ test('the fd-limit prefix runs before the command and tolerates a shell that rej
   expect(TMUX_PANE_FD_LIMIT).toBeGreaterThan(256)
 })
 
-test('the scrubbed set is exactly these four', () => {
+test('the scrubbed set is exactly these six', () => {
   expect([...SCRUBBED_SPAWN_VARS]).toEqual(
-    ['RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO'],
+    ['RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO', 'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN'],
   )
 })
 
@@ -99,6 +99,8 @@ test('tmuxNewSession sweeps every var in one call, before it creates the session
     ';', 'set-environment', '-gr', 'RAINDROP_MODE',
     ';', 'set-environment', '-gr', 'RAINDROP_USER_ID',
     ';', 'set-environment', '-gr', 'RAINDROP_OMIT_REPO',
+    ';', 'set-environment', '-gr', 'SLOPBOT_SLACK_APP_TOKEN',
+    ';', 'set-environment', '-gr', 'SLOPBOT_SLACK_BOT_TOKEN',
   ])
   expect(calls[0].argv).toEqual([...SWEEP_ARGV])
   expect(calls[1].argv).toEqual(['new-session', '-d', '-s', 'probe'])
