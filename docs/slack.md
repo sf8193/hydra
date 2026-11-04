@@ -64,7 +64,13 @@ Both live in the daemon's **state dir** — default `~/.claude/channels/slack/` 
 CHAT_PLATFORM=slack
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
+# Config dir that has the bridge plugin (step 5). Spawned sessions use it too.
+CLAUDE_CONFIG_DIR=/Users/<YOUR_USERNAME>/.claude
+# Working directory for spawned sessions. Must exist. Defaults to your home dir.
+SPAWN_CWD=/Users/<YOUR_USERNAME>/work
 ```
+
+Replace `<YOUR_USERNAME>` with your macOS username (`whoami`). Use absolute paths: the CLI does not expand `~` in this file.
 
 `access.json` — who may DM the bot (find your Slack user id via Profile → ⋮ → Copy member ID):
 
@@ -99,26 +105,25 @@ claude plugin install discord@claude-plugins-official
 
 ## 6. Run
 
-Check readiness first:
+Run these from the hydra checkout. The CLI reads `CLAUDE_CONFIG_DIR` and `SPAWN_CWD` from the `.env` in step 4.
 
 ```bash
-CHAT_PLATFORM=slack DISCORD_STATE_DIR=~/.claude/channels/slack CLAUDE_CONFIG_DIR=~/.claude ./preflight.sh
+# Check readiness.
+bun cli/hydra.ts preflight slack
+
+# Start the daemon and the bot (the main Claude session, tmux `slack-byte`).
+# Set BYTE_CHANNEL to greet a DM on launch, or leave it unset to start silently.
+bun cli/hydra.ts up slack
+
+# Optional: install the launchd watchdog, which restarts both if they die.
+bun cli/hydra.ts install slack
 ```
 
-Then start the daemon, then the bot:
+Healthy = `tmux ls` shows `slack-daemon` **and** `slack-byte`, and the daemon log (`~/hydra-slack-daemon.log`) shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. Then DM the bot.
 
-```bash
-# 1) Daemon. CLAUDE_CONFIG_DIR MUST be a dir that has the bridge plugin (it's also the config
-#    spawned sub-sessions inherit). SPAWN_CWD is required (cwd for spawned sessions).
-CLAUDE_CONFIG_DIR=~/.claude DISCORD_STATE_DIR=~/.claude/channels/slack CHAT_PLATFORM=slack \
-  SPAWN_CWD=~/work ./start-daemon.sh
+`hydra up` refuses to start when a `slack-daemon` session already exists. Run `bun cli/hydra.ts down slack` first, or `bun cli/hydra.ts restart slack` to restart only the daemon.
 
-# 2) Bot (after the socket appears). Set BYTE_CHANNEL to greet a DM on launch, or leave it
-#    unset to start silently and just wait for messages.
-CHAT_PLATFORM=slack ./start-byte.sh
-```
-
-Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. Then DM the bot.
+The `preflight.sh`, `start-daemon.sh` and `start-byte.sh` scripts are deprecated. Use the CLI.
 
 ## Troubleshooting
 
@@ -127,8 +132,11 @@ Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge r
 | Bot never responds, no error | `channelsEnabled` gate (step 5) — check managed settings first. |
 | Bot replies as *your username* ("Sent using Runlayer…") | A native Slack connector is intercepting — disable it (step 5). |
 | Spawned session greets but ignores your thread replies | The daemon's `CLAUDE_CONFIG_DIR` lacks the bridge plugin, so the spawn never registered. Start the daemon with `CLAUDE_CONFIG_DIR` pointing at a dir that has it (step 6). |
-| `start-byte.sh`: "socket not found" | Daemon isn't up — run step 6.1 first. |
-| Daemon exits immediately | `SPAWN_CWD` is required. |
+| Daemon log shows `connected as <bot>` but the bot never replies, and `tmux ls` has no `slack-byte` | The bot did not start. Run `bun cli/hydra.ts down slack`, then `bun cli/hydra.ts up slack` (step 6). |
+| "daemon socket not found" | The daemon is not up. Run `bun cli/hydra.ts up slack` (step 6). |
+| `hydra up`: "SPAWN_CWD is set but empty" | Give `SPAWN_CWD` a value in `.env`, or remove the line to use `$HOME` (step 4). |
+| Bot dies at once, or spawns fail to launch | `SPAWN_CWD` points at a directory that does not exist. Create it, or fix `.env` (step 4). |
+| `slack-byte` runs but never replies | It waits on a first-run screen (theme, login, trust folder). Run `tmux attach -t slack-byte` and complete it once. `hydra preflight slack` warns about this. |
 
 ## Message formatting
 

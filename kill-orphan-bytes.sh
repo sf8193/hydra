@@ -10,12 +10,13 @@
 # Requires: $SOCK (daemon socket path), $LOG (log file path)
 
 _kill_orphan_bytes() {
-  pgrep -f "claude.*--channels" 2>/dev/null | while read pid; do
+  # pgrep exits 1 on no match; callers run under pipefail, so that would end them silently.
+  { pgrep -f "claude.*--channels" 2>/dev/null || true; } | while read pid; do
     pinfo=$(ps eww -p "$pid" 2>/dev/null || true)
     if echo "$pinfo" | grep -q "DAEMON_SOCK=$SOCK" && \
        ! echo "$pinfo" | grep -q "HYDRA_SESSION_ID="; then
       echo "$(date): ${1} orphaned byte process $pid" >> "$LOG"
-      kill ${2} "$pid" 2>/dev/null
+      kill ${2} "$pid" 2>/dev/null || true
     fi
   done
 }
