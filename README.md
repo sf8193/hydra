@@ -53,12 +53,17 @@ A new interface to building — run coding agents over Discord/Slack.
 ```bash
 # Install dependencies
 bun install
+claude plugin install discord@claude-plugins-official
 
-# Create .env with your bot token
+# Create .env with your bot token and an existing working directory
 mkdir -p ~/.claude/channels/discord
 cat > ~/.claude/channels/discord/.env << 'EOF'
+CHAT_PLATFORM=discord
 DISCORD_BOT_TOKEN=your-token-here
+SPAWN_CWD=~/your/project
 EOF
+
+# Run `claude` once: accept the onboarding screens and log in
 
 # Install watchdog + verify setup
 bun cli/hydra.ts install discord --cwd ~/your/project
