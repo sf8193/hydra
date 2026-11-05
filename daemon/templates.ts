@@ -112,7 +112,7 @@ export function formatTemplateList(templates: ReturnType<typeof listTemplates>):
   const blocks = templates.map(t => {
     const actionTag = t.action ? ` _(+ ${t.action} protocol)_` : ''
     const modelTag = t.model ? ` \`[${t.model}]\`` : ''
-    const quoted = t.prompt.split('\n').map(line => `> ${line}`).join('\n')
+    const quoted = t.prompt.split('\n').map(line => line ? `> ${line}` : '>').join('\n')
     return `**${t.name}**${actionTag}${modelTag}\n${quoted}`
   })
   return ['**Spawn Templates**', ...blocks].join('\n\n')

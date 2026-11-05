@@ -71,11 +71,19 @@ describe('formatTemplateList', () => {
     expect(out).toContain('> line one\n> line two')
   })
 
+  test('quotes an empty prompt line without a trailing space', () => {
+    const out = formatTemplateList([{ name: 'x', prompt: 'para one\n\npara two' }])
+    expect(out).toContain('> para one\n>\n> para two')
+  })
+
   test('long output splits on template boundaries under the Discord limit', () => {
     const many = Array.from({ length: 20 }, (_, i) => ({ name: `t${i}`, prompt: longPrompt }))
     const parts = chunk(formatTemplateList(many), 2000, 'markdown')
     expect(parts.length).toBeGreaterThan(1)
-    for (const part of parts) expect(part.length).toBeLessThanOrEqual(2000)
+    for (const part of parts) {
+      expect(part.length).toBeLessThanOrEqual(2000)
+      expect(part).toMatch(/^\*\*(Spawn Templates|t\d+)\*\*/)
+    }
   })
 })
 
