@@ -31,7 +31,6 @@ type SessionRow = {
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
-  originType?: string
   sessionType: string
   parent?: { name: string; url: string }
 }
@@ -67,7 +66,6 @@ function getActiveSessions(): SessionRow[] {
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
-      originType: s.originType,
       sessionType: s.sessionType,
       parent: parentInfo ? { name: parentInfo.tmuxName, url: sessionUrl(parentInfo) } : undefined,
     })
@@ -111,19 +109,10 @@ function escapeMrkdwn(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*~`]/g, '')
 }
 
-function buildOriginBadge(s: SessionRow): string {
-  if (s.originType === 'fork') return 'fork'
-  if (s.originType === 'handoff') return 'handoff'
-  if (s.originType === 'resurrect') return 'resurrect'
-  return ''
-}
-
 function buildSessionText(s: SessionRow): string {
   const link = s.url ? `<${s.url}|${s.name}>` : s.name
-  const origin = buildOriginBadge(s)
-  const originBadge = origin ? ` · ${origin}` : ''
   const parent = s.parent ? ` ← ${s.parent.url ? `<${s.parent.url}|${s.parent.name}>` : s.parent.name}` : ''
-  return `${s.emoji} *${link}*${parent} — ${escapeMrkdwn(s.desc)} · _${s.age}_${originBadge}`
+  return `${s.emoji} *${link}*${parent} — ${escapeMrkdwn(s.desc)} · _${s.age}_`
 }
 
 
