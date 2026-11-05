@@ -1,10 +1,12 @@
 import type { LiveState } from './engines/engine-adapter.js'
+import type { BlockingKind } from './pane-probe.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
 
 export type HomeStatusInputs = {
   connected: boolean
   live: LiveState | null
   working: boolean
+  stuck: BlockingKind | null
   lastReplyAt?: number
   lastUserMessageAt?: number
 }
@@ -15,6 +17,11 @@ const BUTTONS = {
   disconnected: { glyph: '◌', label: 'Disconnected', style: 'danger' },
   working: { glyph: '◑', label: 'Working' },
   blocked: { glyph: '■', label: 'Blocked', style: 'danger' },
+  login_required: { glyph: '■', label: 'Login needed', style: 'danger' },
+  usage_limit: { glyph: '■', label: 'Usage limit', style: 'danger' },
+  plan_mode: { glyph: '■', label: 'Plan approval', style: 'danger' },
+  resume_prompt: { glyph: '■', label: 'Resume prompt', style: 'danger' },
+  unknown_dialog: { glyph: '■', label: 'Dialog open', style: 'danger' },
   your_turn: { glyph: '●', label: 'Your turn', style: 'primary' },
   idle: { glyph: '○', label: 'Parked' },
 } as const
@@ -35,6 +42,7 @@ export function markUserMessaged(info: YourTurnFields, now = Date.now()): void {
 
 export function homeStatus(s: HomeStatusInputs): HomeStatus {
   if (!s.connected) return 'disconnected'
+  if (s.stuck) return s.stuck
   if (s.working) return 'working'
   if (s.live === 'blocked') return 'blocked'
   if (s.lastReplyAt && s.lastReplyAt > (s.lastUserMessageAt ?? 0)) return 'your_turn'

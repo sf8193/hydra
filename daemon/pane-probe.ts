@@ -48,6 +48,7 @@ type ProbeEntry = {
   firstSeen: number
   consecutive: number
   state: BlockingState
+  onScreen: boolean
   notifiedAt: number | null
   notifyCount: number
   notifying: boolean // in-flight notification guard
@@ -332,6 +333,21 @@ const threadIntercepts = new Map<string, {
   handler: (content: string, channelId: string, messageId: string) => Promise<void>
 }>()
 
+const isLoginNotice = (s: BlockingState) => s.kind === 'login_required' && (s.loginStage === 'success' || s.loginStage === 'expiring')
+
+async function press(tmuxName: string, ...keys: string[]): Promise<boolean> {
+  const sent = await io.sendKeys(tmuxName, ...keys)
+  const entry = probeEntries.get(tmuxName)
+  if (sent && entry) entry.onScreen = false
+  return sent
+}
+
+export function confirmedStuckKind(tmuxName: string): BlockingKind | null {
+  const entry = probeEntries.get(tmuxName)
+  if (!entry?.onScreen || entry.consecutive < CONFIRM_PROBES || isLoginNotice(entry.state)) return null
+  return entry.state.kind
+}
+
 export function getThreadIntercept(threadId: string) {
   return threadIntercepts.get(threadId)
 }
@@ -379,13 +395,13 @@ function isPlanModeOnScreen(tail: string): boolean {
 async function confirmAndApprovePlan(tmuxName: string): Promise<boolean> {
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail || !isPlanModeOnScreen(tail)) return false
-  return io.sendKeys(tmuxName, 'Enter')
+  return press(tmuxName, 'Enter')
 }
 
 async function confirmAndRejectPlan(tmuxName: string): Promise<boolean> {
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail || !isPlanModeOnScreen(tail)) return false
-  return io.sendKeys(tmuxName, 'Down', 'Down', 'Enter')
+  return press(tmuxName, 'Down', 'Down', 'Enter')
 }
 
 function autoLoginEnabled(): boolean {
@@ -406,7 +422,7 @@ async function confirmAndSendLogin(tmuxName: string): Promise<boolean> {
   const expired = !live && LOGIN_EXPIRED_RE.test(tail)
   const expiring = LOGIN_EXPIRING_PATTERNS.some(p => p.test(tail))
   if (!blocked && !expired && !expiring) return false
-  return io.sendKeys(tmuxName, '/login', 'Enter')
+  return press(tmuxName, '/login', 'Enter')
 }
 
 async function confirmAndDismissLoginSuccess(tmuxName: string): Promise<boolean> {
@@ -414,7 +430,7 @@ async function confirmAndDismissLoginSuccess(tmuxName: string): Promise<boolean>
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail) return false
   if (hasLiveReplPrompt(tail) || !LOGIN_SUCCESS_RE.test(tail)) return false
-  return io.sendKeys(tmuxName, 'Enter')
+  return press(tmuxName, 'Enter')
 }
 
 function isUsageLimitOnScreen(tail: string): boolean {
@@ -431,7 +447,7 @@ async function confirmAndDismissResumePrompt(tmuxName: string): Promise<boolean>
   const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
   if (!tail || !isResumePromptOnScreen(tail)) return false
   // CC pre-selects option 1 ("Resume from summary"). Enter confirms it.
-  return io.sendKeys(tmuxName, 'Enter')
+  return press(tmuxName, 'Enter')
 }
 
 // Esc cancels the dialog without choosing (no funds added); if the limit is
@@ -445,7 +461,7 @@ async function notifyUsageLimit(entry: ProbeEntry, now: number): Promise<void> {
     const name = entry.tmuxName
     const channelId = entry.isMain ? io.defaultChannel : entry.threadId
     const tail = await io.capturePaneTail(name, PANE_TAIL_LINES)
-    const dismissed = !!tail && isUsageLimitOnScreen(tail) && await io.sendKeys(name, 'Escape')
+    const dismissed = !!tail && isUsageLimitOnScreen(tail) && await press(name, 'Escape')
     if (channelId) {
       await io.safeSend(channelId, dismissed
         ? `> ⏸️ **${name}** was stuck on the usage-limit dialog — dismissed it. If the limit is still active it will come back.`
@@ -483,7 +499,7 @@ async function dismissUnknownDialog(entry: ProbeEntry, now: number): Promise<voi
     const tail = (await io.capturePaneTail(name, PANE_TAIL_LINES)) ?? ''
     // Esc at a working session would interrupt its turn, so re-read the screen right before pressing.
     if (detectBlockingState(tail)?.kind !== 'unknown_dialog') return
-    const dismissed = !ESC_ENDS_SESSION_RE.test(tail) && await io.sendKeys(name, 'Escape')
+    const dismissed = !ESC_ENDS_SESSION_RE.test(tail) && await press(name, 'Escape')
     // Counted before anything below can fail, so a persistent dialog stays under the cooldown and cap.
     entry.notifiedAt = now
     entry.notifyCount++
@@ -788,6 +804,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
     let detected = sessionInfo?.adapter
       ? sessionInfo.adapter.detectBlockingState(sessionInfo, tailText)
       : detectBlockingState(tailText)
+    const onScreen = !!detected
 
     // A spawn whose first turn was "Login expired" sits at a live prompt, so the pane
     // gate above reads the banner as stale. The transcript says it is not.
@@ -811,10 +828,12 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
     const existing = probeEntries.get(key)
     if (existing && existing.state.kind === detected.kind) {
+      existing.onScreen = onScreen
       // Login stage progression — notify immediately without debounce
       const stageChanged = detected.kind === 'login_required' &&
         existing.state.loginStage !== detected.loginStage
       if (stageChanged) {
+        if (isLoginNotice(existing.state)) existing.consecutive = 1
         existing.state = detected
         existing.notifiedAt = null
         existing.notifyCount = 0
@@ -829,8 +848,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
         // success + expiring are one-shot per state-entry: the screen isn't a
         // hard block, so nagging it (up to MAX) is just spam. Genuinely stuck
         // states (plan/resume/blocked/oauth) keep the MAX re-notify budget.
-        const oneShotStage = detected.kind === 'login_required' &&
-          (detected.loginStage === 'success' || detected.loginStage === 'expiring')
+        const oneShotStage = isLoginNotice(detected)
         const effectiveMax = oneShotStage ? 1 : MAX_NOTIFICATIONS
         const underLimit = existing.notifyCount < effectiveMax
 
@@ -863,6 +881,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
         firstSeen: t,
         consecutive: 1,
         state: detected,
+        onScreen,
         notifiedAt: null,
         notifyCount: 0,
         notifying: false,
@@ -879,6 +898,7 @@ type ClearReason = 'gone' | 'active' | 'cleared'
 function clearState(key: string, now: number, reason: ClearReason = 'cleared'): void {
   const existing = probeEntries.get(key)
   if (!existing) return
+  existing.onScreen = false
 
   // Active idle-gate clear: the pane was NOT captured, so we can't conclude a
   // persistent state (a "login expiring" footer, an undismissed success screen)

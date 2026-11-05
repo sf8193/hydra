@@ -18,6 +18,7 @@ import {
   probeAllSessions,
   getThreadIntercept,
   clearInterceptsForSession,
+  confirmedStuckKind,
   _resetForTesting,
   _setIO,
   _resetIO,
@@ -415,6 +416,7 @@ describe('probeAllSessions', () => {
     await probeAllSessions(T0 + 60_000)
     await flush()
     expect(sentMessages.some(m => m.channelId === 'thread-1' && m.text.includes('needs authentication'))).toBe(true)
+    expect(confirmedStuckKind('vale')).toBeNull()
 
     paneTails.set('vale', LOGIN_SUCCESS_TAIL)
     await probeAllSessions(T0 + 120_000)
@@ -451,6 +453,117 @@ describe('probeAllSessions', () => {
 
     await probeAllSessions(T0)
     expect(sentMessages).toHaveLength(0)
+  })
+
+  it('confirmedStuckKind reports a blocking screen only once a second probe confirms it', async () => {
+    addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+    paneTails.set('bloom', PLAN_MODE_TAIL)
+    windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    await probeAllSessions(T0)
+    expect(confirmedStuckKind('bloom')).toBeNull()
+    await probeAllSessions(T0 + 60_000)
+    expect(confirmedStuckKind('bloom')).toBe('plan_mode')
+
+    paneTails.set('bloom', 'all done\n❯\n  ctx: 1%')
+    await probeAllSessions(T0 + 120_000)
+    expect(confirmedStuckKind('bloom')).toBeNull()
+  })
+
+  it('confirmedStuckKind ignores the login success screen: it is not a block', async () => {
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+    paneTails.set('vale', LOGIN_SUCCESS_TAIL)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    expect(confirmedStuckKind('vale')).toBeNull()
+
+    paneTails.set('vale', LOGIN_SELECT_METHOD_TAIL)
+    await probeAllSessions(T0 + 120_000)
+    expect(confirmedStuckKind('vale')).toBeNull()
+    await probeAllSessions(T0 + 180_000)
+    expect(confirmedStuckKind('vale')).toBe('login_required')
+  })
+
+  it('confirmedStuckKind keeps a confirmed login label across a hard-stage change', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+      windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+      paneTails.set('vale', LOGIN_SELECT_METHOD_TAIL)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+
+      paneTails.set('vale', LOGIN_OAUTH_URL_TAIL)
+      await probeAllSessions(T0 + 120_000)
+      await flush()
+      expect(sentMessages.some(m => m.text.includes('authenticate here'))).toBe(true)
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+    } finally {
+      if (origEnv === undefined) delete process.env.HYDRA_AUTO_LOGIN
+      else process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
+  it('confirmedStuckKind ignores the login expiring footer: it is not a block', async () => {
+    addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+    windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+    paneTails.set('vale', LOGIN_EXPIRING_TAIL)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    expect(confirmedStuckKind('vale')).toBeNull()
+  })
+
+  it('confirmedStuckKind waits for a second frame after the expiring footer turns into a block', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+      windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+      paneTails.set('vale', LOGIN_EXPIRING_TAIL)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      paneTails.set('vale', LOGIN_SELECT_METHOD_TAIL)
+      await probeAllSessions(T0 + 120_000)
+      expect(confirmedStuckKind('vale')).toBeNull()
+      await probeAllSessions(T0 + 180_000)
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+    } finally {
+      if (origEnv === undefined) delete process.env.HYDRA_AUTO_LOGIN
+      else process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
+  it('confirmedStuckKind hides a latched screen while the session is active, and shows it again once re-seen', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+      paneTails.set('vale', LOGIN_SELECT_METHOD_TAIL)
+      windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+
+      windowActivity.set('vale', Math.floor((T0 + 120_000) / 1000) - 1)
+      await probeAllSessions(T0 + 120_000)
+      expect(confirmedStuckKind('vale')).toBeNull()
+
+      windowActivity.set('vale', Math.floor((T0 + 180_000) / 1000) - 60)
+      await probeAllSessions(T0 + 180_000)
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+    } finally {
+      if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
   })
 
   it('probes idle sessions', async () => {
@@ -595,6 +708,7 @@ describe('probeAllSessions', () => {
       const loginKey = keysSent.find(k => k.tmuxName === 'bloom')
       expect(loginKey).not.toBeUndefined()
       expect(loginKey!.keys).toContain('/login')
+      expect(confirmedStuckKind('bloom')).toBeNull()
 
       const loginMsg = sentMessages.find(m => m.channelId === 'thread-1')
       expect(loginMsg).not.toBeUndefined()
@@ -659,6 +773,7 @@ describe('probeAllSessions', () => {
       const msg = sentMessages.find(m => m.channelId === 'root-channel-123')
       expect(msg?.text).toContain('usage-limit dialog')
       expect(msg?.text).toContain('dismissed')
+      expect(confirmedStuckKind('discord-byte')).toBeNull()
     } finally {
       if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
     }
@@ -715,6 +830,7 @@ describe('probeAllSessions', () => {
     await stickDialog(tail)
 
     expect(keysSent.filter(k => k.tmuxName === 'ember')).toEqual([{ tmuxName: 'ember', keys: 'Escape' }])
+    expect(confirmedStuckKind('ember')).toBeNull()
     const alert = sentMessages.find(m => m.channelId === 'thread-1')
     expect(alert?.text).toContain('Pressed Esc')
     expect(delivered).toHaveLength(1)
@@ -763,6 +879,7 @@ describe('probeAllSessions', () => {
 
     expect(delivered).toEqual([])
     expect(sentMessages.find(m => m.channelId === 'thread-1')?.text).toContain('tmux attach -t ember')
+    expect(confirmedStuckKind('ember')).toBe('unknown_dialog')
   })
 
   it('handles the main session through its own id and the default channel', async () => {
@@ -1084,6 +1201,7 @@ describe('probeAllSessions', () => {
       const msg = sentMessages.find(m => m.channelId === 'thread-1')
       expect(msg).not.toBeUndefined()
       expect(msg!.text).toContain('auto-dismissed resume prompt')
+      expect(confirmedStuckKind('ember')).toBeNull()
     } finally {
       if (origEnv !== undefined) process.env.HYDRA_AUTO_LOGIN = origEnv
       else delete process.env.HYDRA_AUTO_LOGIN
