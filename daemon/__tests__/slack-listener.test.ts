@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { SlackWatcher, type SlackWatchConfig } from '../slack-watch.js'
-import { SlackListener, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, type SlackAppLike, type RawEvent } from '../slack-listener.js'
+import { SlackListener, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, explainSlackError, type SlackAppLike, type RawEvent } from '../slack-listener.js'
 import type { SlackApi, RawMessage } from '../slack-catchup.js'
 import type { SocketEmitter } from '../../shared/socket-supervisor.js'
 
@@ -23,7 +23,7 @@ const dirs: string[] = []
 const listeners: SlackListener[] = []
 afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWatchConfig | null; failStart?: boolean; firstRetryBaseMs?: number; history?: RawMessage[]; threads?: Record<string, RawMessage[]> } = {}) {
+function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWatchConfig | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
   dirs.push(dir)
   let now = 1_793_000_000_000
@@ -31,7 +31,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWa
   const logs: string[] = []
   const alerts: string[] = []
   const apps: { handler: (e: RawEvent) => void; client: FakeClient; stopped: boolean; started: number; apiCalls: string[] }[] = []
-  const state = { failStart: !!over.failStart, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[] }
+  const state = { failStart: !!over.failStart, historyError: over.historyError as string | undefined, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[] }
   const watcher = new SlackWatcher({
     now: () => now, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => cfg,
     deliver: async (_s, msg) => { sent.push(msg); return { ok: true } },
@@ -52,7 +52,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWa
       const rec = { handler: (_: RawEvent) => {}, client: new FakeClient(), stopped: false, started: 0, apiCalls: [] as string[] }
       apps.push(rec)
       const api: SlackApi = {
-        async history(a) { rec.apiCalls.push(`history:${a.oldest}`); return { messages: state.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
+        async history(a) { rec.apiCalls.push(`history:${a.oldest}`); if (state.historyError) throw new Error(state.historyError); return { messages: state.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
         async replies(a) { rec.apiCalls.push(`replies:${a.ts}`); return { messages: (state.threads[`${a.channel}:${a.ts}`] ?? []).filter(m => a.inclusive ? parseFloat(m.ts!) >= parseFloat(a.oldest) : parseFloat(m.ts!) > parseFloat(a.oldest)) } },
       }
       return {
@@ -60,7 +60,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWa
         start: async () => { rec.started++; if (state.failStart) throw new Error('invalid_auth'); rec.client.emit('connected') },
         stop: async () => { rec.stopped = true },
         emitter: () => rec.client,
-        authTest: async () => ({ botId: 'BBOT', userId: BOT }),
+        authTest: async () => ({ botId: 'BBOT', userId: BOT, ...(over.scopes && { scopes: over.scopes }) }),
         userName: async id => { state.nameLookups.push(id); return id === 'UB' ? 'Bea B' : undefined },
         api,
       } as SlackAppLike
@@ -70,6 +70,50 @@ function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWa
   return { listener, watcher, sent, logs, alerts, apps, state, tick: (ms: number) => { now += ms } }
 }
 const message = (over: Partial<RawEvent>): RawEvent => ({ channel: CH, ts: '1100.000001', user: 'UB', text: mention, ...over })
+
+describe('diagnosing a refused token', () => {
+  test('the scopes the token has are logged, and a token that can read no history is called out', async () => {
+    const ok = setup({ scopes: ['channels:history', 'users:read'] })
+    await ok.listener.start()
+    expect(ok.logs.join()).toContain('bot token scopes: channels:history, users:read')
+    expect(ok.logs.join()).not.toContain('WARN the bot token has neither')
+    const bad = setup({ scopes: ['chat:write', 'reactions:write'] })
+    await bad.listener.start()
+    expect(bad.logs.join()).toContain('bot token scopes: chat:write, reactions:write')
+    expect(bad.logs.join()).toContain('WARN the bot token has neither channels:history nor groups:history')
+  })
+
+  test('a refusal a retry cannot fix is alerted once, at once, with what to do; a good pass re-arms it', async () => {
+    const t = setup({ historyError: 'missing_scope: the token needs groups:history and has chat:write' })
+    await t.listener.start()
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toContain('missing_scope: the token needs groups:history and has chat:write')
+    expect(t.alerts[0]).toContain('SLOPBOT_SLACK_BOT_TOKEN')
+    await t.listener.runCatchUp(true, 'retry')
+    expect(t.alerts).toHaveLength(1) // not again for the same cause
+    t.state.historyError = undefined
+    await t.listener.runCatchUp(true, 'retry')
+    expect(t.listener.health().catchUp).toMatchObject({ ok: true })
+    t.state.historyError = 'not_in_channel'
+    await t.listener.runCatchUp(true, 'retry')
+    expect(t.alerts).toHaveLength(2)
+    expect(t.alerts[1]).toContain('Invite it to the channel')
+  })
+
+  test("an error that is not permanent, such as a rate limit, raises no alert", async () => {
+    const t = setup({ historyError: 'An API error occurred: ratelimited' })
+    await t.listener.start()
+    expect(t.alerts).toHaveLength(0)
+  })
+
+  test("Slack's missing_scope names the scope it needed and the ones the token has", () => {
+    const sdkError = Object.assign(new Error('An API error occurred: missing_scope'), { data: { ok: false, error: 'missing_scope', needed: 'groups:history', provided: 'chat:write,reactions:write' } })
+    expect(explainSlackError(sdkError).message).toBe('missing_scope: the token needs groups:history and has chat:write,reactions:write')
+    const other = new Error('boom')
+    expect(explainSlackError(other)).toBe(other)
+    expect(explainSlackError('plain').message).toBe('plain')
+  })
+})
 
 describe('starting', () => {
   test('without a valid config or a token it stays off and names what is missing, never a token', async () => {

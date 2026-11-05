@@ -20,6 +20,20 @@ import type { SlackWatchConfig, SlackWatcher } from './slack-watch.js'
  * recovered messages the live stream never delivered.
  */
 
+/** Slack errors a retry cannot fix, each with what to do about it. */
+export const PERMANENT_SLACK_ERRORS: [RegExp, string][] = [
+  [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in SLOPBOT_SLACK_BOT_TOKEN, and restart the daemon.'],
+  [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in SLOPBOT_SLACK_BOT_TOKEN and restart the daemon.'],
+  [/not_in_channel|channel_not_found/, 'the bot cannot see a channel listed in slack-watch.json. Invite it to the channel, or correct the channel id.'],
+]
+
+/** Slack's `missing_scope` names the scope it needed and the ones the token has; the SDK's message drops both. */
+export function explainSlackError(err: unknown): Error {
+  const data = (err as { data?: { error?: string; needed?: string; provided?: string } } | null)?.data
+  if (data?.error === 'missing_scope') return new Error(`missing_scope: the token needs ${data.needed ?? '(unnamed)'} and has ${data.provided ?? '(unknown)'}`)
+  return err instanceof Error ? err : new Error(String(err))
+}
+
 export const CATCH_UP_INTERVAL_MS = 10 * 60_000
 export const CATCH_UP_RETRY_MS = 60_000
 export const ALERT_CHECK_MS = 60_000
@@ -33,7 +47,7 @@ export type SlackAppLike = {
   start(): Promise<void>
   stop(): Promise<void>
   emitter(): SocketEmitter | null
-  authTest(): Promise<{ botId?: string; userId?: string }>
+  authTest(): Promise<{ botId?: string; userId?: string; scopes?: string[] }>
   userName(userId: string): Promise<string | undefined>
   api: SlackApi
 }
@@ -83,7 +97,7 @@ export class SlackListener {
   private firstTimer: ReturnType<typeof setTimeout> | undefined
   private firstAttempts = 0
   private timers: ReturnType<typeof setInterval>[] = []
-  private alerted = { down: false, catchUp: false }
+  private alerted: { down: boolean; catchUp: boolean; permanent: string | null } = { down: false, catchUp: false, permanent: null }
   private lastMissedLiveAlertAt = 0
 
   constructor(private readonly d: ListenerDeps) {
@@ -183,10 +197,17 @@ export class SlackListener {
       if (was) { this.reconnectedSincePass = true; void this.runCatchUp(true, 'reconnected') }
     })
     await app.start()
-    const auth = await app.authTest().catch(err => { this.d.log(`daemon: slack listener: auth.test failed: ${err}\n`); return {} as { botId?: string; userId?: string } })
+    const auth = await app.authTest().catch(err => { this.d.log(`daemon: slack listener: auth.test failed: ${err}\n`); return {} as { botId?: string; userId?: string; scopes?: string[] } })
     if (auth.botId) this.d.watcher.setBotId(auth.botId)
     if (auth.userId && auth.userId !== cfg.botUserId) {
       this.d.log(`daemon: slack listener: WARN connected as ${auth.userId} but slack-watch.json names botUserId ${cfg.botUserId}\n`)
+    }
+    if (auth.scopes) {
+      // Scopes are not secret; the token is. Logging them turns "missing_scope" from a guess into a read.
+      this.d.log(`daemon: slack listener: bot token scopes: ${auth.scopes.join(', ') || '(none)'}\n`)
+      if (!auth.scopes.some(sc => sc === 'channels:history' || sc === 'groups:history')) {
+        this.d.log('daemon: slack listener: WARN the bot token has neither channels:history nor groups:history, so no message can be read; add the one that matches your channels and reinstall the app\n')
+      }
     }
     this.d.watcher.setNameResolver(id => app.userName(id))
     this.sup!.touch()
@@ -215,7 +236,8 @@ export class SlackListener {
     try {
       result = await catchUp(this.d.watcher, this.app.api, cfg, { deep, now: this.now, log: this.d.log })
       this.lastCatchUp = { at: this.now(), result }
-      if (result.complete) { this.lastOkCatchUpAt = this.now(); this.alerted.catchUp = false }
+      if (result.complete) { this.lastOkCatchUpAt = this.now(); this.alerted.catchUp = false; this.alerted.permanent = null }
+      else this.alertIfPermanent(result.reason)
       this.d.log(`daemon: slack catch-up (${why}${deep ? ', deep' : ''}): ${result.complete ? 'done' : 'incomplete'}, ${result.calls} call(s), ${result.accepted} message(s) the live stream had not delivered\n`)
       // A quiet pass should find nothing. Finding messages with no reconnect since the last pass means the live
       // stream is losing events, e.g. another process holds a connection on this Slack app.
@@ -234,6 +256,14 @@ export class SlackListener {
     }
     if (this.rerun !== null) { const again = this.rerun; this.rerun = null; void this.runCatchUp(again, 'queued') }
     return result
+  }
+
+  /** A refusal that retrying cannot fix is said once, at once, in the specialist's thread, with what to do. */
+  private alertIfPermanent(reason: string | undefined): void {
+    const hit = reason ? PERMANENT_SLACK_ERRORS.find(([re]) => re.test(reason)) : undefined
+    if (!hit || this.alerted.permanent === hit[1]) return
+    this.alerted.permanent = hit[1]
+    this.d.alert(`⚠️ Slack refused the catch-up read: ${reason}. Retrying will not fix it: ${hit[1]}`)
   }
 
   health(): ListenerHealth {
@@ -292,15 +322,16 @@ export function boltApp(tokens: { app: string; bot: string }): SlackAppLike {
     emitter: () => (app as unknown as { receiver?: { client?: SocketEmitter } }).receiver?.client ?? null,
     authTest: async () => {
       const r = await client.auth.test({ token: tokens.bot })
-      return { botId: r.bot_id, userId: r.user_id }
+      const scopes = (r as { response_metadata?: { scopes?: string[] } }).response_metadata?.scopes
+      return { botId: r.bot_id, userId: r.user_id, ...(scopes && { scopes }) }
     },
     userName: async id => {
       const r = await client.users.info({ token: tokens.bot, user: id })
       return r.user?.profile?.display_name || r.user?.real_name || r.user?.name || undefined
     },
     api: {
-      history: async a => page(await client.conversations.history({ token: tokens.bot, channel: a.channel, oldest: a.oldest, limit: 200, ...(a.cursor && { cursor: a.cursor }) })),
-      replies: async a => page(await client.conversations.replies({ token: tokens.bot, channel: a.channel, ts: a.ts, oldest: a.oldest, inclusive: a.inclusive, limit: 200, ...(a.cursor && { cursor: a.cursor }) })),
+      history: async a => page(await client.conversations.history({ token: tokens.bot, channel: a.channel, oldest: a.oldest, limit: 200, ...(a.cursor && { cursor: a.cursor }) }).catch(e => { throw explainSlackError(e) })),
+      replies: async a => page(await client.conversations.replies({ token: tokens.bot, channel: a.channel, ts: a.ts, oldest: a.oldest, inclusive: a.inclusive, limit: 200, ...(a.cursor && { cursor: a.cursor }) }).catch(e => { throw explainSlackError(e) })),
     },
   }
 }
