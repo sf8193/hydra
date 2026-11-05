@@ -10,8 +10,9 @@ import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
 import { sessionLiveAsync } from './session-activity.js'
-import { homeStatus, homeStatusAccessory, type HomeStatus } from './home-status.js'
-import { confirmedStuckKind } from './pane-probe.js'
+import { homeRecoverable, homeStatus, homeStatusAccessory, type HomeStatus } from './home-status.js'
+import { confirmedStuckState, homeActionable, type BlockingState } from './pane-probe.js'
+import { daemonPastOrphanGrace } from './session-reachability.js'
 
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
@@ -30,6 +31,7 @@ type SessionRow = {
   desc: string
   age: string
   status: HomeStatus | null
+  actionable: boolean
   url: string
   watches: WatchEntry[]
   contextLinks: string[]
@@ -49,16 +51,25 @@ function sessionUrl(s: SessionInfo): string {
     : s.threadUrl ?? ''
 }
 
-async function sessionStatus(s: SessionInfo): Promise<HomeStatus> {
+async function sessionStatus(s: SessionInfo): Promise<{ status: HomeStatus; actionable: boolean; oauthUrl: string | null }> {
   const { live, working } = await sessionLiveAsync(s)
-  return homeStatus({
+  const stuck = confirmedStuckState(s.tmuxName)
+  const status = homeStatus({
     connected: transport.has(s.sessionId),
     live,
     working,
-    stuck: confirmedStuckKind(s.tmuxName),
+    stuck: stuck?.kind ?? null,
     lastReplyAt: s.lastReplyAt,
     lastUserMessageAt: s.lastUserMessageAt,
   })
+  return { status, ...buttonTarget(status, stuck, s.sessionType, daemonPastOrphanGrace()) }
+}
+
+function buttonTarget(status: HomeStatus, stuck: BlockingState | null, sessionType: string, daemonWarm: boolean): { actionable: boolean; oauthUrl: string | null } {
+  return {
+    actionable: status === 'disconnected' ? homeRecoverable(sessionType, stuck, daemonWarm) : !stuck || homeActionable(stuck),
+    oauthUrl: status === 'login_required' ? stuck?.oauthUrl ?? null : null,
+  }
 }
 
 async function getActiveSessions(): Promise<SessionRow[]> {
@@ -81,9 +92,10 @@ async function getActiveSessions(): Promise<SessionRow[]> {
       emoji: sessionEmoji(s.tmuxName),
       desc,
       age: formatDuration(now - s.createdAt),
-      status: statuses[i] ?? null,
+      status: statuses[i]?.status ?? null,
+      actionable: statuses[i]?.actionable ?? false,
       url,
-      buttonUrl: sessionAppLink(s),
+      buttonUrl: statuses[i]?.oauthUrl ?? sessionAppLink(s),
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
@@ -157,7 +169,7 @@ function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: buildSessionText(s) },
-        ...(s.status ? { accessory: homeStatusAccessory(s.status, s.sessionId, s.buttonUrl) } : {}),
+        ...(s.status ? { accessory: homeStatusAccessory(s.status, s.sessionId, s.buttonUrl, s.actionable) } : {}),
       })
       const contextLines = assembleContextLines({
         watches: s.watches,
@@ -228,7 +240,7 @@ function homeTabUser(): string | null {
 
 let publishedStatuses = ''
 const statusKey = (rows: SessionRow[]) =>
-  rows.slice(0, MAX_SESSION_BLOCKS).map(r => `${r.sessionId}=${r.status ?? ''}`).sort().join('|')
+  rows.slice(0, MAX_SESSION_BLOCKS).map(r => `${r.sessionId}=${r.status ?? ''}:${r.actionable}:${r.buttonUrl}`).sort().join('|')
 
 async function publish(onlyIfStatusChanged: boolean): Promise<void> {
   const userId = homeTabUser()
@@ -287,4 +299,4 @@ setInterval(() => void doUpdate(), PERIODIC_REFRESH_MS)
 
 setInterval(() => void doUpdate(true), STATUS_CHECK_MS)
 
-export const __test = process.env.NODE_ENV === 'test' ? { statusKey, coalesced } : undefined
+export const __test = process.env.NODE_ENV === 'test' ? { statusKey, coalesced, buttonTarget } : undefined

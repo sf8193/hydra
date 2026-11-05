@@ -37,6 +37,10 @@ export function classifyReachability(input: {
   return input.ageMs > (input.graceMs ?? ORPHAN_GRACE_MS) ? 'orphaned' : 'starting'
 }
 
+export function daemonPastOrphanGrace(uptimeMs = process.uptime() * 1000): boolean {
+  return uptimeMs > ORPHAN_GRACE_MS
+}
+
 /**
  * Whether a recovery command should refuse because the session is fine as it is.
  *

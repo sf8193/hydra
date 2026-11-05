@@ -39,6 +39,7 @@ export type BlockingState = {
   planPath: string | null
   loginStage: LoginStage | null
   oauthUrl: string | null
+  escEndsSession?: boolean
 }
 
 type ProbeEntry = {
@@ -51,7 +52,7 @@ type ProbeEntry = {
   onScreen: boolean
   notifiedAt: number | null
   notifyCount: number
-  notifying: boolean // in-flight notification guard
+  notifying: boolean // in-flight guard for notifications and Home tab key presses
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +296,7 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   // Fallback: every CC selection dialog ends with this footer. Known kinds above
   // get specific handling; anything else is surfaced so a new dialog can't block silently.
   if (!liveRepl && DIALOG_FOOTER_RE.test(tailText)) {
-    return { kind: 'unknown_dialog', planPath: null, loginStage: null, oauthUrl: null }
+    return { kind: 'unknown_dialog', planPath: null, loginStage: null, oauthUrl: null, escEndsSession: ESC_ENDS_SESSION_RE.test(tailText) }
   }
   return null
 }
@@ -342,10 +343,60 @@ async function press(tmuxName: string, ...keys: string[]): Promise<boolean> {
   return sent
 }
 
-export function confirmedStuckKind(tmuxName: string): BlockingKind | null {
+export function confirmedStuckState(tmuxName: string): BlockingState | null {
   const entry = probeEntries.get(tmuxName)
   if (!entry?.onScreen || entry.consecutive < CONFIRM_PROBES || isLoginNotice(entry.state)) return null
-  return entry.state.kind
+  return entry.state
+}
+
+const HOME_ACTIONS: Record<BlockingKind, { keys: string[]; done: string }> = {
+  plan_mode: { keys: ['Enter'], done: 'plan approved, resuming' },
+  resume_prompt: { keys: ['Enter'], done: 'resumed from the summary' },
+  usage_limit: { keys: ['Escape'], done: 'dismissed the usage-limit dialog. If the limit is still active it will come back' },
+  login_required: { keys: ['/login', 'Enter'], done: 'sent /login' },
+  unknown_dialog: { keys: ['Escape'], done: 'pressed Esc on the dialog. It was cancelled, not approved' },
+}
+
+export function isBlockingKind(value: string): value is BlockingKind {
+  return Object.hasOwn(HOME_ACTIONS, value)
+}
+
+export function homeActionable(state: BlockingState): boolean {
+  if (state.kind === 'login_required') return state.loginStage === 'blocked'
+  if (state.kind === 'unknown_dialog') return !state.escEndsSession
+  return true
+}
+
+// A click on the Home tab is a person answering, so HYDRA_AUTO_LOGIN does not gate it.
+export async function resolveStuckFromHome(tmuxName: string, kind: BlockingKind): Promise<void> {
+  const entry = probeEntries.get(tmuxName)
+  const shown = confirmedStuckState(tmuxName)
+  if (!entry || shown?.kind !== kind || !homeActionable(shown) || entry.notifying) {
+    process.stderr.write(`daemon: pane-probe: ${tmuxName} home action ${kind} skipped\n`)
+    return
+  }
+  entry.notifying = true
+  try {
+    const tail = await io.capturePaneTail(tmuxName, PANE_TAIL_LINES)
+    const now = tail ? detectBlockingState(tail) : null
+    const ok = now?.kind === kind && homeActionable(now) && await press(tmuxName, ...HOME_ACTIONS[kind].keys)
+    if (ok && kind === 'plan_mode') dropEntry(entry)
+    process.stderr.write(`daemon: pane-probe: ${tmuxName} home action ${kind}, ok=${ok}\n`)
+    const channelId = entry.isMain ? io.defaultChannel : entry.threadId
+    const ids = channelId
+      ? await io.safeSend(channelId, ok
+        ? `> ▶️ **${tmuxName}** — ${HOME_ACTIONS[kind].done} (from the Home tab).`
+        : `> ❌ **${tmuxName}** — that screen is gone, so the Home tab click pressed nothing.`)
+      : []
+    if (ok && kind === 'unknown_dialog') tellSessionDialogDismissed(entry, ids[0] ?? '', tail ?? '', 'home')
+  } finally {
+    entry.notifying = false
+  }
+}
+
+function dropEntry(entry: ProbeEntry): void {
+  threadIntercepts.delete(entry.threadId)
+  probeEntries.delete(entry.tmuxName)
 }
 
 export function getThreadIntercept(threadId: string) {
@@ -354,10 +405,7 @@ export function getThreadIntercept(threadId: string) {
 
 export function clearInterceptsForSession(tmuxName: string): void {
   const entry = probeEntries.get(tmuxName)
-  if (entry) {
-    threadIntercepts.delete(entry.threadId)
-    probeEntries.delete(tmuxName)
-  }
+  if (entry) dropEntry(entry)
   // Also scan by tmuxName in case the entry was already removed
   for (const [threadId, intercept] of threadIntercepts) {
     if (intercept.tmuxName === tmuxName) threadIntercepts.delete(threadId)
@@ -498,8 +546,9 @@ async function dismissUnknownDialog(entry: ProbeEntry, now: number): Promise<voi
     const name = entry.tmuxName
     const tail = (await io.capturePaneTail(name, PANE_TAIL_LINES)) ?? ''
     // Esc at a working session would interrupt its turn, so re-read the screen right before pressing.
-    if (detectBlockingState(tail)?.kind !== 'unknown_dialog') return
-    const dismissed = !ESC_ENDS_SESSION_RE.test(tail) && await press(name, 'Escape')
+    const shown = detectBlockingState(tail)
+    if (shown?.kind !== 'unknown_dialog') return
+    const dismissed = !shown.escEndsSession && await press(name, 'Escape')
     // Counted before anything below can fail, so a persistent dialog stays under the cooldown and cap.
     entry.notifiedAt = now
     entry.notifyCount++
@@ -527,16 +576,20 @@ async function dismissUnknownDialog(entry: ProbeEntry, now: number): Promise<voi
   }
 }
 
-function tellSessionDialogDismissed(entry: ProbeEntry, messageId: string, tail: string): void {
+function tellSessionDialogDismissed(entry: ProbeEntry, messageId: string, tail: string, by: 'probe' | 'home' = 'probe'): void {
   const sessionId = entry.isMain ? 'main' : findSession(entry.tmuxName)?.sessionId
   if (!sessionId) return
   const url = messageId ? io.getMessageUrl?.(entry.threadId, messageId) : ''
   io.transportSendOrQueue(sessionId, {
     type: 'notification',
     content: [
-      `Hydra pressed Esc on a dialog that was blocking this session, because nobody answered it${url ? ` (${url})` : ''}. It was cancelled, not approved.`,
+      by === 'home'
+        ? `A person cancelled a dialog that was blocking this session, from the Hydra Home tab${url ? ` (${url})` : ''}. It was cancelled, not approved.`
+        : `Hydra pressed Esc on a dialog that was blocking this session, because nobody answered it${url ? ` (${url})` : ''}. It was cancelled, not approved.`,
       `It showed:\n${tail.trim()}`,
-      `Redo the step in a way that needs no answer from a person, or skip it and report that you skipped it. If it was a safety check, only use a rewrite that check would allow.`,
+      by === 'home'
+        ? `Do not retry that step without asking in the thread first.`
+        : `Redo the step in a way that needs no answer from a person, or skip it and report that you skipped it. If it was a safety check, only use a rewrite that check would allow.`,
     ].join('\n\n'),
     meta: {
       chat_id: entry.threadId,
@@ -595,8 +648,7 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
           void io.react(replyChannelId, messageId, ok ? '✅' : '❌')
           if (ok) {
             void io.safeSend(channelId, `> ▶️ **${name}** — plan approved, resuming.`)
-            threadIntercepts.delete(entry.threadId)
-            probeEntries.delete(name)
+            dropEntry(entry)
           } else {
             void io.safeSend(channelId, `> ❌ **${name}** — plan prompt no longer on screen. May have already resumed.`)
             threadIntercepts.delete(entry.threadId)
@@ -610,8 +662,7 @@ async function notifyPlanMode(entry: ProbeEntry, now: number): Promise<void> {
           if (ok) {
             void io.safeSend(channelId, `> ⏹️ **${name}** — plan rejected.`)
           }
-          threadIntercepts.delete(entry.threadId)
-          probeEntries.delete(name)
+          dropEntry(entry)
         }
       },
     })
@@ -841,6 +892,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
         continue
       }
 
+      existing.state = detected
       existing.consecutive++
 
       if (existing.consecutive >= CONFIRM_PROBES) {

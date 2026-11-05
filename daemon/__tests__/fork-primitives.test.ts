@@ -355,15 +355,28 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     })
   })
 
+  test('a second recovery of the same thread while one runs is refused, not run twice', async () => {
+    const sent: string[] = []
+    const savedSend = gateway.send
+    ;(gateway as any).send = async (c: string, text: string) => { sent.push(text); return { id: 'm', channelId: c } }
+    try {
+      const gone = mkdtempSync(join(tmpdir(), 'fp-gone-'))
+      rmSync(gone, { recursive: true })
+      seedDead({ launchCwd: gone })
+      const anchor = (n: number) => ({ id: `fp-msg-${n}`, channelId: THREAD, isThread: true, effectiveThreadId: THREAD })
+      await Promise.all([handleResumeIntercept(anchor(++seq)), handleResumeIntercept(anchor(++seq))])
+      expect(launches).toHaveLength(1)
+      expect(sent.filter(t => t.includes('already in progress'))).toHaveLength(1)
+    } finally {
+      ;(gateway as any).send = savedSend
+    }
+  })
+
   test('manual resume of a fork whose launch dir is gone: resume and fork refuse, the respawn starts in SPAWN_CWD', async () => {
     const gone = mkdtempSync(join(tmpdir(), 'fp-gone-'))
     rmSync(gone, { recursive: true })
     seedDead({ launchCwd: gone, disallowedTools: kept.disallowedTools })
-    await handleResumeIntercept({
-      id: `fp-msg-${++seq}`, channelId: THREAD, authorId: 'u1', authorUsername: 'op', content: 'resume', isDM: false,
-      isThread: true, isBot: false, parentChannelId: PARENT, hasExistingThread: false, existingThreadId: null,
-      referenceMessageId: null, effectiveThreadId: THREAD, attachments: [], createdAt: new Date(),
-    })
+    await handleResumeIntercept({ id: `fp-msg-${++seq}`, channelId: THREAD, isThread: true, effectiveThreadId: THREAD })
     expect(launches.map(l => [l.resumeFrom ? 'resume' : l.forkFrom ? 'fork' : 'other', l.cwd])).toEqual([['other', process.cwd()]])
     expect(live().deadAt).toBeUndefined()
     expect(live().launchCwd).toBeUndefined()

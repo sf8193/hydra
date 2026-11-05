@@ -114,6 +114,11 @@ if ('homeTabHandler' in gateway) {
   }
 }
 
+if ('homeStatusHandler' in gateway) {
+  const { runHomeStatusAction } = await import('./daemon/home-actions.js')
+  ;(gateway as any).homeStatusHandler = runHomeStatusAction
+}
+
 if ('homeSpawnHandler' in gateway) {
   const { doSpawnSession } = await import('./daemon/session-lifecycle.js')
   const { parseTemplateTopic, buildTemplateSpawnOpts, runTemplateAction } = await import('./daemon/templates.js')

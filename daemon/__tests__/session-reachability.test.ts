@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   ORPHAN_GRACE_MS,
   blocksRecovery,
+  daemonPastOrphanGrace,
   classifyReachability,
   type Reachability,
 } from '../session-reachability.js'
@@ -56,5 +57,12 @@ describe('blocksRecovery', () => {
   it('lets recovery proceed for orphaned and gone sessions', () => {
     expect(blocksRecovery('orphaned')).toBe(false)
     expect(blocksRecovery('gone')).toBe(false)
+  })
+})
+
+describe('daemonPastOrphanGrace', () => {
+  it('is false until the daemon has been up longer than the orphan grace window', () => {
+    expect(daemonPastOrphanGrace(ORPHAN_GRACE_MS)).toBe(false)
+    expect(daemonPastOrphanGrace(ORPHAN_GRACE_MS + 1)).toBe(true)
   })
 })

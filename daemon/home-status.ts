@@ -1,5 +1,5 @@
 import type { LiveState } from './engines/engine-adapter.js'
-import type { BlockingKind } from './pane-probe.js'
+import type { BlockingKind, BlockingState } from './pane-probe.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../shared/constants.js'
 
 export type HomeStatusInputs = {
@@ -49,13 +49,42 @@ export function homeStatus(s: HomeStatusInputs): HomeStatus {
   return 'idle'
 }
 
-export function homeStatusAccessory(status: HomeStatus, sessionId: string, url: string): object {
+const ACTIONS: Partial<Record<HomeStatus, { title: string; text: string; confirm: string }>> = {
+  disconnected: { title: 'Recover session?', text: 'Same as typing resume in the thread: tries resume, then fork, then respawn.', confirm: 'Recover' },
+  plan_mode: { title: 'Approve plan?', text: 'Same as typing approve in the thread.', confirm: 'Approve' },
+  resume_prompt: { title: 'Resume from summary?', text: 'Presses Enter on the resume prompt.', confirm: 'Resume' },
+  unknown_dialog: { title: 'Cancel dialog?', text: 'Presses Esc. The dialog is cancelled, nothing is approved.', confirm: 'Press Esc' },
+  usage_limit: { title: 'Dismiss usage limit?', text: 'Presses Esc on the usage-limit dialog. If the limit is still active it comes back.', confirm: 'Dismiss' },
+  login_required: { title: 'Send /login?', text: 'Sends /login and Enter to the session, the same keys auto-login sends.', confirm: 'Send /login' },
+}
+
+export function homeRecoverable(sessionType: string, stuck: BlockingState | null, daemonWarm: boolean): boolean {
+  return daemonWarm && !stuck && sessionType !== 'thread_guest'
+}
+
+export function parseHomeStatusClick(actionId: string, value: string | undefined, userId: string | undefined, allowFrom: string[]): { sessionId: string; shown: string } | null {
+  if (!value || !userId || !allowFrom.includes(userId) || !actionId.startsWith(HOME_STATUS_ACTION_PREFIX)) return null
+  return { sessionId: actionId.slice(HOME_STATUS_ACTION_PREFIX.length), shown: value }
+}
+
+export function homeStatusAccessory(status: HomeStatus, sessionId: string, url: string, actionable = true): object {
   const button: { glyph: string; label: string; style?: string } = BUTTONS[status]
+  const action = actionable ? ACTIONS[status] : undefined
   return {
     type: 'button',
     action_id: `${HOME_STATUS_ACTION_PREFIX}${sessionId}`,
     text: { type: 'plain_text', text: `${button.glyph}${EN_SPACE}${button.label}`, emoji: true },
     ...(button.style ? { style: button.style } : {}),
-    ...(url ? { url } : {}),
+    ...(action
+      ? {
+          value: status,
+          confirm: {
+            title: { type: 'plain_text', text: action.title },
+            text: { type: 'plain_text', text: action.text },
+            confirm: { type: 'plain_text', text: action.confirm },
+            deny: { type: 'plain_text', text: 'Cancel' },
+          },
+        }
+      : url ? { url } : {}),
   }
 }
