@@ -181,6 +181,8 @@ export interface ChatGateway {
 
   // Channels & threads
   fetchChannel(id: string): Promise<ChannelInfo>
+  /** False only when the platform says the thread is gone; any other failure counts as present. Never throws. */
+  threadExists(threadId: string): Promise<boolean>
   fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]>
   createThread(channelId: string, name: string, opts?: {
     messageId?: string
