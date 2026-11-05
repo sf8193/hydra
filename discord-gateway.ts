@@ -423,6 +423,16 @@ export class DiscordGateway implements ChatGateway {
     }
   }
 
+  async threadExists(threadId: string): Promise<boolean> {
+    try {
+      await this.fetchChannel(threadId)
+      return true
+    } catch (err) {
+      const e = err as { code?: unknown; message?: string }
+      return !(e?.code === 10003 || /not found/i.test(e?.message ?? ''))
+    }
+  }
+
   async fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]> {
     const ch = await this.fetchTextChannel(channelId)
     const msgs = await ch.messages.fetch({ limit: Math.min(limit, 100) })

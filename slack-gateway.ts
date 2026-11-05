@@ -550,6 +550,19 @@ export class SlackGateway implements ChatGateway {
     }
   }
 
+  async threadExists(threadId: string): Promise<boolean> {
+    if (!this.app) return true
+    const { channel, threadTs } = this.parseChannelId(threadId)
+    try {
+      if (threadTs) await this.app.client.conversations.replies({ channel, ts: threadTs, limit: 1 })
+      else await this.app.client.conversations.info({ channel })
+      return true
+    } catch (err) {
+      const code = (err as { data?: { error?: unknown } })?.data?.error
+      return !(code === 'thread_not_found' || code === 'channel_not_found')
+    }
+  }
+
   async fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]> {
     if (!this.app) throw new Error('not connected')
     const parsed = this.parseChannelId(channelId)

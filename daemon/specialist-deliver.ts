@@ -26,20 +26,11 @@ export class SpecialistError extends Error {
 export const SPAWN_BACKOFF_BASE_MS = 30_000
 export const SPAWN_BACKOFF_MAX_MS = 10 * 60_000
 
-/** Test seam: the spawn a vacant specialist is refilled with, the clock, and the Discord thread check. */
+/** Test seam: the spawn a vacant specialist is refilled with, the clock, and the thread check. */
 export const specialistDeps = {
   spawn: doSpawnSession,
   now: () => Date.now(),
-  // Gone only when Discord says so. A network blip must not move a specialist to a new thread.
-  async threadExists(threadId: string): Promise<boolean> {
-    try {
-      await gateway.fetchChannel(threadId)
-      return true
-    } catch (err) {
-      const e = err as { code?: unknown; message?: string }
-      return !(e?.code === 10003 || /not found/i.test(e?.message ?? ''))
-    }
-  },
+  threadExists: (threadId: string) => gateway.threadExists(threadId),
 }
 
 // A refill that keeps failing (bad kickoff, tmux error) must not be retried by every message that arrives.
@@ -58,7 +49,7 @@ function liveOccupant(threadId: string | undefined): SessionInfo | undefined {
  *
  * A refill is a respawn into the specialist's own thread: the new session is told it is
  * resuming there and reads the history, so it does not start amnesiac. The thread is
- * reused while Discord still has it. Only when it is gone does the specialist move to a
+ * reused while the platform still has it. Only when it is gone does the specialist move to a
  * fresh thread opened in the specialist's channel.
  */
 async function occupant(name: string, initiator: string | undefined): Promise<{ info: SessionInfo; spawned: boolean }> {
@@ -87,7 +78,7 @@ export async function spawnSpecialist(name: string, initiator: string): Promise<
   })
 }
 
-/** Start a session for a vacant specialist: from its kickoff, named for it, in its thread when Discord still has it. */
+/** Start a session for a vacant specialist: from its kickoff, named for it, in its thread when the platform still has it. */
 async function fill(name: string, specialist: Specialist, initiator: string | undefined, opts: { ignoreBackoff?: boolean } = {}): Promise<{ info: SessionInfo; url: string }> {
   const kickoff = readKickoff(specialist)
   if (!kickoff) throw new Error(`specialist "${name}" has no live session and no kickoff to spawn one with`)
