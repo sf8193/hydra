@@ -12,6 +12,7 @@ import { sanitizeFilename } from './gateway.js'
 import { SocketSupervisor } from './shared/socket-supervisor.js'
 import { ThrottledQueue } from './throttled-queue.js'
 import { HOME_STATUS_ACTION_PREFIX } from './shared/constants.js'
+import { parseHomeStatusClick } from './daemon/home-status.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -109,6 +110,7 @@ export class SlackGateway implements ChatGateway {
   onReconnectAfterOutage: ((gapMs: number) => void) | undefined = undefined
   homeTabHandler: ((userId: string) => Promise<void>) | null = null
   homeSpawnHandler: ((topic: string, userId: string) => Promise<void>) | null = null
+  homeStatusHandler: ((sessionId: string, shown: string) => Promise<void>) | null = null
 
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     return this.sup.forceReconnect()
@@ -195,7 +197,20 @@ export class SlackGateway implements ChatGateway {
       }
     })
 
-    this.app.action(new RegExp(`^${HOME_STATUS_ACTION_PREFIX}`), async ({ ack }: any) => { await ack() })
+    this.app.action(new RegExp(`^${HOME_STATUS_ACTION_PREFIX}`), async ({ action, body, ack }: any) => {
+      this.touchHeartbeat()
+      await ack()
+      if (!action?.value || !this.homeStatusHandler) return
+      const { loadAccess } = await import('./daemon/access.js')
+      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, loadAccess().allowFrom)
+      if (!click) {
+        process.stderr.write(`slack gateway: home status action rejected for user ${body?.user?.id ?? '(none)'}\n`)
+        return
+      }
+      this.homeStatusHandler(click.sessionId, click.shown).catch((e: Error) =>
+        process.stderr.write(`slack gateway: home status handler error: ${e}\n`),
+      )
+    })
     // Home tab: spawn session on Enter in the text input
     this.app.action('home:spawn', async ({ action, body, ack }: any) => {
       this.touchHeartbeat()

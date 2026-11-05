@@ -247,11 +247,11 @@ describe('handleResumeIntercept — Codex', () => {
     expect(registry.reservedNames.has('r16home')).toBe(false) // reservation released
   })
 
-  test('two concurrent resumes of the same thread launch once; the second is told one is in progress', async () => {
+  test('two concurrent resumes of the same thread launch once; the thread lock refuses the second', async () => {
     seedDead('codex', { codexHomeName: 'r16race' })
     await Promise.all([handleResumeIntercept(msg()), handleResumeIntercept(msg())])
     expect(launches).toHaveLength(1)
-    expect(sent.some(s => s.includes('already in progress'))).toBe(true)
+    expect(sent.some(s => s.includes('A recovery of this thread is already in progress'))).toBe(true)
     expect(registry.reservedNames.has('r16race')).toBe(false)
   })
 
@@ -346,11 +346,11 @@ describe('handleResumeIntercept — omp', () => {
     expect(registry.reservedNames.has(dead.sessionId)).toBe(false)
   })
 
-  test('two concurrent resumes of the same session launch once; the second is told one is in progress', async () => {
+  test('two concurrent resumes of the same session launch once; the thread lock refuses the second', async () => {
     seedDead('omp')
     await Promise.all([handleResumeIntercept(msg()), handleResumeIntercept(msg())])
     expect(launches).toHaveLength(1)
-    expect(sent.some(s => s.includes('already in progress'))).toBe(true)
+    expect(sent.some(s => s.includes('A recovery of this thread is already in progress'))).toBe(true)
   })
 })
 

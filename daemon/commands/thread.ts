@@ -237,7 +237,7 @@ export async function handleForksIntercept(msg: InboundMessage): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function announceRecovery(
-  msg: InboundMessage,
+  msg: RecoveryAnchor,
   result: { name: string },
   thread: { respawnCount: number; threadId?: string },
   method: string,
@@ -266,9 +266,31 @@ async function announceRecovery(
 // Resume / Respawn
 // ---------------------------------------------------------------------------
 
+export type RecoveryAnchor = Pick<InboundMessage, 'id' | 'channelId' | 'isThread' | 'effectiveThreadId'>
+
+const recoveringThreads = new Set<string>()
+
+async function oneRecoveryPerThread(msg: RecoveryAnchor, run: () => Promise<void>): Promise<void> {
+  const threadId = msg.effectiveThreadId ?? msg.channelId
+  if (recoveringThreads.has(threadId)) {
+    await gateway.send(msg.channelId, `⏳ A recovery of this thread is already in progress.`, { replyTo: msg.id }).catch(() => {})
+    return
+  }
+  recoveringThreads.add(threadId)
+  try {
+    await run()
+  } finally {
+    recoveringThreads.delete(threadId)
+  }
+}
+
 // `resume <claudeSessionId>` reattaches an earlier conversation from this thread's
 // history instead of the latest one (e.g. after an unwanted handoff).
-export async function handleResumeIntercept(msg: InboundMessage, claudeSessionIdArg?: string): Promise<void> {
+export async function handleResumeIntercept(msg: RecoveryAnchor, claudeSessionIdArg?: string): Promise<void> {
+  await oneRecoveryPerThread(msg, () => resumeThread(msg, claudeSessionIdArg))
+}
+
+async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): Promise<void> {
   if (!msg.isThread) {
     await reportError(msg.channelId, msg.id, 'resume', 'must be used in a thread')
     return
@@ -432,6 +454,10 @@ export async function handleResumeIntercept(msg: InboundMessage, claudeSessionId
 }
 
 export async function handleRespawnIntercept(msg: InboundMessage, topic?: string, templateName?: string, selection?: { model: string; engine: ProviderId }): Promise<void> {
+  await oneRecoveryPerThread(msg, () => respawnThread(msg, topic, templateName, selection))
+}
+
+async function respawnThread(msg: InboundMessage, topic?: string, templateName?: string, selection?: { model: string; engine: ProviderId }): Promise<void> {
   if (!msg.isThread) {
     await reportError(msg.channelId, msg.id, 'respawn', 'must be used in a thread')
     return

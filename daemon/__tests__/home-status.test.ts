@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { homeStatus, homeStatusAccessory, markUserMessaged, markYourTurn, type HomeStatus, type HomeStatusInputs } from '../home-status.js'
+import { homeStatus, homeStatusAccessory, parseHomeStatusClick, markUserMessaged, markYourTurn, type HomeStatus, type HomeStatusInputs } from '../home-status.js'
 import { __test as dashboardTest } from '../dashboard.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../../shared/constants.js'
 
@@ -39,6 +39,28 @@ describe('homeStatus', () => {
 })
 
 describe('homeStatusAccessory', () => {
+  test.each(['disconnected', 'plan_mode', 'resume_prompt', 'unknown_dialog', 'usage_limit', 'login_required'] as const)(
+    '%s is an action: no link, a confirm dialog, and the shown state as its value', (status) => {
+      const button = homeStatusAccessory(status, 's1', 'https://slack/p1') as { url?: string; value?: string; confirm?: { title: { text: string }; text: { text: string } } }
+      expect(button.url).toBeUndefined()
+      expect(button.value).toBe(status)
+      expect(button.confirm?.title.text.length).toBeLessThanOrEqual(100)
+      expect(button.confirm?.text.text.length).toBeLessThanOrEqual(300)
+    })
+
+  test('a state the server cannot act on is a plain link', () => {
+    const button = homeStatusAccessory('login_required', 's1', 'https://claude.com/oauth', false) as { url?: string; value?: string; confirm?: object }
+    expect(button.url).toBe('https://claude.com/oauth')
+    expect(button.value).toBeUndefined()
+    expect(button.confirm).toBeUndefined()
+  })
+
+  test.each(['working', 'blocked', 'your_turn', 'idle'] as const)('%s stays a link to the thread with no value', (status) => {
+    const button = homeStatusAccessory(status, 's1', 'https://slack/p1') as { url?: string; value?: string }
+    expect(button.url).toBe('https://slack/p1')
+    expect(button.value).toBeUndefined()
+  })
+
   test('a link button to the last message, with an action id unique to the session', () => {
     expect(homeStatusAccessory('your_turn', 's1', 'https://slack/p1')).toEqual({
       type: 'button',
@@ -81,13 +103,27 @@ describe('homeStatusAccessory', () => {
 })
 
 describe('Home tab change detection', () => {
-  const row = (sessionId: string, status: HomeStatus | null) => ({ sessionId, status }) as Parameters<NonNullable<typeof dashboardTest>['statusKey']>[0][number]
+  const row = (sessionId: string, status: HomeStatus | null, actionable = false, oauthUrl: string | null = null, buttonUrl = oauthUrl ?? '') => ({ sessionId, status, actionable, oauthUrl, buttonUrl }) as Parameters<NonNullable<typeof dashboardTest>['statusKey']>[0][number]
 
   test('a status change on any shown row changes the key, and row order does not', () => {
     const { statusKey } = dashboardTest!
     const base = statusKey([row('a', 'idle'), row('b', 'working')])
     expect(statusKey([row('a', 'your_turn'), row('b', 'working')])).not.toBe(base)
     expect(statusKey([row('b', 'working'), row('a', 'idle')])).toBe(base)
+  })
+
+  test('a button turning from action to link, or changing link, changes the key', () => {
+    const { statusKey } = dashboardTest!
+    const base = statusKey([row('a', 'login_required', true)])
+    expect(statusKey([row('a', 'login_required', false)])).not.toBe(base)
+    expect(statusKey([row('a', 'login_required', false, 'https://claude.com/oauth')])).not.toBe(base)
+    expect(statusKey([row('a', 'login_required', false, 'https://claude.com/oauth2')])).not.toBe(statusKey([row('a', 'login_required', false, 'https://claude.com/oauth')]))
+  })
+
+  test('a new reply moving a row\'s app link does not change the key, login rows included', () => {
+    const { statusKey } = dashboardTest!
+    expect(statusKey([row('a', 'working', false, null, 'slack://reply-2')])).toBe(statusKey([row('a', 'working', false, null, 'slack://reply-1')]))
+    expect(statusKey([row('a', 'login_required', false, null, 'slack://reply-2')])).toBe(statusKey([row('a', 'login_required', false, null, 'slack://reply-1')]))
   })
 })
 
@@ -149,5 +185,47 @@ describe('dashboard publish coalescing', () => {
       await request(false)
     } finally { process.stderr.write = saved }
     expect(calls).toBe(2)
+  })
+})
+
+describe('parseHomeStatusClick', () => {
+  const id = `${HOME_STATUS_ACTION_PREFIX}s1`
+  test('an allowed user clicking an action button', () => {
+    expect(parseHomeStatusClick(id, 'plan_mode', 'U1', ['U1'])).toEqual({ sessionId: 's1', shown: 'plan_mode' })
+  })
+  test.each([
+    ['a link button (no value)', id, undefined, 'U1'],
+    ['a user not in allowFrom', id, 'plan_mode', 'U2'],
+    ['no user', id, 'plan_mode', undefined],
+    ['another action id', 'home:spawn', 'plan_mode', 'U1'],
+  ])('ignores %s', (_name, actionId, value, userId) => {
+    expect(parseHomeStatusClick(actionId, value, userId, ['U1'])).toBeNull()
+  })
+})
+
+describe('dashboard buttonTarget', () => {
+  const target = (...args: Parameters<NonNullable<typeof dashboardTest>['buttonTarget']>) => dashboardTest!.buttonTarget(...args)
+  const login = (loginStage: 'blocked' | 'oauth_url', oauthUrl: string | null = null) => ({ kind: 'login_required' as const, planPath: null, loginStage, oauthUrl })
+  test('Recover is offered for a thread owner but not a guest', () => {
+    expect(target('disconnected', null, 'thread_owner', true).actionable).toBe(true)
+    expect(target('disconnected', null, 'thread_guest', true).actionable).toBe(false)
+  })
+  test('Recover is not offered while the probe sees a stuck screen: that screen has its own fix', () => {
+    const resume = { kind: 'resume_prompt' as const, planPath: null, loginStage: null, oauthUrl: null }
+    expect(target('disconnected', resume, 'thread_owner', true).actionable).toBe(false)
+  })
+  test('Recover is not offered right after a daemon restart: bridges are still reconnecting', () => {
+    expect(target('disconnected', null, 'thread_owner', false).actionable).toBe(false)
+  })
+  test('login: blocked is an action, the OAuth URL stage links to the URL', () => {
+    expect(target('login_required', login('blocked'), 'thread_owner', true)).toEqual({ actionable: true, oauthUrl: null })
+    expect(target('login_required', login('oauth_url', 'https://claude.com/oauth'), 'thread_owner', true)).toEqual({ actionable: false, oauthUrl: 'https://claude.com/oauth' })
+  })
+  test('a Disconnected row never links to an OAuth URL', () => {
+    expect(target('disconnected', login('oauth_url', 'https://claude.com/oauth'), 'thread_owner', true).oauthUrl).toBeNull()
+  })
+  test('a dialog whose Esc ends the session is not an action', () => {
+    const dialog = { kind: 'unknown_dialog' as const, planPath: null, loginStage: null, oauthUrl: null, escEndsSession: true }
+    expect(target('unknown_dialog', dialog, 'thread_owner', true).actionable).toBe(false)
   })
 })
