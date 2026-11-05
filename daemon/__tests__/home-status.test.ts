@@ -103,7 +103,7 @@ describe('homeStatusAccessory', () => {
 })
 
 describe('Home tab change detection', () => {
-  const row = (sessionId: string, status: HomeStatus | null, actionable = false, buttonUrl = '') => ({ sessionId, status, actionable, buttonUrl }) as Parameters<NonNullable<typeof dashboardTest>['statusKey']>[0][number]
+  const row = (sessionId: string, status: HomeStatus | null, actionable = false, oauthUrl: string | null = null, buttonUrl = oauthUrl ?? '') => ({ sessionId, status, actionable, oauthUrl, buttonUrl }) as Parameters<NonNullable<typeof dashboardTest>['statusKey']>[0][number]
 
   test('a status change on any shown row changes the key, and row order does not', () => {
     const { statusKey } = dashboardTest!
@@ -118,6 +118,12 @@ describe('Home tab change detection', () => {
     expect(statusKey([row('a', 'login_required', false)])).not.toBe(base)
     expect(statusKey([row('a', 'login_required', false, 'https://claude.com/oauth')])).not.toBe(base)
     expect(statusKey([row('a', 'login_required', false, 'https://claude.com/oauth2')])).not.toBe(statusKey([row('a', 'login_required', false, 'https://claude.com/oauth')]))
+  })
+
+  test('a new reply moving a row\'s app link does not change the key, login rows included', () => {
+    const { statusKey } = dashboardTest!
+    expect(statusKey([row('a', 'working', false, null, 'slack://reply-2')])).toBe(statusKey([row('a', 'working', false, null, 'slack://reply-1')]))
+    expect(statusKey([row('a', 'login_required', false, null, 'slack://reply-2')])).toBe(statusKey([row('a', 'login_required', false, null, 'slack://reply-1')]))
   })
 })
 

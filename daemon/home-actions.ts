@@ -25,7 +25,10 @@ export async function runHomeStatusAction(sessionId: string, shown: string, deps
     if (shown === 'disconnected') {
       if (deps.connected(sessionId) || !homeRecoverable(info.sessionType, deps.stuck(info.tmuxName), deps.daemonWarm())) return
       const [anchorId] = await deps.send(info.threadId, `> ⏯️ Recover requested for **${info.tmuxName}** from the Home tab.`)
-      if (!anchorId) return
+      if (!anchorId) {
+        process.stderr.write(`daemon: home recover ${info.tmuxName}: thread post failed, recover not started\n`)
+        return
+      }
       await deps.resume({ id: anchorId, channelId: info.threadId, isThread: true, effectiveThreadId: info.threadId })
     } else if (isBlockingKind(shown)) {
       await deps.resolveStuck(info.tmuxName, shown)

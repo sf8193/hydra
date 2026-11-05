@@ -39,6 +39,7 @@ type SessionRow = {
   sessionType: string
   parent?: { name: string; url: string }
   buttonUrl: string
+  oauthUrl: string | null
 }
 
 function sessionAppLink(s: SessionInfo): string {
@@ -96,6 +97,7 @@ async function getActiveSessions(): Promise<SessionRow[]> {
       actionable: statuses[i]?.actionable ?? false,
       url,
       buttonUrl: statuses[i]?.oauthUrl ?? sessionAppLink(s),
+      oauthUrl: statuses[i]?.oauthUrl ?? null,
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
@@ -240,7 +242,7 @@ function homeTabUser(): string | null {
 
 let publishedStatuses = ''
 const statusKey = (rows: SessionRow[]) =>
-  rows.slice(0, MAX_SESSION_BLOCKS).map(r => `${r.sessionId}=${r.status ?? ''}:${r.actionable}:${r.buttonUrl}`).sort().join('|')
+  rows.slice(0, MAX_SESSION_BLOCKS).map(r => `${r.sessionId}=${r.status ?? ''}:${r.actionable}:${r.oauthUrl ?? ''}`).sort().join('|')
 
 async function publish(onlyIfStatusChanged: boolean): Promise<void> {
   const userId = homeTabUser()
