@@ -15,6 +15,7 @@ import { gateway } from '../config.js'
 import type { InboundMessage } from '../../gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { pollSessionsOnce } from '../session-health.js'
+import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 
 const THREAD = 'thread-t8'
 const PARENT = 'parent-t8'
@@ -228,7 +229,7 @@ describe('resume tier matrix — Claude', () => {
 describe('resume stamps a gone live record dead (Z5)', () => {
   let tmux: FakeTmux
   beforeEach(() => { tmux = withFakeTmux() })
-  afterEach(() => { tmux.restore() })
+  afterEach(() => { tmux.restore(); _setDaemonStartedAtForTesting(undefined) })
 
   function goneLive(engine: 'claude' | 'codex', extra: Partial<SessionInfo>): SessionInfo {
     const e = seedHistory({ ...extra })
@@ -284,6 +285,25 @@ describe('resume stamps a gone live record dead (Z5)', () => {
 
   test('Claude: a reachable record is left alone, not stamped', async () => {
     const info = goneLive('claude', { claudeSessionId: 'C-z5r', createdAt: Date.now() })
+    tmux.alive(info.tmuxName)
+    await handleResumeIntercept(msg())
+    expect(sent.some(s => s.includes('still starting up'))).toBe(true)
+    expect(info.deadAt).toBeUndefined()
+  })
+
+  test('Claude: an old record with no bridge on a long-running daemon is torn down and resumed', async () => {
+    _setDaemonStartedAtForTesting(0)
+    const info = goneLive('claude', { claudeSessionId: 'C-z5o' })
+    tmux.alive(info.tmuxName)
+    await handleResumeIntercept(msg())
+    expect(sent.some(s => s.includes('still starting up'))).toBe(false)
+    expect(info.deadAt).toBeNumber()
+    expect(calls.some(c => c.fn === 'tryResume')).toBe(true)
+  })
+
+  test('Claude: an old record with no bridge right after a daemon restart is left alone, not torn down', async () => {
+    _setDaemonStartedAtForTesting(Date.now())
+    const info = goneLive('claude', { claudeSessionId: 'C-z5d' })
     tmux.alive(info.tmuxName)
     await handleResumeIntercept(msg())
     expect(sent.some(s => s.includes('still starting up'))).toBe(true)

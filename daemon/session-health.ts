@@ -5,7 +5,7 @@ import { tmuxHasSession, fallbackDescription } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { mainChannel, mainContext, mainTmux } from './main-session.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { ORPHAN_GRACE_MS } from './session-reachability.js'
+import { ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
 import { notifyOperator } from './access.js'
 import type { SessionInfo } from './sessions.js'
 import { autoHandoff } from './auto-handoff.js'
@@ -47,7 +47,7 @@ export function pollSessionsOnce(now: number): void {
     // the same condition at bridge-timeout time. Both paths must preserve.
     // Discovery retries every poll (claudeSessionId may become available later).
     // Alert fires once per orphan episode; clears when bridge reconnects.
-    if (info.sessionType !== 'thread_guest' && !info.deadAt && (now - info.createdAt > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
+    if (info.sessionType !== 'thread_guest' && !info.deadAt && (bridgeWaitMs(info.createdAt, now) > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
       const discovered = info.adapter.recoveryPlan(info, { discover: true }).learnedId
       if (discovered) {
         registry.persist()
@@ -61,7 +61,7 @@ export function pollSessionsOnce(now: number): void {
       }
       if (!orphanAlerted.has(info.sessionId)) {
         orphanAlerted.set(info.sessionId, now)
-        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round((now - info.createdAt) / 1000)}s)${channelNoteSentence(info)}\n`)
+        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round(bridgeWaitMs(info.createdAt, now) / 1000)}s)${channelNoteSentence(info)}\n`)
         newOrphans.push(info)
       }
     } else {

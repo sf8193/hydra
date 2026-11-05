@@ -19,7 +19,7 @@ import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-sele
 import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { claudeEngine, resolveEngine } from '../engines/instances.js'
-import { blocksRecovery, classifyReachability } from '../session-reachability.js'
+import { blocksRecovery, bridgeWaitMs, classifyReachability } from '../session-reachability.js'
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../main-session.js'
 
 // Recovery executors, swappable in tests (same pattern as reply-guard's deps).
@@ -47,7 +47,7 @@ async function reachabilityOf(info: NonNullable<ReturnType<typeof registry.get>>
   return classifyReachability({
     executionAlive: await executionAlive(info),
     bridgeConnected: transport.has(info.sessionId),
-    ageMs: Date.now() - info.createdAt,
+    ageMs: bridgeWaitMs(info.createdAt),
   })
 }
 

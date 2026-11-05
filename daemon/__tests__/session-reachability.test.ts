@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it } from 'bun:test'
 
 import {
   ORPHAN_GRACE_MS,
+  _setDaemonStartedAtForTesting,
   blocksRecovery,
+  bridgeWaitMs,
   daemonPastOrphanGrace,
   classifyReachability,
   type Reachability,
@@ -64,5 +66,27 @@ describe('daemonPastOrphanGrace', () => {
   it('is false until the daemon has been up longer than the orphan grace window', () => {
     expect(daemonPastOrphanGrace(ORPHAN_GRACE_MS)).toBe(false)
     expect(daemonPastOrphanGrace(ORPHAN_GRACE_MS + 1)).toBe(true)
+  })
+
+  it('reads the daemon start clock by default', () => {
+    _setDaemonStartedAtForTesting(Date.now())
+    expect(daemonPastOrphanGrace()).toBe(false)
+    _setDaemonStartedAtForTesting(Date.now() - ORPHAN_GRACE_MS - 1_000)
+    expect(daemonPastOrphanGrace()).toBe(true)
+    _setDaemonStartedAtForTesting(undefined)
+  })
+})
+
+describe('bridgeWaitMs', () => {
+  afterEach(() => _setDaemonStartedAtForTesting(undefined))
+
+  it('counts from the spawn when the daemon was already running', () => {
+    _setDaemonStartedAtForTesting(1_000)
+    expect(bridgeWaitMs(5_000, 8_000)).toBe(3_000)
+  })
+
+  it('counts from the daemon start when the session is older than the daemon', () => {
+    _setDaemonStartedAtForTesting(5_000)
+    expect(bridgeWaitMs(1_000, 8_000)).toBe(3_000)
   })
 })

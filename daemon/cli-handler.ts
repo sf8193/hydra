@@ -10,7 +10,7 @@ import { deliveryOutcome } from './delivery-outcome.js'
 import { deliverToSpecialist, spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
-import { ORPHAN_GRACE_MS } from './session-reachability.js'
+import { ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
@@ -331,14 +331,12 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (!executionAlive) {
     return respond(req, false, 'session gone — use \'hydra spawn\' to create a new session, or \'resume\'/\'respawn\' in chat', undefined, 3)
   }
-  if (!bridgeConnected) {
-    const ageMs = Date.now() - info.createdAt
-    if (ageMs < ORPHAN_GRACE_MS) {
-      return respond(req, false, 'session still booting — retry in ~30s', undefined, 5)
+  if (!bridgeConnected && !queue) {
+    const waitMs = bridgeWaitMs(info.createdAt)
+    if (waitMs < ORPHAN_GRACE_MS) {
+      return respond(req, false, `session still booting — retry in ~${Math.ceil((ORPHAN_GRACE_MS - waitMs) / 1000)}s`, undefined, 5)
     }
-    if (!queue) {
-      return respond(req, false, 'session orphaned (tmux alive, bridge disconnected) — try \'resume\' in the thread, or use --queue to queue for later', undefined, 4)
-    }
+    return respond(req, false, 'session orphaned (tmux alive, bridge disconnected) — try \'resume\' in the thread, or use --queue to queue for later', undefined, 4)
   }
 
   const meta: Record<string, string> = { source: 'cli-deliver' }

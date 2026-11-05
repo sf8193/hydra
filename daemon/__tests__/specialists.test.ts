@@ -9,6 +9,7 @@ import { specialistDeps, _resetSpecialistBackoff, SPAWN_BACKOFF_BASE_MS } from '
 import { removeSpecialist, setSpecialist, getSpecialist, withSpecialistLock, listSpecialists } from '../specialists.js'
 import { fakeAdapter } from './test-harness.js'
 import { getIdempotencyEntry } from '../idempotency.js'
+import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 
 process.stderr.write = (() => true) as any
 
@@ -29,6 +30,7 @@ describe('specialists', () => {
   const threads: string[] = []
   afterEach(() => {
     Object.assign(specialistDeps, realDeps)
+    _setDaemonStartedAtForTesting(undefined)
     _resetSpecialistBackoff()
     for (const s of sessions.splice(0)) { registry.delete(s); transport.bridges.delete(s) }
     for (const t of threads.splice(0)) { registry.threadToSession.delete(t); threadRegistry.delete(t) }
@@ -346,6 +348,7 @@ describe('specialists', () => {
   })
 
   test('an occupant with no bridge past the grace window is orphaned: a failure the caller keeps owing', async () => {
+    _setDaemonStartedAtForTesting(0)
     const calls = fakeSpawn()
     occupy('thread-orphan', { createdAt: Date.now() - 10 * 60_000 })
     const name = specialist('thread-orphan')
@@ -353,6 +356,12 @@ describe('specialists', () => {
     expect(await deliver(name, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 4, error: expect.stringContaining('orphaned') })
     expect(getIdempotencyEntry(k)).toBeUndefined()
     expect(calls).toHaveLength(0)
+  })
+
+  test('an old occupant with no bridge right after a daemon restart is booting, not orphaned', async () => {
+    _setDaemonStartedAtForTesting(Date.now())
+    occupy('thread-restarted', { createdAt: Date.now() - 10 * 60_000 })
+    expect(await deliver(specialist('thread-restarted'))).toMatchObject({ ok: true, data: { spawned: false } })
   })
 
   test('a freshly booting occupant (no bridge yet, inside the grace window) accepts the queued message', async () => {

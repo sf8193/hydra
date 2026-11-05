@@ -16,7 +16,7 @@ import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { gateway, ACCESS_FILE, envPercent } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
-import { ORPHAN_GRACE_MS } from '../session-reachability.js'
+import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting } from '../session-reachability.js'
 import { requestHandoff } from '../session-lifecycle.js'
 import { pendingPermissions } from '../permission.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
@@ -47,6 +47,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
+  _setDaemonStartedAtForTesting(0)
   tmux = withFakeTmux()
   sent = []; stderr = []
   ;(gateway as any).send = async (threadId: string, text: string) => { sent.push({ threadId, text }); return { id: 'm1' } }
@@ -55,6 +56,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  _setDaemonStartedAtForTesting(undefined)
   process.stderr.write = orig.stderrWrite
   tmux.restore()
   for (const id of seededSessions) { registry.delete(id); transport.bridges.delete(id) }
@@ -115,6 +117,18 @@ describe('crash detection', () => {
 })
 
 describe('orphan detection', () => {
+  test("a restarted daemon gives an old session's bridge the full grace window to reconnect", () => {
+    const info = seed({ ageMs: OLD, claudeSessionId: 'known' })
+    tmux.alive(info.tmuxName)
+    _setDaemonStartedAtForTesting(NOW)
+
+    pollSessionsOnce(NOW + ORPHAN_GRACE_MS)
+    expect(to(info, '⚠️')).toHaveLength(0)
+
+    pollSessionsOnce(NOW + ORPHAN_GRACE_MS + 1)
+    expect(to(info, '⚠️')).toHaveLength(1)
+  })
+
   test('alert fires once per episode and clears when the bridge returns', () => {
     const info = seed({ ageMs: OLD, claudeSessionId: 'known' })
     tmux.alive(info.tmuxName)
