@@ -56,7 +56,7 @@ Install App → **Install to Workspace** → Authorize. (Org-restricted workspac
 
 ## 4. Config files
 
-Both live in the daemon's **state dir** — default `~/.claude/channels/slack/` (override with `DISCORD_STATE_DIR`).
+Both live in the daemon's **state dir** — default `~/.claude/channels/slack/` (override with `HYDRA_STATE_DIR`).
 
 `.env` (see [`.env.example`](../.env.example)):
 
@@ -64,6 +64,7 @@ Both live in the daemon's **state dir** — default `~/.claude/channels/slack/` 
 CHAT_PLATFORM=slack
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
+SPAWN_CWD=~/work      # must be an existing directory
 ```
 
 `access.json` — who may DM the bot (find your Slack user id via Profile → ⋮ → Copy member ID):
@@ -99,24 +100,15 @@ claude plugin install discord@claude-plugins-official
 
 ## 6. Run
 
-Check readiness first:
+Run `claude` once in a terminal first. Accept the onboarding screens and log in, or a detached bot hangs on them.
 
 ```bash
-CHAT_PLATFORM=slack DISCORD_STATE_DIR=~/.claude/channels/slack CLAUDE_CONFIG_DIR=~/.claude ./preflight.sh
+bun install
+bun cli/hydra.ts install slack --cwd ~/work   # launchd watchdog, `hydra` CLI, preflight
+hydra up slack                                  # daemon + bot
 ```
 
-Then start the daemon, then the bot:
-
-```bash
-# 1) Daemon. CLAUDE_CONFIG_DIR MUST be a dir that has the bridge plugin (it's also the config
-#    spawned sub-sessions inherit). SPAWN_CWD is required (cwd for spawned sessions).
-CLAUDE_CONFIG_DIR=~/.claude DISCORD_STATE_DIR=~/.claude/channels/slack CHAT_PLATFORM=slack \
-  SPAWN_CWD=~/work ./start-daemon.sh
-
-# 2) Bot (after the socket appears). Set BYTE_CHANNEL to greet a DM on launch, or leave it
-#    unset to start silently and just wait for messages.
-CHAT_PLATFORM=slack ./start-byte.sh
-```
+Fix every ✗ that preflight reports before `hydra up`. `hydra preflight slack` re-runs the checks. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
 
 Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge registered for session main`. Then DM the bot.
 
@@ -126,8 +118,8 @@ Healthy = daemon log shows `slack gateway: connected as <bot>` **and** `bridge r
 |---|---|
 | Bot never responds, no error | `channelsEnabled` gate (step 5) — check managed settings first. |
 | Bot replies as *your username* ("Sent using Runlayer…") | A native Slack connector is intercepting — disable it (step 5). |
-| Spawned session greets but ignores your thread replies | The daemon's `CLAUDE_CONFIG_DIR` lacks the bridge plugin, so the spawn never registered. Start the daemon with `CLAUDE_CONFIG_DIR` pointing at a dir that has it (step 6). |
-| `start-byte.sh`: "socket not found" | Daemon isn't up — run step 6.1 first. |
+| Spawned session greets but ignores your thread replies | The daemon's `CLAUDE_CONFIG_DIR` lacks the bridge plugin, so the spawn never registered. Set `CLAUDE_CONFIG_DIR` in the `.env` to a dir that has it, then `hydra restart slack`. |
+| "socket not found" | Daemon isn't up — run `hydra up slack`. |
 | Daemon exits immediately | `SPAWN_CWD` is required. |
 
 ## Message formatting

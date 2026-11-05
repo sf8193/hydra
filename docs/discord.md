@@ -21,35 +21,42 @@ Discord requires a shared server for DMs. Navigate to **OAuth2** → **URL Gener
 
 Copy the generated URL, open it, add the bot to your server.
 
-## 4. Configure
+## 4. Install the bridge plugin
 
-Add the token to your `.env`:
+The Claude sessions reach the daemon through a plugin. Install it into the config dir the daemon will use (default `~/.claude`):
 
 ```bash
-# In ~/trading/discord-bot-custom/.env
+bun install
+claude plugin install discord@claude-plugins-official
+```
+
+## 5. Configure
+
+Write the token and working directory to `~/.claude/channels/discord/.env`:
+
+```bash
+mkdir -p ~/.claude/channels/discord
+cat > ~/.claude/channels/discord/.env << 'EOF'
 CHAT_PLATFORM=discord
-```
-
-```bash
-# In ~/.claude/channels/discord/.env
 DISCORD_BOT_TOKEN=MTIz...
+SPAWN_CWD=~/your/project      # must be an existing directory
+EOF
 ```
 
-Or use the plugin's configure skill:
-```
-/discord:configure MTIz...
-```
+Then run `claude` once in a terminal. Accept the onboarding screens and log in, or a detached bot hangs on them. `hydra preflight` warns if this is missing.
 
-## 5. Start
+## 6. Start
 
 ```bash
-./start-daemon.sh      # tmux: discord-daemon
-./start-byte.sh        # tmux: discord-byte
+bun cli/hydra.ts install discord --cwd ~/your/project   # launchd watchdog, `hydra` CLI, preflight
+hydra up discord                                          # daemon + bot
 ```
 
-## 6. Pair
+Fix every ✗ that preflight reports before `hydra up`. See [ONBOARDING_TIPS.md](ONBOARDING_TIPS.md) for the gotcha behind each step.
 
-DM your bot on Discord — it replies with a pairing code. In your Claude Code session:
+## 7. Pair
+
+DM your bot on Discord. It replies with a pairing code. In your Claude Code session:
 
 ```
 /discord:access pair <code>
