@@ -7,14 +7,26 @@
  * because the remedies are opposites: a reachable session must be left alone,
  * and an orphaned one must be torn down before it can be resumed.
  *
- * SYNC: the orphan condition here — tmux alive, bridge absent, past the spawn
- * grace window — is the same one checked by session-health.ts (periodic orphan
- * detector) and resume-health.ts (classifyResumeFailure, at bridge-timeout
- * time). All three must agree on what an orphan is.
+ * SYNC: an orphan is a live pane with no bridge for longer than ORPHAN_GRACE_MS,
+ * measured by bridgeWaitMs so a daemon restart restarts the clock. Every check
+ * uses it: commands/thread.ts, session-health.ts, cli-handler.ts and
+ * specialist-deliver.ts.
  */
 
 /** How long a session may hold a live pane with no bridge before it counts as orphaned. */
 export const ORPHAN_GRACE_MS = 90_000
+
+let daemonStartedAtOverride: number | undefined
+
+export function _setDaemonStartedAtForTesting(at: number | undefined): void { daemonStartedAtOverride = at }
+
+function daemonStartedAt(): number {
+  return daemonStartedAtOverride ?? Date.now() - process.uptime() * 1000
+}
+
+export function bridgeWaitMs(createdAt: number, now = Date.now()): number {
+  return now - Math.max(createdAt, daemonStartedAt())
+}
 
 export type Reachability =
   /** Execution alive, bridge connected. Messages get through; leave it be. */
@@ -37,7 +49,7 @@ export function classifyReachability(input: {
   return input.ageMs > (input.graceMs ?? ORPHAN_GRACE_MS) ? 'orphaned' : 'starting'
 }
 
-export function daemonPastOrphanGrace(uptimeMs = process.uptime() * 1000): boolean {
+export function daemonPastOrphanGrace(uptimeMs = Date.now() - daemonStartedAt()): boolean {
   return uptimeMs > ORPHAN_GRACE_MS
 }
 

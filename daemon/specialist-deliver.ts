@@ -6,7 +6,7 @@ import { gateway } from './config.js'
 import { isAlive } from './util.js'
 import { registerIdempotency, clearIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
-import { ORPHAN_GRACE_MS } from './session-reachability.js'
+import { ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
 import { pushToolSurface } from './tool-surface.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
 import { getSpecialist, setSpecialist, readKickoff, withSpecialistLock, type Specialist } from './specialists.js'
@@ -190,7 +190,7 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
   try {
     const { info, spawned } = await ensureSpecialist(p.specialist, p.initiator)
     const connected = transport.has(info.sessionId)
-    if (!spawned && !connected && specialistDeps.now() - info.createdAt > ORPHAN_GRACE_MS) {
+    if (!spawned && !connected && bridgeWaitMs(info.createdAt, specialistDeps.now()) > ORPHAN_GRACE_MS) {
       release()
       return { ok: false, error: `specialist "${p.specialist}": occupant ${info.tmuxName} is orphaned (tmux alive, bridge disconnected) — try 'resume' in its thread`, exitCode: 4 }
     }

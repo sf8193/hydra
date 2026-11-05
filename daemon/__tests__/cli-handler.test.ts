@@ -10,6 +10,7 @@ import { transport } from '../bridge-transport.js'
 import { engines } from '../engines/instances.js'
 import { emit } from '../event-bus.js'
 import { getIdempotencyEntry } from '../idempotency.js'
+import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 
 // Suppress stderr from daemon modules
 process.stderr.write = (() => true) as any
@@ -191,8 +192,9 @@ describe('cli-handler: raindrop in health', () => {
 describe('cli-handler: deliver (Z2)', () => {
   let fake: FakeTmux
   const ids: string[] = []
-  beforeEach(() => { fake = withFakeTmux() })
+  beforeEach(() => { fake = withFakeTmux(); _setDaemonStartedAtForTesting(0) })
   afterEach(() => {
+    _setDaemonStartedAtForTesting(undefined)
     for (const id of ids.splice(0)) { registry.delete(id); transport.bridges.delete(id) }
     fake.restore()
   })
@@ -324,6 +326,18 @@ describe('cli-handler: deliver (Z2)', () => {
     const res = await deliver(info.sessionId, { idempotencyKey: k })
     expect(res).toMatchObject({ ok: false, exitCode: 4 })
     expect(checkIdempotency(k)).toEqual({ blocked: false })
+  })
+
+  test('claude no bridge right after a daemon restart → exit 5 booting, not orphaned', async () => {
+    const info = seed('claude', { createdAt: 1 })
+    _setDaemonStartedAtForTesting(Date.now())
+    expect(await deliver(info.sessionId, {})).toMatchObject({ ok: false, exitCode: 5 })
+  })
+
+  test('claude --queue with no bridge right after a daemon restart → still queued', async () => {
+    const info = seed('claude', { createdAt: 1 })
+    _setDaemonStartedAtForTesting(Date.now())
+    expect(await deliver(info.sessionId, { queue: true })).toMatchObject({ ok: true, data: { status: 'queued' } })
   })
 })
 
