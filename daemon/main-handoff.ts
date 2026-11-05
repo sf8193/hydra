@@ -102,7 +102,7 @@ async function waitIdle(): Promise<string> {
   const start = Date.now()
   for (;;) {
     const s = readClaudeStatus(mainTmux())
-    if (s?.status === 'idle') return s.sessionId
+    if (s?.status === 'idle' || s?.status === 'shell') return s.sessionId
     const waited = Date.now() - start
     if (!s && waited >= _timing.unreadableMs) throw new Error("main's Claude status file is unreadable, so its state is unknown and nothing was typed")
     if (waited >= _timing.idleMs) throw new Error(`main did not go idle within ${Math.round(_timing.idleMs / 1000)}s (status ${s?.status ?? 'unreadable'})`)
