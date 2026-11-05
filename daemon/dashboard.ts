@@ -11,6 +11,7 @@ import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
 import { sessionLiveAsync } from './session-activity.js'
 import { homeStatus, homeStatusAccessory, type HomeStatus } from './home-status.js'
+import { confirmedStuckKind } from './pane-probe.js'
 
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
@@ -54,6 +55,7 @@ async function sessionStatus(s: SessionInfo): Promise<HomeStatus> {
     connected: transport.has(s.sessionId),
     live,
     working,
+    stuck: confirmedStuckKind(s.tmuxName),
     lastReplyAt: s.lastReplyAt,
     lastUserMessageAt: s.lastUserMessageAt,
   })

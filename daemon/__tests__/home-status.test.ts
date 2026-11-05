@@ -3,7 +3,7 @@ import { homeStatus, homeStatusAccessory, markUserMessaged, markYourTurn, type H
 import { __test as dashboardTest } from '../dashboard.js'
 import { HOME_STATUS_ACTION_PREFIX } from '../../shared/constants.js'
 
-const idle: HomeStatusInputs = { connected: true, live: 'idle', working: false }
+const idle: HomeStatusInputs = { connected: true, live: 'idle', working: false, stuck: null }
 
 describe('homeStatus', () => {
   test('idle with nothing waiting on you', () => {
@@ -29,7 +29,12 @@ describe('homeStatus', () => {
   })
 
   test('disconnected beats everything', () => {
-    expect(homeStatus({ ...idle, connected: false, working: true, live: 'blocked', lastReplyAt: 200 })).toBe('disconnected')
+    expect(homeStatus({ ...idle, connected: false, working: true, live: 'blocked', stuck: 'usage_limit', lastReplyAt: 200 })).toBe('disconnected')
+  })
+
+  test('a stuck screen beats working, blocked and your turn', () => {
+    expect(homeStatus({ ...idle, live: 'working', working: true, stuck: 'login_required', lastReplyAt: 200 })).toBe('login_required')
+    expect(homeStatus({ ...idle, live: 'blocked', stuck: 'plan_mode' })).toBe('plan_mode')
   })
 })
 
@@ -59,6 +64,15 @@ describe('homeStatusAccessory', () => {
     const text = (homeStatusAccessory(status, 's1', '') as { text: { text: string } }).text.text
     expect(text.startsWith(glyph + String.fromCharCode(0x2002))).toBe(true)
     expect(text.length).toBeGreaterThan(2)
+  })
+
+  test.each([
+    ['login_required', 'Login needed'], ['usage_limit', 'Usage limit'], ['plan_mode', 'Plan approval'],
+    ['resume_prompt', 'Resume prompt'], ['unknown_dialog', 'Dialog open'],
+  ] as const)('stuck on %s shows a red ■ %s', (status, label) => {
+    const button = homeStatusAccessory(status, 's1', '') as { text: { text: string }; style?: string }
+    expect(button.text.text).toBe(`■${String.fromCharCode(0x2002)}${label}`)
+    expect(button.style).toBe('danger')
   })
 
   test('no url: the button still shows the state but carries no link', () => {
