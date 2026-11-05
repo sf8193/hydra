@@ -22,6 +22,7 @@ import { codexPiggyback } from './codex-piggyback.js'
 import { refreshSessionVisual } from '../anchor-state.js'
 import { on } from '../event-bus.js'
 import type { EngineAdapter } from './engine-adapter.js'
+import { markYourTurn } from '../home-status.js'
 
 // reconnect is Codex-internal: not on EngineAdapter, but on every Codex record's adapter.
 // A typed guard rather than instanceof: test fixtures stand in duck-typed adapters.
@@ -109,6 +110,8 @@ codexEngine.on('turnReconciled', onTurnReconciled)
 codexEngine.on('turnStalled', (sessionId: string, reason: string) => {
   const info = registry.get(sessionId)
   if (!info) return
+  markYourTurn(info, info.threadId)
+  registry.debouncedPersist()
   void safeSend(info.threadId, `⚠️ Codex needs attention: ${reason || 'turn progress is unresolved.'}`)
 })
 

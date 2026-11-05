@@ -22,6 +22,7 @@ import { fetchPrTitle, parsePrUrl } from './pr-watch.js'
 import { ASK_PREDECESSOR_TIMEOUT_MS, normalizeReviewRounds, resolveCodexModelAlias, resolveOmpModelAlias } from '../shared/constants.js'
 import { isToolAllowed, predecessorAsker } from './tool-surface.js'
 import { parseRateLimits, reportUsage } from './usage-alerts.js'
+import { markYourTurn } from './home-status.js'
 
 const SEND_RETRY_ATTEMPTS = 3
 const SEND_RETRY_BASE_MS = 1_000
@@ -217,6 +218,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           const info = registry.get(callerSessionId)
           if (info) {
             info.lastReplyId = sentIds[sentIds.length - 1]
+            if (markYourTurn(info, chat_id)) registry.debouncedPersist()
             // lastReplyId drives the session's dashboard/list link — refresh (debounced) so it tracks the latest reply.
             refreshDashboard()
             // A live reply means the session is working: clear a stale suppressAutoRecover so a

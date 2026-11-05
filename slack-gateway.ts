@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { sanitizeFilename } from './gateway.js'
 import { SocketSupervisor } from './shared/socket-supervisor.js'
 import { ThrottledQueue } from './throttled-queue.js'
+import { HOME_STATUS_ACTION_PREFIX } from './shared/constants.js'
 import type {
   ChatGateway,
   InboundMessage,
@@ -194,6 +195,7 @@ export class SlackGateway implements ChatGateway {
       }
     })
 
+    this.app.action(new RegExp(`^${HOME_STATUS_ACTION_PREFIX}`), async ({ ack }: any) => { await ack() })
     // Home tab: spawn session on Enter in the text input
     this.app.action('home:spawn', async ({ action, body, ack }: any) => {
       this.touchHeartbeat()
@@ -740,6 +742,12 @@ export class SlackGateway implements ChatGateway {
     return this.buildMessageUrl(anchor.channelId, messageTs, anchor.messageId)
   }
 
+  getMessageAppLink(threadId: string, messageTs: string): string {
+    const anchor = this.getThreadAnchor(threadId)
+    if (!anchor || !this._teamId) return ''
+    return `slack://channel?team=${this._teamId}&id=${anchor.channelId}&message=${messageTs}&thread_ts=${anchor.messageId}`
+  }
+
   // Uses Slack's `latest_reply` — may diverge from routed messages in multi-user threads
   async getLastReplyId(threadId: string): Promise<string | null> {
     if (!this.app) return null
@@ -865,8 +873,8 @@ export class SlackGateway implements ChatGateway {
   }
 
   async publishHomeTab(userId: string, blocks: any[]): Promise<void> {
-    if (!this.app) throw new Error('not connected')
-    await this.app.client.views.publish({
+    if (!this.visualApi) throw new Error('not connected')
+    await this.visualApi.views.publish({
       user_id: userId,
       view: {
         type: 'home',

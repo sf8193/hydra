@@ -23,7 +23,11 @@ export function isSessionWorking(info: SessionInfo): boolean {
 }
 
 export async function isSessionWorkingAsync(info: SessionInfo): Promise<boolean> {
+  return (await sessionLiveAsync(info)).working
+}
+
+export async function sessionLiveAsync(info: SessionInfo): Promise<{ live: LiveState | null; working: boolean }> {
   const { live, limitS } = read(info)
-  if (live === 'working' && limitS) return !(await tmuxSilentLongerThan(info.tmuxName, limitS))
-  return live ? live === 'working' : isTmuxRecentlyActive(info.tmuxName)
+  if (live === 'working' && limitS) return { live, working: !(await tmuxSilentLongerThan(info.tmuxName, limitS)) }
+  return { live, working: live ? live === 'working' : await isTmuxRecentlyActive(info.tmuxName) }
 }

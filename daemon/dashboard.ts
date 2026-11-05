@@ -9,9 +9,12 @@ import { formatDuration, executionAlive } from './util.js'
 import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
+import { sessionLiveAsync } from './session-activity.js'
+import { homeStatus, homeStatusAccessory, type HomeStatus } from './home-status.js'
 
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
+const STATUS_CHECK_MS = 20_000
 // Each session = up to 3 blocks (section + context + divider). Slack caps views at 100.
 // Fixed blocks: header, dividers, spacer, input, timestamp, recent header = ~10.
 // Active: up to 25 sessions × 3 blocks = 75. Recent: up to 5 × 2 = 10. Total ≤ 100.
@@ -25,14 +28,18 @@ type SessionRow = {
   emoji: string
   desc: string
   age: string
-  connected: boolean
-  paused: boolean
+  status: HomeStatus | null
   url: string
   watches: WatchEntry[]
   contextLinks: string[]
   artifacts: string[]
   sessionType: string
   parent?: { name: string; url: string }
+  buttonUrl: string
+}
+
+function sessionAppLink(s: SessionInfo): string {
+  return gateway.getMessageAppLink?.(s.threadId, s.lastReplyId ?? gateway.getThreadAnchor(s.threadId)?.messageId ?? '') || sessionUrl(s)
 }
 
 function sessionUrl(s: SessionInfo): string {
@@ -41,15 +48,27 @@ function sessionUrl(s: SessionInfo): string {
     : s.threadUrl ?? ''
 }
 
-function getActiveSessions(): SessionRow[] {
+async function sessionStatus(s: SessionInfo): Promise<HomeStatus> {
+  const { live, working } = await sessionLiveAsync(s)
+  return homeStatus({
+    connected: transport.has(s.sessionId),
+    live,
+    working,
+    lastReplyAt: s.lastReplyAt,
+    lastUserMessageAt: s.lastUserMessageAt,
+  })
+}
+
+async function getActiveSessions(): Promise<SessionRow[]> {
   const all = [...registry.values()]
   const now = Date.now()
 
   all.sort((a, b) => b.lastActive - a.lastActive)
 
   const rows: SessionRow[] = []
-  for (const s of all) {
-    if (!executionAlive(s)) continue
+  const live = all.filter(executionAlive)
+  const statuses = await Promise.all(live.slice(0, MAX_SESSION_BLOCKS).map(sessionStatus))
+  for (const [i, s] of live.entries()) {
     const rawDesc = s.description || s.topic || s.tmuxName
     const desc = rawDesc.length > 80 ? rawDesc.slice(0, 77) + '...' : rawDesc
     const url = sessionUrl(s)
@@ -60,9 +79,9 @@ function getActiveSessions(): SessionRow[] {
       emoji: sessionEmoji(s.tmuxName),
       desc,
       age: formatDuration(now - s.createdAt),
-      connected: transport.has(s.sessionId),
-      paused: !!s.paused,
+      status: statuses[i] ?? null,
       url,
+      buttonUrl: sessionAppLink(s),
       watches: getWatchesBySession(s.sessionId),
       contextLinks: s.contextLinks ?? [],
       artifacts: s.artifacts ?? [],
@@ -136,6 +155,7 @@ function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: buildSessionText(s) },
+        ...(s.status ? { accessory: homeStatusAccessory(s.status, s.sessionId, s.buttonUrl) } : {}),
       })
       const contextLines = assembleContextLines({
         watches: s.watches,
@@ -199,44 +219,70 @@ function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[
   return blocks
 }
 
-async function doUpdate(): Promise<void> {
-  if (PLATFORM !== 'slack') return
-  if (!('publishHomeTab' in gateway)) return
+function homeTabUser(): string | null {
+  if (PLATFORM !== 'slack' || !('publishHomeTab' in gateway)) return null
+  return loadAccess().allowFrom[0] ?? null
+}
 
-  const access = loadAccess()
-  if (!access.allowFrom.length) return
+let publishedStatuses = ''
+const statusKey = (rows: SessionRow[]) =>
+  rows.slice(0, MAX_SESSION_BLOCKS).map(r => `${r.sessionId}=${r.status ?? ''}`).sort().join('|')
 
-  const userId = access.allowFrom[0]
-  const sessions = getActiveSessions()
-  const recent = getRecentCompleted()
-  const blocks = buildHomeBlocks(sessions, recent)
+async function publish(onlyIfStatusChanged: boolean): Promise<void> {
+  const userId = homeTabUser()
+  if (!userId) return
+  const sessions = await getActiveSessions()
+  const key = statusKey(sessions)
+  if (onlyIfStatusChanged && key === publishedStatuses) return
+  const blocks = buildHomeBlocks(sessions, getRecentCompleted())
 
   try {
     await (gateway as any).publishHomeTab(userId, blocks)
+    publishedStatuses = key
   } catch (err) {
     process.stderr.write(`dashboard: home tab publish failed for ${userId}: ${err}\n`)
   }
 }
 
+function coalesced(run: (onlyIfStatusChanged: boolean) => Promise<void>): (onlyIfStatusChanged?: boolean) => Promise<void> {
+  let updating = false
+  let queuedFull = false
+  return async (onlyIfStatusChanged = false) => {
+    if (updating) {
+      if (!onlyIfStatusChanged) queuedFull = true
+      return
+    }
+    updating = true
+    let next = onlyIfStatusChanged
+    for (;;) {
+      queuedFull = false
+      try {
+        await run(next)
+      } catch (err) {
+        process.stderr.write(`dashboard: update failed: ${err}\n`)
+      }
+      if (!queuedFull) break
+      next = false
+    }
+    updating = false
+  }
+}
+
+const doUpdate = coalesced(publish)
+
 export function refreshDashboard(): void {
   if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => {
-    doUpdate().catch(err => {
-      process.stderr.write(`dashboard: update failed: ${err}\n`)
-    })
-  }, DEBOUNCE_MS)
+  debounceTimer = setTimeout(() => void doUpdate(), DEBOUNCE_MS)
 }
 
 export function refreshDashboardNow(): void {
   if (debounceTimer) clearTimeout(debounceTimer)
-  doUpdate().catch(err => {
-    process.stderr.write(`dashboard: update failed: ${err}\n`)
-  })
+  void doUpdate()
 }
 
 // Periodic fallback refresh — keeps dashboard fresh even when no session changes occur
-setInterval(() => {
-  doUpdate().catch(err => {
-    process.stderr.write(`dashboard: periodic refresh failed: ${err}\n`)
-  })
-}, PERIODIC_REFRESH_MS)
+setInterval(() => void doUpdate(), PERIODIC_REFRESH_MS)
+
+setInterval(() => void doUpdate(true), STATUS_CHECK_MS)
+
+export const __test = process.env.NODE_ENV === 'test' ? { statusKey, coalesced } : undefined

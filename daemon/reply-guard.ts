@@ -37,6 +37,7 @@ import type { TurnOutcome } from './engines/engine-adapter.js'
 import { safeSend, tmuxWindowActivity } from './util.js'
 import { probeByteTmuxName } from './pane-probe.js'
 import { blockedReason, readClaudeStatus } from './engines/claude-status.js'
+import { markYourTurn } from './home-status.js'
 
 export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
@@ -53,6 +54,7 @@ export type ReplyGuardDeps = {
   turnOutcome: (info: SessionInfo, sinceMs: number) => TurnOutcome
   // Why Claude says the session is stuck (its status file's waitingFor), or null. Optional so tests need not fake it.
   blockedReason?: (tmuxName: string) => string | null
+  persist?: () => void
 }
 
 /** The adapter's answer. */
@@ -71,6 +73,7 @@ const defaultDeps: ReplyGuardDeps = {
   capturePaneText: (tmuxName, lines) => capturePaneText(tmuxName, lines),
   turnOutcome: (info, sinceMs) => defaultTurnOutcome(info, sinceMs),
   blockedReason: (tmuxName) => blockedReason(readClaudeStatus(tmuxName)),
+  persist: () => registry.debouncedPersist(),
 }
 
 let deps: ReplyGuardDeps = defaultDeps
@@ -230,6 +233,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now(), o
     const name = info?.tmuxName ?? p.sessionId
 
     process.stderr.write(`daemon: reply guard: ${name} silent on message ${p.messageId} in ${p.chatId}, escalating\n`)
+    if (info && markYourTurn(info, p.chatId, now)) deps.persist?.()
     void escalateWithCapture(name, p.chatId, p.user, p.messageId, mins, outcome)
     pending.delete(key)
     silenceFirstSeenAt.delete(key)
