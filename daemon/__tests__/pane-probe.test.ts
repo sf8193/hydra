@@ -487,6 +487,29 @@ describe('probeAllSessions', () => {
     expect(confirmedStuckKind('vale')).toBe('login_required')
   })
 
+  it('confirmedStuckKind keeps a confirmed login label across a hard-stage change', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+      windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+      paneTails.set('vale', LOGIN_SELECT_METHOD_TAIL)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+
+      paneTails.set('vale', LOGIN_OAUTH_URL_TAIL)
+      await probeAllSessions(T0 + 120_000)
+      await flush()
+      expect(sentMessages.some(m => m.text.includes('authenticate here'))).toBe(true)
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+    } finally {
+      if (origEnv === undefined) delete process.env.HYDRA_AUTO_LOGIN
+      else process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
+  })
+
   it('confirmedStuckKind ignores the login expiring footer: it is not a block', async () => {
     addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
     windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
@@ -495,6 +518,27 @@ describe('probeAllSessions', () => {
     await probeAllSessions(T0)
     await probeAllSessions(T0 + 60_000)
     expect(confirmedStuckKind('vale')).toBeNull()
+  })
+
+  it('confirmedStuckKind waits for a second frame after the expiring footer turns into a block', async () => {
+    const origEnv = process.env.HYDRA_AUTO_LOGIN
+    delete process.env.HYDRA_AUTO_LOGIN
+    try {
+      addSession('s1', { tmuxName: 'vale', threadId: 'thread-1' })
+      windowActivity.set('vale', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+      paneTails.set('vale', LOGIN_EXPIRING_TAIL)
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      paneTails.set('vale', LOGIN_SELECT_METHOD_TAIL)
+      await probeAllSessions(T0 + 120_000)
+      expect(confirmedStuckKind('vale')).toBeNull()
+      await probeAllSessions(T0 + 180_000)
+      expect(confirmedStuckKind('vale')).toBe('login_required')
+    } finally {
+      if (origEnv === undefined) delete process.env.HYDRA_AUTO_LOGIN
+      else process.env.HYDRA_AUTO_LOGIN = origEnv
+    }
   })
 
   it('confirmedStuckKind hides a latched screen while the session is active, and shows it again once re-seen', async () => {

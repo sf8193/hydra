@@ -833,8 +833,8 @@ export async function probeAllSessions(now?: number): Promise<void> {
       const stageChanged = detected.kind === 'login_required' &&
         existing.state.loginStage !== detected.loginStage
       if (stageChanged) {
+        if (isLoginNotice(existing.state)) existing.consecutive = 1
         existing.state = detected
-        existing.consecutive = 1
         existing.notifiedAt = null
         existing.notifyCount = 0
         void notifyLoginRequired(existing, t)
