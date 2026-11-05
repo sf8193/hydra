@@ -62,6 +62,8 @@ DM your bot on Discord. It replies with a pairing code. In your Claude Code sess
 /discord:access pair <code>
 ```
 
+Pairing adds your user ID to `allowFrom` in `access.json`. The bot only accepts commands from IDs listed there.
+
 Then lock down: `/discord:access policy allowlist`
 
 ## Discord-specific behavior
