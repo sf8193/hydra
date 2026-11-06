@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { gateway } from '../config.js'
-import { deliverPrUpdate, parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, restoreWatches, listWatches, parsePersistedWatches, applyCheckResult, formatWatchEntry, type WatchEntry, type CheckResult } from '../pr-watch.js'
+import { deliverPrUpdate, parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, restoreWatches, listWatches, parsePersistedWatches, applyCheckResult, formatWatchEntry, selectNewReviews, type WatchEntry, type CheckResult } from '../pr-watch.js'
 import { parseWatchCommand } from '../commands/watch.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { registry } from '../sessions.js'
@@ -404,5 +404,23 @@ describe('notify-green: delivery is a thread post, never a session turn', () => 
     mock()
     await applyCheckResult(mkEntry({ notifyGreen: undefined }), ok('abc'))
     expect(sends).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// selectNewReviews
+// ---------------------------------------------------------------------------
+
+describe('selectNewReviews', () => {
+  // Regression: GitHub returns /reviews oldest-first. An old review at the head of the list
+  // used to stop the scan, so a later approval with a body was never delivered.
+  test('returns a new approval that follows older reviews, with its body', () => {
+    const data = [
+      { id: 1, user: { login: 'cursor[bot]' }, state: 'COMMENTED', body: 'x', submitted_at: '2026-11-06T15:31:23Z' },
+      { id: 2, user: { login: 'cursor[bot]' }, state: 'COMMENTED', body: 'y', submitted_at: '2026-11-06T15:43:22Z' },
+      { id: 3, user: { login: 'dcetlin' }, state: 'APPROVED', body: 'LGTM, nit aside', submitted_at: '2026-11-06T18:03:32Z' },
+    ]
+    const out = selectNewReviews(data, { lastReviewId: 2, lastCheckedAt: '2026-11-06T17:59:00Z' })
+    expect(out.map(r => [r.id, r.user, r.state, r.body])).toEqual([[3, 'dcetlin', 'APPROVED', 'LGTM, nit aside']])
   })
 })

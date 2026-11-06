@@ -290,24 +290,24 @@ async function fetchNewReviewComments(entry: WatchEntry): Promise<PRComment[] | 
     }))
 }
 
-async function fetchNewReviews(entry: WatchEntry): Promise<PRReview[] | null> {
-  // Fetch newest-first, small page — most PRs have few reviews
-  const data = await ghApi(`${prPath(entry)}/reviews?per_page=10&sort=created&direction=desc`)
-  if (!data || !Array.isArray(data)) return null
-
-  const results: PRReview[] = []
-  for (const r of data) {
-    if (r.id <= entry.lastReviewId) break
-    if (new Date(r.submitted_at) <= new Date(entry.lastCheckedAt)) break
-    results.push({
+// GitHub's /reviews endpoint ignores sort/direction and returns oldest-first, so take the
+// whole page (max 100) and filter; never stop at the first old review.
+export function selectNewReviews(data: any[], entry: Pick<WatchEntry, 'lastReviewId' | 'lastCheckedAt'>): PRReview[] {
+  return data
+    .filter((r: any) => r.id > entry.lastReviewId && new Date(r.submitted_at) > new Date(entry.lastCheckedAt))
+    .map((r: any) => ({
       id: r.id,
       user: r.user?.login ?? 'unknown',
       state: r.state,
       body: r.body ?? '',
       createdAt: r.submitted_at,
-    })
-  }
-  return results
+    }))
+}
+
+async function fetchNewReviews(entry: WatchEntry): Promise<PRReview[] | null> {
+  const data = await ghApi(`${prPath(entry)}/reviews?per_page=100`)
+  if (!data || !Array.isArray(data)) return null
+  return selectNewReviews(data, entry)
 }
 
 async function fetchNewIssueComments(entry: WatchEntry): Promise<PRComment[] | null> {
@@ -676,7 +676,7 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
     const [reviewComments, issueComments, reviews, checkResult, prData] = await Promise.all([
       ghApi(`${prPath(parsed)}/comments?per_page=1&sort=created&direction=desc`),
       ghApi(`repos/${parsed.owner}/${parsed.repo}/issues/${parsed.prNumber}/comments?per_page=1&sort=created_at&direction=desc`),
-      ghApi(`${prPath(parsed)}/reviews?per_page=1&sort=id&direction=desc`),
+      ghApi(`${prPath(parsed)}/reviews?per_page=100`),
       fetchCheckStatus(entry),
       fetchPr(parsed),
     ])
