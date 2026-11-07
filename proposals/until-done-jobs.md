@@ -1,6 +1,9 @@
-# Durable jobs
+# Until-done jobs
 
 > Status: proposal, 2026-11-07. Approved in direction by the user; this spec is for review before building.
+
+Naming: not "durable". In durable execution and durable queues, that word means work that survives a crash and
+resumes where it stopped. Here a failed attempt is simply retried from the start. The setting is named for its rule.
 
 ## The problem
 
@@ -28,7 +31,7 @@ Each of those scripts is compensating machinery for a missing concept in the run
 A schedule defines **slots**: the local wall-clock instants its cron expression matches.
 
 - A job is **owed** for the latest slot at or before now, unless that slot is already **done**.
-- A **durable** job stays owed until an attempt succeeds. It is retried on every tick while owed.
+- An **until-done** job (`until_done = true`) stays owed until an attempt succeeds. It is retried on every tick while owed.
 - A plain job (today's behaviour) is attempted once per slot, whatever the outcome.
 - **Missed slots collapse:** only the latest slot can be owed. A machine that was off for a week runs a weekly job
   once, not seven times.
@@ -37,8 +40,8 @@ Every job lands in one of three shapes, made from the same keys; there is no `ki
 
 | Shape | Example | Keys |
 |---|---|---|
-| Obligation: once per slot, a duplicate or a miss is an error | weekly review session | `durable`, `overlap`, `alert_after` |
-| Convergence: keep something true; repeating is harmless | hourly backup sync | `durable`, frequent `schedule`, `alert_after` |
+| Obligation: once per slot, a duplicate or a miss is an error | weekly review session | `until_done`, `overlap`, `alert_after` |
+| Convergence: keep something true; repeating is harmless | hourly backup sync | `until_done`, frequent `schedule`, `alert_after` |
 | Probe: look and report | dependency scan | none (today's behaviour) |
 
 **The line between hydra and the job:** hydra owns *liveness* (is the job running and succeeding?). The job owns its
@@ -54,37 +57,37 @@ New optional keys. A job without them behaves as today.
 schedule = "0 11 * * FRI"
 mode = "spawn"
 prompt = "..."
-durable = true           # owed until an attempt succeeds; retried each tick
+until_done = true        # owed until an attempt succeeds; retried each tick
 needs = ["internet"]     # don't attempt until met; not an attempt, not a failure
 overlap = "absorb"       # spawn only: an open session from this job handles the owed slot
-alert_after = "1d"       # durable only: alert if still owed this long after the slot
+alert_after = "1d"       # until_done only: alert if still owed this long after the slot
 
 [backup-pull]
 schedule = "0 * * * *"
 mode = "none"
 check = "~/scripts/backup-pull.sh"
-durable = true
+until_done = true
 needs = ["internet"]
 alert_after = "2d"
 ```
 
 | Key | Values | Default | Applies to |
 |---|---|---|---|
-| `durable` | boolean | `false` | all modes |
+| `until_done` | boolean | `false` | all modes |
 | `needs` | array of precondition names; v1 knows only `"internet"` | `[]` | all modes |
 | `overlap` | `"absorb"` \| `"wait"` \| `"allow"` | `"allow"` | `spawn` only |
-| `alert_after` | duration (`90m`, `12h`, `2d`; at most `30d`) | `"1d"` when `durable` | `durable` only |
+| `alert_after` | duration (`90m`, `12h`, `2d`; at most `30d`) | `"1d"` when `until_done` | `until_done` only |
 
 Validation follows `parseJobs`' style: unknown precondition names, `overlap` on a non-spawn job, and `alert_after`
-without `durable` are config errors.
+without `until_done` are config errors.
 
 ## The check contract
 
 | Exit | Meaning | Effect on the slot |
 |---|---|---|
 | `0` | Done. Stdout, if any, is findings: spawn/main jobs pass them to the agent. | The attempt continues to the action; if the action succeeds, the slot is done. |
-| `75` (`EX_TEMPFAIL`) | Not now: a job-specific precondition isn't met. | Not an attempt and not a failure. A durable job stays owed; a plain job's slot is dropped. |
-| anything else | Failed attempt. | A durable job stays owed; a plain job's slot is dropped. |
+| `75` (`EX_TEMPFAIL`) | Not now: a job-specific precondition isn't met. | Not an attempt and not a failure. An until-done job stays owed; a plain job's slot is dropped. |
+| anything else | Failed attempt. | An until-done job stays owed; a plain job's slot is dropped. |
 
 For a job with a check, "the action" is the spawn or main delivery when output was printed; with no output, or for
 `mode = "none"`, a check exit 0 is itself success. A job without a check has only the action.
@@ -139,7 +142,7 @@ repeat the action once. This residual at-least-once window is accepted and docum
 ## Alerts
 
 - **Plain jobs:** unchanged: a failed attempt posts one "job failed" message per job per day.
-- **Durable jobs:** individual failed or deferred attempts are recorded and stay quiet. One alert is posted per slot
+- **Until-done jobs:** individual failed or deferred attempts are recorded and stay quiet. One alert is posted per slot
   when the slot is still owed `alert_after` past its instant. It names how long the slot has been owed, the last
   attempt's outcome and note, and any unmet need.
 - **Offline:** the alert is evaluated after the tick's attempt, so a machine coming back online first tries the
@@ -155,7 +158,7 @@ type JobState = {
   last?: { at: string; outcome: 'nothing' | 'findings' | 'failed' | 'deferred'; note?: string }
   doneSlot?: string        // label of the latest done slot
   attemptedSlot?: string   // plain jobs: label of the latest attempted slot
-  alertedSlot?: string     // durable jobs: label of the slot already alerted for
+  alertedSlot?: string     // until-done jobs: label of the slot already alerted for
 }
 ```
 
@@ -170,10 +173,10 @@ deferral reason if deferred.
 ## Migration
 
 - Existing jobs.toml files parse and behave as before: same outcomes, same failure messages.
-- The first tick after `sync` treats a job with no `doneSlot` as having done its latest slot. Enabling `durable` on
-  an existing job therefore doesn't fire it mid-period. A new durable job first runs at its next slot. To run one
+- The first tick after `sync` treats a job with no `doneSlot` as having done its latest slot. Enabling `until_done` on
+  an existing job therefore doesn't fire it mid-period. A new until-done job first runs at its next slot. To run one
   now, use `hydra jobs run`.
-- `sync` removes the per-job launchd entries and adds the tick entry. `jobs.example.toml` gains a durable example.
+- `sync` removes the per-job launchd entries and adds the tick entry. `jobs.example.toml` gains an until-done example.
 
 ## Tests
 
@@ -181,7 +184,7 @@ deferral reason if deferred.
 
 - **Slot computation** in a non-UTC zone, both DST transitions, Friday before and after the slot minute, and the
   label comparison across time-zone changes.
-- **Durable retry:** a failed attempt, then a later tick succeeds and the slot is done; no attempt after done.
+- **Until-done retry:** a failed attempt, then a later tick succeeds and the slot is done; no attempt after done.
 - **Collapse:** a gap spanning several slots yields one attempt.
 - **Exit 75 and `needs`:** recorded as deferred, no failure message, the slot still owed.
 - **`overlap`:** absorb marks done, wait defers, and a failing session list is a failure.
