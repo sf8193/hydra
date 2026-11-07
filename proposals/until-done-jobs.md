@@ -1,6 +1,6 @@
 # Until-done jobs
 
-> Status: proposal v5, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds 1–3)
+> Status: proposal v6, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds 1–4)
 > and an independent pass. For review before building.
 
 ## What hydra jobs should offer
@@ -130,16 +130,29 @@ not die with it.
     can't make the attempt run something the daemon didn't evaluate.
   - The **slot** goes as `--slot <label>`. The attempt records the slot it was given and never recomputes it.
   - **Record-only outcomes:** `--absorbed-by <s>`, `--stuck <s>`, and `--baseline` write their result directly. They
-    write no marker, and run no check, no action and no `needs`.
+    write no marker and run no check and no action.
+  - **`needs` is evaluated only by the daemon,** before dispatch. An attempt never checks it: it can't see the
+    gateway, so it would break "probe or gateway".
 - **An attempt is a detached child:** `lockf -k -t 0 <state>/jobs-state/<name>.lock bun hydra.ts jobs attempt …`,
   spawned detached (its own process group: `child_process.spawn(..., { detached: true })`; macOS has no `setsid`
   command) so a daemon restart doesn't kill it.
+  - **Stdio:** stdin is a pipe carrying the job definition. Truncated or unparseable stdin is a recorded failure, and
+    D1 below covers it if parsing never finishes. stdout and stderr go to `jobs-state/<name>.log`, never to a pipe
+    to the daemon, so the first write after a daemon restart can't hit EPIPE.
   - **The lock is the only liveness witness.** The kernel holds it, and it is released when the process dies.
     "Running" means `lockf -t 0 <lock> true` exits 75. `true` can't exit 75, so this is unambiguous. The daemon's
     dispatch, `jobs run`, and the stale check all use this probe, never `lockf`'s exit code from a real attempt.
-  - **The marker is metadata only:** `running: {startedAt, pgid, lstart}`, where `pgid` is `lockf`'s pid (the attempt's
+  - **The marker is metadata only:** `running: {startedAt, slot, pgid, lstart}`, where `pgid` is `lockf`'s pid (the attempt's
     `process.ppid`, the group leader) and `lstart` is `ps -o lstart= -p <pgid>` read at start. It is written under
     the lock at start and cleared in the result write.
+  - **The daemon owns "did it start"; the attempt owns "how did it end".** At dispatch the daemon records
+    `dispatched: {at, slot, kind}` in `<name>.daemon.json`. The attempt can't report that it never ran, so the
+    daemon does. Past a 2-minute grace, any of these is a **never-started failure** recorded in the daemon's file:
+    - the lock is free and `<name>.json` has nothing newer than `dispatched.at` (import broken by a bun upgrade,
+      unwritable state dir, the baseline never landing);
+    - the lock is held but no marker was written.
+
+    The failure clock and backoff read both files (see State).
   - **A marker present while the lock is free** means the previous attempt died (a bun upgrade breaking import, an
     OOM, `kill -9`). The next attempt, under the lock, records that as a **failed** attempt ("previous attempt died")
     before starting.
@@ -153,6 +166,8 @@ not die with it.
   runs the same attempt **in the foreground** under the same lock and prints its result.
   - A manual run means "run now". It ignores owed state, backoff and `needs`, and skips overlap.
   - If the lock is held it refuses with "already running".
+  - If the daemon isn't running it refuses with "daemon not running": the daemon is the one source of decisions,
+    and a dead daemon is the thing to fix.
   - Success marks the latest slot done.
 - `hydra jobs mark-done <platform> <name>` dispatches a `--baseline` attempt, marking the latest slot done without
   running anything. It is for cutovers and for an "owed (unconfirmed)" slot (see Migration).
@@ -205,6 +220,12 @@ between those two steps. Spawn uses the idempotency key `jobs-<name>-<slot label
 daemon keeps for 24 hours (`DEFAULT_TTL_MS`). A retry after such a crash is deduplicated, so the slot can't be spawned
 twice. A manual `jobs run` uses a per-minute key, so it is never swallowed by the slot's key.
 
+**A duplicate-key answer is an outcome, not a rejection.** The daemon's `checkIdempotency` answers exit 2 for a key
+it already holds:
+- If the existing entry is `spawned` or `completed`, the slot was served. Record **done**, with
+  `absorbedBy = <existing session>`. This happens when the attempt that spawned died before writing.
+- If it is `pending`, record **not now**, and the next tick sees how it ended.
+
 Accepted residual, written down rather than hidden: if the daemon restarts in the middle of a spawn, the pending
 idempotency key loads as failed. A spawn that actually landed can then be repeated once.
 
@@ -227,7 +248,8 @@ An alert means the work keeps failing, not that it is late.
 The daemon decides about alerts on every tick from the current state, so it never sends a stale queued message.
 
 **Delivery:** alerts go to main through `deliver`. If main can't take one (no live main session, deliver refused),
-it goes straight to the channel with `safeSend`: the jobs.toml top-level `channel`, else the daemon's home channel.
+it goes straight to a channel with `safeSend`: the job's own `channel` if set, else the jobs.toml top-level
+`channel`, else the daemon's home channel.
 The stale-tick flag and the config-error alert always take that direct path, because they report on the machinery
 main depends on.
 
@@ -265,7 +287,7 @@ type JobState = {                 // <name>.json, the attempt's
   failures?: number               // consecutive failed attempts, for backoff
   failingSince?: string           // first failed attempt since the last success; cleared on success
   lastFailedAt?: string           // for backoff and the alert rule; untouched by not-now
-  running?: { startedAt: string; pgid: number; lstart: string }
+  running?: { startedAt: string; slot: string; pgid: number; lstart: string }   // slot: a dead plain attempt still uses it up
   last?: { at: string; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string }
   notNow?: { at: string; note: string }   // only the job's own exit 75; never overwrites `last`
 }
@@ -275,6 +297,31 @@ type JobDaemonState = {           // <name>.daemon.json, the daemon's
   notNow?: { since: string; reason: string }   // needs unmet / session not yet probed; no attempt dispatched
 }
 ```
+
+`JobDaemonState` also holds `dispatched?: {at, slot, kind}`, `neverStarted?: {count, since, lastAt}` (cleared once
+`<name>.json` shows a result newer than the dispatch), and `announcedUnconfirmed?: string` (the slot already
+announced as "owed (unconfirmed)", so a restart doesn't announce it again).
+
+**The failure clock reads both files:**
+- consecutive failures = `failures` + `neverStarted.count`;
+- the run started at the earlier of `failingSince` and `neverStarted.since`;
+- the last failure was at the later of `lastFailedAt` and `neverStarted.lastAt`.
+
+**What each outcome does:**
+
+| Outcome | `doneSlot`/`doneAt` | `failures` | `lastFailedAt` | `failingSince` | Shown as |
+|---|---|---|---|---|---|
+| done, nothing | set | 0 | — | cleared | `last` done / nothing |
+| absorbed, dup-hit served | set | 0 | — | cleared | `last` done, `absorbedBy` |
+| baseline, `mark-done` | set | 0 | — | cleared | `last` done, note "baseline": no work ran |
+| failed | — | +1 | now | set if unset | `last` failed |
+| stuck (dispatched only when backoff allows) | — | +1 | now | set if unset | `last` failed, "previous session stuck: <kind>" |
+| previous attempt died (found by the next one) | — | +1, then the attempt runs as its own step | now | set if unset | `last` failed; a plain job's `running.slot` counts as attempted |
+| never started (daemon) | — | `neverStarted.count` +1 | `neverStarted.lastAt` | `neverStarted.since` if unset | daemon file |
+| exit 75, dup-hit pending | — | — | — | — | `notNow` |
+| needs unmet, no verdict yet (daemon) | — | — | — | — | daemon `notNow`, nothing dispatched |
+
+For plain jobs, every row except not-now also sets `attemptedSlot`/`attemptedAt`.
 
 A success clears `failingSince`, so the stored `alertedFor` stops matching and the next failing run can alert,
 without the daemon writing anything. "The latest attempt failed" means `last.result === 'failed'`, and not-now
@@ -289,10 +336,20 @@ when overlap applied); failing since, if failing. Above the list, the clock's la
 ## Migration
 
 - Existing jobs.toml files parse and keep their behaviour: plain jobs, same outcomes, same daily failure message.
+  **One deliberate change:** a plain job whose tool exits 75 used to be "failed, plus a daily message". It is now
+  "not now": silent, and retried every tick until another result. `jobs list` shows it.
+- **Renaming a job** gives it a baseline under the new name. The old `jobs:<old>` initiator no longer counts for
+  overlap. Keep names stable, or follow a rename with `jobs run`.
 - **A job with no record** gets a **baseline**: the daemon dispatches `--baseline`, and the attempt (still the only
   writer) records the latest slot as done. Adding a job doesn't fire it mid-period. Use `jobs run` to start one now.
-- **An unreadable record** is not "no record". The next attempt records a failure ("state unreadable, reset"), and
-  the slot stays owed, so it runs and the failure clock times it.
+- **Today's records (v0, `{at, outcome}`) are translated, not treated as unreadable or missing:**
+  `attemptedAt = at`, and `attemptedSlot` = the latest slot at or before `at`. That keeps plain jobs from firing at
+  cutover. Until-done rules for them are below.
+- **An unreadable record** is not "no record". The next attempt records a failure ("state unreadable, reset"), so it
+  is timed and alerted. What happens next depends on the mode:
+  - `none`: the slot stays owed and runs.
+  - **spawn and main:** "owed (unconfirmed)", not run. A downgrade's schema mismatch is likelier than corruption,
+    and the 24h key won't stop a second session.
 - **Upgrading an existing until-done job:** its latest slot is done only if the old record shows the work ran after
   that slot's instant:
   - For spawn and main jobs, only `findings` counts.
@@ -358,6 +415,16 @@ when overlap applied); failing since, if failing. Above the list, the clock's la
 - **Plain-job messages:** at most one per local day, sent by the daemon.
 - **Migration:** an ambiguous record is "owed (unconfirmed)" and is never run on its own. A corrupt record becomes a
   failure. A new job gets a baseline.
+- **Never started:** a broken import, bad stdin or an unwritable state dir becomes a daemon-recorded failure after
+  the grace, with backoff and an alert. The same goes for a lock held with no marker. A baseline that never lands
+  does too.
+- **Dup-hit:** a `spawned` or `completed` key means done, absorbed by the existing session. A `pending` key means
+  not-now.
+- **Counter table:** every row, including absorbed and baseline clearing `failingSince`, and a dead plain attempt
+  using up `running.slot`.
+- **v0 translation:** live `{at, outcome}` records don't fire at cutover.
+- **Unreadable spawn record:** a failure plus "owed (unconfirmed)", never run.
+- **Detached stdio:** an attempt survives a daemon restart while writing output.
 - **`jobs run`:** runs in the foreground, ignoring owed state, backoff, `needs` and overlap. It refuses while the job
   is running.
 - **Concurrency:** a tick while the job runs doesn't start a second attempt. A manual run while the job runs is
