@@ -1,7 +1,7 @@
 # Until-done jobs
 
-> Status: proposal v6, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds 1–4)
-> and an independent pass. For review before building.
+> Status: proposal v7, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
+> 1–5) and an independent pass. For review before building.
 
 ## What hydra jobs should offer
 
@@ -26,16 +26,17 @@ the backup script keeps only its domain check.
 ## The model
 
 - **Slot:** a local wall-clock instant the job's cron expression matches.
-- **Owed:** the latest slot at or before now is owed when its instant is after the last success's instant **and**
-  its label differs from the last done slot's label (see Slots in local time). Missed slots collapse: only the latest
-  can be owed, so a week offline runs a weekly job once, not seven times.
+- **Owed:** the latest slot at or before now, unless a success already covers it (the rule is under Slots in local
+  time). Missed slots collapse: only the latest can be owed, so a week offline runs a weekly job once, not seven
+  times.
 - **Attempt:** one run of the job's work. Its result is `done`, `nothing to do` (counts as done), or `failed`.
 - **Not now:** a precondition isn't met (`needs`, exit 75). It is **not an attempt** and never uses up a slot, for any
   job.
-- **Goal:** a plain job gets one attempt per slot, whatever its result. An `until_done` job is attempted while its
-  slot is owed, with backoff, until it is done.
+- **Goal:** the one thing `until_done` toggles is **whether a failed attempt uses up the slot**.
+  - A plain job gets one attempt per slot, whatever its result.
+  - An `until_done` job is attempted while its slot is owed, with backoff, until it is done.
 - **Done for spawn jobs** means the daemon accepted the spawn. Whether the session then does its work is session
-  health (pane-probe, idle-limit), not job state. The two meet only at `overlap` (below).
+  health (pane-probe, idle-limit), not job state. The two meet only at `overlap`.
 
 Naming: not "durable". In durable execution and durable queues, that word means work that survives a crash and
 resumes where it stopped. Here a failed attempt is simply retried from the start. The setting is named for its rule.
@@ -43,6 +44,21 @@ resumes where it stopped. Here a failed attempt is simply retried from the start
 **The line between hydra and the job:** hydra owns *liveness* (is the work happening and succeeding?). The job owns
 its *domain* (is the thing it watches healthy?). A sync can succeed every hour while the server it copies from has
 stopped producing backups; detecting that stays in the job, as an ordinary failure exit.
+
+### Slots in local time
+
+- **The matcher.** Hydra needs a local-time cron matcher that finds the latest match at or before a given instant.
+  `Bun.cron.parse` only finds the next match, and in UTC (`0 11 * * FRI` gives 03:00 on a Los Angeles machine). The
+  matcher is a small pure function with its own tests. The same matcher fixes `jobs list`'s "next".
+- **The owed rule.** A slot's label is its local wall-clock time, `YYYY-MM-DD HH:MM`. The latest slot is owed iff
+  its **instant** is after the last success's (for plain jobs: the last attempt's) instant **and** its **label**
+  differs from the last done (attempted) slot's label.
+  - The label stops the double Friday: done at 11:00 in Berlin, then in California the same day, the slot
+    `2026-11-13 11:00` is later as an instant but has the same label, so it isn't owed.
+  - The instant keeps frequent jobs moving. An hourly job done at Berlin 15:00 is owed again at 08:00 in California,
+    a later instant with a different label. Comparing labels by sort order would stall it for 9 hours.
+- **DST.** A fall-back time occurs twice but has one label, so it runs once. A spring-forward time that doesn't exist
+  runs at the first instant after the gap, under its nominal label.
 
 ## A job
 
@@ -72,9 +88,9 @@ prompt = "Triage the scan output below."
 
 | Key | Values | Default | Notes |
 |---|---|---|---|
-| `until_done` | boolean | `false` | retry each tick while the slot is owed |
-| `needs` | names; v1 knows `"internet"` | `[]` | unmet → "not now", checked before the work |
-| `overlap` | `"absorb"` | unset | spawn only: an open, healthy session from this job counts as done for the owed slot; a stuck one is a failed attempt |
+| `until_done` | boolean | `false` | a failed attempt doesn't use up the slot |
+| `needs` | names; v1 knows `"internet"` | `[]` | unmet → "not now"; evaluated by the daemon before dispatch |
+| `overlap` | `"absorb"` | unset | spawn only; see Overlap |
 | `alert_after` | duration up to `30d` | `"1d"` with `until_done` | until-done only; see Alerts |
 
 There is no `kind` key. Obligation, convergence and probe are combinations of these keys.
@@ -91,11 +107,11 @@ The work is the optional `check`, then the action for the mode (spawn, deliver t
 | exit 75 | not now | stdout dropped; not an attempt; the slot stays owed for any job |
 | other exit | failed | a plain job's slot is used; an until-done slot stays owed; counts toward alerts |
 
-The action's own result decides the attempt: a spawn or delivery the daemon rejects is a failed attempt, and the
-slot stays owed. That is the case that check scripts cannot handle today, because the spawn happens after they exit.
+The action's own result decides the attempt: a spawn or delivery the daemon refuses is a failed attempt, and the slot
+stays owed. That is the case that check scripts cannot handle today, because the spawn happens after they exit.
 
-Exit 75 (`EX_TEMPFAIL`) is the general form of `needs`. `needs = ["internet"]` is built in because nearly every laptop
-job has that precondition. A plain job whose tool leaks exit 75 shows "not now" in `jobs list`, not silence.
+Exit 75 (`EX_TEMPFAIL`) is the job-specific form of "not now". `needs = ["internet"]` is built in because nearly
+every laptop job has that precondition.
 
 ## The clock lives in the daemon
 
@@ -109,256 +125,260 @@ Moving to owed slots exposes what it costs:
   `brew upgrade` silently stops every job.
 - **No watcher.** Nothing checks that the scheduler itself still runs.
 - **Races.** A manual `jobs run` and a scheduled firing race on the state file.
-- **Wrong times.** `Bun.cron.parse` evaluates in UTC (`0 11 * * FRI` gives 03:00 on a Los Angeles machine), so
-  `jobs list` shows wrong "next" times.
+- **Wrong times.** `jobs list` shows UTC "next" times, as above.
 
 The daemon is already the always-on part of hydra. It is watched by the watchdog, and it already runs periodic work
-(pr-watch, idle-limit, gateway-health).
+(pr-watch, idle-limit, gateway-health). **So the daemon owns the clock and every decision, and attempts run on their
+own**, because the daemon restarts often and an attempt must not die with it.
 
-**So the daemon owns the clock, and attempts run on their own.** The daemon restarts often, so an attempt must
-not die with it.
+### The tick
 
-- **One timer per daemon (platform),** every minute. It reads jobs.toml, decides whether the machine is online,
-  computes each job's owed slot, and dispatches owed attempts. A wall-clock jump larger than the interval (wake from
-  sleep) is just a tick that finds slots owed.
-- **Online** means the captive-portal probe (`captive.apple.com` returns "Success") **or** the daemon's gateway
-  connection is up (gateway-health). Two independent witnesses: a VPN or firewall that blocks the probe can't make
-  every job "not now" forever, and a captive portal (probe fails, gateway down) still reads offline.
-- **The daemon decides; the attempt records.** The daemon picks the slot and evaluates overlap at dispatch, because
-  only it can see the session table and pane-probe's verdicts. It hands the attempt everything it decided:
-  - The **resolved job definition** goes on stdin, so the attempt never reads jobs.toml. A broken or mid-dispatch edit
-    can't make the attempt run something the daemon didn't evaluate.
-  - The **slot** goes as `--slot <label>`. The attempt records the slot it was given and never recomputes it.
-  - **Record-only outcomes:** `--absorbed-by <s>`, `--stuck <s>`, and `--baseline` write their result directly. They
-    write no marker and run no check and no action.
-  - **`needs` is evaluated only by the daemon,** before dispatch. An attempt never checks it: it can't see the
-    gateway, so it would break "probe or gateway".
-- **An attempt is a detached child:** `lockf -k -t 0 <state>/jobs-state/<name>.lock bun hydra.ts jobs attempt …`,
-  spawned detached (its own process group: `child_process.spawn(..., { detached: true })`; macOS has no `setsid`
-  command) so a daemon restart doesn't kill it.
-  - **Stdio:** stdin is a pipe carrying the job definition. Truncated or unparseable stdin is a recorded failure, and
-    D1 below covers it if parsing never finishes. stdout and stderr go to `jobs-state/<name>.log`, never to a pipe
-    to the daemon, so the first write after a daemon restart can't hit EPIPE.
-  - **The lock is the only liveness witness.** The kernel holds it, and it is released when the process dies.
-    "Running" means `lockf -t 0 <lock> true` exits 75. `true` can't exit 75, so this is unambiguous. The daemon's
-    dispatch, `jobs run`, and the stale check all use this probe, never `lockf`'s exit code from a real attempt.
-  - **The marker is metadata only:** `running: {startedAt, slot, pgid, lstart}`, where `pgid` is `lockf`'s pid (the attempt's
-    `process.ppid`, the group leader) and `lstart` is `ps -o lstart= -p <pgid>` read at start. It is written under
-    the lock at start and cleared in the result write.
-  - **The daemon owns "did it start"; the attempt owns "how did it end".** At dispatch the daemon records
-    `dispatched: {at, slot, kind}` in `<name>.daemon.json`. The attempt can't report that it never ran, so the
-    daemon does. Past a 2-minute grace, any of these is a **never-started failure** recorded in the daemon's file:
-    - the lock is free and `<name>.json` has nothing newer than `dispatched.at` (import broken by a bun upgrade,
-      unwritable state dir, the baseline never landing);
-    - the lock is held but no marker was written.
+One timer per daemon (platform), every minute. A wall-clock jump larger than the interval (wake from sleep) is just
+a tick that finds slots owed. Each tick:
 
-    The failure clock and backoff read both files (see State).
-  - **A marker present while the lock is free** means the previous attempt died (a bun upgrade breaking import, an
-    OOM, `kill -9`). The next attempt, under the lock, records that as a **failed** attempt ("previous attempt died")
-    before starting.
-  - **A hard deadline:** check timeout + action timeout + 2 minutes, enforced by the attempt itself (it records a
-    failure and exits). The action has a real timeout of its own: `hydra spawn` and `deliver` are killed after 2
-    minutes.
-  - **Wedged past its own timer:** while the lock probe says held and the marker is past the deadline plus a margin,
-    the daemon kills process group `pgid`, but only after `ps -o lstart= -p <pgid>` still matches the recorded `lstart`, so a reused
-    pid is never killed. The next attempt then records the death.
-- **`hydra jobs run <platform> <name>`** asks the daemon for a dispatch decision (slot and job definition), then
-  runs the same attempt **in the foreground** under the same lock and prints its result.
-  - A manual run means "run now". It ignores owed state, backoff and `needs`, and skips overlap.
-  - If the lock is held it refuses with "already running".
-  - If the daemon isn't running it refuses with "daemon not running": the daemon is the one source of decisions,
-    and a dead daemon is the thing to fix.
+1. **Reads jobs.toml.** If it doesn't parse, the daemon keeps running the last good config and alerts once a local
+   day.
+2. **Decides whether the machine is online:** the captive-portal probe (`captive.apple.com` returns "Success")
+   **or** the daemon's gateway connection (gateway-health). Two independent witnesses: a VPN that blocks the probe
+   can't make every job "not now" forever, and a captive portal (probe fails, gateway down) still reads offline.
+3. **For each job,** computes the owed slot. Then it skips the job if the attempt lock is held, holds it if backoff
+   says wait, and records not-now itself if `needs` is unmet or overlap has no verdict yet. Otherwise it decides
+   overlap and dispatches.
+4. **Checks dispatches that never started** (below) and **decides alerts** from current state.
+5. **Records the tick.**
+
+**Backoff:** after a failed attempt, the next waits min(2^n minutes, 1h, the schedule's period), measured from
+`last.at`. Not-now re-probes every tick, because probing is cheap.
+
+### Overlap
+
+Overlap counts only connected sessions with initiator `jobs:<name>`, using a per-session verdict that pane-probe
+exports: `clean | active | stuck(<kind>, confirmed) | unprobeable`.
+
+- `clean` and `active` **absorb**: the slot is done, by that session.
+- `stuck` (confirmed, of a named kind) is a **failure** ("previous session stuck: <kind>"), dispatched only when
+  backoff allows. A session stuck on a prompt must not turn into silent success.
+- `unprobeable` (Codex sessions today) **absorbs**. That choice is explicit: they can't be inspected, the idle limit
+  reaps them, and the cross-slot rule below catches one that lingers.
+- **No verdict yet** since the daemon started is **not now** for that tick. That takes about 2 minutes.
+- **Only a session spawned after the previous slot's instant may absorb.** Domain reason: a session that covers
+  everything since its predecessor (like a weekly review) is still doing slot N−1's work when slot N arrives, so it
+  legitimately covers N, once. Still open at N+1, it is not doing the work, so that is a **failure** ("session from
+  <label> still open"). Don't "fix" the one absorbed slot: it is the point.
+
+### Dispatch and the attempt
+
+**The daemon decides; the attempt records.** The daemon picks the slot and decides overlap, because only it sees the
+session table and pane-probe. It hands the attempt everything:
+
+- the **resolved job definition** on stdin, so the attempt never reads jobs.toml, and a broken or mid-dispatch edit
+  can't make it run something the daemon didn't evaluate;
+- the **slot**, as `--slot <label>`, which the attempt records and never recomputes;
+- the daemon's **never-started run**, if any, which the attempt folds into its own record (see State);
+- a **record-only outcome** when there is no work to do: `--absorbed-by <s>`, `--stuck <s>` or `--baseline`. These
+  write their result directly, with no marker, check or action.
+
+**An attempt is a detached child:**
+`lockf -k -t 0 <state>/jobs-state/<name>.lock bun hydra.ts jobs attempt <platform> <name> --slot … [outcome]`. It is
+spawned detached (its own process group: `child_process.spawn(..., { detached: true })`; macOS has no `setsid`
+command), so a daemon restart doesn't kill it.
+
+- **Stdio:** stdin is a pipe carrying the job definition. Truncated or unparseable stdin is a recorded failure.
+  stdout and stderr go to `jobs-state/<name>.log`, never to a pipe to the daemon, so the first write after a daemon
+  restart can't hit EPIPE.
+- **The lock is the only liveness witness.** The kernel holds it, and it is released when the process dies.
+  "Running" means `lockf -t 0 <lock> true` exits 75 (`true` can't exit 75, so this is unambiguous). Dispatch,
+  `jobs run` and the stale checks all use this probe, never `lockf`'s exit code from a real attempt.
+- **The marker is metadata:** `running: {startedAt, slot, pgid, lstart}`, where `pgid` is `lockf`'s pid (the
+  attempt's `process.ppid`, the group leader) and `lstart` is `ps -o lstart= -p <pgid>` read at start. It is written
+  under the lock first thing, and cleared in the result write.
+- **A marker present while the lock is free** means the previous attempt died (an OOM, `kill -9`, a crash). The next
+  attempt, under the lock, records that as a failure ("previous attempt died") before starting. A dead plain
+  attempt still uses up `running.slot`.
+- **Deadlines:**
+  - The action has a timeout of its own: `hydra spawn` and `deliver` are killed after 2 minutes.
+  - The attempt enforces a hard deadline on itself: the check timeout (30m) + the action timeout + 2 minutes. When it
+    hits, it records a failure and exits.
+  - If an attempt is wedged past its own timer (the lock is held and the marker is past the deadline plus a
+    margin), the daemon kills process group `pgid`, but only if `ps -o lstart= -p <pgid>` still matches `lstart`. A
+    reused pid is never killed. The next attempt records the death.
+
+**The daemon owns "did it start"; the attempt owns "how did it end".** At dispatch the daemon records
+`dispatched: {at, slot, kind}`. The attempt can't report that it never ran, so the daemon does: past a 2-minute
+grace, either of these is a **never-started** failure in the daemon's file:
+
+- the lock is free and the attempt's file has nothing newer than `dispatched.at` (import broken by a bun upgrade,
+  unwritable state dir, a baseline that never lands);
+- the lock is held but no marker was written.
+
+### Commands
+
+- **`hydra jobs run <platform> <name>`** asks the daemon for a dispatch decision (slot and job definition), then runs
+  the same attempt **in the foreground** under the same lock and prints its result.
+  - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap.
+  - With the lock held, it refuses with "already running".
+  - With the daemon down, it refuses with "daemon not running". The daemon is the one source of decisions, and a
+    dead daemon is the thing to fix.
   - Success marks the latest slot done.
-- `hydra jobs mark-done <platform> <name>` dispatches a `--baseline` attempt, marking the latest slot done without
-  running anything. It is for cutovers and for an "owed (unconfirmed)" slot (see Migration).
-- **Backoff.** After a failed attempt, the next one waits min(2^n minutes, 1h, the schedule's period). "Not now"
-  re-probes every tick, because probing is cheap.
-- **Overlap** counts only connected sessions with initiator `jobs:<name>`, using a per-session verdict that
-  pane-probe exports: `clean | active | stuck(<kind>, confirmed) | unprobeable`.
-  - `clean` and `active` absorb.
-  - `stuck` (confirmed, of a named kind) makes the attempt **fail** ("previous session stuck: <kind>"), so
-    `failingSince` starts and the alert fires. A session stuck on a prompt must not turn into silent success.
-  - `unprobeable` (Codex sessions today) absorbs. That choice is explicit: they can't be inspected, the idle limit
-    reaps them, and the cross-slot rule below still catches one that lingers.
-  - A session not yet given a verdict since the daemon started is "not now" for that tick. That takes about 2
-    minutes.
-  - **Only a session spawned after the previous slot's instant may absorb.** Domain reason: a spawned session that
-    covers everything since its predecessor (like a weekly review) is still doing slot N−1's work when slot N
-    arrives, so it legitimately covers N, once. Still open at N+1, it is not doing the work. That is a **failure**
-    ("session from <label> still open"), timed and alerted. Don't "fix" the one absorbed slot: it is the point.
-- **`jobs sync`** validates jobs.toml and removes the old launchd entries. The daemon rereads jobs.toml each tick.
-  If it doesn't parse, the daemon keeps running the last good config and alerts once a (local) day. Both the last
-  good config and the alert day live in the daemon-owned `jobs-state/_daemon.json`, so a restart doesn't lose them.
-- **Watching the watcher:** the daemon records its last tick. `jobs list` shows it. The daemon's health loop, which
-  is separate from the job timer, flags a tick older than 5 minutes through the direct channel (see Alerts). If the
-  daemon itself is down, the watchdog already reports that.
+- **`hydra jobs mark-done <platform> <name>`** dispatches a `--baseline` attempt: the latest slot is marked done
+  without running anything. It is for cutovers and for an "owed (unconfirmed)" slot.
+- **`hydra jobs sync <platform>`** validates jobs.toml and removes the old launchd entries.
 
 **What this costs:** jobs need the daemon running to be *dispatched*. Spawn and main jobs need it anyway. A
 `mode = "none"` attempt that is already running survives a restart. The daemon is supervised, and it is the
 component that would report a failure anyway.
 
-## Slots in local time
-
-- **The matcher.** Hydra needs a local-time cron matcher that finds the latest match at or before a given instant.
-  `Bun.cron.parse` only finds the next match, and in UTC. The matcher is a small pure function with its own tests.
-  The same matcher fixes `jobs list`.
-- **Owed = after the last success, and a different label.** A slot's label is its local wall-clock time,
-  `YYYY-MM-DD HH:MM`. The latest slot is owed iff its **instant** is after the last success's instant **and** its
-  **label** differs from the last done slot's label.
-  - The label stops the double Friday: done at 11:00 in Berlin, then in California the same day, the slot
-    `2026-11-13 11:00` is later as an instant but has the same label, so it isn't owed.
-  - The instant keeps frequent jobs moving. An hourly job done at Berlin 15:00 is owed again at 08:00 in California,
-    a later instant with a different label. Comparing labels by sort order would stall it for 9 hours.
-  - State therefore keeps both the done label and the success instant.
-- **DST.** A fall-back time occurs twice but has one label, so it runs once. A spring-forward time that doesn't
-  exist runs at the first instant after the gap, under its nominal label.
-
 ## Duplicate protection
 
 The attempt marks the slot done as soon as the spawn returns success. The only window for a duplicate is a crash
-between those two steps. Spawn uses the idempotency key `jobs-<name>-<slot label>`, which the
-daemon keeps for 24 hours (`DEFAULT_TTL_MS`). A retry after such a crash is deduplicated, so the slot can't be spawned
-twice. A manual `jobs run` uses a per-minute key, so it is never swallowed by the slot's key.
+between those two steps. Spawn uses the idempotency key `jobs-<name>-<slot label>`, which the daemon keeps for 24
+hours (`DEFAULT_TTL_MS`), so a retry after such a crash is deduplicated. A manual `jobs run` uses a per-minute key, so
+it is never swallowed by the slot's key.
 
 **A duplicate-key answer is an outcome, not a rejection.** The daemon's `checkIdempotency` answers exit 2 for a key
 it already holds:
-- If the existing entry is `spawned` or `completed`, the slot was served. Record **done**, with
-  `absorbedBy = <existing session>`. This happens when the attempt that spawned died before writing.
-- If it is `pending`, record **not now**, and the next tick sees how it ended.
+
+- **`spawned` or `completed`:** the slot was served. Record **done**, absorbed by the existing session. This happens
+  when the attempt that spawned died before writing.
+- **`pending`:** record **not now**; the next tick sees how it ended.
 
 Accepted residual, written down rather than hidden: if the daemon restarts in the middle of a spawn, the pending
-idempotency key loads as failed. A spawn that actually landed can then be repeated once.
+idempotency key loads as failed, and a spawn that actually landed can be repeated once.
+
+## State
+
+One writer per file, so no update is lost. All are written atomically (tmp + rename).
+
+```ts
+type JobState = {                 // jobs-state/<name>.json: written only by the attempt, under its lock
+  doneSlot?: string               // label of the latest done slot
+  doneAt?: string                 // its success instant
+  attemptedSlot?: string          // plain jobs: label of the latest attempted slot
+  attemptedAt?: string            // plain jobs: its instant
+  failures?: number               // consecutive failed attempts (backoff)
+  failingSince?: string           // first failure since the last success; cleared on success
+  running?: { startedAt: string; slot: string; pgid: number; lstart: string }
+  last?: { at: string; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string }
+  notNow?: { at: string; note: string }   // the job's own exit 75, or dup-hit pending; never overwrites `last`
+}
+
+type JobDaemonState = {           // jobs-state/<name>.daemon.json: written only by the daemon
+  dispatched?: { at: string; slot: string; kind: 'attempt' | 'absorbed' | 'stuck' | 'baseline' }
+  neverStarted?: { count: number; since: string; lastAt: string }
+  notNow?: { since: string; reason: string }   // needs unmet, or no overlap verdict yet; nothing dispatched
+  alertedFor?: string             // the failure-run start already alerted for: alerted iff equal
+  reportedDay?: string            // plain jobs: local date a failure was last reported
+  announcedUnconfirmed?: string   // slot already announced as "owed (unconfirmed)"
+}
+
+type DaemonState = {              // jobs-state/_daemon.json: daemon-wide
+  lastGoodConfig?: string
+  configAlertDay?: string         // local date
+  lastTick?: string
+}
+```
+
+**The never-started hand-off.** A job that never starts has no attempt file, so the daemon keeps the run in its own
+file, and the failure clock reads both. When an attempt finally runs, the daemon passes `neverStarted` on stdin. The
+attempt folds it in (`failures += count`, `failingSince = earlier of the two`) and writes the result. Only then
+does the daemon clear its copy. A broken import that ran for 3 days and then turns into an ordinary failure keeps
+its 3-day run.
+
+**The failure clock**, computed from both files:
+
+- consecutive failures = `failures` + `neverStarted.count`
+- the run started at the earlier of `failingSince` and `neverStarted.since`
+- the last failure was at the later of `last.at` (when `last.result` is failed) and `neverStarted.lastAt`
+
+`last.at` is the time of the last failure whenever `failures > 0`: not-now never touches `last` or `failures`, and
+every reset to 0 is a success that also rewrites `last`.
+
+**What each outcome does:**
+
+| Outcome | `doneSlot`/`doneAt` | `failures` | `failingSince` | Recorded in | Shown as |
+|---|---|---|---|---|---|
+| **Success:** done, nothing, absorbed, dup-hit served, baseline | set | 0 | cleared | attempt's file | done / nothing / "absorbed by <s>" / "baseline: no work ran" |
+| **Failure:** failed, stuck, previous attempt died | — | +1 | set if unset | attempt's file | failed, with the note ("previous session stuck: <kind>", "previous attempt died") |
+| **Never started** | — | `neverStarted.count` +1 | `neverStarted.since` if unset | daemon's file | "never started" |
+| **Not now:** exit 75, dup-hit pending; needs unmet, no verdict | — | — | — | attempt's `notNow`; daemon's `notNow` | "not now: <reason>" |
+
+For plain jobs, success and failure also set `attemptedSlot` and `attemptedAt`.
 
 ## Alerts
 
 An alert means the work keeps failing, not that it is late.
 
-- **Until-done jobs.** `failingSince` is the time of the first failed attempt since the last success; success clears
-  it. One alert is sent when the latest attempt failed and `now − failingSince ≥ alert_after`. Then quiet until a
-  success, after which a new failing run can alert again.
-  - "Not now" (`needs`, exit 75) neither starts nor clears `failingSince`. Being offline is never alerted.
-  - This works for frequent jobs too: an hourly sync failing for two days alerts once, because it measures the
-    failing run, not the age of any one slot.
-- **Plain jobs.** As today: one message per job per day while its latest attempt has failed. Sent by the **daemon**
-  on its tick, when `last.result` is failed and `reportedDay` isn't today's **local** date. The attempt sends nothing,
-  so a 5-minute job can't post every 15 minutes through the deliver key's window.
+- **Until-done jobs.** One alert per failure run, sent when the latest attempt failed (or never started) and
+  `now − run start ≥ alert_after`. It is "alerted" iff the daemon's `alertedFor` equals the run's start. A success
+  ends the run, so the next failure run can alert, and the daemon never has to write anything to reset it.
+  - Not-now neither starts nor ends a run. Being offline is never alerted.
+  - Frequent jobs work too: an hourly sync failing for two days alerts once, because the clock measures the failing
+    run, not the age of any one slot.
+  - A job that fails whenever it's online and keeps dropping offline still alerts, and its backoff holds.
+- **Plain jobs.** As today, one message per job per day while its latest attempt has failed. Sent by the **daemon**
+  on its tick, when `last.result` is failed and `reportedDay` isn't today's **local** date. The attempt sends
+  nothing, so a 5-minute job can't post every 15 minutes through the deliver key's window.
 - **Lateness itself is not alerted.** A slot stays owed while offline, then runs on reconnect. If staleness matters
   in the domain (a backup older than 2 days), the job's check reports it as a failure.
 
-The daemon decides about alerts on every tick from the current state, so it never sends a stale queued message.
+The daemon decides alerts on every tick from current state, so it never sends a stale queued message.
 
 **Delivery:** alerts go to main through `deliver`. If main can't take one (no live main session, deliver refused),
 it goes straight to a channel with `safeSend`: the job's own `channel` if set, else the jobs.toml top-level
-`channel`, else the daemon's home channel.
-The stale-tick flag and the config-error alert always take that direct path, because they report on the machinery
-main depends on.
+`channel`, else the daemon's home channel. The stale-tick flag and the config-error alert always take that direct
+path, because they report on the machinery main depends on.
+
+**Why failures and not lateness:** a failure clock alerts on what is broken. A stuck session under `overlap` is a
+failure, so it counts. A job that can be stuck in its own "not now" must say so with a failure exit, because exit 75
+means "nothing is wrong, just not yet".
 
 **The invariant this rests on:** while the machine is online, every owed state that persists either becomes a
-failure or carries a reason you can see. The states that could break it are each covered:
-- a hung attempt: the deadline makes it a failure;
-- a dead attempt: the stale marker becomes a failure;
-- a stuck session, or one open across slots: a failure;
-- the probe blocked by a VPN: the gateway witness;
-- an unparseable config: the daily alert;
-- a dead tick: the health loop.
+failure or carries a reason you can see. Every state that could break it is covered:
 
-"Not now" from a job's own exit 75 is the job's declared reason, shown in `jobs list`.
-
-Why the alert clock counts failures, not lateness: lateness (an `owedSince` clock) would alert after every trip,
-because a slot owed while offline is late but nothing is wrong. Counting failures alerts on what is broken. That
-includes a stuck session under `overlap`, which is a failed attempt. A job that can be stuck on its own "not now"
-must say so with a failure exit; exit 75 means "nothing is wrong, just not yet".
-
-## State
-
-One writer per file, so no update is lost; all are written atomically (tmp + rename):
-
-- `jobs-state/<name>.json`: written **only by the attempt**, under its lock.
-- `jobs-state/<name>.daemon.json`: written **only by the daemon**: alert bookkeeping, and "not now" decided at
-  dispatch.
-- `jobs-state/_daemon.json`: daemon-wide: the last good config and its alert day, and the last tick.
-
-```ts
-type JobState = {                 // <name>.json, the attempt's
-  doneSlot?: string               // label of the latest done slot
-  doneAt?: string                 // instant of the success that did it
-  attemptedSlot?: string          // plain jobs: label of the latest attempted slot
-  attemptedAt?: string            // plain jobs: its instant (the owed rule needs instant + label for plain jobs too)
-  failures?: number               // consecutive failed attempts, for backoff
-  failingSince?: string           // first failed attempt since the last success; cleared on success
-  lastFailedAt?: string           // for backoff and the alert rule; untouched by not-now
-  running?: { startedAt: string; slot: string; pgid: number; lstart: string }   // slot: a dead plain attempt still uses it up
-  last?: { at: string; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string }
-  notNow?: { at: string; note: string }   // only the job's own exit 75; never overwrites `last`
-}
-type JobDaemonState = {           // <name>.daemon.json, the daemon's
-  alertedFor?: string             // the failingSince value already alerted for: alerted iff equal
-  reportedDay?: string            // plain jobs: local date a failure was last reported
-  notNow?: { since: string; reason: string }   // needs unmet / session not yet probed; no attempt dispatched
-}
-```
-
-`JobDaemonState` also holds `dispatched?: {at, slot, kind}`, `neverStarted?: {count, since, lastAt}` (cleared once
-`<name>.json` shows a result newer than the dispatch), and `announcedUnconfirmed?: string` (the slot already
-announced as "owed (unconfirmed)", so a restart doesn't announce it again).
-
-**The failure clock reads both files:**
-- consecutive failures = `failures` + `neverStarted.count`;
-- the run started at the earlier of `failingSince` and `neverStarted.since`;
-- the last failure was at the later of `lastFailedAt` and `neverStarted.lastAt`.
-
-**What each outcome does:**
-
-| Outcome | `doneSlot`/`doneAt` | `failures` | `lastFailedAt` | `failingSince` | Shown as |
-|---|---|---|---|---|---|
-| done, nothing | set | 0 | — | cleared | `last` done / nothing |
-| absorbed, dup-hit served | set | 0 | — | cleared | `last` done, `absorbedBy` |
-| baseline, `mark-done` | set | 0 | — | cleared | `last` done, note "baseline": no work ran |
-| failed | — | +1 | now | set if unset | `last` failed |
-| stuck (dispatched only when backoff allows) | — | +1 | now | set if unset | `last` failed, "previous session stuck: <kind>" |
-| previous attempt died (found by the next one) | — | +1, then the attempt runs as its own step | now | set if unset | `last` failed; a plain job's `running.slot` counts as attempted |
-| never started (daemon) | — | `neverStarted.count` +1 | `neverStarted.lastAt` | `neverStarted.since` if unset | daemon file |
-| exit 75, dup-hit pending | — | — | — | — | `notNow` |
-| needs unmet, no verdict yet (daemon) | — | — | — | — | daemon `notNow`, nothing dispatched |
-
-For plain jobs, every row except not-now also sets `attemptedSlot`/`attemptedAt`.
-
-A success clears `failingSince`, so the stored `alertedFor` stops matching and the next failing run can alert,
-without the daemon writing anything. "The latest attempt failed" means `last.result === 'failed'`, and not-now
-never touches `last`. A job that fails whenever it's online and keeps dropping offline still alerts, and its backoff
-holds.
+| Persistent state | Covered by |
+|---|---|
+| hung attempt | its deadline, then the daemon's kill |
+| attempt that died | the marker left behind |
+| attempt that never started | the daemon's dispatch record |
+| stuck session, or one open across slots | overlap failure |
+| probe blocked (VPN) | the gateway witness |
+| config that won't parse | the daily config alert |
+| dead tick | the health loop, which is separate from the job timer, flags a tick older than 5 minutes on the direct path |
+| dead daemon | the watchdog |
+| a job's own exit 75 | its reason, shown in `jobs list` |
 
 ## `jobs list`
 
-Per job, in local time: next slot; owed or not, and since when; last attempt and its result ("absorbed by <session>"
-when overlap applied); failing since, if failing. Above the list, the clock's last tick.
+Per job, in local time: next slot; owed or not, and since when; the last result with its note ("absorbed by <s>",
+"baseline: no work ran", "not now: <reason>", "never started"); failing since, if failing. Above the list, the
+clock's last tick.
 
 ## Migration
 
-- Existing jobs.toml files parse and keep their behaviour: plain jobs, same outcomes, same daily failure message.
+- **Existing jobs.toml files** parse and keep their behaviour: plain jobs, same outcomes, same daily failure message.
   **One deliberate change:** a plain job whose tool exits 75 used to be "failed, plus a daily message". It is now
   "not now": silent, and retried every tick until another result. `jobs list` shows it.
-- **Renaming a job** gives it a baseline under the new name. The old `jobs:<old>` initiator no longer counts for
-  overlap. Keep names stable, or follow a rename with `jobs run`.
+- **Today's records** (v0, `{at, outcome}`) are translated, not treated as unreadable or missing:
+  `attemptedAt = at`, and `attemptedSlot` = the latest slot at or before `at`. Plain jobs don't fire at cutover.
 - **A job with no record** gets a **baseline**: the daemon dispatches `--baseline`, and the attempt (still the only
   writer) records the latest slot as done. Adding a job doesn't fire it mid-period. Use `jobs run` to start one now.
-- **Today's records (v0, `{at, outcome}`) are translated, not treated as unreadable or missing:**
-  `attemptedAt = at`, and `attemptedSlot` = the latest slot at or before `at`. That keeps plain jobs from firing at
-  cutover. Until-done rules for them are below.
 - **An unreadable record** is not "no record". The next attempt records a failure ("state unreadable, reset"), so it
-  is timed and alerted. What happens next depends on the mode:
-  - `none`: the slot stays owed and runs.
-  - **spawn and main:** "owed (unconfirmed)", not run. A downgrade's schema mismatch is likelier than corruption,
-    and the 24h key won't stop a second session.
-- **Upgrading an existing until-done job:** its latest slot is done only if the old record shows the work ran after
-  that slot's instant:
-  - For spawn and main jobs, only `findings` counts.
-  - For `mode = "none"`, exit 0 counts.
-  - An old `nothing` after the slot is ambiguous: the old record holds only the latest run, and a gating script also
-    exits 0 when it is offline. That slot shows "owed (unconfirmed)" in `jobs list` and is announced once on the
-    direct channel. It is never run on its own, because for a spawn job a duplicate is the worst case. It waits for
-    `jobs run` or `jobs mark-done`.
-  - A clear record decides on its own: a sync on Friday 11:30 while offline, before the review ran, reads owed.
+  is timed and alerted. Then:
+  - for `none`, the slot stays owed and runs;
+  - for spawn and main, it is "owed (unconfirmed)" and not run. A downgrade's schema mismatch is likelier than
+    corruption, and the 24h key won't stop a second session.
+- **Turning on `until_done` for an existing job:** its latest slot is done only if the v0 record shows the work ran
+  after that slot's instant:
+  - for spawn and main, only `findings` counts;
+  - for `none`, exit 0 counts.
+
+  An old `nothing` after the slot is ambiguous: the old record holds only the latest run, and a gating script also
+  exits 0 when it's offline. That slot is "owed (unconfirmed)": shown in `jobs list`, announced once on the direct
+  channel, and never run on its own, because for a spawn job a duplicate is the worst case. It waits for `jobs run`
+  or `jobs mark-done`. A clear record decides on its own: a cutover on Friday 11:30 while offline, before the review
+  ran, reads owed.
+- **Renaming a job** gives it a baseline under the new name. The old `jobs:<old>` initiator no longer counts for
+  overlap. Keep names stable, or follow a rename with `jobs run`.
 - **Editing a schedule** needs no reset. The owed rule works with any schedule: the new schedule's latest slot is
   owed if it falls after the last success. A slot can therefore run twice on the day the schedule changes, which is
   accepted for a deliberate edit.
@@ -368,73 +388,35 @@ when overlap applied); failing since, if failing. Above the list, the clock's la
 
 ## Building it: three PRs, one concern each
 
-1. **Local-time matcher** plus fixing `jobs list` "next". This is a bug fix, useful on its own.
+1. **Local-time matcher**, plus fixing `jobs list` "next". This is a bug fix, useful on its own.
 2. **The clock moves into the daemon.** Keeping today's behaviour without launchd already needs most of the
    machinery:
    - plain-job owed state from the matcher, or the catch-up run on wake is lost
-   - the new state files and their one-writer split
-   - the detached attempt with the lock probe, the marker, the deadlines and the action timeout
+   - the state files and their one-writer split, with v0 translation
+   - the detached attempt: the lock probe, the marker, the deadlines and the action timeout
+   - never-started detection and its hand-off
    - the baseline
-   - the job definition passed on stdin
+   - the definition on stdin
    - `jobs run` in the foreground
-   - the config alert and the direct channel path
-   - plain-job failure messages sent by the daemon on local days
-3. **Owed slots:** `until_done`, `needs` and online, exit 75, `overlap` with pane-probe's verdict, the failure clock,
-   migration of existing records and `mark-done`, and `jobs list`.
+   - the config alert and the direct path
+   - plain-job messages sent by the daemon on local days
+3. **Owed slots:** `until_done`, `needs` and the online witnesses, exit 75, `overlap` with pane-probe's verdict, the
+   failure clock and alerts, `mark-done` and the unconfirmed migration, and `jobs list`.
 
 ## Tests
 
-`jobsIO.now` is already injectable; the daemon clock takes an injectable timer.
+`jobsIO.now` is already injectable; the daemon clock takes an injectable timer. **Each rule and each table row above
+has a test.** In addition, these cases a builder wouldn't derive from the rules:
 
-- **Matcher:** a non-UTC zone, both DST transitions, Friday before and after the slot minute, labels across time
-  zones, and the latest match for every field kind (lists, ranges, steps, day-of-week).
-- **Until-done:** a failure then a success; no attempt after done; collapse across a long gap; a failed spawn leaves
-  the slot owed; a check that exits 0 with no output is done with no spawn; a job with no check runs its action.
-- **Not now:** `needs` unmet and exit 75 are both recorded as not-now, keep the slot owed, and leave `failingSince`
-  alone.
-- **Alerts:** quiet inside `alert_after`; exactly one alert past it; none if the attempt succeeds first; an hourly job
-  failing for two days alerts once; offline time never alerts.
-- **Overlap:** a connected, probed, clean session spawned after the previous slot absorbs. A disconnected one
-  doesn't. A not-yet-probed one is not-now. A stuck one, or one open across slots, is a failure.
-- **Dead and hung attempts:** a stale `running` marker becomes a failure on the next attempt. A wedged attempt past
-  its deadline is killed by the daemon.
-- **Online witness:** the probe blocked with the gateway up reads online. Probe down with the gateway down reads
-  offline.
-- **Delivery:** with main dead, an alert goes to the channel. A broken jobs.toml alerts once a day and keeps the
-  last good config.
-- **One writer:** a success between the daemon's alert decision and its write can't resurrect the failing run.
-- **Lock witness:** a killed attempt (marker present, lock free) is dispatched again at once and records the death.
-  A wedged attempt is killed only when `lstart` matches. A reused pid is never killed.
-- **Config:** a broken edit doesn't fail attempts, which run the daemon's snapshot. The last good config survives a
-  daemon restart.
-- **Record-only flags:** `--stuck`, `--absorbed-by` and `--baseline` run nothing.
-- **Pane-probe verdicts:** an active session absorbs, an unprobeable one absorbs, and a session with no verdict yet is
-  not-now.
-- **Absorb across slots:** a session absorbs slot N once and fails at N+1.
-- **Not-now vs. failure:** a job that alternates failing and not-now still alerts and keeps its backoff.
-- **Plain-job messages:** at most one per local day, sent by the daemon.
-- **Migration:** an ambiguous record is "owed (unconfirmed)" and is never run on its own. A corrupt record becomes a
-  failure. A new job gets a baseline.
-- **Never started:** a broken import, bad stdin or an unwritable state dir becomes a daemon-recorded failure after
-  the grace, with backoff and an alert. The same goes for a lock held with no marker. A baseline that never lands
-  does too.
-- **Dup-hit:** a `spawned` or `completed` key means done, absorbed by the existing session. A `pending` key means
-  not-now.
-- **Counter table:** every row, including absorbed and baseline clearing `failingSince`, and a dead plain attempt
-  using up `running.slot`.
-- **v0 translation:** live `{at, outcome}` records don't fire at cutover.
-- **Unreadable spawn record:** a failure plus "owed (unconfirmed)", never run.
-- **Detached stdio:** an attempt survives a daemon restart while writing output.
-- **`jobs run`:** runs in the foreground, ignoring owed state, backoff, `needs` and overlap. It refuses while the job
-  is running.
-- **Concurrency:** a tick while the job runs doesn't start a second attempt. A manual run while the job runs is
-  refused with "already running". An attempt survives a daemon restart and records its result.
-- **Backoff:** the waits between failed attempts, capped at the schedule's period. "Not now" doesn't back off.
-- **Owed rule:** weekly and hourly jobs, flying west and flying east, and fall-back with a 5-minute schedule.
-- **Stuck session under overlap:** a failed attempt, and an alert after `alert_after`.
-- **Clock heartbeat:** a stale heartbeat shows in `jobs list` and in daemon health.
-- **Plain jobs:** unchanged, including one message a day across a mix of results.
-- **Migration:** the Friday-11:30 case stays owed; a new job doesn't fire mid-period.
+- flights west and east, for a weekly and an hourly job;
+- fall-back with a 5-minute schedule;
+- a cutover on Friday 11:30 while offline;
+- a reused pid at the daemon's kill check;
+- a success landing between the daemon's alert decision and its write;
+- EPIPE: an attempt writing output after a daemon restart;
+- a stuck session while in backoff;
+- a job alternating between failure and not-now;
+- a never-started run followed by an ordinary failure, which keeps the run start and count.
 
 ## Out of scope
 
