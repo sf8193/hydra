@@ -1,7 +1,7 @@
 # Until-done jobs
 
-> Status: proposal v7, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
-> 1–5) and an independent pass. For review before building.
+> Status: proposal v8, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
+> 1–6) and an independent pass. For review before building.
 
 ## What hydra jobs should offer
 
@@ -32,9 +32,11 @@ the backup script keeps only its domain check.
 - **Attempt:** one run of the job's work. Its result is `done`, `nothing to do` (counts as done), or `failed`.
 - **Not now:** a precondition isn't met (`needs`, exit 75). It is **not an attempt** and never uses up a slot, for any
   job.
-- **Goal:** the one thing `until_done` toggles is **whether a failed attempt uses up the slot**.
-  - A plain job gets one attempt per slot, whatever its result.
-  - An `until_done` job is attempted while its slot is owed, with backoff, until it is done.
+- **Goal:** `until_done` toggles two things, and the second follows from the first:
+  - **whether a failed attempt uses up the slot.** A plain job gets one attempt per slot, whatever its result. An
+    `until_done` job is attempted while its slot is owed, with backoff, until it is done.
+  - **how failures alert.** A plain job's slot is gone after one failure, so it reports daily. An `until_done` job
+    keeps retrying, so a single failure isn't news: it alerts once per failure run, past `alert_after`.
 - **Done for spawn jobs** means the daemon accepted the spawn. Whether the session then does its work is session
   health (pane-probe, idle-limit), not job state. The two meet only at `overlap`.
 
@@ -147,8 +149,9 @@ a tick that finds slots owed. Each tick:
 4. **Checks dispatches that never started** (below) and **decides alerts** from current state.
 5. **Records the tick.**
 
-**Backoff:** after a failed attempt, the next waits min(2^n minutes, 1h, the schedule's period), measured from
-`last.at`. Not-now re-probes every tick, because probing is cheap.
+**Backoff:** after a failure, the next attempt waits min(2^n minutes, 1h, the schedule's period). n and the
+starting time come from the failure clock (State), so never-started failures count too. Not-now re-probes every
+tick, because probing is cheap.
 
 ### Overlap
 
@@ -258,8 +261,9 @@ type JobState = {                 // jobs-state/<name>.json: written only by the
   failures?: number               // consecutive failed attempts (backoff)
   failingSince?: string           // first failure since the last success; cleared on success
   running?: { startedAt: string; slot: string; pgid: number; lstart: string }
-  last?: { at: string; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string }
-  notNow?: { at: string; note: string }   // the job's own exit 75, or dup-hit pending; never overwrites `last`
+  last?: { at: string; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string;
+           v0?: 'nothing' | 'findings' | 'failed' }   // the original outcome, from a translated v0 record
+  notNow?: { since: string; reason: string }   // the job's own exit 75, or dup-hit pending; never overwrites `last`
 }
 
 type JobDaemonState = {           // jobs-state/<name>.daemon.json: written only by the daemon
@@ -279,9 +283,11 @@ type DaemonState = {              // jobs-state/_daemon.json: daemon-wide
 ```
 
 **The never-started hand-off.** A job that never starts has no attempt file, so the daemon keeps the run in its own
-file, and the failure clock reads both. When an attempt finally runs, the daemon passes `neverStarted` on stdin. The
-attempt folds it in (`failures += count`, `failingSince = earlier of the two`) and writes the result. Only then
-does the daemon clear its copy. A broken import that ran for 3 days and then turns into an ordinary failure keeps
+file, and the failure clock reads both. When an attempt finally runs, the daemon passes `neverStarted` on stdin.
+If the attempt ends in success or failure, it folds the run in (`failures += count`, `failingSince` = the earlier of
+the two) and writes the result. Then the daemon clears its copy, and it does so **before** computing the clock on the
+tick that sees the newer result, so the count is never added twice. An attempt that ends in not-now folds nothing,
+and the daemon keeps its copy: the run's last failure must not be hidden behind an older `last`. A broken import that ran for 3 days and then turns into an ordinary failure keeps
 its 3-day run.
 
 **The failure clock**, computed from both files:
@@ -302,7 +308,9 @@ every reset to 0 is a success that also rewrites `last`.
 | **Never started** | — | `neverStarted.count` +1 | `neverStarted.since` if unset | daemon's file | "never started" |
 | **Not now:** exit 75, dup-hit pending; needs unmet, no verdict | — | — | — | attempt's `notNow`; daemon's `notNow` | "not now: <reason>" |
 
-For plain jobs, success and failure also set `attemptedSlot` and `attemptedAt`.
+For plain jobs, success and failure also set `attemptedSlot` and `attemptedAt`. Never started and not now don't:
+a plain job that never started still owes its slot, and is retried on the next tick (with backoff) while it is
+reported daily.
 
 ## Alerts
 
@@ -315,8 +323,9 @@ An alert means the work keeps failing, not that it is late.
   - Frequent jobs work too: an hourly sync failing for two days alerts once, because the clock measures the failing
     run, not the age of any one slot.
   - A job that fails whenever it's online and keeps dropping offline still alerts, and its backoff holds.
-- **Plain jobs.** As today, one message per job per day while its latest attempt has failed. Sent by the **daemon**
-  on its tick, when `last.result` is failed and `reportedDay` isn't today's **local** date. The attempt sends
+- **Plain jobs.** As today, one message per job per day while it is failing. Sent by the **daemon** on its tick,
+  when the failure clock shows failing (a failed `last`, or a never-started run) and `reportedDay` isn't today's
+  **local** date. A plain job broken by a `brew upgrade` is therefore reported, not silent. The attempt sends
   nothing, so a 5-minute job can't post every 15 minutes through the deliver key's window.
 - **Lateness itself is not alerted.** A slot stays owed while offline, then runs on reconnect. If staleness matters
   in the domain (a backup older than 2 days), the job's check reports it as a failure.
@@ -358,8 +367,10 @@ clock's last tick.
 - **Existing jobs.toml files** parse and keep their behaviour: plain jobs, same outcomes, same daily failure message.
   **One deliberate change:** a plain job whose tool exits 75 used to be "failed, plus a daily message". It is now
   "not now": silent, and retried every tick until another result. `jobs list` shows it.
-- **Today's records** (v0, `{at, outcome}`) are translated, not treated as unreadable or missing:
-  `attemptedAt = at`, and `attemptedSlot` = the latest slot at or before `at`. Plain jobs don't fire at cutover.
+- **Today's records** (v0, `{at, outcome, note}`) are translated, not treated as unreadable or missing:
+  `attemptedAt = at`; `attemptedSlot` = the latest slot at or before `at`; and `last = {at, result, note, v0: outcome}`,
+  keeping the original outcome. Plain jobs don't fire at cutover, and PR 3's until-done rule below reads the
+  translated `last.v0`.
 - **A job with no record** gets a **baseline**: the daemon dispatches `--baseline`, and the attempt (still the only
   writer) records the latest slot as done. Adding a job doesn't fire it mid-period. Use `jobs run` to start one now.
 - **An unreadable record** is not "no record". The next attempt records a failure ("state unreadable, reset"), so it
@@ -367,8 +378,8 @@ clock's last tick.
   - for `none`, the slot stays owed and runs;
   - for spawn and main, it is "owed (unconfirmed)" and not run. A downgrade's schema mismatch is likelier than
     corruption, and the 24h key won't stop a second session.
-- **Turning on `until_done` for an existing job:** its latest slot is done only if the v0 record shows the work ran
-  after that slot's instant:
+- **Turning on `until_done` for an existing job:** its latest slot is done only if the translated record
+  (`last.v0`, at `last.at`) shows the work ran after that slot's instant:
   - for spawn and main, only `findings` counts;
   - for `none`, exit 0 counts.
 
