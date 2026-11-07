@@ -137,8 +137,9 @@ not die with it.
   - **The lock is the only liveness witness.** The kernel holds it, and it is released when the process dies.
     "Running" means `lockf -t 0 <lock> true` exits 75. `true` can't exit 75, so this is unambiguous. The daemon's
     dispatch, `jobs run`, and the stale check all use this probe, never `lockf`'s exit code from a real attempt.
-  - **The marker is metadata only:** `running: {startedAt, pgid}`, where `pgid` is `lockf`'s pid (the attempt's
-    `process.ppid`). It is written under the lock at start and cleared in the result write.
+  - **The marker is metadata only:** `running: {startedAt, pgid, lstart}`, where `pgid` is `lockf`'s pid (the attempt's
+    `process.ppid`, the group leader) and `lstart` is `ps -o lstart= -p <pgid>` read at start. It is written under
+    the lock at start and cleared in the result write.
   - **A marker present while the lock is free** means the previous attempt died (a bun upgrade breaking import, an
     OOM, `kill -9`). The next attempt, under the lock, records that as a **failed** attempt ("previous attempt died")
     before starting.
@@ -146,7 +147,7 @@ not die with it.
     failure and exits). The action has a real timeout of its own: `hydra spawn` and `deliver` are killed after 2
     minutes.
   - **Wedged past its own timer:** while the lock probe says held and the marker is past the deadline plus a margin,
-    the daemon kills process group `pgid`, but only after `ps -o lstart= -p <pgid>` matches `startedAt`, so a reused
+    the daemon kills process group `pgid`, but only after `ps -o lstart= -p <pgid>` still matches the recorded `lstart`, so a reused
     pid is never killed. The next attempt then records the death.
 - **`hydra jobs run <platform> <name>`** asks the daemon for a dispatch decision (slot and job definition), then
   runs the same attempt **in the foreground** under the same lock and prints its result.
@@ -264,7 +265,7 @@ type JobState = {                 // <name>.json, the attempt's
   failures?: number               // consecutive failed attempts, for backoff
   failingSince?: string           // first failed attempt since the last success; cleared on success
   lastFailedAt?: string           // for backoff and the alert rule; untouched by not-now
-  running?: { startedAt: string; pgid: number }
+  running?: { startedAt: string; pgid: number; lstart: string }
   last?: { at: string; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string }
   notNow?: { at: string; note: string }   // only the job's own exit 75; never overwrites `last`
 }
