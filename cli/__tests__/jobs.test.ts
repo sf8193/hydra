@@ -41,6 +41,7 @@ describe('parseJobs', () => {
   const bad: [string, string, RegExp][] = [
     ['no schedule', `[a]\nmode="main"\nprompt="p"`, /schedule is required/],
     ['bad cron', `[a]\nschedule="soon"\nmode="main"\nprompt="p"`, /not a cron expression/],
+    ['cron Bun accepts but jobs list cannot read', `[a]\nschedule="+1 * * * *"\nmode="main"\nprompt="p"`, /schedule "\+1 \* \* \* \*" is not supported/],
     ['no mode', `[a]\nschedule="0 6 * * *"`, /mode is required/],
     ['unknown mode', `[a]\nschedule="0 6 * * *"\nmode="loop"\nprompt="p"`, /mode must be one of/],
     ['spawn without channel', `[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"`, /needs a channel/],

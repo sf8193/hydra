@@ -1,21 +1,24 @@
-// A cron matcher in the process's local time zone (TZ respected). Bun.cron.parse evaluates in UTC and only looks
-// forward; launchd fires in local time, and callers also need the latest match at or before an instant.
+// A cron matcher in the process's local time zone (TZ respected), matching launchd, which fires jobs in local time.
+// Bun.cron.parse can't stand in: it has no previous-match API, and its zone depends on the Bun version (UTC on
+// 1.3.14, local on 1.4.2).
 //
 // Syntax is what Bun.cron accepts: 5 fields, numbers, `*`, lists, ranges, steps (`a/n` runs a to the field max),
 // case-insensitive month and weekday names (3-letter or full), 0 and 7 both Sunday, and the @yearly/@annually/
 // @monthly/@weekly/@daily/@midnight/@hourly nicknames. Day-of-month and day-of-week combine as Bun documents and
 // launchd does: when neither field is literally `*`, a day matches if either one does.
 //
-// A slot is a local wall-clock minute the expression matches. Its label is that wall-clock time; its instant is:
+// A slot is an instant the schedule fires at, named by a label: a local wall-clock `YYYY-MM-DD HH:MM`. Each matching
+// wall-clock minute maps to an instant:
 // - normally, the one instant showing that wall-clock time;
-// - at a fall-back, where the time occurs twice, the first occurrence. The label runs once, so the repeated hour adds
-//   no slots. Since the first occurrence precedes the second, the latest match at or before any instant that has
-//   seen the second has also seen the first;
-// - at a spring-forward, where the time doesn't exist, the first instant after the gap, under its nominal label.
-//   Several labels can then share one instant (02:00 to 02:55 and 03:00 for */5 in Los Angeles).
-// Slot instants never decrease as labels increase, which is what lets the searches below walk labels in order.
-// A gap slot's instant shows a different wall-clock time than its label, so callers that need the label take it
-// from nextSlot/latestSlot rather than from slotLabel(at).
+// - at a fall-back, where the time occurs twice, its first occurrence. The repeated hour adds no slots: the latest
+//   match at or before any instant past the second occurrence is still the first;
+// - at a spring-forward, where the time doesn't exist, the first instant after the gap.
+// One instant is one slot. When several matching minutes map to the same instant (hourly 02:00 and 03:00 both land
+// on 03:00 PDT in Los Angeles), the slot's label is the EARLIEST of them, its nominal label: "2026-03-08 02:00".
+// nextSlot and latestSlot apply the same rule, so latestSlot(nextSlot(t).at) equals nextSlot(t).
+// Instants never decrease as minutes increase, which is what lets the searches walk minutes in order. A gap slot's
+// instant shows a later wall-clock time than its label, so callers that need the label take it from the Slot, not
+// from slotLabel(at).
 
 export interface Slot { at: Date; label: string }
 
@@ -132,39 +135,42 @@ function labelOfKey(w: number): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
 }
 
+// Matching wall-clock minutes from `from` upward (step 1) or downward (step -1), within the search window.
+function* minutes(c: Cron, from: number, step: 1 | -1): Generator<number> {
+  const hours = step > 0 ? c.hours : [...c.hours].reverse()
+  const mins = step > 0 ? c.minutes : [...c.minutes].reverse()
+  let day = from - (((from % DAY) + DAY) % DAY)
+  for (let i = 0; i < SEARCH_DAYS; i++, day += step * DAY) {
+    if (!dayMatches(c, day)) continue
+    for (const h of hours) for (const m of mins) {
+      const w = day + h * HOUR + m * MIN
+      if (step > 0 ? w >= from : w <= from) yield w
+    }
+  }
+}
+
 /** The first slot whose instant is strictly after `from`, or null if the expression never matches. */
 export function nextSlot(expr: string, from: Date): Slot | null {
-  const c = parseCron(expr)
-  const start = wallKey(from.getTime()) - SLACK
-  const firstDay = start - (((start % DAY) + DAY) % DAY)
-  for (let i = 0, day = firstDay; i < SEARCH_DAYS; i++, day += DAY) {
-    if (!dayMatches(c, day)) continue
-    for (const h of c.hours) for (const m of c.minutes) {
-      const w = day + h * HOUR + m * MIN
-      if (w < start) continue
-      const at = instantOf(w)
-      if (at > from.getTime()) return { at: new Date(at), label: labelOfKey(w) }
-    }
+  // Walking up, the first minute whose instant is past `from` is the earliest minute of that instant.
+  for (const w of minutes(parseCron(expr), wallKey(from.getTime()) - SLACK, 1)) {
+    const t = instantOf(w)
+    if (t > from.getTime()) return { at: new Date(t), label: labelOfKey(w) }
   }
   return null
 }
 
 /** The latest slot whose instant is at or before `at`, or null if none in the search window. */
 export function latestSlot(expr: string, at: Date): Slot | null {
-  const c = parseCron(expr)
-  const end = wallKey(at.getTime()) + SLACK
-  const lastDay = end - (((end % DAY) + DAY) % DAY)
-  const hours = [...c.hours].reverse(), minutes = [...c.minutes].reverse()
-  for (let i = 0, day = lastDay; i < SEARCH_DAYS; i++, day -= DAY) {
-    if (!dayMatches(c, day)) continue
-    for (const h of hours) for (const m of minutes) {
-      const w = day + h * HOUR + m * MIN
-      if (w > end) continue
-      const t = instantOf(w)
-      if (t <= at.getTime()) return { at: new Date(t), label: labelOfKey(w) }
-    }
+  // Walking down, find the first minute at or before `at`, then keep going while minutes share its instant.
+  let found: number | undefined, label = 0
+  for (const w of minutes(parseCron(expr), wallKey(at.getTime()) + SLACK, -1)) {
+    const t = instantOf(w)
+    if (found === undefined) {
+      if (t <= at.getTime()) [found, label] = [t, w]
+    } else if (t === found) label = w
+    else break
   }
-  return null
+  return found === undefined ? null : { at: new Date(found), label: labelOfKey(label) }
 }
 
 /** The first local-time match strictly after `from`; null if the expression never matches (e.g. Feb 31). */

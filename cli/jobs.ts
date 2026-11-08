@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { homedir } from 'os'
 import { join } from 'path'
 import { resolveConfig } from './helpers.js'
-import { nextMatch } from './cron-local.js'
+import { nextMatch, parseCron } from './cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
 
 export type Mode = 'spawn' | 'main' | 'none'
@@ -47,6 +47,8 @@ export function parseJobs(text: string): Job[] {
     }
     const schedule = str('schedule') ?? fail('schedule is required')
     try { Bun.cron.parse(schedule) } catch { fail(`schedule "${schedule}" is not a cron expression`) }
+    // jobs list reads schedules with parseCron, which is stricter than Bun in corners (e.g. "+1").
+    try { parseCron(schedule) } catch (e) { fail(`schedule "${schedule}" is not supported: ${(e as Error).message}`) }
     const mode = (str('mode') ?? fail('mode is required')) as Mode
     if (!MODES.includes(mode)) fail(`mode must be one of ${MODES.join(', ')}`)
     const prompt = str('prompt')
