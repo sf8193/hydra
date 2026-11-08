@@ -488,6 +488,47 @@ clock's last tick.
   computes slots in its new zone. Bun applies a runtime `TZ` assignment immediately (verified on 1.3.14). Whether
   bun notices a system zone change without `TZ` set is unverified, so the daemon doesn't rely on it.
 
+### Decisions made while building PR 3
+
+- **Holding back an unconfirmed slot.** "Owed (unconfirmed)" is held by `unconfirmedSlot` (the label held back). It
+  stops being in force once a newer slot is the latest, and is cleared by a successful `jobs run` or by `mark-done`.
+  `announcedUnconfirmed` only records that the announcement went out, so a failed send is retried.
+- **Pane-probe verdicts:**
+  - `active`: window activity less than 30s ago.
+  - `stuck(kind)`: pane-probe's confirmed stuck state (2 consecutive probes; login notices excluded).
+  - `clean`: idle, probed, and nothing detected.
+  - `unprobeable`: a non-bridge adapter (Codex).
+  - A detection that isn't confirmed yet, or a verdict older than 3 minutes, counts as no verdict, which is not-now.
+- **Several open sessions from one job,** checked in this order:
+  1. one spawned at or before the previous slot's instant → failure;
+  2. any stuck → failure;
+  3. any with no verdict → not now;
+  4. otherwise, absorbed by the newest.
+
+  "After the previous slot" is strict.
+- **Backoff applies to durable jobs only.** n is the number of failures, so the first wait is 2 minutes. The period is
+  the gap from the owed slot to the slot after it. A failure from a stuck session is recorded only when backoff
+  allows it.
+- **Online:** a gateway counts as a witness only through an optional `isConnected()`. The captive probe is a GET with
+  a 5-second timeout, run at most once per tick and only when some owed job has `needs`.
+- **`notNow.since`** stays fixed while the reason doesn't change, so `jobs list` can say "not now since 10:00:
+  offline".
+- **The durable alert** reads "Job <name> has been failing since <local time> (<n> failures): <note>". It goes to main,
+  else the direct path. Durable jobs never get the plain daily message.
+- **`alert_after`** is `<n>m|h|d`, between 1m and 30d, and accepted only with `durable = true`.
+- **Duplicate-key answers:** the attempt calls `hydra --json`.
+  - spawn, exit 2: `pending` is not now; `spawned` or `completed` is done, absorbed by the existing session.
+  - deliver: exit 7 is not now; exit 2 is done.
+- **`mark-done`:**
+  - on a plain job, it also sets `attemptedSlot`;
+  - while a dispatch is live, it is refused;
+  - it resets `failures`.
+- **A manual run on a durable job:**
+  - success sets `doneSlot = dispatch.slot`;
+  - failure counts toward the failure run but never touches the slot.
+- **A new durable job** gets the baseline plus `durableApplied: true`.
+- **An unreadable record** on a durable spawn or main job becomes "owed (unconfirmed)".
+
 ## Tests
 
 `jobsIO.now` is already injectable; the daemon clock takes an injectable timer. **Each rule and each table row above
