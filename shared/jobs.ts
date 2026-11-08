@@ -3,7 +3,8 @@
 // result file each; the CLI only reads. Design: proposals/durable-jobs.md.
 
 import { spawnSync } from 'child_process'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeSync } from 'fs'
+import { homedir } from 'os'
 import { join } from 'path'
 import { latestSlot, parseCron, type Slot } from './cron-local.js'
 import { parseIdleTtl } from './constants.js'
@@ -274,3 +275,18 @@ export function listProcesses(): Proc[] {
   return out
 }
 
+
+// ---------------------------------------------------------------------------
+// Legacy launchd entries: before the daemon owned the clock, each job was bun.cron.hydra-job-<platform>-<name>
+// ---------------------------------------------------------------------------
+
+export const LAUNCH_AGENTS_DIR = join(homedir(), 'Library', 'LaunchAgents')
+const LEGACY_TITLE = /^hydra-job-([a-z]+)-([a-z0-9][a-z0-9-]*)$/
+export const parseLegacyTitle = (t: string) => { const m = LEGACY_TITLE.exec(t); return m ? { platform: m[1], name: m[2] } : null }
+
+/** The legacy entries for one platform, by title (depends on Bun naming the file bun.cron.<title>.plist). */
+export function legacyTitles(agentsDir: string, platform: string): string[] {
+  let files: string[] = []
+  try { files = readdirSync(agentsDir) } catch {}
+  return files.map(f => /^bun\.cron\.(.+)\.plist$/.exec(f)?.[1] ?? '').filter(t => parseLegacyTitle(t)?.platform === platform)
+}

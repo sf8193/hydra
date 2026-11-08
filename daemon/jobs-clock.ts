@@ -8,7 +8,7 @@ import { randomBytes } from 'crypto'
 import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from 'fs'
 import { latestSlot } from '../shared/cron-local.js'
 import {
-  ATTEMPT_DEADLINE_MS, attemptArgv, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
+  ATTEMPT_DEADLINE_MS, attemptArgv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
   owedSlot, parseJobsConfig, parseResultName, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../shared/jobs.js'
@@ -40,6 +40,8 @@ export type ClockDeps = {
   lstartOf: (pid: number) => string | null
   listProcesses: () => Proc[]
   killGroup: (pid: number, signal: NodeJS.Signals) => void
+  /** Removes this platform's legacy launchd job entries; returns the titles removed. */
+  removeLegacyEntries: () => Promise<string[]>
   /** Hands a message to main. False if main can't take it. */
   toMain: (text: string, initiator: string) => boolean
   /** Posts straight to a channel (safeSend). False if it couldn't. */
@@ -62,6 +64,7 @@ export class JobsClock {
   private ticking: Promise<void> | null = null
   private readonly startedAt: Date
   private staleFlagged = false
+  private legacyCleared = false
   private readonly strayLogged = new Set<string>()
 
   constructor(private readonly d: ClockDeps) {
@@ -116,6 +119,7 @@ export class JobsClock {
   }
 
   private async runTick(): Promise<void> {
+    await this.clearLegacyEntries()
     this.syncZone()
     if (!this.tryLock()) return
     const cfg = await this.loadConfig()
@@ -129,6 +133,21 @@ export class JobsClock {
     await this.applyResults(cfg)
     await this.reportFailures(cfg)
     this.updateDaemon(s => { s.lastTick = this.d.now().toISOString() })
+  }
+
+  /**
+   * Cutover heals itself: before the first tick, remove the launchd entries the old runner registered, so pulling and
+   * restarting the daemon is the whole migration. (They only fire a no-op now, but they shouldn't linger.) Retried on
+   * later ticks until it succeeds.
+   */
+  private async clearLegacyEntries(): Promise<void> {
+    if (this.legacyCleared) return
+    try {
+      for (const t of await this.d.removeLegacyEntries()) this.d.log(`jobs: removed legacy launchd entry ${t}`)
+      this.legacyCleared = true
+    } catch (err) {
+      this.d.log(`jobs: removing legacy launchd entries failed (retrying next tick): ${err}`)
+    }
   }
 
   /** A traveling laptop changes zone under a long-running daemon. Follow the system's zone unless TZ was set on purpose. */
@@ -463,7 +482,9 @@ export function spawnAttempt(args: string[], stdin: string, log: string): number
   try {
     // bun from PATH, read per spawn: a long-running daemon's own execPath is a versioned Cellar path that a
     // `brew upgrade` + cleanup deletes, which would turn every later dispatch into "ended without a result".
-    const child = spawn(Bun.which('bun') ?? process.execPath, args, { detached: true, stdio: ['pipe', fd, fd], env: process.env })
+    const bun = Bun.which('bun')
+    if (!bun) process.stderr.write(`daemon: jobs: no bun on PATH; starting the attempt with ${process.execPath}\n`)
+    const child = spawn(bun ?? process.execPath, args, { detached: true, stdio: ['pipe', fd, fd], env: process.env })
     child.on('error', err => process.stderr.write(`daemon: jobs attempt spawn error: ${err}\n`))
     child.stdin?.on('error', () => {})   // an attempt that dies before reading stdin ends without a result
     child.stdin?.end(stdin)
@@ -489,6 +510,11 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
     closeLock: fd => closeSync(fd),
     spawnAttempt, lstartOf, listProcesses,
     killGroup: (pid, signal) => process.kill(-pid, signal),
+    removeLegacyEntries: async () => {
+      const titles = legacyTitles(LAUNCH_AGENTS_DIR, o.platform)
+      for (const t of titles) await Bun.cron.remove(t)
+      return titles
+    },
     systemZone,
     explicitTZ: !!process.env.TZ,
     getTZ: () => process.env.TZ,

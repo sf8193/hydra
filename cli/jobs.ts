@@ -7,17 +7,16 @@
 // then the mode's action (spawn, deliver to main, or nothing).
 
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, writeSync } from 'fs'
-import { homedir } from 'os'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from 'fs'
 import { join } from 'path'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { nextSlot } from '../shared/cron-local.js'
 import {
-  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, CHECK_TIMEOUT_MS, isJobName, jobsDir, jobsToml, lstartOf, parseJobsConfig,
+  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, CHECK_TIMEOUT_MS, isJobName, jobsDir, jobsToml, LAUNCH_AGENTS_DIR, legacyTitles, lstartOf, parseJobsConfig,
   readDaemonState, readJobState, resultFile, writeAtomic, type AttemptResult, type Job,
 } from '../shared/jobs.js'
 
-export { parseJobs, parseJobsConfig, isPlatform, type Job, type Mode } from '../shared/jobs.js'
+export { parseJobs, parseJobsConfig, parseLegacyTitle, isPlatform, type Job, type Mode } from '../shared/jobs.js'
 
 // Everything a run does to the outside world goes through here, so tests swap it.
 export const jobsIO = {
@@ -222,11 +221,8 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
 // jobs sync, jobs list
 // ---------------------------------------------------------------------------
 
-// Before the daemon owned the clock, each job was a launchd entry named bun.cron.hydra-job-<platform>-<name>.
-const OLD_TITLE = /^hydra-job-([a-z]+)-([a-z0-9][a-z0-9-]*)$/
-export const parseOldTitle = (t: string) => { const m = OLD_TITLE.exec(t); return m ? { platform: m[1], name: m[2] } : null }
 export const syncIO = {
-  agentsDir: join(homedir(), 'Library', 'LaunchAgents'),
+  agentsDir: LAUNCH_AGENTS_DIR,
   remove: (title: string) => Bun.cron.remove(title),
 }
 
@@ -236,9 +232,7 @@ export async function jobsSync(platform: string, stateDirOverride?: string): Pro
   const file = jobsToml(stateDir)
   if (!existsSync(file)) throw new Error(`no jobs file at ${file}`)
   const { jobs } = parseJobsConfig(await Bun.file(file).text())
-  let files: string[] = []
-  try { files = readdirSync(syncIO.agentsDir) } catch {}
-  const old = files.map(f => /^bun\.cron\.(.+)\.plist$/.exec(f)?.[1] ?? '').filter(t => parseOldTitle(t)?.platform === platform)
+  const old = legacyTitles(syncIO.agentsDir, platform)
   for (const t of old) await syncIO.remove(t)
   console.log(`jobs.toml ok: ${jobs.length} job${jobs.length === 1 ? '' : 's'}. Removed ${old.length} old launchd entr${old.length === 1 ? 'y' : 'ies'}. The ${platform} daemon runs the jobs.`)
 }

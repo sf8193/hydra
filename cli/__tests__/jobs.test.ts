@@ -6,7 +6,7 @@ import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
 import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, parseAttemptArgs, jobsRun, runIO, jobsSync, syncIO, jobsList,
-  parseOldTitle, isPlatform, type AttemptOpts,
+  parseLegacyTitle, isPlatform, type AttemptOpts,
 } from '../jobs.js'
 import { resultFile, stateFile, writeAtomic, daemonFile } from '../../shared/jobs.js'
 
@@ -487,9 +487,18 @@ describe('jobs sync', () => {
     } finally { rmSync(dir, { recursive: true }) }
   })
 
+  test('an old launchd entry that still fires runs nothing: it only says how to remove itself', async () => {
+    const src = readFileSync(join(repo, 'cli', 'jobs-entry.ts'), 'utf8')
+    expect(src).not.toMatch(/^import /m)                // no runner, no state, no hydra calls can be reached
+    const p = Bun.spawn([process.execPath, '-e', `const m = await import(${JSON.stringify(join(repo, 'cli', 'jobs-entry.ts'))}); await m.default.scheduled()`], { stdout: 'pipe', stderr: 'pipe' })
+    expect(await p.exited).toBe(0)
+    expect(await new Response(p.stderr).text()).toContain('run `hydra jobs sync <platform>` to remove this launchd entry')
+    expect(await new Response(p.stdout).text()).toBe('')
+  })
+
   test('old titles parse back to platform and name', () => {
-    expect(parseOldTitle('hydra-job-discord-vuln-scan')).toEqual({ platform: 'discord', name: 'vuln-scan' })
-    expect(parseOldTitle('bun.cron.other')).toBeNull()
+    expect(parseLegacyTitle('hydra-job-discord-vuln-scan')).toEqual({ platform: 'discord', name: 'vuln-scan' })
+    expect(parseLegacyTitle('bun.cron.other')).toBeNull()
   })
 })
 

@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { JobsClock, ADOPT_GRACE_MS, KILL_GRACE_MS, type ClockDeps } from '../jobs-clock.js'
 import {
-  ATTEMPT_DEADLINE_MS, commandMatches, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
+  ATTEMPT_DEADLINE_MS, commandMatches, legacyTitles, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
 } from '../../shared/jobs.js'
 
@@ -25,6 +25,9 @@ type World = {
   zone: string | null
   tz: string | undefined
   directGate?: Promise<void>
+  legacy: string[]
+  legacyFail: number
+  events: string[]
 }
 
 let w: World
@@ -39,6 +42,7 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     openLock: f => openSync(f, fsc.O_RDONLY | fsc.O_CREAT | 0x20 | fsc.O_NONBLOCK),
     closeLock: fd => closeSync(fd),
     spawnAttempt: (args, stdin, log) => {
+      w.events.push('spawn')
       if (w.spawnMode === 'throw') throw new Error('spawn EAGAIN')
       const pid = w.spawnMode === 'no-pid' ? undefined : w.nextPid++
       if (pid) w.procs.set(pid, { lstart: `L${pid}`, command: ['bun', ...args].join(' ') })
@@ -48,6 +52,11 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     lstartOf: pid => w.procs.get(pid)?.lstart ?? null,
     listProcesses: () => [...w.procs].map(([pid, p]) => ({ pid, ...p })),
     killGroup: (pid, sig) => { w.kills.push([pid, sig]); w.procs.delete(pid) },
+    removeLegacyEntries: async () => {
+      w.events.push('legacy')
+      if (w.legacyFail-- > 0) throw new Error('launchctl busy')
+      const removed = w.legacy; w.legacy = []; return removed
+    },
     toMain: text => { if (w.mainOk) w.main.push(text); return w.mainOk },
     direct: async (text, channel) => { await w.directGate; w.direct.push([text, channel]); return w.directOk },
     homeChannel: () => 'home',
@@ -99,6 +108,7 @@ beforeEach(() => {
     dir: mkdtempSync(join(tmpdir(), 'jobs-clock-')), t: new Date('2026-11-04T10:00:30-08:00'),
     procs: new Map(), spawns: [], kills: [], main: [], direct: [], logs: [],
     mainOk: true, directOk: true, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
+    legacy: [], legacyFail: 0, events: [],
   }
 })
 afterEach(() => {
@@ -146,6 +156,41 @@ describe('clock owner lock', () => {
     await clock().tick()
     expect(existsSync(stateFile(w.dir, 'sweep'))).toBe(false)
     expect(existsSync(daemonFile(w.dir))).toBe(false)
+  })
+})
+
+describe('cutover heals itself', () => {
+  test('before its first tick does anything, the daemon removes its legacy launchd entries, logging each, once', async () => {
+    toml(FIVE)
+    setState('sweep', { at: '2026-11-04T17:55:10.000Z', outcome: 'nothing' })   // a v0 record that owes a run now
+    w.legacy = ['hydra-job-test-sweep', 'hydra-job-test-other']
+    const c = clock()
+    await c.tick()
+    expect(w.events).toEqual(['legacy', 'spawn'])
+    expect(w.logs.filter(l => l.startsWith('jobs: removed legacy'))).toEqual([
+      'jobs: removed legacy launchd entry hydra-job-test-sweep', 'jobs: removed legacy launchd entry hydra-job-test-other'])
+    await c.tick()
+    expect(w.events.filter(e => e === 'legacy')).toHaveLength(1)
+  })
+
+  test('a failed removal does not stop the clock, and is retried on the next tick', async () => {
+    toml(FIVE)
+    w.legacy = ['hydra-job-test-sweep']; w.legacyFail = 1
+    const c = clock()
+    await c.tick()
+    expect(state('sweep').last?.note).toBe('baseline: no work ran')
+    await c.tick()
+    expect(w.logs).toContain('jobs: removed legacy launchd entry hydra-job-test-sweep')
+  })
+
+  test("only this platform's entries are legacy", () => {
+    const agents = mkdtempSync(join(tmpdir(), 'agents-'))
+    try {
+      for (const f of ['bun.cron.hydra-job-test-a.plist', 'bun.cron.hydra-job-test-b-c.plist', 'bun.cron.hydra-job-other-a.plist', 'com.hydra.watchdog.test.plist', 'bun.cron.unrelated.plist'])
+        writeFileSync(join(agents, f), '')
+      expect(legacyTitles(agents, 'test').sort()).toEqual(['hydra-job-test-a', 'hydra-job-test-b-c'])
+      expect(legacyTitles(join(agents, 'missing'), 'test')).toEqual([])
+    } finally { rmSync(agents, { recursive: true }) }
   })
 })
 
