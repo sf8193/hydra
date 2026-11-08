@@ -204,6 +204,8 @@ The detached child:
 
 `bun hydra.ts jobs attempt <platform> <name> --dispatch <id> --nonce <nonce> --slot <label>`
 
+- **Environment:** the daemon's environment minus hydra's own secrets (the bot tokens). Check scripts never see
+  them.
 - **Detached:** its own process group (`child_process.spawn(..., { detached: true })`; macOS has no `setsid`
   command), so a daemon restart doesn't kill it. The daemon records the child's `pid` and `lstart`
   (`ps -o lstart= -p <pid>`).
@@ -272,8 +274,9 @@ reservation. If one appears, it is logged and left alone.
   - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap.
   - **For durable jobs**, its success marks the latest slot done. **For plain jobs** it changes nothing about
     the schedule: it never sets `attemptedSlot`, so the scheduled slot is still attempted.
-  - **Ctrl-C** sends SIGTERM to the attempt's group (`-pid`), only while `ps -o lstart= -p <pid>` still matches the
-    answer's `lstart`. The attempt records "cancelled" (see above). A Ctrl-C before
+  - **Ctrl-C** sends SIGTERM to the attempt's **pid** (not its group), only while `ps -o lstart= -p <pid>` still
+    matches the answer's `lstart`. The attempt then writes and kills its own group, so the check's exit can't race
+    the cancel. The attempt records "cancelled" (see above). A Ctrl-C before
     the daemon has answered the request cancels nothing: the CLI exits, and if the reservation was made, its
     attempt runs and reports as usual.
   - With a live dispatch, the daemon refuses with "already running".
