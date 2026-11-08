@@ -3,10 +3,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { unlinkSync } from 'fs'
 import { gateway } from '../config.js'
-import { authorityId, markDead, registry, repointChildren, sessionEmoji, threadRegistry } from '../sessions.js'
+import { markDead, registry, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD, requestHandoff } from '../session-lifecycle.js'
-import type { SessionInfo, SpawnResult } from '../sessions.js'
+import { killSession, emitSessionDeath, requestHandoff } from '../session-lifecycle.js'
+import type { SessionInfo } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
@@ -15,19 +15,15 @@ import { unwatchBySession } from "../pr-watch.js"
 import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
-import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-selection.js'
+import { recoveryEntry } from '../recovery-selection.js'
 import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { claudeEngine, resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, occupancy } from '../session-reachability.js'
+import { currentRecoveryDeps, reviveThread, threadStub } from '../recovery.js'
+export { _setRecoveryDeps, _resetRecoveryDeps } from '../recovery.js'
+import { targetKeyForThread, threadLockHeld, withThreadLock } from '../specialists.js'
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../main-session.js'
-
-// Recovery executors, swappable in tests (same pattern as reply-guard's deps).
-type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn }
-const defaultRecoveryDeps: RecoveryDeps = { tryResume, doSpawnSession, tryRespawn }
-let recoveryDeps: RecoveryDeps = defaultRecoveryDeps
-export function _setRecoveryDeps(custom: Partial<RecoveryDeps>): void { recoveryDeps = { ...defaultRecoveryDeps, ...custom } }
-export function _resetRecoveryDeps(): void { recoveryDeps = defaultRecoveryDeps }
 
 function adapterFor(info: { engine?: ProviderId; adapter?: any }) {
   return info.adapter
@@ -45,10 +41,10 @@ export async function handleThreadKillIntercept(
   // `+destroy` is scoped to the thread, not the session, so it stays meaningful
   // once there is nothing left to kill — which is the whole point of offering it
   // as one command. Two shapes of "already dead" land here: a killed session is
-  // gone from the registry (info is null), and one that died across a daemon
-  // restart is still in it with `deadAt` set. Both skip straight to the destroy
-  // rather than reporting a failed kill.
-  if (destroy && (!info || info.deadAt)) {
+  // gone from the registry (info is null), and one whose execution is gone is
+  // still in it. Both skip straight to the destroy rather than reporting a failed
+  // kill. A running orphan, even one stamped dead, is killed first.
+  if (destroy && (!info || occupancy(info) === 'dead')) {
     await handleDestroyIntercept(msg)
     return
   }
@@ -104,7 +100,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     const parentThreadId = info.threadId
     try {
       const ephemeralSuffix = opts?.ephemeral ? `\n\nWhen you are finished, post exactly \`[done]\` on its own line to your thread. This signals the system to clean up your session automatically.` : ''
-      const result = await recoveryDeps.doSpawnSession(forkTopic, baseChatId, undefined, {
+      const result = await currentRecoveryDeps().doSpawnSession(forkTopic, baseChatId, undefined, {
         model: forkModel,
         engine: targetEngine,
         inheritedLabel: info.label,
@@ -133,7 +129,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   try {
     const ephemeralPrefix = opts?.ephemeral ? `When you are finished, post exactly \`[done]\` on its own line to your thread. This signals the system to clean up your session automatically.\n\n` : undefined
-    const result = await recoveryDeps.doSpawnSession(forkTopic, baseChatId, undefined, {
+    const result = await currentRecoveryDeps().doSpawnSession(forkTopic, baseChatId, undefined, {
       forkFrom: forkFrom!,
       parentId: info.sessionId,  // a human fork answers to its source
       model: forkModel,
@@ -166,7 +162,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
     process.stderr.write(`daemon: fork failed, falling back to spawn: ${errMsg}\n`)
     try {
       await gateway.send(msg.channelId, `⚠️ Fork failed — spawning fresh session that will read the thread for context.`, { replyTo: msg.id })
-      const result = await recoveryDeps.doSpawnSession(forkTopic, baseChatId, undefined, {
+      const result = await currentRecoveryDeps().doSpawnSession(forkTopic, baseChatId, undefined, {
         resurrectFrom: parentName,
         parentId: info.sessionId,  // a human fork answers to its source
         promptPrefix: `Read the parent thread for context using fetch_messages(channel="${info.threadId}", limit=50), then continue in your own thread.`,
@@ -251,20 +247,17 @@ async function announceRecovery(
 
 export type RecoveryAnchor = Pick<InboundMessage, 'id' | 'channelId' | 'isThread' | 'effectiveThreadId'>
 
-const recoveringThreads = new Set<string>()
+// A person asking by hand is not held back by the target's back-off, and a success clears it.
+const byHand = (threadId: string) => ({ backoffKey: targetKeyForThread(threadId), ignoreBackoff: true })
 
+// A person typing resume or respawn twice gets told, not queued behind the first (which may take 30s).
 async function oneRecoveryPerThread(msg: RecoveryAnchor, run: () => Promise<void>): Promise<void> {
   const threadId = msg.effectiveThreadId ?? msg.channelId
-  if (recoveringThreads.has(threadId)) {
+  if (threadLockHeld(threadId)) {
     await gateway.send(msg.channelId, `⏳ A recovery of this thread is already in progress.`, { replyTo: msg.id }).catch(() => {})
     return
   }
-  recoveringThreads.add(threadId)
-  try {
-    await run()
-  } finally {
-    recoveringThreads.delete(threadId)
-  }
+  await withThreadLock(threadId, run)
 }
 
 // `resume <claudeSessionId>` reattaches an earlier conversation from this thread's
@@ -287,6 +280,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
     return
   }
 
+  let orphan: { info: SessionInfo; reason: string } | undefined
   // If thread has a live session, check if it's actually running
   const liveSessionId = registry.getByThread(threadId)
   if (liveSessionId) {
@@ -302,131 +296,37 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
         try { await gateway.send(msg.channelId, note, { replyTo: msg.id }) } catch {}
         return
       }
-      // Orphaned: the process is up but unreachable. Tear it down so the resume
-      // cascade below can reattach to its conversation — killSession closes the
-      // history entry with the claudeSessionId that tier 1 needs.
-      if (occ === 'orphaned') {
-        process.stderr.write(`daemon: resume: tearing down orphaned ${liveInfo.tmuxName} before reattaching\n`)
-        // Keep the worktree: recovery reuses the dead session's on-disk worktree
-        // rather than recreating one, and it may hold unpushed work.
-        await killSession(liveInfo, 'bridge was unreachable — reattaching to this conversation', { skipWorktreeDestroy: true })
-      }
-      // Gone (or just torn down): mark it dead as the health poll would — stamp
-      // and close its history entry — so the poll doesn't announce a second
-      // death after this resume's own outcome.
-      markDead(liveInfo)
+      // Orphaned: the process is up but unreachable. The revive tears it down (worktree kept) after taking what it
+      // carries, so the cascade can reattach to its conversation.
+      if (occ === 'orphaned') orphan = { info: liveInfo, reason: 'bridge was unreachable — reattaching to this conversation' }
+      // Gone: mark it dead as the health poll would, so the poll doesn't announce a second death after this resume.
+      else markDead(liveInfo)
     }
   }
 
-  // Thread is detached — find claudeSessionId from last session in history, or the named one
-  const lastSession = claudeSessionIdArg
-    ? thread.sessionHistory.findLast(e => e.claudeSessionId === claudeSessionIdArg)
-    : recoveryEntry(thread.sessionHistory)
-  if (claudeSessionIdArg && !lastSession) {
+  // Thread is detached: continue its latest conversation, or the named one.
+  const entry = claudeSessionIdArg ? thread.sessionHistory.findLast(e => e.claudeSessionId === claudeSessionIdArg) : undefined
+  if (claudeSessionIdArg && !entry) {
     await reportError(msg.channelId, msg.id, 'resume', `no session \`${claudeSessionIdArg}\` in this thread's history`)
     return
   }
-  const lastInfo = registry.get(lastSession?.sessionId ?? '')
-  const claudeSessionId = lastSession?.claudeSessionId
-  const lastTmuxName = lastSession?.tmuxName ?? thread.threadId.slice(0, 8)
-  const deadModel = recoveryModel(lastSession?.model ?? lastInfo?.sessionMetadata?.model)
-  const deadLabel = deadSessionLabel(lastSession, lastInfo)
-  // Tier 1 (resume) keeps these off the dead record; the fork and respawn tiers run after that record is gone.
-  const { predecessor, launchCwd, disallowedTools, initiator } = lastInfo ?? {}
-  // A resumed session is the dead one continuing, so it keeps its parent.
-  const parentId = lastInfo ? authorityId(lastInfo) : undefined
-  const carryOver = predecessor || launchCwd || disallowedTools || parentId || initiator ? { predecessor, launchCwd, disallowedTools, parentId, initiator } : undefined
-  const engineType = recoveryEngine(lastSession, lastInfo)
-  const plan = resolveEngine(engineType).recoveryPlan({
-    tmuxName: lastTmuxName, claudeSessionId,
-    codexThreadId: lastSession?.codexThreadId ?? lastInfo?.codexThreadId,
-    codexHomeName: lastSession?.codexHomeName ?? lastInfo?.codexHomeName,
-    sessionId: lastSession?.sessionId,
-  })
 
   void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
 
-  // Three-tier cascade: resume → fork-from-dead → respawn. The gate reads both ids
-  // (PINNED R9: a mixed-ID record logs both tier failures, then respawns).
-  if (claudeSessionId || lastSession?.codexThreadId || lastInfo?.codexThreadId || plan.resume) {
-    // Tier 1: full resume, translated from the plan onto the unchanged executors
-    let result: (SpawnResult & { bridgeOrphan?: boolean }) | null = null
-    const r = plan.resume
-    if (r?.kind === 'await-bridge') {
-      result = await recoveryDeps.tryResume({ topic: thread.topic, threadId: thread.threadId, claudeSessionId: r.resumeFrom, threadUrl: thread.threadUrl, model: deadModel, label: deadLabel })
-    } else if (r && 'resumeOmp' in r) {
-      // The reservation is the lock: two resumes of one dead session would each copy its file into a live session.
-      const from = r.resumeOmp.fromSessionId
-      if (registry.reservedNames.has(from)) {
-        await gateway.send(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id }).catch(() => {})
-        return
-      }
-      registry.reservedNames.add(from)
-      try {
-        result = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
-          existingThreadId: thread.threadId, resumeOmp: r.resumeOmp, preserveWorktree: true,
-          promptPrefix: RECOVERY_REVERIFY_GUARD, model: deadModel, engine: engineType, label: deadLabel,
-        })
-      } catch (err) {
-        process.stderr.write(`daemon: omp resume of session ${from} failed: ${err}\n`)
-        result = null
-      } finally {
-        registry.reservedNames.delete(from)
-      }
-    } else if (r && 'resumeCodex' in r) {
-      const home = r.resumeCodex.homeName
-      // The reservation is the lock: a held home means another resume (or spawn) is
-      // mid-launch on it; a second one would double-launch the same CODEX_HOME.
-      if (registry.reservedNames.has(home)) {
-        await gateway.send(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id }).catch(() => {})
-        return
-      }
-      // Hold the home's name across the kill→launch→persist window so no concurrent
-      // spawn picks it (its launch would restart this home's app-server).
-      registry.reservedNames.add(home)
-      try {
-        result = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
-          existingThreadId: thread.threadId, resumeCodex: r.resumeCodex,
-          promptPrefix: RECOVERY_REVERIFY_GUARD, model: deadModel, engine: engineType, label: deadLabel,
-        })
-      } catch (err) {
-        process.stderr.write(`daemon: codex resume of ${r.resumeCodex.threadId} in home ${home} failed: ${err}\n`)
-        result = null
-      } finally {
-        registry.reservedNames.delete(home)
-      }
-    }
-    if (result) {
-      const note = result.bridgeOrphan ? registry.get(result.sessionId)?.channelNote : undefined
-      const method = result.bridgeOrphan
+  const outcome = await reviveThread({ thread, entry, orphan, ...byHand(threadId) })
+  if (outcome.ok) {
+    const { result } = outcome
+    const note = result.bridgeOrphan ? registry.get(result.sessionId)?.channelNote : undefined
+    const [method, emoji] = outcome.method === 'resumed'
+      ? [result.bridgeOrphan
         ? `resumed — context restored, but bridge not yet connected (may need a moment)${note ? `. ${note}` : ''}`
-        : 'resumed — full context restored'
-      if (lastInfo) repointChildren(lastInfo, result.sessionId)
-      await announceRecovery(msg, result, thread, method, '⏯️', lastTmuxName)
-      return
-    }
-    process.stderr.write(`daemon: resume tier 1 (--resume) failed for ${lastTmuxName}, trying fork-from-dead\n`)
-
-    // Tier 2: fork from dead session (--resume --fork-session, transcript copy)
-    try {
-      if (!plan.fork) throw new Error('cannot fork this session')
-      const forkResult = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
-        existingThreadId: thread.threadId, forkFrom: plan.fork,
-        model: deadModel, engine: engineType, label: deadLabel, carryOver,
-      })
-      if (lastInfo) repointChildren(lastInfo, forkResult.sessionId)
-      await announceRecovery(msg, forkResult, thread, 'resumed (forked from dead session — transcript preserved)', '⏯️', lastTmuxName)
-      return
-    } catch {
-      process.stderr.write(`daemon: resume tier 2 (fork-from-dead) failed for ${lastTmuxName}, falling back to respawn\n`)
-    }
-  }
-
-  // Tier 3: respawn (fresh session reads thread history)
-  const t3result = await recoveryDeps.tryRespawn(threadId, thread.topic, lastTmuxName, deadModel, { engine: engineType, label: deadLabel, carryOver })
-  if (t3result) {
-    if (lastInfo) repointChildren(lastInfo, t3result.sessionId)
-    await announceRecovery(msg, t3result, thread, 'respawned (resume unavailable — reading thread history)', '🔁', lastTmuxName)
+        : 'resumed — full context restored', '⏯️']
+      : outcome.method === 'forked'
+        ? ['resumed (forked from dead session — transcript preserved)', '⏯️']
+        : ['respawned (resume unavailable — reading thread history)', '🔁']
+    await announceRecovery(msg, result, thread, method, emoji, outcome.lastTmuxName)
+  } else if (outcome.busy) {
+    await gateway.send(msg.channelId, `⏳ A resume of this session is already in progress.`, { replyTo: msg.id }).catch(() => {})
   } else {
     await reportError(msg.channelId, msg.id, 'resume', 'all recovery methods failed')
   }
@@ -461,6 +361,7 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
     return
   }
 
+  let orphan: { info: SessionInfo; reason: string } | undefined
   const respawnLiveId = registry.getByThread(threadId)
   if (respawnLiveId) {
     const liveInfo = registry.get(respawnLiveId)
@@ -470,32 +371,25 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
         await reportError(msg.channelId, msg.id, 'respawn', `thread has a live session (**${liveInfo.tmuxName}**)`, 'Use `kill` first, or `spawn:` for a new thread.')
         return
       }
-      // An orphaned session would otherwise wedge respawn behind a kill the
-      // alert never mentioned. Prefer resume, which keeps the transcript.
-      if (occ === 'orphaned') {
-        process.stderr.write(`daemon: respawn: tearing down orphaned ${liveInfo.tmuxName}\n`)
-        await killSession(liveInfo, 'bridge was unreachable — respawning', { skipWorktreeDestroy: true })
-      }
+      // An orphaned session would otherwise wedge respawn behind a kill the alert never mentioned; the revive tears
+      // it down after taking what it carries. Prefer resume, which keeps the transcript.
+      if (occ === 'orphaned') orphan = { info: liveInfo, reason: 'bridge was unreachable — respawning' }
     }
   }
 
   void gateway.react(msg.channelId, msg.id, '🔁').catch(() => {})
 
-  const lastSession = recoveryEntry(thread?.sessionHistory ?? [])
   const resolvedTopic = topic || thread?.topic || 'respawned session'
-  const resurrectFrom = lastSession?.tmuxName
-  const lastInfo = registry.get(lastSession?.sessionId ?? '')
-  const respawnEngine = selection?.engine ?? recoveryEngine(lastSession, lastInfo)
-  const deadModel = selection?.model ?? recoveryModel(lastSession?.model ?? lastInfo?.sessionMetadata?.model)
-  const respawnLabel = deadSessionLabel(lastSession, lastInfo)
-
-  // A template respawn layers the template's prompt/tool settings onto the
-  // resurrect spawn. `trigger` is kept so the session's origin still reads as the
-  // template in the spawn announce + `list sessions`.
-  // A template's own label wins over the dead session's bucket.
-  const extraOpts = { inheritedLabel: respawnLabel, ...(template ? buildTemplateSpawnOpts(templateName!, template) : {}), engine: respawnEngine }
-
-  const result = await recoveryDeps.tryRespawn(threadId, resolvedTopic, resurrectFrom, deadModel, extraOpts)
+  const resurrectFrom = recoveryEntry(thread?.sessionHistory ?? [])?.tmuxName
+  // A template respawn layers the template's prompt/tool settings onto the resurrect spawn. `trigger` is kept so
+  // the session's origin still reads as the template in the spawn announce + `list sessions`; its label wins.
+  const outcome = await reviveThread({
+    thread: thread ?? threadStub(threadId, resolvedTopic),
+    respawnOnly: true, respawnTopic: resolvedTopic, orphan, ...byHand(threadId),
+    ...(selection && { engine: selection.engine, model: selection.model }),
+    ...(template && { respawnOpts: buildTemplateSpawnOpts(templateName!, template) }),
+  })
+  const result = outcome.ok ? outcome.result : undefined
   if (result) {
     const e = sessionEmoji(result.name)
     const count = thread?.respawnCount ?? 0
@@ -541,7 +435,7 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
   const sessionId = registry.getByThread(threadId)
   const info = sessionId ? registry.get(sessionId) : undefined
 
-  if (info && !info.deadAt) {
+  if (info && occupancy(info) !== 'dead') {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void safeSend(msg.channelId, `_Session **${info.tmuxName}** is still alive. Kill it first with \`kill\`._`)
     return

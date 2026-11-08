@@ -26,10 +26,17 @@ const REQUIRED_WIRING: Record<string, Record<string, number>> = {
     // And into the durable history entry a later resume reads.
     'label: sessionLabel,': 1,
   },
-  // commonOpts (tiers 2 and 3) and tryResume (tier 1).
-  'recovery.ts': { 'label: recoveredLabel': 2 },
-  // Three fork paths (native, thread-reconstruct, failed-fork fallback) and respawn.
-  'commands/thread.ts': { 'inheritedLabel:': 4, 'deadSessionLabel(': 2 },
+  // reviveThread, the one cascade every resume, respawn, recover and refill runs: the dead session's bucket,
+  // into tryResume (tier 1), the shared tier opts (fork, respawn; `respawn` hands it down as inheritedLabel),
+  // and a new thread opened for a specialist whose thread is gone.
+  'recovery.ts': {
+    'const label = deadSessionLabel(entry, dead)': 1,
+    'model, label,': 1,
+    '{ inheritedLabel: label } : { label }': 1,
+    'engine, label,': 1,
+  },
+  // Three fork paths (native, thread-reconstruct, failed-fork fallback).
+  'commands/thread.ts': { 'inheritedLabel:': 3 },
   // protocol-runner is deliberately absent: protocol-scenarios.test.ts asserts
   // the resumed and spawned critic's label end to end, so pinning the text here
   // would only add a second way to go red for the same regression.

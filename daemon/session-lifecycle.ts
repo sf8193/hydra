@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
+import { withThreadLock } from './specialists.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { notePendingReply } from './reply-guard.js'
@@ -273,6 +274,23 @@ export function handoffNoteFate(info: SessionInfo, artifact: string): HandoffNot
   return sameLetter(note.artifact, artifact) ? { kind: 'carried', text: note.text } : { kind: 'dropped', requested: note.artifact }
 }
 
+// read_only: blocks Claude's file-editing tools. Bash remains, so it is a guard, not a sandbox.
+export const READ_ONLY_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit']
+
+/** What a successor carries off the session it continues: one copy for revive, recovery and handoff. */
+export function carryOver(dead: SessionInfo): NonNullable<SpawnOpts['carryOver']> {
+  return {
+    artifacts: dead.artifacts, contextLinks: dead.contextLinks, description: dead.description,
+    predecessor: dead.predecessor, launchCwd: dead.launchCwd, disallowedTools: dead.disallowedTools,
+    parentId: authorityId(dead), initiator: dead.initiator,
+  }
+}
+
+function withoutReadOnly(tools: string[] | undefined): string[] | undefined {
+  const rest = tools?.filter(t => !READ_ONLY_DISALLOWED_TOOLS.includes(t))
+  return rest?.length ? rest : undefined
+}
+
 /** Spawn opts for the successor: same thread/label/worktree and carried deliverables; model+engine from `handoff <model>` if given. */
 export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts {
   const sel = info.handoffSelection
@@ -294,7 +312,9 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     inheritedLabel: info.label,
     // killSession deletes the record, so the spawn can't snapshot these itself (same as recovery.ts)
     // The successor is the same session continuing, so it answers to the same parent.
-    carryOver: { artifacts: info.artifacts, contextLinks: info.contextLinks, description: info.description, parentId: authorityId(info), initiator: info.initiator },
+    // A resume keeps read_only; a handoff successor starts without it (the documented contract). Other blocked tools stay.
+    // Its predecessor is the session it replaces (`predecessorOf`, above), never that session's own predecessor.
+    carryOver: { ...carryOver(info), predecessor: undefined, disallowedTools: withoutReadOnly(info.disallowedTools) },
     ...(reuseWorktree && { preserveWorktree: true, reuseWorktree }),
   }
 }
@@ -312,19 +332,17 @@ export function handoffArrival(opts: SpawnOpts, vars: { from: string; session: s
 
 // Injectable for tests (like recoveryDeps): the real ones kill tmux and spawn sessions.
 export const handoffIO = { killSession: (i: SessionInfo, r: string, o: { skipWorktreeDestroy: boolean }) => killSession(i, r, o), doSpawnSession: (t: string, c?: string, m?: string, o?: SpawnOpts) => doSpawnSession(t, c, m, o) }
-const handoffsInFlight = new Set<string>()
 
 /**
  * Replace a live session with a fresh one in the same thread, seeded from a
  * handoff file the old session wrote. The kill reason 'handed off' is not a
  * human Kill, so the on-kill retro skips it. PR watches move to the successor.
+ * Holds the thread's target lock from kill to spawn, so no revive slips into the gap.
  */
 export async function handOff(info: SessionInfo, artifact: string): Promise<SpawnResult> {
-  if (handoffsInFlight.has(info.sessionId) || registry.get(info.sessionId) !== info) {
-    throw new Error(`${info.tmuxName} is already handing off (or gone)`)
-  }
-  handoffsInFlight.add(info.sessionId)
-  try {
+  return withThreadLock(info.threadId, async () => {
+    // A second handoff of the same session waited behind the first, which has since replaced it.
+    if (registry.get(info.sessionId) !== info) throw new Error(`${info.tmuxName} is already handing off (or gone)`)
     const opts = handoffSpawnOpts(info, artifact)
     const watches = getWatchesBySession(info.sessionId)  // before the kill unwatches them
     await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true })
@@ -332,9 +350,7 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
     if (watches.length > 0) restoreWatches(watches, r.sessionId, r.threadId)
     repointChildren(info, r.sessionId)  // its children now answer to the successor
     return r
-  } finally {
-    handoffsInFlight.delete(info.sessionId)
-  }
+  })
 }
 
 export function handoffRequest(artifact: string, requester: string | undefined, note?: string): string {
@@ -708,7 +724,9 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   const sessionId = randomUUID()
   // A handoff is the same session continuing: its killed predecessor's name is free, so the successor keeps it.
   const replacing = opts?.existingThreadId ? registry.getByThread(opts.existingThreadId) : undefined
-  const tmuxName = opts?.handedOffFrom ?? (opts?.name ? registry.claimSessionName(opts.name, replacing) : registry.pickSessionName(opts?.reuseName && replacing ? { name: opts.reuseName, replacing } : undefined))
+  const tmuxName = opts?.handedOffFrom ?? (opts?.name
+    ? registry.claimSessionName(opts.name, replacing, s => occupancy(s) === 'dead')
+    : registry.pickSessionName(opts?.reuseName && replacing ? { name: opts.reuseName, replacing } : undefined))
   // NOTE: the freshly-picked name is intentionally NOT held in registry.reservedNames.
   // The pick→registry.set window is short (recoverOne resolves slow worktree ops up front,
   // so nothing lengthy runs here) and shorter than the recovery wave's STAGGER, so same-wave
@@ -1051,6 +1069,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     ...(disallowedTools?.length ? { disallowedTools } : {}),
     adapter,
   })
+  // A claimed name took over from dead records of that name in other threads (a specialist that moved): retire them,
+  // so a lookup by name finds this session, and boot recovery does not revive them into threads left behind.
+  if (opts?.name) {
+    for (const s of [...registry.values()]) {
+      if (s.sessionId === sessionId || s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
+      registry.delete(s.sessionId)
+      if (registry.getByThread(s.threadId) === s.sessionId) registry.deleteThread(s.threadId)
+    }
+    registry.persist()
+  }
   if (phaseBudgetMs) startPhaseBudget(sessionId)
   if (opts?.ephemeral) resumeIdleLimit(sessionId)
   // A bridge that registered before the record existed was given the tools of a session without a predecessor.
@@ -1147,6 +1175,8 @@ export function waitForBridge(sessionId: string, timeoutMs: number): Promise<boo
 
 export async function tryResume(dead: {
   reuseName?: string
+  /** A specialist's name, claimed rather than picked. */
+  name?: string
   topic: string
   threadId: string
   claudeSessionId?: string
@@ -1154,22 +1184,24 @@ export async function tryResume(dead: {
   model?: string
   label?: SessionLabel
   worktree?: { repo: string; path: string; branch: string }
-  // Only recoverOne sets this: it pre-resolves the worktree dir (reattach) before the
-  // cascade, so adopting the branch is safe. The manual `resume` path has no such
-  // pre-flight — leaving it off keeps resume's prior destroy-and-respawn semantics
-  // (a gone dir would otherwise make doSpawnSession throw and orphan the branch).
+  // Set only when the worktree is still on disk (reviveThread checks; boot recovery reattaches it first), so
+  // adopting the branch is safe.
   preserveWorktree?: boolean
+  /** What the resumed session keeps off the one it continues, whose record may already be gone (an orphan torn down). */
+  carryOver?: SpawnOpts['carryOver']
 }): Promise<(SpawnResult & { bridgeOrphan?: boolean }) | null> {
   if (!dead.claudeSessionId) return null
   try {
     const result = await doSpawnSession(dead.topic, undefined, undefined, {
       existingThreadId: dead.threadId,
       reuseName: dead.reuseName,
+      ...(dead.name && { name: dead.name }),
       resumeFrom: dead.claudeSessionId,
       model: dead.model,
       label: dead.label,
       preserveWorktree: dead.preserveWorktree,
       reuseWorktree: dead.preserveWorktree ? dead.worktree : undefined,
+      ...(dead.carryOver && { carryOver: dead.carryOver }),
     })
 
     // Queue the recovery notification before checking bridge health — sendOrQueue
@@ -1240,19 +1272,14 @@ export async function tryRespawn(
   model?: string,
   extraOpts?: Partial<SpawnOpts>,
 ): Promise<SpawnResult | null> {
-  try {
-    return await doSpawnSession(topic, undefined, undefined, {
-      ...extraOpts,
-      existingThreadId: threadId,
-      resurrectFrom,
-      // Respawn continuity: keep the dead session's model if we have one,
-      // else fall back to the template's model (extraOpts), else the default.
-      model: model ?? extraOpts?.model,
-    })
-  } catch (err) {
-    process.stderr.write(`daemon: tryRespawn: doSpawnSession failed for ${threadId}: ${err}\n`)
-    return null
-  }
+  return doSpawnSession(topic, undefined, undefined, {
+    ...extraOpts,
+    existingThreadId: threadId,
+    resurrectFrom,
+    // Respawn continuity: keep the dead session's model if we have one,
+    // else fall back to the template's model (extraOpts), else the default.
+    model: model ?? extraOpts?.model,
+  })
 }
 
 // Claude session ID discovery lives in the Claude engine; re-exported for existing importers.

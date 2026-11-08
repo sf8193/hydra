@@ -434,8 +434,9 @@ export class DiscordGateway implements ChatGateway {
       await this.fetchChannel(threadId)
       return true
     } catch (err) {
-      const e = err as { code?: unknown; message?: string }
-      return !(e?.code === 10003 || /not found/i.test(e?.message ?? ''))
+      // Gone only on Discord's definitive answer. Anything else (a transient failure, or fetchChannel's own
+      // "not found or not text-based") is not proof: a revive treats it as a failed attempt, never opens a new thread.
+      return (err as { code?: unknown })?.code !== 10003
     }
   }
 

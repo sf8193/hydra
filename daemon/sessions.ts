@@ -413,8 +413,8 @@ export class SessionRegistry {
   }
 
   /** Every name something other than the record `replacing` holds: sessions, tmux, worktree branches, Codex homes, reservations. */
-  private usedNames(replacing?: string, keep?: string): Set<string> {
-    const others = [...this.sessions.values()].filter(s => s.sessionId !== replacing)
+  private usedNames(replacing?: string, keep?: string, replaceable?: (s: SessionInfo) => boolean): Set<string> {
+    const others = [...this.sessions.values()].filter(s => s.sessionId !== replacing && !replaceable?.(s))
     const used = new Set(others.map(s => s.tmuxName))
     // Also reserve names still referenced by a record's worktree branch (`wt/<name>`).
     // A recovered session keeps its predecessor's branch (its tmuxName differs), so the
@@ -450,9 +450,14 @@ export class SessionRegistry {
     return `session-${randomBytes(3).toString('hex')}`
   }
 
-  /** A caller-chosen name (`SpawnOpts.name`): the name itself or an error, never a substitute. `replacing`: the dead record this spawn takes over from. */
-  claimSessionName(name: string, replacing?: string): string {
-    if (this.usedNames(replacing).has(name)) throw new Error(`session name "${name}" is already in use`)
+  /**
+   * A caller-chosen name (`SpawnOpts.name`): the name itself or an error, never a substitute. `replacing`: the record
+   * this spawn takes over from. `replaceable`: other records of that name that do not count (a crashed predecessor
+   * must not block its own successor).
+   */
+  claimSessionName(name: string, replacing?: string, replaceable?: (s: SessionInfo) => boolean): string {
+    const sameName = replaceable && ((s: SessionInfo) => s.tmuxName === name && replaceable(s))
+    if (this.usedNames(replacing, undefined, sameName).has(name)) throw new Error(`session name "${name}" is already in use`)
     return name
   }
 
@@ -747,9 +752,19 @@ export class ThreadRegistry {
       }
     }
 
-    if (created > 0 || backfilled > 0) {
+    // The session loader stamps deadAt before this registry exists, so a death across the restart is written
+    // here: deadAt and endedAt together, as markDead does at runtime.
+    let closed = 0
+    for (const session of sessionRegistry.values()) {
+      if (!session.deadAt) continue
+      const entry = this.threads.get(session.threadId)?.sessionHistory.find(h => h.sessionId === session.sessionId && !h.endedAt)
+      if (entry) { entry.endedAt = session.deadAt; closed++ }
+    }
+
+    if (created > 0 || backfilled > 0 || closed > 0) {
       if (created > 0) process.stderr.write(`daemon: created ${created} thread(s) from sessions\n`)
       if (backfilled > 0) process.stderr.write(`daemon: backfilled parentChannelId on ${backfilled} thread(s)\n`)
+      if (closed > 0) process.stderr.write(`daemon: closed ${closed} history entr${closed === 1 ? 'y' : 'ies'} of sessions dead at boot\n`)
       this.persist()
     }
   }

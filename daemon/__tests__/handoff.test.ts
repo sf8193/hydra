@@ -168,9 +168,10 @@ test('handOff: deliverables, PR watches and the `handoff <model>` choice reach t
   handoffIO.doSpawnSession = (async (_t: string, _c?: string, _m?: string, o?: any) => { spawned = o; mk('ho-5', 'fresh', 'ho-thread-4'); return { name: 'fresh', sessionId: 'ho-5', threadId: 'ho-thread-4', url: '' } }) as any
   try {
     const first = handOff(info, '/h.md')
-    await expect(handOff(info, '/h.md')).rejects.toThrow('already handing off')
+    const second = handOff(info, '/h.md')  // waits on the thread's lock, then finds the session already replaced
     release()
     expect((await first).name).toBe('fresh')
+    await expect(second).rejects.toThrow('already handing off')
     expect(spawned).toMatchObject({ handedOffFrom: 'flint', carryOver: { artifacts: ['pr#1'], description: 'd' }, model: 'gpt-5.6-sol', engine: 'codex' })
     expect(getWatchesBySession('ho-4')).toEqual([])
     expect(getWatchesBySession('ho-5').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/9'])
@@ -449,4 +450,33 @@ test('a daemon-started handoff has no message to react to or reply to', async ()
   expect(r.reacted).toEqual([])
   expect(r.replyTo).toEqual([undefined])
   expect(r.meta.message_id).toBe('')
+})
+
+test('a handoff successor starts without read_only, and keeps any other blocked tools', async () => {
+  const { handoffSpawnOpts, READ_ONLY_DISALLOWED_TOOLS } = await import('../session-lifecycle.js')
+  mk('ho-ro', 'flint', 'ho-thread-ro')
+  try {
+    const info = registry.get('ho-ro')!
+    info.disallowedTools = [...READ_ONLY_DISALLOWED_TOOLS]
+    expect(handoffSpawnOpts(info, '/h.md').carryOver!.disallowedTools).toBeUndefined()
+    info.disallowedTools = [...READ_ONLY_DISALLOWED_TOOLS, 'WebFetch']
+    expect(handoffSpawnOpts(info, '/h.md').carryOver!.disallowedTools).toEqual(['WebFetch'])
+  } finally {
+    registry.delete('ho-ro')
+  }
+})
+
+test('a handoff successor never inherits its grandparent as predecessor', async () => {
+  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
+  mk('ho-gp', 'flint', 'ho-thread-gp')
+  try {
+    const info = registry.get('ho-gp')!
+    info.predecessor = { engine: 'claude', fork: { claudeSessionId: 'grandparent', parentName: 'elder' }, cwd: '/x' } as any
+    // No Claude session id of its own: predecessorOf has nothing to hand on.
+    const opts = handoffSpawnOpts(info, '/h.md')
+    expect(opts.predecessor).toBeUndefined()
+    expect(opts.carryOver!.predecessor).toBeUndefined()
+  } finally {
+    registry.delete('ho-gp')
+  }
 })

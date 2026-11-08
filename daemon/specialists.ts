@@ -3,6 +3,7 @@ import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
 import { SESSION_NAMES } from './sessions.js'
+import { clearBackoff } from './recovery-backoff.js'
 
 /**
  * A specialist is a named pointer to a thread (or the channel to open one in) plus the recipe for filling it.
@@ -65,6 +66,7 @@ export function setSpecialist(name: string, specialist: Omit<Specialist, 'update
 export function removeSpecialist(name: string): boolean {
   if (!specialists.delete(name)) return false
   persist()
+  clearBackoff(name)
   return true
 }
 
@@ -74,17 +76,38 @@ export function readKickoff(specialist: Specialist): string | undefined {
   return specialist.kickoff
 }
 
-// Serializes each specialist's find-or-spawn. Two mentions in the same second both
-// find the specialist empty; without this they would each spawn a session.
+/** The specialist whose thread this is, if any. */
+export function specialistForThread(threadId: string): string | undefined {
+  for (const [name, s] of specialists) if (s.threadId === threadId) return name
+  return undefined
+}
+
+/** What a thread is locked by: its specialist's name, so a revive by name and a resume in the thread share one lock. */
+export function targetKeyForThread(threadId: string): string {
+  return specialistForThread(threadId) ?? threadId
+}
+
+// Serializes everything that decides who is home in a target and acts on it: a revive, a resume,
+// a respawn, a handoff's kill → spawn. Twenty messages in one second all find the target empty;
+// without this they would each start a session. Not reentrant: take it only at an entry point.
 const locks = new Map<string, Promise<unknown>>()
 
-export function withSpecialistLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
-  const previous = locks.get(name) ?? Promise.resolve()
+export function withTargetLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = locks.get(key) ?? Promise.resolve()
   const run = previous.then(fn, fn)
   const tail = run.catch(() => {})
-  locks.set(name, tail)
-  void tail.finally(() => { if (locks.get(name) === tail) locks.delete(name) })
+  locks.set(key, tail)
+  void tail.finally(() => { if (locks.get(key) === tail) locks.delete(key) })
   return run
+}
+
+export function withThreadLock<T>(threadId: string, fn: () => Promise<T>): Promise<T> {
+  return withTargetLock(targetKeyForThread(threadId), fn)
+}
+
+/** Someone holds (or waits on) this thread's lock: a person asking by hand is told so instead of queued. */
+export function threadLockHeld(threadId: string): boolean {
+  return locks.has(targetKeyForThread(threadId))
 }
 
 /** Test seam: re-read specialists.json from the current STATE_DIR. */

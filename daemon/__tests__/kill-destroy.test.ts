@@ -17,6 +17,7 @@
 import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from 'bun:test'
 import { handleThreadKillIntercept, handleDestroyIntercept } from '../commands/thread.js'
+import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { gateway } from '../config.js'
@@ -60,7 +61,10 @@ afterAll(() => {
   ;(threadRegistry as any).persist = orig.threadPersist
 })
 
+let tmux: FakeTmux
+
 beforeEach(() => {
+  tmux = withFakeTmux()
   origStderr = process.stderr.write
   process.stderr.write = (() => true) as any
   deletedThreads = []
@@ -76,6 +80,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  tmux.restore()
   for (const id of seeded) registry.delete(id)
   seeded.clear()
   registry.deleteThread(THREAD)
@@ -98,8 +103,8 @@ function msg(content: string): InboundMessage {
 let seq = 0
 const seeded = new Set<string>()
 
-/** A registry entry for the thread, optionally already flagged dead. */
-function seedSession(opts: { deadAt?: number; initiator?: string } = {}): SessionInfo {
+/** A registry entry for the thread: running unless flagged dead, or `running` says otherwise. */
+function seedSession(opts: { deadAt?: number; initiator?: string; running?: boolean } = {}): SessionInfo {
   const info: SessionInfo = {
     sessionId: `sess-kd-${++seq}`,
     topic: 'topic',
@@ -119,6 +124,7 @@ function seedSession(opts: { deadAt?: number; initiator?: string } = {}): Sessio
   registry.set(info.sessionId, info)
   registry.setThread(THREAD, info.sessionId)
   seeded.add(info.sessionId)
+  if (opts.running ?? !opts.deadAt) tmux.alive(info.tmuxName)
   return info
 }
 
@@ -148,6 +154,17 @@ describe('kill +destroy', () => {
     // to killSession, and neither should fire for a session already dead.
     expect(reactions).not.toContain('☠️')
     expect(sent.join('\n')).not.toContain('session ended')
+  })
+
+  test('a session stamped dead whose tmux still runs is an orphan: destroy refuses it, kill +d kills it first', async () => {
+    seedSession({ deadAt: Date.now(), running: true })
+    await handleDestroyIntercept(msg('destroy'))
+    expect(deletedThreads).toEqual([])
+    expect(sent.join('\n')).toContain('still alive')
+
+    await handleThreadKillIntercept(msg('kill +d'), { destroy: true })
+    expect(reactions).toContain('☠️')
+    expect(deletedThreads).toEqual([THREAD])
   })
 
   test('deletes the anchor message alongside the thread', async () => {
