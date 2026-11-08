@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import {
   parseCpuTime, parsePs, createCpuMeter, createSpinTracker, hotProcess, parseSwapUsage, parseMeminfoSwap,
-  formatPressure, formatSpinAlert, formatCpuSummary, paneChildOf, startedAt,
+  formatPressure, formatSpinAlert, formatCpuSummary, claudeAncestor, startedAt,
 } from '../cpu-spin.js'
 
 describe('parseCpuTime', () => {
@@ -28,15 +28,28 @@ test('parsePs reads pid, ppid, elapsed and cputime, skipping junk lines', () => 
   expect(stats.size).toBe(2)
 })
 
-describe('paneChildOf', () => {
-  // pane zsh 10 → caffeinate 11, claude 12 → bun run 13 → bun server.ts 14 (the live tree on 2026-11-08)
-  const tree = parsePs('10 1 1:00 0:00.00\n11 10 1:00 0:00.00\n12 10 1:00 0:00.00\n13 12 1:00 0:00.00\n14 13 1:00 0:00.00\n99 1 1:00 0:00.00')
-  test('walks up from the bridge to the process directly under the pane, past wrappers', () => {
-    expect(paneChildOf(tree, 14, 10)).toBe(12)
+test('parsePs keeps the command, spaces and all', () => {
+  const stats = parsePs('63562 53795  21-22:38:01  89:13.03 claude\n  787     1 102-19:01:15  87:09.11 Core Audio Driver (Zoom)\n')
+  expect(stats.get(63562)?.comm).toBe('claude')
+  expect(stats.get(787)?.comm).toBe('Core Audio Driver (Zoom)')
+})
+
+describe('claudeAncestor', () => {
+  // Both live shapes (2026-11-08): a spawn's pane is a zsh wrapper with Claude under it; byte's pane is Claude.
+  const spawn = parsePs([
+    '10 1 1:00 0:00.00 zsh', '11 10 1:00 0:00.00 caffeinate', '12 10 1:00 0:00.00 claude',
+    '13 12 1:00 0:00.00 bun', '14 13 1:00 0:00.00 /opt/homebrew/bin/bun', '99 1 1:00 0:00.00 bun',
+  ].join('\n'))
+  const byte = parsePs(['20 1 1:00 0:00.00 claude', '21 20 1:00 0:00.00 caffeinate', '22 20 1:00 0:00.00 bun', '23 22 1:00 0:00.00 /opt/homebrew/bin/bun'].join('\n'))
+  test('a spawn: past the bun wrapper to the claude under the pane', () => {
+    expect(claudeAncestor(spawn, 14)).toBe(12)
   })
-  test('a process outside the pane has no pane child', () => {
-    expect(paneChildOf(tree, 99, 10)).toBeUndefined()
-    expect(paneChildOf(tree, 404, 10)).toBeUndefined()
+  test('byte: the pane itself is claude, not the wrapper directly under it', () => {
+    expect(claudeAncestor(byte, 23)).toBe(20)
+  })
+  test('no claude above it: undefined', () => {
+    expect(claudeAncestor(spawn, 99)).toBeUndefined()
+    expect(claudeAncestor(spawn, 404)).toBeUndefined()
   })
 })
 
@@ -74,8 +87,8 @@ describe('createCpuMeter', () => {
 })
 
 describe('spin classifier', () => {
-  const hot = { bridgePct: 99, claudePct: 1, idle: true }
-  const cool = { bridgePct: 0, claudePct: 1, idle: true }
+  const hot = { bridgePct: 99, claudePct: 1, bridgePid: 7, claudePid: 6, idle: true }
+  const cool = { bridgePct: 0, claudePct: 1, bridgePid: 7, claudePid: 6, idle: true }
 
   test('hotProcess prefers the bridge, then Claude, at the threshold', () => {
     expect(hotProcess({ bridgePct: 90, claudePct: 95, idle: true })).toBe('bridge')
@@ -96,6 +109,22 @@ describe('spin classifier', () => {
     expect(t.observe('a', cool).spinning).toBeNull()
     t.observe('a', hot)
     expect(t.observe('a', hot)).toEqual({ spinning: 'bridge', newly: true })
+  })
+
+  test('the streak follows one process: a different bridge pid, or bridge then Claude, starts over', () => {
+    const t = createSpinTracker(90, 2)
+    t.observe('a', hot)
+    expect(t.observe('a', { ...hot, bridgePid: 8 }).spinning).toBeNull()             // another bridge
+    expect(t.observe('a', { ...hot, bridgePid: 8 })).toEqual({ spinning: 'bridge', newly: true })
+    t.observe('b', hot)
+    expect(t.observe('b', { bridgePct: 0, claudePct: 99, bridgePid: 7, claudePid: 6, idle: true }).spinning).toBeNull()
+  })
+
+  test('a new hot process after an alerted episode alerts again', () => {
+    const t = createSpinTracker(90, 2)
+    t.observe('a', hot); t.observe('a', hot)
+    t.observe('a', { ...hot, bridgePid: 8 })
+    expect(t.observe('a', { ...hot, bridgePid: 8 }).newly).toBe(true)
   })
 
   test('a working session is never spinning, however hot', () => {
@@ -151,9 +180,9 @@ test('formatSpinAlert: one message, every entry, combined cores, advice per kind
   expect(lines[0]).toContain('3 idle processes are spinning')
   expect(lines[0]).toContain('~2.9 cores')
   expect(lines[0]).toContain('load=9.1/10cores swap=5000MB')
-  expect(lines[1]).toBe('• [pixel](https://x/1) — TD build · bridge pid 111 at 99%: `kill 111`, then `resume` in the thread')
+  expect(lines[1]).toBe('• [pixel](https://x/1) — TD build · bridge pid 111 at 99%: `kill 111`; if it\'s still there, `kill -9 111`, then `resume` in the thread')
   // Never advise killing Claude itself.
   expect(lines[2]).toBe('• `orbit` · Claude pid 222 at 95% while idle: check its pane')
   expect(lines[2]).not.toContain('kill')
-  expect(lines[3]).toBe('• `session 0523124d` · orphan bridge pid 333 at 100%, its launcher gone: `kill 333`')
+  expect(lines[3]).toBe('• `session 0523124d` · orphan bridge pid 333 at 100%, its launcher gone: `kill 333`; if it\'s still there, `kill -9 333`')
 })

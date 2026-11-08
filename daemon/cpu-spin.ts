@@ -4,7 +4,7 @@
 
 import { SPIN_CPU_PERCENT, SPIN_CONSECUTIVE_SAMPLES } from '../shared/constants.js'
 
-export type ProcStat = { ppid: number; cpuSec: number; elapsedSec: number }
+export type ProcStat = { ppid: number; cpuSec: number; elapsedSec: number; comm?: string }
 
 /** A `ps` cputime field in seconds. macOS prints `mmm:ss.cc`, Linux `[[dd-]hh:]mm:ss`: read right to left. */
 export function parseCpuTime(raw: string): number | undefined {
@@ -14,15 +14,17 @@ export function parseCpuTime(raw: string): number | undefined {
   return (Number(m[1] ?? 0) * 24 + h) * 3600 + min * 60 + s
 }
 
-/** Lines of `ps -o pid=,ppid=,etime=,time=`. Unparseable lines are skipped. */
+/** Lines of `ps -o pid=,ppid=,etime=,time=,comm=` (comm last: it can hold spaces). Unparseable lines are skipped. */
 export function parsePs(out: string): Map<number, ProcStat> {
   const stats = new Map<number, ProcStat>()
   for (const line of out.split('\n')) {
-    const [pid, ppid, etime, time] = line.trim().split(/\s+/)
+    const parts = line.trim().split(/\s+/)
+    const [pid, ppid, etime, time] = parts
+    const comm = parts.slice(4).join(' ') || undefined
     const elapsedSec = etime ? parseCpuTime(etime) : undefined
     const cpuSec = time ? parseCpuTime(time) : undefined
     if (cpuSec === undefined || elapsedSec === undefined || !/^\d+$/.test(pid) || !/^\d+$/.test(ppid)) continue
-    stats.set(Number(pid), { ppid: Number(ppid), cpuSec, elapsedSec })
+    stats.set(Number(pid), { ppid: Number(ppid), cpuSec, elapsedSec, ...(comm && { comm }) })
   }
   return stats
 }
@@ -36,14 +38,15 @@ export function startedAt(stat: ProcStat | undefined, startTs: number, now: numb
 }
 
 /**
- * The process directly under `panePid` that `pid` descends from: Claude, for a bridge, whatever
- * wrappers sit between (today a `bun run` wrapper). Undefined when `pid` is not in that pane.
+ * The Claude a bridge works for: its nearest ancestor whose command is `claude`, past any launcher
+ * (today a `bun run` wrapper). Pane shape varies (a spawn's pane is a zsh wrapper with Claude under
+ * it; byte's pane is Claude itself), so the command, not the depth, identifies it.
  */
-export function paneChildOf(stats: Map<number, ProcStat>, pid: number, panePid: number): number | undefined {
+export function claudeAncestor(stats: Map<number, ProcStat>, pid: number): number | undefined {
   for (let cur = pid, depth = 0; depth < 16; depth++) {
     const parent = stats.get(cur)?.ppid
     if (parent === undefined || parent <= 1) return undefined
-    if (parent === panePid) return cur
+    if (stats.get(parent)?.comm?.split('/').pop() === 'claude') return parent
     cur = parent
   }
   return undefined
@@ -74,7 +77,7 @@ export function createCpuMeter() {
 }
 
 export type SpinWho = 'bridge' | 'claude'
-export type CpuReading = { claudePct?: number; bridgePct?: number; idle: boolean }
+export type CpuReading = { claudePct?: number; bridgePct?: number; claudePid?: number; bridgePid?: number; idle: boolean }
 export type SpinState = { spinning: SpinWho | null; newly: boolean }
 
 /** The hot process in a reading, bridge first: it is a thin relay, so a hot bridge is never work. */
@@ -85,12 +88,13 @@ export function hotProcess(r: CpuReading, threshold = SPIN_CPU_PERCENT): SpinWho
 }
 
 /**
- * Spinning = idle and hot for `needed` readings in a row. A reading that is not hot (or not
- * idle, or unsampled) ends the episode. `newly` is true once per episode, so an alert built
- * on it does not repeat every tick.
+ * Spinning = idle and the same process hot for `needed` readings in a row. A reading that is not hot
+ * (or not idle, or unsampled) ends the episode, and so does a change of hot process (bridge to Claude,
+ * or a different bridge pid): what gets alerted, or killed, is the process that was hot every time.
+ * `newly` is true once per episode, so an alert built on it does not repeat every tick.
  */
 export function createSpinTracker(threshold = SPIN_CPU_PERCENT, needed = SPIN_CONSECUTIVE_SAMPLES) {
-  const streak = new Map<string, number>()
+  const streak = new Map<string, { n: number; proc: string }>()
   const alerted = new Set<string>()
   return {
     observe(id: string, r: CpuReading): SpinState {
@@ -100,8 +104,11 @@ export function createSpinTracker(threshold = SPIN_CPU_PERCENT, needed = SPIN_CO
         alerted.delete(id)
         return { spinning: null, newly: false }
       }
-      const n = (streak.get(id) ?? 0) + 1
-      streak.set(id, n)
+      const proc = `${who}:${(who === 'bridge' ? r.bridgePid : r.claudePid) ?? '?'}`
+      const prev = streak.get(id)
+      if (prev && prev.proc !== proc) alerted.delete(id)
+      const n = prev && prev.proc === proc ? prev.n + 1 : 1
+      streak.set(id, { n, proc })
       if (n < needed) return { spinning: null, newly: false }
       const newly = !alerted.has(id)
       alerted.add(id)
@@ -152,8 +159,10 @@ export type SpinEntry = { name: string; url?: string; label?: string; who: SpinW
 
 function spinAdvice(e: SpinEntry): string {
   const pid = e.pid ?? '?'
-  if (e.who === 'orphan') return `orphan bridge pid ${pid} at ${e.pct}%, its launcher gone: \`kill ${pid}\``
-  if (e.who === 'bridge') return `bridge pid ${pid} at ${e.pct}%: \`kill ${pid}\`, then \`resume\` in the thread`
+  // A spinning bridge may never run its SIGTERM handler (its shutdown waits on a timer the spin starves).
+  const kill = `\`kill ${pid}\`; if it's still there, \`kill -9 ${pid}\``
+  if (e.who === 'orphan') return `orphan bridge pid ${pid} at ${e.pct}%, its launcher gone: ${kill}`
+  if (e.who === 'bridge') return `bridge pid ${pid} at ${e.pct}%: ${kill}, then \`resume\` in the thread`
   return `Claude pid ${pid} at ${e.pct}% while idle: check its pane`
 }
 

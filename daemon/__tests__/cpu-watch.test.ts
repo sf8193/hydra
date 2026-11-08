@@ -12,8 +12,10 @@ import type { SessionInfo } from '../sessions.js'
 import { fakeAdapter } from './test-harness.js'
 
 const PRESSURE = { load1: 1, cores: 10 }
-// This test process plays Claude: its parent is the "pane", and the busy child is its bridge.
-const PANE = { panePid: process.ppid, pid: process.pid }
+// The busy child is the bridge. Its Claude is its nearest `claude` ancestor, which exists when the suite runs
+// inside a Claude session and not otherwise; then the pane fallback (this process) stands in. Which one is the
+// environment's business: claudeAncestor itself is pinned on the live tree shapes in cpu-spin.test.ts.
+const PANE = { pid: process.pid }
 const BUSY = 'for(;;){}'
 let busy: ChildProcess
 let busyStartedAt = 0
@@ -77,7 +79,8 @@ describe('sampleCpu', () => {
       await tick()
     }
     expect(states[0].bridgePid).toBe(busy.pid)
-    expect(states[0].claudePid).toBe(process.pid) // walked up from the bridge to the pane's child
+    expect(states[0].claudePid).toBeNumber()
+    expect(states[0].claudePid).not.toBe(busy.pid)
     expect(states[0].bridgePct).toBeUndefined()   // first reading has no percentage
     expect(states[1].spinning).toBeNull()         // one hot sample is not enough
     expect(states.at(-1)!.spinning).toBe('bridge')
@@ -86,6 +89,17 @@ describe('sampleCpu', () => {
     expect(dms[0]).toContain('1 idle process is spinning')
     expect(dms[0]).toContain(`bridge pid ${busy.pid}`)
     expect(getCpuVitals(s.sessionId)?.spinning).toBe('bridge')
+  }, LOOP_TIMEOUT_MS)
+
+  test('main (byte) is sampled from its `main` records, though it has no registry record, and alerted by name', async () => {
+    record('main', busy.pid!, process.pid, busyStartedAt)
+    const main = { tmuxName: 'hydra-cpu-byte', pid: process.pid }
+    let sample
+    for (let i = 0; i < 10 && !sample?.main?.spinning; i++) { sample = sampleCpu([], () => undefined, PRESSURE, main); await tick() }
+    expect(sample!.main).toMatchObject({ bridgePid: busy.pid, spinning: 'bridge' })
+    expect(sample!.orphans).toEqual([])
+    expect(dms.length).toBe(1)
+    expect(dms[0]).toContain('`hydra-cpu-byte (main)`')
   }, LOOP_TIMEOUT_MS)
 
   test('a working session is not spinning, however hot its bridge', async () => {
