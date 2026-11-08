@@ -5,8 +5,11 @@ import { join } from 'path'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
 import { registry, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { specialistDeps, _resetSpecialistBackoff, SPAWN_BACKOFF_BASE_MS } from '../specialist-deliver.js'
-import { removeSpecialist, setSpecialist, getSpecialist, withSpecialistLock, listSpecialists } from '../specialists.js'
+import { specialistDeps } from '../specialist-deliver.js'
+import { removeSpecialist, setSpecialist, getSpecialist, withTargetLock, listSpecialists } from '../specialists.js'
+import { _resetBackoff, _reloadBackoff, backoffClock, getBackoff, BACKOFF_BASE_MS as SPAWN_BACKOFF_BASE_MS, BACKOFF_STALE_MS } from '../recovery-backoff.js'
+import { _setRecoveryDeps, _resetRecoveryDeps } from '../recovery.js'
+import { handleResumeIntercept } from '../commands/thread.js'
 import { fakeAdapter } from './test-harness.js'
 import { getIdempotencyEntry } from '../idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
@@ -25,13 +28,16 @@ describe('specialists', () => {
   })
 
   const realDeps = { ...specialistDeps }
+  const realClock = { ...backoffClock }
   const names: string[] = []
   const sessions: string[] = []
   const threads: string[] = []
   afterEach(() => {
     Object.assign(specialistDeps, realDeps)
+    Object.assign(backoffClock, realClock)
     _setDaemonStartedAtForTesting(undefined)
-    _resetSpecialistBackoff()
+    _resetBackoff()
+    _resetRecoveryDeps()
     for (const s of sessions.splice(0)) { registry.delete(s); transport.bridges.delete(s) }
     for (const t of threads.splice(0)) { registry.threadToSession.delete(t); threadRegistry.delete(t) }
     for (const name of names.splice(0)) removeSpecialist(name)
@@ -51,18 +57,28 @@ describe('specialists', () => {
     threads.push(thread)
     return sessionId
   }
+  /** Every revive tier spawns through `spawn` (doSpawnSession's signature); there is no conversation to resume. */
+  function setSpawn(spawn: (...args: any[]) => Promise<any>) {
+    _setRecoveryDeps({
+      doSpawnSession: spawn as any,
+      tryResume: async () => null,
+      tryRespawn: ((threadId: string, topic: string, resurrectFrom: string | undefined, model: string | undefined, extra: any) =>
+        spawn(topic, undefined, undefined, { ...extra, existingThreadId: threadId, resurrectFrom, model })) as any,
+    })
+  }
   /** A spawn that behaves like doSpawnSession: registers a live session and reports its thread. */
   function fakeSpawn() {
     const calls: unknown[][] = []
-    specialistDeps.spawn = (async (...args: unknown[]) => {
+    const spawn = async (...args: unknown[]) => {
       calls.push(args)
       await Bun.sleep(15) // a real spawn yields; concurrent callers must still share it
       const opts = args[3] as { existingThreadId?: string }
       const threadId = opts.existingThreadId ?? `fresh-thread-${++n}`
       const sessionId = occupy(threadId)
       return { name: `${sessionId}-tmux`, sessionId, threadId, url: '' }
-    }) as typeof specialistDeps.spawn
-    return calls
+    }
+    setSpawn(spawn)
+    return Object.assign(calls, { spawn })
   }
 
   test('a live occupant gets the message and nothing is spawned', async () => {
@@ -99,8 +115,9 @@ describe('specialists', () => {
     expect([(a.data as any).spawned, (b.data as any).spawned].sort()).toEqual([false, true])
   })
 
-  test('when the thread is unknown the specialist moves to the fresh thread the spawn opened', async () => {
+  test('when the platform says the thread is gone the specialist moves to the fresh thread the spawn opened', async () => {
     fakeSpawn()
+    specialistDeps.threadExists = async () => false
     const name = specialist('thread-deleted', { channel: 'chan-1' })
     const res = await deliver(name)
     expect(res.ok).toBe(true)
@@ -109,8 +126,9 @@ describe('specialists', () => {
     expect(getSpecialist(name)!.kickoff).toBe('be the slopbot')
   })
 
-  test('unknown thread with no channel, no kickoff, and unknown specialist each fail clearly and spawn nothing', async () => {
+  test('a gone thread with no channel, no kickoff, and unknown specialist each fail clearly and spawn nothing', async () => {
     const calls = fakeSpawn()
+    specialistDeps.threadExists = async () => false
     expect(await deliver(specialist('thread-gone'))).toMatchObject({ ok: false, error: expect.stringContaining('no channel') })
     expect(await deliver(specialist('thread-gone-2', { kickoff: undefined, channel: 'c' }))).toMatchObject({ ok: false, error: expect.stringContaining('no kickoff') })
     expect(await deliver('no-such-specialist')).toMatchObject({ ok: false, error: expect.stringContaining('not found') })
@@ -141,6 +159,7 @@ describe('specialists', () => {
     expect(getIdempotencyEntry(key)?.status).toBe('completed')
     expect(await deliver(name, { idempotencyKey: key })).toMatchObject({ ok: false, exitCode: 2 })
 
+    specialistDeps.threadExists = async () => false
     const failing = specialist('thread-fails')
     const k2 = `specialist-idem-${++n}`
     expect((await deliver(failing, { idempotencyKey: k2 })).ok).toBe(false)
@@ -221,11 +240,11 @@ describe('specialists', () => {
     expect(await spawnAs(vacant, { idempotencyKey: key })).toMatchObject({ ok: false, exitCode: 2 })
 
     let attempts = 0
-    specialistDeps.spawn = (async () => { attempts++; throw new Error('tmux exploded') }) as typeof specialistDeps.spawn
+    setSpawn(async () => { attempts++; throw new Error('tmux exploded') })
     const bad = specialist('thread-spawn-bad', { channel: 'c' })
-    expect(await deliver(bad)).toMatchObject({ ok: false, error: 'tmux exploded' })
+    expect(await deliver(bad)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('start failed: tmux exploded') })
     expect(await deliver(bad)).toMatchObject({ ok: false, exitCode: 6 }) // an automatic refill waits out the back-off
-    expect(await spawnAs(bad)).toMatchObject({ ok: false, error: 'tmux exploded' }) // an operator's spawn tries now
+    expect(await spawnAs(bad)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('start failed: tmux exploded') }) // an operator's spawn tries now
     expect(attempts).toBe(2)
     expect(((await cli('show', bad)) as any).data.refillBackoff.failures).toBe(2) // and its failure counts
     fakeSpawn()
@@ -237,7 +256,7 @@ describe('specialists', () => {
     const sid = occupy('thread-show')
     const filled = specialist('thread-show')
     expect(await cli('show', filled)).toMatchObject({ ok: true, data: { name: filled, occupant: { session: `${sid}-tmux`, connected: false } } })
-    specialistDeps.spawn = (async () => { throw new Error('tmux exploded') }) as typeof specialistDeps.spawn
+    setSpawn(async () => { throw new Error('tmux exploded') })
     const bad = specialist('thread-show-bad', { channel: 'c' })
     await deliver(bad)
     const listed = (await cli('list', undefined) as any).data.find((s: any) => s.name === bad)
@@ -249,12 +268,12 @@ describe('specialists', () => {
     const name = `t-specialist-${++n}`
     names.push(name)
     await cli('set', name, { channel: 'chan-race', kickoff: 'old kickoff' })
-    specialistDeps.spawn = (async () => {
+    setSpawn(async () => {
       await Bun.sleep(30)
       const threadId = `fresh-thread-${++n}`
       const sessionId = occupy(threadId)
       return { name: `${sessionId}-tmux`, sessionId, threadId, url: '' }
-    }) as typeof specialistDeps.spawn
+    })
     const up = spawnAs(name)
     await Bun.sleep(5)
     await cli('set', name, { kickoff: 'new kickoff', model: 'm-2' }) // lands mid-spawn
@@ -277,12 +296,12 @@ describe('specialists', () => {
     names.push(name)
     await cli('set', name, { channel: 'chan-repoint', kickoff: 'k' })
     let strayThread = ''
-    specialistDeps.spawn = (async () => {
+    setSpawn(async () => {
       await Bun.sleep(30)
       strayThread = `fresh-thread-${++n}`
       const sessionId = occupy(strayThread)
       return { name: `${sessionId}-tmux`, sessionId, threadId: strayThread, url: '' }
-    }) as typeof specialistDeps.spawn
+    })
     const key = `spawn-repoint-${++n}`
     const up = spawnAs(name, { idempotencyKey: key })
     await Bun.sleep(5)
@@ -332,15 +351,15 @@ describe('specialists', () => {
 
   test('failed refills back off per specialist, then try again once the wait passes', async () => {
     let now = 1_000_000
-    specialistDeps.now = () => now
+    backoffClock.now = () => now
     let attempts = 0
-    specialistDeps.spawn = (async () => { attempts++; throw new Error('tmux exploded') }) as typeof specialistDeps.spawn
+    setSpawn(async () => { attempts++; throw new Error('tmux exploded') })
     const name = specialist('thread-backoff', { channel: 'c' })
-    expect(await deliver(name)).toMatchObject({ ok: false, error: 'tmux exploded' })
-    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('backing off') })
+    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('start failed: tmux exploded') })
+    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('not retrying until') })
     expect(attempts).toBe(1)
     now += SPAWN_BACKOFF_BASE_MS + 1
-    expect(await deliver(name)).toMatchObject({ ok: false, error: 'tmux exploded' })
+    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('start failed: tmux exploded') })
     expect(attempts).toBe(2)
     now += SPAWN_BACKOFF_BASE_MS * 2 + 1 // the second failure doubled the wait
     fakeSpawn()
@@ -418,15 +437,146 @@ describe('specialists', () => {
     expect(await handleCLIRequest(req('specialist', { action: 'set', name: 'Bad Name', thread: 't' }))).toMatchObject({ ok: false })
     expect(await handleCLIRequest(req('specialist', { action: 'set', name: `t-specialist-new-${n}` }))).toMatchObject({ ok: false, error: expect.stringContaining('--thread') })
   })
+  // ── reviveThread: the refill is the cascade (spec §2, §5; flows B, D, E) ──
+
+  test('a refill resumes the dead occupant first; the kickoff is only the respawn prompt, so a broken one does not stop it', async () => {
+    const calls = fakeSpawn()
+    const resumed: any[] = []
+    const { spawn } = calls
+    _setRecoveryDeps({
+      doSpawnSession: spawn as any, tryRespawn: async () => { throw new Error('the respawn tier must not run') },
+      tryResume: (async (dead: any) => {
+        resumed.push(dead)
+        return spawn('resume', undefined, undefined, { existingThreadId: dead.threadId, name: dead.name })
+      }) as any,
+    })
+    occupy('thread-resume', { claudeSessionId: 'C-1', adapter: fakeAdapter({ isAlive: () => false }), tmuxName: 'old-tmux' })
+    const name = specialist('thread-resume', { kickoff: undefined, kickoffFile: '/nonexistent/kickoff.md' })
+    const res = await deliver(name)
+    expect(res).toMatchObject({ ok: true, data: { spawned: true, threadId: 'thread-resume' } })
+    expect(resumed).toHaveLength(1)
+    expect(resumed[0]).toMatchObject({ claudeSessionId: 'C-1', threadId: 'thread-resume', name })
+    expect(calls.map(c => c[0])).toEqual(['resume'])
+  })
+
+  test('a refill keeps the dead occupant\'s worktree on every tier', async () => {
+    const calls = fakeSpawn()
+    const wt = mkdtempSync(join(tmpdir(), 'specialist-wt-'))
+    try {
+      occupy('thread-wt', { adapter: fakeAdapter({ isAlive: () => false }), worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/ops-old' })
+      const res = await deliver(specialist('thread-wt'))
+      expect(res.ok).toBe(true)
+      expect(calls[0][3]).toMatchObject({ preserveWorktree: true, reuseWorktree: { repo: '/repo', path: wt, branch: 'wt/ops-old' } })
+    } finally { rmSync(wt, { recursive: true, force: true }) }
+  })
+
+  test('D: twenty sends to a vacant specialist start one session and all land on it', async () => {
+    const calls = fakeSpawn()
+    const name = specialist('thread-burst', { channel: 'c' })
+    const all = await Promise.all(Array.from({ length: 20 }, () => deliver(name)))
+    expect(all.every(r => r.ok)).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(new Set(all.map(r => (r.data as any).sessionId)).size).toBe(1)
+  })
+
+  test('E: the back-off survives a daemon restart, says when and why, and an operator spawn still tries', async () => {
+    let attempts = 0
+    setSpawn(async () => { attempts++; throw new Error('kickoff file not found') })
+    const name = specialist('thread-restart', { channel: 'c' })
+    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('start failed: kickoff file not found') })
+    _reloadBackoff() // what a restart does
+    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringMatching(/not retrying until \d\d:\d\d:\d\d \(1 failure\); last: kickoff file not found/) })
+    expect(attempts).toBe(1)
+    expect(((await cli('show', name)) as any).data.refillBackoff).toMatchObject({ failures: 1, lastError: 'kickoff file not found' })
+  })
+
+  test('a back-off is removed by specialist rm, and one whose wait ended over 7 days ago is dropped at load', async () => {
+    setSpawn(async () => { throw new Error('boom') })
+    const removed = specialist('thread-rm', { channel: 'c' })
+    await deliver(removed)
+    expect(getBackoff(removed)).toBeDefined()
+    await cli('rm', removed)
+    expect(getBackoff(removed)).toBeUndefined()
+
+    const stale = specialist('thread-stale', { channel: 'c' })
+    await deliver(stale)
+    expect(getBackoff(stale)).toBeDefined()
+    _reloadBackoff(getBackoff(stale)!.nextAt + BACKOFF_STALE_MS + 1)
+    expect(getBackoff(stale)).toBeUndefined()
+  })
+
+  test('a refill of a specialist whose session had a wt/<name> worktree can still claim its name', async () => {
+    const calls = fakeSpawn()
+    const { spawn } = calls
+    // The claim doSpawnSession makes: the record it replaces, and dead same-named records, do not count.
+    setSpawn(async (...args: any[]) => {
+      registry.claimSessionName(args[3].name, registry.getByThread(args[3].existingThreadId), s => !s.adapter.isAlive(s))
+      return spawn(...args)
+    })
+    const wt = mkdtempSync(join(tmpdir(), 'specialist-wt-'))
+    try {
+      const name = 'opswtown' // no dash: a branch's base name is the text before its first one
+      names.push(name)
+      setSpecialist(name, { threadId: 'thread-wt-own', kickoff: 'be the slopbot' })
+      occupy('thread-wt-own', { tmuxName: `${name}-old`, adapter: fakeAdapter({ isAlive: () => false }), worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: `wt/${name}` })
+      expect(await deliver(name)).toMatchObject({ ok: true, data: { spawned: true } })
+      expect(registry.reservedNames.has(name)).toBe(false)
+    } finally { rmSync(wt, { recursive: true, force: true }) }
+  })
+
+  test('M2: a specialist moved to a new thread keeps its dead session\'s worktree', async () => {
+    const calls = fakeSpawn()
+    specialistDeps.threadExists = async () => false
+    const wt = mkdtempSync(join(tmpdir(), 'specialist-wt-'))
+    try {
+      const name = specialist('thread-m2', { channel: 'c' })
+      occupy('thread-m2', { tmuxName: name, adapter: fakeAdapter({ isAlive: () => false }), worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: `wt/${name}` })
+      expect((await deliver(name)).ok).toBe(true)
+      expect(calls[0][1]).toBe('c') // a new thread, in the specialist's channel
+      expect(calls[0][3]).toMatchObject({ preserveWorktree: true, reuseWorktree: { path: wt } })
+    } finally { rmSync(wt, { recursive: true, force: true }) }
+  })
+
+  test('L3: while a specialist backs off, a delivery never asks the platform about its thread', async () => {
+    setSpawn(async () => { throw new Error('boom') })
+    let asked = 0
+    specialistDeps.threadExists = async () => { asked++; return true }
+    const name = specialist('thread-l3a', { channel: 'c' })
+    await deliver(name)
+    asked = 0
+    expect(await deliver(name)).toMatchObject({ ok: false, exitCode: 6, error: expect.stringContaining('not retrying until') })
+    expect(asked).toBe(0)
+  })
+
+  test('L3: a resume typed in a specialist\'s thread clears its back-off when it succeeds', async () => {
+    setSpawn(async () => { throw new Error('boom') })
+    const name = specialist('thread-l3b', { channel: 'c' })
+    threadRegistry.threads.set('thread-l3b', { threadId: 'thread-l3b', topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0, sessionHistory: [] } as any)
+    threads.push('thread-l3b')
+    await deliver(name)
+    expect(getBackoff(name)).toBeDefined()
+    fakeSpawn()
+    await handleResumeIntercept({ id: `l3-${++n}`, channelId: 'thread-l3b', isThread: true, effectiveThreadId: 'thread-l3b' })
+    expect(getBackoff(name)).toBeUndefined()
+  })
+
+  test('a crashed occupant holding the name in a gone thread does not block its own refill', async () => {
+    const name = specialist('thread-crashed', { channel: 'c' })
+    occupy('thread-crashed', { tmuxName: name, adapter: fakeAdapter({ isAlive: () => false }) })
+    expect(registry.claimSessionName(name, undefined, s => !s.adapter.isAlive(s))).toBe(name)
+    const live = specialist('thread-live-holder')
+    occupy('thread-live-holder', { tmuxName: live })
+    expect(() => registry.claimSessionName(live, undefined, s => !s.adapter.isAlive(s))).toThrow(/already in use/)
+  })
 })
 
-describe('withSpecialistLock', () => {
+describe('withTargetLock', () => {
   test('runs tasks for one specialist in order, even when an earlier one throws', async () => {
     const order: string[] = []
-    const a = withSpecialistLock('lock-a', async () => { await Bun.sleep(20); order.push('a1') })
-    const b = withSpecialistLock('lock-a', async () => { order.push('a2'); throw new Error('boom') })
-    const c = withSpecialistLock('lock-a', async () => { order.push('a3') })
-    const other = withSpecialistLock('lock-b', async () => { order.push('b') })
+    const a = withTargetLock('lock-a', async () => { await Bun.sleep(20); order.push('a1') })
+    const b = withTargetLock('lock-a', async () => { order.push('a2'); throw new Error('boom') })
+    const c = withTargetLock('lock-a', async () => { order.push('a3') })
+    const other = withTargetLock('lock-b', async () => { order.push('b') })
     await Promise.allSettled([a, b, c, other])
     expect(order.indexOf('b')).toBeLessThan(order.indexOf('a1'))
     expect(order.filter(x => x.startsWith('a'))).toEqual(['a1', 'a2', 'a3'])

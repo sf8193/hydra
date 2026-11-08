@@ -16,6 +16,9 @@ import type { InboundMessage } from '../../gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { pollSessionsOnce } from '../session-health.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
+import { getWatchesBySession, restoreWatches, unwatchBySession } from '../pr-watch.js'
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
 
 const THREAD = 'thread-t8'
 const PARENT = 'parent-t8'
@@ -137,7 +140,7 @@ describe('resume tier matrix — Claude', () => {
     seedHistory({ claudeSessionId: 'C-1' }, { engine: 'claude' })
     await handleResumeIntercept(msg())
     expect(fns()).toEqual(['tryResume'])
-    expect(calls[0].args[0]).toEqual({ topic: TOPIC, threadId: THREAD, claudeSessionId: 'C-1', threadUrl: URL, model: 'dead-model', label: 'build' })
+    expect(calls[0].args[0]).toEqual({ topic: TOPIC, threadId: THREAD, claudeSessionId: 'C-1', threadUrl: URL, model: 'dead-model', label: 'build', carryOver: expect.any(Object) })
     expect(sent.some(s => s.includes('`resumed-name` resumed — full context restored'))).toBe(true)
     expect(logged()).not.toContain(TIER1_FAIL)
   })
@@ -219,7 +222,7 @@ describe('resume tier matrix — Claude', () => {
     expect(calls.filter(c => c.fn === 'doSpawnSession')).toEqual([])
     expect(logged()).toContain(TIER1_FAIL)
     expect(logged()).toContain(TIER2_FAIL)
-    expect(respawnArgs()[4]).toEqual({ engine: 'claude', label: 'build' })
+    expect(respawnArgs()[4]).toEqual({ engine: 'claude', label: 'build', carryOver: expect.any(Object) })
   })
 })
 
@@ -301,6 +304,24 @@ describe('resume stamps a gone live record dead (Z5)', () => {
     expect(calls.some(c => c.fn === 'tryResume')).toBe(true)
   })
 
+  test('H1: an orphan torn down for a resume still hands over its worktree, PR watches and children', async () => {
+    _setDaemonStartedAtForTesting(0)
+    const wt = mkdtempSync(join(tmpdir(), 'orphan-wt-'))
+    const info = goneLive('claude', { claudeSessionId: 'C-h1', worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/orph' })
+    tmux.alive(info.tmuxName)
+    restoreWatches([{ prUrl: 'https://github.com/o/r/pull/11', sessionId: 'x', threadId: 'x', createdAt: 1 } as any], info.sessionId, THREAD)
+    registry.set('h1-child', { sessionId: 'h1-child', tmuxName: 'h1c', topic: 't', threadId: 'h1-child-t', createdAt: 2, lastActive: 2, listening: false,
+      parentId: info.sessionId, sessionType: 'thread_owner', adapter: engines.claude } as any)
+    seeded.add('h1-child')
+    _setRecoveryDeps({ tryResume: (async (d: any) => { calls.push({ fn: 'tryResume', args: [d] }); return { name: 'resumed-name', sessionId: 's-h1', threadId: THREAD } }) as any })
+    try {
+      await handleResumeIntercept(msg())
+      expect(calls[0].args[0]).toMatchObject({ preserveWorktree: true, worktree: { path: wt, branch: 'wt/orph' } })
+      expect(getWatchesBySession('s-h1').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/11'])
+      expect(registry.get('h1-child')!.parentId).toBe('s-h1')
+    } finally { unwatchBySession('s-h1'); rmSync(wt, { recursive: true, force: true }) }
+  })
+
   test('Claude: an old record with no bridge right after a daemon restart is left alone, not torn down', async () => {
     _setDaemonStartedAtForTesting(Date.now())
     const info = goneLive('claude', { claudeSessionId: 'C-z5d' })
@@ -356,7 +377,7 @@ describe('resume tier matrix — Codex', () => {
     expect(fns()).toEqual(['spawn:resume'])
     const [topic, chatId, messageId, o] = calls[0].args
     expect([topic, chatId, messageId]).toEqual([TOPIC, undefined, undefined])
-    expect(o).toEqual({ existingThreadId: THREAD, resumeCodex: { threadId: 'T-1', homeName: 'home1' },
+    expect(o).toEqual({ existingThreadId: THREAD, resumeCodex: { threadId: 'T-1', homeName: 'home1' }, carryOver: expect.any(Object),
       promptPrefix: RECOVERY_REVERIFY_GUARD, model: 'dead-model', engine: 'codex', label: 'build' })
     expect(reservedDuringSpawn).toEqual([true])
     expect(registry.reservedNames.has('home1')).toBe(false)
@@ -405,7 +426,7 @@ describe('resume tier matrix — Codex', () => {
     const e = seedHistory({ codexThreadId: 'T-1' }, { engine: 'codex' })
     await handleResumeIntercept(msg())
     expect(fns()).toEqual(['spawn:resume', 'spawn:fork', 'tryRespawn'])
-    expect(respawnArgs()).toEqual([THREAD, TOPIC, e.tmuxName, 'dead-model', { engine: 'codex', label: 'build' }])
+    expect(respawnArgs()).toEqual([THREAD, TOPIC, e.tmuxName, 'dead-model', { engine: 'codex', label: 'build', carryOver: expect.any(Object) }])
     expect(logged()).toContain(TIER2_FAIL)
 
     calls = []; sent = []; respawnOk = false
@@ -428,7 +449,7 @@ describe('resume tier matrix — Codex', () => {
     expect(fns()).toEqual(['tryRespawn'])
     expect(logged()).toContain(TIER1_FAIL)
     expect(logged()).toContain(TIER2_FAIL)
-    expect(respawnArgs()[4]).toEqual({ engine: 'codex', label: 'build' })
+    expect(respawnArgs()[4]).toEqual({ engine: 'codex', label: 'build', carryOver: expect.any(Object) })
   })
 })
 
@@ -443,7 +464,7 @@ describe('handleRespawnIntercept', () => {
     expect(fns()).toEqual(['tryRespawn'])
     const [threadId, topic, from, model, extra] = respawnArgs()
     expect([threadId, topic, from, model]).toEqual([THREAD, TOPIC, e.tmuxName, 'sel-model'])
-    expect(extra).toEqual({ inheritedLabel: 'build', engine: 'claude' })
+    expect(extra).toEqual({ inheritedLabel: 'build', engine: 'claude' }) // a fresh start: nothing carried over
   })
 
   test('no selection: record engine, recovered model', async () => {
@@ -598,5 +619,30 @@ describe('handleForkIntercept', () => {
     await handleForkIntercept(forkMsg(info))
     expect(fns()).toEqual(['spawn:fork', 'spawn:fresh'])
     expect(opts(1)).toMatchObject({ resurrectFrom: info.tmuxName, engine: 'claude' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// One cascade (reviveThread): what a manual resume now carries like recovery always did
+// ---------------------------------------------------------------------------
+
+describe('resume through the one cascade', () => {
+  test('a resumed session takes over the dead session\'s PR watches', async () => {
+    const e = seedHistory({ claudeSessionId: 'C-1' }, { claudeSessionId: 'C-1' })
+    restoreWatches([{ prUrl: 'https://github.com/o/r/pull/7', sessionId: 'x', threadId: 'x', createdAt: 1 } as any], e.sessionId, THREAD)
+    _setRecoveryDeps({ tryResume: async () => ({ name: 'resumed-name', sessionId: 's-watch', threadId: THREAD }) as any })
+    try {
+      await handleResumeIntercept(msg())
+      expect(getWatchesBySession('s-watch').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/7'])
+    } finally { unwatchBySession('s-watch'); unwatchBySession(e.sessionId) }
+  })
+
+  test('a resume keeps the dead session\'s worktree when it is still on disk', async () => {
+    const wt = mkdtempSync(join(tmpdir(), 'resume-wt-'))
+    try {
+      seedHistory({ claudeSessionId: 'C-1' }, { claudeSessionId: 'C-1', worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/old' })
+      await handleResumeIntercept(msg())
+      expect(calls[0].args[0]).toMatchObject({ preserveWorktree: true, worktree: { repo: '/repo', path: wt, branch: 'wt/old' } })
+    } finally { rmSync(wt, { recursive: true, force: true }) }
   })
 })

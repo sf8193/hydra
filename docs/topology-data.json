@@ -1165,6 +1165,10 @@
       "daemon_templates"
     ],
     [
+      "daemon_commands_thread",
+      "daemon_recovery"
+    ],
+    [
       "daemon_commands_review",
       "daemon_config"
     ],

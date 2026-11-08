@@ -12,6 +12,7 @@ import { ClaudeEngine } from '../engines/claude-engine.js'
 import { executeTool } from '../bridge-dispatch.js'
 import type { LaunchInput } from '../engines/engine-adapter.js'
 import { handleRecoverIntercept } from '../recovery.js'
+import { RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
 import { handleResumeIntercept } from '../commands/thread.js'
 import { projectDirName } from '../usage.js'
 import { buildForkPrompt, buildHandoffPrompt } from '../prompts/session.js'
@@ -319,6 +320,18 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       expect(deathNotices()).toContain('au-parent-thread')
     })
 
+    test('manual recover: the fork tier is told to re-verify, as resume is', async () => {
+      failResume = true
+      const dead = seedDead()
+      const savedHas = transport.has
+      ;(transport as any).has = (id: string) => id !== dead.sessionId
+      try {
+        await handleRecoverIntercept({ channelId: 'ch', id: `m-${++seq}` } as any, dead.tmuxName)
+      } finally { (transport as any).has = savedHas }
+      const fork = launches.find(l => l.forkFrom)!
+      expect(fork.prompt).toContain(RECOVERY_REVERIFY_GUARD)
+    })
+
     test('recover tier 1 (resume) and tier 2 (fork) keep the parent and take over the children', async () => {
       for (const failTier1 of [false, true]) {
         failResume = failTier1
@@ -381,6 +394,40 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     expect(live().deadAt).toBeUndefined()
     expect(live().launchCwd).toBeUndefined()
     expect(live().disallowedTools).toEqual(kept.disallowedTools)
+  })
+
+  test('H1: an orphan resumed at tier 1 (the real tryResume) keeps read_only, its parent and its launch dir', async () => {
+    const orphan = {
+      sessionId: `fp-orphan-${++seq}`, topic: 'topic', threadId: THREAD, createdAt: Date.now() - 1e6, lastActive: Date.now(),
+      tmuxName: `fporphan${seq}`, listening: false, engine: 'claude', sessionType: 'thread_owner', anchorChannelId: PARENT,
+      adapter: { ...fakeClaude, isAlive: () => true }, claudeSessionId: `C-orph-${seq}`,
+      disallowedTools: kept.disallowedTools, launchCwd: kept.launchCwd, parentId: 'fp-orphan-parent', deadAt: Date.now(),  // stamped while running: an orphan
+    } as any as SessionInfo
+    registry.set(orphan.sessionId, orphan)
+    registry.setThread(THREAD, orphan.sessionId)
+    threadRegistry.recordSpawn(THREAD, { topic: 'topic', respawnCount: 0, sessionId: orphan.sessionId, tmuxName: orphan.tmuxName, originType: 'spawn', model: 'm', claudeSessionId: orphan.claudeSessionId } as any)
+    const savedHas = transport.has
+    ;(transport as any).has = (id: string) => id !== orphan.sessionId  // the orphan has no bridge; its successor's connects
+    try {
+      await handleResumeIntercept({ id: `fp-msg-${++seq}`, channelId: THREAD, isThread: true, effectiveThreadId: THREAD })
+    } finally { (transport as any).has = savedHas }
+    expect(launches.map(l => l.resumeFrom)).toEqual([orphan.claudeSessionId])
+    expect(keptBy(launches[0])).toEqual(kept)
+    expect(live().disallowedTools).toEqual(kept.disallowedTools)
+    expect(live().parentId).toBe('fp-orphan-parent')
+  })
+
+  test('L2: a claimed name retires dead records of that name in other threads, so a lookup by name finds the new session', async () => {
+    seedDead()
+    registry.set('fp-l2-old', { sessionId: 'fp-l2-old', topic: 't', threadId: 'fp-l2-thread', createdAt: 1, lastActive: 1, tmuxName: 'opsl2',
+      listening: false, engine: 'claude', sessionType: 'thread_owner', deadAt: 1, adapter: fakeClaude } as any)
+    registry.setThread('fp-l2-thread', 'fp-l2-old')
+    try {
+      const r = await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, name: 'opsl2' })
+      expect(registry.get('fp-l2-old')).toBeUndefined()
+      expect(registry.getByThread('fp-l2-thread')).toBeUndefined()
+      expect(registry.findByName('opsl2')?.sessionId).toBe(r.sessionId)
+    } finally { registry.delete('fp-l2-old'); registry.deleteThread('fp-l2-thread') }
   })
 
   test('prompts: a fork keeps buildForkPrompt', async () => {

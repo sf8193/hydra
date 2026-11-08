@@ -1,0 +1,69 @@
+%% Who is home, and putting a session back into a thread. Drawn from the code (reconciled by a cold review of the
+%% stack, then corrected for its findings). (a) occupancy() decides; (b) every revive goes through reviveThread()
+%% under one lock per target. Later changes extend (b) to `deliver --to` and named targets.
+flowchart TD
+  subgraph A["(a) occupancy(info): session-reachability.ts"]
+    A0{"record?"} -- no --> AN[none]
+    A0 -- yes --> A1{"transport.has?<br/>(Codex: = isAlive)"}
+    A1 -- yes --> AR[reachable]
+    A1 -- no --> A2{"adapter.isAlive?<br/>Claude/omp: tmux · Codex: socket or reconnecting"}
+    A2 -- no --> AD[dead]
+    A2 -- yes --> A3{"deadAt set, or waitMs > 90s<br/>waitMs = now − max(createdAt, daemonStart)"}
+    A3 -- yes --> AO[orphaned]
+    A3 -- no --> AS[starting]
+  end
+
+  subgraph B["(b) back into an existing thread"]
+    CH["chat resume / respawn"] --> HELD{"threadLockHeld?"}
+    HELD -- yes --> BUSYMSG["'already in progress'"]
+    HELD -- no --> TL["withThreadLock(targetKeyForThread)"]
+    TL --> CO{"occupancy"}
+    CO -- "reachable / starting" --> REF["refuse: running / still starting"]
+    CO -- orphaned --> RTO["reviveThread(orphan)"]
+    CO -- "dead / none" --> MD["resume: markDead"]
+    RTO --> RT
+    MD --> RT
+    RC["recover / boot candidates<br/>(!occupied · boot: deadAt ∧ no tmux)"] --> DEDUP[dedupForRecovery] --> RL["recoverLocked: withThreadLock"]
+    RL --> RO{"thread's record occupied?"}
+    RO -- yes --> RF["failed: already live as X"]
+    RO -- no --> WT["recoverOne: reattach / defer / skip worktree"] --> RT
+    SP["deliver / spawn --specialist"] --> NL["withTargetLock(name)"] --> SO{"occupant in specialist.threadId?<br/>(re-read under lock)"}
+    SO -- "orphaned (deliver)" --> E4s[exit 4]
+    SO -- "occupied" --> HOME["deliver to it · spawn: exit 3"]
+    SO -- vacant --> HOLD{"same name occupied elsewhere?"}
+    HOLD -- yes --> E3h[exit 3]
+    HOLD -- no --> SB{"back-off active?<br/>(not for spawn --specialist)"}
+    SB -- yes --> BOs["exit 6: not retrying until …<br/>(the platform is not asked)"]
+    SB -- no --> TE{"threadExists (gone = 10003 only)"}
+    TE -- "gone, no channel" --> ERR[error]
+    TE -- "exists" --> RT
+    TE -- "gone + channel" --> RTN["reviveThread(newThreadIn)"]
+    HO["handOff"] --> HL["withThreadLock"] --> HC{"record still this one?"}
+    HC -- no --> HX["throw: already handing off"]
+    HC -- yes --> HS["handoffSpawnOpts: carryOver minus read_only and predecessor<br/>→ kill → spawn(handedOffFrom)<br/>→ restoreWatches → repointChildren"]
+
+    RT["reviveThread<br/>chat and recover pass the target's key, ignoring its wait"] --> BG{"backoffKey active and not ignored?"}
+    RTN --> BG
+    BG -- yes --> BO["fail: not retrying until …"]
+    BG -- no --> WS["snapshot the dead record's PR watches"]
+    WS --> ORQ{"orphan to tear down?"}
+    ORQ -- yes --> ORPH["kill it (worktree kept), markDead<br/>its record is still in hand"]
+    ORQ -- no --> SNAP
+    ORPH --> SNAP["resolve entry/dead · carryOver unless respawnOnly (to every tier, tryResume too)<br/>worktree if on disk · reserve branch base<br/>(never the name being claimed)"]
+    SNAP --> NT{"newThreadIn?"}
+    NT -- yes --> NEWT["spawn in channel from kickoff, worktree kept,<br/>told its old thread is gone"]
+    NT -- no --> T1{"ids and not respawnOnly?"}
+    T1 -- yes --> R1["tier 1: tryResume · omp / codex: home reserved?"]
+    R1 -- "reserved" --> BUSY[busy: exit 5]
+    R1 -- fail --> R2["tier 2: fork"] -- fail --> R3
+    T1 -- no --> R3["tier 3: tryRespawn(respawnTopic)"]
+    R1 -- ok --> OK
+    R2 -- ok --> OK
+    R3 -- ok --> OK
+    NEWT -- ok --> OK["repointChildren · restoreWatches · clearBackoff<br/>(a claimed name retires dead same-named records: doSpawnSession)"]
+    R3 -- "null or throw" --> FAIL["restore dead record + watches if thread unclaimed<br/>recordFailure(key) → exit 6"]
+    NEWT -- throw --> FAIL
+    OK -- specialist --> REP{"re-pointed meanwhile?"}
+    REP -- yes --> E3r[exit 3, left running]
+    REP -- no --> SET["setSpecialist(threadId) · pushToolSurface"]
+  end

@@ -7,7 +7,7 @@ import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
-import { claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
+import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, tmuxHasSession, parseDuration } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
@@ -41,9 +41,6 @@ function resolveProtocolSpawnMode(callerSessionId: string | undefined) {
 export const __test = process.env.NODE_ENV === 'test'
   ? { PRIVATE_HELPER_ALLOWED_TOOLS, resolveProtocolSpawnMode }
   : undefined
-
-// read_only: blocks Claude's file-editing tools. Bash remains, so it is a guard, not a sandbox.
-const READ_ONLY_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit']
 
 /** send_to_thread target "parent": the caller's parent by id. */
 function resolveParentTarget(caller: SessionInfo | undefined): { session: SessionInfo; replaced?: string } {

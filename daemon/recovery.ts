@@ -7,17 +7,279 @@
 // work-key dedup, and the single-flight guard here.
 import { existsSync } from 'fs'
 import { gateway } from './config.js'
-import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
-import type { ThreadMetadata, SessionInfo } from './sessions.js'
-import { doSpawnSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
+import { markDead, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
+import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnResult } from './sessions.js'
+import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { tmuxHasSession, baseNameFromBranch } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { parsePrUrl, getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import type { WatchEntry } from './pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
 import { notifyOperator } from './access.js'
-import { deadSessionLabel, recoveryEntry } from './recovery-selection.js'
+import { deadSessionLabel, recoveryEntry, recoveryModel } from './recovery-selection.js'
+import { recoveryEngine } from './engines/history.js'
+import { resolveEngine } from './engines/instances.js'
+import type { ProviderId } from './engines/engine-adapter.js'
+import { activeBackoff, clearBackoff, recordFailure, type Backoff } from './recovery-backoff.js'
+import { targetKeyForThread, withThreadLock } from './specialists.js'
 import type { InboundMessage } from '../gateway.js'
+
+// ---------------------------------------------------------------------------
+// reviveThread — the one cascade: resume → fork → respawn
+// ---------------------------------------------------------------------------
+
+// Recovery executors, swappable in tests (same pattern as reply-guard's deps).
+type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn }
+const defaultRecoveryDeps: RecoveryDeps = { tryResume, doSpawnSession, tryRespawn }
+let recoveryDeps: RecoveryDeps = defaultRecoveryDeps
+export function _setRecoveryDeps(custom: Partial<RecoveryDeps>): void { recoveryDeps = { ...defaultRecoveryDeps, ...custom } }
+export function _resetRecoveryDeps(): void { recoveryDeps = defaultRecoveryDeps }
+/** The executors in effect, for a fork (its own kind of spawn) that shares the test seam. */
+export function currentRecoveryDeps(): RecoveryDeps { return recoveryDeps }
+
+export type ReviveRequest = {
+  thread: ThreadMetadata
+  /** The history entry to continue. Default: the latest one that is not a foreign placeholder. */
+  entry?: ThreadSessionEntry
+  /** The dead record, when the caller already holds it. Default: the entry's record, else the thread's. */
+  dead?: SessionInfo
+  /** A running but unreachable session to tear down first (its worktree kept). Its record, PR watches and children
+   *  are taken before the kill deletes them, so the revive carries them as it would a dead one's. */
+  orphan?: { info: SessionInfo; reason: string }
+  /** Skip resume and fork: a fresh session that reads the thread (the `respawn` command). */
+  respawnOnly?: boolean
+  /** The thread is gone: open a new one in this channel. Respawn tier only; the history is not there to read. */
+  newThreadIn?: string
+  /** The respawn tier's prompt, read only if that tier runs (a broken kickoff must not stop a resume). Default: the thread's topic. */
+  respawnTopic?: string | (() => string)
+  /** A specialist's name, claimed on every tier. */
+  name?: string
+  model?: string
+  engine?: ProviderId
+  /** Layered onto the respawn tier only (a template's tools and session type). */
+  respawnOpts?: Partial<SpawnOpts>
+  promptPrefix?: string
+  /** On the resume tier, keep the dead session's name (boot recovery). */
+  reuseName?: boolean
+  siblingWatches?: WatchEntry[]
+  initiator?: string
+  trigger?: string
+  /** Back-off key (a specialist name, or the thread id): refuse while it backs off, and count a failure toward it. */
+  backoffKey?: string
+  /** An operator asking by hand: not held back by the back-off (a failure still counts). */
+  ignoreBackoff?: boolean
+}
+
+export type ReviveMethod = 'resumed' | 'forked' | 'respawned'
+export type ReviveOutcome =
+  | { ok: true; result: SpawnResult & { bridgeOrphan?: boolean }; method: ReviveMethod; lastTmuxName: string }
+  /** `busy`: another resume holds this conversation; `backoff`: refused, or this failure started/extended one. */
+  | { ok: false; reason: string; lastTmuxName: string; busy?: true; backoff?: Backoff }
+
+/**
+ * Put a session back in a thread whose session is gone: resume its conversation, else fork it, else
+ * respawn a fresh one that reads the thread. Every caller (resume, respawn, recover, boot recovery,
+ * a specialist's refill) runs this one copy, so each carries the same deliverables, keeps the worktree,
+ * restores PR watches and hands the dead session's children to its successor.
+ *
+ * The caller holds the thread's target lock and has checked occupancy: this never looks for a live session.
+ */
+export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
+  const { thread } = req
+  const given = req.orphan?.info ?? req.dead
+  const entry = req.entry
+    ?? (given && thread.sessionHistory.findLast(h => h.sessionId === given.sessionId))
+    ?? recoveryEntry(thread.sessionHistory)
+  const dead = given ?? registry.get(entry?.sessionId ?? '') ?? registry.get(registry.getByThread(thread.threadId) ?? '')
+  const lastTmuxName = entry?.tmuxName ?? dead?.tmuxName ?? thread.threadId.slice(0, 8)
+
+  if (req.backoffKey && !req.ignoreBackoff) {
+    const refusal = backoffRefusal(req.backoffKey)
+    if (refusal) return { ok: false, lastTmuxName, ...refusal }
+  }
+
+  // Snapshot PR watches before any kill unwatches them: the survivor has a new id.
+  const savedWatches = [...(dead ? getWatchesBySession(dead.sessionId) : []), ...(req.siblingWatches ?? [])]
+  if (req.orphan) {
+    process.stderr.write(`daemon: revive: tearing down orphaned ${req.orphan.info.tmuxName} first\n`)
+    await killSession(req.orphan.info, req.orphan.reason, { skipWorktreeDestroy: true })
+    markDead(req.orphan.info)
+  }
+
+  const engine = req.engine ?? recoveryEngine(entry, dead)
+  const model = req.model ?? recoveryModel(entry?.model ?? dead?.sessionMetadata?.model)
+  const label = deadSessionLabel(entry, dead)
+  const claudeSessionId = entry?.claudeSessionId ?? dead?.claudeSessionId
+  // The `respawn` command is a fresh start: it carries no restrictions, parent or launch dir from the dead session.
+  const carried = dead && !req.respawnOnly ? carryOver(dead) : undefined
+  // A worktree still on disk is kept on every tier and into a new thread; boot recovery reattaches a missing one first.
+  const worktree = dead?.worktreeRepo && dead.worktreePath && existsSync(dead.worktreePath)
+    ? { repo: dead.worktreeRepo, path: dead.worktreePath, branch: dead.worktreeBranch ?? `wt/${dead.tmuxName}` }
+    : undefined
+  const keep = worktree ? { preserveWorktree: true, reuseWorktree: worktree } : {}
+  const named = req.name ? { name: req.name } : {}
+  const origin = { ...(req.initiator && { initiator: req.initiator }), ...(req.trigger && { trigger: req.trigger }) }
+
+  // Hold the worktree branch's base name for the whole cascade, so a concurrent spawn can't pick it (freed when
+  // the dead record is replaced) and `branch -D` the branch this revive preserves. The branch's BASE name is the
+  // token pickSessionName derives and createWorktree's stale cleanup targets; after an earlier recovery it is not
+  // the tmuxName. A name this revive claims (a specialist's) needs no reservation and must not get one, or the claim
+  // would refuse it: only the specialist claims it, under its own lock, and the catalog never hands it out.
+  const reserve = (n: string): boolean => n !== req.name && (registry.reservedNames.add(n), true)
+  const reservedName = worktree ? (worktree.branch.startsWith('wt/') ? baseNameFromBranch(worktree.branch) : dead!.tmuxName) : undefined
+  const reservedBranch = reservedName !== undefined && reserve(reservedName)
+  let busy = false
+  let lastError: string | undefined
+  let revived: Extract<ReviveOutcome, { ok: true }> | undefined
+  try {
+    revived = req.newThreadIn ? await respawnInNewThread(req.newThreadIn) : await cascade()
+  } finally {
+    if (reservedBranch) registry.reservedNames.delete(reservedName!)
+  }
+
+  if (revived) {
+    if (dead) repointChildren(dead, revived.result.sessionId)
+    if (savedWatches.length > 0) {
+      const n = restoreWatches(savedWatches, revived.result.sessionId, revived.result.threadId)
+      if (n > 0) process.stderr.write(`daemon: revive ${lastTmuxName}: restored ${n} PR watch(es) onto ${revived.result.sessionId}\n`)
+    }
+    if (req.backoffKey) clearBackoff(req.backoffKey)
+    return revived
+  }
+  if (busy) return { ok: false, busy: true, lastTmuxName, reason: 'a resume of this session is already in progress' }
+
+  // Total failure: the spawn deleted the dead record and its watches before it threw. Put them back so a later
+  // revive can still find them, unless a fallback tier already claimed the thread.
+  if (dead && !req.newThreadIn && registry.getByThread(thread.threadId) === undefined) {
+    dead.deadAt ??= Date.now()
+    registry.set(dead.sessionId, dead)
+    registry.setThread(dead.threadId, dead.sessionId)
+    if (savedWatches.length > 0) restoreWatches(savedWatches, dead.sessionId, dead.threadId)
+    registry.persist()
+    process.stderr.write(`daemon: revive ${lastTmuxName}: all tiers failed — restored the dead record + ${savedWatches.length} watch(es)\n`)
+  }
+  const backoff = req.backoffKey ? recordFailure(req.backoffKey, lastError ?? 'all recovery methods failed') : undefined
+  return { ok: false, lastTmuxName, reason: lastError ? `start failed: ${lastError}` : 'all recovery methods failed', ...(backoff && { backoff }) }
+
+  function ok(result: SpawnResult & { bridgeOrphan?: boolean }, method: ReviveMethod): Extract<ReviveOutcome, { ok: true }> {
+    return { ok: true, result, method, lastTmuxName }
+  }
+
+  async function cascade(): Promise<Extract<ReviveOutcome, { ok: true }> | undefined> {
+    const plan = resolveEngine(engine).recoveryPlan({
+      tmuxName: lastTmuxName, claudeSessionId,
+      codexThreadId: entry?.codexThreadId ?? dead?.codexThreadId,
+      codexHomeName: entry?.codexHomeName ?? dead?.codexHomeName,
+      sessionId: entry?.sessionId,
+    })
+    const prefix = req.promptPrefix ?? RECOVERY_REVERIFY_GUARD
+    // The `respawn` command hands the dead session's bucket down (a template or a flag on the topic wins); a revive keeps it.
+    const shared = { engine, ...(req.respawnOnly ? { inheritedLabel: label } : { label }), ...(carried && { carryOver: carried }), ...keep, ...named, ...origin }
+    const common = { model, ...shared }
+
+    // The gate reads both ids (PINNED R9: a mixed-ID record logs both tier failures, then respawns).
+    if (!req.respawnOnly && (claudeSessionId || entry?.codexThreadId || dead?.codexThreadId || plan.resume)) {
+      let result: (SpawnResult & { bridgeOrphan?: boolean }) | null = null
+      const r = plan.resume
+      if (r?.kind === 'await-bridge') {
+        result = await recoveryDeps.tryResume({
+          topic: thread.topic, threadId: thread.threadId, claudeSessionId: r.resumeFrom, threadUrl: thread.threadUrl, model, label,
+          ...(req.reuseName && { reuseName: lastTmuxName }), ...named,
+          ...(worktree && { worktree, preserveWorktree: true }), ...(carried && { carryOver: carried }),
+        })
+      } else if (r && 'resumeOmp' in r) {
+        // The reservation is the lock: two resumes of one dead session would each copy its file into a live session.
+        const from = r.resumeOmp.fromSessionId
+        if (registry.reservedNames.has(from)) { busy = true; return undefined }
+        const held = reserve(from)
+        try {
+          result = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
+            ...common, existingThreadId: thread.threadId, resumeOmp: r.resumeOmp, preserveWorktree: true, promptPrefix: prefix,
+          })
+        } catch (err) {
+          process.stderr.write(`daemon: omp resume of session ${from} failed: ${err}\n`)
+          lastError = errorText(err)
+        } finally {
+          if (held) registry.reservedNames.delete(from)
+        }
+      } else if (r && 'resumeCodex' in r) {
+        // A held home means another resume (or spawn) is mid-launch on it; a second would double-launch the same
+        // CODEX_HOME. Hold the home's name across the kill → launch → persist window.
+        const home = r.resumeCodex.homeName
+        if (registry.reservedNames.has(home)) { busy = true; return undefined }
+        const held = reserve(home)
+        try {
+          result = await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
+            ...common, existingThreadId: thread.threadId, resumeCodex: r.resumeCodex, promptPrefix: prefix,
+          })
+        } catch (err) {
+          process.stderr.write(`daemon: codex resume of ${r.resumeCodex.threadId} in home ${home} failed: ${err}\n`)
+          lastError = errorText(err)
+        } finally {
+          if (held) registry.reservedNames.delete(home)
+        }
+      }
+      if (result) return ok(result, 'resumed')
+      process.stderr.write(`daemon: resume tier 1 (--resume) failed for ${lastTmuxName}, trying fork-from-dead\n`)
+
+      try {
+        if (!plan.fork) throw new Error('cannot fork this session')
+        return ok(await recoveryDeps.doSpawnSession(thread.topic, undefined, undefined, {
+          ...common, existingThreadId: thread.threadId, forkFrom: plan.fork, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }),
+        }), 'forked')
+      } catch (err) {
+        lastError = errorText(err)
+        process.stderr.write(`daemon: resume tier 2 (fork-from-dead) failed for ${lastTmuxName}, falling back to respawn\n`)
+      }
+    }
+
+    try {
+      const result = await recoveryDeps.tryRespawn(thread.threadId, respawnTopic(), entry?.tmuxName ?? dead?.tmuxName, model, {
+        ...shared, ...req.respawnOpts, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }),
+      })
+      if (result) return ok(result, 'respawned')
+    } catch (err) {
+      lastError = errorText(err)
+      process.stderr.write(`daemon: revive tier 3 (respawn) failed for ${lastTmuxName}: ${lastError}\n`)
+    }
+    return undefined
+  }
+
+  async function respawnInNewThread(channel: string): Promise<Extract<ReviveOutcome, { ok: true }> | undefined> {
+    try {
+      const prompt = thread.threadId
+        ? `[system] Your previous thread (${thread.threadId}) is gone, so this is a new one; its history cannot be read here.\n\n${respawnTopic()}`
+        : respawnTopic()
+      return ok(await recoveryDeps.doSpawnSession(prompt, channel, undefined, {
+        model, engine, label, carryOver: carried, ...keep, ...named, ...origin,
+      }), 'respawned')
+    } catch (err) {
+      lastError = errorText(err)
+      process.stderr.write(`daemon: revive ${lastTmuxName}: a new thread in ${channel} failed: ${lastError}\n`)
+      return undefined
+    }
+  }
+
+  function respawnTopic(): string {
+    return typeof req.respawnTopic === 'function' ? req.respawnTopic() : req.respawnTopic ?? thread.topic
+  }
+}
+
+/** The refusal a target backing off gets, or undefined. Checked before anything reaches the platform. */
+export function backoffRefusal(key: string): { reason: string; backoff: Backoff } | undefined {
+  const b = activeBackoff(key)
+  if (!b) return undefined
+  return { backoff: b, reason: `not retrying until ${new Date(b.nextAt).toTimeString().slice(0, 8)} (${b.failures} failure${b.failures === 1 ? '' : 's'}); last: ${b.lastError}` }
+}
+
+/** A thread the daemon has no metadata for (the platform still has it, or it has none yet): enough for a respawn. */
+export function threadStub(threadId: string, topic: string): ThreadMetadata {
+  return { threadId, topic, sessionHistory: [], respawnCount: 0 } as unknown as ThreadMetadata
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
 
 // ---------------------------------------------------------------------------
 // Recover — crash recovery via resume or resurrect
@@ -62,7 +324,7 @@ function toRecoverInput(info: SessionInfo, siblingWatches?: WatchEntry[], prompt
 type RecoverResult = { name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string; displayName?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string; displayName?: string }
 
 async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string; siblingWatches?: WatchEntry[]; promptPrefix?: string; description?: string }): Promise<RecoverResult> {
-  const { thread, claudeSessionId, lastTmuxName, model } = dead
+  const { thread, lastTmuxName, model } = dead
   const displayName = dead.description || thread.description || thread.topic
 
   // Capture everything off the dead record up front: tier 1's kill deletes it, so the
@@ -74,23 +336,6 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   const worktree = deadInfo?.worktreeRepo && deadInfo.worktreePath
     ? { repo: deadInfo.worktreeRepo, path: deadInfo.worktreePath, branch: deadInfo.worktreeBranch ?? `wt/${deadInfo.tmuxName}` }
     : undefined
-  const carryOver = deadInfo
-    ? { artifacts: deadInfo.artifacts, contextLinks: deadInfo.contextLinks, description: deadInfo.description, predecessor: deadInfo.predecessor, launchCwd: deadInfo.launchCwd, disallowedTools: deadInfo.disallowedTools, parentId: authorityId(deadInfo), initiator: deadInfo.initiator }
-    : undefined
-  // Snapshot PR watches with their seen-cursors before any kill unwatches them; the
-  // cascade recreates the session under a new id, so restore them onto the survivor.
-  // siblingWatches: watches from dead sessions deduped away against this winner, so
-  // a watch owned by the skipped session isn't stranded on a never-revived record.
-  const savedWatches = [...(deadInfo ? getWatchesBySession(deadInfo.sessionId) : []), ...(dead.siblingWatches ?? [])]
-  const restoreOnto = (r: { sessionId: string; threadId: string }): void => {
-    // The recovered session is the dead one continuing: its children answer to it now.
-    if (deadInfo) repointChildren(deadInfo, r.sessionId)
-    if (savedWatches.length > 0) {
-      const n = restoreWatches(savedWatches, r.sessionId, r.threadId)
-      if (n > 0) process.stderr.write(`daemon: recover ${lastTmuxName}: restored ${n} PR watch(es) onto ${r.sessionId}\n`)
-    }
-  }
-
   // Resolve worktree availability BEFORE the cascade so a recovered agent is NEVER spawned
   // into the shared main checkout (spawnCwd). If the dir is gone: reattach it; if that's
   // transiently impossible, defer to next boot; if the branch is truly gone, skip and mark
@@ -120,75 +365,25 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
     // 'attached' → dir now exists; fall through to the cascade.
   }
 
-  const recoveredLabel = deadSessionLabel(recoveryEntry(thread.sessionHistory), deadInfo)
-  const commonOpts = { preserveWorktree: true, reuseWorktree: worktree, carryOver, promptPrefix: dead.promptPrefix ?? RECOVERY_REVERIFY_GUARD, label: recoveredLabel }
+  const outcome = await reviveThread({
+    thread, dead: deadInfo, model, promptPrefix: dead.promptPrefix ?? RECOVERY_REVERIFY_GUARD, reuseName: true, siblingWatches: dead.siblingWatches,
+    backoffKey: targetKeyForThread(thread.threadId), ignoreBackoff: true,
+  })
+  if (!outcome.ok) return { name: lastTmuxName, method: 'failed', reason: outcome.reason, threadUrl: thread.threadUrl, displayName }
+  const method = outcome.method === 'respawned' ? 'resurrected' : outcome.method
+  return { name: lastTmuxName, method, newName: outcome.result.name, threadUrl: thread.threadUrl, displayName }
+}
 
-  // Reserve the predecessor's name for the whole cascade so a concurrent spawn can't grab
-  // it (freed when the dead record is killed) and `branch -D` the worktree branch we're
-  // preserving. Reserve the branch's BASE name — the exact token pickSessionName derives
-  // and createWorktree's stale `branch -D wt/<name>` targets. tmuxName ≠ base after a prior
-  // recovery (fresh tmuxName, preserved old worktreeBranch), so reserving tmuxName would
-  // protect the wrong token and leave the base pickable; parse the branch to match.
-  // finally guarantees release on every exit (success, throw, total-failure); once the
-  // survivor's record persists its worktreeBranch, pickSessionName's reservation takes over.
-  // `deadInfo!` is safe: `worktree` is only truthy when it was built from
-  // `deadInfo.worktreeRepo && deadInfo.worktreePath` above, so a truthy `worktree`
-  // guarantees a non-null `deadInfo`.
-  const reservedName = worktree
-    ? (worktree.branch.startsWith('wt/') ? baseNameFromBranch(worktree.branch) : deadInfo!.tmuxName)
-    : undefined
-  if (reservedName) registry.reservedNames.add(reservedName)
-  try {
-    if (claudeSessionId) {
-      // Tier 1: full resume
-      const result = await tryResume({ reuseName: lastTmuxName, topic: thread.topic, threadId: thread.threadId, claudeSessionId, threadUrl: thread.threadUrl, model, worktree, preserveWorktree: true, label: recoveredLabel })
-      if (result) {
-        restoreOnto(result)
-        return { name: lastTmuxName, method: 'resumed', newName: result.name, threadUrl: thread.threadUrl, displayName }
-      }
-      process.stderr.write(`daemon: recover ${lastTmuxName}: resume failed, trying fork-from-dead\n`)
-
-      // Tier 2: fork from dead session (best-effort, short timeout)
-      try {
-        const forkResult = await doSpawnSession(thread.topic, undefined, undefined, {
-          ...commonOpts,
-          existingThreadId: thread.threadId,
-          forkFrom: { claudeSessionId, parentName: lastTmuxName },
-          model,
-        })
-        restoreOnto(forkResult)
-        return { name: lastTmuxName, method: 'forked', newName: forkResult.name, threadUrl: thread.threadUrl, displayName }
-      } catch {
-        process.stderr.write(`daemon: recover ${lastTmuxName}: fork failed, falling back to resurrect\n`)
-      }
+// Under the thread's target lock, and only while nobody is home: a resume or a specialist's revive may have
+// filled the thread since the candidates were listed.
+function recoverLocked(info: SessionInfo, input: Parameters<typeof recoverOne>[0]): Promise<RecoverResult> {
+  return withThreadLock(info.threadId, async () => {
+    const home = registry.get(registry.getByThread(info.threadId) ?? '')
+    if (home && occupied(occupancy(home))) {
+      return { name: info.tmuxName, method: 'failed', reason: `already live as ${home.tmuxName}`, threadUrl: input.thread.threadUrl }
     }
-
-    // Tier 3: respawn
-    const result = await tryRespawn(thread.threadId, thread.topic, lastTmuxName, model, commonOpts)
-    if (result) {
-      restoreOnto(result)
-      return { name: lastTmuxName, method: 'resurrected', newName: result.name, threadUrl: thread.threadUrl, displayName }
-    }
-
-    // Total failure: doSpawnSession deleted the dead record + its watches early (before
-    // the spawn failed), and no survivor exists to restore onto. Re-persist the record
-    // (still deadAt) + its watches so manual recovery stays possible and the next boot
-    // can retry — otherwise a transient boot glitch would permanently erase metadata.
-    // Gate on the THREAD having no owner (not the old sessionId): a fallback tier may
-    // have created a new record + claimed the thread before throwing — re-persisting
-    // then would clobber that live record's routing and orphan it.
-    if (deadInfo && registry.getByThread(thread.threadId) === undefined) {
-      deadInfo.deadAt = deadInfo.deadAt ?? Date.now()
-      registry.set(deadInfo.sessionId, deadInfo)
-      registry.setThread(deadInfo.threadId, deadInfo.sessionId)
-      if (savedWatches.length > 0) restoreWatches(savedWatches, deadInfo.sessionId, deadInfo.threadId)
-      registry.persist()
-      process.stderr.write(`daemon: recover ${lastTmuxName}: all tiers failed — restored dead record + ${savedWatches.length} watch(es) for manual retry\n`)
-    }
-    return { name: lastTmuxName, method: 'failed', reason: 'all recovery methods failed', threadUrl: thread.threadUrl, displayName }
-  } finally {
-    if (reservedName) registry.reservedNames.delete(reservedName)
-  }
+    return recoverOne(input)
+  })
 }
 
 export async function handleRecoverIntercept(msg: InboundMessage, targetName?: string): Promise<void> {
@@ -243,7 +438,7 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
       const wavePromises = wave.map(async (info, j) => {
         if (j > 0) await new Promise(r => setTimeout(r, STAGGER_MS * j))
         try {
-          const r = await recoverOne(toRecoverInput(info, siblingWatches.get(info.sessionId)))
+          const r = await recoverLocked(info, toRecoverInput(info, siblingWatches.get(info.sessionId)))
           if (r.method !== 'failed') {
             const e = sessionEmoji(r.newName)
             void gateway.send(info.threadId, `${e} \`${r.newName}\` recovered (${r.method})`).catch(() => {})
@@ -480,7 +675,7 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
       const wave = deadInfos.slice(i, i + MAX_CONCURRENT)
       const settled = await Promise.allSettled(wave.map(async (info, j) => {
         if (j > 0) await new Promise(r => setTimeout(r, STAGGER_MS * j))
-        return recoverOne(toRecoverInput(info, undefined, promptPrefix))
+        return recoverLocked(info, toRecoverInput(info, undefined, promptPrefix))
       }))
       for (const s of settled) {
         if (s.status === 'fulfilled') results.push(s.value)

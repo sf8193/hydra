@@ -1,14 +1,15 @@
 import { registry, threadRegistry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { doSpawnSession } from './session-lifecycle.js'
+import { backoffRefusal, reviveThread, threadStub } from './recovery.js'
+import { backoffClock, getBackoff } from './recovery-backoff.js'
 import { gateway } from './config.js'
 import { registerIdempotency, clearIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { pushToolSurface } from './tool-surface.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
-import { getSpecialist, setSpecialist, readKickoff, withSpecialistLock, type Specialist } from './specialists.js'
+import { getSpecialist, setSpecialist, readKickoff, withTargetLock, type Specialist } from './specialists.js'
 import type { DeliveryResult } from './engines/engine-adapter.js'
 
 export type SpecialistDeliverResult =
@@ -22,19 +23,10 @@ export class SpecialistError extends Error {
   constructor(message: string, readonly exitCode?: number, readonly sessionId?: string) { super(message) }
 }
 
-export const SPAWN_BACKOFF_BASE_MS = 30_000
-export const SPAWN_BACKOFF_MAX_MS = 10 * 60_000
-
-/** Test seam: the spawn a vacant specialist is refilled with, the clock, and the thread check. */
+/** Test seam: the thread check. The spawn is recovery.ts's (`_setRecoveryDeps`), the clock recovery-backoff.ts's. */
 export const specialistDeps = {
-  spawn: doSpawnSession,
-  now: () => Date.now(),
   threadExists: (threadId: string) => gateway.threadExists(threadId),
 }
-
-// A refill that keeps failing (bad kickoff, tmux error) must not be retried by every message that arrives.
-const spawnBackoff = new Map<string, { failures: number; nextAt: number }>()
-export function _resetSpecialistBackoff(): void { spawnBackoff.clear() }
 
 function liveOccupant(threadId: string | undefined): SessionInfo | undefined {
   const id = threadId ? registry.getByThread(threadId) : undefined
@@ -68,7 +60,7 @@ async function occupant(name: string, initiator: string | undefined): Promise<{ 
  */
 export async function spawnSpecialist(name: string, initiator: string): Promise<{ info: SessionInfo; url: string }> {
   if (!getSpecialist(name)) throw new Error(`specialist "${name}" not found`)
-  return withSpecialistLock(name, async () => {
+  return withTargetLock(name, async () => {
     const specialist = getSpecialist(name)
     if (!specialist) throw new Error(`specialist "${name}" was removed`)
     const live = liveOccupant(specialist.threadId)
@@ -77,47 +69,42 @@ export async function spawnSpecialist(name: string, initiator: string): Promise<
   })
 }
 
-/** Start a session for a vacant specialist: from its kickoff, named for it, in its thread when the platform still has it. */
+/**
+ * Fill a vacant specialist by the rule (reviveThread): in its thread while the platform still has it, so the
+ * session resumes the conversation or reads the history; in a new thread in its channel when it is gone.
+ * The kickoff is the respawn tier's prompt only.
+ */
 async function fill(name: string, specialist: Specialist, initiator: string | undefined, opts: { ignoreBackoff?: boolean } = {}): Promise<{ info: SessionInfo; url: string }> {
-  const kickoff = readKickoff(specialist)
-  if (!kickoff) throw new Error(`specialist "${name}" has no live session and no kickoff to spawn one with`)
-
-  const now = specialistDeps.now()
-  const backoff = spawnBackoff.get(name)
-  if (!opts.ignoreBackoff && backoff && now < backoff.nextAt) {
-    throw new SpecialistError(`specialist "${name}": refilling is backing off for ${Math.ceil((backoff.nextAt - now) / 1000)}s after ${backoff.failures} failed attempt(s)`, 6)
-  }
-
   // A live session already holding the name in some other thread (a stray from a re-point, or a hand-made one) makes the
   // spawn impossible: say so plainly, and do not count it as a failed refill.
   const holder = [...registry.values()].find(i => i.tmuxName === name && occupied(occupancy(i)))
   if (holder) throw new SpecialistError(`specialist "${name}": a session named ${name} is already running in thread ${holder.threadId}, which is not the specialist's thread${specialist.threadId ? ` (${specialist.threadId})` : ''}; kill it, or point the specialist at it with 'hydra specialist set ${name} --thread ${holder.threadId}'`, 3, holder.sessionId)
 
-  const thread = specialist.threadId ? threadRegistry.get(specialist.threadId) : undefined
-  const reusable = !!specialist.threadId && !!thread && await specialistDeps.threadExists(specialist.threadId)
-  if (!reusable && !specialist.channel) {
+  if (!opts.ignoreBackoff) {
+    const refusal = backoffRefusal(name)
+    if (refusal) throw new SpecialistError(`specialist "${name}": ${refusal.reason}`, 6)
+  }
+  const onPlatform = !!specialist.threadId && await specialistDeps.threadExists(specialist.threadId)
+  if (!onPlatform && !specialist.channel) {
     throw new Error(specialist.threadId
       ? `specialist "${name}": thread ${specialist.threadId} is gone and the specialist has no channel to open a new one in`
       : `specialist "${name}" has no thread and no channel to open one in`)
   }
-  const last = reusable ? thread!.sessionHistory.at(-1) : undefined
-
-  let result
-  try {
-    result = await specialistDeps.spawn(kickoff, specialist.channel, undefined, {
-      initiator: initiator ?? `specialist:${name}`,
-      trigger: `specialist:${name}`,
-      // The session is named for the specialist, so its tmux name, `hydra list` row and thread title all say so, and a refill takes the name back.
-      name,
-      ...((specialist.model ?? last?.model) && { model: (specialist.model ?? last?.model)! }),
-      ...(reusable && { existingThreadId: specialist.threadId!, ...(last && { resurrectFrom: last.tmuxName }) }),
-    })
-  } catch (err) {
-    const failures = (backoff?.failures ?? 0) + 1
-    spawnBackoff.set(name, { failures, nextAt: now + Math.min(SPAWN_BACKOFF_BASE_MS * 2 ** (failures - 1), SPAWN_BACKOFF_MAX_MS) })
-    throw err
-  }
-  spawnBackoff.delete(name)
+  const thread = (specialist.threadId && threadRegistry.get(specialist.threadId)) || threadStub(specialist.threadId ?? '', name)
+  const outcome = await reviveThread({
+    thread,
+    ...(!onPlatform && { newThreadIn: specialist.channel }),
+    respawnTopic: () => {
+      const kickoff = readKickoff(specialist)
+      if (!kickoff) throw new Error('the specialist has no kickoff')
+      return kickoff
+    },
+    name, model: specialist.model,
+    initiator: initiator ?? `specialist:${name}`, trigger: `specialist:${name}`,
+    backoffKey: name, ignoreBackoff: opts.ignoreBackoff,
+  })
+  if (!outcome.ok) throw new SpecialistError(`specialist "${name}": ${outcome.reason}`, outcome.busy ? 5 : 6)
+  const result = outcome.result
 
   // `set` and `rm` do not take the lock and the spawn took seconds: write against what is stored now, not the copy read before it.
   const current = getSpecialist(name)
@@ -151,18 +138,18 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
  */
 async function ensureSpecialist(name: string, initiator?: string): Promise<{ info: SessionInfo; spawned: boolean }> {
   if (!getSpecialist(name)) throw new Error(`specialist "${name}" not found`)
-  return withSpecialistLock(name, () => occupant(name, initiator))
+  return withTargetLock(name, () => occupant(name, initiator))
 }
 
 /** What `hydra specialist show|list` adds to the stored fields: who fills it now, and whether refills are backing off. */
-export function specialistStatus(name: string): { occupant?: { session: string; connected: boolean }; refillBackoff?: { failures: number; retryInSec: number } } {
+export function specialistStatus(name: string): { occupant?: { session: string; connected: boolean }; refillBackoff?: { failures: number; retryInSec: number; lastError: string } } {
   const s = getSpecialist(name)
   const live = s ? liveOccupant(s.threadId) : undefined
-  const b = spawnBackoff.get(name)
-  const wait = b ? Math.ceil((b.nextAt - specialistDeps.now()) / 1000) : 0
+  const b = getBackoff(name)
+  const wait = b ? Math.ceil((b.nextAt - backoffClock.now()) / 1000) : 0
   return {
     ...(live && { occupant: { session: live.tmuxName, connected: transport.has(live.sessionId) } }),
-    ...(b && wait > 0 && { refillBackoff: { failures: b.failures, retryInSec: wait } }),
+    ...(b && wait > 0 && { refillBackoff: { failures: b.failures, retryInSec: wait, lastError: b.lastError } }),
   }
 }
 
@@ -188,7 +175,7 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
 
   try {
     const { info, spawned } = await ensureSpecialist(p.specialist, p.initiator)
-    const occ = occupancy(info, specialistDeps.now())
+    const occ = occupancy(info, backoffClock.now())
     const connected = occ === 'reachable'
     if (!spawned && occ === 'orphaned') {
       release()
