@@ -1,12 +1,14 @@
 import { App, LogLevel } from '@slack/bolt'
 import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../shared/socket-supervisor.js'
 import { catchUp, toEvent, type CatchUpResult, type RawMessage, type SlackApi } from './slack-catchup.js'
-import type { SlackWatchConfig, SlackWatcher } from './slack-watch.js'
+import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
+import { dirname } from 'path'
+import { routedChannels, type SlackWatchConfig, type SlackWatcher } from './slack-watch.js'
 
 /**
- * The Slack side of Slack watching: one read-only Socket Mode connection that feeds
+ * The Slack side of Slack watching: one Socket Mode connection that feeds
  * `message` events to the watcher, and the catch-up pass that replays what the
- * connection missed. It never posts to Slack.
+ * connection missed. It never posts to Slack; its only write is the `ack` reaction.
  *
  * It lives in the Discord daemon but is its own thing: its own Slack app connection,
  * supervised by the shared SocketSupervisor with a *degrade* policy. A dead Slack
@@ -49,11 +51,27 @@ export type SlackAppLike = {
   emitter(): SocketEmitter | null
   authTest(): Promise<{ botId?: string; userId?: string; scopes?: string[] }>
   userName(userId: string): Promise<string | undefined>
+  /** The listener's only write: the ack reaction. */
+  react(channel: string, ts: string, name: string): Promise<void>
+  /** A file's bytes, to `dest` at mode 0600 (its directory 0700). Throws past `maxBytes`. */
+  download(url: string, dest: string, maxBytes: number): Promise<void>
   api: SlackApi
 }
 
+/** The scopes each enabled option needs, so a missing one is a read at startup rather than a guess later. */
+export function scopesNeeded(cfg: SlackWatchConfig): { option: string; any: string[] }[] {
+  const routes = cfg.routes
+  return [
+    ...(routes.some(r => r.channels.length) ? [{ option: 'channels', any: ['channels:history', 'groups:history'] }] : []),
+    { option: 'sender names', any: ['users:read'] },
+    ...(routes.some(r => r.dms) ? [{ option: 'dms', any: ['im:history'] }, { option: 'catching up DMs opened while disconnected', any: ['im:read'] }] : []),
+    ...(routes.some(r => r.files) ? [{ option: 'files', any: ['files:read'] }] : []),
+    ...(routes.some(r => r.ack) ? [{ option: 'ack', any: ['reactions:write'] }] : []),
+  ]
+}
+
 /** A Slack `message` event as Bolt hands it over. */
-export type RawEvent = RawMessage & { channel?: string }
+export type RawEvent = RawMessage & { channel?: string; channel_type?: string }
 
 export type ListenerState = 'off' | 'connecting' | 'up' | 'down' | 'exhausted'
 export type ListenerHealth = {
@@ -196,20 +214,28 @@ export class SlackListener {
       // Every connection after the first follows a gap, however short: Slack replays nothing.
       if (was) { this.reconnectedSincePass = true; void this.runCatchUp(true, 'reconnected') }
     })
+    // Hold every cursor before the socket opens: a live message during start or auth.test must not move a cursor
+    // past the downtime gap the catch-up pass that follows has yet to read. Each pass releases what it reads.
+    this.d.watcher.beginCatchUp([...routedChannels(cfg), ...(cfg.routes.some(r => r.dms) ? this.d.watcher.dmChannels() : [])])
     await app.start()
     const auth = await app.authTest().catch(err => { this.d.log(`daemon: slack listener: auth.test failed: ${err}\n`); return {} as { botId?: string; userId?: string; scopes?: string[] } })
     if (auth.botId) this.d.watcher.setBotId(auth.botId)
     if (auth.userId && auth.userId !== cfg.botUserId) {
       this.d.log(`daemon: slack listener: WARN connected as ${auth.userId} but slack-watch.json names botUserId ${cfg.botUserId}\n`)
     }
+    const needed = scopesNeeded(cfg)
+    this.d.log(`daemon: slack listener: enabled options need: ${needed.map(n => `${n.option} → ${n.any.join(' or ')}`).join('; ')}\n`)
     if (auth.scopes) {
       // Scopes are not secret; the token is. Logging them turns "missing_scope" from a guess into a read.
       this.d.log(`daemon: slack listener: bot token scopes: ${auth.scopes.join(', ') || '(none)'}\n`)
-      if (!auth.scopes.some(sc => sc === 'channels:history' || sc === 'groups:history')) {
-        this.d.log('daemon: slack listener: WARN the bot token has neither channels:history nor groups:history, so no message can be read; add the one that matches your channels and reinstall the app\n')
+      for (const n of needed) {
+        if (!n.any.some(sc => auth.scopes!.includes(sc))) {
+          this.d.log(`daemon: slack listener: WARN ${n.option} needs ${n.any.join(' or ')}, which the bot token lacks; add it and reinstall the app\n`)
+        }
       }
     }
     this.d.watcher.setNameResolver(id => app.userName(id))
+    this.d.watcher.setSlackActions({ react: (c, ts, name) => app.react(c, ts, name), download: (url, dest, max) => app.download(url, dest, max) })
     this.sup!.touch()
   }
 
@@ -325,12 +351,58 @@ export function boltApp(tokens: { app: string; bot: string }): SlackAppLike {
       const scopes = (r as { response_metadata?: { scopes?: string[] } }).response_metadata?.scopes
       return { botId: r.bot_id, userId: r.user_id, ...(scopes && { scopes }) }
     },
+    react: async (channel, ts, name) => { await client.reactions.add({ token: tokens.bot, channel, timestamp: ts, name }) },
+    download: async (url, dest, maxBytes) => {
+      // Only Slack's own hosts ever get the bot token, including across redirects.
+      const slackHost = (u: string) => { try { const h = new URL(u); return h.protocol === 'https:' && (h.hostname === 'slack.com' || h.hostname.endsWith('.slack.com')) } catch { return false } }
+      let res: Response | undefined
+      for (let hop = 0; hop < 3; hop++) {
+        if (!slackHost(url)) throw new Error('not a Slack file URL')
+        res = await fetch(url, { headers: { Authorization: `Bearer ${tokens.bot}` }, redirect: 'manual', signal: AbortSignal.timeout(60_000) })
+        const next = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null
+        if (!next) break
+        url = new URL(next, url).toString()
+      }
+      if (!res?.ok || !res.body) throw new Error(`HTTP ${res?.status}`)
+      if (Number(res.headers.get('content-length') ?? 0) > maxBytes) throw new Error(`over ${maxBytes / 1024 / 1024} MB`)
+      // Without files:read Slack answers with its login page, not an error. Saving that under the file's name would be a quiet lie.
+      if (/^text\/html/i.test(res.headers.get('content-type') ?? '') && !/\.html?$/i.test(dest)) throw new Error('Slack sent a web page instead of the file; does the bot token have files:read?')
+      // Streamed to disk, never held whole; a partial file never takes the real name.
+      mkdirSync(dirname(dest), { recursive: true, mode: 0o700 })
+      const part = `${dest}.part`
+      const fd = openSync(part, 'w', 0o600)
+      try {
+        let size = 0
+        for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+          size += chunk.length
+          if (size > maxBytes) throw new Error(`over ${maxBytes / 1024 / 1024} MB`)
+          writeSync(fd, chunk)
+        }
+        closeSync(fd)
+        renameSync(part, dest)
+      } catch (err) {
+        try { closeSync(fd) } catch {}
+        rmSync(part, { force: true })
+        throw err
+      }
+    },
     userName: async id => {
       const r = await client.users.info({ token: tokens.bot, user: id })
       return r.user?.profile?.display_name || r.user?.real_name || r.user?.name || undefined
     },
     api: {
       history: async a => page(await client.conversations.history({ token: tokens.bot, channel: a.channel, oldest: a.oldest, limit: 200, ...(a.cursor && { cursor: a.cursor }) }).catch(e => { throw explainSlackError(e) })),
+      dms: async () => {
+        const out: { channel: string; user?: string }[] = []
+        let cursor: string | undefined
+        for (let i = 0; i < 5; i++) {
+          const r = await client.users.conversations({ token: tokens.bot, types: 'im', limit: 200, ...(cursor && { cursor }) }).catch(e => { throw explainSlackError(e) })
+          for (const c of (r.channels ?? []) as { id?: string; user?: string }[]) if (c.id) out.push({ channel: c.id, ...(c.user && { user: c.user }) })
+          cursor = r.response_metadata?.next_cursor || undefined
+          if (!cursor) break
+        }
+        return out
+      },
       replies: async a => page(await client.conversations.replies({ token: tokens.bot, channel: a.channel, ts: a.ts, oldest: a.oldest, inclusive: a.inclusive, limit: 200, ...(a.cursor && { cursor: a.cursor }) }).catch(e => { throw explainSlackError(e) })),
     },
   }

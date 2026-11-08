@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { SlackWatcher, type SlackWatchConfig } from '../slack-watch.js'
 import { SlackListener, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, explainSlackError, type SlackAppLike, type RawEvent } from '../slack-listener.js'
 import type { SlackApi, RawMessage } from '../slack-catchup.js'
@@ -23,7 +23,7 @@ const dirs: string[] = []
 const listeners: SlackListener[] = []
 afterEach(() => { for (const l of listeners.splice(0)) l.stop(); for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWatchConfig | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]> } = {}) {
+function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWatchConfig | null; failStart?: boolean; firstRetryBaseMs?: number; scopes?: string[]; historyError?: string; history?: RawMessage[]; threads?: Record<string, RawMessage[]>; duringAuth?: (deliverLive: (e: RawEvent) => void) => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'slack-listener-'))
   dirs.push(dir)
   let now = 1_793_000_000_000
@@ -33,7 +33,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWa
   const apps: { handler: (e: RawEvent) => void; client: FakeClient; stopped: boolean; started: number; apiCalls: string[] }[] = []
   const state = { failStart: !!over.failStart, historyError: over.historyError as string | undefined, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[] }
   const watcher = new SlackWatcher({
-    now: () => now, file: join(dir, 'w.json'), log: l => logs.push(l), config: () => cfg,
+    now: () => now, file: join(dir, 'w.json'), filesDir: join(dir, 'files'), log: l => logs.push(l), config: () => over.config ?? cfg,
     deliver: async (_s, msg) => { sent.push(msg); return { ok: true } },
   })
   // a cursor so the boot pass reads something instead of starting from now
@@ -60,8 +60,10 @@ function setup(over: { tokens?: { app?: string; bot?: string }; config?: SlackWa
         start: async () => { rec.started++; if (state.failStart) throw new Error('invalid_auth'); rec.client.emit('connected') },
         stop: async () => { rec.stopped = true },
         emitter: () => rec.client,
-        authTest: async () => ({ botId: 'BBOT', userId: BOT, ...(over.scopes && { scopes: over.scopes }) }),
+        authTest: async () => { over.duringAuth?.(rec.handler); return { botId: 'BBOT', userId: BOT, ...(over.scopes && { scopes: over.scopes }) } },
         userName: async id => { state.nameLookups.push(id); return id === 'UB' ? 'Bea B' : undefined },
+        react: async (c, ts, name) => { rec.apiCalls.push(`react:${c}:${ts}:${name}`) },
+        download: async (url, dest) => { rec.apiCalls.push(`download:${url}`); mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, 'bytes', { mode: 0o600 }) },
         api,
       } as SlackAppLike
     },
@@ -76,11 +78,54 @@ describe('diagnosing a refused token', () => {
     const ok = setup({ scopes: ['channels:history', 'users:read'] })
     await ok.listener.start()
     expect(ok.logs.join()).toContain('bot token scopes: channels:history, users:read')
-    expect(ok.logs.join()).not.toContain('WARN the bot token has neither')
+    expect(ok.logs.join()).not.toContain('WARN')
     const bad = setup({ scopes: ['chat:write', 'reactions:write'] })
     await bad.listener.start()
     expect(bad.logs.join()).toContain('bot token scopes: chat:write, reactions:write')
-    expect(bad.logs.join()).toContain('WARN the bot token has neither channels:history nor groups:history')
+    expect(bad.logs.join()).toContain('WARN channels needs channels:history or groups:history, which the bot token lacks')
+    expect(bad.logs.join()).toContain('WARN sender names needs users:read')
+  })
+
+  test('a live DM with a file: downloaded, delivered to the dms route, and acked', async () => {
+    const full: SlackWatchConfig = { ...cfg, people: { UB: { role: 'owner' } }, routes: [
+      { channels: [CH], to: 'slopbot', from: 'anyone' },
+      { channels: [], dms: true, to: 'assistant', from: ['owner'], files: true, ack: 'eyes' },
+    ] }
+    const t = setup({ config: full })
+    await t.listener.start()
+    t.apps[0].handler({ channel: 'D0BEA0001', ts: '1793000001.000001', user: 'UB', text: 'see attached', channel_type: 'im',
+      files: [{ id: 'F1', name: 'a.pdf', size: 3, url_private_download: 'https://files.slack.com/F1' }] } as RawEvent)
+    await t.watcher.flush()
+    await Bun.sleep(5)
+    expect(t.sent.at(-1)).toContain('[dm] Bea B (owner) <@UB>')
+    expect(t.apps[0].apiCalls).toContain('download:https://files.slack.com/F1')
+    expect(t.apps[0].apiCalls).toContain('react:D0BEA0001:1793000001.000001:eyes')
+  })
+
+  test('a live message while the connection is still starting does not move a cursor past the downtime gap', async () => {
+    // cursor 1000 (from setup); a tag at 1050 while the daemon was down; live chat at 1100 arrives during auth.test
+    const t = setup({
+      history: [{ ts: '1050.000001', user: 'UB', text: `${mention} (sent while down)` }, { ts: '1100.000001', user: 'UC', text: 'live chat' }],
+      duringAuth: live => live({ channel: CH, ts: '1100.000001', user: 'UC', text: 'live chat' }),
+    })
+    await t.listener.start()
+    await t.watcher.flush()
+    expect(t.sent.some(m => m.includes('sent while down'))).toBe(true)
+    expect(t.watcher.channelCursor(CH)).toBe('1100.000001')
+  })
+
+  test('startup names the scopes each enabled option needs, and warns for each one the token lacks', async () => {
+    const full: SlackWatchConfig = { ...cfg, people: { UOWNER: { role: 'owner' } }, routes: [
+      { channels: [CH], to: 'slopbot', from: 'anyone', files: true, ack: 'eyes' },
+      { channels: [], dms: true, to: 'slopbot', from: ['owner'] },
+    ] }
+    const t = setup({ config: full, scopes: ['channels:history', 'users:read', 'im:history'] })
+    await t.listener.start()
+    const log = t.logs.join()
+    expect(log).toContain('enabled options need: channels → channels:history or groups:history; sender names → users:read; dms → im:history; catching up DMs opened while disconnected → im:read; files → files:read; ack → reactions:write')
+    expect(log).toContain('WARN files needs files:read')
+    expect(log).toContain('WARN ack needs reactions:write')
+    expect(log).not.toContain('WARN dms')
   })
 
   test('a refusal a retry cannot fix is alerted once, at once, with what to do; a good pass re-arms it', async () => {

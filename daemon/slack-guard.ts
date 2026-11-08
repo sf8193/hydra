@@ -19,7 +19,9 @@ export type Guard = { command: string; includeText: boolean; timeoutMs: number }
 export type GuardInput = {
   from: { id?: string; name?: string; role?: string }
   channel: string
+  /** The thread's ts; empty for a DM's top-level conversation. */
   thread: string
+  dm?: true
   to: string
   text?: string
 }

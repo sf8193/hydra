@@ -1,11 +1,12 @@
-import { SlackWatcher, currentSlackWatchConfig, cmpTs, slackWatchesPath, routeFor, routedChannels, routeTargets, type SlackWatchConfig, type SlackWatchStats, type Target } from './slack-watch.js'
+import { SlackWatcher, currentSlackWatchConfig, cmpTs, slackWatchesPath, routeFor, routedChannels, routeTargets, DM_THREAD, isDm, type SlackWatchConfig, type SlackWatchStats, type Target } from './slack-watch.js'
 import { deliverToSpecialist } from './specialist-deliver.js'
 import { getSpecialist } from './specialists.js'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { pushToolSurface } from './tool-surface.js'
 import { SlackListener, boltApp, type ListenerHealth } from './slack-listener.js'
-import { SCRUBBED_ENV } from './config.js'
+import { SCRUBBED_ENV, STATE_DIR } from './config.js'
+import { join } from 'path'
 import { safeSend } from './util.js'
 import { mainChannel } from './main-session.js'
 import { transport } from './bridge-transport.js'
@@ -84,6 +85,7 @@ export function getSlackWatcher(): SlackWatcher {
   return watcher ??= new SlackWatcher({
     now: Date.now,
     file: slackWatchesPath(),
+    filesDir: join(STATE_DIR, 'slack-files'),
     log,
     config,
     alert,
@@ -171,6 +173,8 @@ function requireConfig(): SlackWatchConfig {
 
 function checkThread(cfg: SlackWatchConfig, channel: unknown, threadTs: unknown): { channel: string; threadTs: string } {
   const channels = routedChannels(cfg)
+  // A DM is watched as it arrives, by the dms route: there is nothing to add or remove by hand.
+  if (typeof channel === 'string' && isDm(channel)) throw new Error(`${channel} is a DM: the dms route watches DMs as they arrive, so there is nothing to add or remove by hand`)
   if (typeof channel !== 'string' || !channels.includes(channel)) throw new Error(`channel must be one of: ${channels.join(', ')}`)
   if (typeof threadTs !== 'string' || !THREAD_TS.test(threadTs)) throw new Error('thread_ts must look like 1793732224.093059')
   return { channel, threadTs }
@@ -214,7 +218,7 @@ export function formatSlackWatches(now = Date.now(), only?: (channel: string) =>
   return getSlackWatcher().list().filter(e => !only || only(e.channel)).map(e => {
     const idle = Math.max(0, Math.round((now - e.lastEventAt) / 3_600_000))
     const owed = e.owed?.length ? ` · ${e.owed.length} owed` : ''
-    return `${e.channel}:${e.threadTs} → ${routeFor(config(), e.channel)?.to ?? '(no route: owed messages wait)'} · idle ${idle}h${owed}`
+    return `${e.threadTs === DM_THREAD ? `${e.channel} (DM)` : `${e.channel}:${e.threadTs}`} → ${routeFor(config(), e.channel)?.to ?? '(no route: owed messages wait)'} · idle ${idle}h${owed}`
   })
 }
 
@@ -240,14 +244,14 @@ function routeNote(to: string): { note?: string } {
 const MAIN_NOTE = 'main is never revived; while it is disconnected its messages stay owed, since its queue does not survive a restart'
 
 /** For `hydra health` and `slack-watch list`: null when nothing is configured. Refusals and drops count since the daemon started. */
-export function slackWatchHealth(now = Date.now()): ({ routes: { channels: string[]; to: string; note?: string }[]; watches: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } & SlackWatchStats) | null {
+export function slackWatchHealth(now = Date.now()): ({ routes: { channels: string[]; dms?: true; to: string; note?: string }[]; watches: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } & SlackWatchStats) | null {
   const cfg = config()
   if (!cfg) return null
   const entries = getSlackWatcher().list()
   const owed = entries.flatMap(e => e.owed ?? [])
   const oldest = owed.sort(cmpTs)[0]
   return {
-    routes: cfg.routes.map(r => ({ channels: r.channels, to: r.to, ...routeNote(r.to) })),
+    routes: cfg.routes.map(r => ({ channels: r.channels, ...(r.dms && { dms: true as const }), to: r.to, ...routeNote(r.to) })),
     watches: entries.length,
     owed: owed.length,
     oldestOwedAgeMin: oldest ? Math.max(0, Math.round((now / 1000 - parseFloat(oldest)) / 60)) : null,

@@ -158,6 +158,11 @@ describe('routes in the runtime', () => {
     expect((listed.data as any).health.routes[0].note).toContain('no such specialist: nobody-here')
   })
 
+  test('slack-watch add with a DM id says DMs are watched as they arrive', async () => {
+    configure({ channels: undefined, specialist: undefined, people: { UA0000000: { role: 'owner' } }, routes: [{ channels: ['C1'], to: SPECIALIST, from: 'anyone' }, { dms: true, to: SPECIALIST, from: ['owner'] }] })
+    expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'D0ALICE01', threadTs: '9.000001' }))).toMatchObject({ ok: false, error: expect.stringContaining('is a DM: the dms route watches DMs as they arrive') })
+  })
+
   test('a route naming no such specialist keeps its messages owed', async () => {
     configure({ channels: undefined, specialist: undefined, routes: [{ channels: ['C1'], to: 'nobody-here', from: 'anyone' }] })
     const w = getSlackWatcher()
