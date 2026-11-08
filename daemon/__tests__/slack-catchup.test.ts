@@ -7,7 +7,7 @@ import { catchUp, toEvent, type SlackApi, type RawMessage, type Page } from '../
 
 const BOT = 'UBOT'
 const CH = 'C_FOOD'
-const cfg: SlackWatchConfig = { botUserId: BOT, channels: [CH], specialist: 'slopbot', idleExpiryMs: 7 * 86_400_000, coalesceMs: 5, maxWatches: 50, maxMentionsPer10Min: 10 }
+const cfg: SlackWatchConfig = { botUserId: BOT, channels: [CH], specialist: 'slopbot', people: {}, from: 'anyone', idleExpiryMs: 7 * 86_400_000, coalesceMs: 5, maxWatches: 50, maxMentionsPer10Min: 10 }
 const mention = `<@${BOT}> a cart please`
 
 const dirs: string[] = []
@@ -51,6 +51,24 @@ describe('toEvent', () => {
 })
 
 describe('catchUp', () => {
+  test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
+    const closed: SlackWatchConfig = { ...cfg, people: { UOWNER: { name: 'Owner', role: 'owner' } }, from: 'people' }
+    const { w, sent } = setup(undefined, closed)
+    w.handle({ channel: CH, ts: '1000.000001', user: 'UOWNER', text: 'old chat' }) // sets the cursor
+    const { api } = fakeApi({ [CH]: [
+      { ts: '1005.000001', user: 'USTRANGER', text: mention },
+      { ts: '1010.000001', user: 'UOWNER', text: mention },
+    ] })
+    const r = await catchUp(w, api, closed, opts())
+    await catchUp(w, fakeApi({ [CH]: [{ ts: '1005.000001', user: 'USTRANGER', text: mention }] }).api, closed, { ...opts(), deep: true })
+    await w.flush()
+    expect(r).toMatchObject({ complete: true, handled: 2, accepted: 1 })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('Owner (owner) <@UOWNER>')
+    expect(w.get(CH, '1005.000001')).toBeUndefined()
+    expect(w.stats()).toMatchObject({ refused: 1, refusedBy: { USTRANGER: 1 } })
+  })
+
   test('the first run has no cursor: it starts from now and reads nothing', async () => {
     const { w } = setup()
     const { api, calls } = fakeApi({ [CH]: [{ ts: '1792999999.000001', text: mention, user: 'UA' }] })

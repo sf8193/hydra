@@ -85,7 +85,8 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
     for (const m of [...msgs].sort((a, b) => cmpTs(a.ts ?? '0.0', b.ts ?? '0.0'))) {
       const ev = toEvent(channel, m)
       if (!ev) continue
-      if (watcher.handle(ev) !== 'ignored') accepted++
+      const outcome = watcher.handle(ev)
+      if (outcome !== 'ignored' && outcome !== 'refused') accepted++
       handled++
     }
   }

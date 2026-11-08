@@ -102,6 +102,20 @@ describe('operator view', () => {
     expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'C_ELSEWHERE', threadTs: '9.000002' }))).toMatchObject({ ok: false, error: expect.stringContaining('not one of the channels') })
   })
 
+  test('slack-watch list counts refusals by sender, and drops by kind', async () => {
+    configure({ people: { UOWNER: { role: 'owner' } }, maxWatches: 1 })
+    const before = (await handleCLIRequest(req('slack-watch', { action: 'list' }))).data as any
+    const w = getSlackWatcher()
+    expect(w.handle({ channel: 'C1', ts: '50.000001', user: 'USTRANGER', text: '<@UBOT> hi' })).toBe('refused')
+    w.handle({ channel: 'C1', ts: '51.000001', user: 'UOWNER', text: '<@UBOT> one' })
+    w.handle({ channel: 'C1', ts: '52.000001', user: 'UOWNER', text: '<@UBOT> two' }) // the table holds one
+    const after = (await handleCLIRequest(req('slack-watch', { action: 'list' }))).data as any
+    expect(after.health.refused - before.health.refused).toBe(1)
+    expect(after.health.refusedBy.USTRANGER - (before.health.refusedBy.USTRANGER ?? 0)).toBe(1)
+    expect(after.health.dropped['table-full'] - (before.health.dropped['table-full'] ?? 0)).toBe(1)
+    w.close()
+  })
+
   test('health omits the line when nothing is configured', async () => {
     rmSync(slackWatchConfigPath())
     expect(slackWatchHealth()).toBeNull()
