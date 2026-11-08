@@ -225,8 +225,8 @@ only when a result, or "ended without a result", is applied. The process is just
 dispatches a job that has a live dispatch.
 
 **On each tick the daemon applies results.** It reads any result for the live dispatch, applies it to state, clears
-`dispatch`, and then deletes the file. Applying is idempotent: state keeps `appliedDispatch`, and a result whose id is at or below
-it is ignored. So a crash between applying and deleting changes nothing.
+`dispatch`, and then deletes the file. Applying is idempotent: state keeps `appliedDispatch`, and a result whose
+id is at or below it is ignored. So a crash between applying and deleting changes nothing.
 
 **A dispatch that ends without a result is a failure**, "ended without a result". It is one outcome for every way an
 attempt can be lost: a bun upgrade breaking the import, unreadable stdin, an unwritable result dir, an OOM,
