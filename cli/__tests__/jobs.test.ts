@@ -193,6 +193,23 @@ describe('runWork', () => {
     expect(await runWork(mainJob, dir, 'k')).toMatchObject({ result: 'done', absorbedBy: 'main' })
   })
 
+  test('the daemon is restarting (no socket, refused, or it closed on us): not now, so the slot stays owed', async () => {
+    for (const err of ['fatal: socket error: connect ENOENT /s/daemon.sock', 'fatal: socket error: connect ECONNREFUSED /s/daemon.sock', 'fatal: daemon closed connection without response']) {
+      jobsIO.hydra = async () => ({ code: 1, err, out: '' })
+      const w = await runWork(mainJob, dir, KEY)
+      expect(w.result).toBe('not-now')
+      expect(w.note).toContain('daemon not reachable')
+    }
+    jobsIO.hydra = async () => ({ code: 1, err: 'fatal: connection timed out', out: '' })
+    expect((await runWork(mainJob, dir, KEY)).result).toBe('failed')   // a daemon that is there but stuck is a failure
+  })
+
+  test('the real CLI with no daemon on the state dir: not now', async () => {
+    jobsIO.hydra = real0.hydra
+    const empty = mkdtempSync(join(tmpdir(), 'jobs-nodaemon-'))
+    try { expect((await runWork(mainJob, empty, KEY)).result).toBe('not-now') } finally { rmSync(empty, { recursive: true }) }
+  })
+
   test('no JSON reply (the CLI crashed or was killed): failed, with its exit code', async () => {
     checkResult.out = 'x'
     jobsIO.hydra = async () => ({ code: 124, err: 'killed after 120s (SIGKILL)', out: '' })

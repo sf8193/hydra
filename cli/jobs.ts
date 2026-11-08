@@ -47,6 +47,8 @@ const MAX_MESSAGE_BYTES = 9_000
 const RESERVED_BYTES = 500   // "Check output:" header + truncation marker with the file path
 
 
+const DAEMON_AWAY = /socket error: connect (ENOENT|ECONNREFUSED)|daemon closed connection without response/
+
 type Reply = { ok?: boolean; exitCode?: number; error?: string; data?: { existing?: { status?: string; sessionId?: string } } }
 const parseReply = (out: string): Reply | null => { try { const o = JSON.parse(out); return typeof o === 'object' && o ? o : null } catch { return null } }
 
@@ -91,6 +93,9 @@ export async function runWork(job: Job, stateDir: string, key: string, onActionS
   const r = await jobsIO.hydra(['--state-dir', stateDir, '--json', ...args])
   const reply = parseReply(r.out)
   if (reply?.ok) { const w: Work = { result: 'done' }; onActionSent(w); return w }
+  // No daemon to answer: it is restarting, and the watchdog brings it back. Not now; the idempotency key makes the
+  // retry safe even if a dying daemon took the request.
+  if (!reply && DAEMON_AWAY.test(r.err)) return { result: 'not-now', note: `daemon not reachable (${r.err.trim().slice(-120)})` }
   const code = reply ? (reply.exitCode ?? 1) : (r.code || 1)
   const existing = reply?.data?.existing
   // spawn answers 2 for any key it holds (status pending, spawned or completed); deliver answers 7 while one is in flight.
