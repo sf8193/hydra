@@ -1,4 +1,4 @@
-# Until-done jobs
+# Durable jobs
 
 > Status: proposal v12, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
 > 1–10) and an independent pass. For review before building.
@@ -32,16 +32,17 @@ the backup script keeps only its domain check.
 - **Attempt:** one run of the job's work. Its result is `done`, `nothing to do` (counts as done), or `failed`.
 - **Not now:** a precondition isn't met (`needs`, exit 75). It is **not an attempt** and never uses up a slot, for any
   job.
-- **Goal:** `until_done` toggles two things, and the second follows from the first:
+- **Goal:** `durable` toggles two things, and the second follows from the first:
   - **whether a failed attempt uses up the slot.** A plain job gets one attempt per slot, whatever its result. An
-    `until_done` job is attempted while its slot is owed, with backoff, until it is done.
-  - **how failures alert.** A plain job's slot is gone after one failure, so it reports daily. An `until_done` job
+    `durable` job is attempted while its slot is owed, with backoff, until it is done.
+  - **how failures alert.** A plain job's slot is gone after one failure, so it reports daily. An `durable` job
     keeps retrying, so a single failure isn't news: it alerts once per failure run, past `alert_after`.
 - **Done for spawn jobs** means the daemon accepted the spawn. Whether the session then does its work is session
   health (pane-probe, idle-limit), not job state. The two meet only at `overlap`.
 
-Naming: not "durable". In durable execution and durable queues, that word means work that survives a crash and
-resumes where it stopped. Here a failed attempt is simply retried from the start. The setting is named for its rule.
+Naming: **durable** names the promise. The commitment to run a scheduled slot survives sleep, travel, failures,
+crashes and restarts, and it is kept on disk until a run succeeds. It doesn't mean durable execution: an attempt
+that fails or dies isn't resumed. It is run again from the start.
 
 **The line between hydra and the job:** hydra owns *liveness* (is the work happening and succeeding?). The job owns
 its *domain* (is the thing it watches healthy?). A sync can succeed every hour while the server it copies from has
@@ -67,7 +68,7 @@ stopped producing backups; detecting that stays in the job, as an ordinary failu
 ```toml
 [weekly-review]                  # an obligation: once per slot, a miss or a duplicate is an error
 schedule = "0 11 * * FRI"
-until_done = true
+durable = true
 needs = ["internet"]
 overlap = "absorb"               # a still-open session from this job handles the owed slot
 mode = "spawn"
@@ -75,7 +76,7 @@ prompt = "..."                   # no check: the work is the spawn itself
 
 [backup-pull]                    # convergence: keep something true; repeating is harmless
 schedule = "0 * * * *"
-until_done = true
+durable = true
 needs = ["internet"]
 alert_after = "2d"
 mode = "none"
@@ -90,10 +91,10 @@ prompt = "Triage the scan output below."
 
 | Key | Values | Default | Notes |
 |---|---|---|---|
-| `until_done` | boolean | `false` | a failed attempt doesn't use up the slot |
+| `durable` | boolean | `false` | a failed attempt doesn't use up the slot |
 | `needs` | names; v1 knows `"internet"` | `[]` | unmet → "not now"; evaluated by the daemon before dispatch |
 | `overlap` | `"absorb"` | unset | spawn only; see Overlap |
-| `alert_after` | duration up to `30d` | `"1d"` with `until_done` | until-done only; see Alerts |
+| `alert_after` | duration up to `30d` | `"1d"` with `durable` | durable only; see Alerts |
 
 There is no `kind` key. Obligation, convergence and probe are combinations of these keys.
 
@@ -107,7 +108,7 @@ The work is the optional `check`, then the action for the mode (spawn, deliver t
 | exit 0, output | findings | run the action with the findings; `none`: done |
 | exit 0, no output | nothing to do this slot | done, no action |
 | exit 75 | not now | stdout dropped; not an attempt; the slot stays owed for any job |
-| other exit | failed | a plain job's slot is used; an until-done slot stays owed; counts toward alerts |
+| other exit | failed | a plain job's slot is used; an durable slot stays owed; counts toward alerts |
 
 The action's own result decides the attempt: a spawn or delivery the daemon refuses is a failed attempt, and the slot
 stays owed. That is the case that check scripts cannot handle today, because the spawn happens after they exit.
@@ -118,7 +119,7 @@ every laptop job has that precondition.
 ## The clock lives in the daemon
 
 Today each job is a launchd entry made by `Bun.cron`. That choice kept the first version free of daemon changes.
-Moving to owed slots exposes what it costs:
+Moving to durable jobs exposes what it costs:
 
 - **Stalled jobs.** launchd skips a firing while the previous one is still running, so with one shared tick, a
   30-minute check would stall every job.
@@ -264,7 +265,7 @@ reservation. If one appears, it is logged and left alone.
   run gets everything a scheduled one has: adoption after a daemon crash, the deadline kill, and the result
   surviving a closed terminal.
   - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap.
-  - **For until-done jobs**, its success marks the latest slot done. **For plain jobs** it changes nothing about
+  - **For durable jobs**, its success marks the latest slot done. **For plain jobs** it changes nothing about
     the schedule: it never sets `attemptedSlot`, so the scheduled slot is still attempted.
   - **Ctrl-C** sends SIGTERM to the attempt's group, and the attempt records "cancelled" (see above). A Ctrl-C before
     the daemon has answered the request cancels nothing: the CLI exits, and if the reservation was made, its
@@ -319,7 +320,7 @@ type JobState = {                 // jobs-state/<name>.json
   alertedFor?: string             // the failingSince already alerted for: alerted iff equal
   reportedDay?: string            // plain jobs: local date a failure was last reported
   announcedUnconfirmed?: string   // slot already announced as "owed (unconfirmed)"
-  untilDone?: boolean             // set when the daemon first applies until-done rules (see Migration)
+  durableApplied?: boolean             // set when the daemon first applies durable rules (see Migration)
 }
 
 type DaemonState = {              // jobs-state/_daemon.json
@@ -347,7 +348,7 @@ every reset to 0 is a success that also rewrites `last`.
 
 An alert means the work keeps failing, not that it is late.
 
-- **Until-done jobs.** One alert per failure run, sent when the latest outcome is a failure and
+- **Durable jobs.** One alert per failure run, sent when the latest outcome is a failure and
   `now − run start ≥ alert_after`. It is "alerted" iff `alertedFor` equals `failingSince`. A success
   ends the run, so the next failure run can alert, and the daemon never has to write anything to reset it.
   - Not-now neither starts nor ends a run. Being offline is never alerted.
@@ -401,7 +402,7 @@ clock's last tick.
 - **Today's records** (v0, `{at, outcome, note}`) are translated, not treated as unreadable or missing:
   `attemptedAt = at`; `attemptedSlot` = the latest slot at or before `at`;
   and `last = {at, result, note, v0: outcome}`,
-  keeping the original outcome. Plain jobs don't fire at cutover, and PR 3's until-done rule below reads the
+  keeping the original outcome. Plain jobs don't fire at cutover, and PR 3's durable rule below reads the
   translated `last.v0`.
 - **A job with no record** gets a **baseline**: the daemon records the latest slot as done. Adding a job doesn't
   fire it mid-period. Use `jobs run` to start one now.
@@ -410,8 +411,8 @@ clock's last tick.
   - for `none`, the slot stays owed and runs;
   - for spawn and main, it is "owed (unconfirmed)" and not run. A downgrade's schema mismatch is likelier than
     corruption, and the 24h key won't stop a second session.
-- **Turning on `until_done`** is detected by the daemon: the job has `until_done` in jobs.toml, but its state lacks
-  `untilDone: true`. At that moment the daemon decides the latest slot once, sets `untilDone: true`, and from then on
+- **Turning on `durable`** is detected by the daemon: the job has `durable` in jobs.toml, but its state lacks
+  `durableApplied: true`. At that moment the daemon decides the latest slot once, sets `durableApplied: true`, and from then on
   the normal rules apply. The decision reads `last` in whatever format it is: `last.v0` if present (a translated old
   record), otherwise `last.result` (a run under the new runner). The slot counts as done only if `last.at` is after
   the slot's instant and:
@@ -431,8 +432,8 @@ clock's last tick.
 - **Scripts that read hydra's job state files** (for example, a check that reads `<name>.json`'s `outcome` to clear
   its own stamp) break at PR 2, when the format changes. They must move with PR 2. A script that misreads the new
   format can silently lose a slot.
-- **Moving a self-gating job onto `until_done`** (an hourly schedule with a stamp file, becoming a weekly schedule
-  with `until_done` and `overlap`) is **one edit**: schedule, keys, and the script's removal together. Overlap on the
+- **Moving a self-gating job onto `durable`** (an hourly schedule with a stamp file, becoming a weekly schedule
+  with `durable` and `overlap`) is **one edit**: schedule, keys, and the script's removal together. Overlap on the
   old hourly schedule would read the session as "still open" across slots two hours after each spawn.
 - **Check scripts written for the old runner** should drop their own gating (stamps, internet probes, "print to
   spawn") and stop masking failures. A failed step exits nonzero, so the runner's failure clock times it. Only domain
@@ -454,7 +455,7 @@ clock's last tick.
    - `jobs run` as a dispatch waited on in the foreground
    - the config alert and the direct path
    - plain-job messages sent by the daemon on local days
-3. **Owed slots:** `until_done`, `needs` and the online witnesses, exit 75, `overlap` with pane-probe's verdict, the
+3. **Durable jobs:** `durable`, `needs` and the online witnesses, exit 75, `overlap` with pane-probe's verdict, the
    failure clock and alerts, `mark-done` and the unconfirmed migration, and `jobs list`.
 
 ## Tests
