@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { homedir } from 'os'
 import { join } from 'path'
 import { resolveConfig } from './helpers.js'
+import { nextMatch } from './cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
 
 export type Mode = 'spawn' | 'main' | 'none'
@@ -214,7 +215,7 @@ export function jobsList(platform: string): void {
   const { stateDir } = resolveConfig(platform)
   for (const j of loadJobs(stateDir)) {
     const last = readRecord(stateDir, j.name)
-    console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} next ${Bun.cron.parse(j.schedule)?.toLocaleString() ?? '-'}  last ${last ? `${last.at} ${last.outcome}${last.note ? ` (${last.note})` : ''}` : 'never'}`)
+    console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} next ${nextMatch(j.schedule, jobsIO.now())?.toLocaleString() ?? '-'}  last ${last ? `${last.at} ${last.outcome}${last.note ? ` (${last.note})` : ''}` : 'never'}`)
   }
 }
 
