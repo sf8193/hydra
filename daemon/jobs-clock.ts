@@ -12,7 +12,7 @@ import { resolve } from 'path'
 import { platformStateDir } from '../shared/constants.js'
 import { latestSlot, type Slot } from '../shared/cron-local.js'
 import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, lockFile, logFile,
   owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../shared/jobs.js'
@@ -245,7 +245,7 @@ export class JobsClock {
       const text = readFileSync(file, 'utf8')
       try {
         const cfg = parseJobsConfig(text)
-        if (state.lastGoodConfig !== text) this.updateDaemon(s => { s.lastGoodConfig = text })
+        if (state.lastGoodConfig !== text || state.configAlertedFor) this.updateDaemon(s => { s.lastGoodConfig = text; delete s.configAlertedFor })
         return cfg
       } catch (err) {
         problem = `${file} doesn't parse: ${err instanceof Error ? err.message : err}`
@@ -255,10 +255,10 @@ export class JobsClock {
       problem = `${file} is missing`
     }
     const fallback = this.lastGood(state)
-    const today = localDay(this.d.now())
-    if (state.configAlertDay !== today) {
+    // Once per episode: a problem alerted is not alerted again until the file parses, or the problem changes.
+    if (state.configAlertedFor !== problem) {
       const text = `Jobs: ${problem}. Running the last good config (${fallback.jobs.length} job${fallback.jobs.length === 1 ? '' : 's'}) until it is fixed.`
-      if (await this.d.direct(text, fallback.channel ?? this.d.homeChannel()) && !this.stopped) this.updateDaemon(s => { s.configAlertDay = today })
+      if (await this.d.direct(text, fallback.channel ?? this.d.homeChannel()) && !this.stopped) this.updateDaemon(s => { s.configAlertedFor = problem })
     }
     return fallback
   }
@@ -588,11 +588,21 @@ export class JobsClock {
       return
     }
     const h = this.health()
-    if (!h.stale) { this.staleFlagged = false; return }
-    if (this.staleFlagged) return
+    const alerted = readDaemonState(this.d.stateDir).state.staleAlertedFor
+    if (!h.stale) {
+      this.staleFlagged = false
+      if (alerted !== undefined) this.updateDaemon(s => { delete s.staleAlertedFor })
+      return
+    }
+    // The episode is the last tick it is stale since, persisted: a daemon restart doesn't alert the same one again.
+    const episode = h.lastTick ?? 'never'
+    if (this.staleFlagged || alerted === episode) return
     const since = h.lastTick ? `since ${new Date(h.lastTick).toLocaleString()}` : `since this daemon started (${this.startedAt.toLocaleString()})`
     const why = this.owned ? '' : ' This daemon does not own the clock: another process holds jobs-state/_daemon.lock.'
-    if (await this.d.direct(`Jobs clock: no tick ${since}.${why}`, this.d.homeChannel())) this.staleFlagged = true
+    if (await this.d.direct(`Jobs clock: no tick ${since}.${why}`, this.d.homeChannel())) {
+      this.staleFlagged = true
+      this.updateDaemon(s => { s.staleAlertedFor = episode })
+    }
   }
 
   health(): { owned: boolean; lastTick?: string; stale: boolean } {

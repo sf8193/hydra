@@ -160,7 +160,8 @@ export type JobState = {
 
 export type DaemonState = {
   lastGoodConfig?: string
-  configAlertDay?: string         // local date
+  configAlertedFor?: string       // the config problem already alerted: once per episode, cleared when it parses
+  staleAlertedFor?: string        // the stale-clock episode already alerted (its last tick, or "never"), so a restart doesn't repeat it
   lastTick?: string
 }
 

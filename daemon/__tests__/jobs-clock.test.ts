@@ -740,7 +740,7 @@ describe('unreadable state: a failure, reset', () => {
 })
 
 describe('config', () => {
-  test('a broken jobs.toml: the last good config keeps running, alerted once a local day on the direct path', async () => {
+  test('a broken jobs.toml: the last good config keeps running, alerted once per episode on the direct path', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     toml('[broken')
@@ -752,6 +752,9 @@ describe('config', () => {
     at('2026-11-04T18:00:00-08:00'); await c.tick()
     expect(w.direct).toHaveLength(1)
     at('2026-11-05T08:00:00-08:00'); await c.tick()
+    expect(w.direct).toHaveLength(1)                   // a new day is not a new episode
+    toml(FIVE); at('2026-11-05T08:01:00-08:00'); await c.tick()   // fixed: the episode ends
+    toml('[broken'); at('2026-11-05T08:02:00-08:00'); await c.tick()
     expect(w.direct).toHaveLength(2)
   })
 
@@ -810,6 +813,17 @@ describe('health', () => {
     await minutes(c, '2026-11-04T10:09:00-08:00', '2026-11-04T10:10:00-08:00', true)
     await minutes(c, '2026-11-04T10:11:00-08:00', '2026-11-04T10:17:00-08:00', false)
     expect(w.direct).toHaveLength(2)
+  })
+
+  test('a restart in a stale episode already alerted does not alert it again', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:08:00-08:00', false)
+    expect(w.direct).toHaveLength(1)
+    c.stop()
+    const again = clock()                              // the daemon restarts; the clock still has no new tick
+    await minutes(again, '2026-11-04T10:09:00-08:00', '2026-11-04T10:14:00-08:00', false)
+    expect(w.direct).toHaveLength(1)
   })
 
   test('waking from sleep: no false alarm, whichever timer fires first', async () => {
