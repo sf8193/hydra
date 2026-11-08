@@ -7,8 +7,11 @@ import { execFileSync } from 'child_process'
 import { markDead, registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
-import { RAINDROP_DRYRUN_FILE } from './config.js'
+import { PLATFORM, RAINDROP_DRYRUN_FILE } from './config.js'
 import { transcriptPathFor } from './usage.js'
+import { sampleCpu, systemPressure, type CpuSample, type CpuVitals } from './cpu-watch.js'
+import { formatPct, formatPressure } from './cpu-spin.js'
+import { byteTmuxName } from '../shared/constants.js'
 
 const VITALS_INTERVAL_MS = 60_000
 
@@ -247,7 +250,7 @@ function descendantPids(rootPid: string): string[] {
 // execFileSync (array form, no shell) throughout — removes the quoting question
 // even though tmuxName is daemon-controlled.
 // TODO: async — this sync-spawns several subprocesses per session each tick.
-function paneVitals(tmuxName: string): { pid?: number; rssMB?: number } {
+function paneVitals(tmuxName: string): { pid?: number; rssMB?: number; panePid?: number } {
   try {
     const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim().split('\n')[0]
     if (!panePid) return {}
@@ -257,17 +260,17 @@ function paneVitals(tmuxName: string): { pid?: number; rssMB?: number } {
       try { rssKb += parseInt(execFileSync('ps', ['-o', 'rss=', '-p', pid], { encoding: 'utf8' }).trim() || '0', 10) } catch { /* pid gone */ }
     }
     const pid = subtree[0] ? parseInt(subtree[0], 10) : parseInt(panePid, 10)
-    return { pid, rssMB: Math.round(rssKb / 1024) }
+    return { pid, rssMB: Math.round(rssKb / 1024), panePid: parseInt(panePid, 10) }
   } catch {
     return {}
   }
 }
 
-export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (id: string) => boolean): string {
-  const v = paneVitals(info.tmuxName)
+export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (id: string) => boolean, v: { pid?: number; rssMB?: number } = paneVitals(info.tmuxName), cpu?: CpuVitals): string {
   if (v.rssMB != null) vitalsSamples.set(info.sessionId, { rssMB: v.rssMB, at: now })
   const conn = isConnected(info.sessionId) ? '' : ' [disconnected]'
-  return `${info.tmuxName} pid=${v.pid ?? '?'} rss=${v.rssMB ?? '?'}MB up=${dur(now - info.createdAt)} idle=${dur(now - info.lastActive)}${conn}`
+  const cpuPart = cpu ? ` cpu=${formatPct(cpu.claudePct)} bridge=${cpu.bridgePid ?? '?'}/${formatPct(cpu.bridgePct)}${cpu.spinning ? ` [spinning: ${cpu.spinning}]` : ''}` : ''
+  return `${info.tmuxName} pid=${v.pid ?? '?'} rss=${v.rssMB ?? '?'}MB${cpuPart} up=${dur(now - info.createdAt)} idle=${dur(now - info.lastActive)}${conn}`
 }
 
 // Truncate an over-cap spawn log in place, keeping the last SPAWN_LOG_KEEP_BYTES
@@ -340,9 +343,20 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
     // Ahead of the empty-fleet return: a runaway can outlive every session.
     trimDaemonLog()
     trimRaindropDryrun()
-    if (live.length === 0) return
-    const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected))
-    process.stderr.write(`daemon: vitals (${live.length} live):\n${lines.join('\n')}\n`)
+    const panes = new Map(live.map(s => [s.sessionId, paneVitals(s.tmuxName)]))
+    const pressure = systemPressure()
+    let cpu: CpuSample = { sessions: new Map(), orphans: [] }
+    // CPU is an addition to the line: a sampling failure must not cost the RSS line.
+    // Also ahead of the empty-fleet return: an orphaned bridge can outlive every session.
+    // Main has no registry record; byte's pane pid is its Claude, the fallback when its bridge has no record.
+    const mainTmux = byteTmuxName(PLATFORM)
+    const main = { tmuxName: mainTmux, pid: paneVitals(mainTmux).panePid }
+    try { cpu = sampleCpu(live, id => panes.get(id), pressure, main) } catch (err) { process.stderr.write(`daemon: cpu sample failed: ${err}\n`) }
+    if (live.length === 0 && cpu.orphans.length === 0 && !cpu.main) return
+    const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected, panes.get(s.sessionId), cpu.sessions.get(s.sessionId)))
+    if (cpu.main) lines.push(`  ${mainTmux} (main) cpu=${formatPct(cpu.main.claudePct)} bridge=${cpu.main.bridgePid ?? '?'}/${formatPct(cpu.main.bridgePct)}${cpu.main.spinning ? ` [spinning: ${cpu.main.spinning}]` : ''}`)
+    for (const o of cpu.orphans) lines.push(`  orphan bridge pid=${o.pid} session=${o.key} cpu=${formatPct(o.pct)}${o.spinning ? ' [spinning]' : ''}`)
+    process.stderr.write(`daemon: vitals (${live.length} live, ${formatPressure(pressure)}):\n${lines.join('\n')}\n`)
   }, VITALS_INTERVAL_MS).unref()
 }
 

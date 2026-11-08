@@ -28,6 +28,12 @@ export const DELIVER_MAX_MESSAGE_BYTES = 10_000
 
 export const BRIDGE_SHUTDOWN_GRACE_MS = 1_000
 
+// Spin detection on the vitals tick (once a minute). A process at or above SPIN_CPU_PERCENT
+// of one core is hot; an idle session whose bridge or Claude is hot for SPIN_CONSECUTIVE_SAMPLES
+// samples in a row is spinning. The 2026-11-08 Bun busy-spin held bridges at ~100% for days.
+export const SPIN_CPU_PERCENT = 90
+export const SPIN_CONSECUTIVE_SAMPLES = 2
+
 export const KNOWN_MODELS = new Set([
   'claude-opus-5-5',
   'claude-opus-5',

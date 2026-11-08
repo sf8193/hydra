@@ -455,7 +455,8 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       for (const item of items) {
         const status = item.status === 'connected' ? '●' : '○'
         const ctx = item.context ? ` [${item.context}]` : ''
-        console.log(`${status} ${item.name}  ${item.description ?? ''}  (${item.running_for}${ctx})`)
+        const cpu = item.cpu ? ` · ${item.cpu}` : ''
+        console.log(`${status} ${item.name}  ${item.description ?? ''}  (${item.running_for}${ctx}${cpu})`)
       }
       return
     }
@@ -481,6 +482,7 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       console.log(`  tmux:    ${data.tmux}`)
       console.log(`  uptime:  ${data.running_for}`)
       if (data.context) console.log(`  context: ${data.context}`)
+      if (data.cpu) console.log(`  cpu:     ${data.cpu}`)
       if (data.url) console.log(`  url:     ${data.url}`)
       if (data.origin) console.log(`  origin:  ${data.origin}`)
       return
