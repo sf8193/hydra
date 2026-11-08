@@ -7,12 +7,45 @@ import { oneLine, quietSend, shouldQuiet, spillIfLong, noteLine, SPILL_THRESHOLD
 const tmp = () => mkdtempSync(join(tmpdir(), 'quiet-'))
 const big = () => Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n')
 
-test('one-line note uses the sender summary when given', () => {
-  expect(noteLine('cedar', 'atlas', 'progress', 'long body\nmore', 'API pages scored 7')).toBe('cedar → atlas · API pages scored 7')
+const nova = { name: 'nova', emoji: '💥', url: 'https://discord.com/channels/1/2' }
+const glyph = { name: 'glyph', emoji: '🪶', url: 'https://discord.com/channels/1/3' }
+
+test('the recipient line names the sender with emoji and link, then the summary', () => {
+  expect(noteLine('from', nova, 'progress', 'long body\nmore', 'handoff branch fixed')).toBe('📨 from 💥 [nova](<https://discord.com/channels/1/2>) → handoff branch fixed')
 })
 
-test('one-line note falls back to the first non-empty line without its markdown marker', () => {
-  expect(noteLine('glyph', 'atlas', 'result', '\n\n## **Cold score 5.4** (structure 6)\nrest')).toBe('glyph → atlas ✓ Cold score 5.4 (structure 6)')
+test('the sender line names the recipient; a result or question leads with its glyph', () => {
+  expect(noteLine('to', glyph, 'result', 'PR up')).toBe('📤 to 🪶 [glyph](<https://discord.com/channels/1/3>) → ✅ PR up')
+  expect(noteLine('from', nova, 'question', 'main or wt/glyph?')).toBe('📨 from 💥 [nova](<https://discord.com/channels/1/2>) → ❓ main or wt/glyph?')
+})
+
+test('the emoji stays outside the link: Discord drops a masked link whose text holds an emoji', () => {
+  expect(noteLine('from', nova, 'progress', 'x')).toContain('💥 [nova](')
+})
+
+test('without a thread URL the name is plain', () => {
+  expect(noteLine('from', { name: 'nova', emoji: '💥' }, 'progress', 'x')).toBe('📨 from 💥 nova → x')
+})
+
+test('the line falls back to the first non-empty line without its markdown marker', () => {
+  expect(noteLine('from', nova, 'result', '\n\n## **Cold score 5.4** (structure 6)\nrest')).toContain('→ ✅ Cold score 5.4 (structure 6)')
+})
+
+test('a summary that opens with the sender\'s own name drops it: the line already names the sender', () => {
+  expect(oneLine('x', 'nova: handoff branch fixed', 'nova')).toBe('handoff branch fixed')
+  expect(oneLine('x', '💥 Nova — handoff branch fixed', 'nova')).toBe('handoff branch fixed')
+  expect(oneLine('x', 'novas are bright', 'nova')).toBe('novas are bright')
+})
+
+test('the name strip leaves hyphenated words and other sessions alone, and never empties the line', () => {
+  expect(oneLine('x', 'nova-2 tests pass', 'nova')).toBe('nova-2 tests pass')
+  expect(oneLine('x', 'Nova-style refactor landed', 'nova')).toBe('Nova-style refactor landed')
+  expect(oneLine('x', 'nova:', 'nova')).toBe('nova:')
+})
+
+test('a summary cannot carry a link of its own: only the sender name is linked', () => {
+  const line = noteLine('from', nova, 'progress', 'x', 'see [docs](https://evil.example) and [hi](!channel)')
+  expect(line.match(/\]\(/g)).toHaveLength(1)
 })
 
 test('identifiers survive: underscores, hashes, backticks, angle brackets in words', () => {
@@ -20,9 +53,10 @@ test('identifiers survive: underscores, hashes, backticks, angle brackets in wor
 })
 
 test('mentions in a summary cannot ping', () => {
-  const line = oneLine('x', '@everyone <@123> <@&9>')
+  const line = oneLine('x', '@everyone <@123> <@&9> <!channel>')
   expect(line).not.toContain('@everyone')
   expect(line).not.toContain('<@')
+  expect(line).not.toContain('<!')
 })
 
 test('a long summary is cut to one bounded line', () => {
@@ -59,16 +93,29 @@ test('spill files older than a week are removed on the next spill', () => {
   expect(readdirSync(dir).includes('old.md')).toBe(false)
 })
 
-test('quietSend posts the one-line note and returns what the session is shown', async () => {
+const a = { name: 'a', emoji: '⚡' }
+const b = { name: 'b', emoji: '🟦' }
+
+test('quietSend posts the line to each side and returns what the session is shown', async () => {
   const lines: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'progress', text: 'hello', dir: tmp() }, { postLine: async l => { lines.push(l) }, log: () => {} })
-  expect(out).toEqual({ delivered: 'hello', posted: true })
-  expect(lines).toEqual(['a → b · hello'])
+  const echoes: string[] = []
+  const out = await quietSend({ from: a, to: b, type: 'progress', text: 'hello', dir: tmp() }, { postLine: async l => { lines.push(l) }, postEcho: async l => { echoes.push(l) }, log: () => {} })
+  expect(out).toEqual({ delivered: 'hello', posted: true, echoed: true, headline: 'hello' })
+  expect(lines).toEqual(['📨 from ⚡ a → hello'])
+  expect(echoes).toEqual(['📤 to 🟦 b → hello'])
+})
+
+test('an echo failure is logged and changes nothing else', async () => {
+  const logs: string[] = []
+  const out = await quietSend({ from: a, to: b, type: 'progress', text: 'hello', dir: tmp() }, { postLine: async () => {}, postEcho: async () => { throw new Error('Missing Access') }, log: m => logs.push(m) })
+  expect(out.posted).toBe(true)
+  expect(out.echoed).toBe(false)
+  expect(logs[0]).toContain('Missing Access')
 })
 
 test('a note failure never stops delivery: posted is false and the session still gets its text', async () => {
   const logs: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: tmp() }, { postLine: async () => { throw new Error('Unknown Channel') }, log: m => logs.push(m) })
+  const out = await quietSend({ from: a, to: b, type: 'result', text: big(), dir: tmp() }, { postLine: async () => { throw new Error('Unknown Channel') }, log: m => logs.push(m) })
   expect(out.posted).toBe(false)
   expect(out.delivered).toContain('[full text: ')
   expect(logs[0]).toContain('Unknown Channel')
@@ -79,16 +126,16 @@ test('a spill failure delivers the full text and still posts the note', async ()
   writeFileSync(blocker, 'x')
   const lines: string[] = []
   const logs: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: join(blocker, 'sub') }, { postLine: async l => { lines.push(l) }, log: m => logs.push(m) })
-  expect(out).toEqual({ delivered: big(), posted: true })
-  expect(lines).toEqual(['a → b ✓ line 0'])
+  const out = await quietSend({ from: a, to: b, type: 'result', text: big(), dir: join(blocker, 'sub') }, { postLine: async l => { lines.push(l) }, log: m => logs.push(m) })
+  expect(out).toEqual({ delivered: big(), posted: true, echoed: false, headline: 'line 0' })
+  expect(lines).toEqual(['📨 from ⚡ a → ✅ line 0'])
   expect(logs[0]).toContain('spill failed')
 })
 
 test('a spilled message puts its path on the one-line note', async () => {
   const lines: string[] = []
-  const out = await quietSend({ from: 'a', to: 'b', type: 'result', text: big(), dir: tmp() }, { postLine: async l => { lines.push(l) }, log: () => {} })
-  expect(lines[0]).toMatch(/^a → b ✓ line 0 · `.+\.md`$/)
+  const out = await quietSend({ from: a, to: b, type: 'result', text: big(), dir: tmp() }, { postLine: async l => { lines.push(l) }, log: () => {} })
+  expect(lines[0]).toMatch(/^📨 from ⚡ a → ✅ line 0 · `.+\.md`$/)
   expect(out.delivered).toContain('[full text: ')
 })
 

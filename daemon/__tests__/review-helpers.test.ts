@@ -198,12 +198,12 @@ describe('private delivery', () => {
     expect(res.isError).toBe(true)
   })
 
-  test('public default: one line in the thread, the full text to the session', async () => {
+  test('public default: one line in each thread, the full text to the session', async () => {
     const res = await executeTool('send_to_thread', { target: 'rh-stranger', type: 'progress', text: 'hi' }, 'rh-owner')
     expect(res.isError).toBeUndefined()
-    expect(gwSends).toHaveLength(1)
+    expect(gwSends).toHaveLength(2)
     expect(res.sentIds).toEqual([])
-    expect(sends[0].msg.content).toContain('[progress from rh-owner] hi')
+    expect(sends[0].msg.content).toContain('[progress from rh-owner · your thread shows: "hi"] hi')
   })
 
   test('registered review helpers must use private; public is rejected', async () => {

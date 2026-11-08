@@ -47,6 +47,23 @@ function applyMessageBody(payload: Record<string, unknown>, text: string, hasBut
   else payload.markdown_text = text
 }
 
+/**
+ * Slack has no `-#`; its small grey text is a context block, which reads classic mrkdwn only.
+ * Markdown links to web URLs become `<url|label>`; everything else is escaped so `<!channel>` and the like stay inert.
+ */
+export function slackSubtextBlocks(text: string): Array<Record<string, unknown>> {
+  const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const link = /\[([^\]]+)\]\(<?(https?:\/\/[^)\s>|]+)>?\)/g
+  let out = ''
+  let last = 0
+  for (const m of text.matchAll(link)) {
+    out += escape(text.slice(last, m.index)) + `<${m[2]}|${escape(m[1])}>`
+    last = m.index! + m[0].length
+  }
+  out += escape(text.slice(last))
+  return [{ type: 'context', elements: [{ type: 'mrkdwn', text: out }] }]
+}
+
 const SLACK_TITLE_MAX = 200
 const SLACK_TITLE_UNSAFE = /[^\p{L}\p{M}\p{Nd} .,()'!?&_=|-]/gu
 const SLACK_VISUAL_DRAIN_MS = 2_500
@@ -421,6 +438,7 @@ export class SlackGateway implements ChatGateway {
     buttons?: ButtonDef[]
     unfurl?: boolean
     mrkdwn?: boolean
+    subtext?: boolean
   }): Promise<SentMessage> {
     if (!this.app) throw new Error('not connected')
 
@@ -439,8 +457,11 @@ export class SlackGateway implements ChatGateway {
       payload.thread_ts = opts.replyTo
     }
 
-    // Render full Markdown via markdown_text; buttons and mrkdwn opt-in force the classic text path.
-    if (opts?.mrkdwn) {
+    // Render full Markdown via markdown_text; buttons, subtext and mrkdwn opt-in force the classic text path.
+    if (opts?.subtext) {
+      payload.text = text
+      payload.blocks = slackSubtextBlocks(text)
+    } else if (opts?.mrkdwn) {
       payload.text = text
     } else {
       applyMessageBody(payload, text, !!opts?.buttons?.length)

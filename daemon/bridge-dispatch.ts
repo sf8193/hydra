@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'fs'
 import { isAbsolute, join, resolve as resolvePath } from 'path'
 import { execSync } from 'child_process'
 import { gateway, INBOX_DIR, STATE_DIR } from './config.js'
-import { isParentOf, parentSessionOf, registry, resolveSendTarget, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
+import { isParentOf, parentSessionOf, registry, resolveSendTarget, sessionEmoji, threadRegistry, type Predecessor, type SessionInfo, type ThreadSessionEntry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
@@ -671,11 +671,23 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // protocol child's result must be posted in full to count as complete, and attachments
         // need a real post, so both stay loud.
         const wantsQuiet = shouldQuiet({ protocolParticipant: !!callerSessionId && isProtocolParticipant(callerSessionId), hasFiles: files.length > 0 })
+        // A link is a nicety: a failed lookup leaves the name plain and never blocks delivery.
+        const party = async (s: SessionInfo) => ({
+          name: s.tmuxName,
+          emoji: sessionEmoji(s.tmuxName),
+          url: s.threadUrl || await gateway.getThreadUrl(s.threadId).catch(() => '') || undefined,
+        })
+        const echoThread = caller?.threadId && caller.threadId !== threadId ? caller.threadId : undefined
         const quietOutcome = wantsQuiet
-          ? await quietSend(
-              { from: senderName, to: targetSession.tmuxName, type: msgType as 'progress' | 'question' | 'result', text, summary, dir: join(STATE_DIR, 'messages') },
-              { postLine: line => retrySend(() => gateway.send(threadId, line)), log: m => process.stderr.write(`daemon: ${m}\n`) },
-            )
+          ? await Promise.all([caller ? party(caller) : { name: senderName, emoji: sessionEmoji(senderName) }, party(targetSession)])
+            .then(([from, to]) => quietSend(
+              { from, to, type: msgType as 'progress' | 'question' | 'result', text, summary, dir: join(STATE_DIR, 'messages') },
+              {
+                postLine: line => retrySend(() => gateway.send(threadId, line, { subtext: true })),
+                ...(echoThread ? { postEcho: (line: string) => retrySend(() => gateway.send(echoThread, line, { subtext: true })) } : {}),
+                log: m => process.stderr.write(`daemon: ${m}\n`),
+              },
+            ))
           : undefined
         const quiet = wantsQuiet
         const chunks = quiet ? [] : chunk(text, sendLimit, access.chunkMode ?? 'markdown')
@@ -706,7 +718,8 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           : ''
         transport.sendOrQueue(targetSession.sessionId, {
           type: 'notification',
-          content: `[${msgType} from ${senderName}] ${delivered}${replyInstruction}`,
+          // The recipient learns what the human already saw, so its reply can add rather than repeat.
+          content: `[${msgType} from ${senderName}${quietOutcome?.posted ? ` · your thread shows: ${JSON.stringify(quietOutcome.headline)}` : ''}] ${delivered}${replyInstruction}`,
           meta: {
             chat_id: threadId,
             message_id: sentIds[0] ?? '',
@@ -716,7 +729,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           },
         })
 
-        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.posted ? '' : ' (note failed, logged)'}; one-line note in their thread${redirectNote}` }], sentIds }
+        if (quiet) return { content: [{ type: 'text', text: `delivered to ${target}${quietOutcome?.posted ? '' : ' (note failed, logged)'}; one-line note in their thread${quietOutcome?.echoed ? ' and yours' : ''}${redirectNote}` }], sentIds }
         const result = sentIds.length === 1
           ? `sent to ${target} (id: ${sentIds[0]})${redirectNote}`
           : `sent ${sentIds.length} parts to ${target} (ids: ${sentIds.join(', ')})${redirectNote}`
