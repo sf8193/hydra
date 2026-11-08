@@ -499,12 +499,29 @@ Nothing is dropped silently: a message dropped because it stayed owed past a day
 
 `<state>/jobs.toml` declares recurring jobs (start from [`jobs.example.toml`](jobs.example.toml)). Each one has a 5-field cron `schedule` in local time, an optional `check` script whose output becomes the agent's message, and what to do with that message (`mode`). After editing it, run `hydra jobs sync <platform>`. `jobs list` shows each job's runner, next run and last result; `jobs run <platform> <name>` runs one now; `jobs mark-done` covers a slot without running it.
 
-**A job's `runner` decides what triggers it.** Delivery to a session is always the daemon's. Set `runner` at the top of the file for every job, or on a job to override that; with neither, it's `launchd`.
+**A job's `runner` decides what triggers it; delivery to a session is always the daemon's.** Both are on time when all is well. They differ only when something fails:
 
-| runner | What triggers the check | What it adds |
+| | `launchd` (default) | `daemon` |
 |---|---|---|
-| `launchd` (default) | A launchd entry per job, registered by `jobs sync`, running a stable bun link (never a versioned Cellar path, which `brew upgrade` deletes). It runs at each slot, and once on wake for a slot missed asleep. | Its result waits in `jobs-state/results/` until the daemon delivers and records it, so a message is owed, not lost, while the daemon is down. |
-| `daemon` | The daemon's clock. | A failed slot is retried until it succeeds; `needs` and `alert_after`. These need `runner = "daemon"`. |
+| Depends on hydra running? | no | yes |
+| After a failure | one shot: the next slot tries again | keeps trying until done |
+
+In one line: **launchd tries once, no matter what. daemon keeps trying, as long as hydra runs.** Set `runner` at the top of the file for every job, or on a job to override that. With neither, it's `launchd`.
+
+Take a weekly job, `weekly-review`, due Friday 11:00:
+
+| On Friday at 11:00… | `launchd` | `daemon` |
+|---|---|---|
+| the lid is shut until 14:00 | runs at 14:00 on wake, once | runs at 14:00 on wake, once |
+| Wi-Fi is down | runs, fails, and is gone until next Friday | waits (`needs = ["internet"]`), and runs when you're back online |
+| the check hits an API error | fails, alerts, and is gone until next Friday | retries with back-off; you're told only if it's still failing after `alert_after` |
+| the hydra daemon is down | the check runs at 11:00; its output is delivered once hydra is back | waits for the watchdog to restart hydra (~5 min), then runs |
+| bun was just upgraded | keeps working | keeps working |
+
+- **Pick `daemon`** for obligations: a review that has to happen this week, a backup that has to succeed eventually.
+- **Pick `launchd`** for keepalives and probes, where the next run makes up for a missed one, or for anything that must run while hydra itself is broken.
+
+A launchd job's entry is registered by `jobs sync` and runs a stable bun link, never a versioned Cellar path, which `brew upgrade` deletes. `needs` and `alert_after` need `runner = "daemon"`.
 
 **Nothing changes unless you opt in.** An existing file runs under launchd as before. The old runner's entries keep working until `jobs sync` moves them onto the stable bun path, and `jobs list` flags any that remain. `jobs sync` registers and unregisters launchd entries only for the platform's live state dir, and removes one only when its job leaves the file or moves to `runner = "daemon"`.
 

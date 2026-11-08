@@ -2,11 +2,9 @@
 # missed while the machine slept runs once on wake. `hydra jobs list <platform>` validates the file and shows each
 # job's state.
 #
-# runner: what triggers a job. Delivering its output (mode spawn or main) is always the daemon's.
-#   "launchd" (the default)  a launchd entry, registered by `jobs sync`, runs the check at each slot. Its result waits
-#                            for the daemon, which delivers it; while the daemon is down, it waits.
-#   "daemon"                 the daemon's clock, which retries a slot until it is done, and adds needs and alert_after.
-#   Set here for the whole file, or on a job to override it.
+# runner: launchd tries once, no matter what. daemon keeps trying, as long as hydra runs (and adds needs and
+# alert_after below). Delivery is always the daemon's. Set it here for the whole file, or on a job to override it;
+# absent everywhere, it's launchd.
 #
 # A job's check script prints nothing when all is well. Anything it prints is passed to the agent.
 # Exit 75 means "not now": not an attempt, no message. A daemon-runner job tries again on the next tick; under launchd,
