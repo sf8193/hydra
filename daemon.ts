@@ -33,9 +33,6 @@ try {
   }
 } catch {}
 
-writeFileSync(PID_FILE, `${process.pid}\n`)
-process.on('exit', () => { try { unlinkSync(PID_FILE) } catch {} })
-
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
@@ -72,6 +69,14 @@ if (existsSync(SOCK_PATH)) {
     process.exit(1)
   }
 }
+
+// The pid file is written only here, once no other daemon is running, and removed on exit only
+// while it still holds this daemon's pid. A second daemon used to write it at startup, find the
+// first one running, exit, and delete the running daemon's file on the way out.
+writeFileSync(PID_FILE, `${process.pid}\n`)
+process.on('exit', () => {
+  try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE) } catch {}
+})
 
 startBridgeServer()
 
