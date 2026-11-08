@@ -4,6 +4,7 @@
 // ClockDeps, so tests drive the clock with a fake time and fake processes.
 
 import { spawn } from 'child_process'
+import { dlopen, FFIType } from 'bun:ffi'
 import { randomBytes } from 'crypto'
 import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from 'fs'
 import { resolve } from 'path'
@@ -66,6 +67,7 @@ export class JobsClock {
   private tickStartedAt = 0
   private readonly startedAt: Date
   private staleFlagged = false
+  private lockError = false
   private legacyError = ''
   private lastHealthAt: number | null = null
   private wokeAt: number
@@ -108,7 +110,14 @@ export class JobsClock {
       this.lockFd = this.d.openLock(lockFile(this.d.stateDir))
       this.d.log('jobs: took the clock lock')
       return true
-    } catch {
+    } catch (err) {
+      // Held by another daemon (EAGAIN) is the normal wait. Anything else, a platform with no flock say, means this
+      // daemon can never own the clock: say so once, and never treat it as owned.
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'EAGAIN' && !this.lockError) {
+        this.lockError = true
+        this.d.log(`jobs: can't take the clock lock, so this daemon won't run the clock: ${err instanceof Error ? err.message : err}`)
+      }
       return false
     }
   }
@@ -519,8 +528,23 @@ const msToNextMinute = (now: Date) => TICK_MS - (now.getTime() % TICK_MS) + 1_00
 // Real processes and files
 // ---------------------------------------------------------------------------
 
-/** O_EXLOCK isn't exported by node's fs; 0x20 on darwin. A second open gets EAGAIN; the kernel releases it on exit. */
-const O_EXLOCK = 0x20
+/**
+ * The clock's lock: flock(LOCK_EX | LOCK_NB) on the lock file, through libc (node's fs has no flock; O_EXLOCK is
+ * macOS-only, and on Linux that bit is something else, so it locked nothing). A second holder gets EAGAIN, a second
+ * descriptor in the same process included; the kernel releases it on exit.
+ */
+const LIBC = process.platform === 'darwin' ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6'
+const flocks = new Map<string, (fd: number, op: number) => number>()
+export function openClockLock(file: string, libc = LIBC): number {
+  let flock = flocks.get(libc)
+  if (!flock) {
+    flock = dlopen(libc, { flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } }).symbols.flock
+    flocks.set(libc, flock)
+  }
+  const fd = openSync(file, fsc.O_RDONLY | fsc.O_CREAT)
+  if (flock(fd, 2 /* LOCK_EX */ | 4 /* LOCK_NB */) !== 0) { closeSync(fd); throw Object.assign(new Error(`${file} is held by another daemon`), { code: 'EAGAIN' }) }
+  return fd
+}
 
 let lastBun: string | undefined
 
@@ -559,7 +583,7 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
     now: () => new Date(),
     schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t) },
     sleep: ms => new Promise(r => setTimeout(r, ms)),
-    openLock: file => openSync(file, fsc.O_RDONLY | fsc.O_CREAT | O_EXLOCK | fsc.O_NONBLOCK),
+    openLock: openClockLock,
     closeLock: fd => closeSync(fd),
     spawnAttempt: (args, stdin, log) => spawnAttempt(args, stdin, log, o.log ?? (m => process.stderr.write(`daemon: ${m}\n`))),
     lstartOf, listProcesses,

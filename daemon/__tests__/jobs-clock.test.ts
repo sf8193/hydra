@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, afterAll } from 'bun:tes
 import { closeSync, constants as fsc, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { JobsClock, ADOPT_GRACE_MS, type ClockDeps } from '../jobs-clock.js'
+import { JobsClock, openClockLock, ADOPT_GRACE_MS, type ClockDeps } from '../jobs-clock.js'
 import {
   ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, commandMatches, legacyTitles, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
@@ -40,7 +40,7 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     now: () => w.t,
     schedule: () => () => {},
     sleep: async () => {},
-    openLock: f => openSync(f, fsc.O_RDONLY | fsc.O_CREAT | 0x20 | fsc.O_NONBLOCK),
+    openLock: openClockLock,   // the real lock, as each platform does it
     closeLock: fd => closeSync(fd),
     spawnAttempt: (args, stdin, log) => {
       w.events.push('spawn')
@@ -122,6 +122,15 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('clock owner lock', () => {
+  test('no flock on this platform (libc not found): the daemon never owns the clock, and says so once', async () => {
+    toml(FIVE)
+    const c = clock({ openLock: f => openClockLock(f, '/nonexistent/libc-for-test') })
+    await c.tick(); await c.tick()
+    expect(c.owned).toBe(false)
+    expect(w.spawns).toEqual([])
+    expect(w.logs.filter(l => l.includes("can't take the clock lock, so this daemon won't run the clock"))).toHaveLength(1)
+  })
+
   test('two daemons: only the lock holder dispatches; the other refuses jobs run', async () => {
     toml(FIVE)
     const a = clock(), b = clock()
