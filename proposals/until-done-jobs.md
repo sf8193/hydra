@@ -1,7 +1,7 @@
 # Until-done jobs
 
-> Status: proposal v10, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
-> 1–8) and an independent pass. For review before building.
+> Status: proposal v11, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
+> 1–9) and an independent pass. For review before building.
 
 ## What hydra jobs should offer
 
@@ -138,8 +138,14 @@ own**, because the daemon restarts often and an attempt must not die with it.
 One timer per daemon (platform), every minute. **One daemon per state dir owns the clock:** before its first tick
 the clock opens `jobs-state/_daemon.lock` with `O_EXLOCK | O_NONBLOCK` and holds the descriptor for the daemon's
 life. The kernel releases it on exit. Node's `fs` doesn't export `O_EXLOCK`; the darwin value is `0x20`, verified
-under bun: a second open gets `EAGAIN`. A daemon that can't take the lock runs no jobs and says so. This covers the
+under bun: a second open gets `EAGAIN`. A daemon that can't take the lock retries the
+non-blocking open **every tick** (a routine restart briefly overlaps the exiting daemon). Until it has the lock it
+dispatches nothing, applies nothing, and refuses `jobs run`. Its health loop runs regardless of whether it owns the
+clock, and it reports a clock that stays unowned. This covers the
 daemon's own singleton race (the socket probe comes before the listen), which is worth its own ticket.
+
+**Ticks run one at a time.** A tick that is still running when the next is due delays it, so the daemon never
+looks at its own reservation in the middle of its own spawn.
 
 A wall-clock jump larger than the interval (wake from sleep) is just
 a tick that finds slots owed. Each tick:
@@ -187,14 +193,15 @@ needs unmet or no verdict yet (not now), and the baseline.
 
 **Everything else is dispatched, in two phases:**
 
-1. **Reserve.** Check "no live dispatch" and write `dispatch: {id, at, slot, deadline}` with the next per-job id, as
+1. **Reserve.** Check "no live dispatch" and write `dispatch: {id, nonce, at, slot, deadline}` with the next per-job
+   id and a random nonce, as
    one synchronous step with no `await` in between. The tick and a `jobs run` request both go through this one step,
    so they can't both dispatch. The id is reserved before anything runs, so it is never reused.
 2. **Spawn**, then add `pid` and `lstart` to the record.
 
 The detached child:
 
-`bun hydra.ts jobs attempt <platform> <name> --dispatch <id> --slot <label>`
+`bun hydra.ts jobs attempt <platform> <name> --dispatch <id> --nonce <nonce> --slot <label>`
 
 - **Detached:** its own process group (`child_process.spawn(..., { detached: true })`; macOS has no `setsid`
   command), so a daemon restart doesn't kill it. The daemon records the child's `pid` and `lstart`
@@ -228,9 +235,10 @@ attempt can be lost: a bun upgrade breaking the import, unreadable stdin, an unw
 and nothing dispatches it again. No per-job lock and no marker are needed: only the daemon dispatches, and every
 dispatch is reserved before its process exists.
 
-**A reservation without a `pid`** means the daemon died between spawning and recording. On the next tick it looks
-for the orphan by its unique argv (`jobs attempt <platform> <name> --dispatch <id>`) with
-`ps -ax -o pid=,lstart=,command=`:
+**A reservation without a `pid`** means the daemon died between spawning and recording. On the next tick, past a grace measured
+from `dispatch.at`, it looks for the orphan with `ps -ax -o pid=,lstart=,command=`. It matches by whole argv tokens:
+`--dispatch <id>` **and** `--nonce <nonce>`. The nonce makes the match unique across installs (a worktree or test
+daemon has its own small ids), and token matching keeps `--dispatch 1` from matching `--dispatch 12`.
 - **found:** the daemon adopts it and records its `pid` and `lstart`;
 - **not found:** if a result exists, it is applied; otherwise it is "ended without a result" after the grace.
 
@@ -248,8 +256,11 @@ reservation. If one appears, it is logged and left alone.
   The daemon applies it on its next tick, the same as any other result.
   - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap. It never sets
     `attemptedSlot`, so it doesn't use up a plain job's scheduled slot.
-  - **Ctrl-C:** the CLI traps SIGINT and writes a not-now result, "cancelled", so a cancelled run isn't a failure.
-  - The CLI isn't a process-group leader, so the daemon's kill path targets its `pid`, not a group.
+  - **Ctrl-C:** the CLI traps SIGINT and writes a not-now result, "cancelled", so a cancelled run isn't a failure. A
+    Ctrl-C that lands after the result is written does nothing, so the result file stays immutable.
+  - The CLI runs its work (the check and the action) in a **process group of its own**, as a dispatched attempt does.
+    It records that group's leader as the dispatch's `pid` and `lstart`, so the daemon's kill takes the whole group,
+    guarded by `lstart`, and no child is left working after the dispatch is given up.
   - With a live dispatch, the daemon refuses with "already running".
   - With the daemon down, it refuses with "daemon not running". The daemon is the one source of decisions, and a
     dead daemon is the thing to fix.
@@ -442,7 +453,9 @@ has a test.** In addition, these cases a builder wouldn't derive from the rules:
 - a reused pid at the daemon's liveness and kill checks;
 - a daemon crash between spawning and recording the `pid`: the orphan is adopted by argv, never run twice;
 - a `jobs run` request arriving while the tick is awaiting the probe: exactly one dispatch;
-- two daemons starting at once: only one runs jobs;
+- two daemons starting at once: only one runs jobs; a restart whose old daemon is still exiting takes the clock on a
+  later tick;
+- an attempt from another install with the same name and id: never adopted (nonce);
 - a late result after "ended without a result": deleted, not applied;
 - Ctrl-C on `jobs run`: not-now "cancelled", with no failure and the slot not used;
 - a daemon restart while an attempt runs: the result waits on disk and is applied once;
