@@ -15,6 +15,8 @@ import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
 import { raindropStatusLine } from './raindrop.js'
+import { getCpuVitals } from './cpu-watch.js'
+import { formatCpuSummary } from './cpu-spin.js'
 
 // ---------------------------------------------------------------------------
 // Idempotency completion on session death
@@ -147,6 +149,12 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
   })
 }
 
+// Absent until the vitals tick has sampled the session twice (a percentage needs two readings).
+function cpuField(sessionId: string): { cpu?: string } {
+  const v = getCpuVitals(sessionId)
+  return v && (v.claudePct !== undefined || v.bridgePct !== undefined) ? { cpu: formatCpuSummary(v) } : {}
+}
+
 function handleList(req: CLIRequest): CLIResponse {
   const sorted = [...registry.values()].sort((a, b) => b.lastActive - a.lastActive)
   const list = sorted.map(s => ({
@@ -158,6 +166,7 @@ function handleList(req: CLIRequest): CLIResponse {
     context: formatContextPercent(s.adapter, s),
     running_for: formatDuration(Date.now() - s.createdAt),
     status: transport.has(s.sessionId) ? 'connected' : 'disconnected',
+    ...cpuField(s.sessionId),
     ...(s.initiator && { initiator: s.initiator }),
   }))
   return respond(req, true, list)
@@ -188,6 +197,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
     running_for: formatDuration(Date.now() - info.createdAt),
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
     tmux: tmuxAlive ? 'alive' : 'dead',
+    ...cpuField(info.sessionId),
     origin: info.originType,
     // Only `hydra attach` asks: surface() may recreate tmux and relaunch the Codex TUI.
     attachTarget: (req.params as { attach?: unknown }).attach === true ? info.adapter.surface(info) : undefined,
