@@ -1,4 +1,4 @@
-import { SlackWatcher, fileConfig, cmpTs, slackWatchConfigPath, slackWatchesPath, type SlackWatchConfig } from './slack-watch.js'
+import { SlackWatcher, fileConfig, cmpTs, slackWatchConfigPath, slackWatchesPath, type SlackWatchConfig, type SlackWatchStats } from './slack-watch.js'
 import { deliverToSpecialist } from './specialist-deliver.js'
 import { getSpecialist } from './specialists.js'
 import { registry } from './sessions.js'
@@ -12,6 +12,14 @@ const log = (line: string) => { process.stderr.write(line) }
 const config = fileConfig(slackWatchConfigPath(), log)
 
 const SWEEP_INTERVAL_MS = 60 * 60_000
+
+/** A plain message to the specialist's thread (not a session turn): listener trouble and dropped messages. */
+function alert(text: string): void {
+  const specialist = config()?.specialist
+  const thread = specialist ? getSpecialist(specialist)?.threadId : undefined
+  if (thread) void safeSend(thread, text).catch(() => {})
+  else log(`daemon: slack alert with no specialist thread to send it to: ${text}\n`)
+}
 
 let watcher: SlackWatcher | undefined
 let sweepTimer: ReturnType<typeof setInterval> | undefined
@@ -27,6 +35,7 @@ export function getSlackWatcher(): SlackWatcher {
     file: slackWatchesPath(),
     log,
     config,
+    alert,
     deliver: async (specialist, message, idempotencyKey) => {
       const r = await deliverToSpecialist({ specialist, message, initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
       if (r.ok) return { ok: true }
@@ -52,12 +61,7 @@ export async function startSlackListener(): Promise<void> {
     tokens: () => ({ app: SCRUBBED_ENV.SLOPBOT_SLACK_APP_TOKEN, bot: SCRUBBED_ENV.SLOPBOT_SLACK_BOT_TOKEN }),
     createApp: boltApp,
     log,
-    alert: text => {
-      const specialist = config()?.specialist
-      const thread = specialist ? getSpecialist(specialist)?.threadId : undefined
-      if (thread) void safeSend(thread, text).catch(() => {})
-      else log(`daemon: slack listener alert with no specialist thread to send it to: ${text}\n`)
-    },
+    alert,
   })
   if (await l.start()) listener = l
 }
@@ -153,8 +157,8 @@ export function formatSlackWatches(now = Date.now()): string[] {
 /** The channels slack-watch.json lists; empty when nothing is configured. */
 export function slackWatchChannels(): string[] { return config()?.channels ?? [] }
 
-/** For `hydra health`: null when nothing is configured. */
-export function slackWatchHealth(now = Date.now()): { specialist: string; watches: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } | null {
+/** For `hydra health` and `slack-watch list`: null when nothing is configured. Refusals and drops count since the daemon started. */
+export function slackWatchHealth(now = Date.now()): ({ specialist: string; watches: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } & SlackWatchStats) | null {
   const cfg = config()
   if (!cfg) return null
   const entries = getSlackWatcher().list()
@@ -165,6 +169,7 @@ export function slackWatchHealth(now = Date.now()): { specialist: string; watche
     watches: entries.length,
     owed: owed.length,
     oldestOwedAgeMin: oldest ? Math.max(0, Math.round((now / 1000 - parseFloat(oldest)) / 60)) : null,
+    ...getSlackWatcher().stats(),
     ...(listener && { listener: listener.health() }),
   }
 }

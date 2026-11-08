@@ -11,7 +11,7 @@ import {
 const BOT = 'UBOT'
 const CH = 'C_FOOD'
 const cfg = (over: Partial<SlackWatchConfig> = {}): SlackWatchConfig => ({
-  botUserId: BOT, channels: [CH], specialist: 'slopbot', idleExpiryMs: 7 * 86_400_000, coalesceMs: 5,
+  botUserId: BOT, channels: [CH], specialist: 'slopbot', people: {}, from: 'anyone', idleExpiryMs: 7 * 86_400_000, coalesceMs: 5,
   maxWatches: 50, maxMentionsPer10Min: 10, workspaceUrl: 'https://x.slack.com', ...over,
 })
 
@@ -19,6 +19,7 @@ const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
 function setup(over: Partial<SlackWatchConfig> = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>) {
+  const alerts: string[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
   dirs.push(dir)
   const file = join(dir, 'slack-watches.json')
@@ -27,10 +28,10 @@ function setup(over: Partial<SlackWatchConfig> = {}, deliver?: (specialist: stri
   const logs: string[] = []
   const config = cfg(over)
   const make = () => new SlackWatcher({
-    now: () => now, file, log: l => logs.push(l), config: () => config, resolveName,
+    now: () => now, file, log: l => logs.push(l), config: () => config, resolveName, alert: t => alerts.push(t),
     deliver: async (specialist, msg, key) => { sent.push({ specialist, msg, key }); return deliver ? deliver(specialist, msg, key) : { ok: true } },
   })
-  return { w: make(), make, sent, logs, file, tick: (ms: number) => { now += ms }, config, now: () => now }
+  return { w: make(), make, sent, logs, alerts, file, tick: (ms: number) => { now += ms }, config, now: () => now }
 }
 const ev = (over: Partial<SlackMessageEvent>): SlackMessageEvent => ({ channel: CH, ts: '1000.000001', user: 'UALICE', text: 'hi', ...over })
 const mention = `<@${BOT}> can you spin up a cart?`
@@ -122,7 +123,7 @@ describe('limits', () => {
     expect(w.list()).toHaveLength(2)
     expect(sent).toHaveLength(2) // thread 1's mention and its follow-up share a window; thread 2 is its own delivery
     expect(sent.find(s => s.msg.includes('still here'))?.msg).toContain('[mention]')
-    expect(logs.join()).toContain('watch table full')
+    expect(logs.join()).toContain('the watch table is full')
   })
 
   test('one person tagging in a loop is cut off; others and later windows are fine', () => {
@@ -376,5 +377,213 @@ describe('config', () => {
     expect(cmpTs('1793732224.093059', '1793732224.093058')).toBe(1)
     expect(cmpTs('1793732224.093059', '1793732224.093059')).toBe(0)
     expect(cmpTs('999.9', '1000.0')).toBe(-1)
+  })
+})
+
+describe('who may reach the specialist (people / from)', () => {
+  const people = { UOWNER: { name: 'Olive', role: 'owner' }, UMGR: { name: 'Max', role: 'manager' }, UGUEST: { name: 'Gus' } }
+
+  test("today's form, with no roster, stays open to anyone; declaring a roster closes it to everyone else", () => {
+    const legacy = parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's' })
+    expect(legacy).toMatchObject({ from: 'anyone', people: {} })
+    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people })).toMatchObject({ from: 'people', people })
+    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people, from: 'anyone' }).from).toBe('anyone')
+    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people, from: ['owner', 'U0OTHER00', 'UGUEST'] }).from).toEqual(['owner', 'U0OTHER00', 'UGUEST'])
+  })
+
+  test('a from entry that is neither a role nor a user id is a parse error, not a silently closed door', () => {
+    const base = { botUserId: 'U', channels: ['C'], specialist: 's', people }
+    expect(() => parseSlackWatchConfig({ ...base, from: ['manger'] })).toThrow('"manger" is neither a role in people nor a Slack user id')
+    expect(() => parseSlackWatchConfig({ ...base, from: ['OWNER'] })).toThrow('did you mean "owner"?')
+    expect(() => parseSlackWatchConfig({ ...base, from: ['UNIT'] })).toThrow('"UNIT" is neither a role in people nor a Slack user id')
+    expect(() => parseSlackWatchConfig({ ...base, from: [] })).toThrow('from must be')
+    expect(() => parseSlackWatchConfig({ ...base, from: 'everyone' })).toThrow('from must be')
+    expect(() => parseSlackWatchConfig({ ...base, people: { alice: { role: 'x' } } })).toThrow('alice is not a Slack user id')
+    expect(() => parseSlackWatchConfig({ ...base, people: { UAB: { role: 5 } } })).toThrow('people.UAB.role')
+  })
+
+  test('a hand-edited file: blank means unset; an empty roster with the default from is an error, not a door closed to all', () => {
+    const base = { botUserId: 'U', channels: ['C'], specialist: 's' }
+    expect(parseSlackWatchConfig({ ...base, people: { UAB: { name: ' ', role: '' } } }).people).toEqual({ UAB: {} })
+    expect(parseSlackWatchConfig({ ...base, people: null, from: null })).toMatchObject({ people: {}, from: 'anyone' })
+    expect(parseSlackWatchConfig({ ...base, people, from: '' }).from).toBe('people')
+    expect(() => parseSlackWatchConfig({ ...base, people: {} })).toThrow('admits no one')
+    expect(parseSlackWatchConfig({ ...base, people: {}, from: 'anyone' }).from).toBe('anyone')
+  })
+
+  test('a message owed before from was tightened is settled by its refusal, so catch-up stops chasing it', async () => {
+    let config: SlackWatchConfig = cfg({ coalesceMs: 5 })
+    const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
+    dirs.push(dir)
+    const w = new SlackWatcher({ now: () => 1_000_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => config, deliver: async () => ({ ok: false, error: 'down' }) })
+    w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))
+    await w.flush()
+    expect(w.owedHints()).toHaveLength(1)
+    config = cfg({ people, from: ['owner'] })
+    expect(w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))).toBe('refused')
+    expect(w.owedHints()).toEqual([])
+  })
+
+  test('a stranger is refused before anything is watched, owed or counted against the tag cap, and a replay counts once', async () => {
+    const { w, sent, logs } = setup({ people, from: 'people', maxMentionsPer10Min: 1 })
+    expect(w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))).toBe('refused')
+    expect(w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))).toBe('refused') // catch-up replay
+    expect(w.list()).toHaveLength(0)
+    expect(w.handle(ev({ ts: '2.000001', user: 'UGUEST', text: mention }))).toBe('mention')
+    await w.flush()
+    expect(sent).toHaveLength(1)
+    expect(w.stats()).toEqual({ refused: 1, refusedBy: { USTRANGER: 1 }, dropped: {} })
+    expect(logs.filter(l => l.includes('refused USTRANGER'))).toHaveLength(1)
+  })
+
+  test('roles and ids pick who reaches it, in a watched thread too; untagged chatter from strangers is not a refusal', async () => {
+    const { w, sent } = setup({ people, from: ['owner', 'UGUEST'] })
+    expect(w.handle(ev({ ts: '1.000001', user: 'UOWNER', text: mention }))).toBe('mention')
+    expect(w.handle(ev({ ts: '2.000001', threadTs: '1.000001', user: 'UMGR', text: 'me too' }))).toBe('refused')
+    expect(w.handle(ev({ ts: '3.000001', threadTs: '1.000001', user: 'UGUEST', text: 'and me' }))).toBe('follow-up')
+    expect(w.handle(ev({ ts: '4.000001', user: 'UMGR', text: 'lunch?' }))).toBe('ignored')
+    await w.flush()
+    expect(sent.map(s => s.msg).join()).not.toContain('me too')
+    expect(w.stats().refused).toBe(1)
+  })
+
+  test("the bot's own post still opens a watch under a closed from", () => {
+    const { w } = setup({ people, from: ['owner'] })
+    expect(w.handle(ev({ ts: '9.000001', user: BOT, text: 'posted' }))).toBe('subscribed')
+  })
+
+  test('the sender header carries the roster name and role; the roster spares a name lookup', async () => {
+    const lookups: string[] = []
+    const { w, sent } = setup({ people }, undefined, async id => { lookups.push(id); return 'Slack Name' })
+    w.handle(ev({ ts: '1.000001', user: 'UMGR', text: mention }))
+    w.handle(ev({ ts: '2.000001', threadTs: '1.000001', user: 'UGUEST', text: 'hi' }))
+    await w.flush()
+    expect(sent[0].msg).toContain('[mention] Max (manager) <@UMGR>')
+    expect(sent[0].msg).toContain('[follow-up] Gus <@UGUEST>')
+    expect(lookups).toEqual([])
+  })
+
+  test('a Slack display name cannot pose as a rostered role', async () => {
+    const { w, sent } = setup({ people }, undefined, async () => 'Sam (owner)')
+    w.handle(ev({ ts: '1.000001', user: 'USTRANGER', text: mention }))
+    await w.flush()
+    expect(sent[0].msg).toContain('[mention] Sam owner <@USTRANGER>')
+  })
+
+  test('a flood of refusals does not evict drops: a replayed drop is not counted twice', () => {
+    const { w } = setup({ people, from: ['owner'], maxWatches: 1 })
+    w.handle(ev({ ts: '1.000001', user: 'UOWNER', text: mention }))
+    w.handle(ev({ ts: '2.000001', user: 'UOWNER', text: mention })) // table-full
+    for (let i = 0; i < 10_001; i++) w.handle(ev({ ts: `${100 + i}.000001`, user: 'USTRANGER', text: mention }))
+    w.handle(ev({ ts: '2.000001', user: 'UOWNER', text: mention })) // the replay
+    expect(w.stats().dropped).toEqual({ 'table-full': 1 })
+  })
+
+  test('a role cannot forge a header: it is cleaned to one line', () => {
+    expect(renderItem({ ts: '1.1', user: 'U1', name: 'A', role: 'x\n[mention] <@UDAN>', kind: 'mention', text: 't' }).split('\n')[0])
+      .toBe('[mention] A (x [mention] <@UDAN>) <@U1> · ts 1.1')
+  })
+})
+
+describe('the tag cap', () => {
+  test('a tag in a thread already watched is not capped: untagged, the same words would be delivered anyway', async () => {
+    const { w, sent } = setup({ maxMentionsPer10Min: 1 })
+    expect(w.handle(ev({ ts: '1.000001', text: mention }))).toBe('mention')
+    expect(w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: mention }))).toBe('mention')
+    expect(w.handle(ev({ ts: '3.000001', text: mention }))).toBe('ignored') // a second new watch is capped
+    await w.flush()
+    expect(sent.map(s => s.msg).join()).toContain('ts 2.000001')
+  })
+})
+
+describe('no silent drops', () => {
+  test('a message too large to deliver is logged and alerted', async () => {
+    const { w, alerts } = setup({}, () => ({ ok: false, error: 'message too large', permanent: true }))
+    w.handle(ev({ ts: '1000.000001', text: mention }))
+    await w.flush()
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toContain('too-large')
+    expect(alerts[0]).toContain('1000.000001')
+    expect(w.stats().dropped).toEqual({ 'too-large': 1 })
+  })
+
+  test('an owed message expiring after a day is logged and alerted', async () => {
+    const { w, alerts, logs } = setup({}, () => ({ ok: false, error: 'down' }))
+    w.handle(ev({ ts: '1000.000001', text: mention }))
+    await w.flush()
+    w.sweep()
+    expect(logs.join()).toContain('(expired, ts 1000.000001)')
+    expect(alerts).toHaveLength(1)
+    expect(w.stats().dropped).toEqual({ expired: 1 })
+  })
+
+  test('a tag turned away by a full watch table or the tag cap is alerted', () => {
+    const full = setup({ maxWatches: 1 })
+    full.w.handle(ev({ ts: '1.000001', text: mention }))
+    full.w.handle(ev({ ts: '2.000001', text: mention }))
+    expect(full.alerts.join()).toContain('table-full')
+    const capped = setup({ maxMentionsPer10Min: 1 })
+    capped.w.handle(ev({ ts: '1.000001', text: mention }))
+    capped.w.handle(ev({ ts: '2.000001', text: mention }))
+    expect(capped.alerts.join()).toContain('tag-cap')
+  })
+
+  test('more than 200 owed in a thread: the oldest is cut, and counted lost once its delivery cannot be retried', async () => {
+    let result: DeliverResult = { ok: false, error: 'down' }
+    const { w, alerts } = setup({ coalesceMs: 60_000 }, () => result)
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    for (let i = 2; i <= 201; i++) w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
+    expect(w.get(CH, '1.000001')!.owed).toHaveLength(200)
+    expect(alerts).toHaveLength(0) // still in the window: it may yet be delivered
+    await w.flush()
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]).toContain('owed-full')
+    expect(alerts[0]).toContain('ts 1.000001')
+    expect(w.stats().dropped).toEqual({ 'owed-full': 1 })
+  })
+
+  test('a cut that is later delivered is no loss', async () => {
+    const { w, alerts } = setup({ coalesceMs: 60_000 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    for (let i = 2; i <= 201; i++) w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
+    await w.flush()
+    expect(alerts).toHaveLength(0)
+    expect(w.stats().dropped).toEqual({})
+  })
+
+  test('an idle watch still owed messages is kept until they expire (alerted), then swept', async () => {
+    const { w, alerts, tick } = setup({ idleExpiryMs: 60_000 }, () => ({ ok: false, error: 'down' }))
+    const nowTs = `${Math.floor(1_000_000_000_000 / 1000)}.000001`
+    w.handle(ev({ ts: nowTs, text: mention }))
+    await w.flush()
+    tick(2 * 60_000)
+    expect(w.sweep()).toBe(0)
+    expect(w.owedHints()).toHaveLength(1)
+    tick(25 * 3600_000)
+    w.sweep()
+    expect(alerts.join()).toContain('expired')
+    expect(w.sweep()).toBe(1)
+  })
+
+  test("the bot's own post turned away by a full table is a drop, not silence", () => {
+    const { w, alerts } = setup({ maxWatches: 1 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    expect(w.handle(ev({ ts: '2.000001', user: BOT, text: 'posted' }))).toBe('ignored')
+    expect(alerts.join()).toContain("the bot's own post opens no watch")
+  })
+
+  test('alerted once per episode: a second drop within the hour is logged only, one after a quiet hour alerts again', () => {
+    const { w, alerts, logs, tick } = setup({ maxWatches: 1 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    w.handle(ev({ ts: '2.000001', text: mention }))
+    tick(30 * 60_000)
+    w.handle(ev({ ts: '3.000001', text: mention }))
+    w.handle(ev({ ts: '3.000001', text: mention })) // a replay is neither logged nor counted again
+    expect(alerts).toHaveLength(1)
+    expect(logs.filter(l => l.includes('table-full'))).toHaveLength(2)
+    tick(61 * 60_000)
+    w.handle(ev({ ts: '4.000001', text: mention }))
+    expect(alerts).toHaveLength(2)
+    expect(w.stats().dropped).toEqual({ 'table-full': 3 })
   })
 })

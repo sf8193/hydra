@@ -30,6 +30,12 @@ import { parseIdleTtl } from '../shared/constants.js'
 // Types
 // ---------------------------------------------------------------------------
 
+/** One person in the roster. `role` is free text: printed in each sender header, never interpreted. */
+export type Person = { name?: string; role?: string }
+
+/** Who may reach the specialist: anyone, anyone in `people`, or these roles and user ids. */
+export type From = 'anyone' | 'people' | string[]
+
 export type SlackWatchConfig = {
   /** The bot's Slack user id: `<@id>` in a message text is a tag. */
   botUserId: string
@@ -39,6 +45,9 @@ export type SlackWatchConfig = {
   channels: string[]
   /** The specialist that receives deliveries. */
   specialist: string
+  /** The roster, by Slack user id. */
+  people: Record<string, Person>
+  from: From
   idleExpiryMs: number
   /** Replies arriving within this window of each other are delivered as one message. */
   coalesceMs: number
@@ -89,9 +98,17 @@ export type SlackWatchDeps = {
   log: (line: string) => void
   /** Slack user id to display name (users.info). Optional; deliveries carry the id either way. */
   resolveName?: (userId: string) => Promise<string | undefined>
+  /** A plain message to a person (not a session turn): how a drop is surfaced. */
+  alert?: (text: string) => void
 }
 
-export type HandleOutcome = 'mention' | 'follow-up' | 'subscribed' | 'ignored'
+/** `refused`: a sender `from` does not admit, in a message that would otherwise have been delivered. */
+export type HandleOutcome = 'mention' | 'follow-up' | 'subscribed' | 'refused' | 'ignored'
+
+/** Why an accepted (or would-be accepted) message will never be delivered. */
+export type DropKind = 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full'
+
+export type SlackWatchStats = { refused: number; refusedBy: Record<string, number>; dropped: Partial<Record<DropKind, number>> }
 
 // ---------------------------------------------------------------------------
 // Config
@@ -122,17 +139,75 @@ export function parseSlackWatchConfig(raw: unknown): SlackWatchConfig {
   if (idle === null) fail('idleExpiry must be a duration like 12h or 7d, at most 7d')
   const workspaceUrl = str('workspaceUrl', false)
   const botId = str('botId', false)
+  const people = parsePeople(t.people, fail)
   return {
     botUserId: str('botUserId')!,
     ...(botId && { botId }),
     channels: channels as string[],
     specialist: str('specialist')!,
+    people,
+    // A file with no roster is today's open form; declaring one closes the door to everyone not in it.
+    from: parseFrom(t.from, people, t.people === undefined || t.people === null ? 'anyone' : 'people', fail),
     idleExpiryMs: idle!,
     coalesceMs: t.coalesceMs === 0 ? 0 : num('coalesceMs', 4000, 0, 60_000),
     maxWatches: num('maxWatches', 50, 1, 1000),
     maxMentionsPer10Min: num('maxMentionsPer10Min', 10, 1, 1000),
     ...(workspaceUrl && { workspaceUrl: workspaceUrl.replace(/\/+$/, '') }),
   }
+}
+
+const USER_ID_RE = /^[UW][A-Z0-9]{2,}$/
+/** What a real Slack user id looks like; a `from` id outside the roster must match it. */
+const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/
+
+function parsePeople(raw: unknown, fail: (why: string) => never): Record<string, Person> {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) return fail('people must map Slack user ids to {name, role}')
+  const people: Record<string, Person> = {}
+  for (const [id, p] of Object.entries(raw as Record<string, unknown>)) {
+    if (!USER_ID_RE.test(id)) fail(`people: ${id} is not a Slack user id (U… or W…)`)
+    if (typeof p !== 'object' || p === null || Array.isArray(p)) fail(`people.${id} must be {name, role}`)
+    // A hand-edited file: blank means unset.
+    const field = (k: 'name' | 'role'): string | undefined => {
+      const v = (p as Record<string, unknown>)[k]
+      if (v === undefined || v === null || (typeof v === 'string' && !v.trim())) return undefined
+      if (typeof v !== 'string') return fail(`people.${id}.${k} must be a string`)
+      return v.trim()
+    }
+    const name = field('name')
+    const role = field('role')
+    people[id] = { ...(name && { name }), ...(role && { role }) }
+  }
+  return people
+}
+
+/** Each entry is a role someone in `people` has, or a user id. A typo would otherwise close the door without a word. */
+function parseFrom(raw: unknown, people: Record<string, Person>, dflt: From, fail: (why: string) => never): From {
+  if (raw === undefined || raw === null || raw === '') {
+    if (dflt === 'people' && Object.keys(people).length === 0) fail('people is empty, so from (which defaults to anyone in people) admits no one; add people, or set from')
+    return dflt
+  }
+  if (raw === 'anyone') return 'anyone'
+  if (!Array.isArray(raw) || raw.length === 0 || raw.some(x => typeof x !== 'string' || !x)) return fail('from must be "anyone" or a non-empty array of roles and user ids')
+  const roles = new Set(Object.values(people).map(p => p.role).filter(Boolean))
+  for (const x of raw as string[]) {
+    if (roles.has(x) || x in people) continue
+    // An id outside the roster must look like a real one (U/W and 8+ characters), and must not be a role in the wrong case:
+    // "WRITER" for the role "Writer" would otherwise pass as an id and admit no one.
+    const role = [...roles].find(r => r!.toLowerCase() === x.toLowerCase())
+    if (role) fail(`from: "${x}" is not a role in people; did you mean "${role}"?`)
+    if (!SLACK_ID_RE.test(x)) fail(`from: "${x}" is neither a role in people nor a Slack user id`)
+  }
+  return raw as string[]
+}
+
+/** Whether `from` lets this sender reach the specialist. */
+export function admits(cfg: Pick<SlackWatchConfig, 'from' | 'people'>, user: string | undefined): boolean {
+  if (cfg.from === 'anyone') return true
+  if (!user) return false
+  if (cfg.from === 'people') return user in cfg.people
+  const role = cfg.people[user]?.role
+  return cfg.from.includes(user) || (!!role && cfg.from.includes(role))
 }
 
 /** The state-dir config, re-read when the file changes. A missing or broken file means nothing is watched. */
@@ -174,6 +249,10 @@ const NAME_TTL_MS = 24 * 3600_000
 const NAME_MISS_TTL_MS = 5 * 60_000
 const NAME_TIMEOUT_MS = 3000
 const PERSIST_DEBOUNCE_MS = 200
+/** Drops of one kind closer together than this are one episode: alerted once. */
+const DROP_EPISODE_GAP_MS = 60 * 60_000
+const NOTED_KEEP = 10_000
+const OWED_FULL_WHY = `more than ${OWED_KEEP} messages were owed in one thread, so the oldest is no longer retried`
 
 const watchKey = (channel: string, threadTs: string) => `${channel}:${threadTs}`
 const tagRe = (botUserId: string) => new RegExp(`<@${botUserId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\|[^>]*)?>`)
@@ -189,7 +268,7 @@ const insertTs = (list: string[] | undefined, ts: string, keep: number): string[
 // Event subtypes that are ordinary messages. Edits, deletes, joins and the rest are not.
 const PLAIN_SUBTYPES = new Set([undefined, 'thread_broadcast', 'file_share', 'bot_message'])
 
-export type Item = { ts: string; user?: string; name?: string; kind: 'mention' | 'follow-up'; text: string }
+export type Item = { ts: string; user?: string; name?: string; role?: string; kind: 'mention' | 'follow-up'; text: string }
 
 // Invisible and direction-changing characters that let a message look like something it is not
 // (controls except newline and tab, NEL, zero-width and direction marks, line/paragraph separators, bidi overrides, BOM).
@@ -206,9 +285,12 @@ export const ITEM_TEXT_MAX_CHARS = 1500
 export const BATCH_MAX_BYTES = 8000
 
 /** One message, as the specialist reads it: who, when, and the words quoted line by line so they cannot pose as item headers. */
+const oneLine = (s: string | undefined, max: number) => s ? clean(s).replace(/\s+/g, ' ').trim().slice(0, max) : ''
+
 export function renderItem(i: Item): string {
-  const name = i.name ? clean(i.name).replace(/\s+/g, ' ').trim().slice(0, 60) : ''
-  const who = i.user ? `${name ? `${name} ` : ''}<@${i.user}>` : 'unknown sender'
+  const name = oneLine(i.name, 60)
+  const role = oneLine(i.role, 40)
+  const who = i.user ? `${name ? `${name} ` : ''}${role ? `(${role}) ` : ''}<@${i.user}>` : 'unknown sender'
   const chars = Array.from(clean(i.text))
   const body = chars.length > ITEM_TEXT_MAX_CHARS
     ? `${chars.slice(0, ITEM_TEXT_MAX_CHARS).join('')} […truncated ${chars.length - ITEM_TEXT_MAX_CHARS} chars; read the thread]`
@@ -274,6 +356,11 @@ export class SlackWatcher {
   private persistTimer: ReturnType<typeof setTimeout> | undefined
   private botId: string | undefined
   private catchingUp = false
+  // Refusals and drops already logged, so a catch-up replay neither logs nor counts them twice. Insertion-ordered; oldest go first.
+  // Two sets, so a flood of refusals cannot evict the drops (and re-count them on replay).
+  private readonly noted = { refused: new Set<string>(), dropped: new Set<string>() }
+  private readonly stats_: SlackWatchStats = { refused: 0, refusedBy: {}, dropped: {} }
+  private readonly lastDropAt = new Map<DropKind, number>()
 
   private resolveName: SlackWatchDeps['resolveName']
 
@@ -314,6 +401,8 @@ export class SlackWatcher {
   }
 
   list(): SlackWatchEntry[] { return [...this.entries.values()] }
+  /** Refusals and drops since the daemon started: what `slack-watch list` and `hydra health` count. */
+  stats(): SlackWatchStats { return structuredClone(this.stats_) }
   get(channel: string, threadTs: string): SlackWatchEntry | undefined { return this.entries.get(watchKey(channel, threadTs)) }
   setBotId(id: string | undefined): void { this.botId = id }
   /** Supplied once the listener has a Slack client: display names for the senders in deliveries. */
@@ -325,10 +414,7 @@ export class SlackWatcher {
     const existing = this.get(channel, threadTs)
     if (existing) { existing.lastEventAt = now; this.persist(); return existing }
     const cap = this.deps.config()?.maxWatches ?? 50
-    if (this.entries.size >= cap) {
-      this.deps.log(`daemon: slack-watch: watch table full (${cap}); not watching ${channel}:${threadTs}\n`)
-      return undefined
-    }
+    if (this.entries.size >= cap) return undefined
     const entry: SlackWatchEntry = { channel, threadTs, specialist, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
     this.entries.set(watchKey(channel, threadTs), entry)
     this.persist()
@@ -353,10 +439,15 @@ export class SlackWatcher {
     const owedFloor = `${Math.floor(now / 1000) - OWED_MAX_AGE_S}.000000`
     let n = 0
     for (const [key, e] of this.entries) {
-      if (e.lastEventAt < cutoff && !this.pending.has(key)) { this.entries.delete(key); n++; continue }
+      // An entry still owed messages is not idle: its owed ts expire first (and are alerted), then it goes.
+      if (e.lastEventAt < cutoff && !this.pending.has(key) && !e.owed?.length) { this.entries.delete(key); n++; continue }
       if (e.owed?.length) {
         const kept = e.owed.filter(ts => cmpTs(ts, owedFloor) >= 0 || this.pending.get(key)?.items.some(i => i.ts === ts))
-        if (kept.length !== e.owed.length) { if (kept.length) e.owed = kept; else delete e.owed; this.persist() }
+        if (kept.length !== e.owed.length) {
+          this.drop('expired', e, e.owed.filter(ts => !kept.includes(ts)), `still undelivered after ${OWED_MAX_AGE_S / 3600}h`)
+          if (kept.length) e.owed = kept; else delete e.owed
+          this.persist()
+        }
       }
     }
     if (n) this.persist()
@@ -414,39 +505,55 @@ export class SlackWatcher {
       // The bot's own top-level post opens a watched thread. Its replies are not echoed back to the specialist.
       if (isReply) return 'ignored'
       const entry = this.watch(ev.channel, threadTs, cfg.specialist)
-      if (!entry) return 'ignored'
+      if (!entry) {
+        this.drop('table-full', { channel: ev.channel, threadTs }, [ev.ts], `the watch table is full (${cfg.maxWatches}), so the bot's own post opens no watch and replies to it will not be delivered`)
+        return 'ignored'
+      }
       entry.delivered = insertTs(entry.delivered, ev.ts, DELIVERED_KEEP) // its own words are never owed to the specialist
       this.persist()
       return 'subscribed'
     }
 
     const tagged = !!ev.text && tagRe(cfg.botUserId).test(ev.text)
+    const existing = tagged || isReply ? this.get(ev.channel, threadTs) : undefined
+    if (!tagged && !existing) return 'ignored'
+    if (existing?.delivered?.includes(ev.ts)) return 'ignored'
+    // Refused before anything is counted, watched or owed: a sender `from` does not admit costs nothing.
+    if (!admits(cfg, ev.user)) {
+      this.refuse(ev, threadTs, cfg)
+      // Owed before `from` was tightened: refusing it settles it, so catch-up stops refetching it.
+      if (existing?.owed?.includes(ev.ts)) { const owed = existing.owed.filter(t => t !== ev.ts); if (owed.length) existing.owed = owed; else delete existing.owed; this.persist() }
+      return 'refused'
+    }
+
     if (tagged) {
-      const existing = this.get(ev.channel, threadTs)
-      if (existing?.delivered?.includes(ev.ts)) return 'ignored'
-      if (!this.allowMention(ev.user, cfg)) return 'ignored'
+      // The cap guards against opening watches in a loop. In a thread already watched, the same words untagged would be delivered anyway.
+      if (!existing && !this.allowMention(ev, threadTs, cfg)) return 'ignored'
       const entry = existing ?? this.watch(ev.channel, threadTs, cfg.specialist, ev.user)
-      if (!entry) return 'ignored'
+      if (!entry) {
+        this.drop('table-full', { channel: ev.channel, threadTs }, [ev.ts], `the watch table is full (${cfg.maxWatches}); unwatch a thread or raise maxWatches`)
+        return 'ignored'
+      }
       entry.lastEventAt = this.deps.now()
       this.enqueue(entry, { ts: ev.ts, user: ev.user, kind: 'mention', text: ev.text ?? '' }, cfg)
       return 'mention'
     }
 
-    const entry = isReply ? this.get(ev.channel, threadTs) : undefined
-    if (!entry || entry.delivered?.includes(ev.ts)) return 'ignored'
+    const entry = existing!
     entry.lastEventAt = this.deps.now()
     this.enqueue(entry, { ts: ev.ts, user: ev.user, kind: 'follow-up', text: ev.text ?? '' }, cfg)
     return 'follow-up'
   }
 
-  /** One person tagging in a loop must not be able to keep spawning and filling the specialist. */
-  private allowMention(user: string | undefined, cfg: SlackWatchConfig): boolean {
+  /** One person tagging in a loop must not be able to keep opening watches and filling the specialist. */
+  private allowMention(ev: SlackMessageEvent, threadTs: string, cfg: SlackWatchConfig): boolean {
+    const user = ev.user
     if (!user) return true
     const now = this.deps.now()
     const recent = (this.mentionTimes.get(user) ?? []).filter(t => now - t < MENTION_WINDOW_MS)
     if (recent.length >= cfg.maxMentionsPer10Min) {
       this.mentionTimes.set(user, recent)
-      this.deps.log(`daemon: slack-watch: ${user} tagged the bot ${recent.length} times in 10 minutes; dropping this one\n`)
+      this.drop('tag-cap', { channel: ev.channel, threadTs }, [ev.ts], `${user} tagged the bot ${recent.length} times in 10 minutes outside watched threads (maxMentionsPer10Min)`)
       return false
     }
     recent.push(now)
@@ -456,17 +563,55 @@ export class SlackWatcher {
 
   private enqueue(entry: SlackWatchEntry, item: Item, cfg: SlackWatchConfig): void {
     // Owed before anything is sent: a crash inside the window leaves this for catch-up to find.
-    entry.owed = insertTs(entry.owed, item.ts, OWED_KEEP)
+    const before = entry.owed ?? []
+    entry.owed = insertTs([...before], item.ts, OWED_KEEP)
     this.persist()
     const key = watchKey(entry.channel, entry.threadTs)
     const batch = this.pending.get(key)
     if (batch) {
       if (!batch.items.some(i => i.ts === item.ts)) batch.items.push(item)
-      return // the open window delivers it
+    } else {
+      const timer = setTimeout(() => this.flushKey(key, cfg), cfg.coalesceMs)
+      ;(timer as { unref?: () => void }).unref?.()
+      this.pending.set(key, { items: [item], timer })
     }
-    const timer = setTimeout(() => this.flushKey(key, cfg), cfg.coalesceMs)
-    ;(timer as { unref?: () => void }).unref?.()
-    this.pending.set(key, { items: [item], timer })
+    // Cut from owed but still in the window or in flight: that delivery may yet land, and a failure there is counted then.
+    const live = new Set([...(this.pending.get(key)?.items.map(i => i.ts) ?? []), ...(this.inflight.get(key) ?? [])])
+    const lost = [...before, item.ts].filter(ts => !entry.owed!.includes(ts) && !live.has(ts))
+    if (lost.length) this.drop('owed-full', entry, lost, OWED_FULL_WHY)
+  }
+
+  // -- refusals and drops ----------------------------------------------------
+
+  /** True the first time a fact is seen: a replay of the same message is neither logged nor counted again. */
+  private firstTime(set: Set<string>, fact: string): boolean {
+    if (set.has(fact)) return false
+    set.add(fact)
+    if (set.size > NOTED_KEEP) set.delete(set.values().next().value!)
+    return true
+  }
+
+  private refuse(ev: SlackMessageEvent, threadTs: string, cfg: SlackWatchConfig): void {
+    if (!this.firstTime(this.noted.refused, `${ev.channel}:${ev.ts}`)) return
+    const who = ev.user ?? 'unknown sender'
+    this.stats_.refused++
+    this.stats_.refusedBy[who] = (this.stats_.refusedBy[who] ?? 0) + 1
+    const allowed = cfg.from === 'people' ? 'anyone in people' : (cfg.from as string[]).join(', ')
+    this.deps.log(`daemon: slack-watch: refused ${who} in ${ev.channel}:${threadTs} (ts ${ev.ts}): from admits ${allowed}\n`)
+  }
+
+  /** A message that will never be delivered: logged every time, counted, and alerted once per episode of its kind. */
+  private drop(kind: DropKind, where: Pick<SlackWatchEntry, 'channel' | 'threadTs'>, ts: string[], why: string): void {
+    const fresh = ts.filter(t => this.firstTime(this.noted.dropped, `${where.channel}:${t}`))
+    if (!fresh.length) return
+    this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
+    const line = `dropped ${fresh.length} Slack message${fresh.length === 1 ? '' : 's'} in ${where.channel}:${where.threadTs} (${kind}, ts ${fresh.join(', ')}): ${why}`
+    this.deps.log(`daemon: slack-watch: ${line}\n`)
+    const now = this.deps.now()
+    const last = this.lastDropAt.get(kind)
+    this.lastDropAt.set(kind, now)
+    if (last !== undefined && now - last < DROP_EPISODE_GAP_MS) return
+    this.deps.alert?.(`⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra slack-watch list\` counts them.`)
   }
 
   // -- names ---------------------------------------------------------------
@@ -517,9 +662,17 @@ export class SlackWatcher {
   }
 
   private async deliverBatches(key: string, entry: SlackWatchEntry, items: Item[], cfg: SlackWatchConfig): Promise<void> {
-    const users = [...new Set(items.map(i => i.user).filter((u): u is string => !!u))]
+    // The roster names its people; Slack's display name fills in for everyone else.
+    // Read live, so a roster edit (a name, a role) applies to what is waiting in the window.
+    const people = this.deps.config()?.people ?? cfg.people
+    const users = [...new Set(items.map(i => i.user).filter((u): u is string => !!u && !people[u]?.name))]
     const resolved = new Map(await Promise.all(users.map(async u => [u, await this.nameOf(u)] as const)))
-    const named = items.map(i => ({ ...i, name: i.user ? resolved.get(i.user) : undefined }))
+    const named = items.map(i => {
+      const p = i.user ? people[i.user] : undefined
+      // A Slack display name is the sender's own free text: no parentheses, so "Sam (owner)" cannot pose as a rostered role.
+      const slackName = i.user ? resolved.get(i.user)?.replace(/[()]/g, '') : undefined
+      return { ...i, name: p?.name ?? slackName, ...(p?.role && { role: p.role }) }
+    })
     for (const batch of packItems(named)) {
       const first = batch[0].ts
       const last = batch[batch.length - 1].ts
@@ -530,11 +683,13 @@ export class SlackWatcher {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
       if (!result.ok && !result.permanent) {
-        // Still owed: it stays in `owed`, so the catch-up pass fetches it again.
+        // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
         this.deps.log(`daemon: slack-watch: delivery to specialist ${entry.specialist} failed for ${key} (${first}..${last}): ${result.error}\n`)
+        const cut = batch.map(i => i.ts).filter(ts => !entry.owed?.includes(ts))
+        if (cut.length && this.entries.get(key) === entry) this.drop('owed-full', entry, cut, OWED_FULL_WHY)
         continue
       }
-      if (!result.ok) this.deps.log(`daemon: slack-watch: dropping ${key} (${first}..${last}), it can never be delivered: ${result.error}\n`)
+      if (!result.ok) this.drop('too-large', entry, batch.map(i => i.ts), `it can never be delivered: ${result.error}`)
       if (this.entries.get(key) !== entry) continue
       for (const i of batch) entry.delivered = insertTs(entry.delivered, i.ts, DELIVERED_KEEP)
       const settled = new Set(batch.map(i => i.ts))
