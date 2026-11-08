@@ -194,7 +194,8 @@ needs unmet or no verdict yet (not now), and the baseline.
 **Everything else is dispatched, in two phases:**
 
 1. **Reserve.** Check "no live dispatch" and write `dispatch: {id, nonce, at, slot, deadline}` with the next per-job
-   id and a random nonce, as one synchronous step with no `await` in between. The tick and a `jobs run` request both go through this one step,
+   id and a random nonce, as one synchronous step with no `await` in between. The tick and a `jobs run` request
+   both go through this one step,
    so they can't both dispatch. The id is reserved before anything runs, so it is never reused.
 2. **Spawn**, then add `pid` and `lstart` to the record.
 
@@ -241,7 +242,8 @@ The dispatched process is identified by `pid` + `lstart`, which is all the daemo
 runs.
 
 **A reservation without a `pid`** means the daemon died between spawning and recording. On the next tick, past a
-grace measured from `dispatch.at`, it looks for the orphan with `ps -ax -o pid=,lstart=,command=`. It matches by whole argv tokens:
+grace measured from `dispatch.at`, it looks for the orphan with `ps -ax -o pid=,lstart=,command=`. It matches by whole
+argv tokens:
 `--dispatch <id>` **and** `--nonce <nonce>`. The nonce makes the match unique across installs (a worktree or test
 daemon has its own small ids), and token matching keeps `--dispatch 1` from matching `--dispatch 12`.
 - **found:** the daemon adopts it and records its `pid` and `lstart`;
