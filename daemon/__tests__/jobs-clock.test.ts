@@ -222,6 +222,17 @@ describe('cutover heals itself', () => {
 })
 
 describe('the tick', () => {
+  test('a job with no record but old result files: new ids start above them, and the old file is not applied', async () => {
+    toml(FIVE)
+    finish('sweep', 1, 'failed', 'an old run')       // the record was deleted; its result file stayed
+    const c = clock(); await c.tick()
+    expect(state('sweep')).toMatchObject({ appliedDispatch: 1, last: { note: 'baseline: no work ran' } })
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    expect(argOf(w.spawns[0].args, '--dispatch')).toBe('2')
+    expect(state('sweep').dispatch).toMatchObject({ id: 2 })
+    expect(state('sweep').last?.note).toBe('baseline: no work ran')
+  })
+
   test('a job with no record gets a baseline, not a run', async () => {
     toml(FIVE)
     await clock().tick()
@@ -472,14 +483,26 @@ describe('adoption: a daemon crash between spawning and recording the pid', () =
     expect(state('sweep').last).toMatchObject({ result: 'nothing', dispatch: 5 })
   })
 
-  test('a spawn that fails leaves a reservation that ends without a result', async () => {
+  test('a spawn that fails is lost at once: no reservation is left to wait out', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     w.spawnMode = 'throw'
     at('2026-11-04T10:05:01-08:00'); await c.tick()
-    expect(state('sweep').dispatch).toMatchObject({ id: 1 })
-    at('2026-11-04T10:06:00-08:00'); await c.tick()
-    expect(state('sweep').last).toMatchObject({ note: 'ended without a result', dispatch: 1 })
+    const s = state('sweep')
+    expect(s.dispatch).toBeUndefined()
+    expect(s).toMatchObject({ appliedDispatch: 1, failures: 1, covered: { slot: '2026-11-04 10:05' } })
+    expect(s.last).toMatchObject({ result: 'failed', dispatch: 1 })
+    expect(s.last?.note).toStartWith('spawn failed:')
+  })
+
+  test('jobs run whose spawn fails: the reply comes back with the loss already applied', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    w.spawnMode = 'throw'
+    at('2026-11-04T10:02:00-08:00')
+    expect(c.requestRun('sweep')).toEqual({ ok: true, reply: { id: 1 } })
+    expect(state('sweep')).toMatchObject({ appliedDispatch: 1, last: { result: 'failed', dispatch: 1 } })
+    expect(state('sweep').dispatch).toBeUndefined()
   })
 
   test('argv tokens match whole: dispatch 1 is not 12, and the nonce must match too', () => {

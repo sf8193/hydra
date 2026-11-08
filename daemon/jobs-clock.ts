@@ -250,22 +250,25 @@ export class JobsClock {
     }
     const at = now.toISOString()
     const slot = latestSlot(job.schedule, now)
+    // Old result files keep their ids, so new ids start above them: an old file is never taken for a new dispatch's.
+    const applied = this.highestResultId(job.name)
     let s: JobState
     if (r.kind === 'missing') {
       s = {
         ...(slot && { covered: { slot: slot.label, at } }),
         failures: 0,
         last: { at, result: 'done', note: 'baseline: no work ran' },
+        ...(applied && { appliedDispatch: applied }),
       }
       this.d.log(`jobs: ${job.name}: no record, baseline at ${slot?.label ?? '(no slot)'}`)
     } else {
       // Reset. A `none` job's slot stays owed and runs; a spawn or main job skips this slot, since a second session
-      // is worse than a missed one. Old result files keep their ids, so new ids start above them.
+      // is worse than a missed one.
       s = {
         failures: 1, failingSince: at,
         last: { at, result: 'failed', note: 'state unreadable, reset' },
         ...(job.mode !== 'none' && slot && { covered: { slot: slot.label, at } }),
-        ...(this.highestResultId(job.name) && { appliedDispatch: this.highestResultId(job.name) }),
+        ...(applied && { appliedDispatch: applied }),
       }
       this.d.log(`jobs: ${job.name}: state unreadable (${r.error}), reset`)
     }
@@ -307,7 +310,9 @@ export class JobsClock {
     const args = [this.d.hydraEntry, ...attemptArgv({ platform: this.d.platform, name: job.name, dispatch: d.id, nonce: d.nonce, slot, manual: kind === 'manual', stateDir: this.d.stateDir })]
     let pid: number | undefined
     try { pid = this.d.spawnAttempt(args, JSON.stringify(job), logFile(this.d.stateDir, job.name)) } catch (err) {
-      this.d.log(`jobs: ${job.name}: spawn of dispatch ${d.id} failed: ${err}`)   // the reservation ends without a result
+      // No process exists, so there is nothing to wait for or adopt: the attempt is lost now.
+      this.lost(job.name, job.schedule, d, `spawn failed: ${err}`)
+      return d
     }
     let lstart: string | null = null
     try { lstart = pid ? this.d.lstartOf(pid) : null } catch {}   // unrecorded: adopted by argv on a later tick
@@ -407,7 +412,7 @@ export class JobsClock {
       if (res.result === 'not-now') {
         s.notNow = { since: res.at, reason: res.note ?? 'not now', dispatch: d.id }
       } else {
-        s.last = { at: res.at, dispatch: d.id, result: res.result, ...(res.note && { note: res.note }), ...(res.absorbedBy && { absorbedBy: res.absorbedBy }) }
+        s.last = { at: res.at, dispatch: d.id, result: res.result, ...(res.note && { note: res.note }) }
         if (res.result === 'failed') {
           s.failures = (s.failures ?? 0) + 1
           s.failingSince ??= res.at
@@ -427,18 +432,18 @@ export class JobsClock {
   }
 
   /** Every way an attempt can be lost is one failure. */
-  private lost(name: string, schedule: string | undefined, d: Dispatch): void {
+  private lost(name: string, schedule: string | undefined, d: Dispatch, note = 'ended without a result'): void {
     const at = this.d.now().toISOString()
     this.update(name, schedule, s => {
       if (s.dispatch?.id !== d.id) return
-      s.last = { at, dispatch: d.id, result: 'failed', note: 'ended without a result' }
+      s.last = { at, dispatch: d.id, result: 'failed', note }
       s.failures = (s.failures ?? 0) + 1
       s.failingSince ??= at
       if (d.kind === 'scheduled') s.covered = { slot: d.slot, at: d.at }
       delete s.dispatch
       s.appliedDispatch = d.id
     })
-    this.d.log(`jobs: ${name}: dispatch ${d.id} ended without a result`)
+    this.d.log(`jobs: ${name}: dispatch ${d.id} ${note}`)
   }
 
   /** Results at or below appliedDispatch are done with, including one that landed after its dispatch was given up. */

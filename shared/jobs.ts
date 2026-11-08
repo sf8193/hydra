@@ -121,7 +121,7 @@ export type JobState = {
   appliedDispatch?: number        // the last dispatch id whose result (or loss) was applied
   failures?: number
   failingSince?: string
-  last?: { at: string; dispatch?: number; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string; v0?: V0Outcome }
+  last?: { at: string; dispatch?: number; result: 'done' | 'nothing' | 'failed'; note?: string; v0?: V0Outcome }
   notNow?: { since: string; reason: string; dispatch?: number }
   reportedDay?: string            // local date a failure was last reported
 }
@@ -133,7 +133,7 @@ export type DaemonState = {
 }
 
 /** What an attempt reports, once, in results/<name>.<id>.json. */
-export type AttemptResult = { dispatch: number; at: string; result: Result; note?: string; absorbedBy?: string }
+export type AttemptResult = { dispatch: number; at: string; result: Result; note?: string }
 
 export const jobsDir = (stateDir: string) => join(stateDir, 'jobs-state')
 export const resultsDir = (stateDir: string) => join(jobsDir(stateDir), 'results')

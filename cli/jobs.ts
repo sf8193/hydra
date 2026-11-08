@@ -245,7 +245,7 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
     else {
       const s = r.state
       const last = s.last
-      parts.push(last ? `last ${local(last.at)} ${last.result}${last.absorbedBy ? ` (absorbed by ${last.absorbedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
+      parts.push(last ? `last ${local(last.at)} ${last.result}${last.note ? ` (${last.note})` : ''}` : 'last never')
       if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now: ${s.notNow.reason}`)
       if (s.failingSince) parts.push(`failing since ${local(s.failingSince)}`)
       if (s.dispatch) parts.push(`running: dispatch ${s.dispatch.id} since ${local(s.dispatch.at)}`)
