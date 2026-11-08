@@ -510,15 +510,15 @@ export class JobsClock {
   // Applying results
   // -------------------------------------------------------------------------
 
-  private readResult(name: string, id: number): AttemptResult | null {
-    try { return JSON.parse(readFileSync(resultFile(this.d.stateDir, name, id), 'utf8')) as AttemptResult } catch { return null }
+  private readResult(name: string, d: Dispatch): AttemptResult | null {
+    try { return JSON.parse(readFileSync(resultFile(this.d.stateDir, name, d.id, d.nonce), 'utf8')) as AttemptResult } catch { return null }
   }
 
   private async applyResults(cfg: JobsConfig): Promise<void> {
     const jobs = new Map(cfg.jobs.map(j => [j.name, j]))
     const names = new Set<string>(cfg.jobs.map(j => j.name))
     // A job dropped from jobs.toml can still have a dispatch running: settle it too.
-    try { for (const f of readdirSync(jobsDir(this.d.stateDir))) { const m = /^([a-z0-9][a-z0-9-]*)\.json$/.exec(f); if (m) names.add(m[1]) } } catch {}
+    try { for (const f of readdirSync(jobsDir(this.d.stateDir))) { const m = /^([a-z0-9][a-z0-9-]*)\.state\.json$/.exec(f); if (m) names.add(m[1]) } } catch {}
     for (const name of names) { if (this.stopped) return; await this.settle(name, jobs.get(name)) }
     this.sweep()
   }
@@ -578,7 +578,7 @@ export class JobsClock {
   }
 
   private applyIfPresent(name: string, job: Job | undefined, d: Dispatch): boolean {
-    const res = this.readResult(name, d.id)
+    const res = this.readResult(name, d)
     if (!res) return false
     this.apply(name, job, d, res)
     return true
@@ -593,7 +593,7 @@ export class JobsClock {
       s.appliedDispatch = d.id
     })
     if (!applied) return   // state went unreadable: keep the result for the tick after the reset
-    try { unlinkSync(resultFile(this.d.stateDir, name, d.id)) } catch {}
+    try { unlinkSync(resultFile(this.d.stateDir, name, d.id, d.nonce)) } catch {}
     this.d.log(`jobs: ${name}: dispatch ${d.id} -> ${res.result}${res.note ? ` (${res.note})` : ''}`)
   }
 
@@ -617,8 +617,8 @@ export class JobsClock {
       const r = readJobState(this.d.stateDir, p.name)
       const st = r.kind === 'ok' ? r.state : undefined
       if (st && p.id <= (st.appliedDispatch ?? 0)) {
-        try { unlinkSync(resultFile(this.d.stateDir, p.name, p.id)) } catch {}
-      } else if (st?.dispatch?.id !== p.id && !this.strayLogged.has(f)) {
+        try { unlinkSync(resultFile(this.d.stateDir, p.name, p.id, p.nonce)) } catch {}
+      } else if ((st?.dispatch?.id !== p.id || st.dispatch.nonce !== p.nonce) && !this.strayLogged.has(f)) {
         this.strayLogged.add(f)
         this.d.log(`jobs: stray result ${f} (no matching dispatch); left alone`)
       }

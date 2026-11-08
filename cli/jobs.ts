@@ -130,7 +130,7 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
   const write = (result: AttemptResult['result'], note?: string, absorbedBy?: string): AttemptResult | null => {
     if (written) return null
     written = { dispatch: o.dispatch, at: jobsIO.now().toISOString(), result, ...(note && { note }), ...(absorbedBy && { absorbedBy }) }
-    writeAtomic(resultFile(o.stateDir, o.name, o.dispatch), JSON.stringify(written))
+    writeAtomic(resultFile(o.stateDir, o.name, o.dispatch, o.nonce), JSON.stringify(written))
     attemptIO.out(`${written.at} ${o.name} dispatch ${o.dispatch}: ${result}${note ? ` (${note})` : ''}`)
     return written
   }

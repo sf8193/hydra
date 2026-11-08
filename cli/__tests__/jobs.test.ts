@@ -259,7 +259,7 @@ describe('the attempt (in process)', () => {
     })
   })
   afterEach(() => { Object.assign(jobsIO, real); Object.assign(attemptIO, realA); rmSync(dir, { recursive: true }) })
-  const result = (id = 3) => JSON.parse(readFileSync(resultFile(dir, 'scan', id), 'utf8'))
+  const result = (id = 3) => JSON.parse(readFileSync(resultFile(dir, 'scan', id, 'n'), 'utf8'))
 
   test('writes one result file and never touches job state', async () => {
     await jobsAttempt(opts())
@@ -317,7 +317,7 @@ describe('the attempt (in process)', () => {
   test('stdin that is not this job ends the attempt without a result', async () => {
     attemptIO.readStdin = async () => '{"name":"other"}'
     await expect(jobsAttempt(opts())).rejects.toThrow('stdin holds job other')
-    expect(existsSync(resultFile(dir, 'scan', 3))).toBe(false)
+    expect(existsSync(resultFile(dir, 'scan', 3, 'n'))).toBe(false)
   })
 
   test('argv parsing: the daemon form round-trips; anything incomplete is refused', () => {
@@ -369,7 +369,7 @@ await jobsAttempt(JSON.parse(process.argv[2])); process.exit(0)\n`)
     const pid = startAttempt(`sleep 60 & echo $! > ${pidFile}; sleep 60`, 1_500)
     const gc = Number(await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim()))
     expect(alive(gc)).toBe(true)
-    const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1)))
+    const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1, 'n')))
     expect(res).toMatchObject({ dispatch: 1, result: 'failed', note: expect.stringContaining('deadline') })
     await waitFor(() => !alive(gc) && !alive(pid))
   }, 15_000)
@@ -379,7 +379,7 @@ await jobsAttempt(JSON.parse(process.argv[2])); process.exit(0)\n`)
     const pid = startAttempt(`sleep 60 & echo $! > ${pidFile}; sleep 60`)
     const gc = Number(await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim()))
     process.kill(pid, 'SIGTERM')
-    const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1)))
+    const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1, 'n')))
     expect(res).toMatchObject({ result: 'not-now', note: 'cancelled' })
     await waitFor(() => !alive(gc) && !alive(pid))
   }, 15_000)
@@ -397,7 +397,7 @@ console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * 
     const attemptPid = Number((await new Response(p.stdout).text()).trim())
     expect(await p.exited).toBe(0)                  // the daemon is gone; the attempt runs on
     expect(alive(attemptPid)).toBe(true)
-    const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1)))
+    const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1, 'n')))
     expect(res).toMatchObject({ result: 'done', note: 'after-daemon-exit' })
     const log = readFileSync(join(jobsState, 'sweep.log'), 'utf8')
     expect(log).toContain('sweep dispatch 1 (slot s) started')
@@ -427,7 +427,7 @@ console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * 
     const p = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), 'jobs', 'attempt', 'test', 'sweep', '--dispatch', '1', '--nonce', 'n', '--slot', 's', '--state-dir', dir],
       { stdin: new Blob(['not json']), stdout: 'ignore', stderr: 'pipe' })
     expect(await p.exited).toBe(1)
-    expect(existsSync(resultFile(dir, 'sweep', 1))).toBe(false)
+    expect(existsSync(resultFile(dir, 'sweep', 1, 'n'))).toBe(false)
   }, 15_000)
 })
 

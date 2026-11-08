@@ -176,17 +176,21 @@ export type AttemptResult = Outcome & { dispatch: number; at: string }
 
 export const jobsDir = (stateDir: string) => join(stateDir, 'jobs-state')
 export const resultsDir = (stateDir: string) => join(jobsDir(stateDir), 'results')
-export const stateFile = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.json`)
+/** The daemon's record of a job. A name the old launchd runner never wrote, so it can't overwrite it. */
+export const stateFile = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.state.json`)
+/** The old runner's record (v0), read only to migrate it. */
+export const v0File = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.json`)
 export const logFile = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.log`)
-export const resultFile = (stateDir: string, name: string, id: number) => join(resultsDir(stateDir), `${name}.${id}.json`)
+/** Named by id and nonce: ids can restart (a state reset), and a stale result must never settle a new dispatch. */
+export const resultFile = (stateDir: string, name: string, id: number, nonce: string) => join(resultsDir(stateDir), `${name}.${id}.${nonce}.json`)
 export const daemonFile = (stateDir: string) => join(jobsDir(stateDir), '_daemon.json')
 export const lockFile = (stateDir: string) => join(jobsDir(stateDir), '_daemon.lock')
 export const jobsToml = (stateDir: string) => join(stateDir, 'jobs.toml')
 
-/** `<name>.<id>.json` → its parts, or null for anything else in the results dir (a tmp file, say). */
-export function parseResultName(file: string): { name: string; id: number } | null {
-  const m = /^([a-z0-9][a-z0-9-]*)\.(\d+)\.json$/.exec(file)
-  return m ? { name: m[1], id: Number(m[2]) } : null
+/** `<name>.<id>.<nonce>.json` → its parts, or null for anything else in the results dir (a tmp file, say). */
+export function parseResultName(file: string): { name: string; id: number; nonce: string } | null {
+  const m = /^([a-z0-9][a-z0-9-]*)\.(\d+)\.([a-z0-9]+)\.json$/.exec(file)
+  return m ? { name: m[1], id: Number(m[2]), nonce: m[3] } : null
 }
 
 /** tmp + fsync + rename: a reader sees the old file or the new one, never half of one. */
@@ -227,10 +231,22 @@ const isV0 = (o: Record<string, unknown>) =>
 
 export type ReadState = { kind: 'missing' } | { kind: 'unreadable'; error: string } | { kind: 'ok'; state: JobState; translated: boolean }
 
-/** A job's state: missing (never ran here), unreadable (corrupt or foreign), or the state, translated from v0 if needed. */
+/**
+ * A job's state: missing (never ran here), unreadable (corrupt or foreign), or the state. With no daemon record yet,
+ * the old runner's `<name>.json` is migrated (`translated`), and only then: once the daemon has written its own
+ * record, a later v0 write can't touch it.
+ */
 export function readJobState(stateDir: string, name: string, schedule?: string): ReadState {
-  const f = stateFile(stateDir, name)
-  if (!existsSync(f)) return { kind: 'missing' }
+  if (existsSync(stateFile(stateDir, name))) {
+    const r = readRecord(stateFile(stateDir, name), schedule)
+    return r.kind === 'ok' && r.translated ? { kind: 'unreadable', error: 'a v0 record in the daemon state file' } : r
+  }
+  if (!existsSync(v0File(stateDir, name))) return { kind: 'missing' }
+  const r = readRecord(v0File(stateDir, name), schedule)
+  return r.kind === 'ok' ? { ...r, translated: true } : r
+}
+
+function readRecord(f: string, schedule: string | undefined): ReadState {
   let o: unknown
   try { o = JSON.parse(readFileSync(f, 'utf8')) } catch (err) { return { kind: 'unreadable', error: err instanceof Error ? err.message : String(err) } }
   if (typeof o !== 'object' || o === null || Array.isArray(o)) return { kind: 'unreadable', error: 'not an object' }

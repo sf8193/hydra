@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { JobsClock, openClockLock, ADOPT_GRACE_MS, NO_VERDICT_LIMIT_MS, applyOutcome, openJobSessions, type ClockDeps, type JobSession } from '../jobs-clock.js'
 import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, backoffUntil, commandMatches, legacyTitles, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, backoffUntil, commandMatches, legacyTitles, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
 } from '../../shared/jobs.js'
 
@@ -93,13 +93,22 @@ const state = (name: string): JobState => {
   if (r.kind !== 'ok') throw new Error(`state ${name}: ${r.kind}`)
   return r.state
 }
-const setState = (name: string, s: object) => writeAtomic(stateFile(w.dir, name), JSON.stringify(s))
+/** A v0 record (`outcome`) goes where the old runner wrote it; anything else is the daemon's own record. */
+const setState = (name: string, s: object) => writeAtomic(('outcome' in s ? v0File : stateFile)(w.dir, name), JSON.stringify(s))
 /** What an attempt does when it finishes: one result file, then the process is gone. */
 function finish(name: string, id: number, result: AttemptResult['result'], note?: string, pid?: number) {
-  writeAtomic(resultFile(w.dir, name, id), JSON.stringify({ dispatch: id, at: w.t.toISOString(), result, ...(note && { note }) }))
+  writeAtomic(rfile(name, id), JSON.stringify({ dispatch: id, at: w.t.toISOString(), result, ...(note && { note }) }))
   if (pid) w.procs.delete(pid)
 }
 const argOf = (args: string[], flag: string) => args[args.indexOf(flag) + 1]
+/** A dispatch's nonce: from its live record, else from the argv it was spawned with; 'x' for one that never existed. */
+function nonceOf(name: string, id: number): string {
+  const r = readJobState(w.dir, name)
+  if (r.kind === 'ok' && r.state.dispatch?.id === id) return r.state.dispatch.nonce
+  const s = w.spawns.find(x => x.args[6] === name && argOf(x.args, '--dispatch') === String(id))
+  return s ? argOf(s.args, '--nonce') : 'x'
+}
+const rfile = (name: string, id: number) => resultFile(w.dir, name, id, nonceOf(name, id))
 
 const FIVE = `[sweep]\nschedule = "*/5 * * * *"\ncheck = "sweep.sh"\nmode = "none"\n`
 const HOURLY = `[sync]\nschedule = "0 * * * *"\ncheck = "sync.sh"\nmode = "none"\n`
@@ -330,7 +339,7 @@ describe('applying results', () => {
     expect(s.dispatch).toBeUndefined()
     expect(s.appliedDispatch).toBe(1)
     expect(s).toMatchObject({ covered: { slot: '2026-11-04 10:05', at: new Date('2026-11-04T10:05:01-08:00').toISOString() }, failures: 0, last: { result: 'done', dispatch: 1, note: 'pruned 3' } })
-    expect(existsSync(resultFile(w.dir, 'sweep', 1))).toBe(false)
+    expect(existsSync(rfile('sweep', 1))).toBe(false)
   })
 
   test('failed: failures count up and the run keeps its start; a success ends it', async () => {
@@ -367,7 +376,7 @@ describe('applying results', () => {
     finish('sweep', 1, 'failed', 'x')          // the file the crash left behind
     at('2026-11-04T10:07:00-08:00'); await c.tick()
     expect(state('sweep')).toEqual(applied)
-    expect(existsSync(resultFile(w.dir, 'sweep', 1))).toBe(false)
+    expect(existsSync(rfile('sweep', 1))).toBe(false)
   })
 
   test('process gone, no result: "ended without a result", a failure', async () => {
@@ -386,7 +395,7 @@ describe('applying results', () => {
     finish('sweep', 1, 'done', 'late')
     at('2026-11-04T10:07:00-08:00'); await c.tick()
     expect(state('sweep')).toEqual(lost)
-    expect(existsSync(resultFile(w.dir, 'sweep', 1))).toBe(false)
+    expect(existsSync(rfile('sweep', 1))).toBe(false)
   })
 
   test('a result landing in the final-write grace is applied, not lost', async () => {
@@ -487,13 +496,28 @@ describe('applying results', () => {
     expect(w.logs.filter(l => l.includes('dispatch 1 -> done'))).toHaveLength(1)
   })
 
+  test('ids restart after a state reset: a stale result with the new dispatch\'s id but another nonce never settles it', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    writeAtomic(resultFile(w.dir, 'sweep', 1, 'oldnonce'), JSON.stringify({ dispatch: 1, at: '2026-11-01T00:00:00Z', result: 'failed', note: 'from a past life' }))
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    expect(state('sweep').dispatch?.id).toBe(1)
+    at('2026-11-04T10:06:00-08:00'); await c.tick()
+    expect(state('sweep').dispatch?.id).toBe(1)   // still running: the stale file is not its result
+    expect(state('sweep').last?.note).not.toBe('from a past life')
+    finish('sweep', 1, 'done', 'this life', 1000)
+    at('2026-11-04T10:07:00-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'done', note: 'this life' })
+    expect(existsSync(resultFile(w.dir, 'sweep', 1, 'oldnonce'))).toBe(false)   // swept once id 1 is applied
+  })
+
   test('a stray result above appliedDispatch that is not the live dispatch is logged and left alone', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     finish('sweep', 9, 'done')
     await c.tick(); await c.tick()
-    expect(existsSync(resultFile(w.dir, 'sweep', 9))).toBe(true)
-    expect(w.logs.filter(l => l.includes('stray result sweep.9.json'))).toHaveLength(1)
+    expect(existsSync(rfile('sweep', 9))).toBe(true)
+    expect(w.logs.filter(l => l.includes('stray result sweep.9.x.json'))).toHaveLength(1)
   })
 })
 
@@ -641,7 +665,7 @@ describe('jobs run', () => {
 })
 
 describe('migration from v0 records', () => {
-  test('a v0 record does not fire at cutover, and is translated in place keeping v0', async () => {
+  test('a v0 record does not fire at cutover, and is migrated to the daemon\'s own file keeping v0', async () => {
     toml(FIVE)
     setState('sweep', { at: '2026-11-04T18:00:40.000Z', outcome: 'findings', note: 'pruned' })
     at('2026-11-04T10:03:00-08:00'); await clock().tick()
@@ -650,6 +674,16 @@ describe('migration from v0 records', () => {
       covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:40.000Z' },
       last: { at: '2026-11-04T18:00:40.000Z', result: 'done', note: 'pruned', v0: 'findings' },
     })
+  })
+
+  test('after migration the old runner\'s file is never read again: a late v0 write changes nothing', async () => {
+    toml(FIVE)
+    setState('sweep', { at: '2026-11-04T18:00:40.000Z', outcome: 'findings', note: 'pruned' })
+    at('2026-11-04T10:03:00-08:00'); const c = clock(); await c.tick()
+    const migrated = state('sweep')
+    writeAtomic(v0File(w.dir, 'sweep'), JSON.stringify({ at: '2026-11-04T18:03:30.000Z', outcome: 'failed', note: 'old runner' }))
+    at('2026-11-04T10:04:00-08:00'); await c.tick()
+    expect(state('sweep')).toEqual(migrated)
   })
 
   test('a v0 record from before the latest slot runs that slot, as launchd would have', async () => {
@@ -1299,7 +1333,7 @@ describe('exit 75 and other not-now results', () => {
     expect(state('pull').notNow?.dispatch).toBe(1)
     at('2026-11-04T10:06:30-08:00'); await c.tick()
     const d = state('pull').dispatch!
-    writeAtomic(resultFile(w.dir, 'pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', absorbedBy: 'sess-9' }))
+    writeAtomic(rfile('pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', absorbedBy: 'sess-9' }))
     w.procs.delete(d.pid!)
     await c.tick()
     expect(state('pull').last).toMatchObject({ result: 'done', absorbedBy: 'sess-9', dispatch: 2 })
