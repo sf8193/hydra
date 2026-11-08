@@ -43,6 +43,7 @@ Lifecycle:
 
 Session management:
   hydra spawn <prompt>                 Spawn a new session
+  hydra spawn [options] -- <prompt>    Everything after -- is the prompt, even text starting with "-"
   hydra spawn --specialist <name>      Spawn the session for a declared specialist (its kickoff is the prompt; refuses if it is already filled)
   hydra list                           List active sessions
   hydra status <name>                  Session details
@@ -100,7 +101,10 @@ Global options:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
-  if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
+  // `--` ends the options: what follows is data (a prompt that starts with "-", say), never a flag.
+  const end = args.indexOf('--')
+  const options = end < 0 ? args : args.slice(0, end)
+  if (args.length === 0 || options.includes('-h') || options.includes('--help')) {
     console.log(USAGE)
     process.exit(0)
   }
@@ -110,7 +114,10 @@ async function main(): Promise<void> {
   const filtered: string[] = []
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--daemon' && i + 1 < args.length) {
+    if (args[i] === '--') {
+      filtered.push(...args.slice(i))
+      break
+    } else if (args[i] === '--daemon' && i + 1 < args.length) {
       daemonName = args[++i]
     } else if (args[i] === '--json') {
       json = true
@@ -188,7 +195,10 @@ async function main(): Promise<void> {
       const promptParts: string[] = []
 
       for (let i = 1; i < filtered.length; i++) {
-        if (filtered[i] === '--idempotency-key' && i + 1 < filtered.length) {
+        if (filtered[i] === '--') {
+          promptParts.push(...filtered.slice(i + 1))
+          break
+        } else if (filtered[i] === '--idempotency-key' && i + 1 < filtered.length) {
           idempotencyKey = filtered[++i]
         } else if (filtered[i] === '--initiator' && i + 1 < filtered.length) {
           initiator = filtered[++i]
