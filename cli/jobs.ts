@@ -213,8 +213,8 @@ export async function jobsSync(platform: string): Promise<void> {
   console.log(`registered ${jobs.length}, removed ${stale.length}; launchd runs ${import.meta.dir}/jobs-entry.ts`)
 }
 
-export function jobsList(platform: string): void {
-  const { stateDir } = resolveConfig(platform)
+export function jobsList(platform: string, stateDirOverride?: string): void {
+  const stateDir = stateDirOverride ?? resolveConfig(platform).stateDir
   for (const j of loadJobs(stateDir)) {
     const last = readRecord(stateDir, j.name)
     console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} next ${nextMatch(j.schedule, jobsIO.now())?.toLocaleString() ?? '-'}  last ${last ? `${last.at} ${last.outcome}${last.note ? ` (${last.note})` : ''}` : 'never'}`)

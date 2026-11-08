@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
-import { parseJobs, runJob, jobsRun, jobsIO, parseTitle, jobTitle, isPlatform, readRecord, writeRecord } from '../jobs.js'
+import { parseJobs, runJob, jobsRun, jobsList, jobsIO, parseTitle, jobTitle, isPlatform, readRecord, writeRecord } from '../jobs.js'
 
 const ok = `
 channel = "123"
@@ -259,6 +259,25 @@ describe('jobsIO.check (real subprocess)', () => {
   test('stdout and exit code come back', async () => {
     expect(await check('echo found; exit 0')).toMatchObject({ code: 0, out: 'found\n' })
     expect(await check('echo bad >&2; exit 3')).toMatchObject({ code: 3, err: 'bad\n' })
+  })
+})
+
+describe('jobsList', () => {
+  const real = { ...jobsIO }
+  const saved = { env: process.env.TZ, zone: Intl.DateTimeFormat().resolvedOptions().timeZone }
+  afterAll(() => { Object.assign(jobsIO, real); process.env.TZ = saved.zone; if (saved.env === undefined) delete process.env.TZ })
+  test("prints each job's next run in local time", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-list-'))
+    const lines: string[] = []
+    const log = console.log
+    console.log = (s: string) => { lines.push(s) }
+    try {
+      process.env.TZ = 'America/Los_Angeles'
+      writeFileSync(join(dir, 'jobs.toml'), `[review]\nschedule = "0 11 * * FRI"\nmode = "main"\nprompt = "p"`)
+      jobsIO.now = () => new Date('2026-11-13T10:59:00-08:00')
+      jobsList('discord', dir)
+      expect(lines[0]).toContain('next 11/13/2026, 11:00:00 AM')   // local 11:00, not 03:00 (11:00 UTC)
+    } finally { console.log = log; rmSync(dir, { recursive: true }) }
   })
 })
 

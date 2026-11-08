@@ -1,12 +1,12 @@
-// A cron matcher in the process's local time zone (TZ respected), matching launchd, which fires jobs in local time.
+// A cron matcher in the process's local time zone (TZ respected), for the times jobs fire at.
 // Bun.cron.parse can't stand in everywhere: its zone depends on the Bun version (UTC on 1.3.14, local on 1.4.2).
 //
 // Syntax is what Bun.cron accepts: 5 fields, numbers, `*`, lists, ranges, steps (`a/n` runs a to the field max),
 // case-insensitive month and weekday names (3-letter or full), 0 and 7 both Sunday, and the @yearly/@annually/
-// @monthly/@weekly/@daily/@midnight/@hourly nicknames. Day-of-month and day-of-week combine as Bun documents and
-// launchd does: when neither field is literally `*`, a day matches if either one does.
+// @monthly/@weekly/@daily/@midnight/@hourly nicknames. Day-of-month and day-of-week combine as Bun documents: when
+// neither field is literally `*`, a day matches if either one does.
 //
-// Each matching local wall-clock minute maps to the instant the schedule fires at:
+// Our rule, not a claim about any other scheduler: each matching local wall-clock minute maps to one instant:
 // - normally, the one instant showing that wall-clock time;
 // - at a fall-back, where the time occurs twice, its first occurrence, so the repeated hour adds no firings;
 // - at a spring-forward, where the time doesn't exist, the first instant after the gap.
