@@ -180,7 +180,9 @@ test('a session dir that is gone: the hook runs from the temp dir with HYDRA_CWD
 test('a timeout kills the hook\'s whole process group', async () => {
   const pidFile = join(dir, 'pid')
   writeHook(`sleep 30 &\necho $! > ${pidFile}\nwait`)
-  expect(await runPreHandoffHook(info, letter, PRE_HANDOFF_HOOK_PATH, 300)).toEqual({ ok: true })
+  // Past the first exec of a new script, which macOS can hold for ~450ms while it scans it:
+  // a 300ms budget killed the hook before it wrote its pid.
+  expect(await runPreHandoffHook(info, letter, PRE_HANDOFF_HOOK_PATH, 1500)).toEqual({ ok: true })
   await Bun.sleep(100)
   const pid = Number(readFileSync(pidFile, 'utf8'))
   let alive = true
