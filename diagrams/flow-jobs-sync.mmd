@@ -1,0 +1,24 @@
+sequenceDiagram
+    autonumber
+    participant CLI as cli/jobs.ts (jobs sync)
+    participant T as jobs.toml
+    participant H as cli-handler.ts
+    participant C as jobs-clock.ts
+    participant L as launchd (legacy entries)
+
+    CLI->>T: read + parseJobsConfig
+    alt invalid or missing
+        CLI-->>CLI: error, exit 1 (the daemon is never asked)
+    else no socket / refused
+        CLI-->>CLI: daemon not running, it will load this on start + job lines, exit 0
+    else daemon up
+        CLI->>H: jobs-sync
+        H->>C: requestSync()
+        C->>C: before = last good config (_daemon.json)
+        C->>T: read + parse, lastGoodConfig = text
+        C->>L: remove this platform's legacy entries (live state dir only)
+        C->>C: tick now: an owed slot dispatches at once
+        C-->>H: {before, after, legacyRemoved}
+        H-->>CLI: reply
+        CLI-->>CLI: added / changed (jobs.toml keys) / removed, legacy removed, job lines, exit 0
+    end
