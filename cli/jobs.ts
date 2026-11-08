@@ -12,8 +12,8 @@ import { join } from 'path'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { nextSlot } from '../shared/cron-local.js'
 import {
-  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, jobInitiator, jobsDir, jobsToml, lstartOf, parseJobsConfig,
-  readDaemonState, readJobState, resultFile, writeAtomic, type AttemptArgs, type AttemptResult, type Job,
+  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, isOpenJobSession, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
+  readDaemonState, readJobState, resultFile, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult, type Job, type Outcome,
 } from '../shared/jobs.js'
 
 export { parseJobs, parseJobsConfig, isPlatform, type Job, type Mode } from '../shared/jobs.js'
@@ -34,11 +34,11 @@ export const jobsIO = {
     try { return await Promise.race([done, late]) } finally { clearTimeout(timer!) }
   },
   // The action's own timeout: a hung spawn or deliver is killed and counts as failed.
-  async hydra(args: string[], timeoutMs = ACTION_TIMEOUT_MS): Promise<{ code: number; err: string }> {
-    const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'ignore', stderr: 'pipe', env: process.env, timeout: timeoutMs, killSignal: 'SIGKILL' })
-    const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited])
-    if (p.signalCode) return { code: 124, err: `killed after ${timeoutMs / 1000}s (${p.signalCode})` }
-    return { code, err: err.trim().slice(-200) }
+  async hydra(args: string[], timeoutMs = ACTION_TIMEOUT_MS): Promise<{ code: number; err: string; out: string }> {
+    const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env, timeout: timeoutMs, killSignal: 'SIGKILL' })
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
+    if (p.signalCode) return { code: 124, err: `killed after ${timeoutMs / 1000}s (${p.signalCode})`, out: '' }
+    return { code, err: err.trim().slice(-200), out }
   },
 }
 
@@ -46,25 +46,26 @@ export const jobsIO = {
 const MAX_MESSAGE_BYTES = 9_000
 const RESERVED_BYTES = 500   // "Check output:" header + truncation marker with the file path
 
-// The daemon answers exit 2 when the idempotency key already went through, and 7 when a send with that key is still in flight.
-// Either way the first attempt is delivering, so this one counts as sent.
-const sent = (code: number) => code === 0 || code === 2 || code === 7
+
+type Reply = { ok?: boolean; exitCode?: number; error?: string; data?: { existing?: { status?: string; sessionId?: string } } }
+const parseReply = (out: string): Reply | null => { try { const o = JSON.parse(out); return typeof o === 'object' && o ? o : null } catch { return null } }
 
 // First `maxBytes` bytes of s, never cutting a character in half.
 const headBytes = (s: string, maxBytes: number) => Buffer.from(s).subarray(0, maxBytes).toString().replace(/�$/, '')
 
-export type Work = { result: 'done' | 'nothing' | 'failed'; note?: string }
+export type Work = Outcome
 
 /**
  * A job's work. `key` is the idempotency key for the action: the slot label for a scheduled run, so a retry after a
  * crash is deduplicated; the minute for a manual one, so it is never swallowed by the slot's key.
  * `onActionSent` fires as soon as the action has landed, so a cancel after that point reports done.
  */
-export async function runWork(job: Job, stateDir: string, key: string, onActionSent: () => void = () => {}): Promise<Work> {
+export async function runWork(job: Job, stateDir: string, key: string, onActionSent: (w: Work) => void = () => {}): Promise<Work> {
   const initiator = jobInitiator(job.name)
   let output = ''
   if (job.check) {
     const r = await jobsIO.check(job.check)
+    if (r.code === EX_TEMPFAIL) return { result: 'not-now', note: `check exited ${EX_TEMPFAIL}${r.err.trim() ? `: ${r.err.trim().slice(-200)}` : ''}` }   // stdout dropped
     if (r.code !== 0) return { result: 'failed', note: `check exited ${r.code}: ${(r.err || r.out).trim().slice(-300)}` }
     output = r.out.trim()
     if (!output) return { result: 'nothing' }
@@ -86,9 +87,22 @@ export async function runWork(job: Job, stateDir: string, key: string, onActionS
     ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', job.channel!, '--ephemeral', ...(job.idleTtl ? ['--idle-ttl', job.idleTtl] : []), ...(job.model ? ['--model', job.model] : []), message]
     : ['deliver', '--session', 'main', '--queue', '--initiator', initiator, '--idempotency-key', key, '--message', message]
   // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
-  const r = await jobsIO.hydra(['--state-dir', stateDir, ...args])
-  if (sent(r.code)) { onActionSent(); return { result: 'done' } }
-  return { result: 'failed', note: `hydra ${args[0]} exited ${r.code}${r.err ? `: ${r.err}` : ''}` }
+  // --json: the reply carries the duplicate-key status, so a key the daemon already holds is an outcome, not an error.
+  const r = await jobsIO.hydra(['--state-dir', stateDir, '--json', ...args])
+  const reply = parseReply(r.out)
+  if (reply?.ok) { const w: Work = { result: 'done' }; onActionSent(w); return w }
+  const code = reply ? (reply.exitCode ?? 1) : (r.code || 1)
+  const existing = reply?.data?.existing
+  // spawn answers 2 for any key it holds (status pending, spawned or completed); deliver answers 7 while one is in flight.
+  const pending = (job.mode === 'spawn' && code === 2 && existing?.status === 'pending') || (job.mode === 'main' && code === 7)
+  if (pending) return { result: 'not-now', note: `duplicate key ${key} still pending` }
+  if (code === 2) {
+    const w: Work = { result: 'done', note: `duplicate key ${key}: already served`, ...(existing?.sessionId && { absorbedBy: existing.sessionId }) }
+    onActionSent(w)
+    return w
+  }
+  const why = reply?.error ?? r.err
+  return { result: 'failed', note: `hydra ${args[0]} exited ${code}${why ? `: ${why.slice(-200)}` : ''}` }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,9 +127,9 @@ export const attemptIO = {
 export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null> {
   let written: AttemptResult | null = null
   let actionSent = false
-  const write = (result: AttemptResult['result'], note?: string): AttemptResult | null => {
+  const write = (result: AttemptResult['result'], note?: string, absorbedBy?: string): AttemptResult | null => {
     if (written) return null
-    written = { dispatch: o.dispatch, at: jobsIO.now().toISOString(), result, ...(note && { note }) }
+    written = { dispatch: o.dispatch, at: jobsIO.now().toISOString(), result, ...(note && { note }), ...(absorbedBy && { absorbedBy }) }
     writeAtomic(resultFile(o.stateDir, o.name, o.dispatch), JSON.stringify(written))
     attemptIO.out(`${written.at} ${o.name} dispatch ${o.dispatch}: ${result}${note ? ` (${note})` : ''}`)
     return written
@@ -133,8 +147,8 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
   if (job.name !== o.name) throw new Error(`stdin holds job ${job.name}, not ${o.name}`)
   const key = o.manual ? `jobs-${o.name}-${started.toISOString().slice(0, 16)}` : `jobs-${o.name}-${o.slot}`
   // The done result is written the moment the action lands: a cancel or a crash after that can't turn it into a rerun.
-  const w = await runWork(job, o.stateDir, key, () => { actionSent = true; write('done') })
-  write(w.result, w.note)
+  const w = await runWork(job, o.stateDir, key, landed => { actionSent = true; write(landed.result, landed.note, landed.absorbedBy) })
+  write(w.result, w.note, w.absorbedBy)
   attemptIO.killOwnGroup()
   return written
 }
@@ -211,13 +225,28 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
       }
       if (notNow?.dispatch === reply.id) {
         runIO.print(`${name}: not now: ${notNow.reason} [dispatch ${reply.id}]`)
-        return cancelling ? 130 : 0
+        return cancelling ? 130 : EX_TEMPFAIL   // the check contract's own "not now"; a cancel stays 130
       }
       runIO.print(`${name}: superseded by dispatch ${Math.max(last?.dispatch ?? 0, notNow?.dispatch ?? 0, r.state.appliedDispatch ?? 0)}`)
       return 1
     }
     await runIO.sleep(pollMs)
   }
+}
+
+/** `hydra jobs mark-done`: the daemon records the latest slot as done without running anything. Returns the exit code. */
+export async function jobsMarkDone(platform: string, name: string, stateDirOverride?: string): Promise<number> {
+  const sock = join(stateDirFor(platform, stateDirOverride), 'daemon.sock')
+  if (!existsSync(sock)) { runIO.error(`error: daemon not running (no socket at ${sock})`); return 1 }
+  let resp: Record<string, unknown>
+  try { resp = await runIO.send(sock, { type: 'cli', command: 'jobs-mark-done', id: randomUUID(), params: { name } }) } catch (err) {
+    runIO.error(`error: daemon not running: ${err instanceof Error ? err.message : err}`)
+    return 1
+  }
+  if (!resp.ok) { runIO.error(`error: ${resp.error}`); return 1 }
+  const slot = (resp.data as { slot: string | null }).slot
+  runIO.print(`${name}: ${slot ? `slot ${slot} marked done` : 'no slot to mark'} (marked done: no work ran)`)
+  return 0
 }
 
 // ---------------------------------------------------------------------------
@@ -238,20 +267,44 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
   console.log(`clock: ${tick ? `last tick ${local(tick)} (${ago(new Date(tick), now)})` : 'no tick yet'}${stale ? '  STALE: is the daemon running?' : ''}`)
   const file = jobsToml(stateDir)
   if (!existsSync(file)) { console.log(`no jobs file at ${file}`); return }
+  const sessions = readSessions(stateDir)
   for (const j of parseJobsConfig(readFileSync(file, 'utf8')).jobs) {
-    const r = readJobState(stateDir, j.name, j.schedule)
-    const next = nextSlot(j.schedule, now)
-    const parts = [`next ${next ? next.at.toLocaleString() : '-'}`]
-    if (r.kind === 'missing') parts.push('last never')
-    else if (r.kind === 'unreadable') parts.push(`state unreadable: ${r.error}`)
-    else {
-      const s = r.state
-      const last = s.last
-      parts.push(last ? `last ${local(last.at)} ${last.result}${last.note ? ` (${last.note})` : ''}` : 'last never')
-      if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now: ${s.notNow.reason}`)
-      if (s.failingSince) parts.push(`failing since ${local(s.failingSince)}`)
-      if (s.dispatch) parts.push(`running: dispatch ${s.dispatch.id} since ${local(s.dispatch.at)}`)
-    }
-    console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} ${parts.join('  ')}`)
+    const open = sessions.filter(s => isOpenJobSession(s, j.name)).map(s => s.tmuxName)
+    console.log(describeJob(j, readJobState(stateDir, j.name, j.schedule), now, open))
   }
+}
+
+/** The daemon's persisted session registry, read only to name a job's open sessions. Missing or unreadable: none. */
+function readSessions(stateDir: string): { tmuxName: string; initiator?: string; deadAt?: number }[] {
+  try { const a = JSON.parse(readFileSync(join(stateDir, 'sessions.json'), 'utf8')); return Array.isArray(a) ? a : [] } catch { return [] }
+}
+
+/** One `jobs list` line: next slot; owed or not and since when; the last result and its note; not-now; the failure run. */
+export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Date, openSessions: string[] = []): string {
+  const next = nextSlot(j.schedule, now)
+  const parts = [`next ${next ? next.at.toLocaleString() : '-'}`]
+  if (r.kind === 'missing') parts.push('last never')
+  else if (r.kind === 'unreadable') parts.push(`state unreadable: ${r.error}`)
+  else {
+    const s = r.state
+    const owed = owedSlot(j.schedule, s, now)
+    if (owed && j.durable && s.unconfirmedSlot === owed.label) {
+      // A manual run skips overlap: with a session from the job open, it would start a second one.
+      parts.push(openSessions.length
+        ? `owed (unconfirmed) since ${owed.at.toLocaleString()}: ${openSessions.join(', ')} still open; mark-done it if that covers the slot (not jobs run)`
+        : `owed (unconfirmed) since ${owed.at.toLocaleString()}: run or mark-done it`)
+    }
+    else if (owed) parts.push(`owed since ${owed.at.toLocaleString()} (${owed.label})`)
+    else parts.push('not owed')
+    const last = s.last
+    parts.push(last ? `last ${local(last.at)} ${last.result}${last.absorbedBy ? ` (absorbed by ${last.absorbedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
+    if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now since ${local(s.notNow.since)}: ${s.notNow.reason}`)
+    if (s.failingSince) parts.push(`failing since ${local(s.failingSince)} (${s.failures ?? 1}x)`)
+    if (owed && j.durable) {
+      const until = backoffUntil(j.schedule, s, owed)
+      if (until !== null && until > now.getTime()) parts.push(`retry after ${new Date(until).toLocaleString()}`)
+    }
+    if (s.dispatch) parts.push(`running: dispatch ${s.dispatch.id} since ${local(s.dispatch.at)}`)
+  }
+  return `${j.name.padEnd(20)} ${j.mode.padEnd(6)}${j.durable ? ' durable' : ''} ${parts.join('  ')}`
 }

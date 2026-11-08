@@ -244,6 +244,16 @@ function handleHealth(req: CLIRequest): CLIResponse {
   })
 }
 
+// `hydra jobs mark-done`: the latest slot is recorded as done without running anything.
+function handleJobsMarkDone(req: CLIRequest): CLIResponse {
+  const { name } = req.params as { name?: string }
+  if (!name) return respond(req, false, 'name is required')
+  const clock = jobsClock()
+  if (!clock) return respond(req, false, 'jobs clock not running in this daemon')
+  const r = clock.requestMarkDone(name)
+  return r.ok ? respond(req, true, { slot: r.slot }) : respond(req, false, r.error)
+}
+
 // `hydra jobs run`: a manual dispatch through the clock. Answered after the spawn, with {id, pid, lstart}.
 function handleJobsRun(req: CLIRequest): CLIResponse {
   const { name } = req.params as { name?: string }
@@ -438,6 +448,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'specialist': response = await handleSpecialist(req); break
       case 'slack-watch': response = handleSlackWatch(req); break
       case 'jobs-run': response = handleJobsRun(req); break
+      case 'jobs-mark-done': response = handleJobsMarkDone(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }

@@ -274,6 +274,10 @@ export class DiscordGateway implements ChatGateway {
     }, HEARTBEAT_TICK_MS)
   }
 
+  isConnected(): boolean {
+    return !this.health.isDisconnected && this.client.ws.status === Status.Ready
+  }
+
   async forceReconnect(): Promise<{ ok: boolean; message: string }> {
     if (!this.token) return { ok: false, message: 'gateway not started' }
     try {

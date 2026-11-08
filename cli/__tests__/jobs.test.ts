@@ -6,9 +6,9 @@ import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
 import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
-  isPlatform,
+  isPlatform, describeJob, jobsMarkDone,
 } from '../jobs.js'
-import { resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
+import { resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
 
 const repo = join(import.meta.dir, '..', '..')
 
@@ -70,8 +70,31 @@ describe('parseJobs', () => {
     ['idle_ttl that is not a duration', `channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\nidle_ttl="a while"`, /must be a duration/],
     ['unknown key', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nretries=3`, /unknown key retries/],
     ['bad name', `[Vuln_Scan]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"`, /name must be/],
+    ['durable that is not a boolean', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable="yes"`, /durable must be true or false/],
+    ['an unknown need', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nneeds=["vpn"]`, /unknown precondition "vpn"/],
+    ['needs that is not a list', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nneeds="internet"`, /needs must be a list/],
+    ['overlap on a main job', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\noverlap="absorb"`, /overlap only applies to mode spawn/],
+    ['an unknown overlap', `channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\noverlap="wait"`, /overlap must be "absorb"/],
+    ['alert_after without durable', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nalert_after="2d"`, /alert_after only applies to durable/],
+    ['alert_after over 30d', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true\nalert_after="31d"`, /at most 30d/],
+    ['alert_after that is not a duration', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true\nalert_after="soon"`, /must be a duration/],
   ]
   for (const [label, text, err] of bad) test(`rejects ${label}`, () => expect(() => parseJobs(text)).toThrow(err))
+
+  test('the durable keys parse: durable, needs (deduplicated), overlap, alert_after', () => {
+    const [j] = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true\nneeds=["internet","internet"]\noverlap="absorb"\nalert_after="3d"`)
+    expect(j).toMatchObject({ durable: true, needs: ['internet'], overlap: 'absorb', alertAfterMs: 3 * 86_400_000 })
+    expect(parseJobs(`[d]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true`)[0].alertAfterMs).toBe(86_400_000)   // default 1d, applied once
+    const [plain] = parseJobs(`[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=false`)
+    expect(plain.durable).toBeUndefined()
+  })
+
+  test('alert_after durations', () => {
+    expect(parseAlertAfter('90m')).toBe(90 * 60_000)
+    expect(parseAlertAfter('30d')).toBe(30 * 86_400_000)
+    expect(parseAlertAfter('0m')).toBeNull()
+    expect(parseAlertAfter('1w')).toBeNull()
+  })
 
   test('a platform name must be lowercase letters', () => {
     expect(isPlatform('discord')).toBe(true)
@@ -86,14 +109,18 @@ describe('runWork', () => {
   const calls: string[][] = []
   let checkResult = { code: 0, out: '', err: '' }
   let hydraCode = 0
+  let existing: { status: string; sessionId: string } | undefined
+  /** What `hydra --json` prints: the daemon's reply, ok or not, with its exit code and the existing key entry. */
+  const reply = (code: number) => JSON.stringify(code === 0 ? { ok: true, data: {} } : { ok: false, exitCode: code, error: 'boom', ...(existing && { data: { existing } }) })
   beforeEach(() => {
     calls.length = 0
     checkResult = { code: 0, out: '', err: '' }
     hydraCode = 0
+    existing = undefined
     Object.assign(jobsIO, {
       now: () => new Date('2026-10-25T10:00:00Z'),
       check: async () => checkResult,
-      hydra: async (a: string[]) => { calls.push(a.slice(2)); return { code: hydraCode, err: hydraCode ? 'boom' : '' } },
+      hydra: async (a: string[]) => { expect(a.slice(0, 3)).toEqual(['--state-dir', dir, '--json']); calls.push(a.slice(3)); return { code: 0, err: '', out: reply(hydraCode) } },
     })
   })
 
@@ -139,14 +166,37 @@ describe('runWork', () => {
     expect(calls).toHaveLength(1)
   })
 
-  test('exit 2 (key already went through) and 7 (in flight) count as sent', async () => {
+  test('exit 75 from the check: not now, stdout dropped, no action', async () => {
+    checkResult = { code: 75, out: 'would have been findings', err: 'vpn down' }
+    expect(await runWork(spawnJob, dir, KEY)).toEqual({ result: 'not-now', note: 'check exited 75: vpn down' })
+    expect(calls).toEqual([])
+  })
+
+  test('duplicate key, spawn: pending is not now; spawned or completed is done, absorbed by that session', async () => {
     checkResult.out = 'x'
-    for (const code of [2, 7]) {
-      hydraCode = code
-      let landed = false
-      expect((await runWork(spawnJob, dir, KEY, () => { landed = true })).result).toBe('done')
-      expect(landed).toBe(true)
+    hydraCode = 2
+    existing = { status: 'pending', sessionId: '' }
+    let landed = 0
+    expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'not-now', note: `duplicate key ${KEY} still pending` })
+    for (const status of ['spawned', 'completed']) {
+      existing = { status, sessionId: 'sess-1' }
+      expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'done', note: `duplicate key ${KEY}: already served`, absorbedBy: 'sess-1' })
     }
+    expect(landed).toBe(2)
+  })
+
+  test('duplicate key, deliver: 7 (in flight) is not now; 2 (delivered) is done', async () => {
+    hydraCode = 7
+    expect((await runWork(mainJob, dir, 'k')).result).toBe('not-now')
+    hydraCode = 2
+    existing = { status: 'completed', sessionId: 'main' }
+    expect(await runWork(mainJob, dir, 'k')).toMatchObject({ result: 'done', absorbedBy: 'main' })
+  })
+
+  test('no JSON reply (the CLI crashed or was killed): failed, with its exit code', async () => {
+    checkResult.out = 'x'
+    jobsIO.hydra = async () => ({ code: 124, err: 'killed after 120s (SIGKILL)', out: '' })
+    expect(await runWork(spawnJob, dir, KEY)).toEqual({ result: 'failed', note: 'hydra spawn exited 124: killed after 120s (SIGKILL)' })
   })
 
   test('the size cap counts bytes: multibyte output still fits the daemon limit', async () => {
@@ -175,7 +225,7 @@ describe('runWork', () => {
   test("every hydra call addresses the dispatching daemon by its state dir, never the platform's live daemon", async () => {
     checkResult.out = 'x'
     const seen: string[][] = []
-    jobsIO.hydra = async (a: string[]) => { seen.push(a); return { code: 0, err: '' } }
+    jobsIO.hydra = async (a: string[]) => { seen.push(a); return { code: 0, err: '', out: '{"ok":true}' } }
     await runWork(spawnJob, dir, KEY)
     await runWork(mainJob, dir, 'k')
     for (const a of seen) expect(a.slice(0, 2)).toEqual(['--state-dir', dir])
@@ -205,7 +255,7 @@ describe('the attempt (in process)', () => {
     Object.assign(jobsIO, {
       now: () => new Date('2026-10-25T13:00:10Z'),
       check: async () => ({ code: 0, out: 'finding', err: '' }),
-      hydra: async (a: string[]) => { keys.push(a[a.indexOf('--idempotency-key') + 1]); return { code: 0, err: '' } },
+      hydra: async (a: string[]) => { keys.push(a[a.indexOf('--idempotency-key') + 1]); return { code: 0, err: '', out: '{"ok":true}' } },
     })
   })
   afterEach(() => { Object.assign(jobsIO, real); Object.assign(attemptIO, realA); rmSync(dir, { recursive: true }) })
@@ -458,6 +508,12 @@ describe('jobs run', () => {
     expect(await new Response(p.stderr).text()).toContain('jobs commands take --state-dir <dir>, not --daemon')
   }, 15_000)
 
+  test('not now exits 75, the check contract\'s own code, so a script can tell "ran" from "not now"', async () => {
+    apply({ appliedDispatch: 3, notNow: { since: 'x', reason: 'check exited 75', dispatch: 3 } })
+    expect(await jobsRun('test', 'sweep', dir, 0)).toBe(75)
+    expect(out.at(-1)).toBe('sweep: not now: check exited 75 [dispatch 3]')
+  })
+
   test('a failed outcome exits 1', async () => {
     apply({ appliedDispatch: 3, last: { at: 'x', dispatch: 3, result: 'failed', note: 'check exited 1' } })
     expect(await jobsRun('test', 'sweep', dir, 0)).toBe(1)
@@ -582,5 +638,89 @@ describe('jobs list', () => {
       jobsList('test', dir)
       expect(lines[0]).toContain('STALE')
     } finally { console.log = log; rmSync(dir, { recursive: true }) }
+  })
+})
+
+describe('jobs list lines', () => {
+  const real = { ...jobsIO }
+  const savedTZ = process.env.TZ
+  beforeEach(() => { process.env.TZ = 'America/Los_Angeles' })
+  afterEach(() => { process.env.TZ = savedTZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone })
+  const dur = parseJobs(`[pull]\nschedule="*/5 * * * *"\ncheck="p.sh"\nmode="none"\ndurable=true`)[0]
+  const review = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true`)[0]
+  const now = new Date('2026-11-04T10:08:00-08:00')
+  const line = (j: typeof dur, s: object) => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-line-'))
+    try { writeAtomic(stateFile(dir, j.name), JSON.stringify(s)); return describeJob(j, readJobState(dir, j.name, j.schedule), now) } finally { rmSync(dir, { recursive: true }) }
+  }
+
+  test('owed since its slot, failing since, the retry time under backoff', () => {
+    const l = line(dur, { covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:30Z' }, failures: 2, failingSince: '2026-11-04T18:05:10Z', last: { at: '2026-11-04T18:06:00Z', result: 'failed', note: 'ssh timeout' } })
+    expect(l).toContain('durable')
+    expect(l).toContain('owed since')
+    expect(l).toContain('(2026-11-04 10:05)')
+    expect(l).toContain('failed (ssh timeout)')
+    expect(l).toContain('failing since')
+    expect(l).toContain('(2x)')
+    expect(l).toContain('retry after')
+  })
+
+  test('not owed, absorbed, and not now (only when newer than the last result)', () => {
+    const l = line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:05:30Z' }, last: { at: '2026-11-04T18:05:30Z', result: 'done', absorbedBy: 'pull-7' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })
+    expect(l).toContain('not owed')
+    expect(l).toContain('done (absorbed by pull-7)')
+    expect(l).toContain(': offline')
+    expect(line(dur, { last: { at: '2026-11-04T18:07:30Z', result: 'done' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })).not.toContain('offline')
+  })
+
+  test('owed (unconfirmed), with what to do about it', () => {
+    const l = line(review, { durableApplied: true, unconfirmedSlot: '2026-10-30 11:00', last: { at: '2026-10-30T19:05:00Z', result: 'nothing', v0: 'nothing' } })
+    expect(l).toContain('owed (unconfirmed) since')
+    expect(l).toContain('run or mark-done it')
+  })
+
+  test('owed (unconfirmed) with a session from the job open: mark-done only, never jobs run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-line-'))
+    const lines: string[] = []
+    const log = console.log
+    console.log = (x: string) => { lines.push(x) }
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), `channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true`)
+      writeAtomic(stateFile(dir, 'review'), JSON.stringify({ durableApplied: true, unconfirmedSlot: '2026-10-30 11:00', last: { at: '2026-10-30T19:05:00Z', result: 'nothing', v0: 'nothing' } }))
+      writeFileSync(join(dir, 'sessions.json'), JSON.stringify([
+        { tmuxName: 'review-1', initiator: 'jobs:review' }, { tmuxName: 'old', initiator: 'jobs:review', deadAt: 1 }, { tmuxName: 'x', initiator: 'jobs:other' },
+      ]))
+      jobsIO.now = () => now
+      jobsList('test', dir)
+      const l = lines.find(x => x.startsWith('review'))!
+      expect(l).toContain('review-1 still open; mark-done it if that covers the slot (not jobs run)')
+      expect(l).not.toContain('old')
+      expect(l).not.toContain('run or mark-done')
+    } finally { console.log = log; jobsIO.now = real.now; rmSync(dir, { recursive: true }) }
+  })
+
+  test('baseline and ended-without-a-result notes are shown as recorded', () => {
+    expect(line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:06:00Z' }, last: { at: '2026-11-04T18:06:00Z', result: 'done', note: 'baseline: no work ran' } })).toContain('(baseline: no work ran)')
+    expect(line(dur, { last: { at: '2026-11-04T18:06:00Z', result: 'failed', note: 'ended without a result' }, failures: 1, failingSince: '2026-11-04T18:06:00Z' })).toContain('(ended without a result)')
+  })
+})
+
+describe('jobs mark-done (CLI)', () => {
+  const realR = { ...runIO }
+  afterEach(() => Object.assign(runIO, realR))
+  test('asks the daemon and prints the slot it marked; a refusal exits 1', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-md-'))
+    writeFileSync(join(dir, 'daemon.sock'), '')
+    const out: string[] = []
+    const sent: Record<string, unknown>[] = []
+    Object.assign(runIO, { print: (x: string) => out.push(x), error: (x: string) => out.push(x), send: async (_s: string, req: Record<string, unknown>) => { sent.push(req); return { ok: true, data: { slot: '2026-11-13 11:00' } } } })
+    try {
+      expect(await jobsMarkDone('test', 'review', dir)).toBe(0)
+      expect(sent[0]).toMatchObject({ type: 'cli', command: 'jobs-mark-done', params: { name: 'review' } })
+      expect(out).toEqual(['review: slot 2026-11-13 11:00 marked done (marked done: no work ran)'])
+      runIO.send = async () => ({ ok: false, error: 'review is already running' })
+      expect(await jobsMarkDone('test', 'review', dir)).toBe(1)
+      expect(out.at(-1)).toBe('error: review is already running')
+    } finally { rmSync(dir, { recursive: true }) }
   })
 })

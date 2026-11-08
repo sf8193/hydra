@@ -14,14 +14,17 @@ export const DEFAULT_IDLE_TTL_MS = 30 * 60_000
 // Long enough for a session that waits days on a reply; well under setTimeout's ~24.8-day ceiling.
 export const MAX_IDLE_TTL_MS = 7 * 86_400_000
 
-/** `90m`, `12h`, `4d` → ms. Null when malformed, zero, or over MAX_IDLE_TTL_MS. */
-export function parseIdleTtl(s: string): number | null {
+/** `90m`, `12h`, `4d` (any case, surrounding space ignored) → ms. Null when malformed, zero, or over `maxMs`. */
+export function parseDuration(s: string, maxMs: number): number | null {
   const m = s.trim().match(/^(\d+)(m|h|d)$/i)
   if (!m) return null
   const unit = m[2].toLowerCase()
   const ms = parseInt(m[1], 10) * (unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : 86_400_000)
-  return ms > 0 && ms <= MAX_IDLE_TTL_MS ? ms : null
+  return ms > 0 && ms <= maxMs ? ms : null
 }
+
+/** An idle limit: a duration up to MAX_IDLE_TTL_MS. */
+export const parseIdleTtl = (s: string): number | null => parseDuration(s, MAX_IDLE_TTL_MS)
 
 /** Largest message `hydra deliver` accepts, to any target. */
 export const DELIVER_MAX_MESSAGE_BYTES = 10_000

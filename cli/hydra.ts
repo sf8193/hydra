@@ -10,7 +10,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
-import { isPlatform, jobsAttempt, jobsList, jobsRun } from './jobs.js'
+import { isPlatform, jobsAttempt, jobsList, jobsMarkDone, jobsRun } from './jobs.js'
 import { parseAttemptArgs } from '../shared/jobs.js'
 import { MODEL_ALIASES } from '../shared/constants.js'
 
@@ -32,6 +32,7 @@ Setup:
 Jobs (recurring, from <state dir>/jobs.toml):
   hydra jobs list <platform>           The clock's last tick; each job's next run and last result (validates jobs.toml)
   hydra jobs run <platform> <name>     Run one job now, through the daemon; Ctrl-C cancels it
+  hydra jobs mark-done <platform> <name>  Mark the latest slot done without running it (a cutover, an unconfirmed slot)
   The daemon reads jobs.toml every minute; there is nothing to sync.
 
 Lifecycle:
@@ -161,12 +162,14 @@ async function main(): Promise<void> {
       try { await jobsAttempt(o) } catch (err) { console.error(`attempt error: ${err instanceof Error ? err.stack : err}`); process.exit(1) }
       process.exit(0)
     }
-    if (!['list', 'run'].includes(sub) || !platform || !isPlatform(platform) || (sub === 'run' && (!name || name.startsWith('-')))) {
-      console.error('usage: hydra [--state-dir <dir>] jobs list <platform>   |   hydra [--state-dir <dir>] jobs run <platform> <name>')
+    const named = sub === 'run' || sub === 'mark-done'
+    if (!['list', 'run', 'mark-done'].includes(sub) || !platform || !isPlatform(platform) || (named && (!name || name.startsWith('-')))) {
+      console.error('usage: hydra [--state-dir <dir>] jobs list <platform>   |   hydra [--state-dir <dir>] jobs run|mark-done <platform> <name>')
       process.exit(1)
     }
     try {
       if (sub === 'list') jobsList(platform, stateDirOpt)
+      else if (sub === 'mark-done') process.exit(await jobsMarkDone(platform, name, stateDirOpt))
       else process.exit(await jobsRun(platform, name, stateDirOpt))
     } catch (err) {
       console.error(`error: ${err instanceof Error ? err.message : err}`)

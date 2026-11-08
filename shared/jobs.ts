@@ -1,13 +1,13 @@
 // Recurring jobs, the part both sides read: jobs.toml, the state files the daemon writes, and the owed rule.
 // The daemon's clock (daemon/jobs-clock.ts) is the only writer of job state; attempts (cli/jobs.ts) write one
-// result file each; the CLI only reads. Design: proposals/durable-jobs.md.
+// result file each; the CLI only reads.
 
 import { spawnSync } from 'child_process'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { latestSlot, parseCron, type Slot } from './cron-local.js'
-import { parseIdleTtl } from './constants.js'
+import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
+import { parseDuration, parseIdleTtl } from './constants.js'
 
 // ---------------------------------------------------------------------------
 // jobs.toml
@@ -24,7 +24,19 @@ export type Job = {
   channel?: string   // spawn: where the session opens; any mode: where a direct alert goes. Falls back to the top-level channel
   model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
   idleTtl?: string   // spawn only: passed to `hydra spawn --idle-ttl` (validated here with the daemon's parser)
+  durable?: true     // a failed attempt doesn't use up the slot: it is retried, with backoff, until done
+  needs?: Need[]     // preconditions the daemon checks before dispatch; unmet = not now
+  overlap?: 'absorb' // spawn only: a still-open session from this job handles the owed slot
+  alertAfterMs?: number // durable only: how long a failure run lasts before it is alerted (alert_after, default 1d)
 }
+
+export type Need = 'internet'
+const NEEDS: readonly Need[] = ['internet']
+const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
+const MAX_ALERT_AFTER_MS = 30 * 24 * 60 * 60_000
+
+/** alert_after: a duration up to 30d. */
+export const parseAlertAfter = (s: string): number | null => parseDuration(s, MAX_ALERT_AFTER_MS)
 
 export type JobsConfig = { channel?: string; jobs: Job[] }
 
@@ -49,7 +61,7 @@ export function parseJobsConfig(text: string): JobsConfig {
       return t[k] as string
     }
     for (const k of Object.keys(t)) {
-      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl'].includes(k)) fail(`unknown key ${k}`)
+      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after'].includes(k)) fail(`unknown key ${k}`)
     }
     const schedule = str('schedule') ?? fail('schedule is required')
     // parseCron is the only reader of a schedule, so it is the only validator.
@@ -71,7 +83,25 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (idleTtl && parseIdleTtl(idleTtl) === null) fail(`idle_ttl "${idleTtl}" must be a duration like 90m, 12h or 4d, at most 7d`)
     const check = str('check')
     if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
-    jobs.push({ name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }) })
+    if (t.durable !== undefined && typeof t.durable !== 'boolean') fail('durable must be true or false')
+    const durable = t.durable === true
+    let needs: Need[] = []
+    if (t.needs !== undefined) {
+      if (!Array.isArray(t.needs) || t.needs.some(n => typeof n !== 'string')) fail('needs must be a list of names')
+      for (const n of t.needs as string[]) if (!NEEDS.includes(n as Need)) fail(`needs: unknown precondition "${n}" (known: ${NEEDS.join(', ')})`)
+      needs = [...new Set(t.needs as Need[])]
+    }
+    const overlap = str('overlap')
+    if (overlap !== undefined && overlap !== 'absorb') fail('overlap must be "absorb"')
+    if (overlap && mode !== 'spawn') fail('overlap only applies to mode spawn')
+    const alertAfter = str('alert_after')
+    if (alertAfter && !durable) fail('alert_after only applies to durable jobs (a plain job reports each failure daily)')
+    const alertAfterMs = alertAfter === undefined ? DEFAULT_ALERT_AFTER_MS : parseAlertAfter(alertAfter)
+    if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most 30d`)
+    jobs.push({
+      name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
+      ...(durable && { durable: true as const, alertAfterMs: alertAfterMs! }), ...(needs.length && { needs }), ...(overlap && { overlap: 'absorb' as const }),
+    })
   }
   return { ...(defaultChannel && { channel: defaultChannel }), jobs }
 }
@@ -99,6 +129,10 @@ export const ATTEMPT_DEADLINE_MS = CHECK_TIMEOUT_MS + ACTION_TIMEOUT_MS + 2 * 60
 // ---------------------------------------------------------------------------
 
 export type Result = 'done' | 'nothing' | 'failed' | 'not-now'
+/** What happened: the one result vocabulary for attempts, the daemon's own decisions and the outcome table. */
+export type Outcome = { result: Result; note?: string; absorbedBy?: string }
+/** `check` exit code for "not now" (EX_TEMPFAIL): not an attempt, uses no slot. `jobs run` exits with it too. */
+export const EX_TEMPFAIL = 75
 export type V0Outcome = 'nothing' | 'findings' | 'failed'
 
 export type Dispatch = {
@@ -121,9 +155,13 @@ export type JobState = {
   appliedDispatch?: number        // the last dispatch id whose result (or loss) was applied
   failures?: number
   failingSince?: string
-  last?: { at: string; dispatch?: number; result: 'done' | 'nothing' | 'failed'; note?: string; v0?: V0Outcome }
+  last?: { at: string; dispatch?: number; result: Exclude<Result, 'not-now'>; note?: string; absorbedBy?: string; v0?: V0Outcome }
   notNow?: { since: string; reason: string; dispatch?: number }
-  reportedDay?: string            // local date a failure was last reported
+  alertedFor?: string             // durable: the failingSince already alerted for (alerted iff equal)
+  reportedDay?: string            // plain jobs: local date a failure was last reported
+  unconfirmedSlot?: string        // a slot held as "owed (unconfirmed)": never run on its own (jobs run or mark-done)
+  announcedUnconfirmed?: string   // the unconfirmed slot already announced on the direct path
+  durableApplied?: boolean        // set when the daemon first applies durable rules to this job
 }
 
 export type DaemonState = {
@@ -133,7 +171,7 @@ export type DaemonState = {
 }
 
 /** What an attempt reports, once, in results/<name>.<id>.json. */
-export type AttemptResult = { dispatch: number; at: string; result: Result; note?: string }
+export type AttemptResult = Outcome & { dispatch: number; at: string }
 
 export const jobsDir = (stateDir: string) => join(stateDir, 'jobs-state')
 export const resultsDir = (stateDir: string) => join(jobsDir(stateDir), 'results')
@@ -165,7 +203,7 @@ export function localDay(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const V0_RESULT: Record<V0Outcome, 'done' | 'nothing' | 'failed'> = { findings: 'done', nothing: 'nothing', failed: 'failed' }
+const V0_RESULT: Record<V0Outcome, Exclude<Result, 'not-now'>> = { findings: 'done', nothing: 'nothing', failed: 'failed' }
 
 /**
  * Today's runner wrote `{at, outcome, note}`. Translate it rather than treat it as missing: the job then doesn't fire
@@ -234,6 +272,21 @@ export function owedSlot(schedule: string, state: JobState, now: Date): Slot | n
   return slot
 }
 
+
+/**
+ * Durable backoff: after n consecutive failures the next attempt waits min(2^n minutes, 1 hour, the schedule's
+ * period), measured from the last failure (`last.at`: with failures > 0 it is always a failure). The period is the
+ * gap from the owed slot to the next one. Returns the earliest instant (ms) the slot may be tried, or null for no wait.
+ */
+export function backoffUntil(schedule: string, state: JobState, owed: Slot): number | null {
+  const n = state.failures ?? 0
+  if (n <= 0 || !state.last) return null
+  const next = nextSlot(schedule, owed.at)
+  const period = next ? next.at.getTime() - owed.at.getTime() : Infinity
+  const wait = Math.min(2 ** Math.min(n, 20) * 60_000, 3_600_000, period)
+  return new Date(state.last.at).getTime() + wait
+}
+
 // ---------------------------------------------------------------------------
 // Clock constants and names shared by the daemon and the CLI
 // ---------------------------------------------------------------------------
@@ -243,6 +296,9 @@ export const STALE_TICK_MS = 5 * 60_000
 
 /** The initiator every session and message a job causes carries. */
 export const jobInitiator = (name: string) => `jobs:${name}`
+
+/** A session overlap counts for a job: spawned by it and not dead, connected or not. */
+export const isOpenJobSession = (s: { initiator?: string; deadAt?: number }, name: string) => s.initiator === jobInitiator(name) && !s.deadAt
 
 // ---------------------------------------------------------------------------
 // The attempt's command line

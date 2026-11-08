@@ -7,7 +7,7 @@ sequenceDiagram
     participant A as cli/jobs.ts (jobs attempt, detached)
     participant R as jobs-state/results/NAME.ID.json
 
-    Note over C: one tick a minute, one at a time, only while holding _daemon.lock
+    Note over C: one tick a minute, one at a time, only while holding _daemon.lock<br/>each tick: apply results, then decide each job (backoff, needs, overlap), then alerts
     alt tick: latest slot owed
         C->>S: reserve dispatch {id, nonce, at, kind: scheduled, slot, deadline} (sync, no await)
     else jobs run
