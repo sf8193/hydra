@@ -1,6 +1,6 @@
 # Copy to <state dir>/jobs.toml. The daemon reads it every minute and runs each job at its local-time slots;
-# a slot missed while the machine slept runs once on wake. `hydra jobs sync <platform>` validates the file (and
-# removes launchd entries left by older hydra versions). `hydra jobs list <platform>` shows each job's state.
+# a slot missed while the machine slept runs once on wake. `hydra jobs list <platform>` validates the file and shows
+# each job's state.
 #
 # A job's check script prints nothing when all is well. Anything it prints is passed to the agent.
 # A nonzero exit is a failure: the daemon posts one "job failed" message per local day while it keeps failing.

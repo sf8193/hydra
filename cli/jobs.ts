@@ -2,7 +2,7 @@
 // This file holds what runs outside it:
 // - `jobs attempt`: one detached run of a job's work, started by the daemon, reporting one result file;
 // - `jobs run`: asks the daemon for a dispatch and waits for its outcome in the foreground;
-// - `jobs list` and `jobs sync`.
+// - `jobs list`: the clock's last tick and each job's state (it parses jobs.toml, so it also validates it).
 // The work: an optional check script (output = findings for an agent, no output = nothing to do, nonzero = failed),
 // then the mode's action (spawn, deliver to main, or nothing).
 
@@ -12,11 +12,11 @@ import { join } from 'path'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { nextSlot } from '../shared/cron-local.js'
 import {
-  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, CHECK_TIMEOUT_MS, isJobName, jobsDir, jobsToml, LAUNCH_AGENTS_DIR, legacyTitles, lstartOf, parseJobsConfig,
-  readDaemonState, readJobState, resultFile, writeAtomic, type AttemptResult, type Job,
+  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, CHECK_TIMEOUT_MS, STALE_TICK_MS, jobInitiator, jobsDir, jobsToml, lstartOf, parseJobsConfig,
+  readDaemonState, readJobState, resultFile, writeAtomic, type AttemptArgs, type AttemptResult, type Job,
 } from '../shared/jobs.js'
 
-export { parseJobs, parseJobsConfig, parseLegacyTitle, isPlatform, type Job, type Mode } from '../shared/jobs.js'
+export { parseJobs, parseJobsConfig, isPlatform, type Job, type Mode } from '../shared/jobs.js'
 
 // Everything a run does to the outside world goes through here, so tests swap it.
 export const jobsIO = {
@@ -60,8 +60,8 @@ export type Work = { result: 'done' | 'nothing' | 'failed'; note?: string }
  * crash is deduplicated; the minute for a manual one, so it is never swallowed by the slot's key.
  * `onActionSent` fires as soon as the action has landed, so a cancel after that point reports done.
  */
-export async function runWork(job: Job, platform: string, stateDir: string, key: string, onActionSent: () => void = () => {}): Promise<Work> {
-  const initiator = `jobs:${job.name}`
+export async function runWork(job: Job, stateDir: string, key: string, onActionSent: () => void = () => {}): Promise<Work> {
+  const initiator = jobInitiator(job.name)
   let output = ''
   if (job.check) {
     const r = await jobsIO.check(job.check)
@@ -85,7 +85,8 @@ export async function runWork(job: Job, platform: string, stateDir: string, key:
   const args = job.mode === 'spawn'
     ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', job.channel!, '--ephemeral', ...(job.idleTtl ? ['--idle-ttl', job.idleTtl] : []), ...(job.model ? ['--model', job.model] : []), message]
     : ['deliver', '--session', 'main', '--queue', '--initiator', initiator, '--idempotency-key', key, '--message', message]
-  const r = await jobsIO.hydra(['--daemon', platform, ...args])
+  // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
+  const r = await jobsIO.hydra(['--state-dir', stateDir, ...args])
   if (sent(r.code)) { onActionSent(); return { result: 'done' } }
   return { result: 'failed', note: `hydra ${args[0]} exited ${r.code}${r.err ? `: ${r.err}` : ''}` }
 }
@@ -93,18 +94,6 @@ export async function runWork(job: Job, platform: string, stateDir: string, key:
 // ---------------------------------------------------------------------------
 // The attempt
 // ---------------------------------------------------------------------------
-
-export type AttemptOpts = { platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string }
-
-/** Parses `jobs attempt <platform> <name> --dispatch <id> --nonce <n> --slot <label> [--manual] --state-dir <dir>`. */
-export function parseAttemptArgs(rest: string[]): AttemptOpts | null {
-  const [platform, name, ...flags] = rest
-  const val = (f: string) => { const i = flags.indexOf(f); return i >= 0 ? flags[i + 1] : undefined }
-  const dispatch = Number(val('--dispatch'))
-  const nonce = val('--nonce'), slot = val('--slot'), stateDir = val('--state-dir')
-  if (!platform || !name || !isJobName(name) || !Number.isInteger(dispatch) || dispatch < 1 || !nonce || slot === undefined || !stateDir) return null
-  return { platform, name, dispatch, nonce, slot, manual: flags.includes('--manual'), stateDir }
-}
 
 export const attemptIO = {
   readStdin: () => Bun.stdin.text(),
@@ -120,7 +109,7 @@ export const attemptIO = {
  * writes one result file, and never touches job state. At its deadline, or on SIGTERM, it writes its result first and
  * then kills its own group, so no grandchild of the check outlives the dispatch.
  */
-export async function jobsAttempt(o: AttemptOpts): Promise<AttemptResult | null> {
+export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null> {
   let written: AttemptResult | null = null
   let actionSent = false
   const write = (result: AttemptResult['result'], note?: string): AttemptResult | null => {
@@ -143,7 +132,7 @@ export async function jobsAttempt(o: AttemptOpts): Promise<AttemptResult | null>
   if (job.name !== o.name) throw new Error(`stdin holds job ${job.name}, not ${o.name}`)
   const key = o.manual ? `jobs-${o.name}-${started.toISOString().slice(0, 16)}` : `jobs-${o.name}-${o.slot}`
   // The done result is written the moment the action lands: a cancel or a crash after that can't turn it into a rerun.
-  const w = await runWork(job, o.platform, o.stateDir, key, () => { actionSent = true; write('done') })
+  const w = await runWork(job, o.stateDir, key, () => { actionSent = true; write('done') })
   write(w.result, w.note)
   return written
 }
@@ -219,24 +208,8 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
 }
 
 // ---------------------------------------------------------------------------
-// jobs sync, jobs list
+// jobs list
 // ---------------------------------------------------------------------------
-
-export const syncIO = {
-  agentsDir: LAUNCH_AGENTS_DIR,
-  remove: (title: string) => Bun.cron.remove(title),
-}
-
-/** Validates jobs.toml and removes the launchd entries the old runner registered. The daemon runs the jobs. */
-export async function jobsSync(platform: string, stateDirOverride?: string): Promise<void> {
-  const stateDir = stateDirFor(platform, stateDirOverride)
-  const file = jobsToml(stateDir)
-  if (!existsSync(file)) throw new Error(`no jobs file at ${file}`)
-  const { jobs } = parseJobsConfig(await Bun.file(file).text())
-  const old = legacyTitles(syncIO.agentsDir, platform)
-  for (const t of old) await syncIO.remove(t)
-  console.log(`jobs.toml ok: ${jobs.length} job${jobs.length === 1 ? '' : 's'}. Removed ${old.length} old launchd entr${old.length === 1 ? 'y' : 'ies'}. The ${platform} daemon runs the jobs.`)
-}
 
 const ago = (from: Date, to: Date) => {
   const m = Math.round((to.getTime() - from.getTime()) / 60_000)
@@ -248,7 +221,7 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
   const stateDir = stateDirFor(platform, stateDirOverride)
   const now = jobsIO.now()
   const tick = readDaemonState(stateDir).state.lastTick
-  const stale = !tick || now.getTime() - new Date(tick).getTime() > 5 * 60_000
+  const stale = !tick || now.getTime() - new Date(tick).getTime() > STALE_TICK_MS
   console.log(`clock: ${tick ? `last tick ${local(tick)} (${ago(new Date(tick), now)})` : 'no tick yet'}${stale ? '  STALE: is the daemon running?' : ''}`)
   const file = jobsToml(stateDir)
   if (!existsSync(file)) { console.log(`no jobs file at ${file}`); return }

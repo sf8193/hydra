@@ -7,9 +7,10 @@ import { spawn } from 'child_process'
 import { randomBytes } from 'crypto'
 import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from 'fs'
 import { resolve } from 'path'
+import { platformStateDir } from '../shared/constants.js'
 import { latestSlot } from '../shared/cron-local.js'
 import {
-  ATTEMPT_DEADLINE_MS, attemptArgv, attemptEnv, defaultStateDir, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
+  ATTEMPT_DEADLINE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
   owedSlot, parseJobsConfig, parseResultName, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../shared/jobs.js'
@@ -20,8 +21,6 @@ export const ADOPT_GRACE_MS = 30_000
 export const FINAL_WRITE_GRACE_MS = 2_000
 /** The attempt kills itself at its deadline; the daemon kills a wedged one this long after. */
 export const KILL_GRACE_MS = 60_000
-/** A last tick older than this is flagged on the direct path. */
-export const STALE_TICK_MS = 5 * 60_000
 const TICK_MS = 60_000
 
 export type ClockDeps = {
@@ -248,8 +247,8 @@ export class JobsClock {
     let s: JobState
     if (r.kind === 'missing') {
       s = {
-        ...(slot && { doneSlot: slot.label, attemptedSlot: slot.label }),
-        doneAt: at, attemptedAt: at, failures: 0,
+        ...(slot && { covered: { slot: slot.label, at } }),
+        failures: 0,
         last: { at, result: 'done', note: 'baseline: no work ran' },
       }
       this.d.log(`jobs: ${job.name}: no record, baseline at ${slot?.label ?? '(no slot)'}`)
@@ -259,7 +258,7 @@ export class JobsClock {
       s = {
         failures: 1, failingSince: at,
         last: { at, result: 'failed', note: 'state unreadable, reset' },
-        ...(job.mode !== 'none' && slot && { attemptedSlot: slot.label, attemptedAt: at }),
+        ...(job.mode !== 'none' && slot && { covered: { slot: slot.label, at } }),
         ...(this.highestResultId(job.name) && { appliedDispatch: this.highestResultId(job.name) }),
       }
       this.d.log(`jobs: ${job.name}: state unreadable (${r.error}), reset`)
@@ -398,9 +397,9 @@ export class JobsClock {
         } else {
           s.failures = 0
           delete s.failingSince
-          if (scheduled) { s.doneSlot = d.slot; s.doneAt = res.at }
         }
-        if (scheduled) { s.attemptedSlot = d.slot; s.attemptedAt = d.at }
+        // A plain job gets one attempt per slot, whatever its result. A manual run never moves the schedule.
+        if (scheduled) s.covered = { slot: d.slot, at: d.at }
       }
       if (s.dispatch?.id === d.id) delete s.dispatch
       s.appliedDispatch = d.id
@@ -418,7 +417,7 @@ export class JobsClock {
       s.last = { at, dispatch: d.id, result: 'failed', note: 'ended without a result' }
       s.failures = (s.failures ?? 0) + 1
       s.failingSince ??= at
-      if (d.kind === 'scheduled') { s.attemptedSlot = d.slot; s.attemptedAt = d.at }
+      if (d.kind === 'scheduled') s.covered = { slot: d.slot, at: d.at }
       delete s.dispatch
       s.appliedDispatch = d.id
     })
@@ -454,7 +453,7 @@ export class JobsClock {
       const last = r.state.last
       if (last?.result !== 'failed' || r.state.reportedDay === today) continue
       const note = last.note ?? 'failed'
-      const sent = this.d.toMain(`Job ${job.name} failed: ${note}. Tell the user about it now.`, `jobs:${job.name}`)
+      const sent = this.d.toMain(`Job ${job.name} failed: ${note}. Tell the user about it now.`, jobInitiator(job.name))
         || await this.d.direct(`Job ${job.name} failed: ${note}`, job.channel ?? cfg.channel ?? this.d.homeChannel())
       if (sent) this.update(job.name, job.schedule, s => { s.reportedDay = today })
     }
@@ -541,7 +540,7 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
     closeLock: fd => closeSync(fd),
     spawnAttempt: (args, stdin, log) => spawnAttempt(args, stdin, log, o.log ?? (m => process.stderr.write(`daemon: ${m}\n`))),
     lstartOf, listProcesses,
-    defaultStateDir: defaultStateDir(o.platform),
+    defaultStateDir: platformStateDir(o.platform),
     killGroup: (pid, signal) => process.kill(-pid, signal),
     removeLegacyEntries: async () => {
       const titles = legacyTitles(LAUNCH_AGENTS_DIR, o.platform)

@@ -891,6 +891,10 @@
       "daemon_util"
     ],
     [
+      "daemon_jobs-clock",
+      "shared_constants"
+    ],
+    [
       "daemon_dashboard",
       "daemon_config"
     ],

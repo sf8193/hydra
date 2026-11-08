@@ -2,6 +2,6 @@
 // nothing but say how to remove the entry. Removed once no install still has those entries.
 export default {
   scheduled() {
-    process.stderr.write('hydra jobs moved into the daemon; run `hydra jobs sync <platform>` to remove this launchd entry\n')
+    process.stderr.write('hydra jobs moved into the daemon, which removes this launchd entry on its next tick\n')
   },
 }

@@ -505,10 +505,10 @@ startJobsClock(realDeps({
     transport.sendOrQueue('main', { type: 'notification', content: text, meta: { source: 'jobs', initiator } })
     return true
   },
+  // The clock resolves job channel → top-level channel → home channel; this only sends.
   direct: async (text, channel) => {
-    const to = channel || DEFAULT_SESSION_CHANNEL
-    if (!to) { process.stderr.write(`daemon: jobs alert has no channel: ${text}\n`); return false }
-    return (await safeSend(to, text)).length > 0
+    if (!channel) { process.stderr.write(`daemon: jobs alert has no channel: ${text}\n`); return false }
+    return (await safeSend(channel, text)).length > 0
   },
   homeChannel: () => DEFAULT_SESSION_CHANNEL || undefined,
 }))

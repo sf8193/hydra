@@ -5,7 +5,7 @@ import { join } from 'path'
 import type { ChatGateway } from '../gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 import { captureSpawnVars } from '../shared/spawn-env.js'
-import { claudeConfigDir } from '../shared/constants.js'
+import { claudeConfigDir, platformStateDir } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // Paths & env
@@ -20,7 +20,7 @@ if (process.env.NODE_ENV === 'test' && process.env.HYDRA_TEST_PRELOADED !== '1')
 
 export const STATE_DIR = process.env.HYDRA_STATE_DIR
   ?? process.env.DISCORD_STATE_DIR
-  ?? join(homedir(), '.claude', 'channels', process.env.CHAT_PLATFORM ?? 'discord')
+  ?? platformStateDir(process.env.CHAT_PLATFORM ?? 'discord')
 export const ACCESS_FILE = join(STATE_DIR, 'access.json')
 export const APPROVED_DIR = join(STATE_DIR, 'approved')
 export const ENV_FILE = join(STATE_DIR, '.env')

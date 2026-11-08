@@ -5,10 +5,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
 import {
-  parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, parseAttemptArgs, jobsRun, runIO, jobsSync, syncIO, jobsList,
-  parseLegacyTitle, isPlatform, type AttemptOpts,
+  parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
+  isPlatform,
 } from '../jobs.js'
-import { resultFile, stateFile, writeAtomic, daemonFile } from '../../shared/jobs.js'
+import { resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, type AttemptArgs } from '../../shared/jobs.js'
 
 const repo = join(import.meta.dir, '..', '..')
 
@@ -33,11 +33,16 @@ mode = "none"
 `
 
 describe('parseJobs', () => {
-  test('reads jobs, applies the top-level channel to spawn only', () => {
+  test('reads jobs, applies the top-level channel to every job', () => {
     const jobs = parseJobs(ok)
     expect(jobs.map(j => j.name)).toEqual(['vuln-scan', 'retro', 'cleanup'])
     expect(jobs[0]).toEqual({ name: 'vuln-scan', schedule: '0 6 * * *', check: 'scan.sh', mode: 'spawn', prompt: 'Triage it.', channel: '123' })
-    expect(jobs[1].channel).toBeUndefined()
+    expect(jobs[1].channel).toBe('123')   // any mode: where its direct alerts go
+  })
+
+  test('a per-job channel is kept for every mode, never accepted and dropped', () => {
+    const jobs = parseJobs(`channel = "111"\n[n]\nschedule="0 6 * * *"\ncheck="c.sh"\nmode="none"\nchannel="999"\n[m]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nchannel="888"`)
+    expect(jobs.map(j => j.channel)).toEqual(['999', '888'])
   })
 
   test('a job channel beats the top-level one', () => {
@@ -48,7 +53,7 @@ describe('parseJobs', () => {
   const bad: [string, string, RegExp][] = [
     ['no schedule', `[a]\nmode="main"\nprompt="p"`, /schedule is required/],
     ['bad cron', `[a]\nschedule="soon"\nmode="main"\nprompt="p"`, /not a cron expression/],
-    ['cron Bun accepts but jobs list cannot read', `[a]\nschedule="+1 * * * *"\nmode="main"\nprompt="p"`, /schedule "\+1 \* \* \* \*" is not supported/],
+    ['cron Bun accepts but jobs list cannot read', `[a]\nschedule="+1 * * * *"\nmode="main"\nprompt="p"`, /schedule "\+1 \* \* \* \*" is not a cron expression/],
     ['no mode', `[a]\nschedule="0 6 * * *"`, /mode is required/],
     ['unknown mode', `[a]\nschedule="0 6 * * *"\nmode="loop"\nprompt="p"`, /mode must be one of/],
     ['spawn without channel', `[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"`, /needs a channel/],
@@ -98,39 +103,39 @@ describe('runWork', () => {
   const KEY = 'jobs-scan-2026-10-25 06:00'
 
   test('empty check output: nothing to do, no action', async () => {
-    expect(await runWork(spawnJob, 'discord', dir, KEY)).toEqual({ result: 'nothing' })
+    expect(await runWork(spawnJob, dir, KEY)).toEqual({ result: 'nothing' })
     expect(calls).toEqual([])
   })
 
   test('check output: spawns an ephemeral agent in the job channel with the output, under the given key', async () => {
     checkResult.out = 'new flaw X\n'
-    expect((await runWork(spawnJob, 'discord', dir, KEY)).result).toBe('done')
+    expect((await runWork(spawnJob, dir, KEY)).result).toBe('done')
     expect(calls).toEqual([['spawn', '--initiator', 'jobs:scan', '--idempotency-key', KEY,
       '--channel', '9', '--ephemeral', 'Triage.\n\nCheck output:\nnew flaw X']])
   })
 
   test('no check script: delivers the prompt to main, queued', async () => {
-    expect((await runWork(mainJob, 'discord', dir, 'k')).result).toBe('done')
+    expect((await runWork(mainJob, dir, 'k')).result).toBe('done')
     expect(calls).toEqual([['deliver', '--session', 'main', '--queue', '--initiator', 'jobs:retro',
       '--idempotency-key', 'k', '--message', 'Run the retro.']])
   })
 
   test('failed check: failed, and the attempt itself sends nothing (the daemon reports failures)', async () => {
     checkResult = { code: 2, out: '', err: 'ssh: timeout' }
-    expect(await runWork(spawnJob, 'discord', dir, KEY)).toEqual({ result: 'failed', note: 'check exited 2: ssh: timeout' })
+    expect(await runWork(spawnJob, dir, KEY)).toEqual({ result: 'failed', note: 'check exited 2: ssh: timeout' })
     expect(calls).toEqual([])
   })
 
   test('mode none with output: done, the output kept as the note', async () => {
     checkResult.out = 'pruned 3 files'
-    expect(await runWork(noneJob, 'discord', dir, 'k')).toEqual({ result: 'done', note: 'pruned 3 files' })
+    expect(await runWork(noneJob, dir, 'k')).toEqual({ result: 'done', note: 'pruned 3 files' })
     expect(calls).toEqual([])
   })
 
   test('an action the daemon refuses is a failed attempt', async () => {
     checkResult.out = 'x'
     hydraCode = 1
-    expect(await runWork(spawnJob, 'discord', dir, KEY)).toEqual({ result: 'failed', note: 'hydra spawn exited 1: boom' })
+    expect(await runWork(spawnJob, dir, KEY)).toEqual({ result: 'failed', note: 'hydra spawn exited 1: boom' })
     expect(calls).toHaveLength(1)
   })
 
@@ -139,22 +144,22 @@ describe('runWork', () => {
     for (const code of [2, 7]) {
       hydraCode = code
       let landed = false
-      expect((await runWork(spawnJob, 'discord', dir, KEY, () => { landed = true })).result).toBe('done')
+      expect((await runWork(spawnJob, dir, KEY, () => { landed = true })).result).toBe('done')
       expect(landed).toBe(true)
     }
   })
 
   test('the size cap counts bytes: multibyte output still fits the daemon limit', async () => {
     checkResult.out = '—'.repeat(8000)   // 24,000 bytes
-    await runWork(mainJob, 'discord', dir, 'k')
-    await runWork(spawnJob, 'discord', dir, KEY)
+    await runWork(mainJob, dir, 'k')
+    await runWork(spawnJob, dir, KEY)
     for (const c of calls) expect(Buffer.byteLength(c[c.length - 1])).toBeLessThan(10_000)
     expect(readFileSync(join(dir, 'jobs-state', 'scan.output.txt'), 'utf8')).toBe('—'.repeat(8000))
   })
 
   test('findings over the daemon message limit are cut with a note', async () => {
     checkResult.out = 'y'.repeat(9000)
-    await runWork(spawnJob, 'discord', dir, KEY)
+    await runWork(spawnJob, dir, KEY)
     const msg = calls[0][calls[0].length - 1]
     expect(Buffer.byteLength(msg)).toBeLessThan(9000)
     expect(msg).toContain('[truncated 507 chars; full output in ')
@@ -163,16 +168,18 @@ describe('runWork', () => {
   test('model and idle_ttl pass through to spawn', async () => {
     checkResult.out = 'x'
     const j = parseJobs(`channel="9"\n[w]\nschedule="0 1 * * MON"\nmode="spawn"\nprompt="Do it."\nmodel="haiku"\nidle_ttl="4d"`)[0]
-    await runWork(j, 'discord', dir, 'k')
+    await runWork(j, dir, 'k')
     expect(calls[0].join(' ')).toContain('--ephemeral --idle-ttl 4d --model haiku')
   })
 
-  test('every hydra call targets the job platform daemon', async () => {
+  test("every hydra call addresses the dispatching daemon by its state dir, never the platform's live daemon", async () => {
     checkResult.out = 'x'
     const seen: string[][] = []
     jobsIO.hydra = async (a: string[]) => { seen.push(a); return { code: 0, err: '' } }
-    await runWork(spawnJob, 'slack', dir, KEY)
-    expect(seen[0].slice(0, 2)).toEqual(['--daemon', 'slack'])
+    await runWork(spawnJob, dir, KEY)
+    await runWork(mainJob, dir, 'k')
+    for (const a of seen) expect(a.slice(0, 2)).toEqual(['--state-dir', dir])
+    expect(seen.flat()).not.toContain('--daemon')
   })
 })
 
@@ -182,7 +189,7 @@ describe('the attempt (in process)', () => {
   let sigterm: () => void
   let killed: number
   let timers: { fn: () => void; ms: number }[]
-  const opts = (o: Partial<AttemptOpts> = {}): AttemptOpts => ({ platform: 'test', name: 'scan', dispatch: 3, nonce: 'n', slot: '2026-10-25 06:00', manual: false, stateDir: dir, ...o })
+  const opts = (o: Partial<AttemptArgs> = {}): AttemptArgs => ({ platform: 'test', name: 'scan', dispatch: 3, nonce: 'n', slot: '2026-10-25 06:00', manual: false, stateDir: dir, ...o })
   const job = { name: 'scan', schedule: '0 6 * * *', check: 's.sh', mode: 'spawn', prompt: 'Triage.', channel: '9' }
   const keys: string[] = []
   beforeEach(() => {
@@ -249,10 +256,14 @@ describe('the attempt (in process)', () => {
   })
 
   test('argv parsing: the daemon form round-trips; anything incomplete is refused', () => {
-    expect(parseAttemptArgs(['test', 'scan', '--dispatch', '12', '--nonce', 'ab', '--slot', '2026-10-25 06:00', '--manual', '--state-dir', '/s']))
-      .toEqual({ platform: 'test', name: 'scan', dispatch: 12, nonce: 'ab', slot: '2026-10-25 06:00', manual: true, stateDir: '/s' })
-    expect(parseAttemptArgs(['test', 'scan', '--dispatch', '12', '--nonce', 'ab', '--slot', 'x'])).toBeNull()
-    expect(parseAttemptArgs(['test', 'scan', '--dispatch', '0', '--nonce', 'ab', '--slot', 'x', '--state-dir', '/s'])).toBeNull()
+    // One contract, both halves in shared/jobs.ts: what the daemon writes, the attempt reads back.
+    for (const a of [{ platform: 'test', name: 'scan', dispatch: 12, nonce: 'ab', slot: '2026-10-25 06:00', manual: true, stateDir: '/s' },
+      { platform: 'discord', name: 'x-1', dispatch: 1, nonce: 'n', slot: '', manual: false, stateDir: '/tmp/a b' }])
+      expect(parseAttemptArgs(attemptArgv(a))).toEqual(a)
+    expect(attemptArgv({ platform: 'test', name: 'scan', dispatch: 1, nonce: 'n', slot: 's', manual: false, stateDir: '/s' }).slice(0, 2)).toEqual(['--state-dir', '/s'])
+    expect(parseAttemptArgs(['jobs', 'attempt', 'test', 'scan', '--dispatch', '12', '--nonce', 'ab', '--slot', 'x'])).toBeNull()          // no state dir
+    expect(parseAttemptArgs(['--state-dir', '/s', 'jobs', 'attempt', 'test', 'scan', '--dispatch', '0', '--nonce', 'ab', '--slot', 'x'])).toBeNull()
+    expect(parseAttemptArgs(['--state-dir', '/s', 'jobs', 'run', 'test', 'scan'])).toBeNull()
   })
 })
 
@@ -278,7 +289,7 @@ describe('the attempt (real processes)', () => {
     writeFileSync(harness, `import { jobsAttempt, attemptIO } from ${JSON.stringify(join(repo, 'cli', 'jobs.ts'))}
 if (${deadlineMs}) attemptIO.setTimer = (fn, _ms) => setTimeout(fn, ${deadlineMs})
 await jobsAttempt(JSON.parse(process.argv[2])); process.exit(0)\n`)
-    const o: AttemptOpts = { platform: 'test', name: 'sweep', dispatch: 1, nonce: 'n', slot: 's', manual: false, stateDir: dir }
+    const o: AttemptArgs = { platform: 'test', name: 'sweep', dispatch: 1, nonce: 'n', slot: 's', manual: false, stateDir: dir }
     const log = openSync(join(dir, 'sweep.log'), 'a')
     const child = spawn(process.execPath, [harness, JSON.stringify(o)], { detached: true, stdio: ['pipe', log, log] })
     closeSync(log)
@@ -473,6 +484,16 @@ describe('jobs run', () => {
     expect(out[1]).toContain('daemon not running (no socket')
   })
 
+  test('--state-dir is a global address: any daemon command goes to <dir>/daemon.sock, and it excludes --daemon', async () => {
+    rmSync(join(dir, 'daemon.sock'))
+    const health = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), '--state-dir', dir, 'health'], { stdout: 'pipe', stderr: 'pipe' })
+    await health.exited
+    expect(await new Response(health.stderr).text() + await new Response(health.stdout).text()).toContain(join(dir, 'daemon.sock'))
+    const both = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), '--state-dir', dir, '--daemon', 'discord', 'health'], { stdout: 'pipe', stderr: 'pipe' })
+    expect(await both.exited).toBe(1)
+    expect(await new Response(both.stderr).text()).toContain('--daemon and --state-dir both name a daemon')
+  }, 15_000)
+
   test('the real CLI entry: hydra jobs run with --state-dir and no daemon exits 1', async () => {
     rmSync(join(dir, 'daemon.sock'))
     const p = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), 'jobs', 'run', 'test', 'sweep', '--state-dir', dir], { stdout: 'pipe', stderr: 'pipe' })
@@ -482,36 +503,16 @@ describe('jobs run', () => {
 })
 
 // ---------------------------------------------------------------------------
-// jobs sync, jobs list
+// The old launchd entries, jobs list
 // ---------------------------------------------------------------------------
 
-describe('jobs sync', () => {
-  const realS = { ...syncIO }
-  afterEach(() => Object.assign(syncIO, realS))
-
-  test("validates jobs.toml and removes only this platform's old launchd entries", async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jobs-sync-'))
-    const agents = join(dir, 'agents'); mkdirSync(agents)
-    for (const f of ['bun.cron.hydra-job-test-a.plist', 'bun.cron.hydra-job-test-b-c.plist', 'bun.cron.hydra-job-other-a.plist', 'com.hydra.watchdog.test.plist'])
-      writeFileSync(join(agents, f), '')
-    const removed: string[] = []
-    Object.assign(syncIO, { agentsDir: agents, remove: async (t: string) => { removed.push(t) } })
-    try {
-      writeFileSync(join(dir, 'jobs.toml'), '[broken')
-      await expect(jobsSync('test', dir)).rejects.toThrow()
-      expect(removed).toEqual([])
-      writeFileSync(join(dir, 'jobs.toml'), ok)
-      await jobsSync('test', dir)
-      expect(removed.sort()).toEqual(['hydra-job-test-a', 'hydra-job-test-b-c'])
-    } finally { rmSync(dir, { recursive: true }) }
-  })
-
+describe('the old launchd entries', () => {
   test('an old launchd entry that still fires runs nothing: it only says how to remove itself', async () => {
     const src = readFileSync(join(repo, 'cli', 'jobs-entry.ts'), 'utf8')
     expect(src).not.toMatch(/^import /m)                // no runner, no state, no hydra calls can be reached
     const p = Bun.spawn([process.execPath, '-e', `const m = await import(${JSON.stringify(join(repo, 'cli', 'jobs-entry.ts'))}); await m.default.scheduled()`], { stdout: 'pipe', stderr: 'pipe' })
     expect(await p.exited).toBe(0)
-    expect(await new Response(p.stderr).text()).toContain('run `hydra jobs sync <platform>` to remove this launchd entry')
+    expect(await new Response(p.stderr).text()).toContain('which removes this launchd entry on its next tick')
     expect(await new Response(p.stdout).text()).toBe('')
   })
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from 'crypto'
-import { resolve } from 'path'
+import { join, resolve } from 'path'
 import { resolveSocket, sendRequest, printResponse } from './helpers.js'
 import {
   lifecycleUp, lifecycleDown, lifecycleRestart,
@@ -10,7 +10,8 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
-import { isPlatform, jobsAttempt, jobsList, jobsRun, jobsSync, parseAttemptArgs } from './jobs.js'
+import { isPlatform, jobsAttempt, jobsList, jobsRun } from './jobs.js'
+import { parseAttemptArgs } from '../shared/jobs.js'
 import { MODEL_ALIASES } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
@@ -29,10 +30,9 @@ Setup:
   hydra uninstall <platform>           Remove launchd watchdog
 
 Jobs (recurring, from <state dir>/jobs.toml):
-  hydra jobs list <platform>           The clock's last tick; each job's next run and last result
-  hydra jobs sync <platform>           Validate jobs.toml; remove the old launchd entries (the daemon runs jobs)
+  hydra jobs list <platform>           The clock's last tick; each job's next run and last result (validates jobs.toml)
   hydra jobs run <platform> <name>     Run one job now, through the daemon; Ctrl-C cancels it
-    --state-dir <dir>                  Use this state dir instead of the platform's
+  The daemon reads jobs.toml every minute; there is nothing to sync.
 
 Lifecycle:
   hydra up <platform>                  Start daemon + byte
@@ -105,6 +105,7 @@ ${Object.entries(MODEL_ALIASES).map(([k, v]) => `  ${k.padEnd(16)} → ${v}`).jo
 
 Global options:
   --daemon <name>                      Target a specific daemon
+  --state-dir <dir>                    Target the daemon (and jobs state) in this state dir: a worktree or test daemon
   --json                               Output raw JSON
   -h, --help                           Show this help
 `
@@ -120,6 +121,7 @@ async function main(): Promise<void> {
   }
 
   let daemonName: string | undefined
+  let stateDirOpt: string | undefined   // a daemon's address by its state dir: <dir>/daemon.sock
   let json = false
   const filtered: string[] = []
 
@@ -129,6 +131,8 @@ async function main(): Promise<void> {
       break
     } else if (args[i] === '--daemon' && i + 1 < args.length) {
       daemonName = args[++i]
+    } else if (args[i] === '--state-dir' && i + 1 < args.length) {
+      stateDirOpt = args[++i]
     } else if (args[i] === '--json') {
       json = true
     } else {
@@ -138,25 +142,27 @@ async function main(): Promise<void> {
 
   const command = filtered[0]
 
+  if (daemonName && stateDirOpt) {
+    console.error('error: --daemon and --state-dir both name a daemon; use one')
+    process.exit(1)
+  }
+
   if (command === 'jobs') {
     const [, sub, platform, name] = filtered
     if (sub === 'attempt') {
       // Started by the daemon's clock, detached; not for direct use.
-      const o = parseAttemptArgs(filtered.slice(2))
-      if (!o) { console.error('usage: hydra jobs attempt <platform> <name> --dispatch <id> --nonce <n> --slot <label> [--manual] --state-dir <dir>'); process.exit(64) }
+      const o = parseAttemptArgs(args)
+      if (!o) { console.error('usage: hydra --state-dir <dir> jobs attempt <platform> <name> --dispatch <id> --nonce <n> --slot <label> [--manual]'); process.exit(64) }
       try { await jobsAttempt(o) } catch (err) { console.error(`attempt error: ${err instanceof Error ? err.stack : err}`); process.exit(1) }
       process.exit(0)
     }
-    const sd = filtered.indexOf('--state-dir')
-    const stateDir = sd >= 0 ? filtered[sd + 1] : undefined
-    if (!['list', 'sync', 'run'].includes(sub) || !platform || !isPlatform(platform) || (sub === 'run' && (!name || name.startsWith('-'))) || (sd >= 0 && !stateDir)) {
-      console.error('usage: hydra jobs list|sync <platform> [--state-dir <dir>]   |   hydra jobs run <platform> <name> [--state-dir <dir>]')
+    if (!['list', 'run'].includes(sub) || !platform || !isPlatform(platform) || (sub === 'run' && (!name || name.startsWith('-')))) {
+      console.error('usage: hydra [--state-dir <dir>] jobs list <platform>   |   hydra [--state-dir <dir>] jobs run <platform> <name>')
       process.exit(1)
     }
     try {
-      if (sub === 'list') jobsList(platform, stateDir)
-      else if (sub === 'sync') await jobsSync(platform, stateDir)
-      else process.exit(await jobsRun(platform, name, stateDir))
+      if (sub === 'list') jobsList(platform, stateDirOpt)
+      else process.exit(await jobsRun(platform, name, stateDirOpt))
     } catch (err) {
       console.error(`error: ${err instanceof Error ? err.message : err}`)
       process.exit(1)
@@ -196,7 +202,7 @@ async function main(): Promise<void> {
 
   // Lazy: resolved on first actual use, so a command's own argument validation runs first.
   let resolvedSocketPath: string | undefined
-  const socketPath = () => resolvedSocketPath ??= resolveSocket(daemonName)
+  const socketPath = () => resolvedSocketPath ??= stateDirOpt ? join(stateDirOpt, 'daemon.sock') : resolveSocket(daemonName)
 
   switch (command) {
     case 'spawn': {

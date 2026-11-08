@@ -21,7 +21,7 @@ export type Job = {
   check?: string     // shell command; prints nothing when all is well
   mode: Mode
   prompt?: string    // required for spawn and main
-  channel?: string   // spawn only; falls back to the file's top-level channel
+  channel?: string   // spawn: where the session opens; any mode: where a direct alert goes. Falls back to the top-level channel
   model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
   idleTtl?: string   // spawn only: passed to `hydra spawn --idle-ttl` (validated here with the daemon's parser)
 }
@@ -52,9 +52,8 @@ export function parseJobsConfig(text: string): JobsConfig {
       if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl'].includes(k)) fail(`unknown key ${k}`)
     }
     const schedule = str('schedule') ?? fail('schedule is required')
-    try { Bun.cron.parse(schedule) } catch { fail(`schedule "${schedule}" is not a cron expression`) }
-    // The clock reads schedules with parseCron, which is stricter than Bun in corners (e.g. "+1").
-    try { parseCron(schedule) } catch (e) { fail(`schedule "${schedule}" is not supported: ${(e as Error).message}`) }
+    // parseCron is the only reader of a schedule, so it is the only validator.
+    try { parseCron(schedule) } catch (e) { fail(`schedule "${schedule}" is not a cron expression: ${(e as Error).message}`) }
     const mode = (str('mode') ?? fail('mode is required')) as Mode
     if (!MODES.includes(mode)) fail(`mode must be one of ${MODES.join(', ')}`)
     const prompt = str('prompt')
@@ -72,7 +71,7 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (idleTtl && parseIdleTtl(idleTtl) === null) fail(`idle_ttl "${idleTtl}" must be a duration like 90m, 12h or 4d, at most 7d`)
     const check = str('check')
     if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
-    jobs.push({ name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(mode === 'spawn' && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }) })
+    jobs.push({ name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }) })
   }
   return { ...(defaultChannel && { channel: defaultChannel }), jobs }
 }
@@ -109,21 +108,18 @@ export type Dispatch = {
   lstart?: string
 }
 
+/** The latest slot that needs no more work, and when the work that covered it started. */
+export type Covered = { slot: string; at: string }
+
 export type JobState = {
-  doneSlot?: string
-  doneAt?: string
-  attemptedSlot?: string          // plain jobs: label of the latest attempted slot
-  attemptedAt?: string            // plain jobs: its instant
+  covered?: Covered               // the one record the owed rule reads
   dispatch?: Dispatch             // set = a live dispatch
   appliedDispatch?: number        // the last dispatch id whose result (or loss) was applied
   failures?: number
   failingSince?: string
   last?: { at: string; dispatch?: number; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string; v0?: V0Outcome }
   notNow?: { since: string; reason: string; dispatch?: number }
-  alertedFor?: string             // PR 3 (durable alerts)
-  reportedDay?: string            // plain jobs: local date a failure was last reported
-  announcedUnconfirmed?: string   // PR 3
-  durableApplied?: boolean        // PR 3
+  reportedDay?: string            // local date a failure was last reported
 }
 
 export type DaemonState = {
@@ -177,8 +173,7 @@ export function translateV0(rec: { at: string; outcome: V0Outcome; note?: string
   const slot = schedule ? latestSlot(schedule, at) : null
   const reported = rec.outcome === 'failed' && !rec.note?.includes('also failed')
   return {
-    attemptedAt: rec.at,
-    ...(slot && { attemptedSlot: slot.label }),
+    ...(slot && { covered: { slot: slot.label, at: rec.at } }),
     last: { at: rec.at, result: V0_RESULT[rec.outcome], ...(rec.note !== undefined && { note: rec.note }), v0: rec.outcome },
     ...(reported && { reportedDay: localDay(at) }),
   }
@@ -217,32 +212,57 @@ export function readDaemonState(stateDir: string): { state: DaemonState; corrupt
 }
 
 // ---------------------------------------------------------------------------
-// The owed rule (plain jobs)
+// The owed rule
 // ---------------------------------------------------------------------------
 
 /**
- * The slot a plain job owes at `now`, or null. Only the latest slot can be owed, so missed slots collapse into one
- * run on wake. It is owed iff its instant is after the last attempt's instant and its label differs from the last
- * attempted slot's label: the label stops a second run of the same wall-clock slot after a flight east, the instant
- * keeps frequent jobs moving after a flight west. Labels come from the matcher, never from formatting an instant.
+ * The slot a job owes at `now`, or null: one rule over one record, `covered`. Only the latest slot can be owed, so
+ * missed slots collapse into one run on wake. It is owed iff its instant is after the covering work's start and its
+ * label differs from the covered slot's label: the label stops a second run of the same wall-clock slot after a flight
+ * east, the instant keeps frequent jobs moving after a flight west. Labels come from the matcher, never from
+ * formatting an instant. What counts as covering a slot is decided where outcomes are applied, not here.
  */
 export function owedSlot(schedule: string, state: JobState, now: Date): Slot | null {
   const slot = latestSlot(schedule, now)
   if (!slot) return null
-  if (state.attemptedAt && slot.at.getTime() <= new Date(state.attemptedAt).getTime()) return null
-  if (state.attemptedSlot === slot.label) return null
+  const c = state.covered
+  if (c && (slot.at.getTime() <= new Date(c.at).getTime() || c.slot === slot.label)) return null
   return slot
 }
+
+// ---------------------------------------------------------------------------
+// Clock constants and names shared by the daemon and the CLI
+// ---------------------------------------------------------------------------
+
+/** A last tick older than this is stale: the health loop flags it, and `jobs list` says so. */
+export const STALE_TICK_MS = 5 * 60_000
+
+/** The initiator every session and message a job causes carries. */
+export const jobInitiator = (name: string) => `jobs:${name}`
 
 // ---------------------------------------------------------------------------
 // The attempt's command line
 // ---------------------------------------------------------------------------
 
+/** The `jobs attempt` contract. attemptArgv writes it (the daemon), parseAttemptArgs reads it (the attempt). */
 export type AttemptArgs = { platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string }
 
+/** `--state-dir` is the CLI's global daemon address, so it comes first: the attempt's own spawn or deliver uses it too. */
 export function attemptArgv(a: AttemptArgs): string[] {
-  return ['jobs', 'attempt', a.platform, a.name, '--dispatch', String(a.dispatch), '--nonce', a.nonce, '--slot', a.slot,
-    ...(a.manual ? ['--manual'] : []), '--state-dir', a.stateDir]
+  return ['--state-dir', a.stateDir, 'jobs', 'attempt', a.platform, a.name, '--dispatch', String(a.dispatch), '--nonce', a.nonce,
+    '--slot', a.slot, ...(a.manual ? ['--manual'] : [])]
+}
+
+/** The whole CLI argv of an attempt, or null if any part is missing or malformed. */
+export function parseAttemptArgs(argv: string[]): AttemptArgs | null {
+  const at = argv.findIndex((x, i) => x === 'attempt' && argv[i - 1] === 'jobs')
+  if (at < 0) return null
+  const [platform, name] = argv.slice(at + 1)
+  const val = (f: string) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined }
+  const dispatch = Number(val('--dispatch'))
+  const nonce = val('--nonce'), slot = val('--slot'), stateDir = val('--state-dir')
+  if (!platform || !name || !isJobName(name) || !Number.isInteger(dispatch) || dispatch < 1 || !nonce || slot === undefined || !stateDir) return null
+  return { platform, name, dispatch, nonce, slot, manual: argv.includes('--manual'), stateDir }
 }
 
 /** Whole-token match on `--dispatch <id>` and `--nonce <nonce>`, so dispatch 1 never matches 12 and another install's id never matches. */
@@ -284,8 +304,6 @@ export function listProcesses(): Proc[] {
 // ---------------------------------------------------------------------------
 
 export const LAUNCH_AGENTS_DIR = join(homedir(), 'Library', 'LaunchAgents')
-/** The state dir a platform's live daemon uses. Only a daemon on it may touch that platform's launchd entries. */
-export const defaultStateDir = (platform: string) => join(homedir(), '.claude', 'channels', platform)
 const LEGACY_TITLE = /^hydra-job-([a-z]+)-([a-z0-9][a-z0-9-]*)$/
 export const parseLegacyTitle = (t: string) => { const m = LEGACY_TITLE.exec(t); return m ? { platform: m[1], name: m[2] } : null }
 

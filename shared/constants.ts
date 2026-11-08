@@ -185,6 +185,9 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { ToolName } from './tool-definitions.js'
 
+/** The state dir a platform's daemon uses unless HYDRA_STATE_DIR points elsewhere: ~/.claude/channels/<platform>. */
+export const platformStateDir = (platform: string) => join(homedir(), '.claude', 'channels', platform)
+
 // Spawned sessions launch with CLAUDE_CONFIG_DIR set to this, so transcripts land under it.
 export function claudeConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')

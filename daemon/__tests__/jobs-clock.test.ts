@@ -225,7 +225,7 @@ describe('the tick', () => {
     toml(FIVE)
     await clock().tick()
     expect(w.spawns).toHaveLength(0)
-    expect(state('sweep')).toMatchObject({ attemptedSlot: '2026-11-04 10:00', doneSlot: '2026-11-04 10:00', last: { result: 'done', note: 'baseline: no work ran' } })
+    expect(state('sweep')).toMatchObject({ covered: { slot: '2026-11-04 10:00' }, last: { result: 'done', note: 'baseline: no work ran' } })
   })
 
   test('a plain job fires on its minute: argv, stdin definition, log', async () => {
@@ -237,7 +237,7 @@ describe('the tick', () => {
     at('2026-11-04T10:05:01-08:00'); await c.tick()
     expect(w.spawns).toHaveLength(1)
     const s = w.spawns[0]
-    expect(s.args.slice(0, 5)).toEqual(['/hydra/cli/hydra.ts', 'jobs', 'attempt', 'test', 'sweep'])
+    expect(s.args.slice(0, 7)).toEqual(['/hydra/cli/hydra.ts', '--state-dir', w.dir, 'jobs', 'attempt', 'test', 'sweep'])
     expect(argOf(s.args, '--dispatch')).toBe('1')
     expect(argOf(s.args, '--slot')).toBe('2026-11-04 10:05')
     expect(argOf(s.args, '--state-dir')).toBe(w.dir)
@@ -298,8 +298,7 @@ describe('applying results', () => {
     const s = state('sweep')
     expect(s.dispatch).toBeUndefined()
     expect(s.appliedDispatch).toBe(1)
-    expect(s).toMatchObject({ attemptedSlot: '2026-11-04 10:05', doneSlot: '2026-11-04 10:05', failures: 0, last: { result: 'done', dispatch: 1, note: 'pruned 3' } })
-    expect(s.attemptedAt).toBe(new Date('2026-11-04T10:05:01-08:00').toISOString())
+    expect(s).toMatchObject({ covered: { slot: '2026-11-04 10:05', at: new Date('2026-11-04T10:05:01-08:00').toISOString() }, failures: 0, last: { result: 'done', dispatch: 1, note: 'pruned 3' } })
     expect(existsSync(resultFile(w.dir, 'sweep', 1))).toBe(false)
   })
 
@@ -325,7 +324,7 @@ describe('applying results', () => {
     const s = state('sweep')
     expect(s.notNow).toEqual({ since: w.t.toISOString(), reason: 'cancelled', dispatch: 1 })
     expect(s.last).toEqual(before.last)
-    expect(s.attemptedSlot).toBe(before.attemptedSlot)
+    expect(s.covered).toEqual(before.covered)
     expect(s.appliedDispatch).toBe(1)
   })
 
@@ -344,7 +343,7 @@ describe('applying results', () => {
     const c = await dispatched()
     w.procs.delete(1000)
     at('2026-11-04T10:06:00-08:00'); await c.tick()
-    expect(state('sweep')).toMatchObject({ failures: 1, appliedDispatch: 1, attemptedSlot: '2026-11-04 10:05', last: { result: 'failed', note: 'ended without a result', dispatch: 1 } })
+    expect(state('sweep')).toMatchObject({ failures: 1, appliedDispatch: 1, covered: { slot: '2026-11-04 10:05' }, last: { result: 'failed', note: 'ended without a result', dispatch: 1 } })
     expect(state('sweep').dispatch).toBeUndefined()
   })
 
@@ -439,7 +438,7 @@ describe('applying results', () => {
 describe('adoption: a daemon crash between spawning and recording the pid', () => {
   function crashedReservation(nonce = 'n0nce') {
     toml(FIVE)
-    setState('sweep', { attemptedSlot: '2026-11-04 10:00', attemptedAt: '2026-11-04T18:00:30.000Z', appliedDispatch: 4,
+    setState('sweep', { covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:30.000Z' }, appliedDispatch: 4,
       dispatch: { id: 5, nonce, at: '2026-11-04T18:05:01.000Z', kind: 'scheduled', slot: '2026-11-04 10:05', deadline: '2026-11-04T18:39:01.000Z' } })
   }
 
@@ -508,12 +507,24 @@ describe('jobs run', () => {
     expect(c.requestRun('ghost')).toEqual({ ok: false, error: 'no job named ghost in jobs.toml' })
   })
 
-  test('a manual run never sets attemptedSlot, so the scheduled slot is still attempted', async () => {
+  test('a manual run of the slot that is owed right now still leaves that slot to the schedule', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:00.500-08:00'); c.requestRun('sweep')            // 10:05 has passed; no tick has seen it yet
+    expect(state('sweep').dispatch?.slot).toBe('2026-11-04 10:05')
+    finish('sweep', 1, 'done', undefined, 1000)
+    at('2026-11-04T10:05:30-08:00'); await c.tick()                       // applies the manual result
+    at('2026-11-04T10:06:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(2)
+    expect(w.spawns[1].args).not.toContain('--manual')
+  })
+
+  test('a manual run never covers a slot, so the scheduled slot is still attempted', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     at('2026-11-04T10:02:00-08:00'); c.requestRun('sweep')
     at('2026-11-04T10:03:00-08:00'); finish('sweep', 1, 'done', undefined, 1000); await c.tick()
-    expect(state('sweep').attemptedSlot).toBe('2026-11-04 10:00')
+    expect(state('sweep').covered?.slot).toBe('2026-11-04 10:00')
     at('2026-11-04T10:05:01-08:00'); await c.tick()
     expect(w.spawns).toHaveLength(2)
     expect(w.spawns[1].args).not.toContain('--manual')
@@ -562,7 +573,7 @@ describe('migration from v0 records', () => {
     at('2026-11-04T10:03:00-08:00'); await clock().tick()
     expect(w.spawns).toHaveLength(0)
     expect(JSON.parse(readFileSync(stateFile(w.dir, 'sweep'), 'utf8'))).toEqual({
-      attemptedAt: '2026-11-04T18:00:40.000Z', attemptedSlot: '2026-11-04 10:00',
+      covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:40.000Z' },
       last: { at: '2026-11-04T18:00:40.000Z', result: 'done', note: 'pruned', v0: 'findings' },
     })
   })
@@ -619,7 +630,7 @@ describe('unreadable state: a failure, reset', () => {
     writeFileSync(stateFile(w.dir, 'scan'), '[]')
     at('2026-11-04T06:30:00-08:00'); await clock().tick()
     expect(w.spawns).toHaveLength(0)
-    expect(state('scan')).toMatchObject({ attemptedSlot: '2026-11-04 06:00', failures: 1, last: { note: 'state unreadable, reset' } })
+    expect(state('scan')).toMatchObject({ covered: { slot: '2026-11-04 06:00' }, failures: 1, last: { note: 'state unreadable, reset' } })
     expect(w.main).toEqual(['Job scan failed: state unreadable, reset. Tell the user about it now.'])
   })
 })
@@ -664,6 +675,16 @@ describe('plain-job failure messages', () => {
     const c2 = await failing(MAIN.replace('0 9', '0 6'))
     await c2.tick()
     expect(w.direct[0][1]).toBe('top')
+  })
+
+  test("a none job's own channel is where its direct alert goes", async () => {
+    w.mainOk = false
+    toml(`channel = "top"\n[clean]\nschedule = "0 6 * * *"\ncheck = "c.sh"\nmode = "none"\nchannel = "own"\n`)
+    const c = clock()
+    at('2026-11-04T05:00:00-08:00'); await c.tick()
+    at('2026-11-04T06:00:10-08:00'); await c.tick()
+    finish('clean', 1, 'failed', 'disk full', 1000); await c.tick()
+    expect(w.direct).toEqual([['Job clean failed: disk full', 'own']])
   })
 
   test('both paths fail: not marked reported, so the next tick tries again', async () => {
@@ -832,7 +853,7 @@ describe('real processes: lstart from both ps calls', () => {
     const orphan = Bun.spawn(['sh', '-c', 'sleep 30; true', 'attempt', '--dispatch', '5', '--nonce', 'realnonce'])
     try {
       const realAt = new Date()
-      setState('sweep', { attemptedSlot: 'x', attemptedAt: realAt.toISOString(), appliedDispatch: 4,
+      setState('sweep', { covered: { slot: 'x', at: realAt.toISOString() }, appliedDispatch: 4,
         dispatch: { id: 5, nonce: 'realnonce', at: new Date(realAt.getTime() - ADOPT_GRACE_MS - 5_000).toISOString(), kind: 'scheduled', slot: 'x', deadline: new Date(realAt.getTime() + 3_600_000).toISOString() } })
       w.t = realAt
       const c = clock({ lstartOf, listProcesses })
@@ -864,7 +885,7 @@ describe('time zone', () => {
   })
 })
 
-describe('the owed rule (plain jobs)', () => {
+describe('the owed rule', () => {
   const withTZ = (tz: string, fn: () => void) => { const s = process.env.TZ ?? savedTZ.zone; process.env.TZ = tz; try { fn() } finally { process.env.TZ = s } }
 
   test('flight east, weekly: done Friday 11:00 in Berlin, then California the same day: not owed again', () => {
@@ -872,15 +893,22 @@ describe('the owed rule (plain jobs)', () => {
     withTZ('Europe/Berlin', () => {
       const slot = owedSlot('0 11 * * FRI', {}, new Date('2026-11-13T10:30:00Z'))!
       expect(slot.label).toBe('2026-11-13 11:00')
-      s = { attemptedSlot: slot.label, attemptedAt: '2026-11-13T10:00:30Z' }
+      s = { covered: { slot: slot.label, at: '2026-11-13T10:00:30Z' } }
     })
     withTZ('America/Los_Angeles', () => {
       expect(owedSlot('0 11 * * FRI', s, new Date('2026-11-13T19:30:00Z'))).toBeNull()   // 11:30 Friday in LA
     })
   })
 
+  test('a zone change at the same instant does not re-run the slot just done (the instant rule)', () => {
+    // Hourly, done at 08:00 LA (16:00Z). The zone becomes Berlin a few minutes later: the latest slot there is
+    // 17:00 Berlin, the very same instant, under a different label.
+    const s: JobState = { covered: { slot: '2026-11-13 08:00', at: '2026-11-13T16:00:05Z' } }
+    withTZ('Europe/Berlin', () => { expect(owedSlot('0 * * * *', s, new Date('2026-11-13T16:20:00Z'))).toBeNull() })
+  })
+
   test('flight west, hourly: done 15:00 Berlin, owed again at 08:00 California', () => {
-    const s: JobState = { attemptedSlot: '2026-11-13 15:00', attemptedAt: '2026-11-13T14:00:20Z' }
+    const s: JobState = { covered: { slot: '2026-11-13 15:00', at: '2026-11-13T14:00:20Z' } }
     withTZ('America/Los_Angeles', () => {
       expect(owedSlot('0 * * * *', s, new Date('2026-11-13T16:10:00Z'))?.label).toBe('2026-11-13 08:00')
     })
@@ -890,7 +918,7 @@ describe('the owed rule (plain jobs)', () => {
     withTZ('America/Los_Angeles', () => {
       // 01:55 PDT ran; the clock falls back to 01:00 PST. Labels 01:00 to 01:55 already ran, so nothing is owed
       // until 02:00 PST.
-      const s: JobState = { attemptedSlot: '2026-11-01 01:55', attemptedAt: '2026-11-01T08:55:05Z' }
+      const s: JobState = { covered: { slot: '2026-11-01 01:55', at: '2026-11-01T08:55:05Z' } }
       expect(owedSlot('*/5 * * * *', s, new Date('2026-11-01T09:31:00Z'))).toBeNull()
       expect(owedSlot('*/5 * * * *', s, new Date('2026-11-01T09:59:00Z'))).toBeNull()
       expect(owedSlot('*/5 * * * *', s, new Date('2026-11-01T10:01:00Z'))?.label).toBe('2026-11-01 02:00')
