@@ -6,9 +6,10 @@
 import { spawn } from 'child_process'
 import { randomBytes } from 'crypto'
 import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from 'fs'
+import { resolve } from 'path'
 import { latestSlot } from '../shared/cron-local.js'
 import {
-  ATTEMPT_DEADLINE_MS, attemptArgv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
+  ATTEMPT_DEADLINE_MS, attemptArgv, attemptEnv, defaultStateDir, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
   owedSlot, parseJobsConfig, parseResultName, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../shared/jobs.js'
@@ -42,6 +43,8 @@ export type ClockDeps = {
   killGroup: (pid: number, signal: NodeJS.Signals) => void
   /** Removes this platform's legacy launchd job entries; returns the titles removed. */
   removeLegacyEntries: () => Promise<string[]>
+  /** The platform's live state dir. Legacy entries belong to the daemon on it; a worktree or test daemon leaves them. */
+  defaultStateDir: string
   /** Hands a message to main. False if main can't take it. */
   toMain: (text: string, initiator: string) => boolean
   /** Posts straight to a channel (safeSend). False if it couldn't. */
@@ -64,11 +67,14 @@ export class JobsClock {
   private ticking: Promise<void> | null = null
   private readonly startedAt: Date
   private staleFlagged = false
-  private legacyCleared = false
+  private legacyError = ''
+  private lastHealthAt: number | null = null
+  private wokeAt: number
   private readonly strayLogged = new Set<string>()
 
   constructor(private readonly d: ClockDeps) {
     this.startedAt = d.now()
+    this.wokeAt = this.startedAt.getTime()
   }
 
   get owned(): boolean { return this.lockFd !== null }
@@ -119,9 +125,9 @@ export class JobsClock {
   }
 
   private async runTick(): Promise<void> {
-    await this.clearLegacyEntries()
     this.syncZone()
     if (!this.tryLock()) return
+    await this.clearLegacyEntries()
     const cfg = await this.loadConfig()
     const now = this.d.now()
     for (const job of cfg.jobs) {
@@ -136,17 +142,19 @@ export class JobsClock {
   }
 
   /**
-   * Cutover heals itself: before the first tick, remove the launchd entries the old runner registered, so pulling and
-   * restarting the daemon is the whole migration. (They only fire a no-op now, but they shouldn't linger.) Retried on
-   * later ticks until it succeeds.
+   * Cutover heals itself: the launchd entries the old runner registered are removed by the clock owner on the
+   * platform's live state dir, every tick (a readdir), so a `jobs sync` from an old checkout is undone within a minute.
+   * A worktree or test daemon never touches them. (A firing entry only prints a message now; it shouldn't linger.)
    */
   private async clearLegacyEntries(): Promise<void> {
-    if (this.legacyCleared) return
+    if (resolve(this.d.stateDir) !== resolve(this.d.defaultStateDir)) return
     try {
       for (const t of await this.d.removeLegacyEntries()) this.d.log(`jobs: removed legacy launchd entry ${t}`)
-      this.legacyCleared = true
+      this.legacyError = ''
     } catch (err) {
-      this.d.log(`jobs: removing legacy launchd entries failed (retrying next tick): ${err}`)
+      const msg = String(err)
+      if (msg !== this.legacyError) this.d.log(`jobs: removing legacy launchd entries failed (retrying each tick): ${msg}`)
+      this.legacyError = msg
     }
   }
 
@@ -452,6 +460,13 @@ export class JobsClock {
 
   /** Separate from the tick, so a dead tick is noticed. Flags once per stale episode, on the direct path. */
   async healthCheck(): Promise<void> {
+    // After sleep the health timer and the tick timer both fire late, in no fixed order. A health check that itself
+    // overslept, or that runs within two intervals of waking, says nothing about the tick; nor does one mid-tick.
+    const now = this.d.now().getTime()
+    const overslept = this.lastHealthAt !== null && now - this.lastHealthAt > 2 * TICK_MS
+    this.lastHealthAt = now
+    if (overslept) { this.wokeAt = now; return }
+    if (now - this.wokeAt < 2 * TICK_MS || this.ticking) return
     const h = this.health()
     if (!h.stale) { this.staleFlagged = false; return }
     if (this.staleFlagged) return
@@ -476,16 +491,23 @@ const msToNextMinute = (now: Date) => TICK_MS - (now.getTime() % TICK_MS) + 1_00
 /** O_EXLOCK isn't exported by node's fs; 0x20 on darwin. A second open gets EAGAIN; the kernel releases it on exit. */
 const O_EXLOCK = 0x20
 
-export function spawnAttempt(args: string[], stdin: string, log: string): number | undefined {
+let lastBun: string | undefined
+
+export function spawnAttempt(args: string[], stdin: string, log: string, say: (m: string) => void = m => process.stderr.write(`daemon: ${m}\n`)): number | undefined {
+  // bun from PATH, read per spawn: a long-running daemon's own execPath is a versioned Cellar path that a
+  // `brew upgrade` + cleanup deletes, which would turn every later dispatch into "ended without a result".
+  const found = Bun.which('bun')
+  const bun = found ?? process.execPath
+  if (bun !== lastBun) {
+    say(found ? `jobs: attempts start with ${bun}` : `jobs: no bun on PATH; attempts start with ${bun}`)
+    lastBun = bun
+  }
   // The log, not a pipe to the daemon: an attempt that outlives a daemon restart must not hit EPIPE on its next write.
   const fd = openSync(log, 'a')
   try {
-    // bun from PATH, read per spawn: a long-running daemon's own execPath is a versioned Cellar path that a
-    // `brew upgrade` + cleanup deletes, which would turn every later dispatch into "ended without a result".
-    const bun = Bun.which('bun')
-    if (!bun) process.stderr.write(`daemon: jobs: no bun on PATH; starting the attempt with ${process.execPath}\n`)
-    const child = spawn(bun ?? process.execPath, args, { detached: true, stdio: ['pipe', fd, fd], env: process.env })
-    child.on('error', err => process.stderr.write(`daemon: jobs attempt spawn error: ${err}\n`))
+    // hydra's own credentials stay in the daemon: an attempt runs arbitrary check scripts.
+    const child = spawn(bun, args, { detached: true, stdio: ['pipe', fd, fd], env: attemptEnv(process.env) })
+    child.on('error', err => say(`jobs: attempt spawn error: ${err}`))
     child.stdin?.on('error', () => {})   // an attempt that dies before reading stdin ends without a result
     child.stdin?.end(stdin)
     child.unref()
@@ -508,7 +530,9 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
     sleep: ms => new Promise(r => setTimeout(r, ms)),
     openLock: file => openSync(file, fsc.O_RDONLY | fsc.O_CREAT | O_EXLOCK | fsc.O_NONBLOCK),
     closeLock: fd => closeSync(fd),
-    spawnAttempt, lstartOf, listProcesses,
+    spawnAttempt: (args, stdin, log) => spawnAttempt(args, stdin, log, o.log ?? (m => process.stderr.write(`daemon: ${m}\n`))),
+    lstartOf, listProcesses,
+    defaultStateDir: defaultStateDir(o.platform),
     killGroup: (pid, signal) => process.kill(-pid, signal),
     removeLegacyEntries: async () => {
       const titles = legacyTitles(LAUNCH_AGENTS_DIR, o.platform)

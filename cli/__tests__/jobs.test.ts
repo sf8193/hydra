@@ -297,11 +297,11 @@ await jobsAttempt(JSON.parse(process.argv[2])); process.exit(0)\n`)
     await waitFor(() => !alive(gc) && !alive(pid))
   }, 15_000)
 
-  test('SIGTERM to the group (Ctrl-C on jobs run): "cancelled" is written, and no work is left running', async () => {
+  test('SIGTERM to the attempt alone (Ctrl-C on jobs run): it writes "cancelled", then kills its group: no work left', async () => {
     const pidFile = join(dir, 'gc.pid')
     const pid = startAttempt(`sleep 60 & echo $! > ${pidFile}; sleep 60`)
     const gc = Number(await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim()))
-    process.kill(-pid, 'SIGTERM')
+    process.kill(pid, 'SIGTERM')
     const res = await waitFor(() => readJSON(resultFile(dir, 'sweep', 1)))
     expect(res).toMatchObject({ result: 'not-now', note: 'cancelled' })
     await waitFor(() => !alive(gc) && !alive(pid))
@@ -325,6 +325,25 @@ console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * 
     const log = readFileSync(join(jobsState, 'sweep.log'), 'utf8')
     expect(log).toContain('sweep dispatch 1 (slot s) started')
     expect(log).toContain('sweep dispatch 1: done (after-daemon-exit)')
+  }, 15_000)
+
+  test("an attempt gets the daemon's environment minus hydra's credentials; which bun is logged once per change", async () => {
+    const { spawnAttempt } = await import('../../daemon/jobs-clock.js')
+    const saved = { ...process.env }
+    Object.assign(process.env, { DISCORD_BOT_TOKEN: 'secret-d', SLACK_BOT_TOKEN: 'secret-s', SLACK_APP_TOKEN: 'secret-a', SLOPBOT_SLACK_BOT_TOKEN: 'secret-w', JOBS_TEST_MARKER: 'kept' })
+    const said: string[] = []
+    try {
+      const log = join(dir, 'env.log')
+      spawnAttempt(['-e', 'console.log(JSON.stringify(process.env))'], '', log, m => said.push(m))
+      spawnAttempt(['-e', '0'], '', join(dir, 'other.log'), m => said.push(m))
+      const env = await waitFor(() => readJSON(log))
+      expect(env.JOBS_TEST_MARKER).toBe('kept')
+      for (const k of ['DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN']) expect(env[k]).toBeUndefined()
+      expect(said.filter(m => m.startsWith('jobs: attempts start with')).length).toBeLessThanOrEqual(1)
+    } finally {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+      Object.assign(process.env, saved)
+    }
   }, 15_000)
 
   test('stdin that does not parse: the attempt exits without a result (the daemon records "ended without a result")', async () => {
@@ -382,7 +401,7 @@ describe('jobs run', () => {
       sleep: async () => { onSleep(++sleeps); await Bun.sleep(0) },
       onSigint: (fn: () => void) => { sigint = fn },
       lstartOf: (pid: number) => pid === 50 ? 'L50' : null,
-      killGroup: (pid: number, sig: string) => { kills.push([pid, sig]) },
+      kill: (pid: number, sig: string) => { kills.push([pid, sig]) },
       exit: (code: number) => { throw new Exit(code) },
       print: (s: string) => { out.push(s) },
       error: (s: string) => { out.push(s) },
@@ -408,7 +427,7 @@ describe('jobs run', () => {
     expect(out.at(-1)).toBe('sweep: superseded by dispatch 4')
   })
 
-  test('Ctrl-C after the answer: SIGTERM to the attempt group under the lstart guard; prints "cancelled"', async () => {
+  test('Ctrl-C after the answer: SIGTERM to the attempt process (not its group) under the lstart guard; prints "cancelled"', async () => {
     onSleep = n => {
       if (n === 1) sigint!()
       if (n === 2) apply({ appliedDispatch: 3, notNow: { since: 'x', reason: 'cancelled', dispatch: 3 } })

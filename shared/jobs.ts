@@ -258,9 +258,12 @@ export function commandMatches(command: string, id: number, nonce: string): bool
 
 export type Proc = { pid: number; lstart: string; command: string }
 
+/** ps pads the day of month ("Sat Nov  7"); every lstart is compared in this one form, whichever ps call produced it. */
+export const normalizeLstart = (s: string) => s.trim().replace(/\s+/g, ' ')
+
 export function lstartOf(pid: number): string | null {
   const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })
-  const out = r.stdout?.trim()
+  const out = r.stdout ? normalizeLstart(r.stdout) : ''
   return r.status === 0 && out ? out : null
 }
 
@@ -270,7 +273,7 @@ export function listProcesses(): Proc[] {
   for (const line of (r.stdout ?? '').split('\n')) {
     // lstart is five fields: "Sat Nov  7 16:25:09 2026"
     const m = /^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/.exec(line)
-    if (m) out.push({ pid: Number(m[1]), lstart: m[2].replace(/\s+/g, ' '), command: m[3] })
+    if (m) out.push({ pid: Number(m[1]), lstart: normalizeLstart(m[2]), command: m[3] })
   }
   return out
 }
@@ -281,6 +284,8 @@ export function listProcesses(): Proc[] {
 // ---------------------------------------------------------------------------
 
 export const LAUNCH_AGENTS_DIR = join(homedir(), 'Library', 'LaunchAgents')
+/** The state dir a platform's live daemon uses. Only a daemon on it may touch that platform's launchd entries. */
+export const defaultStateDir = (platform: string) => join(homedir(), '.claude', 'channels', platform)
 const LEGACY_TITLE = /^hydra-job-([a-z]+)-([a-z0-9][a-z0-9-]*)$/
 export const parseLegacyTitle = (t: string) => { const m = LEGACY_TITLE.exec(t); return m ? { platform: m[1], name: m[2] } : null }
 
@@ -289,4 +294,18 @@ export function legacyTitles(agentsDir: string, platform: string): string[] {
   let files: string[] = []
   try { files = readdirSync(agentsDir) } catch {}
   return files.map(f => /^bun\.cron\.(.+)\.plist$/.exec(f)?.[1] ?? '').filter(t => parseLegacyTitle(t)?.platform === platform)
+}
+
+// ---------------------------------------------------------------------------
+// The attempt's environment
+// ---------------------------------------------------------------------------
+
+/** hydra's own credentials. An attempt runs arbitrary check scripts, so it gets none of them. */
+export const isHydraSecret = (name: string) =>
+  name === 'DISCORD_BOT_TOKEN' || /^SLACK_.*TOKEN$/.test(name) || /^SLOPBOT_SLACK_/.test(name) || /^RAINDROP_/.test(name)
+
+export function attemptEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(base)) if (!isHydraSecret(k)) env[k] = v
+  return env
 }

@@ -19,7 +19,7 @@ sequenceDiagram
     C->>S: add pid + lstart
     opt jobs run
         H-->>CLI: {id, pid, lstart}
-        Note over CLI: Ctrl-C: SIGTERM to -pid, only while lstart matches
+        Note over CLI: Ctrl-C: SIGTERM to pid (not the group), only while lstart matches
     end
     A->>A: check, then action (2 min timeout), self-deadline 34 min
     A->>R: write result once {dispatch, at, result, note}

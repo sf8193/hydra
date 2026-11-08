@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { JobsClock, ADOPT_GRACE_MS, KILL_GRACE_MS, type ClockDeps } from '../jobs-clock.js'
 import {
-  ATTEMPT_DEADLINE_MS, commandMatches, legacyTitles, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
+  ATTEMPT_DEADLINE_MS, commandMatches, legacyTitles, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
 } from '../../shared/jobs.js'
 
@@ -52,6 +52,7 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     lstartOf: pid => w.procs.get(pid)?.lstart ?? null,
     listProcesses: () => [...w.procs].map(([pid, p]) => ({ pid, ...p })),
     killGroup: (pid, sig) => { w.kills.push([pid, sig]); w.procs.delete(pid) },
+    defaultStateDir: w.dir,
     removeLegacyEntries: async () => {
       w.events.push('legacy')
       if (w.legacyFail-- > 0) throw new Error('launchctl busy')
@@ -160,25 +161,50 @@ describe('clock owner lock', () => {
 })
 
 describe('cutover heals itself', () => {
-  test('before its first tick does anything, the daemon removes its legacy launchd entries, logging each, once', async () => {
+  test('the clock owner removes its legacy launchd entries before dispatching, logging each', async () => {
     toml(FIVE)
     setState('sweep', { at: '2026-11-04T17:55:10.000Z', outcome: 'nothing' })   // a v0 record that owes a run now
     w.legacy = ['hydra-job-test-sweep', 'hydra-job-test-other']
-    const c = clock()
-    await c.tick()
+    await clock().tick()
     expect(w.events).toEqual(['legacy', 'spawn'])
     expect(w.logs.filter(l => l.startsWith('jobs: removed legacy'))).toEqual([
       'jobs: removed legacy launchd entry hydra-job-test-sweep', 'jobs: removed legacy launchd entry hydra-job-test-other'])
-    await c.tick()
-    expect(w.events.filter(e => e === 'legacy')).toHaveLength(1)
   })
 
-  test('a failed removal does not stop the clock, and is retried on the next tick', async () => {
+  test('re-checked every tick: entries an old checkout re-registers are removed within a minute', async () => {
     toml(FIVE)
-    w.legacy = ['hydra-job-test-sweep']; w.legacyFail = 1
     const c = clock()
     await c.tick()
+    w.legacy = ['hydra-job-test-sweep']                 // `jobs sync` from an old checkout
+    at('2026-11-04T10:01:30-08:00'); await c.tick()
+    expect(w.logs).toContain('jobs: removed legacy launchd entry hydra-job-test-sweep')
+    expect(w.events.filter(e => e === 'legacy')).toHaveLength(2)
+  })
+
+  test('a daemon without the clock lock never touches them', async () => {
+    toml(FIVE)
+    await clock().tick()
+    w.events.length = 0
+    w.legacy = ['hydra-job-test-sweep']
+    await clock().tick()
+    expect(w.events).toEqual([])
+    expect(w.legacy).toEqual(['hydra-job-test-sweep'])
+  })
+
+  test("a daemon on another state dir (a worktree, a test) never strips the live daemon's entries", async () => {
+    toml(FIVE)
+    w.legacy = ['hydra-job-test-sweep']
+    await clock({ defaultStateDir: '/somewhere/else' }).tick()
+    expect(w.events).toEqual([])
+  })
+
+  test('a failed removal does not stop the clock; it is retried each tick and logged once per distinct error', async () => {
+    toml(FIVE)
+    w.legacy = ['hydra-job-test-sweep']; w.legacyFail = 2
+    const c = clock()
+    await c.tick(); await c.tick()
     expect(state('sweep').last?.note).toBe('baseline: no work ran')
+    expect(w.logs.filter(l => l.includes('removing legacy launchd entries failed'))).toHaveLength(1)
     await c.tick()
     expect(w.logs).toContain('jobs: removed legacy launchd entry hydra-job-test-sweep')
   })
@@ -709,18 +735,56 @@ describe('config', () => {
 })
 
 describe('health', () => {
+  /** The health loop, once a minute from `from` to `to`, ticking or not. */
+  async function minutes(c: JobsClock, from: string, to: string, tick: boolean) {
+    for (let t = new Date(from).getTime(); t <= new Date(to).getTime(); t += 60_000) {
+      w.t = new Date(t)
+      if (tick) await c.tick()
+      await c.healthCheck()
+    }
+  }
+
   test('a tick older than 5 minutes is flagged once on the direct path, and re-armed when ticks resume', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
-    at('2026-11-04T10:05:00-08:00'); await c.healthCheck()
+    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:05:00-08:00', false)
     expect(w.direct).toEqual([])
     expect(c.health()).toMatchObject({ owned: true, stale: false })
-    at('2026-11-04T10:06:00-08:00'); await c.healthCheck(); await c.healthCheck()
+    await minutes(c, '2026-11-04T10:06:00-08:00', '2026-11-04T10:08:00-08:00', false)
     expect(w.direct).toHaveLength(1)
     expect(w.direct[0]).toEqual([expect.stringContaining('Jobs clock: no tick since'), 'home'])
-    await c.tick(); await c.healthCheck()
-    at('2026-11-04T10:12:00-08:00'); await c.healthCheck()
+    await minutes(c, '2026-11-04T10:09:00-08:00', '2026-11-04T10:10:00-08:00', true)
+    await minutes(c, '2026-11-04T10:11:00-08:00', '2026-11-04T10:17:00-08:00', false)
     expect(w.direct).toHaveLength(2)
+  })
+
+  test('waking from sleep: no false alarm, whichever timer fires first', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:02:00-08:00', true)
+    at('2026-11-04T13:00:05-08:00'); await c.healthCheck()   // the health timer wakes first: it overslept
+    at('2026-11-04T13:00:40-08:00'); await c.healthCheck()   // still inside the grace after waking
+    await c.tick()
+    await minutes(c, '2026-11-04T13:01:40-08:00', '2026-11-04T13:04:40-08:00', true)
+    expect(w.direct).toEqual([])
+  })
+
+  test('a health check during a tick says nothing', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:07:00-08:00', false)
+    w.direct.length = 0
+    const fresh = clock(); (fresh as any).ticking = new Promise(() => {})
+    await minutes(fresh, '2026-11-04T10:08:00-08:00', '2026-11-04T10:12:00-08:00', false)
+    expect(w.direct).toEqual([])
+  })
+
+  test('a dead tick timer after waking is still caught', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    at('2026-11-04T13:00:05-08:00'); await c.healthCheck()
+    await minutes(c, '2026-11-04T13:01:05-08:00', '2026-11-04T13:03:05-08:00', false)
+    expect(w.direct).toHaveLength(1)
   })
 
   test('a daemon that never gets the clock, with no owner ticking, reports it', async () => {
@@ -729,6 +793,36 @@ describe('health', () => {
     const other = clock(); await other.tick()
     at('2026-11-04T10:07:00-08:00'); await other.healthCheck()
     expect(w.direct[0][0]).toContain('does not own the clock')
+  })
+})
+
+describe('real processes: lstart from both ps calls', () => {
+  test('ps -o lstart and ps -ax agree on a running process, including a padded day of month', async () => {
+    const p = Bun.spawn(['sleep', '30'])
+    try {
+      const one = lstartOf(p.pid)!
+      const all = listProcesses().find(x => x.pid === p.pid)!
+      expect(one).toBe(all.lstart)
+      expect(one).not.toContain('  ')
+      expect(normalizeLstart('Sat Nov  7 16:25:09 2026')).toBe('Sat Nov 7 16:25:09 2026')
+    } finally { p.kill() }
+  })
+
+  test('an adopted orphan stays alive to the clock (a real process, real ps)', async () => {
+    toml(FIVE)
+    const orphan = Bun.spawn(['sh', '-c', 'sleep 30; true', 'attempt', '--dispatch', '5', '--nonce', 'realnonce'])
+    try {
+      const realAt = new Date()
+      setState('sweep', { attemptedSlot: 'x', attemptedAt: realAt.toISOString(), appliedDispatch: 4,
+        dispatch: { id: 5, nonce: 'realnonce', at: new Date(realAt.getTime() - ADOPT_GRACE_MS - 5_000).toISOString(), kind: 'scheduled', slot: 'x', deadline: new Date(realAt.getTime() + 3_600_000).toISOString() } })
+      w.t = realAt
+      const c = clock({ lstartOf, listProcesses })
+      await c.tick()
+      expect(state('sweep').dispatch).toMatchObject({ pid: orphan.pid })
+      await c.tick()
+      expect(state('sweep').dispatch?.id).toBe(5)       // still live: not "ended without a result"
+      expect(state('sweep').last).toBeUndefined()
+    } finally { orphan.kill() }
   })
 })
 

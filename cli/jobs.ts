@@ -157,7 +157,7 @@ export const runIO = {
   sleep: (ms: number) => new Promise<void>(r => setTimeout(r, ms)),
   onSigint: (fn: () => void) => { process.on('SIGINT', fn) },
   lstartOf,
-  killGroup: (pid: number, signal: NodeJS.Signals) => process.kill(-pid, signal),
+  kill: (pid: number, signal: NodeJS.Signals) => process.kill(pid, signal),
   exit: (code: number): never => process.exit(code),
   print: (s: string) => console.log(s),
   error: (s: string) => console.error(s),
@@ -179,7 +179,8 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
     if (!reply || cancelling) runIO.exit(130)
     cancelling = true
     if (reply!.pid && reply!.lstart && runIO.lstartOf(reply!.pid) === reply!.lstart) {
-      try { runIO.killGroup(reply!.pid, 'SIGTERM') } catch {}
+      // The attempt alone: it decides cancelled or done, writes that, then kills its own group (write, then kill).
+      try { runIO.kill(reply!.pid, 'SIGTERM') } catch {}
       runIO.print(`${name}: cancelling dispatch ${reply!.id}… (Ctrl-C again to stop waiting)`)
     } else {
       runIO.print(`${name}: dispatch ${reply!.id} has no running attempt to cancel; waiting for its result`)
