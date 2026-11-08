@@ -5,7 +5,7 @@ import { describe, test, expect, beforeAll, afterAll, afterEach } from 'bun:test
 import { mkdirSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { spawn, execFileSync, type ChildProcess } from 'child_process'
-import { sampleCpu, getCpuVitals } from '../cpu-watch.js'
+import { sampleCpu, getCpuVitals, _setSpinThresholdForTesting } from '../cpu-watch.js'
 import { STATE_DIR, ACCESS_FILE, gateway } from '../config.js'
 import { bridgeLifePath } from '../../shared/bridge-life.js'
 import type { SessionInfo } from '../sessions.js'
@@ -38,8 +38,13 @@ function record(sessionId: string, pid: number, ppid: number, ts: number): void 
 }
 
 const tick = () => new Promise(r => setTimeout(r, 1000))
+// Real processes on a shared machine: a busy loop may get far less than a core, so these tests classify at a
+// threshold any running loop clears (the 90% rule is pinned in cpu-spin.test.ts), and allow time for the ticks.
+const LOW_THRESHOLD = 10
+const LOOP_TIMEOUT_MS = 30_000
 
 beforeAll(() => {
+  _setSpinThresholdForTesting(LOW_THRESHOLD)
   busyStartedAt = Date.now()
   busy = spawn(process.execPath, ['-e', BUSY], { stdio: 'ignore' })
   origSendDM = gateway.sendDM
@@ -48,6 +53,7 @@ beforeAll(() => {
 })
 
 afterAll(() => {
+  _setSpinThresholdForTesting(undefined)
   busy.kill('SIGKILL')
   for (const pid of strays) try { process.kill(pid, 'SIGKILL') } catch {}
   ;(gateway as any).sendDM = origSendDM
@@ -80,17 +86,17 @@ describe('sampleCpu', () => {
     expect(dms[0]).toContain('1 idle process is spinning')
     expect(dms[0]).toContain(`bridge pid ${busy.pid}`)
     expect(getCpuVitals(s.sessionId)?.spinning).toBe('bridge')
-  })
+  }, LOOP_TIMEOUT_MS)
 
   test('a working session is not spinning, however hot its bridge', async () => {
     const s = session('spin-2', 'working')
     record(s.sessionId, busy.pid!, process.pid, busyStartedAt)
     let last
     for (let i = 0; i < 3; i++) { last = sampleCpu([s], () => PANE, PRESSURE).sessions.get(s.sessionId)!; await tick() }
-    expect(last!.bridgePct!).toBeGreaterThan(50)
+    expect(last!.bridgePct!).toBeGreaterThanOrEqual(LOW_THRESHOLD)
     expect(last!.spinning).toBeNull()
     expect(dms.length).toBe(0)
-  })
+  }, LOOP_TIMEOUT_MS)
 
   test('a record older than its pid (recycled pid) is neither the bridge nor an orphan', () => {
     const s = session('spin-3')
@@ -116,7 +122,7 @@ describe('sampleCpu', () => {
     expect(sample!.orphans).toEqual([expect.objectContaining({ pid, key: 'gone-session', spinning: true })])
     expect(dms.length).toBe(1)
     expect(dms[0]).toContain(`orphan bridge pid ${pid}`)
-  })
+  }, LOOP_TIMEOUT_MS)
 
   test('with no bridge record the pane\'s first child is sampled as Claude', async () => {
     const s = session('spin-4')

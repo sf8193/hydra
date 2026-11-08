@@ -21,6 +21,7 @@ import { notifyOperator } from './access.js'
 import { isSessionWorking } from './session-activity.js'
 import { fallbackDescription } from './util.js'
 import { bridgeLifeDir, type BridgeLifeEvent } from '../shared/bridge-life.js'
+import { SPIN_CPU_PERCENT } from '../shared/constants.js'
 import {
   createCpuMeter, createSpinTracker, formatSpinAlert, hotProcess, paneChildOf, parseMeminfoSwap, parsePs, parseSwapUsage, startedAt,
   type ProcStat, type SpinEntry, type SpinWho, type SystemPressure,
@@ -43,10 +44,20 @@ export type CpuSample = { sessions: Map<string, CpuVitals>; orphans: OrphanBridg
 type StartRecord = { pid: number; ppid: number; ts: number }
 
 const meter = createCpuMeter()
-const tracker = createSpinTracker()
+let spinThreshold = SPIN_CPU_PERCENT
+let tracker = createSpinTracker(spinThreshold)
 const latest = new Map<string, CpuVitals>()
 // A record's start line never changes, so it is read once per file (once it has been written).
 const startRecords = new Map<string, StartRecord>()
+
+/**
+ * Test seam: a real-process test can't count on a loaded machine giving its busy loop 90% of a core.
+ * The classifier's own threshold behaviour is pinned in cpu-spin.test.ts; this resets all spin state.
+ */
+export function _setSpinThresholdForTesting(pct?: number): void {
+  spinThreshold = pct ?? SPIN_CPU_PERCENT
+  tracker = createSpinTracker(spinThreshold)
+}
 
 /** The last CPU reading for a session, for `hydra list`/`status`. Ephemeral, like the RSS sample. */
 export function getCpuVitals(sessionId: string): CpuVitals | undefined {
@@ -141,7 +152,7 @@ export function sampleCpu(live: SessionInfo[], pane: (sessionId: string) => Pane
       bridgePct: bridge ? pct.get(bridge.pid) : undefined,
     }
     // isSessionWorking reads tmux, so it is only asked when something is hot.
-    const idle = hotProcess({ ...reading, idle: true }) ? !isSessionWorking(info) : true
+    const idle = hotProcess({ ...reading, idle: true }, spinThreshold) ? !isSessionWorking(info) : true
     const state = tracker.observe(info.sessionId, { ...reading, idle })
     const v: CpuVitals = { claudePid, bridgePid: bridge?.pid, ...reading, spinning: state.spinning, at: now }
     sessions.set(info.sessionId, v)
