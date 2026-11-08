@@ -315,7 +315,7 @@ type JobState = {                 // jobs-state/<name>.json
   doneAt?: string                 // its success instant
   attemptedSlot?: string          // plain jobs: label of the latest attempted slot
   attemptedAt?: string            // plain jobs: its instant
-  dispatch?: { id: number; nonce: string; at: string; slot: string; deadline: string;
+  dispatch?: { id: number; nonce: string; kind: 'scheduled' | 'manual'; at: string; slot: string; deadline: string;
                pid?: number; lstart?: string }   // set = a live dispatch; pid/lstart added after the spawn
   appliedDispatch?: number        // the last dispatch id whose result was applied
   failures?: number               // consecutive failures (backoff)
@@ -464,6 +464,26 @@ clock's last tick.
    - plain-job messages sent by the daemon on local days
 3. **Durable jobs:** `durable`, `needs` and the online witnesses, exit 75, `overlap` with pane-probe's verdict, the
    failure clock and alerts, `mark-done` and the unconfirmed migration, and `jobs list`.
+
+### Decisions made while building PR 2
+
+- **No jobs.toml and no last good config** means zero jobs and no alert. The daily config alert is for a file that
+  doesn't parse, or one that disappears after a good config was seen.
+- **An unreadable record in PR 2** (before the "unconfirmed" path exists): record a failure, "state unreadable,
+  reset", reported daily. For `none`, the slot stays owed and runs. For spawn and main, `attemptedSlot` is set to the
+  latest slot, so it isn't run again.
+- **The stale-tick flag** is sent once per stale episode and re-armed when ticks resume. An unowned clock shows up the
+  same way, because it records no ticks.
+- **State dir:** the daemon passes `--state-dir <dir>` to `jobs attempt`. `jobs run`, `jobs list` and `jobs sync`
+  take it too. `resolveConfig(platform)` alone ignores `HYDRA_STATE_DIR`.
+- **Manual dispatches** are marked by `dispatch.kind: 'scheduled' | 'manual'` (argv `--manual`), not by a magic slot
+  value. For a manual dispatch, `slot` is for display only, the key is per-minute, and `attemptedSlot` is never set.
+- **Duplicate-key answers in PR 2** keep today's rule (exit 2 or 7 = sent = done). Scheduled runs use the slot key.
+  PR 3 splits out `pending` as not-now.
+- **Time zone:** if `TZ` was set in the daemon's environment at startup, it is never overridden. Otherwise each tick
+  reads `readlink /etc/localtime` and assigns `process.env.TZ` when the zone changes, so a laptop that travels
+  computes slots in its new zone. Bun applies a runtime `TZ` assignment immediately (verified on 1.3.14). Whether
+  bun notices a system zone change without `TZ` set is unverified, so the daemon doesn't rely on it.
 
 ## Tests
 
