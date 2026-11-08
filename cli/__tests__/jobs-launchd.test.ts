@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { jobsIO, jobsLaunchdRun, jobsList, launchdIO, parseJobs, runIO, syncLaunchd } from '../jobs.js'
+import { attemptIO, jobsIO, jobsLaunchdRun, jobsList, launchdIO, parseJobs, runIO, syncLaunchd } from '../jobs.js'
 import { launchdCalendar, launchdPlist, stableBun } from '../../shared/jobs-launchd.js'
 import { externalFile } from '../../shared/jobs.js'
 
@@ -46,7 +46,6 @@ describe('jobs sync registers launchd-runner jobs', () => {
       uid: () => 501,
       // Bun.which on Homebrew can resolve into the Cellar; the plist must still name the link.
       bun: () => stableBun(() => '/opt/homebrew/Cellar/bun/1.4.4_1/bin/bun', p => p === '/opt/homebrew/bin/bun'),
-      path: () => '/opt/homebrew/bin:/usr/bin:/bin',
     })
   })
   afterEach(() => { Object.assign(launchdIO, real); rmSync(agents, { recursive: true }); rmSync(state, { recursive: true }) })
@@ -89,12 +88,48 @@ describe('jobs sync registers launchd-runner jobs', () => {
     expect(existsSync(join(agents, 'bun.cron.hydra-job-other-scan.plist'))).toBe(true)
   })
 
+  test("a re-sync leaves a running job alone: the sync shell's PATH and a silent daemon change nothing", async () => {
+    await sync(jobs(LD))
+    calls = []
+    const savedPath = process.env.PATH
+    process.env.PATH = `/somewhere/else:${savedPath}`
+    try { expect(await sync(jobs(LD))).toEqual({ ok: true, lines: [] }) } finally { process.env.PATH = savedPath }
+    expect(await syncLaunchd('test', state, jobs(LD), undefined)).toEqual({ ok: true, lines: [] })   // no daemon to ask: keep its entry
+    expect(calls).toEqual([])
+    expect(readFileSync(plist('scan'), 'utf8')).toContain(`<string>${ENTRY}</string>`)
+  })
+
   test('a failed bootstrap fails the sync and leaves no plist, so the next sync registers it', async () => {
     launchdIO.launchctl = (a: string[]) => a[0] === 'bootstrap' ? { code: 5, err: 'Input/output error' } : { code: 0, err: '' }
     expect(await sync(jobs(LD))).toEqual({ ok: false, lines: ['launchd: scan: registering failed: Input/output error; run jobs sync again'] })
     expect(existsSync(plist('scan'))).toBe(false)
     launchdIO.launchctl = (a: string[]) => { calls.push(a); return { code: 0, err: '' } }
     expect(await sync(jobs(LD))).toEqual({ ok: true, lines: [`launchd: registered scan (runs ${ENTRY})`] })
+  })
+})
+
+describe('jobs launchd-run: stopped by launchd', () => {
+  const realJ = { ...jobsIO }, realR = { ...runIO }, realA = { ...attemptIO }
+  afterEach(() => { Object.assign(jobsIO, realJ); Object.assign(runIO, realR); Object.assign(attemptIO, realA) })
+  test('a bootout while the check runs leaves a not-now result for the slot, then ends its group', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ld-term-'))
+    let sigterm = () => {}
+    let killed = 0
+    let release = () => {}
+    Object.assign(runIO, { print: () => {}, error: () => {} })
+    Object.assign(attemptIO, { onSigterm: (fn: () => void) => { sigterm = fn }, killOwnGroup: () => { killed++ } })
+    Object.assign(jobsIO, { now: () => new Date('2026-11-04T14:00:20Z'), check: () => new Promise(r => { release = () => r({ code: 0, out: 'late', err: '' }) }) })
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), '[scan]\nschedule="0 * * * *"\ncheck="s.sh"\nmode="none"\n')
+      const run = jobsLaunchdRun('test', 'scan', dir)
+      await Bun.sleep(5)
+      sigterm()
+      const slot = new Date('2026-11-04T14:00:00Z').toISOString()
+      expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'not-now', note: 'stopped by launchd (its entry was re-registered)' })
+      expect(killed).toBe(1)
+      release(); await run
+      expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8')).result).toBe('not-now')   // written once
+    } finally { rmSync(dir, { recursive: true }) }
   })
 })
 
@@ -149,7 +184,7 @@ describe('jobs list shows the runner', () => {
       const b = lines.findIndex(l => l.startsWith('b '))
       expect(lines[b]).toMatch(/ launchd +/)
       expect(lines[b]).not.toContain('owed')
-      expect(lines[b + 1]).toBe('  1 launchd result waiting for the daemon to apply')
+      expect(lines[b + 1]).toBe('  owed: 1 launchd result, waiting for the daemon to deliver')
     } finally { console.log = log; rmSync(dir, { recursive: true }) }
   })
 })

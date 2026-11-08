@@ -1,29 +1,19 @@
-sequenceDiagram
-    autonumber
-    participant CLI as cli/jobs.ts (jobs sync)
-    participant T as jobs.toml
-    participant H as cli-handler.ts
-    participant C as jobs-clock.ts
-    participant L as launchd (~/Library/LaunchAgents)
-
-    CLI->>T: read + parseJobsConfig
-    alt invalid or missing
-        CLI-->>CLI: error, exit 1 (the daemon is never asked)
-    end
-    opt live state dir only
-        CLI->>L: register each runner=launchd job (com.hydra.job.PLATFORM.NAME, stable bun), unchanged ones untouched
-        CLI->>L: unregister jobs gone or now runner=daemon, move the old runner's bun.cron entries over
-        Note over CLI: a failed registration is printed, and the sync exits 1 after the rest
-    end
-    alt no socket / refused
-        CLI-->>CLI: daemon not running, it will load this on start + job lines
-    else daemon up
-        CLI->>H: jobs-sync
-        H->>C: requestSync()
-        C->>C: before = last good config (_daemon.json)
-        C->>T: read + parse, lastGoodConfig = text
-        C->>C: tick now: an owed slot dispatches at once
-        C-->>H: {before, after}
-        H-->>CLI: reply
-        CLI-->>CLI: added / changed (jobs.toml keys) / removed, then job lines with each runner
-    end
+%% hydra jobs sync (cli/jobs.ts jobsSync, syncLaunchd; daemon/jobs-clock.ts requestSync).
+flowchart TD
+  S["hydra jobs sync PLATFORM"] --> P{"jobs.toml exists and parses?"}
+  P -->|no| E1["exit 1; the daemon is never asked"]
+  P -->|yes| SK{"daemon.sock answers jobs-sync (15s)?"}
+  SK -->|"no socket, or refused"| M1["print: daemon not running; it loads this on start"]
+  SK -->|"timeout or error"| M2["print: it loads jobs.toml on its next tick"]
+  SK -->|yes| RQ["requestSync: before = the config the last sync made live;<br/>lastGoodConfig = syncedConfig = text; one tick now"]
+  RQ --> DF["reply {before, after, hydraEntry}<br/>print added / changed (effective values, toml keys) / removed"]
+  M1 & M2 & DF --> LIVE{"the state dir is the platform's live dir?"}
+  LIVE -->|no| NOTE["print: launchd entries only for the live dir"]
+  LIVE -->|yes| B{"stableBun: PATH bun not under /Cellar/,<br/>else a known link"}
+  B -->|none| E2["print the error; exit 1"]
+  B --> REG["each launchd job: plist (stable bun; the daemon's hydra.ts, else the one the plist already runs;<br/>calendar; a fixed PATH; log). Identical: left loaded.<br/>Else bootout, write, bootstrap; a failure removes the plist and exits 1"]
+  REG --> UN["each com.hydra.job.PLATFORM.* no longer wanted: bootout + remove<br/>(com.hydra.watchdog.* never matches)"]
+  UN --> LG["each bun.cron.hydra-job-PLATFORM-*: Bun.cron.remove"]
+  LG --> PJ["printJobs: target, runner and where it came from; notes;<br/>launchd notes (owed results, entries to migrate); TCC warnings"]
+  NOTE --> PJ
+  E2 --> PJ

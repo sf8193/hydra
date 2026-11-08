@@ -197,6 +197,18 @@ describe('jobs sync, and launchd entries the daemon leaves alone', () => {
     expect(await c.requestSync()).toMatchObject({ ok: false })
   })
 
+  test('the diff is against the last sync, so an edit the tick already loaded still shows', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    expect(await c.requestSync()).toMatchObject({ ok: true })
+    toml(FIVE + HOURLY)
+    at('2026-11-04T10:02:00-08:00'); await c.tick()                    // the tick picks up the edit on its own
+    const r = await c.requestSync()
+    if (!r.ok) throw new Error(r.error)
+    expect(r.before.map(j => j.name)).toEqual(['sweep'])
+    expect(r.after.map(j => j.name)).toEqual(['sweep', 'sync'])
+  })
+
   test("only this platform's old Bun.cron entries are legacy: never a runner agent, never the watchdog", () => {
     const agents = mkdtempSync(join(tmpdir(), 'agents-'))
     try {
@@ -1202,7 +1214,7 @@ describe('exit 75 and other not-now results', () => {
     expect(w.spawns).toHaveLength(2)
   })
 
-  test('a duplicate-key "pending" result is not now; "served" is done, absorbed by the session', async () => {
+  test('a duplicate-key "pending" result is not now; "served" is done, served by the session', async () => {
     toml(DUR5)
     const c = clock(); await c.tick()
     at('2026-11-04T10:05:01-08:00'); await c.tick()
@@ -1210,10 +1222,10 @@ describe('exit 75 and other not-now results', () => {
     expect(state('pull').notNow?.dispatch).toBe(1)
     at('2026-11-04T10:06:30-08:00'); await c.tick()
     const d = state('pull').dispatch!
-    writeAtomic(rfile('pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', absorbedBy: 'sess-9' }))
+    writeAtomic(rfile('pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', servedBy: 'sess-9' }))
     w.procs.delete(d.pid!)
     await c.tick()
-    expect(state('pull').last).toMatchObject({ result: 'done', absorbedBy: 'sess-9', dispatch: 2 })
+    expect(state('pull').last).toMatchObject({ result: 'done', servedBy: 'sess-9', dispatch: 2 })
     expect(state('pull').covered?.slot).toBe('2026-11-04 10:05')
   })
 
@@ -1471,25 +1483,41 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
     expect(w.main[0]).toMatch(/^Job sweep has been failing since .* \(1 failure\): check exited 2: disk\. Tell the user about it now\.$/)
   })
 
-  test("an external result is never a dispatch's result, nor the reverse", async () => {
+  test("an external result is never a dispatch's result, nor the reverse: each is applied by its own path, once", async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
-    at('2026-11-04T10:05:01-08:00'); await c.tick()                                 // a daemon job, dispatch 1 live
-    leave('sweep', '2026-11-04T10:05:00-08:00', '2026-11-04 10:05', { result: 'failed', note: 'not mine', dispatch: 1 })
+    at('2026-11-04T10:05:01-08:00'); await c.tick()                                 // dispatch 1 live
+    leave('sweep', '2026-11-04T10:00:00-08:00', '2026-11-04 10:00', { result: 'failed', note: 'not mine', dispatch: 1 })
     at('2026-11-04T10:06:00-08:00'); await c.tick()
     expect(state('sweep').dispatch?.id).toBe(1)                                     // not taken for the dispatch's result
     expect(state('sweep').last?.note).not.toBe('not mine')
-    expect(existsSync(externalFile(w.dir, 'sweep', new Date('2026-11-04T10:05:00-08:00').toISOString()))).toBe(false)
-    expect(w.logs.some(l => l.includes('no longer runs under launchd'))).toBe(true)   // a daemon job's: dropped, never applied
-    // Now a launchd job with both waiting: each goes through its own path, once.
-    toml(LD.replace('[scan]', '[sweep]').replace('scan.sh', 's.sh'))
-    leave('sweep', '2026-11-04T10:00:00-08:00', '2026-11-04 10:00', { result: 'nothing' })
     finish('sweep', 1, 'done', 'from the dispatch', 1000)
     at('2026-11-04T10:07:00-08:00'); await c.tick()
     expect(w.logs.filter(l => l.includes('dispatch 1 -> done (from the dispatch)'))).toHaveLength(1)
     expect(state('sweep')).toMatchObject({ appliedDispatch: 1, appliedExternal: new Date('2026-11-04T10:00:00-08:00').toISOString() })
     expect(w.spawns).toHaveLength(1)
   })
+
+  test('a job moved from launchd to the daemon has its waiting result applied, so the check does not run that slot again', async () => {
+    toml(LD_NONE)
+    at('2026-11-04T06:05:40-08:00')
+    leave('sweep', '2026-11-04T06:05:00-08:00', '2026-11-04 06:05', { result: 'done', output: 'pruned 3' })
+    toml(LD_NONE.replace('runner = "launchd"', 'runner = "daemon"'))                // switched before the daemon saw it
+    const c = clock(); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'done', note: 'pruned 3' })
+    at('2026-11-04T06:06:40-08:00'); await c.tick()
+    expect(w.spawns).toEqual([])                                                    // 06:05 is covered: no second check
+    expect(existsSync(externalFile(w.dir, 'sweep', new Date('2026-11-04T06:05:00-08:00').toISOString()))).toBe(false)
+  })
+
+  test("a job gone from the file: its waiting result is dropped, and says so", async () => {
+    toml(LD_NONE)
+    leave('gone', SLOT, '2026-11-04 06:00', { result: 'done', output: 'x' })
+    at('2026-11-04T06:00:40-08:00'); await clock().tick()
+    expect(existsSync(externalFile(w.dir, 'gone', new Date(SLOT).toISOString()))).toBe(false)
+    expect(w.logs.some(l => l.includes('gone: launchd result') && l.includes('no longer in jobs.toml'))).toBe(true)
+  })
+
 
   test('a launchd job with no check delivers its prompt: the result is done with no output, and still goes to the target', async () => {
     toml(LD.replace('check = "scan.sh"\n', ''))

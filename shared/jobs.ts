@@ -22,7 +22,7 @@ export type Job = {
   check?: string     // shell command; prints nothing when all is well
   mode: Mode
   runner: Runner     // what triggers it; delivery to a target is always the daemon's
-  runnerFrom: 'job' | 'file' | 'default'
+  runnerFrom: 'job' | 'file' | 'default' | 'schedule'   // schedule: too fine for a launchd calendar, so the daemon runs it
   prompt?: string    // required for spawn and main
   channel?: string   // spawn: where the session opens; any mode: where a direct alert goes. Falls back to the top-level channel
   model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
@@ -100,7 +100,7 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
     // A daemon job's slot is owed until it is done. durable = true says that; false is ignored, for old files.
     if (t.durable !== undefined && typeof t.durable !== 'boolean') fail('durable must be true or false')
-    const notes = t.durable === false ? ['durable = false is ignored: a job is retried until its slot is done; remove the key'] : []
+    const notes: string[] = []
     let needs: Need[] = []
     if (t.needs !== undefined) {
       if (!Array.isArray(t.needs) || t.needs.some(n => typeof n !== 'string')) fail('needs must be a list of names')
@@ -113,11 +113,22 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most 30d`)
     const own = str('runner')
     if (own !== undefined && own !== 'daemon' && own !== 'launchd') fail('runner must be "launchd" (the default) or "daemon"')
-    const runner = (own ?? fileRunner ?? 'launchd') as Runner
-    const runnerFrom = own ? 'job' as const : fileRunner ? 'file' as const : 'default' as const
+    let runner = (own ?? fileRunner ?? 'launchd') as Runner
+    let runnerFrom: Job['runnerFrom'] = own ? 'job' : fileRunner ? 'file' : 'default'
     if (runner === 'launchd') {
-      for (const k of ['durable', 'needs', 'alert_after']) if (t[k] !== undefined && t[k] !== false) fail(`${k} needs runner = "daemon"`)
-      try { launchdCalendar(schedule) } catch (e) { fail((e as Error).message) }
+      // A schedule launchd can't hold never fails the file (it parsed on main): the daemon runs that job, and says why.
+      try { launchdCalendar(schedule) } catch (e) {
+        runner = 'daemon'; runnerFrom = 'schedule'
+        notes.push(`${(e as Error).message}, so the daemon runs it; set runner = "daemon" to say so`)
+      }
+    }
+    if (runner === 'launchd') {
+      for (const k of ['durable', 'needs', 'alert_after']) if (t[k] !== undefined && t[k] !== false) fail(`${k} needs the daemon runner: add runner = "daemon"`)
+    }
+    if (t.durable === false) {
+      notes.push(runner === 'daemon'
+        ? 'durable = false is ignored: a daemon-runner job is retried until its slot is done; remove the key'
+        : 'durable = false is ignored: under launchd a job runs once a slot, with no retries; remove the key')
     }
     jobs.push({
       name, schedule, mode, runner, runnerFrom, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
@@ -152,7 +163,7 @@ export const ATTEMPT_DEADLINE_MS = CHECK_TIMEOUT_MS + ACTION_TIMEOUT_MS + 2 * 60
 
 export type Result = 'done' | 'nothing' | 'failed' | 'not-now'
 /** What happened: the one result vocabulary for attempts, the daemon's own decisions and the outcome table. */
-export type Outcome = { result: Result; note?: string; absorbedBy?: string }
+export type Outcome = { result: Result; note?: string; servedBy?: string }
 /** `check` exit code for "not now" (EX_TEMPFAIL): not an attempt, uses no slot. `jobs run` exits with it too. */
 export const EX_TEMPFAIL = 75
 export type V0Outcome = 'nothing' | 'findings' | 'failed'
@@ -180,13 +191,14 @@ export type JobState = {
   appliedExternal?: string        // the latest slot instant whose launchd result was applied: a replay of it is dropped
   failures?: number
   failingSince?: string
-  last?: { at: string; dispatch?: number; result: Exclude<Result, 'not-now'>; note?: string; absorbedBy?: string }
+  last?: { at: string; dispatch?: number; result: Exclude<Result, 'not-now'>; note?: string; servedBy?: string }
   notNow?: { since: string; reason: string; dispatch?: number }
   alertedFor?: string             // the failingSince already alerted for (alerted iff equal)
 }
 
 export type DaemonState = {
   lastGoodConfig?: string
+  syncedConfig?: string           // the jobs.toml the last `jobs sync` made live: what its diff is against
   configAlertedFor?: string       // the config problem already alerted: once per episode, cleared when it parses
   staleAlertedFor?: string        // the stale-clock episode already alerted (its last tick, or "never"), so a restart doesn't repeat it
   lastTick?: string

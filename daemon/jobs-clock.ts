@@ -1,8 +1,8 @@
-// The jobs clock: the daemon decides when each job in jobs.toml runs, dispatches it as a detached attempt, and
-// applies the result the attempt leaves on disk. It is the only writer of job state. It lives in the daemon, not
-// launchd, so firings aren't lost in sleep, a running job stalls nothing, and one owner decides every slot. Each tick:
-// apply results, decide each job (owed slot, back-off, needs), then alerts. Everything outside goes through
-// ClockDeps, so tests drive the clock with a fake time and fake processes.
+// The jobs clock, in the daemon. It triggers `runner = "daemon"` jobs: it decides when each one runs, dispatches it as
+// a detached attempt, and retries a slot until it is done. For every job it is the delivery stage and the only writer
+// of job state: it applies each attempt's result, and each result a launchd run leaves (runner = "launchd").
+// Each tick: apply results, decide each daemon job (owed slot, back-off, needs), then alerts. Everything outside goes
+// through ClockDeps, so tests drive the clock with a fake time and fake processes.
 
 import { spawn } from 'child_process'
 import { dlopen, FFIType } from 'bun:ffi'
@@ -189,7 +189,7 @@ export class JobsClock {
   /** An outcome the daemon decides itself (no process): not-now, a baseline, a mark-done. */
   private recordOutcome(job: Job, o: Recorded, t: Target | null): void {
     this.update(job.name, job.schedule, s => applyOutcome(s, o, t))
-    this.d.log(`jobs: ${job.name}: ${o.result}${o.absorbedBy ? ` (absorbed by ${o.absorbedBy})` : ''}${o.note ? ` (${o.note})` : ''}`)
+    this.d.log(`jobs: ${job.name}: ${o.result}${o.servedBy ? ` (served by ${o.servedBy})` : ''}${o.note ? ` (${o.note})` : ''}`)
   }
 
   /** A traveling laptop changes zone under a long-running daemon. Follow the system's zone unless TZ was set on purpose. */
@@ -235,6 +235,10 @@ export class JobsClock {
       if (await this.d.direct(text, fallback.channel ?? this.d.homeChannel()) && !this.stopped) this.updateDaemon(s => { s.configAlertedFor = problem })
     }
     return fallback
+  }
+
+  private parsedOrEmpty(text: string | undefined): Job[] {
+    try { return text ? parseJobsConfig(text).jobs : [] } catch { return [] }
   }
 
   private lastGood(state: DaemonState): JobsConfig {
@@ -375,12 +379,15 @@ export class JobsClock {
    */
   async requestSync(): Promise<{ ok: true; before: Job[]; after: Job[]; hydraEntry: string } | { ok: false; error: string }> {
     if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
-    const before = this.lastGood(readDaemonState(this.d.stateDir).state).jobs
+    // Against the config the last sync made live: the tick reloads jobs.toml every minute, so the last good copy
+    // would show "no changes" for any edit older than a minute.
+    const state = readDaemonState(this.d.stateDir).state
+    const before = this.parsedOrEmpty(state.syncedConfig ?? state.lastGoodConfig)
     let text: string
     try { text = readFileSync(jobsToml(this.d.stateDir), 'utf8') } catch { return { ok: false, error: `no jobs file at ${jobsToml(this.d.stateDir)}` } }
     let after: Job[]
     try { after = parseJobsConfig(text).jobs } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) } }
-    this.updateDaemon(s => { s.lastGoodConfig = text })
+    this.updateDaemon(s => { s.lastGoodConfig = text; s.syncedConfig = text })
     await this.tick()
     return { ok: true, before, after, hydraEntry: this.d.hydraEntry }
   }
@@ -414,21 +421,23 @@ export class JobsClock {
     // A job dropped from jobs.toml can still have a dispatch running: settle it too.
     try { for (const f of readdirSync(jobsDir(this.d.stateDir))) { const m = /^([a-z0-9][a-z0-9-]*)\.state\.json$/.exec(f); if (m) names.add(m[1]) } } catch {}
     for (const name of names) { if (this.stopped) return; await this.settle(name, jobs.get(name)) }
-    for (const job of cfg.jobs) if (job.runner === 'launchd') this.applyExternal(job)
+    // Every job in the file: one that just moved from launchd to the daemon still has its waiting result applied, so
+    // its check doesn't run that slot again.
+    for (const job of cfg.jobs) this.applyExternal(job)
     this.dropStrandedExternal(cfg)
     this.sweep()
   }
 
-  /** Launchd results of a job that left the file or moved to the daemon: nothing will deliver them, so they go. */
+  /** Launchd results of a job that left the file: nothing will deliver them, so they go. */
   private dropStrandedExternal(cfg: JobsConfig): void {
-    const launchd = new Set(cfg.jobs.filter(j => j.runner === 'launchd').map(j => j.name))
+    const inFile = new Set(cfg.jobs.map(j => j.name))
     let files: string[] = []
     try { files = readdirSync(resultsDir(this.d.stateDir)) } catch {}
     for (const f of files) {
       const p = parseExternalName(f)
-      if (!p || launchd.has(p.name)) continue
+      if (!p || inFile.has(p.name)) continue
       try { unlinkSync(join(resultsDir(this.d.stateDir), f)) } catch {}
-      this.d.log(`jobs: ${p.name}: launchd result for ${p.slotAt} dropped: the job no longer runs under launchd`)
+      this.d.log(`jobs: ${p.name}: launchd result for ${p.slotAt} dropped: the job is no longer in jobs.toml`)
     }
   }
 
@@ -650,7 +659,7 @@ export function applyOutcome(s: JobState, o: Recorded, t: Target | null): void {
     s.notNow = { since: keep ? s.notNow!.since : o.at, reason, ...(o.dispatch !== undefined && { dispatch: o.dispatch }) }
     return
   }
-  s.last = { at: o.at, ...(o.dispatch !== undefined && { dispatch: o.dispatch }), result: o.result, ...(o.note && { note: o.note }), ...(o.absorbedBy && { absorbedBy: o.absorbedBy }) }
+  s.last = { at: o.at, ...(o.dispatch !== undefined && { dispatch: o.dispatch }), result: o.result, ...(o.note && { note: o.note }), ...(o.servedBy && { servedBy: o.servedBy }) }
   const success = o.result !== 'failed'
   if (success) { s.failures = 0; delete s.failingSince } else { s.failures = (s.failures ?? 0) + 1; s.failingSince ??= o.at }
   if (t?.slot && success) s.covered = { slot: t.slot, at: t.at }

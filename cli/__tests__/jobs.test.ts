@@ -12,6 +12,9 @@ import { awakeTimeout, externalFile, runnerLabel, resultFile, stateFile, writeAt
 import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
 
 const repo = join(import.meta.dir, '..', '..')
+/** The zone this file started in, captured once: restoring by name (an older bun ignores an unset TZ), never from a
+ *  zone a test has already changed. */
+const ORIGINAL_TZ = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone
 
 const ok = `
 channel = "123"
@@ -85,8 +88,9 @@ describe('parseJobs', () => {
     expect(j).toMatchObject({ needs: ['internet'], alertAfterMs: 3 * 86_400_000 })
     expect(j.notes).toBeUndefined()
     expect(parseJobs(`[d]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"`)[0].alertAfterMs).toBe(86_400_000)   // default 1d
-    const [off] = parseJobs(`[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=false`)
-    expect(off.notes).toEqual(['durable = false is ignored: a job is retried until its slot is done; remove the key'])
+    const [off, offLd] = parseJobs(`[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"\ndurable=false\n[b]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=false`)
+    expect(off.notes).toEqual(['durable = false is ignored: a daemon-runner job is retried until its slot is done; remove the key'])
+    expect(offLd.notes).toEqual(['durable = false is ignored: under launchd a job runs once a slot, with no retries; remove the key'])
   })
 
   test('runner: the job beats the file, the file beats the default (launchd), with where each came from', () => {
@@ -101,11 +105,11 @@ describe('parseJobs', () => {
     const job = (top: string, extra: string) => () => parseJobs(`${top}channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\n${extra}`)
     for (const extra of ['durable=true', 'needs=["internet"]', 'alert_after="2d"']) {
       const key = extra.split('=')[0]
-      expect(job('', extra)).toThrow(`jobs.toml [a]: ${key} needs runner = "daemon"`)
-      expect(job('runner = "launchd"\n', extra)).toThrow(`${key} needs runner = "daemon"`)
+      expect(job('', extra)).toThrow(`jobs.toml [a]: ${key} needs the daemon runner: add runner = "daemon"`)
+      expect(job('runner = "launchd"\n', extra)).toThrow(`${key} needs the daemon runner: add runner = "daemon"`)
       expect(job('runner = "launchd"\n', `${extra}\nrunner="daemon"`)).not.toThrow()
       expect(job('runner = "daemon"\n', extra)).not.toThrow()
-      expect(job('runner = "daemon"\n', `${extra}\nrunner="launchd"`)).toThrow(`${key} needs runner = "daemon"`)
+      expect(job('runner = "daemon"\n', `${extra}\nrunner="launchd"`)).toThrow(`${key} needs the daemon runner: add runner = "daemon"`)
     }
     expect(job('', 'durable=false')).not.toThrow()
   })
@@ -113,8 +117,12 @@ describe('parseJobs', () => {
   test('runner values, and a schedule too fine for a launchd calendar', () => {
     expect(() => parseJobs('[a]\nschedule="0 6 * * *"\ncheck="a"\nmode="none"\nrunner="cron"')).toThrow('runner must be "launchd" (the default) or "daemon"')
     expect(() => parseJobs('runner = "cron"\n[a]\nschedule="0 6 * * *"\ncheck="a"\nmode="none"')).toThrow('top-level runner must be')
-    expect(() => parseJobs('[a]\nschedule="0-58 0-22 * * *"\ncheck="a"\nmode="none"')).toThrow('needs 1357 launchd calendar entries')
-    expect(() => parseJobs('[a]\nschedule="0-58 0-22 * * *"\ncheck="a"\nmode="none"\nrunner="daemon"')).not.toThrow()
+    // Too fine for a launchd calendar: never a parse error (it parsed on main). The daemon runs it, and says why.
+    const [fine, ok] = parseJobs('[a]\nschedule="*/2 9-17 * * 1-5"\ncheck="a"\nmode="none"\nneeds=["internet"]\n[b]\nschedule="0 6 * * *"\ncheck="b"\nmode="none"')
+    expect(fine).toMatchObject({ runner: 'daemon', runnerFrom: 'schedule' })
+    expect(runnerLabel(fine)).toBe('daemon (schedule)')
+    expect(fine.notes).toEqual(['schedule "*/2 9-17 * * 1-5" needs 1350 launchd calendar entries (at most 500), so the daemon runs it; set runner = "daemon" to say so'])
+    expect(ok.runner).toBe('launchd')                                                   // the rest of the file is untouched
   })
 
   test('alert_after durations', () => {
@@ -200,7 +208,7 @@ describe('runWork', () => {
     expect(calls).toEqual([])
   })
 
-  test('duplicate key, spawn: pending is not now; spawned or completed is done, absorbed by that session', async () => {
+  test('duplicate key, spawn: pending is not now; spawned or completed is done, served by that session', async () => {
     checkResult.out = 'x'
     hydraCode = 2
     existing = { status: 'pending', sessionId: '' }
@@ -208,7 +216,7 @@ describe('runWork', () => {
     expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'not-now', note: `duplicate key ${KEY} still pending` })
     for (const status of ['spawned', 'completed']) {
       existing = { status, sessionId: 'sess-1' }
-      expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'done', note: `duplicate key ${KEY}: already served`, absorbedBy: 'sess-1' })
+      expect(await runWork(spawnJob, dir, KEY, () => { landed++ })).toEqual({ result: 'done', note: `duplicate key ${KEY}: already served`, servedBy: 'sess-1' })
     }
     expect(landed).toBe(2)
   })
@@ -218,7 +226,7 @@ describe('runWork', () => {
     expect((await runWork(mainJob, dir, 'k')).result).toBe('not-now')
     hydraCode = 2
     existing = { status: 'completed', sessionId: 'main' }
-    expect(await runWork(mainJob, dir, 'k')).toMatchObject({ result: 'done', absorbedBy: 'main' })
+    expect(await runWork(mainJob, dir, 'k')).toMatchObject({ result: 'done', servedBy: 'main' })
   })
 
   test('the daemon is restarting (no socket, refused, or it closed on us): not now, so the slot stays owed', async () => {
@@ -696,13 +704,13 @@ describe('the old launchd entries', () => {
     const home = mkdtempSync(join(tmpdir(), 'jobs-entry-'))
     const state = join(home, '.claude', 'channels', 'test')
     mkdirSync(state, { recursive: true })
-    writeFileSync(join(state, 'jobs.toml'), '[x]\nschedule="* * * * *"\ncheck="echo found"\nmode="main"\nprompt="p"\n')
+    writeFileSync(join(state, 'jobs.toml'), '[x]\nschedule="* * * * *"\ncheck="echo found ${DISCORD_BOT_TOKEN:-scrubbed}"\nmode="main"\nprompt="p"\n')
     try {
-      const run = (title: string) => Bun.spawn([process.execPath, `--cron-title=${title}`, '--cron-period=* * * * *', join(repo, 'cli', 'jobs-entry.ts')], { env: { ...process.env, HOME: home }, stdout: 'pipe', stderr: 'pipe' })
+      const run = (title: string) => Bun.spawn([process.execPath, `--cron-title=${title}`, '--cron-period=* * * * *', join(repo, 'cli', 'jobs-entry.ts')], { env: { ...process.env, HOME: home, DISCORD_BOT_TOKEN: 'secret-token' }, stdout: 'pipe', stderr: 'pipe' })
       expect(await run('hydra-job-test-x').exited).toBe(0)
       const files = readdirSync(join(state, 'jobs-state', 'results'))
       expect(files).toHaveLength(1)
-      expect(JSON.parse(readFileSync(join(state, 'jobs-state', 'results', files[0]), 'utf8'))).toMatchObject({ result: 'done', output: 'found' })
+      expect(JSON.parse(readFileSync(join(state, 'jobs-state', 'results', files[0]), 'utf8'))).toMatchObject({ result: 'done', output: 'found scrubbed' })   // hydra's token never reaches a check
       const p = run('not-ours')
       expect(await p.exited).toBe(0)
       expect(await new Response(p.stderr).text()).toContain('not a hydra job entry')
@@ -728,10 +736,10 @@ describe('jobs list', () => {
       jobsIO.now = () => new Date('2026-11-04T18:00:00Z')
       writeAtomic(daemonFile(dir), JSON.stringify({ lastTick: '2026-11-04T17:59:30Z' }))
       writeAtomic(stateFile(dir, 'cleanup'), JSON.stringify({ last: { at: '2026-11-04T17:45:00Z', result: 'failed', note: 'ended without a result' }, failures: 1, failingSince: '2026-11-04T17:45:00Z', dispatch: { id: 2, nonce: 'n', at: '2026-11-04T18:00:00Z', kind: 'scheduled', slot: 's', deadline: 'd' } }))
-      const tz = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone
       process.env.TZ = 'America/Los_Angeles'
-      try { jobsList('test', dir) } finally { process.env.TZ = tz }
-      expect(lines.find(l => l.startsWith('vuln-scan'))).toContain('next 11/5/2026, 6:00:00 AM')   // local 06:00, not 06:00 UTC
+      try { jobsList('test', dir) } finally { process.env.TZ = ORIGINAL_TZ }
+      // Local 06:00, not 06:00 UTC. \s: ICU puts a narrow no-break space (U+202F) before AM in newer builds.
+      expect(lines.find(l => l.startsWith('vuln-scan'))).toMatch(/next 11\/5\/2026, 6:00:00\sAM/)
       expect(lines[0]).toStartWith('clock: last tick')
       expect(lines[0]).not.toContain('STALE')
       const cleanup = lines.find(l => l.startsWith('cleanup'))!
@@ -749,9 +757,8 @@ describe('jobs list', () => {
 
 describe('jobs list lines', () => {
   const real = { ...jobsIO }
-  const savedTZ = process.env.TZ
   beforeEach(() => { process.env.TZ = 'America/Los_Angeles' })
-  afterEach(() => { process.env.TZ = savedTZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone })
+  afterEach(() => { process.env.TZ = ORIGINAL_TZ })
   const dur = parseJobs(`[pull]\nschedule="*/5 * * * *"\ncheck="p.sh"\nmode="none"\nrunner="daemon"\ndurable=true`)[0]
   const review = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\nrunner="daemon"\ndurable=true`)[0]
   const now = new Date('2026-11-04T10:08:00-08:00')
@@ -770,10 +777,10 @@ describe('jobs list lines', () => {
     expect(l).toContain('retry after')
   })
 
-  test('not owed, absorbed, and not now (only when newer than the last result)', () => {
-    const l = line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:05:30Z' }, last: { at: '2026-11-04T18:05:30Z', result: 'done', absorbedBy: 'pull-7' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })
+  test('not owed, served, and not now (only when newer than the last result)', () => {
+    const l = line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:05:30Z' }, last: { at: '2026-11-04T18:05:30Z', result: 'done', servedBy: 'pull-7' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })
     expect(l).toContain('not owed')
-    expect(l).toContain('done (absorbed by pull-7)')
+    expect(l).toContain('done (served by pull-7)')
     expect(l).toContain(': offline')
     expect(line(dur, { last: { at: '2026-11-04T18:07:30Z', result: 'done' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })).not.toContain('offline')
   })
@@ -788,7 +795,7 @@ describe('jobs list lines', () => {
     try {
       writeFileSync(join(dir, 'jobs.toml'), `[old]\nschedule="0 6 * * *"\ncheck="c"\nmode="none"\ndurable=false`)
       jobsList('test', dir)
-      expect(lines).toContain('  note: durable = false is ignored: a job is retried until its slot is done; remove the key')
+      expect(lines).toContain('  note: durable = false is ignored: under launchd a job runs once a slot, with no retries; remove the key')
     } finally { console.log = log; rmSync(dir, { recursive: true }) }
   })
 
@@ -821,6 +828,8 @@ describe('jobs sync (CLI)', () => {
     const after = parseJobs(`[a]\nschedule="0 5 * * *"\ncheck="a2.sh"\nmode="none"\nrunner="daemon"\nalert_after="2d"\n` + B + C)
     expect(diffJobs(before, after)).toEqual(['changed: a (schedule, runner, check, alert_after)', 'added: c', 'removed: d'])
     expect(diffJobs(after, after)).toEqual([])
+    // Effective values: writing out the default runner is not a change in what runs.
+    expect(diffJobs(parseJobs(A), parseJobs(A.replace('mode="none"', 'mode="none"\nrunner="launchd"')))).toEqual([])
   })
 
   test('the daemon loads it now: prints what changed against what it had, then each job', async () => {
@@ -846,10 +855,10 @@ describe('jobs sync (CLI)', () => {
     } finally { Object.assign(launchdIO, realL); t.done() }
   })
 
-  test('nothing changed: says the daemon already had it', async () => {
+  test('nothing changed: says so', async () => {
     const t = setup(A)
     runIO.send = async () => ({ ok: true, data: { before: parseJobs(A), after: parseJobs(A) } })
-    try { expect(await jobsSync('test', t.dir)).toBe(0); expect(t.out[0]).toBe('no changes: the daemon already had this config') } finally { t.done() }
+    try { expect(await jobsSync('test', t.dir)).toBe(0); expect(t.out[0]).toBe('no changes since the last sync') } finally { t.done() }
   })
 
   test('an invalid or missing jobs.toml exits 1, and the daemon is never asked', async () => {

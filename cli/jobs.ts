@@ -11,12 +11,12 @@ import { spawnSync } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, writeSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { platformStateDir } from '../shared/constants.js'
-import { LAUNCH_AGENTS_DIR, jobAgentLabel, launchdCalendar, launchdPlist, legacyTitles, parseLegacyTitle, runnerJobs, stableBun } from '../shared/jobs-launchd.js'
+import { LAUNCHD_PATH, LAUNCH_AGENTS_DIR, jobAgentLabel, plistEntry, launchdCalendar, launchdPlist, legacyTitles, parseLegacyTitle, runnerJobs, stableBun } from '../shared/jobs-launchd.js'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
-  awakeTimeout, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
+  attemptEnv, awakeTimeout, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
   type ExternalResult, type Job, type Outcome,
 } from '../shared/jobs.js'
 
@@ -114,7 +114,7 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
   const pending = (job.mode === 'spawn' && code === 2 && existing?.status === 'pending') || (job.mode === 'main' && code === 7)
   if (pending) return { result: 'not-now', note: `duplicate key ${key} still pending` }
   if (code === 2) {
-    const w: Work = { result: 'done', note: `duplicate key ${key}: already served`, ...(existing?.sessionId && { absorbedBy: existing.sessionId }) }
+    const w: Work = { result: 'done', note: `duplicate key ${key}: already served`, ...(existing?.sessionId && { servedBy: existing.sessionId }) }
     onActionSent(w)
     return w
   }
@@ -144,9 +144,9 @@ export const attemptIO = {
 export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null> {
   let written: AttemptResult | null = null
   let actionSent = false
-  const write = (result: AttemptResult['result'], note?: string, absorbedBy?: string): AttemptResult | null => {
+  const write = (result: AttemptResult['result'], note?: string, servedBy?: string): AttemptResult | null => {
     if (written) return null
-    written = { dispatch: o.dispatch, at: jobsIO.now().toISOString(), result, ...(note && { note }), ...(absorbedBy && { absorbedBy }) }
+    written = { dispatch: o.dispatch, at: jobsIO.now().toISOString(), result, ...(note && { note }), ...(servedBy && { servedBy }) }
     writeAtomic(resultFile(o.stateDir, o.name, o.dispatch, o.nonce), JSON.stringify(written))
     attemptIO.out(`${written.at} ${o.name} dispatch ${o.dispatch}: ${result}${note ? ` (${note})` : ''}`)
     return written
@@ -166,9 +166,9 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
   // hit the first slot's key and record a false done. An attempt from a daemon without --slot-at keys on the label.
   const key = o.manual ? `jobs-${o.name}-${started.toISOString().slice(0, 16)}` : `jobs-${o.name}-${o.slotAt ?? o.slot}`
   // The done result is written the moment the action lands: a cancel or a crash after that can't turn it into a rerun.
-  const landed = (l: Work) => { actionSent = true; write(l.result, l.note, l.absorbedBy) }
+  const landed = (l: Work) => { actionSent = true; write(l.result, l.note, l.servedBy) }
   const w = o.external ? await deliverExternal(job, o, key, landed) : await runWork(job, o.stateDir, key, landed)
-  write(w.result, w.note, w.absorbedBy)
+  write(w.result, w.note, w.servedBy)
   attemptIO.killOwnGroup()
   return written
 }
@@ -207,14 +207,23 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
   if (!slot) return 0
   const out = externalFile(stateDir, name, slot.at.toISOString())
   if (existsSync(out)) { runIO.print(`${name}: slot ${slot.label} already has a result waiting for the daemon`); return 0 }
-  const c = await runCheck(job)
-  const res: ExternalResult = {
-    slot: slot.label, slotAt: slot.at.toISOString(), at: now.toISOString(),
-    ...('outcome' in c ? c.outcome : { result: 'done' as const, output: c.output }),
-  }
+  // The check gets what an attempt gets: hydra's own credentials stay out, whatever started this (an old Bun.cron
+  // entry runs with the user's launchd environment).
+  const clean = attemptEnv(process.env)
+  for (const k of Object.keys(process.env)) if (!(k in clean)) delete process.env[k]
   mkdirSync(resultsDir(stateDir), { recursive: true })
-  writeAtomic(out, JSON.stringify(res))
-  runIO.print(`${res.at} ${name} slot ${slot.label}: ${res.result}${res.note ? ` (${res.note})` : ''}`)
+  let written = false
+  const leave = (r: Outcome & { output?: string }) => {
+    if (written) return
+    written = true
+    writeAtomic(out, JSON.stringify({ slot: slot.label, slotAt: slot.at.toISOString(), at: now.toISOString(), ...r } satisfies ExternalResult))
+  }
+  // launchd stops a running job when its entry is re-registered (bootout): the slot is then not now, never silent.
+  attemptIO.onSigterm(() => { leave({ result: 'not-now', note: 'stopped by launchd (its entry was re-registered)' }); attemptIO.killOwnGroup() })
+  const c = await runCheck(job)
+  const res: Outcome & { output?: string } = 'outcome' in c ? c.outcome : { result: 'done', output: c.output }
+  leave(res)
+  runIO.print(`${now.toISOString()} ${name} slot ${slot.label}: ${res.result}${res.note ? ` (${res.note})` : ''}`)
   return res.result === 'failed' ? 1 : res.result === 'not-now' ? EX_TEMPFAIL : 0
 }
 
@@ -351,7 +360,7 @@ function printJobs(platform: string, stateDir: string, jobs: Job[], now: Date): 
 export function launchdNotes(platform: string, stateDir: string, j: Job): string[] {
   const out: string[] = []
   const waiting = j.runner === 'launchd' ? externalResults(stateDir, j.name).length : 0
-  if (waiting) out.push(`${waiting} launchd result${waiting === 1 ? '' : 's'} waiting for the daemon to apply`)
+  if (waiting) out.push(`owed: ${waiting} launchd result${waiting === 1 ? '' : 's'}, waiting for the daemon to deliver`)
   if (resolve(stateDir) !== resolve(platformStateDir(platform))) return out
   const registered = runnerJobs(launchdIO.agentsDir, platform).includes(j.name)
   const legacy = legacyTitles(launchdIO.agentsDir, platform).some(t => parseLegacyTitle(t)?.name === j.name)
@@ -368,7 +377,7 @@ export function launchdNotes(platform: string, stateDir: string, j: Job): string
 // jobs sync: make the config live now
 // ---------------------------------------------------------------------------
 
-const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after', notes: 'durable', runnerFrom: 'runner' }
+const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after', notes: 'durable' }
 
 /** What changed between the jobs the daemon had and the ones it has now, by jobs.toml key. */
 export function diffJobs(before: Job[], after: Job[]): string[] {
@@ -379,7 +388,8 @@ export function diffJobs(before: Job[], after: Job[]): string[] {
     const old = had.get(j.name)
     if (!old) { lines.push(`added: ${j.name}`); continue }
     const now = j as Record<string, unknown>
-    const keys = [...new Set([...Object.keys(old), ...Object.keys(now)])].filter(k => JSON.stringify(old[k]) !== JSON.stringify(now[k]))
+    // Effective values only: where a runner came from (job, file, default) is not a change in what runs.
+    const keys = [...new Set([...Object.keys(old), ...Object.keys(now)])].filter(k => k !== 'runnerFrom' && JSON.stringify(old[k]) !== JSON.stringify(now[k]))
     if (keys.length) lines.push(`changed: ${j.name} (${[...new Set(keys.map(k => TOML_KEY[k] ?? k))].join(', ')})`)
   }
   for (const j of before) if (!has.has(j.name)) lines.push(`removed: ${j.name}`)
@@ -417,14 +427,12 @@ export async function jobsSync(platform: string, stateDirOverride?: string): Pro
   const d = resp?.ok ? resp.data as { before: Job[]; after: Job[]; hydraEntry?: string } : null
   if (d) {
     const changes = diffJobs(d.before, d.after)
-    for (const l of changes.length ? changes : ['no changes: the daemon already had this config']) runIO.print(l)
+    for (const l of changes.length ? changes : ['no changes since the last sync']) runIO.print(l)
   }
   let code = 0
   if (resolve(stateDir) === resolve(platformStateDir(platform))) {
     // An entry runs the daemon's own checkout, whichever checkout ran this sync; without a daemon, this one.
-    const entry = d?.hydraEntry ?? join(import.meta.dir, 'hydra.ts')
-    if (!d?.hydraEntry && jobs.some(j => j.runner === 'launchd')) runIO.print(`launchd: no daemon to ask, so entries run ${entry}`)
-    const r = await syncLaunchd(platform, stateDir, jobs, entry)
+    const r = await syncLaunchd(platform, stateDir, jobs, d?.hydraEntry)
     for (const l of r.lines) runIO.print(l)
     if (!r.ok) code = 1
   } else if (jobs.some(j => j.runner === 'launchd')) {
@@ -447,7 +455,6 @@ export const launchdIO = {
   removeLegacy: (title: string) => Bun.cron.remove(title),
   uid: () => process.getuid?.() ?? 0,
   bun: () => stableBun(),
-  path: () => process.env.PATH || '/usr/bin:/bin',
 }
 
 /**
@@ -455,7 +462,7 @@ export const launchdIO = {
  * are gone from the file or now run in the daemon. The old runner's entries for this platform are moved over: removed,
  * with their jobs registered here if they still run under launchd. An unchanged agent is left loaded.
  */
-export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[], hydraEntry: string): Promise<{ lines: string[]; ok: boolean }> {
+export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[], hydraEntry: string | undefined): Promise<{ lines: string[]; ok: boolean }> {
   const io = launchdIO
   const lines: string[] = []
   let ok = true
@@ -466,11 +473,14 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
   try { bun = want.length ? io.bun() : '' } catch (err) { return { lines: [`launchd: ${err instanceof Error ? err.message : err}`], ok: false } }
   for (const j of want) {
     const label = jobAgentLabel(platform, j.name)
+    const existing = io.read(plistOf(j.name))
+    // Without the daemon's answer, keep the checkout an entry already runs: a re-registration stops a running job.
+    const entry = hydraEntry ?? (existing && plistEntry(existing)) ?? join(import.meta.dir, 'hydra.ts')
     const plist = launchdPlist({
-      label, program: [bun, hydraEntry, '--state-dir', stateDir, 'jobs', 'launchd-run', platform, j.name],
-      calendar: launchdCalendar(j.schedule), log: logFile(stateDir, j.name), path: io.path(),
+      label, program: [bun, entry, '--state-dir', stateDir, 'jobs', 'launchd-run', platform, j.name],
+      calendar: launchdCalendar(j.schedule), log: logFile(stateDir, j.name), path: LAUNCHD_PATH,
     })
-    if (io.read(plistOf(j.name)) === plist) continue
+    if (existing === plist) continue
     io.launchctl(['bootout', `${domain}/${label}`])   // not loaded yet is fine
     io.write(plistOf(j.name), plist)
     const r = io.launchctl(['bootstrap', domain, plistOf(j.name)])
@@ -478,7 +488,7 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
       io.remove(plistOf(j.name))   // the next sync sees no entry and tries again
       ok = false
       lines.push(`launchd: ${j.name}: registering failed: ${r.err || `exit ${r.code}`}; run jobs sync again`)
-    } else lines.push(`launchd: registered ${j.name} (runs ${hydraEntry})`)
+    } else lines.push(`launchd: registered ${j.name} (runs ${entry})`)
   }
   for (const name of runnerJobs(io.agentsDir, platform)) {
     if (want.some(j => j.name === name)) continue
@@ -507,7 +517,7 @@ export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Dat
     const owed = owedSlot(j.schedule, s, now)
     if (j.runner === 'daemon') parts.push(owed ? `owed since ${owed.at.toLocaleString()} (${owed.label})` : 'not owed')
     const last = s.last
-    parts.push(last ? `last ${local(last.at)} ${last.result}${last.absorbedBy ? ` (absorbed by ${last.absorbedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
+    parts.push(last ? `last ${local(last.at)} ${last.result}${last.servedBy ? ` (served by ${last.servedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
     if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now since ${local(s.notNow.since)}: ${s.notNow.reason}`)
     if (s.failingSince) parts.push(`failing since ${local(s.failingSince)} (${s.failures ?? 1}x)`)
     if (owed && j.runner === 'daemon') {
