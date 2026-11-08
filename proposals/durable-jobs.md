@@ -1,7 +1,7 @@
 # Durable jobs
 
-> Status: proposal v13, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
-> 1–11) and an independent pass. For review before building.
+> Status: proposal v14, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
+> 1–12) and an independent pass. For review before building.
 
 ## What hydra jobs should offer
 
@@ -35,13 +35,13 @@ the backup script keeps only its domain check.
 - **Goal:** `durable` toggles two things, and the second follows from the first:
   - **whether a failed attempt uses up the slot.** A plain job gets one attempt per slot, whatever its result. An
     `durable` job is attempted while its slot is owed, with backoff, until it is done.
-  - **how failures alert.** A plain job's slot is gone after one failure, so it reports daily. An `durable` job
+  - **how failures alert.** A plain job's slot is gone after one failure, so it reports daily. A `durable` job
     keeps retrying, so a single failure isn't news: it alerts once per failure run, past `alert_after`.
 - **Done for spawn jobs** means the daemon accepted the spawn. Whether the session then does its work is session
   health (pane-probe, idle-limit), not job state. The two meet only at `overlap`.
 
 Naming: **durable** names the promise. The commitment to run a scheduled slot survives sleep, travel, failures,
-crashes and restarts, and it is kept on disk until a run succeeds. It doesn't mean durable execution: an attempt
+crashes and restarts, and it is kept on disk until a run succeeds. It doesn't mea durable execution: an attempt
 that fails or dies isn't resumed. It is run again from the start.
 
 **The line between hydra and the job:** hydra owns *liveness* (is the work happening and succeeding?). The job owns
@@ -108,7 +108,7 @@ The work is the optional `check`, then the action for the mode (spawn, deliver t
 | exit 0, output | findings | run the action with the findings; `none`: done |
 | exit 0, no output | nothing to do this slot | done, no action |
 | exit 75 | not now | stdout dropped; not an attempt; the slot stays owed for any job |
-| other exit | failed | a plain job's slot is used; an durable slot stays owed; counts toward alerts |
+| other exit | failed | a plain job's slot is used; a durable slot stays owed; counts toward alerts |
 
 The action's own result decides the attempt: a spawn or delivery the daemon refuses is a failed attempt, and the slot
 stays owed. That is the case that check scripts cannot handle today, because the spawn happens after they exit.
@@ -263,7 +263,9 @@ reservation. If one appears, it is logged and left alone.
 - **`hydra jobs run <platform> <name>`** is a dispatch like any other, waited on in the foreground. The daemon reserves
   and spawns the same detached `jobs attempt … --dispatch <id> --nonce <n>` child the tick uses, and answers the
   request after the spawn with `{id, pid, lstart}`. The CLI never reads the result file. It waits until the job's
-  state shows `appliedDispatch >= id`, then prints `last`. That keeps the daemon the only one that interprets
+  state shows `appliedDispatch >= id`, then prints the outcome tagged with its `id` (`last.dispatch` or
+  `notNow.dispatch`). If neither matches, a later dispatch replaced it, and the CLI prints "superseded by dispatch
+  N". That keeps the daemon the only one that interprets
   results, and it survives a daemon restart. There is one attempt runner, so a manual
   run gets everything a scheduled one has: adoption after a daemon crash, the deadline kill, and the result
   surviving a closed terminal.
@@ -318,13 +320,13 @@ type JobState = {                 // jobs-state/<name>.json
   appliedDispatch?: number        // the last dispatch id whose result was applied
   failures?: number               // consecutive failures (backoff)
   failingSince?: string           // first failure since the last success; cleared on success
-  last?: { at: string; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string;
+  last?: { at: string; dispatch?: number; result: 'done' | 'nothing' | 'failed'; note?: string; absorbedBy?: string;
            v0?: 'nothing' | 'findings' | 'failed' }   // v0: the original outcome of a translated record
-  notNow?: { since: string; reason: string }   // the latest not-now, from any source; never overwrites `last`
+  notNow?: { since: string; reason: string; dispatch?: number }   // latest not-now, any source; never overwrites `last`
   alertedFor?: string             // the failingSince already alerted for: alerted iff equal
   reportedDay?: string            // plain jobs: local date a failure was last reported
   announcedUnconfirmed?: string   // slot already announced as "owed (unconfirmed)"
-  durableApplied?: boolean             // set when the daemon first applies durable rules (see Migration)
+  durableApplied?: boolean        // set when the daemon first applies durable rules (see Migration)
 }
 
 type DaemonState = {              // jobs-state/_daemon.json
