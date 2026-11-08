@@ -1,4 +1,4 @@
-import { cmpTs, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './slack-watch.js'
+import { cmpTs, routedChannels, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './slack-watch.js'
 
 /**
  * The catch-up pass: replays into the watcher what Slack did not push while the listener
@@ -102,10 +102,12 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
 
   try {
     // 1. Owed messages first: they are known to be missing.
-    for (const h of watcher.owedHints()) want(h.channel, h.threadTs, h.fromTs, true)
+    // Owed in a channel no route covers now: nothing would take them, so they are not fetched (they wait, then expire).
+    const routed = new Set(routedChannels(cfg))
+    for (const h of watcher.owedHints()) if (routed.has(h.channel)) want(h.channel, h.threadTs, h.fromTs, true)
 
     // 2. The channel since its cursor. No cursor yet means the first run: start from now, no backfill.
-    for (const channel of cfg.channels) {
+    for (const channel of routedChannels(cfg)) {
       const cursor = watcher.channelCursor(channel)
       if (!cursor) { newest.set(channel, nowTs(opts.now())); continue }
       let page: string | undefined
@@ -152,6 +154,6 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
     return { complete: false, calls: Math.min(calls, maxCalls), handled, accepted, reason }
   }
 
-  for (const channel of cfg.channels) watcher.endCatchUp(channel, newest.get(channel))
+  for (const channel of routedChannels(cfg)) watcher.endCatchUp(channel, newest.get(channel))
   return { complete: true, calls, handled, accepted }
 }

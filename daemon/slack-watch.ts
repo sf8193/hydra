@@ -36,18 +36,24 @@ export type Person = { name?: string; role?: string }
 /** Who may reach the specialist: anyone, anyone in `people`, or these roles and user ids. */
 export type From = 'anyone' | 'people' | string[]
 
+/**
+ * The brief's delivery target (daemon/targets.ts, lane A). Until that lands, only the `to` arm exists here;
+ * replace this with an import when it does.
+ */
+export type Target = { to: string; revive?: boolean }
+
+/** Some channels, where their messages go, and who may send them. A channel belongs to one route. */
+export type Route = { channels: string[]; to: string; from: From }
+
 export type SlackWatchConfig = {
   /** The bot's Slack user id: `<@id>` in a message text is a tag. */
   botUserId: string
   /** Its bot id (`B…`), for message events that carry no `user`. Learned at connect time; this overrides. */
   botId?: string
-  /** Only these channels are watched. */
-  channels: string[]
-  /** The specialist that receives deliveries. */
-  specialist: string
   /** The roster, by Slack user id. */
   people: Record<string, Person>
-  from: From
+  /** Only these channels are watched, each by exactly one route. */
+  routes: Route[]
   idleExpiryMs: number
   /** Replies arriving within this window of each other are delivered as one message. */
   coalesceMs: number
@@ -62,7 +68,6 @@ export type SlackWatchConfig = {
 export type SlackWatchEntry = {
   channel: string
   threadTs: string
-  specialist: string
   mentionedBy?: string
   createdAt: number
   /** Last matching event, delivered or not: the idle clock. */
@@ -87,19 +92,20 @@ export type SlackMessageEvent = {
 export type DeliverResult =
   | { ok: true; duplicate?: boolean }
   // `permanent`: this message can never be delivered (too large). It is dropped, not retried.
-  | { ok: false; error: string; permanent?: boolean }
+  // `exit` 8: the route names no such specialist. Kept owed (a fixed config delivers it) and alerted.
+  | { ok: false; error: string; permanent?: boolean; exit?: number }
 
 export type SlackWatchDeps = {
   now: () => number
-  deliver: (specialist: string, message: string, idempotencyKey: string) => Promise<DeliverResult>
+  deliver: (target: Target, message: string, idempotencyKey: string) => Promise<DeliverResult>
   /** Read per event so edits apply without a restart. Null: nothing is watched. */
   config: () => SlackWatchConfig | null
   file: string
   log: (line: string) => void
   /** Slack user id to display name (users.info). Optional; deliveries carry the id either way. */
   resolveName?: (userId: string) => Promise<string | undefined>
-  /** A plain message to a person (not a session turn): how a drop is surfaced. */
-  alert?: (text: string) => void
+  /** A plain message to a person (not a session turn): how a drop is surfaced. `channel`: the Slack channel it concerns, whose route's target should hear it. */
+  alert?: (text: string, channel?: string) => void
 }
 
 /** `refused`: a sender `from` does not admit, in a message that would otherwise have been delivered. */
@@ -131,10 +137,6 @@ export function parseSlackWatchConfig(raw: unknown): SlackWatchConfig {
     if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) fail(`${k} must be a number from ${min} to ${max}`)
     return v as number
   }
-  const channels = t.channels
-  if (!Array.isArray(channels) || channels.length === 0 || channels.some(c => typeof c !== 'string' || !c)) {
-    fail('channels must be a non-empty array of channel ids')
-  }
   const idle = parseIdleTtl(str('idleExpiry', false) || '7d')
   if (idle === null) fail('idleExpiry must be a duration like 12h or 7d, at most 7d')
   const workspaceUrl = str('workspaceUrl', false)
@@ -143,11 +145,8 @@ export function parseSlackWatchConfig(raw: unknown): SlackWatchConfig {
   return {
     botUserId: str('botUserId')!,
     ...(botId && { botId }),
-    channels: channels as string[],
-    specialist: str('specialist')!,
     people,
-    // A file with no roster is today's open form; declaring one closes the door to everyone not in it.
-    from: parseFrom(t.from, people, t.people === undefined || t.people === null ? 'anyone' : 'people', fail),
+    routes: parseRoutes(t, people, fail),
     idleExpiryMs: idle!,
     coalesceMs: t.coalesceMs === 0 ? 0 : num('coalesceMs', 4000, 0, 60_000),
     maxWatches: num('maxWatches', 50, 1, 1000),
@@ -159,6 +158,49 @@ export function parseSlackWatchConfig(raw: unknown): SlackWatchConfig {
 const USER_ID_RE = /^[UW][A-Z0-9]{2,}$/
 /** What a real Slack user id looks like; a `from` id outside the roster must match it. */
 const SLACK_ID_RE = /^[UW][A-Z0-9]{8,}$/
+
+/** `routes`, or today's `{channels, specialist}` form as one route. A channel in two routes is an error: which would it go to? */
+function parseRoutes(t: Record<string, unknown>, people: Record<string, Person>, fail: (why: string) => never): Route[] {
+  const legacy = t.channels !== undefined || t.specialist !== undefined
+  if (legacy && t.routes !== undefined) return fail('use routes, or channels and specialist, not both')
+  if (!legacy && t.from !== undefined) return fail('from belongs inside each route')
+  const noRoster = t.people === undefined || t.people === null
+  const one = (r: Record<string, unknown>, where: string, dfltFrom: From): Route => {
+    const channels = r.channels
+    if (!Array.isArray(channels) || channels.length === 0 || channels.some(c => typeof c !== 'string' || !c)) {
+      fail(`${where}channels must be a non-empty array of channel ids`)
+    }
+    const to = legacy ? r.specialist : r.to
+    if (typeof to !== 'string' || !to.trim()) fail(`${where}${legacy ? 'specialist' : 'to'} must be a non-empty string`)
+    return { channels: channels as string[], to: (to as string).trim(), from: parseFrom(r.from, people, dfltFrom, fail, where) }
+  }
+  // Today's form, with no roster, stays open to anyone; declaring one closes the door to everyone not in it.
+  const routes = legacy
+    ? [one(t, '', noRoster ? 'anyone' : 'people')]
+    : Array.isArray(t.routes) && t.routes.length
+      ? t.routes.map((r, i) => {
+          if (typeof r !== 'object' || r === null || Array.isArray(r)) return fail(`routes[${i}] must be an object`)
+          return one(r as Record<string, unknown>, `routes[${i}].`, 'people')
+        })
+      : fail('routes must be a non-empty array (or give channels and specialist)')
+  const owner = new Map<string, number>()
+  routes.forEach((r, i) => r.channels.forEach(c => {
+    if (owner.get(c) === i) fail(`channel ${c} is listed twice in routes[${i}]`)
+    if (owner.has(c)) fail(`channel ${c} is in routes[${owner.get(c)}] and routes[${i}]; a channel belongs to one route`)
+    owner.set(c, i)
+  }))
+  return routes
+}
+
+/** The route a channel belongs to, from this config: where its messages go, who may send them. The one lookup delivery, alerts and the watch tools share. */
+export function routeFor(cfg: Pick<SlackWatchConfig, 'routes'> | null | undefined, channel: string): Route | undefined {
+  return cfg?.routes.find(r => r.channels.includes(channel))
+}
+
+export const routedChannels = (cfg: Pick<SlackWatchConfig, 'routes'> | null | undefined): string[] => cfg?.routes.flatMap(r => r.channels) ?? []
+
+/** Each specialist a route delivers to, once. */
+export const routeTargets = (cfg: Pick<SlackWatchConfig, 'routes'> | null | undefined): string[] => [...new Set(cfg?.routes.map(r => r.to) ?? [])]
 
 function parsePeople(raw: unknown, fail: (why: string) => never): Record<string, Person> {
   if (raw === undefined || raw === null) return {}
@@ -182,32 +224,38 @@ function parsePeople(raw: unknown, fail: (why: string) => never): Record<string,
 }
 
 /** Each entry is a role someone in `people` has, or a user id. A typo would otherwise close the door without a word. */
-function parseFrom(raw: unknown, people: Record<string, Person>, dflt: From, fail: (why: string) => never): From {
+function parseFrom(raw: unknown, people: Record<string, Person>, dflt: From, fail: (why: string) => never, where = ''): From {
   if (raw === undefined || raw === null || raw === '') {
-    if (dflt === 'people' && Object.keys(people).length === 0) fail('people is empty, so from (which defaults to anyone in people) admits no one; add people, or set from')
+    if (dflt === 'people' && Object.keys(people).length === 0) fail(`${where}from defaults to anyone in people, and people is empty, so it admits no one; add people, or set from`)
     return dflt
   }
   if (raw === 'anyone') return 'anyone'
-  if (!Array.isArray(raw) || raw.length === 0 || raw.some(x => typeof x !== 'string' || !x)) return fail('from must be "anyone" or a non-empty array of roles and user ids')
+  if (!Array.isArray(raw) || raw.length === 0 || raw.some(x => typeof x !== 'string' || !x)) return fail(`${where}from must be "anyone" or a non-empty array of roles and user ids`)
   const roles = new Set(Object.values(people).map(p => p.role).filter(Boolean))
   for (const x of raw as string[]) {
     if (roles.has(x) || x in people) continue
     // An id outside the roster must look like a real one (U/W and 8+ characters), and must not be a role in the wrong case:
     // "WRITER" for the role "Writer" would otherwise pass as an id and admit no one.
     const role = [...roles].find(r => r!.toLowerCase() === x.toLowerCase())
-    if (role) fail(`from: "${x}" is not a role in people; did you mean "${role}"?`)
-    if (!SLACK_ID_RE.test(x)) fail(`from: "${x}" is neither a role in people nor a Slack user id`)
+    if (role) fail(`${where}from: "${x}" is not a role in people; did you mean "${role}"?`)
+    if (!SLACK_ID_RE.test(x)) fail(`${where}from: "${x}" is neither a role in people nor a Slack user id`)
   }
   return raw as string[]
 }
 
 /** Whether `from` lets this sender reach the specialist. */
-export function admits(cfg: Pick<SlackWatchConfig, 'from' | 'people'>, user: string | undefined): boolean {
-  if (cfg.from === 'anyone') return true
+export function admits(from: From, people: Record<string, Person>, user: string | undefined): boolean {
+  if (from === 'anyone') return true
   if (!user) return false
-  if (cfg.from === 'people') return user in cfg.people
-  const role = cfg.people[user]?.role
-  return cfg.from.includes(user) || (!!role && cfg.from.includes(role))
+  if (from === 'people') return user in people
+  const role = people[user]?.role
+  return from.includes(user) || (!!role && from.includes(role))
+}
+
+let shared: (() => SlackWatchConfig | null) | undefined
+/** The daemon's one reader of `<state>/slack-watch.json`: delivery, alerts and the tool gate all ask it. */
+export function currentSlackWatchConfig(): SlackWatchConfig | null {
+  return (shared ??= fileConfig(slackWatchConfigPath(), l => { process.stderr.write(l) }))()
 }
 
 /** The state-dir config, re-read when the file changes. A missing or broken file means nothing is watched. */
@@ -249,8 +297,8 @@ const NAME_TTL_MS = 24 * 3600_000
 const NAME_MISS_TTL_MS = 5 * 60_000
 const NAME_TIMEOUT_MS = 3000
 const PERSIST_DEBOUNCE_MS = 200
-/** Drops of one kind closer together than this are one episode: alerted once. */
-const DROP_EPISODE_GAP_MS = 60 * 60_000
+/** Alerts of one kind closer together than this are one episode: alerted once. */
+const ALERT_EPISODE_GAP_MS = 60 * 60_000
 const NOTED_KEEP = 10_000
 const OWED_FULL_WHY = `more than ${OWED_KEEP} messages were owed in one thread, so the oldest is no longer retried`
 
@@ -360,7 +408,7 @@ export class SlackWatcher {
   // Two sets, so a flood of refusals cannot evict the drops (and re-count them on replay).
   private readonly noted = { refused: new Set<string>(), dropped: new Set<string>() }
   private readonly stats_: SlackWatchStats = { refused: 0, refusedBy: {}, dropped: {} }
-  private readonly lastDropAt = new Map<DropKind, number>()
+  private readonly episodeStart = new Map<string, number>()
 
   private resolveName: SlackWatchDeps['resolveName']
 
@@ -372,7 +420,10 @@ export class SlackWatcher {
     try {
       if (!existsSync(this.deps.file)) return
       const raw = JSON.parse(readFileSync(this.deps.file, 'utf8')) as Store
-      for (const e of raw.entries ?? []) this.entries.set(watchKey(e.channel, e.threadTs), e)
+      for (const e of raw.entries ?? []) {
+        delete (e as { specialist?: string }).specialist // older stores pinned the target; it is resolved at delivery now
+        this.entries.set(watchKey(e.channel, e.threadTs), e)
+      }
       this.channelCursors = raw.channelCursors ?? {}
     } catch (err) {
       this.deps.log(`daemon: slack-watch: load failed: ${err}\n`)
@@ -409,13 +460,13 @@ export class SlackWatcher {
   setNameResolver(fn: SlackWatchDeps['resolveName']): void { this.resolveName = fn }
 
   /** Watch a thread by hand (the bridge tool). Idempotent. Undefined when the watch table is full. */
-  watch(channel: string, threadTs: string, specialist: string, mentionedBy?: string): SlackWatchEntry | undefined {
+  watch(channel: string, threadTs: string, mentionedBy?: string): SlackWatchEntry | undefined {
     const now = this.deps.now()
     const existing = this.get(channel, threadTs)
     if (existing) { existing.lastEventAt = now; this.persist(); return existing }
     const cap = this.deps.config()?.maxWatches ?? 50
     if (this.entries.size >= cap) return undefined
-    const entry: SlackWatchEntry = { channel, threadTs, specialist, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
+    const entry: SlackWatchEntry = { channel, threadTs, ...(mentionedBy && { mentionedBy }), createdAt: now, lastEventAt: now }
     this.entries.set(watchKey(channel, threadTs), entry)
     this.persist()
     return entry
@@ -484,14 +535,15 @@ export class SlackWatcher {
    */
   handle(ev: SlackMessageEvent): HandleOutcome {
     const cfg = this.deps.config()
-    if (!cfg || !cfg.channels.includes(ev.channel)) return 'ignored'
+    const route = routeFor(cfg, ev.channel)
+    if (!cfg || !route) return 'ignored'
     if (!TS_RE.test(ev.ts) || (ev.threadTs !== undefined && !TS_RE.test(ev.threadTs))) return 'ignored'
-    const outcome = this.classify(ev, cfg)
+    const outcome = this.classify(ev, cfg, route)
     if (!this.catchingUp) this.advance(ev.channel, ev.ts)
     return outcome
   }
 
-  private classify(ev: SlackMessageEvent, cfg: SlackWatchConfig): HandleOutcome {
+  private classify(ev: SlackMessageEvent, cfg: SlackWatchConfig, route: Route): HandleOutcome {
     if (!PLAIN_SUBTYPES.has(ev.subtype)) return 'ignored'
 
     const botId = cfg.botId ?? this.botId
@@ -504,7 +556,7 @@ export class SlackWatcher {
     if (own) {
       // The bot's own top-level post opens a watched thread. Its replies are not echoed back to the specialist.
       if (isReply) return 'ignored'
-      const entry = this.watch(ev.channel, threadTs, cfg.specialist)
+      const entry = this.watch(ev.channel, threadTs)
       if (!entry) {
         this.drop('table-full', { channel: ev.channel, threadTs }, [ev.ts], `the watch table is full (${cfg.maxWatches}), so the bot's own post opens no watch and replies to it will not be delivered`)
         return 'ignored'
@@ -519,8 +571,8 @@ export class SlackWatcher {
     if (!tagged && !existing) return 'ignored'
     if (existing?.delivered?.includes(ev.ts)) return 'ignored'
     // Refused before anything is counted, watched or owed: a sender `from` does not admit costs nothing.
-    if (!admits(cfg, ev.user)) {
-      this.refuse(ev, threadTs, cfg)
+    if (!admits(route.from, cfg.people, ev.user)) {
+      this.refuse(ev, threadTs, route)
       // Owed before `from` was tightened: refusing it settles it, so catch-up stops refetching it.
       if (existing?.owed?.includes(ev.ts)) { const owed = existing.owed.filter(t => t !== ev.ts); if (owed.length) existing.owed = owed; else delete existing.owed; this.persist() }
       return 'refused'
@@ -529,7 +581,7 @@ export class SlackWatcher {
     if (tagged) {
       // The cap guards against opening watches in a loop. In a thread already watched, the same words untagged would be delivered anyway.
       if (!existing && !this.allowMention(ev, threadTs, cfg)) return 'ignored'
-      const entry = existing ?? this.watch(ev.channel, threadTs, cfg.specialist, ev.user)
+      const entry = existing ?? this.watch(ev.channel, threadTs, ev.user)
       if (!entry) {
         this.drop('table-full', { channel: ev.channel, threadTs }, [ev.ts], `the watch table is full (${cfg.maxWatches}); unwatch a thread or raise maxWatches`)
         return 'ignored'
@@ -591,12 +643,12 @@ export class SlackWatcher {
     return true
   }
 
-  private refuse(ev: SlackMessageEvent, threadTs: string, cfg: SlackWatchConfig): void {
+  private refuse(ev: SlackMessageEvent, threadTs: string, route: Route): void {
     if (!this.firstTime(this.noted.refused, `${ev.channel}:${ev.ts}`)) return
     const who = ev.user ?? 'unknown sender'
     this.stats_.refused++
     this.stats_.refusedBy[who] = (this.stats_.refusedBy[who] ?? 0) + 1
-    const allowed = cfg.from === 'people' ? 'anyone in people' : (cfg.from as string[]).join(', ')
+    const allowed = route.from === 'people' ? 'anyone in people' : (route.from as string[]).join(', ')
     this.deps.log(`daemon: slack-watch: refused ${who} in ${ev.channel}:${threadTs} (ts ${ev.ts}): from admits ${allowed}\n`)
   }
 
@@ -607,11 +659,21 @@ export class SlackWatcher {
     this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
     const line = `dropped ${fresh.length} Slack message${fresh.length === 1 ? '' : 's'} in ${where.channel}:${where.threadTs} (${kind}, ts ${fresh.join(', ')}): ${why}`
     this.deps.log(`daemon: slack-watch: ${line}\n`)
+    // Keyed by kind and by who hears it: one route's trouble does not silence another's.
+    this.alertOnce(`${kind}:${routeFor(this.deps.config(), where.channel)?.to ?? '-'}`, where.channel, `⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra slack-watch list\` counts them.`)
+  }
+
+  /**
+   * One alert per episode. An episode is named by when it began: alerts with the same key within the hour after
+   * that are its own, and are not sent; the first one after the hour starts a new episode. So a steady trickle is
+   * still said once an hour, rather than never again.
+   */
+  private alertOnce(key: string, channel: string | undefined, text: string): void {
     const now = this.deps.now()
-    const last = this.lastDropAt.get(kind)
-    this.lastDropAt.set(kind, now)
-    if (last !== undefined && now - last < DROP_EPISODE_GAP_MS) return
-    this.deps.alert?.(`⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra slack-watch list\` counts them.`)
+    const began = this.episodeStart.get(key)
+    if (began !== undefined && now - began < ALERT_EPISODE_GAP_MS) return
+    this.episodeStart.set(key, now)
+    this.deps.alert?.(text, channel)
   }
 
   // -- names ---------------------------------------------------------------
@@ -661,10 +723,33 @@ export class SlackWatcher {
     }
   }
 
-  private async deliverBatches(key: string, entry: SlackWatchEntry, items: Item[], cfg: SlackWatchConfig): Promise<void> {
+  private async deliverBatches(key: string, entry: SlackWatchEntry, items: Item[], enqueuedCfg: SlackWatchConfig): Promise<void> {
+    // Where it goes is decided now, from the current config, once for the whole burst: a re-route applies to what is
+    // already owed, and a burst split into batches cannot land half on one target and half on another.
+    const cfg = this.deps.config() ?? enqueuedCfg
+    const route = routeFor(cfg, entry.channel)
+    if (!route) {
+      this.deps.log(`daemon: slack-watch: ${key} is in no route now; ${items.length} message(s) stay owed until a route covers ${entry.channel} again or they expire\n`)
+      return
+    }
+    const target: Target = { to: route.to }
+    // The gate travels with the target: a message admitted by the route it arrived under is judged again by the route it leaves by.
+    const admitted = items.filter(i => {
+      if (admits(route.from, cfg.people, i.user)) return true
+      this.refuse({ channel: entry.channel, ts: i.ts, user: i.user }, entry.threadTs, route)
+      return false
+    })
+    if (admitted.length < items.length && this.entries.get(key) === entry) {
+      const refused = new Set(items.filter(i => !admitted.includes(i)).map(i => i.ts))
+      const owed = (entry.owed ?? []).filter(ts => !refused.has(ts))
+      if (owed.length) entry.owed = owed; else delete entry.owed
+      this.persist()
+    }
+    items = admitted
+    if (!items.length) return
     // The roster names its people; Slack's display name fills in for everyone else.
-    // Read live, so a roster edit (a name, a role) applies to what is waiting in the window.
-    const people = this.deps.config()?.people ?? cfg.people
+    // Read once with the target, so a roster edit (a name, a role) applies to what is waiting in the window.
+    const people = cfg.people
     const users = [...new Set(items.map(i => i.user).filter((u): u is string => !!u && !people[u]?.name))]
     const resolved = new Map(await Promise.all(users.map(async u => [u, await this.nameOf(u)] as const)))
     const named = items.map(i => {
@@ -679,12 +764,14 @@ export class SlackWatcher {
       const message = formatDelivery(entry, batch, cfg.workspaceUrl)
       const idempotencyKey = `slack-watch-${entry.channel}-${entry.threadTs}-${first}-${last}`
       let result: DeliverResult
-      try { result = await this.deps.deliver(entry.specialist, message, idempotencyKey) } catch (err) {
+      try { result = await this.deps.deliver(target, message, idempotencyKey) } catch (err) {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
       if (!result.ok && !result.permanent) {
         // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
-        this.deps.log(`daemon: slack-watch: delivery to specialist ${entry.specialist} failed for ${key} (${first}..${last}): ${result.error}\n`)
+        this.deps.log(`daemon: slack-watch: delivery to ${target.to} failed for ${key} (${first}..${last}): ${result.error}\n`)
+        // Not to the channel's route: its target is the one that does not exist. Every other route's target hears it.
+        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages for ${entry.channel} are owed but undeliverable: ${result.error}. The route's \`to\` names no specialist; fix slack-watch.json or declare it with \`hydra specialist set\`. They stay owed for up to a day.`)
         const cut = batch.map(i => i.ts).filter(ts => !entry.owed?.includes(ts))
         if (cut.length && this.entries.get(key) === entry) this.drop('owed-full', entry, cut, OWED_FULL_WHY)
         continue
