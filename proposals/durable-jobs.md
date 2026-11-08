@@ -170,9 +170,9 @@ tick, because probing is cheap.
 
 ### Overlap
 
-Overlap counts every session in the registry with initiator `jobs:<name>` that isn't dead (a session whose bridge
-is down after a daemon restart still counts; a missing verdict makes it not-now, never invisible), using a per-session verdict that pane-probe
-exports: `clean | active | stuck(<kind>, confirmed) | unprobeable`.
+Overlap counts every session in the registry with initiator `jobs:<name>` that isn't dead. A session whose
+bridge is down after a daemon restart still counts: a missing verdict makes it not-now, never invisible. Each
+session gets a verdict that pane-probe exports: `clean | active | stuck(<kind>, confirmed) | unprobeable`.
 
 - `clean` and `active` **absorb**: the slot is done, by that session.
 - `stuck` (confirmed, of a named kind) is a **failure** ("previous session stuck: <kind>"), dispatched only when
