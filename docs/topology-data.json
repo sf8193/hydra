@@ -207,6 +207,12 @@
       "desc": "GitHub PR polling, comment delivery"
     },
     {
+      "id": "daemon_jobs-clock",
+      "label": "daemon/jobs-clock.ts",
+      "layer": "domain",
+      "desc": "Jobs clock: tick, dispatch detached attempts, apply results"
+    },
+    {
       "id": "daemon_dashboard",
       "label": "daemon/dashboard.ts",
       "layer": "domain",
@@ -427,6 +433,10 @@
     [
       "daemon",
       "daemon_session-health"
+    ],
+    [
+      "daemon",
+      "daemon_jobs-clock"
     ],
     [
       "bridge",
@@ -671,6 +681,10 @@
     [
       "daemon_cli-handler",
       "daemon_raindrop"
+    ],
+    [
+      "daemon_cli-handler",
+      "daemon_jobs-clock"
     ],
     [
       "daemon_session-lifecycle",

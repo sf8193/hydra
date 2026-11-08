@@ -1,11 +1,7 @@
-// The script launchd runs for every registered job. Bun passes the job title as the flag --cron-title (in execArgv, not argv).
-import { jobsRun, parseTitle } from './jobs.js'
-
+// What the old launchd entries (bun.cron.hydra-job-*) run. The daemon owns the jobs clock now, so a firing does
+// nothing but say how to remove the entry. Removed once no install still has those entries.
 export default {
-  async scheduled() {
-    const title = process.execArgv.find(a => a.startsWith('--cron-title='))?.slice('--cron-title='.length) ?? ''
-    const t = parseTitle(title)
-    if (!t) throw new Error(`not a hydra job title: ${title}`)
-    if ((await jobsRun(t.platform, t.name)).outcome === 'failed') process.exitCode = 1
+  scheduled() {
+    process.stderr.write('hydra jobs moved into the daemon; run `hydra jobs sync <platform>` to remove this launchd entry\n')
   },
 }

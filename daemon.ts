@@ -491,6 +491,28 @@ setInterval(() => {
 // Lower cadence than reply guard — these stalls are minutes-scale.
 setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
 
+// Jobs clock: runs jobs.toml's jobs as detached attempts and applies their results (daemon/jobs-clock.ts).
+// Failure reports go to main; if main can't take one, straight to a channel.
+import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
+import { safeSend } from './daemon/util.js'
+import { DEFAULT_SESSION_CHANNEL } from './daemon/config.js'   // a live binding: resolveDefaultChannel fills it after boot
+startJobsClock(realDeps({
+  stateDir: STATE_DIR,
+  platform: PLATFORM,
+  hydraEntry: join(import.meta.dir, 'cli', 'hydra.ts'),
+  toMain: (text, initiator) => {
+    if (!transport.has('main')) return false
+    transport.sendOrQueue('main', { type: 'notification', content: text, meta: { source: 'jobs', initiator } })
+    return true
+  },
+  direct: async (text, channel) => {
+    const to = channel || DEFAULT_SESSION_CHANNEL
+    if (!to) { process.stderr.write(`daemon: jobs alert has no channel: ${text}\n`); return false }
+    return (await safeSend(to, text)).length > 0
+  },
+  homeChannel: () => DEFAULT_SESSION_CHANNEL || undefined,
+}))
+
 let shuttingDown = false
 
 function shutdown(): void {
@@ -499,6 +521,7 @@ function shutdown(): void {
   process.stderr.write('daemon: shutting down\n')
 
   stopSlackWatch()
+  stopJobsClock()
   registry.persist()
   transport.persistQueues()
   socketServer.close()

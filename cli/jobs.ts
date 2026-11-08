@@ -1,84 +1,23 @@
-// Recurring jobs: jobs.toml lists them, `hydra jobs sync` registers each with launchd (Bun.cron),
-// and a fire runs the optional check script. Check output means "findings": an agent gets them.
-// No output means nothing to report. A nonzero exit is a failure and posts one message a day.
+// Recurring jobs, the CLI side. The daemon owns the clock (daemon/jobs-clock.ts): it decides, dispatches and records.
+// This file holds what runs outside it:
+// - `jobs attempt`: one detached run of a job's work, started by the daemon, reporting one result file;
+// - `jobs run`: asks the daemon for a dispatch and waits for its outcome in the foreground;
+// - `jobs list` and `jobs sync`.
+// The work: an optional check script (output = findings for an agent, no output = nothing to do, nonzero = failed),
+// then the mode's action (spawn, deliver to main, or nothing).
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'fs'
+import { randomUUID } from 'crypto'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, writeSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { resolveConfig } from './helpers.js'
-import { nextSlot, parseCron } from '../shared/cron-local.js'
-import { parseIdleTtl } from '../shared/constants.js'
+import { resolveConfig, sendRequest } from './helpers.js'
+import { nextSlot } from '../shared/cron-local.js'
+import {
+  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, CHECK_TIMEOUT_MS, isJobName, jobsDir, jobsToml, lstartOf, parseJobsConfig,
+  readDaemonState, readJobState, resultFile, writeAtomic, type AttemptResult, type Job,
+} from '../shared/jobs.js'
 
-export type Mode = 'spawn' | 'main' | 'none'
-
-export type Job = {
-  name: string
-  schedule: string   // 5-field cron, local time
-  check?: string     // shell command; prints nothing when all is well
-  mode: Mode
-  prompt?: string    // required for spawn and main
-  channel?: string   // spawn only; falls back to the file's top-level channel
-  model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
-  idleTtl?: string   // spawn only: passed to `hydra spawn --idle-ttl` (validated here with the daemon's parser)
-}
-
-const MODES: readonly Mode[] = ['spawn', 'main', 'none']
-const NAME = /^[a-z0-9][a-z0-9-]*$/
-const MAX_PROMPT_BYTES = 4_000
-
-export function parseJobs(text: string): Job[] {
-  const doc = Bun.TOML.parse(text) as Record<string, unknown>
-  if (doc.channel !== undefined && typeof doc.channel !== 'string') throw new Error('jobs.toml: top-level channel must be a quoted string (a job named "channel" is not allowed)')
-  const defaultChannel = doc.channel as string | undefined
-  const jobs: Job[] = []
-  for (const [name, raw] of Object.entries(doc)) {
-    if (name === 'channel') continue
-    const fail = (why: string): never => { throw new Error(`jobs.toml [${name}]: ${why}`) }
-    if (!NAME.test(name)) fail('name must be lowercase letters, digits and dashes')
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) fail('must be a table')
-    const t = raw as Record<string, unknown>
-    const str = (k: string): string | undefined => {
-      if (t[k] === undefined) return undefined
-      if (typeof t[k] !== 'string' || t[k] === '') fail(`${k} must be a non-empty string`)
-      return t[k] as string
-    }
-    for (const k of Object.keys(t)) {
-      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl'].includes(k)) fail(`unknown key ${k}`)
-    }
-    const schedule = str('schedule') ?? fail('schedule is required')
-    try { Bun.cron.parse(schedule) } catch { fail(`schedule "${schedule}" is not a cron expression`) }
-    // jobs list reads schedules with parseCron, which is stricter than Bun in corners (e.g. "+1").
-    try { parseCron(schedule) } catch (e) { fail(`schedule "${schedule}" is not supported: ${(e as Error).message}`) }
-    const mode = (str('mode') ?? fail('mode is required')) as Mode
-    if (!MODES.includes(mode)) fail(`mode must be one of ${MODES.join(', ')}`)
-    const prompt = str('prompt')
-    const channel = str('channel') ?? defaultChannel
-    if (prompt && Buffer.byteLength(prompt) > MAX_PROMPT_BYTES) fail(`prompt is over ${MAX_PROMPT_BYTES} bytes`)
-    if (prompt?.startsWith('-')) fail('prompt must not start with "-" (the hydra CLI would read it as a flag)')
-    if (mode === 'none' && prompt) fail('mode none runs no agent, so it takes no prompt')
-    if (mode !== 'none' && !prompt) fail(`mode ${mode} needs a prompt`)
-    if (mode === 'spawn' && !channel) fail('mode spawn needs a channel (job or top-level)')
-    const model = str('model')
-    if (model && mode !== 'spawn') fail('model only applies to mode spawn')
-    if (model?.startsWith('-')) fail('model must not start with "-"')
-    const idleTtl = str('idle_ttl')
-    if (idleTtl && mode !== 'spawn') fail('idle_ttl only applies to mode spawn')
-    if (idleTtl && parseIdleTtl(idleTtl) === null) fail(`idle_ttl "${idleTtl}" must be a duration like 90m, 12h or 4d, at most 7d`)
-    const check = str('check')
-    if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
-    jobs.push({ name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(mode === 'spawn' && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }) })
-  }
-  return jobs
-}
-
-// ---------------------------------------------------------------------------
-// Running a job
-// ---------------------------------------------------------------------------
-
-export type Outcome = 'nothing' | 'findings' | 'failed'
-export type RunRecord = { at: string; outcome: Outcome; note?: string }
-
-const CHECK_TIMEOUT_MS = 30 * 60_000
+export { parseJobs, parseJobsConfig, isPlatform, type Job, type Mode } from '../shared/jobs.js'
 
 // Everything a run does to the outside world goes through here, so tests swap it.
 export const jobsIO = {
@@ -95,9 +34,11 @@ export const jobsIO = {
     })
     try { return await Promise.race([done, late]) } finally { clearTimeout(timer!) }
   },
-  async hydra(args: string[]): Promise<{ code: number; err: string }> {
-    const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'ignore', stderr: 'pipe', env: process.env })
+  // The action's own timeout: a hung spawn or deliver is killed and counts as failed.
+  async hydra(args: string[], timeoutMs = ACTION_TIMEOUT_MS): Promise<{ code: number; err: string }> {
+    const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'ignore', stderr: 'pipe', env: process.env, timeout: timeoutMs, killSignal: 'SIGKILL' })
     const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited])
+    if (p.signalCode) return { code: 124, err: `killed after ${timeoutMs / 1000}s (${p.signalCode})` }
     return { code, err: err.trim().slice(-200) }
   },
 }
@@ -107,50 +48,36 @@ const MAX_MESSAGE_BYTES = 9_000
 const RESERVED_BYTES = 500   // "Check output:" header + truncation marker with the file path
 
 // The daemon answers exit 2 when the idempotency key already went through, and 7 when a send with that key is still in flight.
-// Either way the first fire is delivering the message, so this one counts as sent.
+// Either way the first attempt is delivering, so this one counts as sent.
 const sent = (code: number) => code === 0 || code === 2 || code === 7
 
 // First `maxBytes` bytes of s, never cutting a character in half.
-const headBytes = (s: string, maxBytes: number) => Buffer.from(s).subarray(0, maxBytes).toString().replace(/\uFFFD$/, '')
+const headBytes = (s: string, maxBytes: number) => Buffer.from(s).subarray(0, maxBytes).toString().replace(/�$/, '')
 
-// One "job failed" message per job per day, so a broken scan is never silent. The daemon forgets the key after 15 min,
-// so the day is also checked here: a job whose last run already failed today (and was reported) stays quiet.
-async function failRun(job: { name: string }, platform: string, note: string, now: Date, stateDir?: string): Promise<RunRecord> {
-  const at = now.toISOString()
-  const day = at.slice(0, 10)
-  const last = stateDir ? readRecord(stateDir, job.name) : undefined
-  if (last?.outcome === 'failed' && last.at.slice(0, 10) === day && !last.note?.includes('also failed')) {
-    return { at, outcome: 'failed', note: `${note} (already reported today)` }
-  }
-  const r = await jobsIO.hydra(['--daemon', platform, 'deliver', '--session', 'main', '--queue', '--initiator', `jobs:${job.name}`,
-    '--idempotency-key', `jobs-fail-${job.name}-${day}`, '--message', `Job ${job.name} failed: ${note}. Tell the user about it now.`])
-  return { at, outcome: 'failed', note: sent(r.code) ? note : `${note} (the failure message also failed: ${r.err || `exit ${r.code}`})` }
-}
+export type Work = { result: 'done' | 'nothing' | 'failed'; note?: string }
 
-export async function runJob(job: Job, platform: string, stateDir: string): Promise<RunRecord> {
-  const now = jobsIO.now()
-  const at = now.toISOString()
+/**
+ * A job's work. `key` is the idempotency key for the action: the slot label for a scheduled run, so a retry after a
+ * crash is deduplicated; the minute for a manual one, so it is never swallowed by the slot's key.
+ * `onActionSent` fires as soon as the action has landed, so a cancel after that point reports done.
+ */
+export async function runWork(job: Job, platform: string, stateDir: string, key: string, onActionSent: () => void = () => {}): Promise<Work> {
   const initiator = `jobs:${job.name}`
-  // Minute resolution: stops a double fire, but a manual re-run later the same day still goes through.
-  const key = `jobs-${job.name}-${at.slice(0, 16)}`
-
   let output = ''
   if (job.check) {
     const r = await jobsIO.check(job.check)
-    if (r.code !== 0) {
-      return failRun(job, platform, `check exited ${r.code}: ${(r.err || r.out).trim().slice(-300)}`, now, stateDir)
-    }
+    if (r.code !== 0) return { result: 'failed', note: `check exited ${r.code}: ${(r.err || r.out).trim().slice(-300)}` }
     output = r.out.trim()
-    if (!output) return { at, outcome: 'nothing' }
+    if (!output) return { result: 'nothing' }
   }
-  if (job.mode === 'none') return { at, outcome: 'findings', note: output.slice(0, 300) }
+  if (job.mode === 'none') return { result: 'done', note: output.slice(0, 300) }
 
   let shown = output
   const room = MAX_MESSAGE_BYTES - RESERVED_BYTES - Buffer.byteLength(job.prompt!)
   if (Buffer.byteLength(output) > room) {
     // The agent gets the head; the whole output stays on disk and the agent is told where.
-    const file = join(stateDir, 'jobs-state', `${job.name}.output.txt`)
-    mkdirSync(join(stateDir, 'jobs-state'), { recursive: true })
+    const file = join(jobsDir(stateDir), `${job.name}.output.txt`)
+    mkdirSync(jobsDir(stateDir), { recursive: true })
     writeFileSync(file, output)
     const head = headBytes(output, room)
     shown = `${head}\n[truncated ${output.length - head.length} chars; full output in ${file}]`
@@ -160,81 +87,190 @@ export async function runJob(job: Job, platform: string, stateDir: string): Prom
     ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', job.channel!, '--ephemeral', ...(job.idleTtl ? ['--idle-ttl', job.idleTtl] : []), ...(job.model ? ['--model', job.model] : []), message]
     : ['deliver', '--session', 'main', '--queue', '--initiator', initiator, '--idempotency-key', key, '--message', message]
   const r = await jobsIO.hydra(['--daemon', platform, ...args])
-  if (sent(r.code)) return { at, outcome: 'findings' }
-  return failRun(job, platform, `hydra ${args[0]} exited ${r.code}${r.err ? `: ${r.err}` : ''}`, now, stateDir)
+  if (sent(r.code)) { onActionSent(); return { result: 'done' } }
+  return { result: 'failed', note: `hydra ${args[0]} exited ${r.code}${r.err ? `: ${r.err}` : ''}` }
 }
 
 // ---------------------------------------------------------------------------
-// State, registration, listing
+// The attempt
 // ---------------------------------------------------------------------------
 
-// One file per job: two jobs firing at the same minute never write the same file.
-const stateFile = (stateDir: string, name: string) => join(stateDir, 'jobs-state', `${name}.json`)
+export type AttemptOpts = { platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string }
 
-export function readRecord(stateDir: string, name: string): RunRecord | undefined {
-  try { return JSON.parse(readFileSync(stateFile(stateDir, name), 'utf8')) } catch { return undefined }
+/** Parses `jobs attempt <platform> <name> --dispatch <id> --nonce <n> --slot <label> [--manual] --state-dir <dir>`. */
+export function parseAttemptArgs(rest: string[]): AttemptOpts | null {
+  const [platform, name, ...flags] = rest
+  const val = (f: string) => { const i = flags.indexOf(f); return i >= 0 ? flags[i + 1] : undefined }
+  const dispatch = Number(val('--dispatch'))
+  const nonce = val('--nonce'), slot = val('--slot'), stateDir = val('--state-dir')
+  if (!platform || !name || !isJobName(name) || !Number.isInteger(dispatch) || dispatch < 1 || !nonce || slot === undefined || !stateDir) return null
+  return { platform, name, dispatch, nonce, slot, manual: flags.includes('--manual'), stateDir }
 }
 
-export function writeRecord(stateDir: string, name: string, rec: RunRecord): void {
-  mkdirSync(join(stateDir, 'jobs-state'), { recursive: true })
-  const f = stateFile(stateDir, name)
-  writeFileSync(`${f}.tmp`, JSON.stringify(rec))
-  renameSync(`${f}.tmp`, f)
+export const attemptIO = {
+  readStdin: () => Bun.stdin.text(),
+  /** Kills the attempt's own process group, which it leads (the daemon spawns it detached). Takes the attempt with it. */
+  killOwnGroup: () => { try { process.kill(-process.pid, 'SIGKILL') } catch {} process.exit(1) },
+  setTimer: (fn: () => void, ms: number) => setTimeout(fn, ms),
+  onSigterm: (fn: () => void) => { process.on('SIGTERM', fn) },
+  out: (line: string) => { try { writeSync(1, `${line}\n`) } catch {} },
 }
 
-export const isPlatform = (p: string) => /^[a-z]+$/.test(p)
+/**
+ * One run of a job's work, detached from the daemon. Reads the job definition on stdin (it never reads jobs.toml),
+ * writes one result file, and never touches job state. At its deadline, or on SIGTERM, it writes its result first and
+ * then kills its own group, so no grandchild of the check outlives the dispatch.
+ */
+export async function jobsAttempt(o: AttemptOpts): Promise<AttemptResult | null> {
+  let written: AttemptResult | null = null
+  let actionSent = false
+  const write = (result: AttemptResult['result'], note?: string): AttemptResult | null => {
+    if (written) return null
+    written = { dispatch: o.dispatch, at: jobsIO.now().toISOString(), result, ...(note && { note }) }
+    writeAtomic(resultFile(o.stateDir, o.name, o.dispatch), JSON.stringify(written))
+    attemptIO.out(`${written.at} ${o.name} dispatch ${o.dispatch}: ${result}${note ? ` (${note})` : ''}`)
+    return written
+  }
+  attemptIO.setTimer(() => {
+    if (write('failed', `attempt passed its ${ATTEMPT_DEADLINE_MS / 60_000}m deadline`)) attemptIO.killOwnGroup()
+  }, ATTEMPT_DEADLINE_MS)
+  attemptIO.onSigterm(() => {
+    if (write(actionSent ? 'done' : 'not-now', actionSent ? 'cancelled after the action landed' : 'cancelled')) attemptIO.killOwnGroup()
+  })
 
-// A registered job's launchd title carries the platform so a fire can find its state dir.
-const TITLE = /^hydra-job-([a-z]+)-([a-z0-9][a-z0-9-]*)$/
-export const jobTitle = (platform: string, name: string) => `hydra-job-${platform}-${name}`
-export const parseTitle = (t: string) => { const m = TITLE.exec(t); return m ? { platform: m[1], name: m[2] } : null }
+  const started = jobsIO.now()
+  attemptIO.out(`${started.toISOString()} ${o.name} dispatch ${o.dispatch} (${o.manual ? 'manual' : `slot ${o.slot}`}) started, pid ${process.pid}`)
+  const job = JSON.parse(await attemptIO.readStdin()) as Job   // unreadable stdin throws: the dispatch ends without a result
+  if (job.name !== o.name) throw new Error(`stdin holds job ${job.name}, not ${o.name}`)
+  const key = o.manual ? `jobs-${o.name}-${started.toISOString().slice(0, 16)}` : `jobs-${o.name}-${o.slot}`
+  // The done result is written the moment the action lands: a cancel or a crash after that can't turn it into a rerun.
+  const w = await runWork(job, o.platform, o.stateDir, key, () => { actionSent = true; write('done') })
+  write(w.result, w.note)
+  return written
+}
 
-const AGENTS_DIR = join(homedir(), 'Library', 'LaunchAgents')
-// Depends on Bun naming its launchd file bun.cron.<title>.plist (true in Bun 1.4.2; there is no list API).
-const registeredTitles = (platform: string) => {
+// ---------------------------------------------------------------------------
+// jobs run: a daemon dispatch, waited on in the foreground
+// ---------------------------------------------------------------------------
+
+export const runIO = {
+  send: (sock: string, req: Record<string, unknown>) => sendRequest(sock, req, 15_000),
+  sleep: (ms: number) => new Promise<void>(r => setTimeout(r, ms)),
+  onSigint: (fn: () => void) => { process.on('SIGINT', fn) },
+  lstartOf,
+  killGroup: (pid: number, signal: NodeJS.Signals) => process.kill(-pid, signal),
+  exit: (code: number): never => process.exit(code),
+  print: (s: string) => console.log(s),
+  error: (s: string) => console.error(s),
+}
+
+const stateDirFor = (platform: string, override?: string) => override ?? resolveConfig(platform).stateDir
+
+/**
+ * Asks the daemon to dispatch `name` now, then waits until the daemon has applied that dispatch and prints its outcome.
+ * The CLI never reads the result file: the daemon is the only one that interprets results. Returns the exit code.
+ */
+export async function jobsRun(platform: string, name: string, stateDirOverride?: string, pollMs = 1_000): Promise<number> {
+  const stateDir = stateDirFor(platform, stateDirOverride)
+  const sock = join(stateDir, 'daemon.sock')
+  let reply: { id: number; pid?: number; lstart?: string } | null = null
+  let cancelling = false
+  runIO.onSigint(() => {
+    // Before the daemon answers, nothing is ours to cancel: if the reservation was made, its attempt runs as usual.
+    if (!reply || cancelling) runIO.exit(130)
+    cancelling = true
+    if (reply!.pid && reply!.lstart && runIO.lstartOf(reply!.pid) === reply!.lstart) {
+      try { runIO.killGroup(reply!.pid, 'SIGTERM') } catch {}
+      runIO.print(`${name}: cancelling dispatch ${reply!.id}… (Ctrl-C again to stop waiting)`)
+    } else {
+      runIO.print(`${name}: dispatch ${reply!.id} has no running attempt to cancel; waiting for its result`)
+    }
+  })
+
+  if (!existsSync(sock)) { runIO.error(`error: daemon not running (no socket at ${sock})`); return 1 }
+  let resp: Record<string, unknown>
+  try {
+    resp = await runIO.send(sock, { type: 'cli', command: 'jobs-run', id: randomUUID(), params: { name } })
+  } catch (err) {
+    runIO.error(`error: daemon not running: ${err instanceof Error ? err.message : err}`)
+    return 1
+  }
+  if (!resp.ok) { runIO.error(`error: ${resp.error}`); return 1 }
+  reply = resp.data as { id: number; pid?: number; lstart?: string }
+  runIO.print(`${name}: dispatch ${reply.id} started${reply.pid ? ` (pid ${reply.pid})` : ''}`)
+
+  for (;;) {
+    const r = readJobState(stateDir, name)
+    if (r.kind === 'ok' && (r.state.appliedDispatch ?? 0) >= reply.id) {
+      const { last, notNow } = r.state
+      if (last?.dispatch === reply.id) {
+        runIO.print(`${name}: ${last.result}${last.note ? ` (${last.note})` : ''} [dispatch ${reply.id}]`)
+        return last.result === 'failed' ? 1 : 0
+      }
+      if (notNow?.dispatch === reply.id) {
+        runIO.print(`${name}: not now: ${notNow.reason} [dispatch ${reply.id}]`)
+        return cancelling ? 130 : 0
+      }
+      runIO.print(`${name}: superseded by dispatch ${Math.max(last?.dispatch ?? 0, notNow?.dispatch ?? 0, r.state.appliedDispatch ?? 0)}`)
+      return 1
+    }
+    await runIO.sleep(pollMs)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// jobs sync, jobs list
+// ---------------------------------------------------------------------------
+
+// Before the daemon owned the clock, each job was a launchd entry named bun.cron.hydra-job-<platform>-<name>.
+const OLD_TITLE = /^hydra-job-([a-z]+)-([a-z0-9][a-z0-9-]*)$/
+export const parseOldTitle = (t: string) => { const m = OLD_TITLE.exec(t); return m ? { platform: m[1], name: m[2] } : null }
+export const syncIO = {
+  agentsDir: join(homedir(), 'Library', 'LaunchAgents'),
+  remove: (title: string) => Bun.cron.remove(title),
+}
+
+/** Validates jobs.toml and removes the launchd entries the old runner registered. The daemon runs the jobs. */
+export async function jobsSync(platform: string, stateDirOverride?: string): Promise<void> {
+  const stateDir = stateDirFor(platform, stateDirOverride)
+  const file = jobsToml(stateDir)
+  if (!existsSync(file)) throw new Error(`no jobs file at ${file}`)
+  const { jobs } = parseJobsConfig(await Bun.file(file).text())
   let files: string[] = []
-  try { files = readdirSync(AGENTS_DIR) } catch {}
-  return files.map(f => /^bun\.cron\.(.+)\.plist$/.exec(f)?.[1] ?? '').filter(t => parseTitle(t)?.platform === platform)
+  try { files = readdirSync(syncIO.agentsDir) } catch {}
+  const old = files.map(f => /^bun\.cron\.(.+)\.plist$/.exec(f)?.[1] ?? '').filter(t => parseOldTitle(t)?.platform === platform)
+  for (const t of old) await syncIO.remove(t)
+  console.log(`jobs.toml ok: ${jobs.length} job${jobs.length === 1 ? '' : 's'}. Removed ${old.length} old launchd entr${old.length === 1 ? 'y' : 'ies'}. The ${platform} daemon runs the jobs.`)
 }
 
-function loadJobs(stateDir: string): Job[] {
-  const f = join(stateDir, 'jobs.toml')
-  if (!existsSync(f)) throw new Error(`no jobs file at ${f}`)
-  return parseJobs(readFileSync(f, 'utf8'))
+const ago = (from: Date, to: Date) => {
+  const m = Math.round((to.getTime() - from.getTime()) / 60_000)
+  return m < 60 ? `${m}m ago` : m < 48 * 60 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`
 }
-
-export async function jobsSync(platform: string): Promise<void> {
-  const { stateDir } = resolveConfig(platform)
-  const jobs = loadJobs(stateDir)
-  const wanted = jobs.map(j => jobTitle(platform, j.name))
-  const stale = registeredTitles(platform).filter(t => !wanted.includes(t))
-  for (const j of jobs) await Bun.cron(`${import.meta.dir}/jobs-entry.ts`, j.schedule, jobTitle(platform, j.name))
-  for (const t of stale) await Bun.cron.remove(t)
-  console.log(`registered ${jobs.length}, removed ${stale.length}; launchd runs ${import.meta.dir}/jobs-entry.ts`)
-}
+const local = (iso: string) => new Date(iso).toLocaleString()
 
 export function jobsList(platform: string, stateDirOverride?: string): void {
-  const stateDir = stateDirOverride ?? resolveConfig(platform).stateDir
-  for (const j of loadJobs(stateDir)) {
-    const last = readRecord(stateDir, j.name)
-    console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} next ${nextSlot(j.schedule, jobsIO.now())?.at.toLocaleString() ?? '-'}  last ${last ? `${last.at} ${last.outcome}${last.note ? ` (${last.note})` : ''}` : 'never'}`)
+  const stateDir = stateDirFor(platform, stateDirOverride)
+  const now = jobsIO.now()
+  const tick = readDaemonState(stateDir).state.lastTick
+  const stale = !tick || now.getTime() - new Date(tick).getTime() > 5 * 60_000
+  console.log(`clock: ${tick ? `last tick ${local(tick)} (${ago(new Date(tick), now)})` : 'no tick yet'}${stale ? '  STALE: is the daemon running?' : ''}`)
+  const file = jobsToml(stateDir)
+  if (!existsSync(file)) { console.log(`no jobs file at ${file}`); return }
+  for (const j of parseJobsConfig(readFileSync(file, 'utf8')).jobs) {
+    const r = readJobState(stateDir, j.name, j.schedule)
+    const next = nextSlot(j.schedule, now)
+    const parts = [`next ${next ? next.at.toLocaleString() : '-'}`]
+    if (r.kind === 'missing') parts.push('last never')
+    else if (r.kind === 'unreadable') parts.push(`state unreadable: ${r.error}`)
+    else {
+      const s = r.state
+      const last = s.last
+      parts.push(last ? `last ${local(last.at)} ${last.result}${last.absorbedBy ? ` (absorbed by ${last.absorbedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
+      if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now: ${s.notNow.reason}`)
+      if (s.failingSince) parts.push(`failing since ${local(s.failingSince)}`)
+      if (s.dispatch) parts.push(`running: dispatch ${s.dispatch.id} since ${local(s.dispatch.at)}`)
+    }
+    console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} ${parts.join('  ')}`)
   }
-}
-
-// What a scheduled fire and `hydra jobs run` both do. A bad jobs.toml or a job dropped from it still leaves a record and a message.
-export async function jobsRun(platform: string, name: string, stateDirOverride?: string): Promise<RunRecord> {
-  let stateDir = stateDirOverride
-  let rec: RunRecord
-  try {
-    stateDir ??= resolveConfig(platform).stateDir
-    process.env.HYDRA_STATE_DIR = stateDir
-    const job = loadJobs(stateDir).find(j => j.name === name)
-    if (!job) throw new Error(`no job named ${name} in jobs.toml (run \`hydra jobs sync ${platform}\` to drop it)`)
-    rec = await runJob(job, platform, stateDir)
-  } catch (err) {
-    rec = await failRun({ name }, platform, err instanceof Error ? err.message : String(err), jobsIO.now(), stateDir)
-  }
-  if (stateDir) writeRecord(stateDir, name, rec)   // if even the state dir can't be resolved, the alert above is all there is
-  console.log(`${name}: ${rec.outcome}${rec.note ? ` (${rec.note})` : ''}`)
-  return rec
 }

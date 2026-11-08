@@ -50,6 +50,7 @@ graph TD
     daemon_access["access.ts"]
     daemon_templates["templates.ts"]
     daemon_pr-watch["pr-watch.ts"]
+    daemon_jobs-clock["jobs-clock.ts"]
     daemon_dashboard["dashboard.ts"]
     daemon_idempotency["idempotency.ts"]
     daemon_state-machine["state-machine.ts"]
@@ -98,6 +99,7 @@ graph TD
   daemon --> daemon_reply-guard
   daemon --> daemon_util
   daemon --> daemon_session-health
+  daemon --> daemon_jobs-clock
   bridge --> shared_constants
   cli_hydra --> shared_constants
   shared_constants --> shared_tool-definitions
@@ -159,6 +161,7 @@ graph TD
   daemon_cli-handler --> daemon_config
   daemon_cli-handler --> daemon_access
   daemon_cli-handler --> daemon_raindrop
+  daemon_cli-handler --> daemon_jobs-clock
   daemon_session-lifecycle --> daemon_config
   daemon_session-lifecycle --> daemon_util
   daemon_session-lifecycle --> daemon_sessions

@@ -10,7 +10,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
-import { isPlatform, jobsList, jobsRun, jobsSync } from './jobs.js'
+import { isPlatform, jobsAttempt, jobsList, jobsRun, jobsSync, parseAttemptArgs } from './jobs.js'
 import { MODEL_ALIASES } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
@@ -29,9 +29,10 @@ Setup:
   hydra uninstall <platform>           Remove launchd watchdog
 
 Jobs (recurring, from <state dir>/jobs.toml):
-  hydra jobs list <platform>           Each job's next run and last result
-  hydra jobs sync <platform>           Register jobs with launchd; drop removed ones
-  hydra jobs run <platform> <name>     Run one job now
+  hydra jobs list <platform>           The clock's last tick; each job's next run and last result
+  hydra jobs sync <platform>           Validate jobs.toml; remove the old launchd entries (the daemon runs jobs)
+  hydra jobs run <platform> <name>     Run one job now, through the daemon; Ctrl-C cancels it
+    --state-dir <dir>                  Use this state dir instead of the platform's
 
 Lifecycle:
   hydra up <platform>                  Start daemon + byte
@@ -139,14 +140,23 @@ async function main(): Promise<void> {
 
   if (command === 'jobs') {
     const [, sub, platform, name] = filtered
-    if (!['list', 'sync', 'run'].includes(sub) || !platform || !isPlatform(platform) || (sub === 'run' && !name)) {
-      console.error('usage: hydra jobs list|sync <platform>   |   hydra jobs run <platform> <name>')
+    if (sub === 'attempt') {
+      // Started by the daemon's clock, detached; not for direct use.
+      const o = parseAttemptArgs(filtered.slice(2))
+      if (!o) { console.error('usage: hydra jobs attempt <platform> <name> --dispatch <id> --nonce <n> --slot <label> [--manual] --state-dir <dir>'); process.exit(64) }
+      try { await jobsAttempt(o) } catch (err) { console.error(`attempt error: ${err instanceof Error ? err.stack : err}`); process.exit(1) }
+      process.exit(0)
+    }
+    const sd = filtered.indexOf('--state-dir')
+    const stateDir = sd >= 0 ? filtered[sd + 1] : undefined
+    if (!['list', 'sync', 'run'].includes(sub) || !platform || !isPlatform(platform) || (sub === 'run' && (!name || name.startsWith('-'))) || (sd >= 0 && !stateDir)) {
+      console.error('usage: hydra jobs list|sync <platform> [--state-dir <dir>]   |   hydra jobs run <platform> <name> [--state-dir <dir>]')
       process.exit(1)
     }
     try {
-      if (sub === 'list') jobsList(platform)
-      else if (sub === 'sync') await jobsSync(platform)
-      else if ((await jobsRun(platform, name)).outcome === 'failed') process.exit(1)
+      if (sub === 'list') jobsList(platform, stateDir)
+      else if (sub === 'sync') await jobsSync(platform, stateDir)
+      else process.exit(await jobsRun(platform, name, stateDir))
     } catch (err) {
       console.error(`error: ${err instanceof Error ? err.message : err}`)
       process.exit(1)

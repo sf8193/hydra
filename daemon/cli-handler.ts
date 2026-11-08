@@ -17,6 +17,7 @@ import { on } from './event-bus.js'
 import { raindropStatusLine } from './raindrop.js'
 import { getCpuVitals } from './cpu-watch.js'
 import { formatCpuSummary } from './cpu-spin.js'
+import { jobsClock } from './jobs-clock.js'
 
 // ---------------------------------------------------------------------------
 // Idempotency completion on session death
@@ -239,7 +240,18 @@ function handleHealth(req: CLIRequest): CLIResponse {
     idempotency: { active: listIdempotencyEntries().length },
     ...(raindropLine ? { raindrop: raindropLine } : {}),
     ...(slackWatchHealth() ? { slackWatch: slackWatchHealth() } : {}),
+    ...(jobsClock() ? { jobs: jobsClock()!.health() } : {}),
   })
+}
+
+// `hydra jobs run`: a manual dispatch through the clock. Answered after the spawn, with {id, pid, lstart}.
+function handleJobsRun(req: CLIRequest): CLIResponse {
+  const { name } = req.params as { name?: string }
+  if (!name) return respond(req, false, 'name is required')
+  const clock = jobsClock()
+  if (!clock) return respond(req, false, 'jobs clock not running in this daemon')
+  const r = clock.requestRun(name)
+  return r.ok ? respond(req, true, r.reply) : respond(req, false, r.error)
 }
 
 function handleClearKey(req: CLIRequest): CLIResponse {
@@ -425,6 +437,7 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'deliver': response = await handleDeliver(req); break
       case 'specialist': response = await handleSpecialist(req); break
       case 'slack-watch': response = handleSlackWatch(req); break
+      case 'jobs-run': response = handleJobsRun(req); break
       default:
         response = respond(req, false, `unknown command: ${req.command}`)
     }
