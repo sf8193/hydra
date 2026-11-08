@@ -47,7 +47,7 @@ import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
-import { startJobsClock, stopJobsClock, realDeps, openJobSessions } from './daemon/jobs-clock.js'
+import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
 
 threadRegistry.boot(registry)
 reattachAdapters(resolveEngine)
@@ -223,7 +223,7 @@ import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daem
 import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/slack-watch-runtime.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
-import { probeAllSessions, sessionVerdict } from './daemon/pane-probe.js'
+import { probeAllSessions } from './daemon/pane-probe.js'
 import { tmuxHasSession, safeSend } from './daemon/util.js'
 
 // ---------------------------------------------------------------------------
@@ -512,7 +512,6 @@ startJobsClock(realDeps({
   homeChannel: () => DEFAULT_SESSION_CHANNEL || undefined,
   gatewayConnected: () => gateway.isConnected(),
   // Overlap: every live session the job spawned, connected or not, with pane-probe's verdict on each.
-  jobSessions: name => openJobSessions(registry.values(), name, sessionVerdict),
 }))
 
 let shuttingDown = false

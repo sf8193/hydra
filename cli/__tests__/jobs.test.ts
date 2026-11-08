@@ -36,7 +36,7 @@ describe('parseJobs', () => {
   test('reads jobs, applies the top-level channel to every job', () => {
     const jobs = parseJobs(ok)
     expect(jobs.map(j => j.name)).toEqual(['vuln-scan', 'retro', 'cleanup'])
-    expect(jobs[0]).toEqual({ name: 'vuln-scan', schedule: '0 6 * * *', check: 'scan.sh', mode: 'spawn', prompt: 'Triage it.', channel: '123' })
+    expect(jobs[0]).toEqual({ name: 'vuln-scan', schedule: '0 6 * * *', check: 'scan.sh', mode: 'spawn', prompt: 'Triage it.', channel: '123', alertAfterMs: 86_400_000 })
     expect(jobs[1].channel).toBe('123')   // any mode: where its direct alerts go
   })
 
@@ -73,20 +73,19 @@ describe('parseJobs', () => {
     ['durable that is not a boolean', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable="yes"`, /durable must be true or false/],
     ['an unknown need', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nneeds=["vpn"]`, /unknown precondition "vpn"/],
     ['needs that is not a list', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nneeds="internet"`, /needs must be a list/],
-    ['overlap on a main job', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\noverlap="absorb"`, /overlap only applies to mode spawn/],
-    ['an unknown overlap', `channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\noverlap="wait"`, /overlap must be "absorb"/],
-    ['alert_after without durable', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nalert_after="2d"`, /alert_after only applies to durable/],
+    ['overlap, which is gone', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\noverlap="absorb"`, /overlap is gone: for one standing session that sees every run, use to = "<specialist>"/],
     ['alert_after over 30d', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true\nalert_after="31d"`, /at most 30d/],
     ['alert_after that is not a duration', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true\nalert_after="soon"`, /must be a duration/],
   ]
   for (const [label, text, err] of bad) test(`rejects ${label}`, () => expect(() => parseJobs(text)).toThrow(err))
 
-  test('the durable keys parse: durable, needs (deduplicated), overlap, alert_after', () => {
-    const [j] = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true\nneeds=["internet","internet"]\noverlap="absorb"\nalert_after="3d"`)
-    expect(j).toMatchObject({ durable: true, needs: ['internet'], overlap: 'absorb', alertAfterMs: 3 * 86_400_000 })
-    expect(parseJobs(`[d]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true`)[0].alertAfterMs).toBe(86_400_000)   // default 1d, applied once
-    const [plain] = parseJobs(`[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=false`)
-    expect(plain.durable).toBeUndefined()
+  test('every job is retried until done: durable = true is the default, durable = false parses with a note; needs, alert_after', () => {
+    const [j] = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true\nneeds=["internet","internet"]\nalert_after="3d"`)
+    expect(j).toMatchObject({ needs: ['internet'], alertAfterMs: 3 * 86_400_000 })
+    expect(j.notes).toBeUndefined()
+    expect(parseJobs(`[d]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"`)[0].alertAfterMs).toBe(86_400_000)   // default 1d
+    const [off] = parseJobs(`[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=false`)
+    expect(off.notes).toEqual(['durable = false is ignored: a job is retried until its slot is done; remove the key'])
   })
 
   test('alert_after durations', () => {
@@ -709,7 +708,6 @@ describe('jobs list lines', () => {
 
   test('owed since its slot, failing since, the retry time under backoff', () => {
     const l = line(dur, { covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:30Z' }, failures: 2, failingSince: '2026-11-04T18:05:10Z', last: { at: '2026-11-04T18:06:00Z', result: 'failed', note: 'ssh timeout' } })
-    expect(l).toContain('durable')
     expect(l).toContain('owed since')
     expect(l).toContain('(2026-11-04 10:05)')
     expect(l).toContain('failed (ssh timeout)')
@@ -726,30 +724,18 @@ describe('jobs list lines', () => {
     expect(line(dur, { last: { at: '2026-11-04T18:07:30Z', result: 'done' }, notNow: { since: '2026-11-04T18:07:00Z', reason: 'offline' } })).not.toContain('offline')
   })
 
-  test('owed (unconfirmed), with what to do about it', () => {
-    const l = line(review, { durableApplied: true, unconfirmedSlot: '2026-10-30 11:00', last: { at: '2026-10-30T19:05:00Z', result: 'nothing', v0: 'nothing' } })
-    expect(l).toContain('owed (unconfirmed) since')
-    expect(l).toContain('run or mark-done it')
-  })
 
-  test('owed (unconfirmed) with a session from the job open: mark-done only, never jobs run', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jobs-line-'))
+
+  test('durable = false is listed with its deprecation note', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-note-'))
     const lines: string[] = []
     const log = console.log
     console.log = (x: string) => { lines.push(x) }
     try {
-      writeFileSync(join(dir, 'jobs.toml'), `channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true`)
-      writeAtomic(stateFile(dir, 'review'), JSON.stringify({ durableApplied: true, unconfirmedSlot: '2026-10-30 11:00', last: { at: '2026-10-30T19:05:00Z', result: 'nothing', v0: 'nothing' } }))
-      writeFileSync(join(dir, 'sessions.json'), JSON.stringify([
-        { tmuxName: 'review-1', initiator: 'jobs:review' }, { tmuxName: 'old', initiator: 'jobs:review', deadAt: 1 }, { tmuxName: 'x', initiator: 'jobs:other' },
-      ]))
-      jobsIO.now = () => now
+      writeFileSync(join(dir, 'jobs.toml'), `[old]\nschedule="0 6 * * *"\ncheck="c"\nmode="none"\ndurable=false`)
       jobsList('test', dir)
-      const l = lines.find(x => x.startsWith('review'))!
-      expect(l).toContain('review-1 still open; mark-done it if that covers the slot (not jobs run)')
-      expect(l).not.toContain('old')
-      expect(l).not.toContain('run or mark-done')
-    } finally { console.log = log; jobsIO.now = real.now; rmSync(dir, { recursive: true }) }
+      expect(lines).toContain('  note: durable = false is ignored: a job is retried until its slot is done; remove the key')
+    } finally { console.log = log; rmSync(dir, { recursive: true }) }
   })
 
   test('baseline and ended-without-a-result notes are shown as recorded', () => {
@@ -779,7 +765,7 @@ describe('jobs sync (CLI)', () => {
   test('diffJobs: added, changed (by jobs.toml key), removed', () => {
     const before = parseJobs(A + B + `[d]\nschedule="0 9 * * *"\nmode="main"\nprompt="p"\n`)
     const after = parseJobs(`[a]\nschedule="0 5 * * *"\ncheck="a2.sh"\nmode="none"\ndurable=true\nalert_after="2d"\n` + B + C)
-    expect(diffJobs(before, after)).toEqual(['changed: a (schedule, check, durable, alert_after)', 'added: c', 'removed: d'])
+    expect(diffJobs(before, after)).toEqual(['changed: a (schedule, check, alert_after)', 'added: c', 'removed: d'])
     expect(diffJobs(after, after)).toEqual([])
   })
 

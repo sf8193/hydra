@@ -12,7 +12,7 @@ import { join } from 'path'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { nextSlot } from '../shared/cron-local.js'
 import {
-  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, isOpenJobSession, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
+  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
   awakeTimeout, readDaemonState, readJobState, resultFile, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult, type Job, type Outcome,
 } from '../shared/jobs.js'
 
@@ -279,10 +279,9 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
 
 /** One line per job: what `jobs list` and `jobs sync` both print. */
 function printJobs(stateDir: string, jobs: Job[], now: Date): void {
-  const sessions = readSessions(stateDir)
   for (const j of jobs) {
-    const open = sessions.filter(s => isOpenJobSession(s, j.name)).map(s => s.tmuxName)
-    console.log(describeJob(j, readJobState(stateDir, j.name, j.schedule), now, open))
+    console.log(describeJob(j, readJobState(stateDir, j.name, j.schedule), now))
+    for (const n of j.notes ?? []) console.log(`  note: ${n}`)
   }
 }
 
@@ -290,7 +289,7 @@ function printJobs(stateDir: string, jobs: Job[], now: Date): void {
 // jobs sync: make the config live now
 // ---------------------------------------------------------------------------
 
-const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after' }
+const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after', notes: 'durable' }
 
 /** What changed between the jobs the daemon had and the ones it has now, by jobs.toml key. */
 export function diffJobs(before: Job[], after: Job[]): string[] {
@@ -345,13 +344,9 @@ export async function jobsSync(platform: string, stateDirOverride?: string): Pro
   return 0
 }
 
-/** The daemon's persisted session registry, read only to name a job's open sessions. Missing or unreadable: none. */
-function readSessions(stateDir: string): { tmuxName: string; initiator?: string; deadAt?: number }[] {
-  try { const a = JSON.parse(readFileSync(join(stateDir, 'sessions.json'), 'utf8')); return Array.isArray(a) ? a : [] } catch { return [] }
-}
 
 /** One `jobs list` line: next slot; owed or not and since when; the last result and its note; not-now; the failure run. */
-export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Date, openSessions: string[] = []): string {
+export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Date): string {
   const next = nextSlot(j.schedule, now)
   const parts = [`next ${next ? next.at.toLocaleString() : '-'}`]
   if (r.kind === 'missing') parts.push('last never')
@@ -359,23 +354,17 @@ export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Dat
   else {
     const s = r.state
     const owed = owedSlot(j.schedule, s, now)
-    if (owed && j.durable && s.unconfirmedSlot === owed.label) {
-      // A manual run skips overlap: with a session from the job open, it would start a second one.
-      parts.push(openSessions.length
-        ? `owed (unconfirmed) since ${owed.at.toLocaleString()}: ${openSessions.join(', ')} still open; mark-done it if that covers the slot (not jobs run)`
-        : `owed (unconfirmed) since ${owed.at.toLocaleString()}: run or mark-done it`)
-    }
-    else if (owed) parts.push(`owed since ${owed.at.toLocaleString()} (${owed.label})`)
+    if (owed) parts.push(`owed since ${owed.at.toLocaleString()} (${owed.label})`)
     else parts.push('not owed')
     const last = s.last
     parts.push(last ? `last ${local(last.at)} ${last.result}${last.absorbedBy ? ` (absorbed by ${last.absorbedBy})` : ''}${last.note ? ` (${last.note})` : ''}` : 'last never')
     if (s.notNow && (!last || s.notNow.since > last.at)) parts.push(`not now since ${local(s.notNow.since)}: ${s.notNow.reason}`)
     if (s.failingSince) parts.push(`failing since ${local(s.failingSince)} (${s.failures ?? 1}x)`)
-    if (owed && j.durable) {
+    if (owed) {
       const until = backoffUntil(j.schedule, s, owed)
       if (until !== null && until > now.getTime()) parts.push(`retry after ${new Date(until).toLocaleString()}`)
     }
     if (s.dispatch) parts.push(`running: dispatch ${s.dispatch.id} since ${local(s.dispatch.at)}`)
   }
-  return `${j.name.padEnd(20)} ${j.mode.padEnd(6)}${j.durable ? ' durable' : ''} ${parts.join('  ')}`
+  return `${j.name.padEnd(20)} ${j.mode.padEnd(6)} ${parts.join('  ')}`
 }
