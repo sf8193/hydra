@@ -11,15 +11,14 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { readFileSync } from 'fs'
-import { join } from 'path'
-import { homedir } from 'os'
+import { basename, join } from 'path'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { loadAccess } from './access.js'
 import { safeSend } from './util.js'
 import { transport } from './bridge-transport.js'
-import { byteTmuxName } from '../shared/constants.js'
+import { byteTmuxName, claudeConfigDir } from '../shared/constants.js'
 import { blockedReason, readClaudeStatus, type ClaudeLiveStatus } from './engines/claude-status.js'
 import { reportUsage, type UsageReading } from './usage-alerts.js'
 import { transcriptPathFor } from './usage.js'
@@ -186,7 +185,9 @@ export function _resetIO(): void { io = defaultIO }
 const PLAN_OPTION_A = /Yes, and bypass permissions/
 const PLAN_OPTION_B = /Yes, manually approve edits/
 const PLAN_OPTION_C = /Tell Claude what to change/
-const PLAN_PATH_RE = /\.claude\/plans\/([^\s·/][^\s·]*\.md)/
+// Claude writes plans under its config dir, which a session may have moved off ~/.claude.
+const planPathRe = (): RegExp =>
+  new RegExp(`${basename(claudeConfigDir()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/plans/([^\\s·/][^\\s·]*\\.md)`)
 
 // Login: CC renders specific prompts at each stage. Patterns derived from
 // actual CC screenshots (2026-08-06).
@@ -254,7 +255,7 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   const planOptionCount = [PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C]
     .filter(re => re.test(tailText)).length
   if (planOptionCount >= 2) {
-    const pathMatch = tailText.match(PLAN_PATH_RE)
+    const pathMatch = tailText.match(planPathRe())
     return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginStage: null, oauthUrl: null }
   }
   // Resume prompt: CC's session resume dialog blocks the session. Detect before
@@ -419,7 +420,7 @@ export function clearInterceptsForSession(tmuxName: string): void {
 function readPlanSummary(planPath: string | null): string | null {
   if (!planPath) return null
   if (planPath.includes('..')) return null
-  const root = join(homedir(), '.claude', 'plans')
+  const root = join(claudeConfigDir(), 'plans')
   const fullPath = join(root, planPath)
   if (!fullPath.startsWith(root + '/')) return null
   const content = io.readFile(fullPath)
