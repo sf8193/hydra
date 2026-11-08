@@ -54,10 +54,10 @@ flowchart TD
   subgraph deliver["delivery (slack-watch.ts → slack-watch-runtime.ts)"]
     resolve{"routeFor(entry.channel)<br/>at delivery, current config"}
     unrouted(["no route now:<br/>stays owed"])
-    guard{"beforeDeliver (PR 7)<br/>per message"}
-    g10[["DROP guard (exit 10)"]]
+    guard{"route.guard: beforeDeliver<br/>per message, slack-guard.ts"}
+    g10[["DROP guard (exit 10)<br/>logged, counted, not alerted"]]
     g75(["exit 75: stays owed,<br/>retried"])
-    target["route target<br/>deliverToTarget(to)"]
+    target["route target, or the redirect<br/>deliverToTarget(to)"]
     ok(["delivered:<br/>ts moves owed → delivered"])
     fail(["failed: stays owed,<br/>catch-up retries"])
     large[["DROP too-large"]]
