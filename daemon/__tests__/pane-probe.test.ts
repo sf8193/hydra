@@ -604,7 +604,8 @@ describe('probeAllSessions', () => {
       await flush()
       expect(sentMessages.some(m => m.text.includes('Ship the fix'))).toBe(true)
     } finally {
-      process.env.CLAUDE_CONFIG_DIR = origDir
+      if (origDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = origDir
     }
   })
 

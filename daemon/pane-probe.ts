@@ -11,7 +11,7 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { readFileSync } from 'fs'
-import { basename, join } from 'path'
+import { join } from 'path'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
@@ -185,9 +185,8 @@ export function _resetIO(): void { io = defaultIO }
 const PLAN_OPTION_A = /Yes, and bypass permissions/
 const PLAN_OPTION_B = /Yes, manually approve edits/
 const PLAN_OPTION_C = /Tell Claude what to change/
-// Claude writes plans under its config dir, which a session may have moved off ~/.claude.
-const planPathRe = (): RegExp =>
-  new RegExp(`${basename(claudeConfigDir()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/plans/([^\\s·/][^\\s·]*\\.md)`)
+// Plans live under Claude's config dir, which may not be ~/.claude; readPlanSummary confines the read.
+const PLAN_PATH_RE = /\/plans\/([^\s·/][^\s·]*\.md)/
 
 // Login: CC renders specific prompts at each stage. Patterns derived from
 // actual CC screenshots (2026-08-06).
@@ -255,7 +254,7 @@ export function detectBlockingState(tailText: string): BlockingState | null {
   const planOptionCount = [PLAN_OPTION_A, PLAN_OPTION_B, PLAN_OPTION_C]
     .filter(re => re.test(tailText)).length
   if (planOptionCount >= 2) {
-    const pathMatch = tailText.match(planPathRe())
+    const pathMatch = tailText.match(PLAN_PATH_RE)
     return { kind: 'plan_mode', planPath: pathMatch?.[1] ?? null, loginStage: null, oauthUrl: null }
   }
   // Resume prompt: CC's session resume dialog blocks the session. Detect before
