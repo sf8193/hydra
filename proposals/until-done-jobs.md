@@ -139,7 +139,9 @@ One timer per daemon (platform), every minute. **One daemon per state dir owns t
 the clock opens `jobs-state/_daemon.lock` with `O_EXLOCK | O_NONBLOCK` and holds the descriptor for the daemon's
 life. The kernel releases it on exit. Node's `fs` doesn't export `O_EXLOCK`; the darwin value is `0x20`, verified
 under bun: a second open gets `EAGAIN`. A daemon that can't take the lock runs no jobs and says so. This covers the
-daemon's own singleton race (the socket probe comes before the listen), which is worth its own ticket. A wall-clock jump larger than the interval (wake from sleep) is just
+daemon's own singleton race (the socket probe comes before the listen), which is worth its own ticket.
+
+A wall-clock jump larger than the interval (wake from sleep) is just
 a tick that finds slots owed. Each tick:
 
 1. **Reads jobs.toml.** If it doesn't parse, the daemon keeps running the last good config and alerts once a local
