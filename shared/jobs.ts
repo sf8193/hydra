@@ -5,7 +5,7 @@
 import { spawnSync } from 'child_process'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeSync } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { isAbsolute, join, normalize } from 'path'
 import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
 import { parseDuration, parseIdleTtl } from './constants.js'
 import { launchdCalendar } from './jobs-launchd.js'
@@ -20,6 +20,8 @@ export type Job = {
   name: string
   schedule: string   // 5-field cron, local time
   check?: string     // shell command; prints nothing when all is well
+  cwd?: string       // the check's working dir: absolute, ~ expanded
+  envFile?: string   // KEY=VALUE lines added to the check's environment, read at each run: absolute, ~ expanded
   mode: Mode
   runner: Runner     // what triggers it; delivery to a target is always the daemon's
   runnerFrom: 'job' | 'file' | 'default' | 'schedule'   // schedule: too fine for a launchd calendar, so the daemon runs it
@@ -76,7 +78,7 @@ export function parseJobsConfig(text: string): JobsConfig {
       return t[k] as string
     }
     for (const k of Object.keys(t)) {
-      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after', 'runner'].includes(k)) fail(`unknown key ${k}`)
+      if (!['schedule', 'check', 'cwd', 'env_file', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after', 'runner'].includes(k)) fail(`unknown key ${k}`)
     }
     const schedule = str('schedule') ?? fail('schedule is required')
     // parseCron is the only reader of a schedule, so it is the only validator.
@@ -98,6 +100,16 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (idleTtl && parseIdleTtl(idleTtl) === null) fail(`idle_ttl "${idleTtl}" must be a duration like 90m, 12h or 4d, at most 7d`)
     const check = str('check')
     if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
+    const path = (k: string): string | undefined => {
+      const v = str(k)
+      if (v === undefined) return undefined
+      if (!check) fail(`${k} applies to the check, and this job has none`)
+      const abs = v === '~' || v.startsWith('~/') ? homedir() + v.slice(1) : v
+      if (!isAbsolute(abs)) fail(`${k} must be an absolute path or start with ~/`)
+      return abs
+    }
+    const cwd = path('cwd')
+    const envFile = path('env_file')
     // A daemon job's slot is owed until it is done. durable = true says that; false is ignored, for old files.
     if (t.durable !== undefined && typeof t.durable !== 'boolean') fail('durable must be true or false')
     const notes: string[] = []
@@ -131,7 +143,7 @@ export function parseJobsConfig(text: string): JobsConfig {
         : 'durable = false is ignored: under launchd a job runs once a slot, with no retries; remove the key')
     }
     jobs.push({
-      name, schedule, mode, runner, runnerFrom, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
+      name, schedule, mode, runner, runnerFrom, ...(check && { check }), ...(cwd && { cwd }), ...(envFile && { envFile }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
       // launchd has no retries: a failure is the run, so it is alerted at once
       alertAfterMs: runner === 'launchd' ? 0 : alertAfterMs!, ...(needs.length && { needs }), ...(notes.length && { notes }),
     })
@@ -140,6 +152,33 @@ export function parseJobsConfig(text: string): JobsConfig {
 }
 
 export const parseJobs = (text: string): Job[] => parseJobsConfig(text).jobs
+
+/** The macOS folder (TCC-gated by default) that holds `path`, as `~/Documents`; null for any other path. Case-blind, like APFS. */
+export function tccFolder(path: string): string | null {
+  const p = normalize(path).toLowerCase()
+  const home = `${homedir().toLowerCase()}/`
+  const m = p.startsWith(home) ? p.slice(home.length).match(/^(documents|desktop|downloads)(\/|$)/) : null
+  return m ? `~/${m[1][0].toUpperCase()}${m[1].slice(1)}` : null
+}
+
+/**
+ * An env file: `KEY=VALUE` lines, optionally `export `-prefixed, with blank and `#` lines skipped. A value may be
+ * wrapped in single or double quotes, which are removed, and may end in ` # comment`. Nothing is expanded, so
+ * `PATH=$HOME/bin:$PATH` sets PATH to that literal text. A line of any other shape throws.
+ */
+export function parseEnvFile(text: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) return
+    const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
+    if (!m) throw new Error(`line ${i + 1} is not KEY=VALUE`)
+    const quoted = m[2].match(/^(['"])(.*?)\1\s*(#.*)?$/)
+    if (!quoted && /^['"]/.test(m[2])) throw new Error(`line ${i + 1} is not KEY=VALUE (an unclosed quote, or text after the closing one)`)
+    env[m[1]] = quoted ? quoted[2] : m[2].replace(/\s+#.*$/, '')
+  })
+  return env
+}
 
 export const isPlatform = (p: string) => /^[a-z]+$/.test(p)
 export const isJobName = (n: string) => NAME.test(n)

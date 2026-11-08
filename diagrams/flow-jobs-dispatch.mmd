@@ -20,9 +20,9 @@ flowchart TD
   RS --> SP["spawnAttempt: detached, env minus hydra secrets,<br/>job JSON on stdin, log = NAME.log"]
   SP -->|throws| LOST
   SP --> AT["jobs attempt: key = jobs-NAME-slotAt (manual: the minute)<br/>self-deadline 34m awake; SIGTERM: write, then kill own group"]
-  AT --> CK["runCheck: the check in sh, 30m awake"]
+  AT --> CK["runCheck: env_file parsed, cwd opened,<br/>/bin/sh -c in cwd, 30m awake"]
   CK -->|"exit 75"| RNN[not-now]
-  CK -->|nonzero| RF[failed]
+  CK -->|"nonzero; env_file or cwd unusable (TCC named)"| RF[failed]
   CK -->|empty stdout| RN[nothing]
   CK -->|"output, or no check"| ACT["runAction: hydra spawn / deliver<br/>with --idempotency-key"]
   ACT -->|"ok, or exit 2 already served"| RD[done]

@@ -3,12 +3,12 @@
 // - `jobs attempt`: one detached run of a job's work, started by the daemon, reporting one result file;
 // - `jobs run`: asks the daemon for a dispatch and waits for its outcome in the foreground;
 // - `jobs list`: the clock's last tick and each job's state (it parses jobs.toml, so it also validates it).
-// The work: an optional check script (output = findings for an agent, no output = nothing to do, nonzero = failed),
-// then the mode's action (spawn, deliver to main, or nothing).
+// The work: an optional check script, run in the job's cwd with its env_file added (output = findings for an agent,
+// no output = nothing to do, nonzero = failed), then the mode's action (spawn, deliver to main, or nothing).
 
 import { randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, writeSync } from 'fs'
+import { existsSync, mkdirSync, opendirSync, readFileSync, rmSync, writeFileSync, writeSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { platformStateDir } from '../shared/constants.js'
 import { LAUNCHD_PATH, LAUNCH_AGENTS_DIR, jobAgentLabel, plistEntry, launchdCalendar, launchdPlist, legacyTitles, parseLegacyTitle, runnerJobs, stableBun } from '../shared/jobs-launchd.js'
@@ -16,7 +16,7 @@ import { resolveConfig, sendRequest } from './helpers.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
-  attemptEnv, awakeTimeout, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
+  attemptEnv, awakeTimeout, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
   type ExternalResult, type Job, type Outcome,
 } from '../shared/jobs.js'
 
@@ -26,9 +26,10 @@ export { parseJobs, parseJobsConfig, isPlatform, type Job, type Mode } from '../
 export const jobsIO = {
   now: () => new Date(),
   // stdout is the contract: findings go there. The deadline covers a child that outlives `sh` and holds the pipe open.
-  async check(cmd: string, timeoutMs = CHECK_TIMEOUT_MS): Promise<{ code: number; out: string; err: string }> {
+  async check(cmd: string, timeoutMs = CHECK_TIMEOUT_MS, o: { cwd?: string; env?: Record<string, string | undefined> } = {}): Promise<{ code: number; out: string; err: string }> {
     // env is passed explicitly: Bun.spawn does not see later edits to process.env.PATH, and resolveConfig adds Homebrew to it.
-    const p = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe', env: process.env })
+    // /bin/sh by path: an env_file's PATH must not decide whether the check can start.
+    const p = Bun.spawn(['/bin/sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe', env: o.env ?? process.env, cwd: o.cwd })
     const done = Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
       .then(([out, err, code]) => ({ code, out, err }))
     let cancel = () => {}
@@ -37,6 +38,9 @@ export const jobsIO = {
     })
     try { return await Promise.race([done, late]) } finally { cancel() }
   },
+  readFile: (path: string) => readFileSync(path, 'utf8'),
+  /** Throws as opening `path` would for the check: ENOENT, ENOTDIR, or EPERM where macOS denies the folder. */
+  openDir: (path: string) => { opendirSync(path).closeSync() },
   // The action's own timeout: a hung spawn or deliver is killed and counts as failed.
   async hydra(args: string[], timeoutMs = ACTION_TIMEOUT_MS): Promise<{ code: number; err: string; out: string }> {
     const p = Bun.spawn([process.execPath, `${import.meta.dir}/hydra.ts`, ...args], { stdout: 'pipe', stderr: 'pipe', env: process.env, timeout: timeoutMs, killSignal: 'SIGKILL' })
@@ -59,6 +63,21 @@ const parseReply = (out: string): Reply | null => { try { const o = JSON.parse(o
 // First `maxBytes` bytes of s, never cutting a character in half.
 const headBytes = (s: string, maxBytes: number) => Buffer.from(s).subarray(0, maxBytes).toString().replace(/�$/, '')
 
+/** Whose macOS access a check reads with: the daemon's tmux server's, or (under launchd) bun's own, per bun version. */
+const TCC_ACCESS: Record<Job['runner'], string> = {
+  daemon: "the daemon's tmux server has access there (fixed when it started)",
+  launchd: 'bun itself has access there; macOS grants it per bun version, so a brew upgrade of bun may need it again',
+}
+
+/** Why `path` couldn't be used, in the user's terms. */
+function pathProblem(path: string, e: unknown, runner: Job['runner']): string {
+  const { code, message } = e as NodeJS.ErrnoException
+  if (code === 'EPERM' && tccFolder(path)) return `macOS denied access to ${tccFolder(path)} (EPERM): the check gets in only if ${TCC_ACCESS[runner]}; see docs/macos-permissions.md`
+  if (code === 'ENOENT') return 'not found'
+  if (code === 'ENOTDIR') return 'not a directory'
+  return code ?? message
+}
+
 export type Work = Outcome
 
 /**
@@ -74,7 +93,20 @@ export async function runWork(job: Job, stateDir: string, key: string, onActionS
 /** The check alone: its output, or the outcome that ends the work here (failed, nothing to do, not now). */
 export async function runCheck(job: Job): Promise<{ output: string } | { outcome: Work }> {
   if (!job.check) return { output: '' }
-  const r = await jobsIO.check(job.check)
+  let env: Record<string, string | undefined> = process.env
+  if (job.envFile) {
+    try { env = { ...process.env, ...parseEnvFile(jobsIO.readFile(job.envFile)) } } catch (e) {
+      return { outcome: { result: 'failed', note: `env_file ${job.envFile}: ${pathProblem(job.envFile, e, job.runner)}` } }
+    }
+  }
+  if (job.cwd) {
+    try { jobsIO.openDir(job.cwd) } catch (e) { return { outcome: { result: 'failed', note: `cwd ${job.cwd}: ${pathProblem(job.cwd, e, job.runner)}` } } }
+  }
+  let r: Awaited<ReturnType<typeof jobsIO.check>>
+  try { r = await jobsIO.check(job.check, CHECK_TIMEOUT_MS, { cwd: job.cwd, env }) } catch (e) {
+    const { code, message } = e as NodeJS.ErrnoException
+    return { outcome: { result: 'failed', note: `the check could not start: ${code ?? message}` } }
+  }
   if (r.code === EX_TEMPFAIL) return { outcome: { result: 'not-now', note: `check exited ${EX_TEMPFAIL}${r.err.trim() ? `: ${r.err.trim().slice(-200)}` : ''}` } }   // stdout dropped
   if (r.code !== 0) return { outcome: { result: 'failed', note: `check exited ${r.code}: ${(r.err || r.out).trim().slice(-300)}` } }
   const output = r.out.trim()
@@ -356,6 +388,7 @@ function printJobs(platform: string, stateDir: string, jobs: Job[], now: Date): 
     console.log(describeJob(j, readJobState(stateDir, j.name, j.schedule), now))
     for (const n of j.notes ?? []) console.log(`  note: ${n}`)
     for (const w of launchdNotes(platform, stateDir, j)) console.log(`  ${w}`)
+    for (const w of jobWarnings(j)) console.log(`  warning: ${w}`)
   }
 }
 
@@ -383,7 +416,7 @@ export function launchdNotes(platform: string, stateDir: string, j: Job): string
 // jobs sync: make the config live now
 // ---------------------------------------------------------------------------
 
-const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after', notes: 'durable' }
+const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after', notes: 'durable', envFile: 'env_file' }
 
 /** What changed between the jobs the daemon had and the ones it has now, by jobs.toml key. */
 export function diffJobs(before: Job[], after: Job[]): string[] {
@@ -509,6 +542,15 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
     }
   }
   return { lines, ok }
+}
+
+/** What jobs.toml can't rule out on its own: things that may stop the job when it runs. */
+export function jobWarnings(j: Job): string[] {
+  const keys = [['cwd', j.cwd], ['env_file', j.envFile]] as const
+  return keys.flatMap(([k, path]) => {
+    const folder = path && tccFolder(path)
+    return folder ? [`${k} is under ${folder}: macOS lets the check in only if ${TCC_ACCESS[j.runner]} (docs/macos-permissions.md)`] : []
+  })
 }
 
 
