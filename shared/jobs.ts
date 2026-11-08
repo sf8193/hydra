@@ -14,7 +14,11 @@ import { launchdCalendar } from './jobs-launchd.js'
 // jobs.toml
 // ---------------------------------------------------------------------------
 
-export type Mode = 'spawn' | 'main' | 'none'
+/** How a job's spawned session starts: the same recipe shape as a specialist's (specialists-and-targets §3). */
+export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
+
+/** Where a job's message goes: a specialist, `main` or a thread id; or a fresh session each time. */
+export type JobTarget = { to: string; revive?: true } | { spawn: Recipe }
 
 export type Job = {
   name: string
@@ -22,13 +26,11 @@ export type Job = {
   check?: string     // shell command; prints nothing when all is well
   cwd?: string       // the check's working dir: absolute, ~ expanded
   envFile?: string   // KEY=VALUE lines added to the check's environment, read at each run: absolute, ~ expanded
-  mode: Mode
   runner: Runner     // what triggers it; delivery to a target is always the daemon's
   runnerFrom: 'job' | 'file' | 'default' | 'schedule'   // schedule: too fine for a launchd calendar, so the daemon runs it
-  prompt?: string    // required for spawn and main
-  channel?: string   // spawn: where the session opens; any mode: where a direct alert goes. Falls back to the top-level channel
-  model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
-  idleTtl?: string   // spawn only: passed to `hydra spawn --idle-ttl` (validated here with the daemon's parser)
+  target?: JobTarget // absent: no agent (mode = "none"); the check runs and its result is recorded
+  prompt?: string    // sent with the check output; optional when there is a check (or a spawn kickoff)
+  channel?: string   // where a direct alert goes: the job's channel, else the spawn channel, else the top-level one
   needs?: Need[]     // preconditions the daemon checks before dispatch; unmet = not now
   alertAfterMs: number // how long a failure run lasts before it is alerted, once (alert_after, default 1d)
   notes?: string[]   // what jobs list says about keys that are kept only for old files
@@ -39,6 +41,21 @@ export type Job = {
  * and leaves its result for the daemon to deliver. daemon: the daemon's clock, which retries a slot until it is done.
  */
 export type Runner = 'launchd' | 'daemon'
+
+/**
+ * The job an attempt reads on stdin. A daemon started before targets existed sends `mode` (and `model`, `idleTtl`)
+ * instead of `target`; read that the way the parser reads the old keys, so a slot isn't run as "no agent".
+ */
+export function jobFromWire(o: Job & { mode?: string; model?: string; idleTtl?: string }): Job {
+  if (o.target || !o.mode) { const { mode: _m, model: _mo, idleTtl: _i, ...job } = o; return job }
+  const { mode, model, idleTtl, ...job } = o
+  if (mode === 'main') return { ...job, target: { to: 'main' } }
+  if (mode === 'spawn' && job.channel) return { ...job, target: { spawn: { channel: job.channel, ...(model && { model }), ...(idleTtl && { idle: idleTtl }) } } }
+  return job
+}
+
+export const isSpawn = (t: JobTarget | undefined): t is { spawn: Recipe } => !!t && 'spawn' in t
+export const targetLabel = (t: JobTarget | undefined) => !t ? 'none' : 'spawn' in t ? 'spawn' : `to ${t.to}`
 
 export type Need = 'internet'
 const NEEDS: readonly Need[] = ['internet']
@@ -53,9 +70,13 @@ export type JobsConfig = { channel?: string; jobs: Job[] }
 /** How `jobs list` and `jobs sync` name a job's runner: `daemon`, `daemon (file)`, `launchd (default)`. */
 export const runnerLabel = (j: Pick<Job, 'runner' | 'runnerFrom'>) => j.runnerFrom === 'job' ? j.runner : `${j.runner} (${j.runnerFrom})`
 
-const MODES: readonly Mode[] = ['spawn', 'main', 'none']
+const MODES = ['spawn', 'main', 'none']
 const NAME = /^[a-z0-9][a-z0-9-]*$/
 const MAX_PROMPT_BYTES = 4_000
+const JOB_KEYS = ['schedule', 'check', 'cwd', 'env_file', 'to', 'revive', 'spawn', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after', 'runner']
+const SPAWN_KEYS = ['channel', 'kickoff', 'kickoff_file', 'model', 'idle']
+
+const expandHome = (v: string) => v === '~' || v.startsWith('~/') ? homedir() + v.slice(1) : v
 
 export function parseJobsConfig(text: string): JobsConfig {
   const doc = Bun.TOML.parse(text) as Record<string, unknown>
@@ -72,44 +93,85 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (!NAME.test(name)) fail('name must be lowercase letters, digits and dashes')
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) fail('must be a table')
     const t = raw as Record<string, unknown>
-    const str = (k: string): string | undefined => {
-      if (t[k] === undefined) return undefined
-      if (typeof t[k] !== 'string' || t[k] === '') fail(`${k} must be a non-empty string`)
-      return t[k] as string
+    const strIn = (o: Record<string, unknown>, k: string, label = k): string | undefined => {
+      if (o[k] === undefined) return undefined
+      if (typeof o[k] !== 'string' || o[k] === '') fail(`${label} must be a non-empty string`)
+      return o[k] as string
     }
-    for (const k of Object.keys(t)) {
-      if (!['schedule', 'check', 'cwd', 'env_file', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after', 'runner'].includes(k)) fail(`unknown key ${k}`)
+    const str = (k: string) => strIn(t, k)
+    const absPath = (label: string, v: string): string => {
+      const abs = expandHome(v)
+      if (!isAbsolute(abs)) fail(`${label} must be an absolute path or start with ~/`)
+      return abs
     }
+    const noDash = (label: string, v: string | undefined) => { if (v?.startsWith('-')) fail(`${label} must not start with "-" (the hydra CLI would read it as a flag)`) }
+    for (const k of Object.keys(t)) if (!JOB_KEYS.includes(k)) fail(`unknown key ${k}`)
     const schedule = str('schedule') ?? fail('schedule is required')
     // parseCron is the only reader of a schedule, so it is the only validator.
     try { parseCron(schedule) } catch (e) { fail(`schedule "${schedule}" is not a cron expression: ${(e as Error).message}`) }
-    const mode = (str('mode') ?? fail('mode is required')) as Mode
-    if (!MODES.includes(mode)) fail(`mode must be one of ${MODES.join(', ')}`)
-    const prompt = str('prompt')
-    const channel = str('channel') ?? defaultChannel
-    if (prompt && Buffer.byteLength(prompt) > MAX_PROMPT_BYTES) fail(`prompt is over ${MAX_PROMPT_BYTES} bytes`)
-    if (prompt?.startsWith('-')) fail('prompt must not start with "-" (the hydra CLI would read it as a flag)')
-    if (mode === 'none' && prompt) fail('mode none runs no agent, so it takes no prompt')
-    if (mode !== 'none' && !prompt) fail(`mode ${mode} needs a prompt`)
-    if (mode === 'spawn' && !channel) fail('mode spawn needs a channel (job or top-level)')
-    const model = str('model')
-    if (model && mode !== 'spawn') fail('model only applies to mode spawn')
-    if (model?.startsWith('-')) fail('model must not start with "-"')
-    const idleTtl = str('idle_ttl')
-    if (idleTtl && mode !== 'spawn') fail('idle_ttl only applies to mode spawn')
-    if (idleTtl && parseIdleTtl(idleTtl) === null) fail(`idle_ttl "${idleTtl}" must be a duration like 90m, 12h or 4d, at most 7d`)
     const check = str('check')
-    if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
     const path = (k: string): string | undefined => {
       const v = str(k)
       if (v === undefined) return undefined
       if (!check) fail(`${k} applies to the check, and this job has none`)
-      const abs = v === '~' || v.startsWith('~/') ? homedir() + v.slice(1) : v
-      if (!isAbsolute(abs)) fail(`${k} must be an absolute path or start with ~/`)
-      return abs
+      return absPath(k, v)
     }
     const cwd = path('cwd')
     const envFile = path('env_file')
+    const prompt = str('prompt')
+    if (prompt && Buffer.byteLength(prompt) > MAX_PROMPT_BYTES) fail(`prompt is over ${MAX_PROMPT_BYTES} bytes`)
+    noDash('prompt', prompt)
+    const jobChannel = str('channel')
+
+    // One target: `to`, `spawn`, or the older `mode` ("main" is `to = "main"`, "spawn" is `spawn = {…}`, "none" no agent).
+    const given = ['to', 'spawn', 'mode'].filter(k => t[k] !== undefined)
+    if (given.length === 0) fail('needs a target: to = "<specialist|main|thread id>", spawn = { channel, … }, or mode = "none"')
+    if (given.length > 1) fail(`takes one target, not ${given.join(' and ')}`)
+    const mode = str('mode')
+    if (mode !== undefined && !MODES.includes(mode)) fail(`mode must be one of ${MODES.join(', ')}`)
+    for (const k of ['model', 'idle_ttl']) if (t[k] !== undefined && mode !== 'spawn') fail(`${k} only applies to mode spawn; with a spawn target, put it in spawn = { ${k === 'idle_ttl' ? 'idle' : k} = … }`)
+    const recipeExtras = (model: string | undefined, idle: string | undefined, modelKey: string, idleKey: string) => {
+      noDash(modelKey, model)
+      if (idle && parseIdleTtl(idle) === null) fail(`${idleKey} "${idle}" must be a duration like 90m, 12h or 4d, at most 7d`)
+      return { ...(model && { model }), ...(idle && { idle }) }
+    }
+    let target: JobTarget | undefined
+    if (t.to !== undefined) {
+      const to = str('to')!
+      noDash('to', to)
+      target = { to }
+    } else if (t.spawn !== undefined) {
+      if (typeof t.spawn !== 'object' || t.spawn === null || Array.isArray(t.spawn)) fail('spawn must be a table: spawn = { channel = "…", kickoff = "…", model = "…", idle = "4h" }')
+      const sp = t.spawn as Record<string, unknown>
+      for (const k of Object.keys(sp)) if (!SPAWN_KEYS.includes(k)) fail(`spawn: unknown key ${k} (known: ${SPAWN_KEYS.join(', ')})`)
+      const kickoff = strIn(sp, 'kickoff', 'spawn.kickoff')
+      const kickoffFile = strIn(sp, 'kickoff_file', 'spawn.kickoff_file')
+      if (kickoff && kickoffFile) fail('spawn takes kickoff or kickoff_file, not both')
+      if (kickoff && Buffer.byteLength(kickoff) > MAX_PROMPT_BYTES) fail(`spawn.kickoff is over ${MAX_PROMPT_BYTES} bytes`)
+      noDash('spawn.kickoff', kickoff)
+      const channel = strIn(sp, 'channel', 'spawn.channel') ?? jobChannel ?? defaultChannel ?? fail('spawn needs a channel (spawn.channel, the job channel or the top-level one)')
+      target = { spawn: {
+        channel, ...(kickoff && { kickoff }), ...(kickoffFile && { kickoffFile: absPath('spawn.kickoff_file', kickoffFile) }),
+        ...recipeExtras(strIn(sp, 'model', 'spawn.model'), strIn(sp, 'idle', 'spawn.idle'), 'spawn.model', 'spawn.idle'),
+      } }
+    } else if (mode === 'main') {
+      target = { to: 'main' }
+    } else if (mode === 'spawn') {
+      const channel = jobChannel ?? defaultChannel ?? fail('mode spawn needs a channel (job or top-level)')
+      target = { spawn: { channel, ...recipeExtras(str('model'), str('idle_ttl'), 'model', 'idle_ttl') } }
+    }
+    if (t.revive !== undefined && typeof t.revive !== 'boolean') fail('revive must be true or false')
+    if (t.revive === true) {
+      const to = target && 'to' in target ? target : fail('revive only applies to a to target')
+      if (to.to === 'main') fail('revive does not apply to main')
+      target = { ...to, revive: true }
+    }
+
+    if (!target && prompt) fail('mode none runs no agent, so it takes no prompt')
+    if (!target && !check) fail('mode none needs a check script, or the job does nothing')
+    if (target && !prompt && !check && !(isSpawn(target) && (target.spawn.kickoff || target.spawn.kickoffFile))) {
+      fail(isSpawn(target) ? 'has nothing to say: give it a prompt, a check or a spawn kickoff' : 'has nothing to say: give it a prompt or a check')
+    }
     // A daemon job's slot is owed until it is done. durable = true says that; false is ignored, for old files.
     if (t.durable !== undefined && typeof t.durable !== 'boolean') fail('durable must be true or false')
     const notes: string[] = []
@@ -142,8 +204,9 @@ export function parseJobsConfig(text: string): JobsConfig {
         ? 'durable = false is ignored: a daemon-runner job is retried until its slot is done; remove the key'
         : 'durable = false is ignored: under launchd a job runs once a slot, with no retries; remove the key')
     }
+    const channel = jobChannel ?? (isSpawn(target) ? target.spawn.channel : undefined) ?? defaultChannel
     jobs.push({
-      name, schedule, mode, runner, runnerFrom, ...(check && { check }), ...(cwd && { cwd }), ...(envFile && { envFile }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
+      name, schedule, runner, runnerFrom, ...(check && { check }), ...(cwd && { cwd }), ...(envFile && { envFile }), ...(target && { target }), ...(prompt && { prompt }), ...(channel && { channel }),
       // launchd has no retries: a failure is the run, so it is alerted at once
       alertAfterMs: runner === 'launchd' ? 0 : alertAfterMs!, ...(needs.length && { needs }), ...(notes.length && { notes }),
     })

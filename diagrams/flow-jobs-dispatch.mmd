@@ -19,15 +19,21 @@ flowchart TD
   RUN["hydra jobs run (manual, any runner)"] --> RS
   RS --> SP["spawnAttempt: detached, env minus hydra secrets,<br/>job JSON on stdin, log = NAME.log"]
   SP -->|throws| LOST
-  SP --> AT["jobs attempt: key = jobs-NAME-slotAt (manual: the minute)<br/>self-deadline 34m awake; SIGTERM: write, then kill own group"]
+  SP --> AT["jobs attempt: key = jobs-NAME-slotAt (manual: the minute)<br/>self-deadline 34m awake; however it ends: write, then kill own group"]
   AT --> CK["runCheck: env_file parsed, cwd opened,<br/>/bin/sh -c in cwd, 30m awake"]
   CK -->|"exit 75"| RNN[not-now]
   CK -->|"nonzero; env_file or cwd unusable (TCC named)"| RF[failed]
   CK -->|empty stdout| RN[nothing]
-  CK -->|"output, or no check"| ACT["runAction: hydra spawn / deliver<br/>with --idempotency-key"]
-  ACT -->|"ok, or exit 2 already served"| RD[done]
-  ACT -->|"daemon away; spawn 2 pending; deliver 7"| RNN
-  ACT -->|"other exit, timeout"| RF
+  CK -->|"output, or no check"| TG{"target?"}
+  TG -->|"none (mode = none)"| RD
+  TG -->|"to = specialist / main / thread id"| DV["hydra deliver --to T [--revive] --queue<br/>with --idempotency-key"]
+  TG -->|"spawn = { channel, kickoff, model, idle }"| SPW["hydra spawn --ephemeral --channel C<br/>with --idempotency-key -- message"]
+  DV -->|"0, or 2 already delivered"| RD[done]
+  DV -->|"daemon away; 5 can't take it yet; 7 in flight"| RNN
+  DV -->|"3, 4, 6, 8 no such specialist; timeout"| RF
+  SPW -->|"ok, or 2 already served"| RD
+  SPW -->|"daemon away; 2 pending"| RNN
+  SPW -->|"other exit, timeout"| RF
   RNN & RF & RN & RD --> RFILE["results/NAME.ID.NONCE.json, written once, atomic"]
   RFILE --> ST["settle, next tick: only the live dispatch's id + nonce"]
   ST -->|result present| AO

@@ -18,8 +18,8 @@ flowchart TD
   BUSY -->|no| W2[wait a tick]
   BUSY -->|yes| RP{"slotAt at or below appliedExternal?"}
   RP -->|yes| DROP["drop: a replay"]
-  RP -->|no| KIND{"done AND mode is not none?"}
-  KIND -->|"nothing, failed, not-now, or mode none"| REC["applyOutcome + appliedExternal = slotAt, one write; delete the file"]
+  RP -->|no| KIND{"done AND the job has a target?"}
+  KIND -->|"nothing, failed, not-now, or no target (mode none)"| REC["applyOutcome + appliedExternal = slotAt, one write; delete the file"]
   KIND -->|yes| DSP["reserve a dispatch, kind scheduled, external = slotAt"]
   DSP --> ATT["jobs attempt --external: runAction on the saved output<br/>key = jobs-NAME-slotAt"]
   ATT --> SET["settle, then apply"]

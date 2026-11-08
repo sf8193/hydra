@@ -8,7 +8,7 @@ import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
   isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs, jobWarnings, jobsLaunchdRun, syncLaunchd, launchdIO,
 } from '../jobs.js'
-import { awakeTimeout, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
+import { awakeTimeout, jobFromWire, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs, type Job } from '../../shared/jobs.js'
 import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
 
 const repo = join(import.meta.dir, '..', '..')
@@ -40,7 +40,7 @@ describe('parseJobs', () => {
   test('reads jobs, applies the top-level channel to every job', () => {
     const jobs = parseJobs(ok)
     expect(jobs.map(j => j.name)).toEqual(['vuln-scan', 'retro', 'cleanup'])
-    expect(jobs[0]).toEqual({ name: 'vuln-scan', schedule: '0 6 * * *', check: 'scan.sh', mode: 'spawn', runner: 'launchd', runnerFrom: 'default', prompt: 'Triage it.', channel: '123', alertAfterMs: 0 })
+    expect(jobs[0]).toEqual({ name: 'vuln-scan', schedule: '0 6 * * *', check: 'scan.sh', runner: 'launchd', runnerFrom: 'default', target: { spawn: { channel: '123' } }, prompt: 'Triage it.', channel: '123', alertAfterMs: 0 })
     expect(jobs[1].channel).toBe('123')   // any mode: where its direct alerts go
   })
 
@@ -58,10 +58,10 @@ describe('parseJobs', () => {
     ['no schedule', `[a]\nmode="main"\nprompt="p"`, /schedule is required/],
     ['bad cron', `[a]\nschedule="soon"\nmode="main"\nprompt="p"`, /not a cron expression/],
     ['cron Bun accepts but jobs list cannot read', `[a]\nschedule="+1 * * * *"\nmode="main"\nprompt="p"`, /schedule "\+1 \* \* \* \*" is not a cron expression/],
-    ['no mode', `[a]\nschedule="0 6 * * *"`, /mode is required/],
+    ['no target', `[a]\nschedule="0 6 * * *"`, /needs a target: to = /],
     ['unknown mode', `[a]\nschedule="0 6 * * *"\nmode="loop"\nprompt="p"`, /mode must be one of/],
     ['spawn without channel', `[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"`, /needs a channel/],
-    ['agent mode without prompt', `[a]\nschedule="0 6 * * *"\nmode="main"`, /needs a prompt/],
+    ['agent mode without prompt or check', `[a]\nschedule="0 6 * * *"\nmode="main"`, /has nothing to say: give it a prompt or a check/],
     ['none with prompt', `[a]\nschedule="0 6 * * *"\nmode="none"\ncheck="x"\nprompt="p"`, /takes no prompt/],
     ['none without check', `[a]\nschedule="0 6 * * *"\nmode="none"`, /needs a check script/],
     ['prompt that reads as a flag', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="--json now"`, /must not start with "-"/],
@@ -80,6 +80,24 @@ describe('parseJobs', () => {
     ['overlap, which is gone', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\noverlap="absorb"`, /overlap is gone: for one standing session that sees every run, use to = "<specialist>"/],
     ['alert_after over 30d', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"\nalert_after="31d"`, /at most 30d/],
     ['alert_after that is not a duration', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"\nalert_after="soon"`, /must be a duration/],
+    ['two targets', `[a]\nschedule="0 6 * * *"\nprompt="p"\nto="ops"\nmode="main"`, /takes one target, not to and mode/],
+    ['to and spawn', `channel="1"\n[a]\nschedule="0 6 * * *"\nprompt="p"\nto="ops"\nspawn={}`, /takes one target, not to and spawn/],
+    ['revive on main', `[a]\nschedule="0 6 * * *"\nprompt="p"\nto="main"\nrevive=true`, /revive does not apply to main/],
+    ['revive on mode main', `[a]\nschedule="0 6 * * *"\nprompt="p"\nmode="main"\nrevive=true`, /revive does not apply to main/],
+    ['revive on a spawn target', `channel="1"\n[a]\nschedule="0 6 * * *"\nprompt="p"\nspawn={}\nrevive=true`, /revive only applies to a to target/],
+    ['revive that is not a boolean', `[a]\nschedule="0 6 * * *"\nprompt="p"\nto="ops"\nrevive="yes"`, /revive must be true or false/],
+    ['an empty to', `[a]\nschedule="0 6 * * *"\nprompt="p"\nto=""`, /to must be a non-empty string/],
+    ['a to that reads as a flag', `[a]\nschedule="0 6 * * *"\nprompt="p"\nto="--session"`, /to must not start with "-"/],
+    ['a to target with nothing to say', `[a]\nschedule="0 6 * * *"\nto="ops"`, /has nothing to say: give it a prompt or a check/],
+    ['a spawn target with nothing to say', `channel="1"\n[a]\nschedule="0 6 * * *"\nspawn={}`, /has nothing to say: give it a prompt, a check or a spawn kickoff/],
+    ['spawn that is not a table', `[a]\nschedule="0 6 * * *"\nprompt="p"\nspawn="yes"`, /spawn must be a table/],
+    ['an unknown spawn key', `channel="1"\n[a]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ idle_ttl="4h" }`, /spawn: unknown key idle_ttl/],
+    ['spawn with no channel anywhere', `[a]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ model="haiku" }`, /spawn needs a channel/],
+    ['kickoff and kickoff_file', `channel="1"\n[a]\nschedule="0 6 * * *"\nspawn={ kickoff="k", kickoff_file="/k.md" }`, /kickoff or kickoff_file, not both/],
+    ['a relative kickoff_file', `channel="1"\n[a]\nschedule="0 6 * * *"\nspawn={ kickoff_file="k.md" }`, /spawn.kickoff_file must be an absolute path/],
+    ['a spawn idle over 7d', `channel="1"\n[a]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ idle="8d" }`, /spawn.idle "8d" must be a duration/],
+    ['top-level model with a spawn target', `channel="1"\n[a]\nschedule="0 6 * * *"\nprompt="p"\nspawn={}\nmodel="haiku"`, /put it in spawn = \{ model = … \}/],
+    ['idle_ttl with a to target', `[a]\nschedule="0 6 * * *"\nprompt="p"\nto="ops"\nidle_ttl="4h"`, /idle_ttl only applies to mode spawn/],
     ['cwd on a job with no check', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ncwd="/srv"`, /cwd applies to the check, and this job has none/],
     ['env_file on a job with no check', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nenv_file="/srv/.env"`, /env_file applies to the check/],
     ['a relative cwd', `[a]\nschedule="0 6 * * *"\ncheck="c.sh"\nmode="none"\ncwd="build"`, /cwd must be an absolute path or start with ~\//],
@@ -127,6 +145,63 @@ describe('parseJobs', () => {
     expect(runnerLabel(fine)).toBe('daemon (schedule)')
     expect(fine.notes).toEqual(['schedule "*/2 9-17 * * 1-5" needs 1350 launchd calendar entries (at most 500), so the daemon runs it; set runner = "daemon" to say so'])
     expect(ok.runner).toBe('launchd')                                                   // the rest of the file is untouched
+  })
+
+  test('targets: to (with revive), spawn = { … } with the channel falling back to the job and top-level ones', () => {
+    const jobs = parseJobs(`channel="top"
+[a]\nschedule="0 6 * * *"\ncheck="c.sh"\nto="ops"
+[b]\nschedule="0 6 * * *"\nprompt="p"\nto="1234567890123456789"\nrevive=true
+[c]\nschedule="0 6 * * *"\ncheck="c.sh"\nspawn={ model="haiku", idle="4h" }
+[d]\nschedule="0 6 * * *"\nchannel="own"\nspawn={ kickoff_file="~/k.md" }
+[e]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ channel="sp", kickoff="Start." }`)
+    expect(jobs.map(j => j.target)).toEqual([
+      { to: 'ops' }, { to: '1234567890123456789', revive: true },
+      { spawn: { channel: 'top', model: 'haiku', idle: '4h' } },
+      { spawn: { channel: 'own', kickoffFile: join(homedir(), 'k.md') } },
+      { spawn: { channel: 'sp', kickoff: 'Start.' } },
+    ])
+    expect(jobs.map(j => j.channel)).toEqual(['top', 'top', 'top', 'own', 'sp'])   // where direct alerts go
+  })
+
+  test('mode = "main" and mode = "spawn" parse to the same target as to = "main" and spawn = { … }; mode = "none" has none', () => {
+    const [oldMain, newMain, oldSpawn, newSpawn, none] = parseJobs(`channel="9"
+[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"
+[b]\nschedule="0 6 * * *"\nto="main"\nprompt="p"
+[c]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\nmodel="haiku"\nidle_ttl="4d"
+[d]\nschedule="0 6 * * *"\nspawn={ model="haiku", idle="4d" }\nprompt="p"
+[e]\nschedule="0 6 * * *"\ncheck="c.sh"\nmode="none"`)
+    expect({ ...oldMain, name: 'x' }).toEqual({ ...newMain, name: 'x' })
+    expect({ ...oldSpawn, name: 'x' }).toEqual({ ...newSpawn, name: 'x' })
+    expect(none.target).toBeUndefined()
+  })
+
+  test('jobs.example.toml parses, in the target vocabulary', () => {
+    const jobs = parseJobs(readFileSync(join(repo, 'jobs.example.toml'), 'utf8'))
+    expect(jobs.length).toBeGreaterThan(3)
+    expect(readFileSync(join(repo, 'jobs.example.toml'), 'utf8')).not.toMatch(/^mode = "(main|spawn)"/m)
+  })
+
+  test("the spec's jobs.toml example parses (generic names)", () => {
+    const jobs = parseJobs(`[nightly-build]
+schedule = "0 2 * * *"
+check    = "./scripts/nightly-check.sh"
+cwd      = "/srv/build"
+env_file = "/srv/build/.env"
+to       = "integrator"
+
+[weekly-review]
+schedule = "0 11 * * FRI"
+prompt   = "Run the weekly review."
+runner   = "daemon"
+durable  = true
+needs    = ["internet"]
+to       = "ops"
+
+[dependency-scan]
+schedule = "0 6 * * *"
+check    = "~/scripts/dependency_scan.sh"
+spawn    = { channel = "000000000000000000", model = "haiku", idle = "4h" }`)
+    expect(jobs.map(j => j.target)).toEqual([{ to: 'integrator' }, { to: 'ops' }, { spawn: { channel: '000000000000000000', model: 'haiku', idle: '4h' } }])
   })
 
   test('cwd and env_file parse to absolute paths, ~ expanded', () => {
@@ -186,12 +261,12 @@ describe('runWork', () => {
     checkResult.out = 'new flaw X\n'
     expect((await runWork(spawnJob, dir, KEY)).result).toBe('done')
     expect(calls).toEqual([['spawn', '--initiator', 'jobs:scan', '--idempotency-key', KEY,
-      '--channel', '9', '--ephemeral', 'Triage.\n\nCheck output:\nnew flaw X']])
+      '--channel', '9', '--ephemeral', '--', 'Triage.\n\nCheck output:\nnew flaw X']])
   })
 
   test('no check script: delivers the prompt to main, queued', async () => {
     expect((await runWork(mainJob, dir, 'k')).result).toBe('done')
-    expect(calls).toEqual([['deliver', '--session', 'main', '--queue', '--initiator', 'jobs:retro',
+    expect(calls).toEqual([['deliver', '--to', 'main', '--queue', '--initiator', 'jobs:retro',
       '--idempotency-key', 'k', '--message', 'Run the retro.']])
   })
 
@@ -255,7 +330,9 @@ describe('runWork', () => {
   test('the real CLI with no daemon on the state dir: not now', async () => {
     jobsIO.hydra = real0.hydra
     const empty = mkdtempSync(join(tmpdir(), 'jobs-nodaemon-'))
-    try { expect((await runWork(mainJob, empty, KEY)).result).toBe('not-now') } finally { rmSync(empty, { recursive: true }) }
+    // A spawn: `deliver --to` arrives with lane A's PR 4, and until then the CLI refuses it before reaching the socket.
+    const job = parseJobs(`[s]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ channel="c" }`)[0]
+    try { expect((await runWork(job, empty, KEY)).result).toBe('not-now') } finally { rmSync(empty, { recursive: true }) }
   })
 
   test('no JSON reply (the CLI crashed or was killed): failed, with its exit code', async () => {
@@ -321,6 +398,77 @@ describe('runWork', () => {
     const e = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\nenv_file="/srv/.env"`)[0]
     expect(await runWork(e, dir, KEY)).toEqual({ result: 'failed', note: 'env_file /srv/.env: line 2 is not KEY=VALUE' })
     expect(ran).toBe(false)
+  })
+
+  const toJob = (extra = '') => parseJobs(`[nb]\nschedule="0 2 * * *"\ncheck="n.sh"\nto="integrator"\n${extra}`)[0]
+
+  test('to: delivers the check output to the named target, queued; no prompt means the output alone', async () => {
+    checkResult = { code: 0, out: '3 failures\n', err: '' }
+    expect((await runWork(toJob(), dir, 'k')).result).toBe('done')
+    expect(calls).toEqual([['deliver', '--to', 'integrator', '--queue', '--initiator', 'jobs:nb', '--idempotency-key', 'k', '--message', 'Check output:\n3 failures']])
+    calls.length = 0
+    await runWork(toJob('revive=true\nprompt="Fix it."'), dir, 'k')
+    expect(calls[0].slice(0, 4)).toEqual(['deliver', '--to', 'integrator', '--revive'])
+    expect(calls[0].at(-1)).toBe('Fix it.\n\nCheck output:\n3 failures')
+  })
+
+  test('to: what deliver answers decides the outcome; 8 (no such specialist) is a failure, never sent', async () => {
+    checkResult = { code: 0, out: 'x', err: '' }
+    const outcome = async (code: number) => {
+      hydraCode = code
+      let sent = false
+      const w = await runWork(toJob(), dir, 'k', () => { sent = true })
+      return [w.result, sent]
+    }
+    expect(await outcome(0)).toEqual(['done', true])
+    expect(await outcome(2)).toEqual(['done', true])      // the key was already delivered
+    expect(await outcome(7)).toEqual(['not-now', false])  // in flight
+    expect(await outcome(5)).toEqual(['not-now', false])  // the target can't take it yet: booting, or stuck on a prompt
+    for (const code of [3, 4, 6, 8]) expect(await outcome(code)).toEqual(['failed', false])
+    hydraCode = 8
+    expect((await runWork(toJob(), dir, 'k')).note).toBe('hydra deliver exited 8: boom')
+  })
+
+  test('exit 75 from the check is not now for a to target too: nothing is delivered', async () => {
+    checkResult = { code: 75, out: 'ignored', err: 'offline' }
+    expect(await runWork(toJob(), dir, 'k')).toEqual({ result: 'not-now', note: 'check exited 75: offline' })
+    expect(calls).toEqual([])
+  })
+
+  test('spawn: kickoff, then prompt, then check output; kickoff_file is read at each run', async () => {
+    checkResult = { code: 0, out: 'CVE-1', err: '' }
+    const [inline, file] = parseJobs(`[s]\nschedule="0 6 * * *"\ncheck="s.sh"\nprompt="Triage."\nspawn={ channel="c", kickoff="You are the scanner.", model="haiku", idle="4h" }
+[f]\nschedule="0 6 * * *"\ncheck="s.sh"\nspawn={ channel="c", kickoff_file="/k/kick.md" }`)
+    await runWork(inline, dir, 'k')
+    expect(calls[0]).toEqual(['spawn', '--initiator', 'jobs:s', '--idempotency-key', 'k', '--channel', 'c', '--ephemeral', '--idle-ttl', '4h', '--model', 'haiku', '--',
+      'You are the scanner.\n\nTriage.\n\nCheck output:\nCVE-1'])
+    let kick = 'From the file.\n'
+    jobsIO.readFile = (p: string) => { expect(p).toBe('/k/kick.md'); return kick }
+    await runWork(file, dir, 'k')
+    expect(calls[1].at(-1)).toBe('From the file.\n\nCheck output:\nCVE-1')
+    kick = 'Edited.'
+    await runWork(file, dir, 'k')
+    expect(calls[2].at(-1)).toBe('Edited.\n\nCheck output:\nCVE-1')
+    jobsIO.readFile = () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }
+    expect(await runWork(file, dir, 'k')).toEqual({ result: 'failed', note: 'spawn.kickoff_file /k/kick.md: not found' })
+  })
+
+  test('an empty kickoff_file fails saying so; one starting with "-" (frontmatter) goes after --, as the message', async () => {
+    const [only] = parseJobs(`[f]\nschedule="0 6 * * *"\nspawn={ channel="c", kickoff_file="/k.md" }`)
+    jobsIO.readFile = () => '  \n'
+    expect(await runWork(only, dir, 'k')).toEqual({ result: 'failed', note: 'spawn.kickoff_file /k.md is empty, and there is no prompt or check output' })
+    expect(calls).toEqual([])
+    jobsIO.readFile = () => '---\ntitle: x\n---\nGo.'
+    expect((await runWork(only, dir, 'k')).result).toBe('done')
+    expect(calls[0].slice(-2)).toEqual(['--', '---\ntitle: x\n---\nGo.'])
+  })
+
+  test('the byte budget reserves room for the output header only when there is output', async () => {
+    jobsIO.readFile = () => 'k'.repeat(8_800)
+    const [only] = parseJobs(`[f]\nschedule="0 6 * * *"\nspawn={ channel="c", kickoff_file="/k.md" }`)
+    expect((await runWork(only, dir, 'k')).result).toBe('done')
+    jobsIO.readFile = () => 'k'.repeat(9_001)
+    expect(await runWork(only, dir, 'k')).toEqual({ result: 'failed', note: 'kickoff and prompt are over 9000 bytes' })
   })
 
   test('model and idle_ttl pass through to spawn', async () => {
@@ -436,6 +584,15 @@ describe('the attempt (in process)', () => {
     await jobsAttempt(opts())
     expect(result()).toMatchObject({ result: 'failed', note: 'check exited 124: timed out after 1800s' })
     expect(killed).toBe(1)
+  })
+
+  test('a job from a daemon that predates targets (mode on stdin) still gets its action, not "no agent"', () => {
+    expect<unknown>(jobFromWire({ name: 'r', schedule: '0 9 * * *', mode: 'main', prompt: 'p' } as unknown as Job)).toEqual({ name: 'r', schedule: '0 9 * * *', prompt: 'p', target: { to: 'main' } })
+    expect<unknown>(jobFromWire({ name: 's', schedule: '0 9 * * *', mode: 'spawn', prompt: 'p', channel: 'c', model: 'haiku', idleTtl: '4h' } as unknown as Job))
+      .toEqual({ name: 's', schedule: '0 9 * * *', prompt: 'p', channel: 'c', target: { spawn: { channel: 'c', model: 'haiku', idle: '4h' } } })
+    expect<unknown>(jobFromWire({ name: 'n', schedule: '0 9 * * *', check: 'c', mode: 'none' } as unknown as Job)).toEqual({ name: 'n', schedule: '0 9 * * *', check: 'c' })
+    const current = parseJobs(`[t]\nschedule="0 9 * * *"\nprompt="p"\nto="ops"`)[0]
+    expect(jobFromWire(JSON.parse(JSON.stringify(current)))).toEqual(current)
   })
 
   test('stdin that is not this job ends the attempt without a result', async () => {
@@ -913,6 +1070,8 @@ describe('jobs sync (CLI)', () => {
     // Effective values: writing out the default runner is not a change in what runs.
     expect(diffJobs(parseJobs(A), parseJobs(A.replace('mode="none"', 'mode="none"\nrunner="launchd"')))).toEqual([])
     expect(diffJobs(parseJobs(C), parseJobs(C + 'env_file="/x/.env"\n'))).toEqual(['changed: c (env_file)'])
+    const t = (to: string) => parseJobs(`[t]\nschedule="0 6 * * *"\nprompt="p"\nto="${to}"`)
+    expect(diffJobs(t('ops'), t('integrator'))).toEqual(['changed: t (to/spawn)'])
   })
 
   test('the daemon loads it now: prints what changed against what it had, then each job', async () => {
@@ -983,6 +1142,27 @@ describe('jobs sync (CLI)', () => {
 
 describe('jobs list warnings', () => {
   const at = (rel: string) => join(homedir(), rel)
+  test('a to naming an undeclared specialist is flagged; main, a declared one and a thread id are not', () => {
+    const jobs = parseJobs(['bookkeper', 'main', 'ops', '1234567890123456789'].map((to, i) => `[j${i}]\nschedule="0 2 * * *"\nprompt="p"\nto="${to}"`).join('\n'))
+    const declared = new Set(['ops'])
+    expect(jobs.map(j => jobWarnings(j, declared))).toEqual([['no such specialist "bookkeper" (hydra specialist list)'], [], [], []])
+  })
+  test('jobs list reads the declared specialists from the state dir and labels each target', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-spec-'))
+    const lines: string[] = []
+    const log = console.log
+    console.log = (s: string) => { lines.push(s) }
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), `channel="1"\n[a]\nschedule="0 2 * * *"\nprompt="p"\nto="ops"\n[b]\nschedule="0 2 * * *"\nprompt="p"\nto="opz"\n[c]\nschedule="0 2 * * *"\nprompt="p"\nspawn={}`)
+      writeFileSync(join(dir, 'specialists.json'), JSON.stringify({ ops: { channel: 'C0TEST', updatedAt: 1 } }))
+      jobsList('test', dir)
+      const i = lines.findIndex(l => l.startsWith('b '))
+      expect(lines[i]).toContain('to opz')
+      expect(lines[i + 1]).toBe('  warning: no such specialist "opz" (hydra specialist list)')
+      expect(lines.filter(l => l.includes('no such specialist'))).toHaveLength(1)
+      expect(lines.find(l => l.startsWith('c '))).toContain('spawn')
+    } finally { console.log = log; rmSync(dir, { recursive: true }) }
+  })
   test('a cwd or env_file under a folder macOS gates gets a warning naming the folder and the key; others none', () => {
     const job = (cwd: string, env: string) => parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="c.sh"\nmode="none"\ncwd="${cwd}"\nenv_file="${env}"`)[0]
     const w = jobWarnings(job(at('Documents/build'), at('Desktop/.env')))

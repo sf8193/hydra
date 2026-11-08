@@ -256,7 +256,7 @@ describe('the tick', () => {
     expect(argOf(s.args, '--slot-at')).toBe(new Date('2026-11-04T10:05:00-08:00').toISOString())
     expect(argOf(s.args, '--state-dir')).toBe(w.dir)
     expect(s.args).not.toContain('--manual')
-    expect(JSON.parse(s.stdin)).toEqual({ name: 'sweep', schedule: '*/5 * * * *', check: 'sweep.sh', mode: 'none', runner: 'daemon', runnerFrom: 'file', alertAfterMs: 86_400_000 })
+    expect(JSON.parse(s.stdin)).toEqual({ name: 'sweep', schedule: '*/5 * * * *', check: 'sweep.sh', runner: 'daemon', runnerFrom: 'file', alertAfterMs: 86_400_000 })
     expect(s.log).toBe(join(w.dir, 'jobs-state', 'sweep.log'))
     expect(state('sweep').dispatch).toMatchObject({ id: 1, kind: 'scheduled', slot: '2026-11-04 10:05', pid: 1000, lstart: 'L1000', nonce: argOf(s.args, '--nonce') })
     expect(new Date(state('sweep').dispatch!.deadline).getTime() - w.t.getTime()).toBe(ATTEMPT_DEADLINE_MS)
@@ -1488,6 +1488,26 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
     expect(state('sweep').last).toMatchObject({ result: 'failed', note: 'check exited 2: disk' })
     expect(w.main).toHaveLength(1)                                                  // launchd has no retries: alerted at once
     expect(w.main[0]).toMatch(/^Job sweep has been failing since .* \(1 failure\): check exited 2: disk\. Tell the user about it now\.$/)
+  })
+
+  test("an alert goes where the job's work goes: its to target, then main, then a channel; a spawn job starts at main", async () => {
+    const TO = `runner = "launchd"\nchannel = "top"\n[scan]\nschedule = "0 6 * * *"\ncheck = "scan.sh"\nto = "ops"\n`
+    const run = async (text: string, answer: boolean | 'throw', mainOk = true) => {
+      w.main = []; w.direct = []; w.mainOk = mainOk
+      const targets: string[] = []
+      toml(text)
+      rmSync(stateFile(w.dir, 'scan'), { force: true })
+      leave('scan', SLOT, '2026-11-04 06:00', { result: 'failed', note: 'x' })   // launchd has no retries: alerted at once
+      const c = clock({ toTarget: async (to, msg) => { targets.push(`${to}: ${msg}`); if (answer === 'throw') throw new Error('boom'); return answer } })
+      at('2026-11-04T06:00:40-08:00'); await c.tick()
+      c.stop()
+      return { targets: targets.map(t => t.replace(/since .* \(1/, 'since … (1')), main: w.main.length, direct: w.direct.length }
+    }
+    expect(await run(TO, true)).toEqual({ targets: ['ops: Job scan has been failing since … (1 failure): x. Tell the user about it now.'], main: 0, direct: 0 })
+    expect(await run(TO, false)).toMatchObject({ main: 1, direct: 0 })
+    expect(await run(TO, 'throw')).toMatchObject({ main: 1, direct: 0 })
+    expect(await run(TO, false, false)).toMatchObject({ main: 0, direct: 1 })
+    expect(await run(LD, true)).toEqual({ targets: [], main: 1, direct: 0 })
   })
 
   test("an external result is never a dispatch's result, nor the reverse: each is applied by its own path, once", async () => {

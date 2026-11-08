@@ -4,7 +4,8 @@
 // - `jobs run`: asks the daemon for a dispatch and waits for its outcome in the foreground;
 // - `jobs list`: the clock's last tick and each job's state (it parses jobs.toml, so it also validates it).
 // The work: an optional check script, run in the job's cwd with its env_file added (output = findings for an agent,
-// no output = nothing to do, nonzero = failed), then the mode's action (spawn, deliver to main, or nothing).
+// no output = nothing to do, nonzero = failed), then the target's action: deliver `to` a specialist, main or a thread,
+// spawn a fresh session, or nothing.
 
 import { randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
@@ -16,11 +17,11 @@ import { resolveConfig, sendRequest } from './helpers.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
-  attemptEnv, awakeTimeout, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
+  attemptEnv, awakeTimeout, isSpawn, jobFromWire, targetLabel, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
   type ExternalResult, type Job, type Outcome,
 } from '../shared/jobs.js'
 
-export { parseJobs, parseJobsConfig, isPlatform, type Job, type Mode } from '../shared/jobs.js'
+export { parseJobs, parseJobsConfig, isPlatform, type Job, type JobTarget } from '../shared/jobs.js'
 
 // Everything a run does to the outside world goes through here, so tests swap it.
 export const jobsIO = {
@@ -123,10 +124,22 @@ export async function runCheck(job: Job): Promise<{ output: string } | { outcome
 /** The action for a check's output: none records it; spawn and main send the prompt with it. */
 export async function runAction(job: Job, stateDir: string, key: string, output: string, onActionSent: (w: Work) => void = () => {}): Promise<Work> {
   const initiator = jobInitiator(job.name)
-  if (job.mode === 'none') return { result: 'done', note: output.slice(0, 300) }
+  const target = job.target
+  if (!target) return { result: 'done', note: output.slice(0, 300) }
 
+  // A spawned session reads its kickoff first; kickoff_file is re-read at each run, like a specialist's.
+  let kickoff = isSpawn(target) ? target.spawn.kickoff : undefined
+  if (isSpawn(target) && target.spawn.kickoffFile) {
+    try { kickoff = jobsIO.readFile(target.spawn.kickoffFile).trim() } catch (e) {
+      return { result: 'failed', note: `spawn.kickoff_file ${target.spawn.kickoffFile}: ${pathProblem(target.spawn.kickoffFile, e, job.runner)}` }
+    }
+  }
+  const lead = [kickoff, job.prompt].filter(Boolean).join('\n\n')
+  const kickoffFile = isSpawn(target) ? target.spawn.kickoffFile : undefined
+  if (!lead && !output) return { result: 'failed', note: `spawn.kickoff_file ${kickoffFile} is empty, and there is no prompt or check output` }
+  const room = MAX_MESSAGE_BYTES - (output ? RESERVED_BYTES : 0) - Buffer.byteLength(lead)
+  if (room < 0) return { result: 'failed', note: `kickoff and prompt are over ${MAX_MESSAGE_BYTES} bytes` }
   let shown = output
-  const room = MAX_MESSAGE_BYTES - RESERVED_BYTES - Buffer.byteLength(job.prompt!)
   if (Buffer.byteLength(output) > room) {
     // The agent gets the head; the whole output stays on disk and the agent is told where.
     const file = join(jobsDir(stateDir), `${job.name}.output.txt`)
@@ -135,10 +148,11 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
     const head = headBytes(output, room)
     shown = `${head}\n[truncated ${output.length - head.length} chars; full output in ${file}]`
   }
-  const message = shown ? `${job.prompt}\n\nCheck output:\n${shown}` : job.prompt!
-  const args = job.mode === 'spawn'
-    ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', job.channel!, '--ephemeral', ...(job.idleTtl ? ['--idle-ttl', job.idleTtl] : []), ...(job.model ? ['--model', job.model] : []), message]
-    : ['deliver', '--session', 'main', '--queue', '--initiator', initiator, '--idempotency-key', key, '--message', message]
+  const message = [lead, shown && `Check output:\n${shown}`].filter(Boolean).join('\n\n')
+  const args = isSpawn(target)
+    ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', target.spawn.channel, '--ephemeral',
+      ...(target.spawn.idle ? ['--idle-ttl', target.spawn.idle] : []), ...(target.spawn.model ? ['--model', target.spawn.model] : []), '--', message]
+    : ['deliver', '--to', target.to, ...(target.revive ? ['--revive'] : []), '--queue', '--initiator', initiator, '--idempotency-key', key, '--message', message]
   // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
   // --json: the reply carries the duplicate-key status, so a key the daemon already holds is an outcome, not an error.
   const r = await jobsIO.hydra(['--state-dir', stateDir, '--json', ...args])
@@ -149,9 +163,11 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
   if (!reply && DAEMON_AWAY.test(r.err)) return { result: 'not-now', note: `daemon not reachable (${r.err.trim().slice(-120)})` }
   const code = reply ? (reply.exitCode ?? 1) : (r.code || 1)
   const existing = reply?.data?.existing
-  // spawn answers 2 for any key it holds (status pending, spawned or completed); deliver answers 7 while one is in flight.
-  const pending = (job.mode === 'spawn' && code === 2 && existing?.status === 'pending') || (job.mode === 'main' && code === 7)
-  if (pending) return { result: 'not-now', note: `duplicate key ${key} still pending` }
+  // spawn answers 2 for any key it holds (status pending, spawned or completed). deliver answers 2 for a key already
+  // delivered, 7 while one is in flight, and 5 when the target can't take it yet (booting, or stuck on a prompt);
+  // 3, 4, 6 and 8 (no such specialist) fail.
+  if (isSpawn(target) ? code === 2 && existing?.status === 'pending' : code === 7) return { result: 'not-now', note: `duplicate key ${key} still pending` }
+  if (!isSpawn(target) && code === 5) return { result: 'not-now', note: `${target.to} can't take it yet${reply?.error ? `: ${reply.error.slice(-200)}` : ''}` }
   if (code === 2) {
     const w: Work = { result: 'done', note: `duplicate key ${key}: already served`, ...(existing?.sessionId && { servedBy: existing.sessionId }) }
     onActionSent(w)
@@ -199,7 +215,7 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
 
   const started = jobsIO.now()
   attemptIO.out(`${started.toISOString()} ${o.name} dispatch ${o.dispatch} (${o.manual ? 'manual' : `slot ${o.slot}`}) started, pid ${process.pid}`)
-  const job = JSON.parse(await attemptIO.readStdin()) as Job   // unreadable stdin throws: the dispatch ends without a result
+  const job = jobFromWire(JSON.parse(await attemptIO.readStdin()))   // unreadable stdin throws: the dispatch ends without a result
   if (job.name !== o.name) throw new Error(`stdin holds job ${job.name}, not ${o.name}`)
   // A scheduled run keys on the slot's instant: its label repeats after a westward zone change, and the repeat would
   // hit the first slot's key and record a false done. An attempt from a daemon without --slot-at keys on the label.
@@ -391,11 +407,12 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
 
 /** One line per job: what `jobs list` and `jobs sync` both print. */
 function printJobs(platform: string, stateDir: string, jobs: Job[], now: Date): void {
+  const specialists = readSpecialistNames(stateDir)
   for (const j of jobs) {
     console.log(describeJob(j, readJobState(stateDir, j.name, j.schedule), now))
     for (const n of j.notes ?? []) console.log(`  note: ${n}`)
     for (const w of launchdNotes(platform, stateDir, j)) console.log(`  ${w}`)
-    for (const w of jobWarnings(j)) console.log(`  warning: ${w}`)
+    for (const w of jobWarnings(j, specialists)) console.log(`  warning: ${w}`)
   }
 }
 
@@ -423,7 +440,7 @@ export function launchdNotes(platform: string, stateDir: string, j: Job): string
 // jobs sync: make the config live now
 // ---------------------------------------------------------------------------
 
-const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after', notes: 'durable', envFile: 'env_file' }
+const TOML_KEY: Record<string, string> = { target: 'to/spawn', alertAfterMs: 'alert_after', notes: 'durable', runnerFrom: 'runner', envFile: 'env_file' }
 
 /** What changed between the jobs the daemon had and the ones it has now, by jobs.toml key. */
 export function diffJobs(before: Job[], after: Job[]): string[] {
@@ -551,13 +568,24 @@ export async function syncLaunchd(platform: string, stateDir: string, jobs: Job[
   return { lines, ok }
 }
 
-/** What jobs.toml can't rule out on its own: things that may stop the job when it runs. */
-export function jobWarnings(j: Job): string[] {
+/**
+ * What jobs.toml can't rule out on its own: things that may stop the job when it runs. A `to` resolves as deliver
+ * --to does: main, then a declared specialist, then an all-digit thread id; anything else is no such specialist.
+ */
+export function jobWarnings(j: Job, specialists: ReadonlySet<string> = new Set()): string[] {
   const keys = [['cwd', j.cwd], ['env_file', j.envFile]] as const
-  return keys.flatMap(([k, path]) => {
+  const out = keys.flatMap(([k, path]) => {
     const folder = path && tccFolder(path)
     return folder ? [`${k} is under ${folder}: macOS lets the check in only if ${TCC_ACCESS[j.runner]} (docs/macos-permissions.md)`] : []
   })
+  const to = j.target && 'to' in j.target ? j.target.to : undefined
+  if (to && to !== 'main' && !specialists.has(to) && !/^\d+$/.test(to)) out.push(`no such specialist "${to}" (hydra specialist list)`)
+  return out
+}
+
+/** The names in the daemon's specialists.json. Missing or unreadable: none declared. */
+function readSpecialistNames(stateDir: string): Set<string> {
+  try { return new Set(Object.keys(JSON.parse(readFileSync(join(stateDir, 'specialists.json'), 'utf8')) ?? {})) } catch { return new Set() }
 }
 
 
@@ -581,5 +609,5 @@ export function describeJob(j: Job, r: ReturnType<typeof readJobState>, now: Dat
     }
     if (s.dispatch) parts.push(`running: dispatch ${s.dispatch.id} since ${local(s.dispatch.at)}`)
   }
-  return `${j.name.padEnd(20)} ${j.mode.padEnd(6)} ${runnerLabel(j).padEnd(17)} ${parts.join('  ')}`
+  return `${j.name.padEnd(20)} ${targetLabel(j.target).padEnd(10)} ${runnerLabel(j).padEnd(17)} ${parts.join('  ')}`
 }
