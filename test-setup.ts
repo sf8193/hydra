@@ -147,6 +147,11 @@ process.env.HYDRA_TEST_PRELOADED = '1' // daemon/config.ts refuses to load under
 process.env.CLAUDE_CONFIG_DIR = join(dir, 'claude')
 delete process.env.DISCORD_STATE_DIR
 
+// The operator's automatic-handoff knobs (AUTO_CONVERGE_PCT, AUTO_HANDOFF_*) are inherited from
+// the session environment when bun test runs inside a hydra session, so the run would test the
+// operator's settings, not the defaults. Tests that need one set it.
+for (const k of Object.keys(process.env)) if (k.startsWith('AUTO_')) delete process.env[k]
+
 // Real processes too: a private tmux server and a throwaway Codex root (codex-process.ts refuses real starts).
 // The tmux server can't be chosen here: bun's child processes inherit the environment bun
 // started with, not edits to process.env, so a TMUX_TMPDIR set in this file reached only the
