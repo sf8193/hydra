@@ -33,7 +33,8 @@ try {
   }
 } catch {}
 
-import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
+// DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
+import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
@@ -46,6 +47,7 @@ import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
+import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
 
 threadRegistry.boot(registry)
 reattachAdapters(resolveEngine)
@@ -222,7 +224,7 @@ import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/sl
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
-import { tmuxHasSession } from './daemon/util.js'
+import { tmuxHasSession, safeSend } from './daemon/util.js'
 
 // ---------------------------------------------------------------------------
 // Recovery report on reconnect
@@ -493,9 +495,6 @@ setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon
 
 // Jobs clock: runs jobs.toml's jobs as detached attempts and applies their results (daemon/jobs-clock.ts).
 // Failure reports go to main; if main can't take one, straight to a channel.
-import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
-import { safeSend } from './daemon/util.js'
-import { DEFAULT_SESSION_CHANNEL } from './daemon/config.js'   // a live binding: resolveDefaultChannel fills it after boot
 startJobsClock(realDeps({
   stateDir: STATE_DIR,
   platform: PLATFORM,

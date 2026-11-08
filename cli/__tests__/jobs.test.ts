@@ -535,7 +535,10 @@ describe('jobs list', () => {
       jobsIO.now = () => new Date('2026-11-04T18:00:00Z')
       writeAtomic(daemonFile(dir), JSON.stringify({ lastTick: '2026-11-04T17:59:30Z' }))
       writeAtomic(stateFile(dir, 'cleanup'), JSON.stringify({ last: { at: '2026-11-04T17:45:00Z', result: 'failed', note: 'ended without a result' }, failures: 1, failingSince: '2026-11-04T17:45:00Z', dispatch: { id: 2, nonce: 'n', at: '2026-11-04T18:00:00Z', kind: 'scheduled', slot: 's', deadline: 'd' } }))
-      jobsList('test', dir)
+      const tz = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+      process.env.TZ = 'America/Los_Angeles'
+      try { jobsList('test', dir) } finally { process.env.TZ = tz }
+      expect(lines.find(l => l.startsWith('vuln-scan'))).toContain('next 11/5/2026, 6:00:00 AM')   // local 06:00, not 06:00 UTC
       expect(lines[0]).toStartWith('clock: last tick')
       expect(lines[0]).not.toContain('STALE')
       const cleanup = lines.find(l => l.startsWith('cleanup'))!

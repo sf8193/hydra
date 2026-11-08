@@ -392,6 +392,10 @@
     ],
     [
       "daemon",
+      "daemon_jobs-clock"
+    ],
+    [
+      "daemon",
       "daemon_raindrop"
     ],
     [
@@ -433,10 +437,6 @@
     [
       "daemon",
       "daemon_session-health"
-    ],
-    [
-      "daemon",
-      "daemon_jobs-clock"
     ],
     [
       "bridge",

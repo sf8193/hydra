@@ -579,7 +579,6 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
 let clock: JobsClock | null = null
 export const jobsClock = () => clock
 export function startJobsClock(deps: ClockDeps): JobsClock {
-  clock?.stop()
   clock = new JobsClock(deps)
   clock.start()
   return clock
