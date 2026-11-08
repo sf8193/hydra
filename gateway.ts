@@ -170,6 +170,8 @@ export interface ChatGateway {
     files?: string[]
     buttons?: ButtonDef[]
     unfurl?: boolean
+    /** Small grey secondary text: Discord's `-#`, a Slack context block. */
+    subtext?: boolean
   }): Promise<SentMessage>
   edit(channelId: string, messageId: string, text: string): Promise<string>
   delete(channelId: string, messageId: string): Promise<void>

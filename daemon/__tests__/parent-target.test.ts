@@ -42,7 +42,7 @@ test('target="parent" resolves the caller\'s parent by id; errors with no parent
   mk('hd-imposter', 'hdparent2')
   mk('hd-child', 'hdchild', { parentId: 'hd-parent', initiator: 'hdparent2' })
   expect((await send('hd-child', 'parent', 'progress')).isError).toBeFalsy()
-  expect(sent).toEqual(['hd-parent-thread'])
+  expect(sent).toEqual(['hd-parent-thread', 'hd-child-thread'])
   expect(delivered.map(d => d.to)).toEqual(['hd-parent'])
 
   mk('hd-orphan', 'hdorphan', { parentId: null })

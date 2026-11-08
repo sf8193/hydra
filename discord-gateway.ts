@@ -94,6 +94,11 @@ export function formatThreadName(opts: SessionVisualOpts): { name: string; prior
  */
 export const DISCORD_ALLOWED_MENTIONS = { parse: ['users'], repliedUser: true } satisfies MessageMentionOptions
 
+/** Discord's subtext marker applies per line. */
+export function discordSubtext(text: string): string {
+  return text.split('\n').map(l => `-# ${l}`).join('\n')
+}
+
 export class DiscordGateway implements ChatGateway {
   readonly platform = 'discord' as const
   readonly canThreadInDM = false
@@ -313,11 +318,12 @@ export class DiscordGateway implements ChatGateway {
     replyTo?: string
     files?: string[]
     buttons?: ButtonDef[]
+    subtext?: boolean
   }): Promise<SentMessage> {
     const ch = await this.fetchTextChannel(channelId)
     if (!('send' in ch)) throw new Error('channel is not sendable')
 
-    const payload: Record<string, unknown> = { content: text }
+    const payload: Record<string, unknown> = { content: opts?.subtext ? discordSubtext(text) : text }
     if (opts?.files?.length) {
       for (const f of opts.files) {
         const st = statSync(f)

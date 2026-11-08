@@ -2,8 +2,8 @@ import { mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
 
-// Session-to-session sends reach the recipient's session in full. The recipient's thread
-// shows a one-line note instead of the whole text.
+// Session-to-session sends reach the recipient's session in full. Each thread shows one
+// subtext line instead of the whole text: 📨 in the recipient's, 📤 in the sender's.
 
 /** Past this many characters the recipient gets a file path and the opening lines, not the whole text. */
 export const SPILL_THRESHOLD = 4000
@@ -12,23 +12,39 @@ const HEAD_MAX_CHARS = 600
 const NOTE_SUMMARY_MAX = 140
 const SPILL_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-const TYPE_MARK = { progress: '·', question: '?', result: '✓' } as const
+const TYPE_MARK = { progress: '', question: '❓ ', result: '✅ ' } as const
 export type SendType = keyof typeof TYPE_MARK
 
+/** A session as the line names it. Its URL links its own thread. */
+export type Party = { name: string; emoji: string; url?: string }
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 /** The sender's own summary, else the first non-empty line: one line, bounded, identifiers intact. */
-export function oneLine(text: string, summary?: string): string {
+export function oneLine(text: string, summary?: string, sender?: string): string {
   const source = summary?.trim() || text.split('\n').map(l => l.trim()).find(l => l.length > 0) || ''
-  const flat = source
+  let flat = source
     .replace(/^[#>*\-\s]+/, '')
     .replace(/\*\*/g, '')
     .replace(/\s+/g, ' ')
     .replace(/@/g, '@\u200b')
-    .replace(/<(?=[@#&])/g, '<\u200b')
+    .replace(/<(?=[@#&!])/g, '<\u200b')
+    // Only the line itself links: a masked link in the summary would render on both platforms.
+    .replace(/\]\(/g, '] (')
+  // The line already names the sender.
+  const stripped = sender ? flat.replace(new RegExp(`^[^\\p{L}\\p{N}]*${escapeRe(sender)}(?::|\\s+[—–-])\\s*`, 'iu'), '') : flat
+  if (stripped) flat = stripped
   return flat.length > NOTE_SUMMARY_MAX ? `${flat.slice(0, NOTE_SUMMARY_MAX - 1)}…` : flat
 }
 
-export function noteLine(from: string, to: string, type: SendType, text: string, summary?: string, path?: string): string {
-  const line = `${from} → ${to} ${TYPE_MARK[type]} ${oneLine(text, summary)}`
+/**
+ * The line each thread shows: 📨 in the recipient's, 📤 in the sender's. Platform-neutral
+ * markdown; the gateway renders it as subtext. The emoji stays outside the link because
+ * Discord drops a masked link whose text holds an emoji.
+ */
+export function noteLine(dir: 'from' | 'to', party: Party, type: SendType, text: string, summary?: string, path?: string, sender?: string): string {
+  const name = party.url ? `[${party.name}](<${party.url}>)` : party.name
+  const line = `${dir === 'from' ? '📨' : '📤'} ${dir} ${party.emoji} ${name} → ${TYPE_MARK[type]}${oneLine(text, summary, sender)}`
   return path ? `${line} · \`${path}\`` : line
 }
 
@@ -58,32 +74,45 @@ export function shouldQuiet(o: { protocolParticipant: boolean; hasFiles: boolean
   return !o.protocolParticipant && !o.hasFiles
 }
 
-export type QuietIO = { postLine: (line: string) => Promise<unknown>; log: (msg: string) => void }
+export type QuietIO = {
+  postLine: (line: string) => Promise<unknown>
+  /** Posts to the sender's own thread; absent when there is none to post to. */
+  postEcho?: (line: string) => Promise<unknown>
+  log: (msg: string) => void
+}
 
 /**
- * Prepares what the recipient session is shown and posts the one-line note. Neither step
- * may stop delivery: a spill failure delivers the full text, and a note failure is
- * logged and reported as posted=false. The note is a notice, not the sender speaking to
- * the human: only a session's own reply does that.
+ * Prepares what the recipient session is shown and posts a line in each thread. None of
+ * it may stop delivery: a spill failure delivers the full text, and a line failure is
+ * logged (posted=false for the recipient's). The lines are notices, not the sender
+ * speaking to the human: only a session's own reply does that.
  */
 export async function quietSend(
-  o: { from: string; to: string; type: SendType; text: string; summary?: string; dir: string },
+  o: { from: Party; to: Party; type: SendType; text: string; summary?: string; dir: string },
   io: QuietIO,
-): Promise<{ delivered: string; posted: boolean }> {
+): Promise<{ delivered: string; posted: boolean; echoed: boolean; headline: string }> {
   let delivered = o.text
   let path: string | undefined
   try {
-    const spilled = spillIfLong(o.text, o.dir, o.from, o.to)
+    const spilled = spillIfLong(o.text, o.dir, o.from.name, o.to.name)
     delivered = spilled.text
     path = spilled.path
   } catch (err) {
     io.log(`quiet-send: spill failed, delivering full text: ${err instanceof Error ? err.message : err}`)
   }
-  try {
-    await io.postLine(noteLine(o.from, o.to, o.type, o.text, o.summary, path))
-    return { delivered, posted: true }
-  } catch (err) {
-    io.log(`quiet-send: note post failed, line skipped: ${err instanceof Error ? err.message : err}`)
-    return { delivered, posted: false }
+  const post = async (what: string, send: () => Promise<unknown>) => {
+    try {
+      await send()
+      return true
+    } catch (err) {
+      io.log(`quiet-send: ${what} post failed, line skipped: ${err instanceof Error ? err.message : err}`)
+      return false
+    }
   }
+  const echo = io.postEcho
+  const [posted, echoed] = await Promise.all([
+    post('note', () => io.postLine(noteLine('from', o.from, o.type, o.text, o.summary, path, o.from.name))),
+    echo ? post('echo', () => echo(noteLine('to', o.to, o.type, o.text, o.summary, undefined, o.from.name))) : false,
+  ])
+  return { delivered, posted, echoed, headline: oneLine(o.text, o.summary, o.from.name) }
 }
