@@ -1,7 +1,7 @@
 # Until-done jobs
 
-> Status: proposal v9, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
-> 1–7) and an independent pass. For review before building.
+> Status: proposal v10, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
+> 1–8) and an independent pass. For review before building.
 
 ## What hydra jobs should offer
 
@@ -135,7 +135,11 @@ own**, because the daemon restarts often and an attempt must not die with it.
 
 ### The tick
 
-One timer per daemon (platform), every minute. A wall-clock jump larger than the interval (wake from sleep) is just
+One timer per daemon (platform), every minute. **One daemon per state dir owns the clock:** before its first tick
+the clock opens `jobs-state/_daemon.lock` with `O_EXLOCK | O_NONBLOCK` and holds the descriptor for the daemon's
+life. The kernel releases it on exit. Node's `fs` doesn't export `O_EXLOCK`; the darwin value is `0x20`, verified
+under bun: a second open gets `EAGAIN`. A daemon that can't take the lock runs no jobs and says so. This covers the
+daemon's own singleton race (the socket probe comes before the listen), which is worth its own ticket. A wall-clock jump larger than the interval (wake from sleep) is just
 a tick that finds slots owed. Each tick:
 
 1. **Reads jobs.toml.** If it doesn't parse, the daemon keeps running the last good config and alerts once a local
@@ -143,7 +147,7 @@ a tick that finds slots owed. Each tick:
 2. **Decides whether the machine is online:** the captive-portal probe (`captive.apple.com` returns "Success")
    **or** the daemon's gateway connection (gateway-health). Two independent witnesses: a VPN that blocks the probe
    can't make every job "not now" forever, and a captive portal (probe fails, gateway down) still reads offline.
-3. **For each job,** computes the owed slot. Then it skips the job if the attempt lock is held, holds it if backoff
+3. **For each job,** computes the owed slot. Then it skips the job if it has a live dispatch, holds it if backoff
    says wait, and records not-now itself if `needs` is unmet or overlap has no verdict yet. Otherwise it decides
    overlap and dispatches.
 4. **Applies results,** and catches dispatches that ended without one (below). Then it **decides alerts** from
@@ -179,8 +183,14 @@ work and reports one result. It never reads or writes job state.
 **Outcomes that need no work are recorded by the daemon directly,** with no process: absorbed and stuck (overlap),
 needs unmet or no verdict yet (not now), and the baseline.
 
-**Everything else is dispatched.** The daemon gives each dispatch a per-job increasing id, records it in the job's
-state (`dispatch: {id, at, slot, pid, lstart, deadline}`), and starts a detached child:
+**Everything else is dispatched, in two phases:**
+
+1. **Reserve.** Check "no live dispatch" and write `dispatch: {id, at, slot, deadline}` with the next per-job id, as
+   one synchronous step with no `await` in between. The tick and a `jobs run` request both go through this one step,
+   so they can't both dispatch. The id is reserved before anything runs, so it is never reused.
+2. **Spawn**, then add `pid` and `lstart` to the record.
+
+The detached child:
 
 `bun hydra.ts jobs attempt <platform> <name> --dispatch <id> --slot <label>`
 
@@ -213,15 +223,31 @@ attempt can be lost: a bun upgrade breaking the import, unreadable stdin, an unw
   gone, no result".
 
 **Liveness is the dispatched process,** identified by `pid` + `lstart`. While it runs, the job has a live dispatch,
-and the tick doesn't dispatch it again. No lock file and no marker are needed, because only the daemon dispatches,
-and it records each dispatch before the attempt starts.
+and nothing dispatches it again. No per-job lock and no marker are needed: only the daemon dispatches, and every
+dispatch is reserved before its process exists.
+
+**A reservation without a `pid`** means the daemon died between spawning and recording. On the next tick it looks
+for the orphan by its unique argv (`jobs attempt <platform> <name> --dispatch <id>`) with
+`ps -ax -o pid=,lstart=,command=`:
+- **found:** the daemon adopts it and records its `pid` and `lstart`;
+- **not found:** if a result exists, it is applied; otherwise it is "ended without a result" after the grace.
+
+So a crash in that window never produces a second concurrent attempt or a reused id.
+
+**Stale results.** Recording "ended without a result" for a dispatch also sets `appliedDispatch` to its id. Each
+tick deletes result files with an id at or below `appliedDispatch`, including a result that landed after its
+dispatch was already given up. A result above `appliedDispatch` that isn't the live dispatch can't arise after
+reservation. If one appears, it is logged and left alone.
 
 ### Commands
 
 - **`hydra jobs run <platform> <name>`** asks the daemon for a dispatch. The daemon records it, with the CLI's own
   `pid` and `lstart`. The CLI runs the attempt **in the foreground**, writes the result file, and prints the result.
   The daemon applies it on its next tick, the same as any other result.
-  - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap.
+  - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap. It never sets
+    `attemptedSlot`, so it doesn't use up a plain job's scheduled slot.
+  - **Ctrl-C:** the CLI traps SIGINT and writes a not-now result, "cancelled", so a cancelled run isn't a failure.
+  - The CLI isn't a process-group leader, so the daemon's kill path targets its `pid`, not a group.
   - With a live dispatch, the daemon refuses with "already running".
   - With the daemon down, it refuses with "daemon not running". The daemon is the one source of decisions, and a
     dead daemon is the thing to fix.
@@ -412,6 +438,11 @@ has a test.** In addition, these cases a builder wouldn't derive from the rules:
 - fall-back with a 5-minute schedule;
 - a cutover on Friday 11:30 while offline;
 - a reused pid at the daemon's liveness and kill checks;
+- a daemon crash between spawning and recording the `pid`: the orphan is adopted by argv, never run twice;
+- a `jobs run` request arriving while the tick is awaiting the probe: exactly one dispatch;
+- two daemons starting at once: only one runs jobs;
+- a late result after "ended without a result": deleted, not applied;
+- Ctrl-C on `jobs run`: not-now "cancelled", with no failure and the slot not used;
 - a daemon restart while an attempt runs: the result waits on disk and is applied once;
 - a crash between applying a result and deleting it: no double apply;
 - EPIPE: an attempt writing output after a daemon restart;
