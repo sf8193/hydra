@@ -141,7 +141,8 @@ export type Dispatch = {
   at: string
   kind: 'scheduled' | 'manual'
   slot: string        // scheduled: the slot it serves; manual: the latest slot label, for display only
-  deadline: string
+  deadline: string    // moved later by any gap in the daemon's watch (sleep): the attempt's own timers count only awake time
+  seenAt?: string     // when the daemon last saw the attempt running
   pid?: number        // added after the spawn
   lstart?: string
 }
@@ -293,6 +294,28 @@ export function backoffUntil(schedule: string, state: JobState, owed: Slot): num
 
 /** A last tick older than this is stale: the health loop flags it, and `jobs list` says so. */
 export const STALE_TICK_MS = 5 * 60_000
+
+/**
+ * Like setTimeout, but counts only time awake. On macOS a timer counts sleep (CLOCK_MONOTONIC runs on), so a laptop
+ * that sleeps through an attempt would wake into its deadline. A gap between beats longer than two beats is sleep
+ * and counts as one beat. Returns a cancel.
+ */
+export function awakeTimeout(fn: () => void, ms: number, clock: { now: () => number; every: (f: () => void, ms: number) => () => void } = {
+  now: Date.now,
+  every: (f, beat) => { const t = setInterval(f, beat); return () => clearInterval(t) },
+}): () => void {
+  const beat = Math.min(30_000, Math.max(10, ms / 4))
+  let awake = 0
+  let last = clock.now()
+  const cancel = clock.every(() => {
+    const now = clock.now()
+    const step = now - last
+    last = now
+    awake += step > 2 * beat ? beat : step
+    if (awake >= ms) { cancel(); fn() }
+  }, beat)
+  return cancel
+}
 
 /** The initiator every session and message a job causes carries. */
 export const jobInitiator = (name: string) => `jobs:${name}`

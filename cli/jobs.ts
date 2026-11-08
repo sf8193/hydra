@@ -13,7 +13,7 @@ import { resolveConfig, sendRequest } from './helpers.js'
 import { nextSlot } from '../shared/cron-local.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, isOpenJobSession, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
-  readDaemonState, readJobState, resultFile, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult, type Job, type Outcome,
+  awakeTimeout, readDaemonState, readJobState, resultFile, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult, type Job, type Outcome,
 } from '../shared/jobs.js'
 
 export { parseJobs, parseJobsConfig, isPlatform, type Job, type Mode } from '../shared/jobs.js'
@@ -24,14 +24,14 @@ export const jobsIO = {
   // stdout is the contract: findings go there. The deadline covers a child that outlives `sh` and holds the pipe open.
   async check(cmd: string, timeoutMs = CHECK_TIMEOUT_MS): Promise<{ code: number; out: string; err: string }> {
     // env is passed explicitly: Bun.spawn does not see later edits to process.env.PATH, and resolveConfig adds Homebrew to it.
-    const p = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe', timeout: timeoutMs, env: process.env })
+    const p = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe', env: process.env })
     const done = Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited])
       .then(([out, err, code]) => ({ code, out, err }))
-    let timer: ReturnType<typeof setTimeout>
+    let cancel = () => {}
     const late = new Promise<{ code: number; out: string; err: string }>(res => {
-      timer = setTimeout(() => res({ code: 124, out: '', err: `timed out after ${timeoutMs / 1000}s` }), timeoutMs + 500)
+      cancel = awakeTimeout(() => { p.kill(); res({ code: 124, out: '', err: `timed out after ${timeoutMs / 1000}s` }) }, timeoutMs)
     })
-    try { return await Promise.race([done, late]) } finally { clearTimeout(timer!) }
+    try { return await Promise.race([done, late]) } finally { cancel() }
   },
   // The action's own timeout: a hung spawn or deliver is killed and counts as failed.
   async hydra(args: string[], timeoutMs = ACTION_TIMEOUT_MS): Promise<{ code: number; err: string; out: string }> {
@@ -113,7 +113,7 @@ export const attemptIO = {
   readStdin: () => Bun.stdin.text(),
   /** Kills the attempt's own process group, which it leads (the daemon spawns it detached). Takes the attempt with it. */
   killOwnGroup: () => { try { process.kill(-process.pid, 'SIGKILL') } catch {} process.exit(1) },
-  setTimer: (fn: () => void, ms: number) => setTimeout(fn, ms),
+  setTimer: (fn: () => void, ms: number) => { awakeTimeout(fn, ms) },
   onSigterm: (fn: () => void) => { process.on('SIGTERM', fn) },
   out: (line: string) => { try { writeSync(1, `${line}\n`) } catch {} },
 }

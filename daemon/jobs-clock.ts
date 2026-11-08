@@ -41,6 +41,8 @@ export type ClockDeps = {
   lstartOf: (pid: number) => string | null
   listProcesses: () => Proc[]
   killGroup: (pid: number, signal: NodeJS.Signals) => void
+  /** Signals one process (not its group). */
+  kill: (pid: number, signal: NodeJS.Signals) => void
   /** Removes this platform's legacy launchd job entries; returns the titles removed. */
   removeLegacyEntries: () => Promise<string[]>
   /** The platform's live state dir. Legacy entries belong to the daemon on it; a worktree or test daemon leaves them. */
@@ -558,10 +560,20 @@ export class JobsClock {
       return
     }
 
-    if (now > new Date(d.deadline).getTime() + KILL_GRACE_MS && ask(() => this.d.lstartOf(d.pid!)) === d.lstart) {
-      this.d.log(`jobs: ${name}: dispatch ${d.id} is past its deadline; killing process group ${d.pid}`)
-      try { this.d.killGroup(d.pid, 'SIGKILL') } catch (err) { this.d.log(`jobs: ${name}: kill failed: ${err}`) }
-    }
+    // A gap since the daemon last saw the attempt is time it couldn't watch: the machine slept, or no daemon ran. The
+    // attempt's own timers count only awake time, so its deadline moves by the gap and a sleep is never a failure.
+    const seen = new Date(d.seenAt ?? d.at).getTime()
+    const deadline = new Date(d.deadline).getTime() + (now - seen > 2 * TICK_MS ? now - seen : 0)
+    this.update(name, schedule, s => {
+      if (s.dispatch?.id === d.id) s.dispatch = { ...s.dispatch, seenAt: new Date(now).toISOString(), deadline: new Date(deadline).toISOString() }
+    })
+    // Past the deadline: SIGTERM to the attempt, whose handler writes not-now (or done if the action landed) and then
+    // kills its own group. Only a grace later, if it is still there, SIGKILL to the group.
+    const overdue = now - deadline
+    if (overdue <= KILL_GRACE_MS || ask(() => this.d.lstartOf(d.pid!)) !== d.lstart) return
+    const signal = overdue > 2 * KILL_GRACE_MS ? 'SIGKILL' : 'SIGTERM'
+    this.d.log(`jobs: ${name}: dispatch ${d.id} is past its deadline; ${signal === 'SIGTERM' ? `SIGTERM to ${d.pid}` : `killing process group ${d.pid}`}`)
+    try { signal === 'SIGTERM' ? this.d.kill(d.pid, 'SIGTERM') : this.d.killGroup(d.pid, 'SIGKILL') } catch (err) { this.d.log(`jobs: ${name}: kill failed: ${err}`) }
   }
 
   private applyIfPresent(name: string, job: Job | undefined, d: Dispatch): boolean {
@@ -783,6 +795,7 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
     lstartOf, listProcesses,
     defaultStateDir: platformStateDir(o.platform),
     killGroup: (pid, signal) => process.kill(-pid, signal),
+    kill: (pid, signal) => process.kill(pid, signal),
     removeLegacyEntries: async () => {
       const titles = legacyTitles(LAUNCH_AGENTS_DIR, o.platform)
       for (const t of titles) await Bun.cron.remove(t)

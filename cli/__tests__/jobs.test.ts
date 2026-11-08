@@ -8,7 +8,7 @@ import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
   isPlatform, describeJob, jobsMarkDone,
 } from '../jobs.js'
-import { resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
+import { awakeTimeout, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
 
 const repo = join(import.meta.dir, '..', '..')
 
@@ -421,6 +421,34 @@ console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * 
     expect(await p.exited).toBe(1)
     expect(existsSync(resultFile(dir, 'sweep', 1))).toBe(false)
   }, 15_000)
+})
+
+describe('awakeTimeout', () => {
+  const fake = () => {
+    let t = 0
+    let beat: (() => void) | null = null
+    return {
+      clock: { now: () => t, every: (f: () => void) => { beat = f; return () => { beat = null } } },
+      advance: (ms: number) => { t += ms; beat?.() },
+      get armed() { return beat !== null },
+    }
+  }
+  test('fires after the given awake time, once', () => {
+    const f = fake(); let fired = 0
+    awakeTimeout(() => fired++, 60_000, f.clock)
+    for (let i = 0; i < 3; i++) f.advance(15_000)
+    expect(fired).toBe(0)
+    f.advance(15_000)
+    expect(fired).toBe(1)
+    expect(f.armed).toBe(false)
+  })
+  test('a long gap between beats (the machine slept) counts as one beat, not as elapsed time', () => {
+    const f = fake(); let fired = 0
+    awakeTimeout(() => fired++, 34 * 60_000, f.clock)
+    f.advance(5 * 60_000)
+    f.advance(3 * 3_600_000)   // asleep
+    expect(fired).toBe(0)
+  })
 })
 
 describe('jobsIO (real subprocess)', () => {

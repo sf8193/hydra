@@ -58,6 +58,7 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     lstartOf: pid => w.procs.get(pid)?.lstart ?? null,
     listProcesses: () => [...w.procs].map(([pid, p]) => ({ pid, ...p })),
     killGroup: (pid, sig) => { w.kills.push([pid, sig]); w.procs.delete(pid) },
+    kill: (pid, sig) => { w.kills.push([pid, sig]) },
     defaultStateDir: w.dir,
     gatewayConnected: () => w.gateway,
     captiveProbe: async () => { w.probes++; await w.probeGate; if (w.probe === 'throw') throw new Error('ENOTFOUND'); return w.probe },
@@ -405,23 +406,54 @@ describe('applying results', () => {
     expect(w.kills).toEqual([])
   })
 
-  test('wedged past its deadline: the group is killed, then the next tick records the loss', async () => {
+  /** Ticks once a minute until `until`, as an awake daemon does. */
+  const walk = async (c: JobsClock, until: number) => { while (w.t.getTime() + 60_000 <= until) { w.t = new Date(w.t.getTime() + 60_000); await c.tick() } }
+
+  test('wedged past its deadline: SIGTERM to the attempt first, the group SIGKILLed only a grace later, then the loss', async () => {
     const c = await dispatched()
     const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
-    w.t = new Date(deadline + KILL_GRACE_MS - 1000); await c.tick()
+    await walk(c, deadline + KILL_GRACE_MS)
     expect(w.kills).toEqual([])
-    w.t = new Date(deadline + KILL_GRACE_MS + 1000); await c.tick()
-    expect(w.kills).toEqual([[1000, 'SIGKILL']])
+    await walk(c, deadline + KILL_GRACE_MS + 60_000)
+    expect(w.kills).toEqual([[1000, 'SIGTERM']])   // the attempt alone: its handler writes, then kills its own group
+    await walk(c, deadline + 2 * KILL_GRACE_MS + 60_000)
+    expect(w.kills.at(-1)).toEqual([1000, 'SIGKILL'])
     expect(state('sweep').dispatch).toBeDefined()
     w.t = new Date(w.t.getTime() + 60_000); await c.tick()
     expect(state('sweep').last).toMatchObject({ note: 'ended without a result' })
   })
 
+  test('SIGTERM at the deadline lets the attempt report: its not-now result is applied, nothing is killed', async () => {
+    const c = await dispatched()
+    const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
+    await walk(c, deadline + KILL_GRACE_MS + 60_000)
+    expect(w.kills).toEqual([[1000, 'SIGTERM']])
+    finish('sweep', 1, 'not-now', 'cancelled', 1000)
+    w.t = new Date(w.t.getTime() + 60_000); await c.tick()
+    expect(w.kills).toEqual([[1000, 'SIGTERM']])
+    expect(state('sweep').notNow).toMatchObject({ reason: 'cancelled' })
+    expect(state('sweep').last?.result).not.toBe('failed')
+  })
+
+  test('the machine sleeps through an attempt: no kill on wake, the deadline moves by the gap, and its result lands', async () => {
+    const c = await dispatched()
+    const before = new Date(state('sweep').dispatch!.deadline).getTime()
+    w.t = new Date(w.t.getTime() + 3 * 3_600_000); await c.tick()   // 3h asleep: far past the old deadline
+    expect(w.kills).toEqual([])
+    expect(new Date(state('sweep').dispatch!.deadline).getTime()).toBeGreaterThanOrEqual(before + 3 * 3_600_000 - 60_000)
+    await walk(c, w.t.getTime() + 10 * 60_000)   // awake again, still running
+    expect(w.kills).toEqual([])
+    finish('sweep', 1, 'done', undefined, 1000)
+    w.t = new Date(w.t.getTime() + 60_000); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'done' })
+  })
+
   test('a reused pid at the kill check: past the deadline, a different process with that pid is never killed', async () => {
     const c = await dispatched()
     const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
+    await walk(c, deadline)
     w.procs.set(1000, { lstart: 'reused', command: 'Safari' })
-    w.t = new Date(deadline + KILL_GRACE_MS + 1000); await c.tick()
+    await walk(c, deadline + 2 * KILL_GRACE_MS + 60_000)
     expect(w.kills).toEqual([])
     expect(w.procs.get(1000)?.command).toBe('Safari')
   })
@@ -429,7 +461,7 @@ describe('applying results', () => {
   test('a deadline group kill leaves the job free to dispatch on its next slot', async () => {
     const c = await dispatched()
     const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
-    w.t = new Date(deadline + KILL_GRACE_MS + 1000); await c.tick()
+    await walk(c, deadline + 2 * KILL_GRACE_MS + 60_000)
     w.t = new Date(w.t.getTime() + 60_000); await c.tick()   // loss recorded; the latest slot is owed again
     w.t = new Date(w.t.getTime() + 5 * 60_000); await c.tick()
     expect(w.spawns.length).toBeGreaterThanOrEqual(2)
