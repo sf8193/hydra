@@ -17,8 +17,8 @@
 // on 03:00 PDT in Los Angeles), the slot's label is the EARLIEST of them, its nominal label: "2026-03-08 02:00".
 // nextSlot and latestSlot apply the same rule, so latestSlot(nextSlot(t).at) equals nextSlot(t).
 // Instants never decrease as minutes increase, which is what lets the searches walk minutes in order. A gap slot's
-// instant shows a later wall-clock time than its label, so callers that need the label take it from the Slot, not
-// from slotLabel(at).
+// instant shows a later wall-clock time than its label, so a slot's label only ever comes from the Slot itself; this
+// module exports no way to label an instant.
 
 export interface Slot { at: Date; label: string }
 
@@ -172,12 +172,3 @@ export function latestSlot(expr: string, at: Date): Slot | null {
   }
   return found === undefined ? null : { at: new Date(found), label: labelOfKey(label) }
 }
-
-/** The first local-time match strictly after `from`; null if the expression never matches (e.g. Feb 31). */
-export const nextMatch = (expr: string, from: Date): Date | null => nextSlot(expr, from)?.at ?? null
-
-/** The latest local-time match at or before `at`; null if none. */
-export const latestMatch = (expr: string, at: Date): Date | null => latestSlot(expr, at)?.at ?? null
-
-/** Local wall-clock `YYYY-MM-DD HH:MM` of an instant. A gap slot's nominal label comes from its Slot instead. */
-export const slotLabel = (d: Date): string => labelOfKey(wallKey(d.getTime()))

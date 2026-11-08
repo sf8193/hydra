@@ -1,5 +1,13 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { nextMatch, latestMatch, nextSlot, latestSlot, slotLabel, parseCron } from '../cron-local.js'
+import { nextSlot, latestSlot, parseCron } from '../cron-local.js'
+
+// Instant-only views of the Slot API, for assertions about instants.
+const nextMatch = (e: string, from: Date) => nextSlot(e, from)?.at ?? null
+const latestMatch = (e: string, at: Date) => latestSlot(e, at)?.at ?? null
+// The local wall-clock time an instant shows. Not a slot's label: a gap slot's label is its nominal time, which this
+// can't produce, which is why the module exports no such function.
+const p2 = (n: number) => String(n).padStart(2, '0')
+const slotLabel = (x: Date) => `${x.getFullYear()}-${p2(x.getMonth() + 1)}-${p2(x.getDate())} ${p2(x.getHours())}:${p2(x.getMinutes())}`
 
 // Each describe runs in one zone. Bun applies a runtime change to process.env.TZ to Date's local methods, but
 // assigning undefined or deleting it leaves the last zone in force. To restore, set the original zone's name back,
