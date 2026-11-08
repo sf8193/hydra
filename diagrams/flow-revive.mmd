@@ -1,6 +1,6 @@
 %% Who is home, and putting a session back into a thread. Drawn from the code (reconciled by a cold review of the
 %% stack, then corrected for its findings). (a) occupancy() decides; (b) every revive goes through reviveThread()
-%% under one lock per target. Later changes extend (b) to `deliver --to` and named targets.
+%% under one lock per target; (c) `deliver --thread T --revive` asks for it. Later changes extend this to `deliver --to`.
 flowchart TD
   subgraph A["(a) occupancy(info): session-reachability.ts"]
     A0{"record?"} -- no --> AN[none]
@@ -66,4 +66,23 @@ flowchart TD
     OK -- specialist --> REP{"re-pointed meanwhile?"}
     REP -- yes --> E3r[exit 3, left running]
     REP -- no --> SET["setSpecialist(threadId) · pushToolSurface"]
+  end
+
+  subgraph C["(c) deliver --thread T --revive: cli-handler.ts"]
+    D0{"--thread set, no --session?"} -- no --> DV[error]
+    D0 -- yes --> DS{"a specialist's thread?"}
+    DS -- yes --> SPD["deliver to the specialist (b): its name, kickoff, back-off"]
+    DS -- no --> DL["withThreadLock(T)"] --> DO{"occupancy of T's record"}
+    DO -- orphaned --> D4[exit 4]
+    DO -- "starting / reachable" --> DQ["revived: false"]
+    DO -- "dead / none" --> DB{"back-off on T?"}
+    DB -- yes --> D6b["exit 6: not retrying until …<br/>(the platform is not asked)"]
+    DB -- no --> DE{"threadExists"}
+    DE -- "gone (10003)" --> D3b["exit 3: gone"]
+    DE -- yes --> DR["reviveThread(thread or a stub for an unknown one,<br/>backoffKey = T)"]
+    DR -- "busy" --> D5[exit 5]
+    DR -- "fail" --> D6[exit 6]
+    DR -- ok --> DQ2["revived: true"]
+    DQ --> DD["queue = true → deliver: queued or delivered"]
+    DQ2 --> DD
   end

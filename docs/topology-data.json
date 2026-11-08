@@ -662,6 +662,10 @@
     ],
     [
       "daemon_cli-handler",
+      "daemon_recovery"
+    ],
+    [
+      "daemon_cli-handler",
       "daemon_config"
     ],
     [

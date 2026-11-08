@@ -272,6 +272,37 @@ export function backoffRefusal(key: string): { reason: string; backoff: Backoff 
   return { backoff: b, reason: `not retrying until ${new Date(b.nextAt).toTimeString().slice(0, 8)} (${b.failures} failure${b.failures === 1 ? '' : 's'}); last: ${b.lastError}` }
 }
 
+/** Test seam: the platform's answer to "is this thread still there?" (`threadExists` reports gone only on a definitive code). */
+export const reviveDeps = {
+  threadExists: (threadId: string) => gateway.threadExists(threadId),
+}
+
+export type ThreadReviveResult =
+  | { ok: true; revived: boolean }
+  | { ok: false; exitCode: 3 | 4 | 5 | 6; reason: string }
+
+/**
+ * `deliver --thread <id> --revive` for a thread no specialist owns: an unnamed thread heals only when asked. Under
+ * the thread's lock: an orphan is reported (exit 4), never revived over; someone home is left alone; a thread backing
+ * off is refused before the platform is asked; otherwise, while the platform still has the thread, a session is
+ * revived there with the plain resume prompt, even when hydra has no record of the thread. A deleted thread is exit 3.
+ */
+export function reviveThreadForDelivery(threadId: string, initiator?: string): Promise<ThreadReviveResult> {
+  return withThreadLock(threadId, async () => {
+    const home = registry.get(registry.getByThread(threadId) ?? '')
+    const occ = occupancy(home)
+    if (occ === 'orphaned') return { ok: false, exitCode: 4, reason: `${home!.tmuxName} is running but not connected; resume it in the thread, or kill it to restart` }
+    if (occupied(occ)) return { ok: true, revived: false }
+    const refusal = backoffRefusal(threadId)
+    if (refusal) return { ok: false, exitCode: 6, reason: refusal.reason }
+    if (!(await reviveDeps.threadExists(threadId))) return { ok: false, exitCode: 3, reason: `thread ${threadId} is gone` }
+    const thread = threadRegistry.get(threadId) ?? threadStub(threadId, 'Continue the work in this thread.')
+    const outcome = await reviveThread({ thread, backoffKey: threadId, ...(initiator && { initiator }), trigger: 'deliver --revive' })
+    if (!outcome.ok) return { ok: false, exitCode: outcome.busy ? 5 : 6, reason: outcome.reason }
+    return { ok: true, revived: true }
+  })
+}
+
 /** A thread the daemon has no metadata for (the platform still has it, or it has none yet): enough for a respawn. */
 export function threadStub(threadId: string, topic: string): ThreadMetadata {
   return { threadId, topic, sessionHistory: [], respawnCount: 0 } as unknown as ThreadMetadata
