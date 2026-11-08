@@ -281,14 +281,24 @@ export type Proc = { pid: number; lstart: string; command: string }
 /** ps pads the day of month ("Sat Nov  7"); every lstart is compared in this one form, whichever ps call produced it. */
 export const normalizeLstart = (s: string) => s.trim().replace(/\s+/g, ' ')
 
+// ps prints lstart in local time, following TZ, which the clock follows as a laptop travels: every call pins UTC, so
+// one process always has one lstart, whatever the zone is now or was when it was recorded.
+const psEnv = () => ({ ...process.env, TZ: 'UTC' })
+
+/** The process's start time, or null if no such process. Throws if ps itself failed: that says nothing about the pid. */
 export function lstartOf(pid: number): string | null {
-  const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })
+  const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: psEnv() })
+  if (r.error) throw r.error
   const out = r.stdout ? normalizeLstart(r.stdout) : ''
-  return r.status === 0 && out ? out : null
+  if (r.status === 0 && out) return out
+  if (r.status === 1) return null
+  throw new Error(`ps exited ${r.status}: ${(r.stderr ?? '').trim()}`)
 }
 
 export function listProcesses(): Proc[] {
-  const r = spawnSync('ps', ['-ax', '-o', 'pid=,lstart=,command='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+  const r = spawnSync('ps', ['-ax', '-o', 'pid=,lstart=,command='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: psEnv() })
+  if (r.error) throw r.error
+  if (r.status !== 0) throw new Error(`ps exited ${r.status}: ${(r.stderr ?? '').trim()}`)
   const out: Proc[] = []
   for (const line of (r.stdout ?? '').split('\n')) {
     // lstart is five fields: "Sat Nov  7 16:25:09 2026"

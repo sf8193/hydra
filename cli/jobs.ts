@@ -167,9 +167,12 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
     // Before the daemon answers, nothing is ours to cancel: if the reservation was made, its attempt runs as usual.
     if (!reply || cancelling) runIO.exit(130)
     cancelling = true
-    if (reply!.pid && reply!.lstart && runIO.lstartOf(reply!.pid) === reply!.lstart) {
+    const pid = reply!.pid
+    let same = false
+    try { same = !!pid && !!reply!.lstart && runIO.lstartOf(pid) === reply!.lstart } catch {}   // no answer: kill nothing
+    if (pid && same) {
       // The attempt alone: it decides cancelled or done, writes that, then kills its own group (write, then kill).
-      try { runIO.kill(reply!.pid, 'SIGTERM') } catch {}
+      try { runIO.kill(pid, 'SIGTERM') } catch {}
       runIO.print(`${name}: cancelling dispatch ${reply!.id}… (Ctrl-C again to stop waiting)`)
     } else {
       runIO.print(`${name}: dispatch ${reply!.id} has no running attempt to cancel; waiting for its result`)

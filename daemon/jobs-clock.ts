@@ -64,6 +64,7 @@ export class JobsClock {
   private cancel: (() => void) | null = null
   private cancelHealth: (() => void) | null = null
   private ticking: Promise<void> | null = null
+  private stopped = false   // set by stop(): no reschedule, no lock, and an in-flight tick bails at its next await
   private tickStartedAt = 0
   private readonly startedAt: Date
   private staleFlagged = false
@@ -86,14 +87,15 @@ export class JobsClock {
   start(firstTickMs = 5_000): void {
     const loop = () => {
       this.cancel = null
-      void this.tick().finally(() => { this.cancel = this.d.schedule(loop, msToNextMinute(this.d.now())) })
+      void this.tick().finally(() => { if (!this.stopped) this.cancel = this.d.schedule(loop, msToNextMinute(this.d.now())) })
     }
     this.cancel = this.d.schedule(loop, firstTickMs)
-    const health = () => { void this.healthCheck().finally(() => { this.cancelHealth = this.d.schedule(health, TICK_MS) }) }
+    const health = () => { void this.healthCheck().finally(() => { if (!this.stopped) this.cancelHealth = this.d.schedule(health, TICK_MS) }) }
     this.cancelHealth = this.d.schedule(health, TICK_MS)
   }
 
   stop(): void {
+    this.stopped = true
     this.cancel?.(); this.cancelHealth?.()
     this.cancel = this.cancelHealth = null
     if (this.lockFd !== null) { this.d.closeLock(this.lockFd); this.lockFd = null }
@@ -101,6 +103,7 @@ export class JobsClock {
 
   /** One daemon per state dir owns the clock. Retried every tick: a restart briefly overlaps the exiting daemon. */
   private tryLock(): boolean {
+    if (this.stopped) return false
     if (this.lockFd !== null) return true
     try {
       mkdirSync(jobsDir(this.d.stateDir), { recursive: true })
@@ -129,7 +132,9 @@ export class JobsClock {
     this.syncZone()
     if (!this.tryLock()) return
     await this.clearLegacyEntries()
+    if (this.stopped) return
     const cfg = await this.loadConfig()
+    if (this.stopped) return
     const now = this.d.now()
     for (const job of cfg.jobs) {
       const state = this.ensureState(job, now)
@@ -138,7 +143,9 @@ export class JobsClock {
       if (slot) this.dispatch(job, 'scheduled', slot.label)
     }
     await this.applyResults(cfg)
+    if (this.stopped) return
     await this.reportFailures(cfg)
+    if (this.stopped) return
     this.updateDaemon(s => { s.lastTick = this.d.now().toISOString() })
   }
 
@@ -178,6 +185,7 @@ export class JobsClock {
     if (corrupt) {
       writeAtomic(daemonFile(this.d.stateDir), '{}')
       await this.d.direct(`Jobs: ${daemonFile(this.d.stateDir)} was unreadable (${corrupt}); started it fresh.`, this.d.homeChannel())
+      if (this.stopped) return { jobs: [] }
     }
     let problem: string
     const file = jobsToml(this.d.stateDir)
@@ -198,7 +206,7 @@ export class JobsClock {
     const today = localDay(this.d.now())
     if (state.configAlertDay !== today) {
       const text = `Jobs: ${problem}. Running the last good config (${fallback.jobs.length} job${fallback.jobs.length === 1 ? '' : 's'}) until it is fixed.`
-      if (await this.d.direct(text, fallback.channel ?? this.d.homeChannel())) this.updateDaemon(s => { s.configAlertDay = today })
+      if (await this.d.direct(text, fallback.channel ?? this.d.homeChannel()) && !this.stopped) this.updateDaemon(s => { s.configAlertDay = today })
     }
     return fallback
   }
@@ -303,7 +311,8 @@ export class JobsClock {
     try { pid = this.d.spawnAttempt(args, JSON.stringify(job), logFile(this.d.stateDir, job.name)) } catch (err) {
       this.d.log(`jobs: ${job.name}: spawn of dispatch ${d.id} failed: ${err}`)   // the reservation ends without a result
     }
-    const lstart = pid ? this.d.lstartOf(pid) : null
+    let lstart: string | null = null
+    try { lstart = pid ? this.d.lstartOf(pid) : null } catch {}   // unrecorded: adopted by argv on a later tick
     if (pid && lstart) {
       d.pid = pid; d.lstart = lstart
       this.update(job.name, job.schedule, st => { if (st.dispatch?.id === d.id) st.dispatch = d })
@@ -338,7 +347,7 @@ export class JobsClock {
     const names = new Set<string>(cfg.jobs.map(j => j.name))
     // A job dropped from jobs.toml can still have a dispatch running: settle it too.
     try { for (const f of readdirSync(jobsDir(this.d.stateDir))) { const m = /^([a-z0-9][a-z0-9-]*)\.json$/.exec(f); if (m) names.add(m[1]) } } catch {}
-    for (const name of names) await this.settle(name, schedules.get(name))
+    for (const name of names) { if (this.stopped) return; await this.settle(name, schedules.get(name)) }
     this.sweep()
   }
 
@@ -350,26 +359,36 @@ export class JobsClock {
     if (this.applyIfPresent(name, schedule, d)) return
     const now = this.d.now().getTime()
 
+    // ps failing says nothing about the attempt: decide on a later tick, never "lost" on a missing answer.
+    const ask = <T>(f: () => T): T | undefined => {
+      try { return f() } catch (err) { this.d.log(`jobs: ${name}: ps failed (${err}); deciding dispatch ${d.id} next tick`); return undefined }
+    }
     if (d.pid === undefined || !d.lstart) {
       if (now - new Date(d.at).getTime() < ADOPT_GRACE_MS) return
-      const orphan = this.d.listProcesses().find(p => commandMatches(p.command, d.id, d.nonce))
+      const procs = ask(() => this.d.listProcesses())
+      if (!procs) return
+      const orphan = procs.find(p => commandMatches(p.command, d.id, d.nonce))
       if (orphan) {
         this.update(name, schedule, s => { if (s.dispatch?.id === d.id) s.dispatch = { ...d, pid: orphan.pid, lstart: orphan.lstart } })
         this.d.log(`jobs: ${name}: adopted dispatch ${d.id} (pid ${orphan.pid})`)
         return
       }
       await this.d.sleep(FINAL_WRITE_GRACE_MS)
+      if (this.stopped) return
       if (!this.applyIfPresent(name, schedule, d)) this.lost(name, schedule, d)
       return
     }
 
-    if (this.d.lstartOf(d.pid) !== d.lstart) {
+    const live = ask(() => this.d.lstartOf(d.pid!))
+    if (live === undefined) return
+    if (live !== d.lstart) {
       await this.d.sleep(FINAL_WRITE_GRACE_MS)
+      if (this.stopped) return
       if (!this.applyIfPresent(name, schedule, d)) this.lost(name, schedule, d)
       return
     }
 
-    if (now > new Date(d.deadline).getTime() + KILL_GRACE_MS && this.d.lstartOf(d.pid) === d.lstart) {
+    if (now > new Date(d.deadline).getTime() + KILL_GRACE_MS && ask(() => this.d.lstartOf(d.pid!)) === d.lstart) {
       this.d.log(`jobs: ${name}: dispatch ${d.id} is past its deadline; killing process group ${d.pid}`)
       try { this.d.killGroup(d.pid, 'SIGKILL') } catch (err) { this.d.log(`jobs: ${name}: kill failed: ${err}`) }
     }
@@ -455,6 +474,7 @@ export class JobsClock {
       const note = last.note ?? 'failed'
       const sent = this.d.toMain(`Job ${job.name} failed: ${note}. Tell the user about it now.`, jobInitiator(job.name))
         || await this.d.direct(`Job ${job.name} failed: ${note}`, job.channel ?? cfg.channel ?? this.d.homeChannel())
+      if (this.stopped) return
       if (sent) this.update(job.name, job.schedule, s => { s.reportedDay = today })
     }
   }

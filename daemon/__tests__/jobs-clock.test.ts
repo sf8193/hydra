@@ -25,6 +25,7 @@ type World = {
   zone: string | null
   tz: string | undefined
   directGate?: Promise<void>
+  directCalls: number
   legacy: string[]
   legacyFail: number
   events: string[]
@@ -59,7 +60,7 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
       const removed = w.legacy; w.legacy = []; return removed
     },
     toMain: text => { if (w.mainOk) w.main.push(text); return w.mainOk },
-    direct: async (text, channel) => { await w.directGate; w.direct.push([text, channel]); return w.directOk },
+    direct: async (text, channel) => { w.directCalls++; await w.directGate; w.direct.push([text, channel]); return w.directOk },
     homeChannel: () => 'home',
     systemZone: () => w.zone,
     explicitTZ: false,
@@ -108,7 +109,7 @@ beforeEach(() => {
   w = {
     dir: mkdtempSync(join(tmpdir(), 'jobs-clock-')), t: new Date('2026-11-04T10:00:30-08:00'),
     procs: new Map(), spawns: [], kills: [], main: [], direct: [], logs: [],
-    mainOk: true, directOk: true, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
+    mainOk: true, directOk: true, directCalls: 0, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
     legacy: [], legacyFail: 0, events: [],
   }
 })
@@ -836,6 +837,65 @@ describe('health', () => {
   })
 })
 
+describe('stop()', () => {
+  test('stops a tick already in flight: it bails at its next await, writes nothing more, and reschedules nothing', async () => {
+    toml(FIVE)
+    const scheduled: (() => void)[] = []
+    const c = clock({ schedule: fn => { scheduled.push(fn); return () => {} } })
+    await c.tick()
+    const lastTick = JSON.parse(readFileSync(daemonFile(w.dir), 'utf8')).lastTick
+    toml('[broken')                                    // the tick will await its config alert
+    let release!: () => void
+    w.directGate = new Promise(r => { release = r })
+    at('2026-11-04T10:05:01-08:00')                    // 10:05 is owed: a tick that didn't bail would dispatch it
+    c.start(0)
+    scheduled[0]()                                     // the clock's own loop runs a tick…
+    while (!w.directCalls) await Bun.sleep(0)          // …which is now suspended mid-tick
+    c.stop()
+    release()
+    await c.tick(); await Bun.sleep(0)
+    expect(w.spawns).toHaveLength(0)
+    expect(JSON.parse(readFileSync(daemonFile(w.dir), 'utf8')).lastTick).toBe(lastTick)
+    expect(scheduled).toHaveLength(2)                  // the loop and the health timer from start(); nothing after stop
+    expect(c.requestRun('sweep')).toEqual({ ok: false, error: expect.stringContaining('clock not owned') })
+    expect(c.owned).toBe(false)
+  })
+
+  test('a stopped clock lets another take the lock at once', async () => {
+    toml(FIVE)
+    const a = clock(); await a.tick()
+    a.stop()
+    const b = clock(); await b.tick()
+    expect(b.owned).toBe(true)
+  })
+})
+
+describe('ps failing is no answer, never a loss', () => {
+  test('lstartOf throwing: the dispatch stays live and is decided on a later tick', async () => {
+    toml(FIVE)
+    let broken = false
+    const c = clock({ lstartOf: pid => { if (broken) throw new Error('ps: fork failed'); return w.procs.get(pid)?.lstart ?? null } })
+    await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    broken = true
+    at('2026-11-04T10:06:00-08:00'); await c.tick()
+    expect(state('sweep').dispatch?.id).toBe(1)
+    expect(state('sweep').last?.note).toBe('baseline: no work ran')
+    broken = false
+    finish('sweep', 1, 'done', undefined, 1000)
+    at('2026-11-04T10:07:00-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'done', dispatch: 1 })
+  })
+
+  test('listProcesses throwing during adoption: not lost either', async () => {
+    toml(FIVE)
+    setState('sweep', { covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:30.000Z' }, appliedDispatch: 4,
+      dispatch: { id: 5, nonce: 'n', at: '2026-11-04T18:05:01.000Z', kind: 'scheduled', slot: '2026-11-04 10:05', deadline: '2026-11-04T18:39:01.000Z' } })
+    at('2026-11-04T10:06:00-08:00'); await clock({ listProcesses: () => { throw new Error('ps: fork failed') } }).tick()
+    expect(state('sweep').dispatch?.id).toBe(5)
+  })
+})
+
 describe('real processes: lstart from both ps calls', () => {
   test('ps -o lstart and ps -ax agree on a running process, including a padded day of month', async () => {
     const p = Bun.spawn(['sleep', '30'])
@@ -846,6 +906,24 @@ describe('real processes: lstart from both ps calls', () => {
       expect(one).not.toContain('  ')
       expect(normalizeLstart('Sat Nov  7 16:25:09 2026')).toBe('Sat Nov 7 16:25:09 2026')
     } finally { p.kill() }
+  })
+
+  test("one process has one lstart whatever the daemon's zone (a traveling laptop)", () => {
+    const p = Bun.spawn(['sleep', '30'])
+    const saved = process.env.TZ ?? savedTZ.zone
+    try {
+      process.env.TZ = 'America/Los_Angeles'
+      const la = lstartOf(p.pid)
+      process.env.TZ = 'Asia/Tokyo'
+      expect(lstartOf(p.pid)).toBe(la)
+      expect(listProcesses().find(x => x.pid === p.pid)?.lstart).toBe(la!)
+    } finally { process.env.TZ = saved; p.kill() }
+  })
+
+  test('a process that has exited is null, not an error', async () => {
+    const p = Bun.spawn(['true'])
+    await p.exited
+    expect(lstartOf(p.pid)).toBeNull()
   })
 
   test('an adopted orphan stays alive to the clock (a real process, real ps)', async () => {
