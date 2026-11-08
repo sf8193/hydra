@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFile
 import { homedir } from 'os'
 import { join } from 'path'
 import { resolveConfig } from './helpers.js'
+import { nextMatch, parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
 
 export type Mode = 'spawn' | 'main' | 'none'
@@ -46,6 +47,8 @@ export function parseJobs(text: string): Job[] {
     }
     const schedule = str('schedule') ?? fail('schedule is required')
     try { Bun.cron.parse(schedule) } catch { fail(`schedule "${schedule}" is not a cron expression`) }
+    // jobs list reads schedules with parseCron, which is stricter than Bun in corners (e.g. "+1").
+    try { parseCron(schedule) } catch (e) { fail(`schedule "${schedule}" is not supported: ${(e as Error).message}`) }
     const mode = (str('mode') ?? fail('mode is required')) as Mode
     if (!MODES.includes(mode)) fail(`mode must be one of ${MODES.join(', ')}`)
     const prompt = str('prompt')
@@ -210,11 +213,11 @@ export async function jobsSync(platform: string): Promise<void> {
   console.log(`registered ${jobs.length}, removed ${stale.length}; launchd runs ${import.meta.dir}/jobs-entry.ts`)
 }
 
-export function jobsList(platform: string): void {
-  const { stateDir } = resolveConfig(platform)
+export function jobsList(platform: string, stateDirOverride?: string): void {
+  const stateDir = stateDirOverride ?? resolveConfig(platform).stateDir
   for (const j of loadJobs(stateDir)) {
     const last = readRecord(stateDir, j.name)
-    console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} next ${Bun.cron.parse(j.schedule)?.toLocaleString() ?? '-'}  last ${last ? `${last.at} ${last.outcome}${last.note ? ` (${last.note})` : ''}` : 'never'}`)
+    console.log(`${j.name.padEnd(20)} ${j.mode.padEnd(6)} next ${nextMatch(j.schedule, jobsIO.now())?.toLocaleString() ?? '-'}  last ${last ? `${last.at} ${last.outcome}${last.note ? ` (${last.note})` : ''}` : 'never'}`)
   }
 }
 
