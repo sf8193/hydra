@@ -8,7 +8,9 @@
 import { engines } from '../engines/instances.js'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { discoverClaudeSessionId, killSession } from '../session-lifecycle.js'
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdirSync, writeFileSync, mkdtempSync, existsSync, rmSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { handleForkIntercept } from '../commands/thread.js'
 import { registry, threadRegistry } from '../sessions.js'
@@ -230,4 +232,65 @@ describe('recoveryPlan { discover }', () => {
     expect('learnedId' in plan).toBe(false)
     expect(info.claudeSessionId).toBeUndefined()
   })
+})
+
+describe('killSession keepRecord: ended the way a crash leaves it', () => {
+  test('the record stays, stamped dead and out of boot recovery, with its thread, launch settings and history closed', async () => {
+    const info = seed('claude', { claudeSessionId: SID, launchCwd: '/tmp/fork-cwd', disallowedTools: ['Edit'] })
+    registry.setThread(info.threadId, info.sessionId)
+    await killSession(info, 'idle 7d, ended', { keepRecord: true })
+
+    expect(tmux.calls().some(c => c.startsWith('kill-session'))).toBe(true)
+    const kept = registry.get(info.sessionId)!
+    expect(kept).toBe(info)
+    expect(kept.deadAt).toBeDefined()
+    expect(kept.suppressAutoRecover).toBe(true)
+    expect(kept.launchCwd).toBe('/tmp/fork-cwd')
+    expect(kept.disallowedTools).toEqual(['Edit'])
+    expect(registry.getByThread(info.threadId)).toBe(info.sessionId)
+    const entry = threadRegistry.get(info.threadId)!.sessionHistory.find(h => h.sessionId === info.sessionId)!
+    expect(entry.endedAt).toBeDefined()
+    expect(entry.claudeSessionId).toBe(SID)
+    expect(sent).toContain('_idle 7d, ended_')
+  })
+
+  test('without it, the record is deleted as before', async () => {
+    const info = seed('claude', { claudeSessionId: SID })
+    await killSession(info, 'session ended')
+    expect(registry.get(info.sessionId)).toBeUndefined()
+  })
+
+  // A real repo and worktree. forceWorktreeCleanup makes a plain kill destroy it whatever it holds.
+  function worktree(): { repo: string; path: string; branch: string } {
+    const root = mkdtempSync(join(tmpdir(), 'keep-record-wt-'))
+    const repo = join(root, 'repo'), path = join(root, 'wt'), branch = 'wt/keep-record'
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+    mkdirSync(repo)
+    git('init', '-q'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'base')
+    git('worktree', 'add', '-q', '-b', branch, path)
+    return { repo, path, branch }
+  }
+
+  test('the worktree is kept, even with forceWorktreeCleanup; a plain kill destroys it', async () => {
+    const kept = worktree(), gone = worktree()
+    try {
+      const a = seed('claude', { claudeSessionId: SID, worktreeRepo: kept.repo, worktreePath: kept.path, worktreeBranch: kept.branch, forceWorktreeCleanup: true })
+      const b = seed('claude', { claudeSessionId: SID, worktreeRepo: gone.repo, worktreePath: gone.path, worktreeBranch: gone.branch, forceWorktreeCleanup: true })
+      await killSession(a, 'idle 7d, ended', { keepRecord: true })
+      await killSession(b, 'session ended')
+      for (let i = 0; i < 50 && existsSync(gone.path); i++) await Bun.sleep(100)
+      expect(existsSync(gone.path)).toBe(false)
+      expect(existsSync(kept.path)).toBe(true)
+    } finally {
+      for (const w of [kept, gone]) rmSync(join(w.repo, '..'), { recursive: true, force: true })
+    }
+  }, 15_000)
+
+  test('a tmux session that outlives the kill is still caught by the deferred kill, though the kept record has its name', async () => {
+    const info = seed('claude', { claudeSessionId: SID })
+    tmux.alive(info.tmuxName)  // kill-session "succeeds" but the session stays up
+    await killSession(info, 'idle 7d, ended', { keepRecord: true })
+    await Bun.sleep(3_300)
+    expect(tmux.calls().filter(c => c === `kill-session -t ${info.tmuxName}`).length).toBe(2)
+  }, 10_000)
 })

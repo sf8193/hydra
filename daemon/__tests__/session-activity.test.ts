@@ -16,6 +16,15 @@ const withLive = (live: LiveState | null, extra: Partial<SessionInfo> = {}) =>
   ({ sessionId: 's1', tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ live, activityAt: null, confirmedComplete: false, answer: () => null }) }), ...extra }) as unknown as SessionInfo
 
 describe('isSessionWorking', () => {
+  test('sessionLiveAsync passes the engine\'s backgroundWork through, and leaves it out when absent', async () => {
+    const withBackground = { sessionId: 's1', tmuxName: 'cedar', adapter: fakeAdapter({ turn: () => ({ live: null, backgroundWork: true, activityAt: null, confirmedComplete: false, answer: () => null }) }) } as unknown as SessionInfo
+    const tmux = withFakeTmux()
+    try {
+      expect(await sessionLiveAsync(withBackground)).toMatchObject({ live: null, background: true })
+      expect((await sessionLiveAsync(withLive('idle'))).background).toBeUndefined()
+    } finally { tmux.restore() }
+  })
+
   test('sessionLiveAsync passes the provider state through alongside working', async () => {
     const fake = withFakeTmux()
     try {

@@ -540,7 +540,10 @@ export function splitOwnFromHistory(allIds: readonly string[], ownId: string | u
 // skipWorktreeDestroy: the conversation continues elsewhere (handoff, reattach) — keep the
 // Hydra worktree and scratchpads. keepScratch: only the scratchpads (a resume or fork of
 // this conversation still names their paths, and a resume reuses the scratchpad itself).
-export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean }): Promise<void> {
+// keepRecord: end it the way a crash leaves it, so `resume` in the thread continues it in full:
+// the record stays, stamped dead, with its worktree, scratchpads, PR watches and launch
+// settings, and is left out of automatic boot recovery.
+export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean; keepRecord?: boolean }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
 
@@ -593,7 +596,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     clearIdleLimit(info.sessionId)
     clearInterceptsForSession(info.tmuxName)
 
-    if (info.worktreePath && info.worktreeRepo && !opts?.skipWorktreeDestroy) {
+    const keepWorktree = opts?.skipWorktreeDestroy || opts?.keepRecord
+    if (info.worktreePath && info.worktreeRepo && !keepWorktree) {
       const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
 
       // Async worktree cleanup — fire-and-forget (killSession is sync, cleanup is best-effort).
@@ -611,7 +615,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     // worktrees a handoff deliberately kept for it — made under their scratchpads: same rule.
     // forceWorktreeCleanup is this session's own opt-in: it never applies to a predecessor's
     // history, whose work a handoff may have deliberately kept.
-    const allScratchIds = !opts?.skipWorktreeDestroy && !opts?.keepScratch ? scratchSessionIds(info, registry.values(), threadRegistry.get(info.threadId)?.sessionHistory ?? []) : []
+    const allScratchIds = !keepWorktree && !opts?.keepScratch ? scratchSessionIds(info, registry.values(), threadRegistry.get(info.threadId)?.sessionHistory ?? []) : []
     const { own: ownScratchIds, history: historyScratchIds } = splitOwnFromHistory(allScratchIds, info.claudeSessionId)
     if (allScratchIds.length) {
       void Promise.all([
@@ -629,19 +633,27 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     // Update thread metadata before deleting session
-    if (info.sessionType !== 'thread_guest') {
-      threadRegistry.closeHistoryEntry(info.threadId, info)
-      registry.deleteThread(info.threadId)
+    if (opts?.keepRecord) {
+      info.suppressAutoRecover = true
+      markDead(info)
+    } else {
+      if (info.sessionType !== 'thread_guest') {
+        threadRegistry.closeHistoryEntry(info.threadId, info)
+        registry.deleteThread(info.threadId)
+      }
+      registry.delete(info.sessionId)
     }
-    registry.delete(info.sessionId)
     registry.persist()
 
     // Recovery re-establishes watches on the replacement via restoreWatches (snapshot
     // taken before this kill) — so deleting here is safe and avoids orphaning entries
-    // on the now-deleted sessionId (which pollPr would prune mid-recovery).
-    const removedWatches = unwatchBySession(info.sessionId)
-    if (removedWatches > 0) {
-      process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
+    // on the now-deleted sessionId (which pollPr would prune mid-recovery). A kept record
+    // keeps its watches: pollPr holds a dead owner's watch, and the revive moves it on.
+    if (!opts?.keepRecord) {
+      const removedWatches = unwatchBySession(info.sessionId)
+      if (removedWatches > 0) {
+        process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
+      }
     }
 
     if (info.sessionType === 'thread_guest') {
@@ -654,7 +666,7 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     setTimeout(() => {
       try {
         // Only kill if the tmux session isn't owned by a new session (name recycling)
-        const currentOwner = [...registry.values()].find(s => s.tmuxName === tmuxName)
+        const currentOwner = [...registry.values()].find(s => s !== info && s.tmuxName === tmuxName)
         if (!currentOwner) {
           execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
           execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })

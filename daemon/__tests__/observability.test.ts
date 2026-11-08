@@ -514,6 +514,12 @@ describe('turnOutcome composition', () => {
       }
       expect(claudeTurnOutcome(live, T, withStatus(null)).confirmedComplete).toBe(true) // registry id fallback
     })
+    test('backgroundWork is Claude\'s shell status (a background shell between turns), and only that', () => {
+      expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status: 'shell' })).backgroundWork).toBe(true)
+      expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status: 'shell' })).live).toBeNull()
+      for (const status of ['idle', 'busy', 'waiting']) expect(claudeTurnOutcome(live, T, withStatus({ ...idle, status })).backgroundWork).toBe(false)
+      expect(claudeTurnOutcome(live, T, withStatus(null)).backgroundWork).toBe(false)
+    })
     test('a message still queued behind a running turn → not confirmed', () => {
       const f = forensics({ lastAssistantFullText: 'turn A answer', lastAssistantTs: iso(T + 5000), queueBacklog: 1 })
       expect(claudeTurnOutcome(live, T, withStatus(idle, f)).confirmedComplete).toBe(false)

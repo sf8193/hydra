@@ -9,10 +9,10 @@ import type { SessionInfo } from './sessions.js'
 import type { LiveState } from './engines/engine-adapter.js'
 import { isTmuxRecentlyActive, isTmuxRecentlyActiveSync, tmuxSilentLongerThan, tmuxSilentLongerThanSync } from './util.js'
 
-function read(info: SessionInfo): { live: LiveState | null; limitS?: number } {
+function read(info: SessionInfo): { live: LiveState | null; limitS?: number; background?: boolean } {
   try {
     const turn = info.adapter?.turn(info, 0)
-    return { live: turn?.live ?? null, limitS: turn?.workingSilenceLimitS }
+    return { live: turn?.live ?? null, limitS: turn?.workingSilenceLimitS, background: turn?.backgroundWork }
   } catch { return { live: null } }
 }
 
@@ -26,8 +26,9 @@ export async function isSessionWorkingAsync(info: SessionInfo): Promise<boolean>
   return (await sessionLiveAsync(info)).working
 }
 
-export async function sessionLiveAsync(info: SessionInfo): Promise<{ live: LiveState | null; working: boolean }> {
-  const { live, limitS } = read(info)
-  if (live === 'working' && limitS) return { live, working: !(await tmuxSilentLongerThan(info.tmuxName, limitS)) }
-  return { live, working: live ? live === 'working' : await isTmuxRecentlyActive(info.tmuxName) }
+/** `background`: the engine says work it started is still running between turns (see Turn.backgroundWork). */
+export async function sessionLiveAsync(info: SessionInfo): Promise<{ live: LiveState | null; working: boolean; background?: boolean }> {
+  const { live, limitS, background } = read(info)
+  if (live === 'working' && limitS) return { live, working: !(await tmuxSilentLongerThan(info.tmuxName, limitS)), ...(background && { background }) }
+  return { live, working: live ? live === 'working' : await isTmuxRecentlyActive(info.tmuxName), ...(background && { background }) }
 }

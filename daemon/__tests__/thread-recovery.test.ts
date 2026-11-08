@@ -8,7 +8,7 @@ import { rmSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { handleResumeIntercept, handleRespawnIntercept, handleForkIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../commands/thread.js'
-import { RECOVERY_REVERIFY_GUARD } from '../session-lifecycle.js'
+import { RECOVERY_REVERIFY_GUARD, killSession } from '../session-lifecycle.js'
 import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo, ThreadSessionEntry } from '../sessions.js'
 import { gateway } from '../config.js'
@@ -635,6 +635,33 @@ describe('resume through the one cascade', () => {
       await handleResumeIntercept(msg())
       expect(getWatchesBySession('s-watch').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/7'])
     } finally { unwatchBySession('s-watch'); unwatchBySession(e.sessionId) }
+  })
+
+  test('a session reaped for idleness (killSession keepRecord) resumes with its worktree, PR watches and launch settings', async () => {
+    const tmux = withFakeTmux()
+    const wt = mkdtempSync(join(tmpdir(), 'reaped-wt-'))
+    try {
+      const e = seedHistory({ claudeSessionId: 'C-reap', endedAt: undefined }, {
+        claudeSessionId: 'C-reap', deadAt: undefined, worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/reaped',
+        launchCwd: '/tmp/fork-cwd', disallowedTools: ['Edit'],
+      })
+      registry.setThread(THREAD, e.sessionId)
+      restoreWatches([{ prUrl: 'https://github.com/o/r/pull/9', sessionId: 'x', threadId: 'x', createdAt: 1 } as any], e.sessionId, THREAD)
+      await killSession(registry.get(e.sessionId)!, 'idle 7d, ended', { keepRecord: true })
+      expect(getWatchesBySession(e.sessionId).map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/9'])
+      await handleResumeIntercept(msg())
+      expect(getWatchesBySession('s-new').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/9'])
+      expect(calls[0].fn).toBe('tryResume')
+      expect(calls[0].args[0]).toMatchObject({
+        claudeSessionId: 'C-reap', preserveWorktree: true, worktree: { repo: '/repo', path: wt, branch: 'wt/reaped' },
+      })
+      expect(JSON.stringify(calls[0].args[0])).toContain('/tmp/fork-cwd')
+      expect(JSON.stringify(calls[0].args[0])).toContain('"Edit"')
+    } finally {
+      tmux.restore()
+      unwatchBySession('s-new')
+      rmSync(wt, { recursive: true, force: true })
+    }
   })
 
   test('a resume keeps the dead session\'s worktree when it is still on disk', async () => {
