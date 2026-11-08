@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { join } from 'path'
 import { homedir } from 'os'
+import { claudeConfigDir } from '../../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // Test state — injected via PaneProbeIO, no mock.module needed
@@ -588,11 +589,31 @@ describe('probeAllSessions', () => {
     expect(sentMessages[0].text).toContain('plan approval')
   })
 
+  it('reads the plan from the config dir the session runs under, not ~/.claude', async () => {
+    const origDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = join(homedir(), '.claude-personal')
+    try {
+      addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
+      paneTails.set('bloom', PLAN_MODE_TAIL.replace('.claude/plans/', '.claude-personal/plans/'))
+      fileContents.set(join(homedir(), '.claude-personal', 'plans', 'witty-humming-beaver.md'), '# Ship the fix\nsteps')
+      windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
+      windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+      await probeAllSessions(T0)
+      await probeAllSessions(T0 + 60_000)
+      await flush()
+      expect(sentMessages.some(m => m.text.includes('Ship the fix'))).toBe(true)
+    } finally {
+      if (origDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = origDir
+    }
+  })
+
   it('path traversal in the plan path never reaches the notification', async () => {
     const traversal = '../../../etc/passwd.md'
     addSession('s1', { tmuxName: 'bloom', threadId: 'thread-1' })
     paneTails.set('bloom', PLAN_MODE_TAIL.replace('witty-humming-beaver.md', traversal))
-    fileContents.set(join(homedir(), '.claude', 'plans', traversal), '# SECRET\nleaked body')
+    fileContents.set(join(claudeConfigDir(), 'plans', traversal), '# SECRET\nleaked body')
     windowActivity.set('bloom', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
 
