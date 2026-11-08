@@ -154,8 +154,8 @@ describe('deliver --thread <id> --revive', () => {
     expect(asked).toBe(0)
   })
 
-  test('--revive takes --thread only', async () => {
+  test('--revive takes an address that can heal: --to or --thread', async () => {
     expect(await handleCLIRequest({ type: 'cli', command: 'deliver', id: 'dr-x', params: { session: 's', message: 'm', revive: true } } as CLIRequest))
-      .toMatchObject({ ok: false, error: expect.stringContaining('--revive takes --thread') })
+      .toMatchObject({ ok: false, error: expect.stringContaining('--revive takes --to or --thread') })
   })
 })

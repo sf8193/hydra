@@ -247,13 +247,13 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(getIdempotencyEntry(k)).toBeUndefined()
   })
 
-  test('codex rejected → error with the reason, no key', async () => {
+  test('codex rejected → exit 3 (refused) with the reason, no key', async () => {
     const info = codex(async () => ({ status: 'rejected', retryable: false, reason: 'session is retiring' }))
     const k = key()
     const res = await deliver(info.sessionId, { idempotencyKey: k })
     expect(res.ok).toBe(false)
     expect(res.error).toContain('session is retiring')
-    expect(res.exitCode).toBeUndefined()
+    expect(res.exitCode).toBe(3) // refused
     expect(checkIdempotency(k)).toEqual({ blocked: false })
   })
 

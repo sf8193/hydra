@@ -131,7 +131,7 @@ describe('specialists', () => {
     specialistDeps.threadExists = async () => false
     expect(await deliver(specialist('thread-gone'))).toMatchObject({ ok: false, error: expect.stringContaining('no channel') })
     expect(await deliver(specialist('thread-gone-2', { kickoff: undefined, channel: 'c' }))).toMatchObject({ ok: false, error: expect.stringContaining('no kickoff') })
-    expect(await deliver('no-such-specialist')).toMatchObject({ ok: false, error: expect.stringContaining('not found') })
+    expect(await deliver('no-such-specialist')).toMatchObject({ ok: false, exitCode: 8, error: 'no such specialist: no-such-specialist' })
     expect(calls).toHaveLength(0)
   })
 
@@ -222,7 +222,7 @@ describe('specialists', () => {
 
   test('spawn --specialist: an unknown name, flags the declaration owns, a repeated key, and the refill back-off', async () => {
     const calls = fakeSpawn()
-    expect(await spawnAs('no-such-one')).toMatchObject({ ok: false, error: expect.stringContaining('not found') })
+    expect(await spawnAs('no-such-one')).toMatchObject({ ok: false, exitCode: 8, error: 'no such specialist: no-such-one' })
     const sid = occupy('thread-spawn-live')
     const live = specialist('thread-spawn-live')
     const filled = await spawnAs(live) as any
@@ -291,30 +291,32 @@ describe('specialists', () => {
     expect(getSpecialist(gone)).toBeUndefined() // a removed specialist stays removed
   })
 
-  test('a set --thread that lands while the spawn is running wins; the call fails naming the stray session, which keeps running', async () => {
+  test('G: a set --thread waits out a running spawn, then refuses to move a live specialist (exit 3); once it is killed, the move lands', async () => {
     const name = `t-specialist-${++n}`
     names.push(name)
     await cli('set', name, { channel: 'chan-repoint', kickoff: 'k' })
-    let strayThread = ''
+    let started = ''
     setSpawn(async () => {
       await Bun.sleep(30)
-      strayThread = `fresh-thread-${++n}`
-      const sessionId = occupy(strayThread)
-      return { name: `${sessionId}-tmux`, sessionId, threadId: strayThread, url: '' }
+      started = `fresh-thread-${++n}`
+      const sessionId = occupy(started)
+      return { name: `${sessionId}-tmux`, sessionId, threadId: started, url: '' }
     })
-    const key = `spawn-repoint-${++n}`
-    const up = spawnAs(name, { idempotencyKey: key })
+    const up = spawnAs(name)
     await Bun.sleep(5)
-    await cli('set', name, { thread: 'thread-chosen-by-operator' })
-    const res = await up as any
-    const error: string = res.error // read before toMatchObject, which leaves the matcher in its place under Bun
-    expect(res.ok).toBe(false)
-    expect(res.exitCode).toBe(3)
-    expect(getIdempotencyEntry(key)).toMatchObject({ status: 'spawned' }) // a session did start: a retry with this key is blocked
-    expect(error).toContain('re-pointed to thread thread-chosen-by-operator')
-    expect(error).toContain(strayThread)
-    expect(getSpecialist(name)!.threadId).toBe('thread-chosen-by-operator') // the operator's choice survives
-    expect(registry.getByThread(strayThread)).toBeDefined() // and the stray session is left alone
+    const moved = await cli('set', name, { thread: 'thread-chosen-by-operator' }) as any // queued behind the spawn on the specialist's lock
+    expect(await up).toMatchObject({ ok: true })
+    expect(moved).toMatchObject({ ok: false, exitCode: 3, error: `${name}: is live in ${started}; hydra kill ${name} first` })
+    expect(getSpecialist(name)!.threadId).toBe(started) // one session, one name: the pointer did not move under it
+
+    registry.deleteThread(started)
+    expect(await cli('set', name, { thread: 'thread-chosen-by-operator' })).toMatchObject({ ok: true })
+    expect(getSpecialist(name)!.threadId).toBe('thread-chosen-by-operator')
+  })
+
+  test('a name needs a letter: an all-digit one reads as a thread id', async () => {
+    expect(await cli('set', '12345', { channel: 'c', kickoff: 'k' })).toMatchObject({ ok: false, error: expect.stringContaining('needs a letter') })
+    expect(getSpecialist('12345')).toBeUndefined()
   })
 
   test('a live session holding the specialist\'s name elsewhere makes a fill refuse (exit 3, naming it) without counting as a failed refill', async () => {
@@ -325,13 +327,20 @@ describe('specialists', () => {
       const res = await deliver(name) as any
       expect(res.ok).toBe(false)
       expect(res.exitCode).toBe(3) // not 6: this is not a back-off
-      expect(res.error).toContain('thread-elsewhere')
+      expect(res.error).toContain(`hydra specialist set ${name} --thread thread-elsewhere`)
       void attempt
     }
-    const manual = await spawnAs(name) as any
-    expect(manual.exitCode).toBe(3)
+    expect(getBackoff(name)).toBeUndefined()
     expect(calls).toHaveLength(0)
     expect(registry.get(strayId)).toBeDefined()
+    // An operator's keyed spawn refused for the stray started nothing, so its key does not block a retry.
+    const k = `stray-key-${++n}`
+    expect(await spawnAs(name, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 3 })
+    expect(getIdempotencyEntry(k)).toMatchObject({ status: 'failed' })
+    expect(await spawnAs(name, { idempotencyKey: k })).toMatchObject({ ok: false, exitCode: 3 }) // refused again, not "already exists" (2)
+    // The fix it names works: thread-own is vacant, so the move is not the live move G refuses.
+    expect(await cli('set', name, { thread: 'thread-elsewhere' })).toMatchObject({ ok: true })
+    expect(await deliver(name)).toMatchObject({ ok: true, data: { sessionId: strayId, spawned: false } })
   })
 
   test('a thread Discord no longer has moves the specialist to its channel; without a channel it fails', async () => {

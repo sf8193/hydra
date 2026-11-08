@@ -23,10 +23,21 @@ export type Specialist = {
   kickoff?: string
   kickoffFile?: string
   model?: string
+  /** A quiet session ends after this long (`30m`, `4h`, `1d`): nudged, then reaped. Absent: it stays. */
+  idle?: string
   updatedAt: number
 }
 
 export const SPECIALIST_NAME_RE = /^[a-z0-9][a-z0-9-]*$/
+
+/** Why a name can't be a specialist's, or undefined. It needs a letter: an all-digit `to` is a thread id. */
+export function invalidSpecialistName(name: string): string | undefined {
+  if (!SPECIALIST_NAME_RE.test(name)) return 'specialist name must be lowercase letters, digits and dashes'
+  if (!/[a-z]/.test(name)) return `specialist name "${name}" needs a letter: an all-digit name reads as a thread id`
+  if (SESSION_NAMES.includes(name)) return `"${name}" is a default session name; a specialist needs its own name`
+  if (name === 'main' || name === 'parent') return `"${name}" is a reserved address (to = "main", send_to_thread target "parent")`
+  return undefined
+}
 
 const specialistsPath = () => join(STATE_DIR, 'specialists.json')
 
@@ -40,6 +51,11 @@ function load(): void {
   } catch {
     specialists = new Map()
   }
+  // A name saved before names needed a letter is kept in the file but never answers: reported, never renamed.
+  for (const name of specialists.keys()) {
+    const why = invalidSpecialistName(name)
+    if (why) process.stderr.write(`daemon: specialist "${name}" is ignored: ${why}. Remove it with 'hydra specialist rm ${name}' and declare it under a new name.\n`)
+  }
 }
 
 function persist(): void {
@@ -47,16 +63,20 @@ function persist(): void {
 }
 
 export function getSpecialist(name: string): Specialist | undefined {
-  return specialists.get(name)
+  return invalidSpecialistName(name) ? undefined : specialists.get(name)
 }
 
-export function listSpecialists(): [string, Specialist][] {
-  return [...specialists.entries()]
+/** Every stored specialist, with `invalid` set on one saved under a name that is no longer allowed. */
+export function listSpecialists(): [string, Specialist & { invalid?: string }][] {
+  return [...specialists.entries()].map(([name, s]) => {
+    const invalid = invalidSpecialistName(name)
+    return [name, invalid ? { ...s, invalid } : s]
+  })
 }
 
 export function setSpecialist(name: string, specialist: Omit<Specialist, 'updatedAt'>): Specialist {
-  if (!SPECIALIST_NAME_RE.test(name)) throw new Error('specialist name must be lowercase letters, digits and dashes')
-  if (SESSION_NAMES.includes(name)) throw new Error(`"${name}" is a default session name; a specialist needs its own name`)
+  const invalid = invalidSpecialistName(name)
+  if (invalid) throw new Error(invalid)
   const next = { ...specialist, updatedAt: Date.now() }
   specialists.set(name, next)
   persist()
@@ -78,7 +98,7 @@ export function readKickoff(specialist: Specialist): string | undefined {
 
 /** The specialist whose thread this is, if any. */
 export function specialistForThread(threadId: string): string | undefined {
-  for (const [name, s] of specialists) if (s.threadId === threadId) return name
+  for (const [name, s] of specialists) if (s.threadId === threadId && !invalidSpecialistName(name)) return name
   return undefined
 }
 

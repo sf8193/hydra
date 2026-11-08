@@ -50,11 +50,15 @@ Session management:
   hydra kill <name>                    Kill a session
   hydra peek [name]                    Read-only view of live sessions
   hydra attach <name>                  Attach to a running session's tmux surface
+                                       <name>: a session's name or id, a specialist's name, or a thread id
   hydra health                         Daemon diagnostics
   hydra clear-key <key>                Clear a stuck idempotency key
   hydra check-key <key>                Check if an idempotency key exists
 
 Deliver (whisper channel — message to session context, not thread):
+  hydra deliver --to <specialist|main|thread id> --message "..." [--revive]
+                                       resolves in order: main, a declared specialist, an all-digit thread id;
+                                       anything else is exit 8 (no such specialist). A specialist always revives.
   hydra deliver --session <name> --message "..."
   hydra deliver --thread <id> --message "..."
   hydra deliver --specialist <name> --message "..."
@@ -65,13 +69,15 @@ Deliver (whisper channel — message to session context, not thread):
     --initiator <who>                  Who sent this (default: $USER)
     --idempotency-key <key>            Prevent duplicate delivery (optional, 15min TTL)
     --queue                            Queue if bridge disconnected (default: fail)
-    --revive                           With --thread: a dead session is revived in its thread first (resume, else fork,
-                                       else a fresh one that reads the thread); the message queues for it. Exit 3: the
-                                       thread is gone; 4: its session runs but is unreachable; 6: starting failed or backing off
+    --revive                           With --to <thread id> or --thread: a dead session is revived in its thread first
+                                       (resume, else fork, else a fresh one that reads the thread); the message queues for it.
+  Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 not now (booting,
+  busy, or stuck on a dialog) · 6 starting failed or backing off · 7 a delivery with this key is in flight · 8 no such specialist
 
 Specialists (named addresses that refill themselves):
-  hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
-                                       a new specialist needs --channel (its first session opens a thread there) or --thread
+  hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>] [--idle <30m|4h|1d>]
+                                       a new specialist needs --channel (its first session opens a thread there) or --thread;
+                                       a name needs a letter (an all-digit one reads as a thread id)
   hydra specialist show <name> | list | rm <name>
 
 Slack watches (threads whose replies reach a specialist):
@@ -358,6 +364,7 @@ async function main(): Promise<void> {
     }
 
     case 'deliver': {
+      let to: string | undefined
       let thread: string | undefined
       let session: string | undefined
       let specialist: string | undefined
@@ -368,7 +375,9 @@ async function main(): Promise<void> {
       let revive = false
 
       for (let i = 1; i < filtered.length; i++) {
-        if (filtered[i] === '--thread' && i + 1 < filtered.length) {
+        if (filtered[i] === '--to' && i + 1 < filtered.length) {
+          to = filtered[++i]
+        } else if (filtered[i] === '--thread' && i + 1 < filtered.length) {
           thread = filtered[++i]
         } else if (filtered[i] === '--session' && i + 1 < filtered.length) {
           session = filtered[++i]
@@ -391,8 +400,8 @@ async function main(): Promise<void> {
         console.error('error: --message is required')
         process.exit(1)
       }
-      if (!thread && !session && !specialist) {
-        console.error('error: --session, --thread or --specialist is required')
+      if (!to && !thread && !session && !specialist) {
+        console.error('error: --to, --session, --thread or --specialist is required')
         process.exit(1)
       }
 
@@ -401,6 +410,7 @@ async function main(): Promise<void> {
       const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'deliver', id: randomUUID(),
         params: {
+          ...(to && { to }),
           ...(thread && { thread }),
           ...(session && { session }),
           ...(specialist && { specialist }),
@@ -410,7 +420,7 @@ async function main(): Promise<void> {
           ...(queue && { queue }),
           ...(revive && { revive }),
         },
-      }, specialist || revive ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
+      }, to || specialist || revive ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }
@@ -424,12 +434,13 @@ async function main(): Promise<void> {
       const flags: Record<string, string> = {}
       for (let i = 3; i < filtered.length; i++) {
         const f = filtered[i]
-        if (!['--thread', '--channel', '--kickoff', '--kickoff-file', '--model'].includes(f) || i + 1 >= filtered.length) {
+        if (!['--thread', '--channel', '--kickoff', '--kickoff-file', '--model', '--idle'].includes(f) || i + 1 >= filtered.length) {
           console.error(`error: unknown or incomplete flag ${f}`)
           process.exit(1)
         }
         flags[f.slice(2)] = filtered[++i]
       }
+      // set and rm wait on the specialist's lock, which a refill in flight holds for as long as a spawn takes.
       const response = await sendRequest(socketPath(), {
         type: 'cli', command: 'specialist', id: randomUUID(),
         params: {
@@ -440,8 +451,9 @@ async function main(): Promise<void> {
           // The daemon reads the file, so it must see a path that means the same there.
           ...(flags['kickoff-file'] && { kickoffFile: resolve(flags['kickoff-file']) }),
           ...(flags.model && { model: flags.model }),
+          ...(flags.idle && { idle: flags.idle }),
         },
-      })
+      }, action === 'set' || action === 'rm' ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }

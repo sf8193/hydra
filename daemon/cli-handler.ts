@@ -1,17 +1,16 @@
-import { registry, threadRegistry } from './sessions.js'
+import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration } from './util.js'
-import { parseIdleTtl, DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
-import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
+import { parseIdleTtl } from '../shared/constants.js'
+import { occupancy, occupied } from './session-reachability.js'
+import { formatContextPercent } from './engines/engine-adapter.js'
 import { existsSync } from 'fs'
-import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
-import { deliveryOutcome } from './delivery-outcome.js'
-import { deliverToSpecialist, spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
-import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, specialistForThread, type Specialist } from './specialists.js'
+import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
+import { spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
+import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withTargetLock, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, addSlackWatch, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
-import { ORPHAN_GRACE_MS, bridgeWaitMs, occupancy } from './session-reachability.js'
-import { reviveThreadForDelivery } from './recovery.js'
+import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from './targets.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
@@ -122,12 +121,8 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
       result = await doSpawnSession(prompt!, channel ?? undefined, message ?? undefined, { initiator, model, ephemeral, idleTtlMs, forceWorktreeCleanup: forceWorktreeCleanup === true, trigger: 'CLI' })
     }
   } catch (err) {
-    if (!(err instanceof SpecialistError && err.sessionId)) updateIdempotency(idempotencyKey, { status: 'failed' })
-    if (err instanceof SpecialistError) {
-      // A session that did start (a re-point during the spawn) keeps the key, so a retry is blocked.
-      if (err.sessionId) updateIdempotency(idempotencyKey, { status: 'spawned', sessionId: err.sessionId })
-      return respond(req, false, err.message, undefined, err.exitCode)
-    }
+    updateIdempotency(idempotencyKey, { status: 'failed' })
+    if (err instanceof SpecialistError) return respond(req, false, err.message, undefined, err.exitCode)
     throw err
   }
 
@@ -177,7 +172,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
   const { name } = req.params as { name?: string }
   if (!name) return respond(req, false, 'name is required')
 
-  const info = [...registry.values()].find(s => s.tmuxName === name || s.sessionId === name)
+  const info = sessionByName(name)
   if (!info) return respond(req, false, `session "${name}" not found`)
 
   const tmuxAlive = (() => {
@@ -209,7 +204,7 @@ async function handleKill(req: CLIRequest): Promise<CLIResponse> {
   const { name } = req.params as { name?: string }
   if (!name) return respond(req, false, 'name is required')
 
-  const info = [...registry.values()].find(s => s.tmuxName === name || s.sessionId === name)
+  const info = sessionByName(name)
   if (!info) return respond(req, false, `session "${name}" not found`)
 
   // Capture key before kill — getBySessionId only finds spawned/pending,
@@ -270,7 +265,8 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 
 
 async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
-  const { thread, session, specialist, message, initiator, idempotencyKey, revive } = req.params as {
+  const { to, thread, session, specialist, message, initiator, idempotencyKey, queue, revive } = req.params as {
+    to?: string
     thread?: string
     session?: string
     specialist?: string
@@ -280,15 +276,13 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     queue?: boolean
     revive?: boolean
   }
-  let { queue } = req.params as { queue?: boolean }
 
   if (!message) return respond(req, false, 'message is required')
-  if (Buffer.byteLength(message) > DELIVER_MAX_MESSAGE_BYTES) {
-    return respond(req, false, `message too large (${Buffer.byteLength(message)} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`)
-  }
-  if (!thread && !session && !specialist) return respond(req, false, '--thread, --session or --specialist is required')
+  const addresses = [to, thread, session, specialist].filter(Boolean).length
+  if (addresses === 0) return respond(req, false, '--to, --thread, --session or --specialist is required')
+  if (to && addresses > 1) return respond(req, false, '--to is the whole address: drop --thread/--session/--specialist')
   if (specialist && (thread || session)) return respond(req, false, '--specialist is its own address: drop --thread/--session')
-  if (revive && (!thread || session)) return respond(req, false, '--revive takes --thread (a specialist always revives)')
+  if (revive && !(to || (thread && !session))) return respond(req, false, '--revive takes --to or --thread (a specialist always revives)')
 
   if (idempotencyKey) {
     const check = checkIdempotency(idempotencyKey)
@@ -302,106 +296,25 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     }
   }
 
-  if (specialist) {
-    const r = await deliverToSpecialist({ specialist, message, initiator, idempotencyKey })
-    return r.ok ? respond(req, true, r.data) : respond(req, false, r.error, r.data, r.exitCode)
+  const opts = { initiator: initiator ?? 'unknown', ...(idempotencyKey && { idempotencyKey }), ...(queue && { queue }) }
+  let r: DeliverOutcome
+  if (to) r = await deliverToTarget({ to, ...(revive && { revive }) }, message, opts)
+  else if (specialist) r = await deliverToTarget({ to: specialist }, message, opts)
+  else if (session === 'main') r = await deliverToTarget({ to: 'main' }, message, opts)
+  else if (thread && !session) r = await deliverVia(() => toThread(thread, message, opts, !!revive), message, opts)
+  else {
+    const info = [...registry.values()].find(s => s.tmuxName === session || s.sessionId === session)
+    if (info && thread && info.threadId !== thread) return respond(req, false, `session "${session}" is in thread ${info.threadId}, not ${thread}`)
+    if (info) r = await deliverVia(() => toSession(info, message, opts), message, opts)
+    else if (thread) r = await deliverVia(() => toThread(thread, message, opts, false), message, opts)
+    else return respond(req, false, `session "${session}" not found`)
   }
-
-  // 'main' (the platform's byte session) has no registry record; it's reached by its bridge id.
-  if (session === 'main') {
-    const connected = transport.has('main')
-    if (!connected && !queue) return respond(req, false, 'main not connected — use --queue to queue for later', undefined, 4)
-    const meta: Record<string, string> = { source: 'cli-deliver', ...(initiator && { initiator }) }
-    transport.sendOrQueue('main', { type: 'notification', content: message, meta })
-    if (idempotencyKey) registerIdempotency(idempotencyKey, 'main', DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
-    return respond(req, true, { status: connected ? 'delivered' : 'queued', sessionId: 'main', sessionName: 'main' })
-  }
-
-  // A specialist's thread revives as the specialist: its name, its kickoff for a fresh start, its back-off.
-  const owner = revive ? specialistForThread(thread!) : undefined
-  if (owner) {
-    const r = await deliverToSpecialist({ specialist: owner, message, initiator, idempotencyKey })
-    if (!r.ok) return respond(req, false, r.error, r.data, r.exitCode)
-    const data = r.data as { spawned: boolean }
-    return respond(req, true, { ...data, revived: data.spawned })
-  }
-
-  // --revive always queues, as a specialist does: a revived (or still booting) session's bridge flushes the queue
-  // when it connects, after the session has read the thread.
-  let revived = false
-  if (revive) {
-    const r = await reviveThreadForDelivery(thread!, initiator)
-    if (!r.ok) return respond(req, false, r.reason, undefined, r.exitCode)
-    revived = r.revived
-    queue = true
-  }
-
-  let info = session
-    ? [...registry.values()].find(s => s.tmuxName === session || s.sessionId === session)
-    : undefined
-
-  if (thread && !info) {
-    const sessionId = registry.getByThread(thread)
-    if (sessionId) info = registry.get(sessionId)
-  }
-
-  if (thread && session && info && info.threadId !== thread) {
-    return respond(req, false, `session "${session}" is in thread ${info.threadId}, not ${thread}`)
-  }
-
-  if (!info && thread) {
-    const threadMeta = threadRegistry.get(thread)
-    if (threadMeta) {
-      return respond(req, false, 'session gone — use \'hydra spawn\' to create a new session in this thread, or \'resume\'/\'respawn\' in chat', undefined, 3)
-    }
-  }
-
-  if (!info) return respond(req, false, `${thread ? 'thread' : 'session'} "${thread ?? session}" not found`)
-
-  const occ = occupancy(info)
-  const bridgeConnected = occ === 'reachable'
-
-  if (occ === 'dead') {
-    return respond(req, false, 'session gone — use \'hydra spawn\' to create a new session, or \'resume\'/\'respawn\' in chat', undefined, 3)
-  }
-  if (occ === 'starting' && !queue) {
-    return respond(req, false, `session still booting — retry in ~${Math.ceil((ORPHAN_GRACE_MS - bridgeWaitMs(info.createdAt)) / 1000)}s`, undefined, 5)
-  }
-  if (occ === 'orphaned' && !queue) {
-    return respond(req, false, 'session orphaned (tmux alive, bridge disconnected) — try \'resume\' in the thread, or use --queue to queue for later', undefined, 4)
-  }
-
-  const meta: Record<string, string> = { source: 'cli-deliver' }
-  if (initiator) meta.initiator = initiator
-
-  const notification = { type: 'notification' as const, content: message, meta }
-
-  // Both engines deliver through their adapter. Reserve the key just before the
-  // await so a concurrent retry is blocked; only an accepted delivery keeps it.
-  // Reserved without the sessionId so the session's death/kill bookkeeping
-  // (getBySessionId) can't pick up an in-flight deliver key.
-  if (idempotencyKey) registerIdempotency(idempotencyKey, '', DELIVER_IDEMPOTENCY_TTL_MS, 'pending')
-  let result: DeliveryResult
-  try {
-    result = await info.adapter.deliver(info, notification)
-  } catch (err) {
-    result = { status: 'unknown', reason: String(err) }
-  }
-
-  const outcome = deliveryOutcome(result, !!queue && !bridgeConnected)
-  if (!outcome.ok) {
-    if (idempotencyKey) clearIdempotency(idempotencyKey)
-    return respond(req, false, outcome.error, undefined, outcome.exitCode)
-  }
-
-  if (idempotencyKey) registerIdempotency(idempotencyKey, info.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
+  // `permanent`: drop it rather than retry (it can never be delivered), as distinct from a gone session.
+  if (!r.ok) return respond(req, false, r.reason, r.permanent ? { permanent: true } : undefined, r.exit)
   return respond(req, true, {
-    status: outcome.status,
-    proof: outcome.proof,
-    sessionId: info.sessionId,
-    sessionName: info.tmuxName,
-    threadId: info.threadId,
-    ...(revive && { revived }),
+    status: r.status, proof: r.proof, sessionId: r.sessionId, sessionName: r.sessionName, threadId: r.threadId,
+    ...(r.specialist && { specialist: r.specialist, spawned: r.revived }),
+    ...(revive && { revived: r.revived }),
   })
 }
 
@@ -410,39 +323,62 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 // ---------------------------------------------------------------------------
 
 async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
-  const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string }
-  const view = (name: string, s: Specialist) => ({ name, ...s, ...specialistStatus(name) })
+  const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
+  const view = (name: string, s: Specialist & { invalid?: string }) => ({ name, ...s, ...specialistStatus(name) })
   switch (p.action) {
     case 'list': return respond(req, true, listSpecialists().map(([name, s]) => view(name, s)))
     case 'show': {
-      const s = p.name ? getSpecialist(p.name) : undefined
-      return s ? respond(req, true, view(p.name!, s)) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
+      // The stored entry, as `rm` sees it: one saved under a name no longer allowed is shown, flagged, not "not found".
+      const entry = listSpecialists().find(([name]) => name === p.name)
+      return entry ? respond(req, true, view(entry[0], entry[1])) : respond(req, false, `specialist "${p.name ?? ''}" not found`)
     }
     case 'rm': {
-      if (!p.name || !removeSpecialist(p.name)) return respond(req, false, `specialist "${p.name ?? ''}" not found`)
+      const name = p.name
+      // Under the specialist's lock: a removal never lands in the middle of its refill.
+      if (!name || !(await withTargetLock(name, async () => removeSpecialist(name)))) return respond(req, false, `specialist "${name ?? ''}" not found`)
       refreshSlackSpecialistSurface() // its occupant loses the Slack-watch tools
-      return respond(req, true, { removed: p.name })
+      return respond(req, true, { removed: name })
     }
     case 'set': {
-      if (!p.name) return respond(req, false, 'specialist name is required')
-      const existing = getSpecialist(p.name)
-      const threadId = p.thread ?? existing?.threadId
-      if (!threadId && !(p.channel ?? existing?.channel)) return respond(req, false, '--channel (where to open its thread) or --thread is required for a new specialist')
-      if (p.kickoffFile && !existsSync(p.kickoffFile)) return respond(req, false, `kickoff file not found: ${p.kickoffFile}`)
-      // Fields not passed keep their current value, so re-pointing a specialist's thread leaves its kickoff alone.
-      const { updatedAt: _t, ...rest } = existing ?? { updatedAt: 0 }
-      const specialist = setSpecialist(p.name, {
-        ...rest,
-        ...(threadId && { threadId }),
-        ...(p.channel && { channel: p.channel }),
-        ...(p.kickoff && { kickoff: p.kickoff }),
-        ...(p.kickoffFile && { kickoffFile: p.kickoffFile }),
-        ...(p.model && { model: p.model }),
-      })
-      refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the Slack-watch tools
-      return respond(req, true, view(p.name, specialist))
+      const name = p.name
+      if (!name) return respond(req, false, 'specialist name is required')
+      // Under the specialist's lock, so the record a refill writes its thread to is the one set here.
+      return withTargetLock(name, async () => setSpecialistUnderLock(req, name, p, view))
     }
     default: return respond(req, false, 'specialist action must be set, show, rm or list')
+  }
+}
+
+function setSpecialistUnderLock(
+  req: CLIRequest, name: string,
+  p: { thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string },
+  view: (name: string, s: Specialist) => unknown,
+): CLIResponse {
+  const existing = getSpecialist(name)
+  // G: two sessions answering to one name is never allowed, so a live specialist moves only once it has stopped.
+  const fromId = existing?.threadId && p.thread && p.thread !== existing.threadId ? registry.getByThread(existing.threadId) : undefined
+  const from = fromId ? registry.get(fromId) : undefined
+  if (from && occupied(occupancy(from))) return respond(req, false, `${name}: is live in ${existing!.threadId}; hydra kill ${name} first`, undefined, 3)
+  const threadId = p.thread ?? existing?.threadId
+  if (!threadId && !(p.channel ?? existing?.channel)) return respond(req, false, '--channel (where to open its thread) or --thread is required for a new specialist')
+  if (p.kickoffFile && !existsSync(p.kickoffFile)) return respond(req, false, `kickoff file not found: ${p.kickoffFile}`)
+  if (p.idle && parseIdleTtl(p.idle) === null) return respond(req, false, `--idle "${p.idle}" is not a duration like 30m, 4h or 1d (at most 7d)`)
+  // Fields not passed keep their current value, so re-pointing a specialist's thread leaves its kickoff alone.
+  const { updatedAt: _t, ...rest } = existing ?? { updatedAt: 0 }
+  try {
+    const specialist = setSpecialist(name, {
+      ...rest,
+      ...(threadId && { threadId }),
+      ...(p.channel && { channel: p.channel }),
+      ...(p.kickoff && { kickoff: p.kickoff }),
+      ...(p.kickoffFile && { kickoffFile: p.kickoffFile }),
+      ...(p.model && { model: p.model }),
+      ...(p.idle && { idle: p.idle }),
+    })
+    refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the Slack-watch tools
+    return respond(req, true, view(name, specialist))
+  } catch (err) {
+    return respond(req, false, err instanceof Error ? err.message : String(err))
   }
 }
 

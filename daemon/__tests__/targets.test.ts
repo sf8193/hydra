@@ -1,0 +1,316 @@
+// targets.ts: one vocabulary for where a message goes (spec §3), and one landing for all of them. The spawn is
+// stubbed through recovery.ts's seam (and doSpawnSession's module for `spawn` targets), so nothing is launched.
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
+import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
+import { transport } from '../bridge-transport.js'
+import { gateway, STATE_DIR } from '../config.js'
+import { executeTool } from '../bridge-dispatch.js'
+import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
+import { _resetBackoff, getBackoff } from '../recovery-backoff.js'
+import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withThreadLock } from '../specialists.js'
+import { deliverToTarget, parseTarget, perThreadName, sessionByName, targetDeps } from '../targets.js'
+import { fakeAdapter } from './test-harness.js'
+
+process.stderr.write = (() => true) as any
+
+let n = 0
+const sessions: string[] = []
+const threads: string[] = []
+const names: string[] = []
+const real = { threadExists: reviveDeps.threadExists, stuck: targetDeps.stuckState, send: gateway.send, sendOrQueue: transport.sendOrQueue }
+let spawns: any[][] = []
+
+/** A session in `threadId`: alive and bridged unless told otherwise. */
+function occupy(threadId: string, o: { alive?: boolean; connected?: boolean; tmuxName?: string } = {}): SessionInfo {
+  const sessionId = `tg-sess-${++n}`
+  const info = {
+    sessionId, tmuxName: o.tmuxName ?? `tg-${n}`, topic: 't', threadId, createdAt: Date.now() - 600_000, lastActive: 1, listening: false,
+    engine: 'claude', sessionType: 'thread_owner', adapter: fakeAdapter({ isAlive: () => o.alive ?? true, usage: () => null }),
+  } as unknown as SessionInfo
+  registry.set(sessionId, info)
+  registry.setThread(threadId, sessionId)
+  if (o.connected ?? true) transport.bridges.set(sessionId, { sessionId, socket: { destroyed: false, write: () => true } } as any)
+  sessions.push(sessionId); threads.push(threadId)
+  return info
+}
+
+function stubSpawn() {
+  const spawn = async (...args: any[]) => {
+    spawns.push(args)
+    await Bun.sleep(5)
+    const threadId = args[3]?.existingThreadId ?? `tg-new-thread-${++n}`
+    const info = occupy(threadId, { tmuxName: args[3]?.name ?? `tg-new-${n}`, connected: false })
+    return { name: info.tmuxName, sessionId: info.sessionId, threadId, url: '' }
+  }
+  _setRecoveryDeps({
+    doSpawnSession: spawn as any, tryResume: async () => null,
+    tryRespawn: ((threadId: string, topic: string, from: string, model: string, extra: any) => spawn(topic, undefined, undefined, { ...extra, existingThreadId: threadId, resurrectFrom: from, model })) as any,
+  })
+  return spawn
+}
+
+const specialist = (threadId: string | undefined, extra: Record<string, unknown> = {}) => {
+  const name = `tgspec${++n}`
+  names.push(name)
+  setSpecialist(name, { ...(threadId && { threadId }), channel: 'chan-tg', kickoff: 'be the specialist', ...extra })
+  return name
+}
+const opts = { initiator: 'tester' }
+
+beforeEach(() => { spawns = []; reviveDeps.threadExists = async () => true; stubSpawn() })
+afterEach(() => {
+  _resetRecoveryDeps(); _resetBackoff()
+  Object.assign(reviveDeps, { threadExists: real.threadExists }); targetDeps.stuckState = real.stuck
+  ;(gateway as any).send = real.send; (transport as any).sendOrQueue = real.sendOrQueue
+  for (const s of sessions.splice(0)) { registry.delete(s); transport.bridges.delete(s) }
+  for (const t of threads.splice(0)) { registry.deleteThread(t); threadRegistry.threads.delete(t) }
+  for (const name of names.splice(0)) removeSpecialist(name)
+})
+
+describe('parseTarget', () => {
+  test('exactly one of to, spawn, perThread; revive only with to; recipes are checked; errors name where', () => {
+    expect(parseTarget({ to: 'ops' }, 'job x')).toEqual({ to: 'ops' })
+    expect(parseTarget({ to: '123', revive: true }, 'job x')).toEqual({ to: '123', revive: true })
+    expect(parseTarget({ spawn: { channel: 'C1', kickoff: 'k', idle: '4h' } }, 'job x')).toEqual({ spawn: { channel: 'C1', kickoff: 'k', idle: '4h' } })
+    expect(parseTarget({ perThread: { channel: 'C1', kickoffFile: '/k.md' }, key: 'slack-C0-1.2' }, 'route 1')).toMatchObject({ key: 'slack-C0-1.2' })
+    expect(() => parseTarget({ to: 'ops', spawn: { channel: 'C1', kickoff: 'k' } }, 'job x')).toThrow('job x: give exactly one of to, spawn, perThread')
+    expect(() => parseTarget({}, 'job x')).toThrow('job x')
+    expect(() => parseTarget({ spawn: { channel: 'C1', kickoff: 'k' }, revive: true }, 'job x')).toThrow('revive goes with to')
+    expect(() => parseTarget({ spawn: { channel: 'C1' } }, 'job x')).toThrow('job x.spawn: kickoff or kickoffFile is required')
+    expect(() => parseTarget({ spawn: { channel: 'C1', kickoff: 'k', idle: 'soon' } }, 'job x')).toThrow('idle "soon"')
+    expect(() => parseTarget({ spawn: { channel: 'C1', kickoff: 'k', prompt: 'p' } }, 'job x')).toThrow('unknown recipe field "prompt"')
+    expect(() => parseTarget({ perThread: { channel: 'C1', kickoff: 'k' } }, 'route 1')).toThrow('perThread needs the key')
+  })
+})
+
+describe('deliverToTarget: `to` resolves main, then a specialist, then an all-digit thread id, else exit 8', () => {
+  test('I: a name that is none of them is exit 8, never a specialist made from a typo', async () => {
+    expect(await deliverToTarget({ to: 'bookkeper' }, 'm', opts)).toEqual({ ok: false, exit: 8, reason: 'no such specialist: bookkeper' })
+    expect(getSpecialist('bookkeper')).toBeUndefined()
+    expect(spawns).toHaveLength(0)
+  })
+
+  test('a declared specialist wins over a thread id that happens to match nothing; an all-digit `to` is a thread', async () => {
+    const live = occupy('987654321')
+    expect(await deliverToTarget({ to: '987654321' }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId, revived: false })
+    const name = specialist('987654321')
+    expect(await deliverToTarget({ to: name }, 'm', opts)).toMatchObject({ ok: true, sessionId: live.sessionId, specialist: name })
+  })
+
+  test('A: first use of a declared specialist opens its thread in its channel, starts a session and queues the message', async () => {
+    const name = specialist(undefined)
+    const r = await deliverToTarget({ to: name }, 'nightly: 3 failures', opts)
+    expect(r).toMatchObject({ ok: true, revived: true, specialist: name, sessionName: name })
+    expect(spawns[0][1]).toBe('chan-tg')
+    expect(getSpecialist(name)!.threadId).toBe((r as any).threadId)
+  })
+
+  test('main is reached by its bridge and is never revived', async () => {
+    expect(await deliverToTarget({ to: 'main', revive: true }, 'm', opts)).toMatchObject({ ok: false, exit: 4 })
+    expect(spawns).toHaveLength(0)
+  })
+})
+
+describe('the landing', () => {
+  test('a reachable session stuck on a dialog is not a landing: exit 5 "stuck: <verdict>", never delivered into', async () => {
+    const live = occupy('tg-stuck')
+    let written = 0
+    transport.bridges.set(live.sessionId, { sessionId: live.sessionId, socket: { destroyed: false, write: () => { written++; return true } } } as any)
+    targetDeps.stuckState = (name: string) => name === live.tmuxName ? { kind: 'unknown_dialog' } as any : null
+    expect(await deliverToTarget({ to: 'tg-stuck' }, 'm', opts)).toEqual({ ok: false, exit: 8, reason: 'no such specialist: tg-stuck' }) // not all digits
+    const name = specialist('tg-stuck')
+    expect(await deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: `tg-k-${++n}` })).toEqual({ ok: false, exit: 5, reason: 'stuck: unknown_dialog' })
+    expect(written).toBe(0)
+    targetDeps.stuckState = () => null
+    expect(await deliverToTarget({ to: name }, 'm', opts)).toMatchObject({ ok: true, status: 'delivered' })
+  })
+
+  test('a message too large is refused permanently (exit 3), never retried', async () => {
+    const name = specialist('tg-big')
+    occupy('tg-big')
+    expect(await deliverToTarget({ to: name }, 'x'.repeat(200_000), opts)).toMatchObject({ ok: false, exit: 3, permanent: true })
+  })
+
+  test('an idempotency key that already landed answers ok and duplicate, without a second delivery', async () => {
+    const name = specialist('tg-dup')
+    occupy('tg-dup')
+    const key = `tg-dup-${++n}`
+    const first = await deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: key })
+    expect(first).toMatchObject({ ok: true })
+    expect(await deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: key })).toMatchObject({ ok: true, duplicate: true, sessionId: (first as any).sessionId })
+  })
+
+  test('a key still in flight is exit 7, never 5: wait, it is landing', async () => {
+    const name = specialist('tg-flight')
+    occupy('tg-flight')
+    const key = `tg-flight-${++n}`
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    _setRecoveryDeps({ tryResume: async () => null, tryRespawn: async () => { await gate; return null as any } })
+    registry.deleteThread('tg-flight') // vacant: the first send waits in the refill
+    const first = deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: key })
+    await Bun.sleep(5)
+    expect(await deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: key })).toMatchObject({ ok: false, exit: 7 })
+    release()
+    await first
+  })
+})
+
+describe('recipes', () => {
+  test('spawn: every message gets a fresh session from the recipe, idle-limited when it says so', async () => {
+    const t = { spawn: { channel: 'C-scan', kickoff: 'scan the deps', idle: '4h' } }
+    const a = await deliverToTarget(t, 'run', opts), b = await deliverToTarget(t, 'run', opts)
+    expect([a.ok, b.ok]).toEqual([true, true])
+    expect((a as any).sessionId).not.toBe((b as any).sessionId)
+    expect(spawns.map(s => [s[0], s[1], s[3].ephemeral, s[3].idleTtlMs])).toEqual([
+      ['scan the deps', 'C-scan', true, 4 * 3_600_000], ['scan the deps', 'C-scan', true, 4 * 3_600_000],
+    ])
+  })
+
+  test('perThread: one specialist per key, named from it, never stored; a second message reaches the same session', async () => {
+    const key = 'slack-C0REQ-1700000000.0001'
+    const t = { perThread: { channel: 'chan-req', kickoff: 'handle this request', idle: '1d' }, key }
+    const a = await deliverToTarget(t, 'first', opts)
+    expect(a).toMatchObject({ ok: true, revived: true, specialist: perThreadName(key), sessionName: perThreadName(key) })
+    expect(perThreadName(key)).toBe('slack-c0req-1700000000-0001')
+    expect(spawns[0][0]).toBe('handle this request')
+    expect(registry.get((a as any).sessionId)).toMatchObject({ ephemeral: true, idleTtlMs: 86_400_000 })
+    const b = await deliverToTarget(t, 'second', opts)
+    expect(b).toMatchObject({ ok: true, revived: false, sessionId: (a as any).sessionId })
+    expect(spawns).toHaveLength(1)
+    expect(getSpecialist(perThreadName(key))).toBeUndefined()
+
+    // Killed (its record gone): the next message revives it in the same Slack-thread's session thread, not a new one.
+    const threadId = (a as any).threadId
+    threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
+      sessionHistory: [{ sessionId: (a as any).sessionId, tmuxName: perThreadName(key), originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] } as any)
+    registry.delete((a as any).sessionId); registry.deleteThread(threadId)
+    const c = await deliverToTarget(t, 'third', opts)
+    expect(c).toMatchObject({ ok: true, revived: true, threadId })
+    expect(spawns[1][3]).toMatchObject({ existingThreadId: threadId })
+  })
+})
+
+describe('perThread shares its thread\'s lock and back-off once it has a thread', () => {
+  test('a refill waits on a resume holding the thread, and its failure counts under the thread', async () => {
+    const key = 'slack-C0LK-1700000000.0002'
+    const t = { perThread: { channel: 'chan-req', kickoff: 'handle it' }, key }
+    const a = await deliverToTarget(t, 'first', opts)
+    const threadId = (a as any).threadId
+    threads.push(threadId)
+    threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
+      sessionHistory: [{ sessionId: (a as any).sessionId, tmuxName: perThreadName(key), originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] } as any)
+    registry.delete((a as any).sessionId); registry.deleteThread(threadId)
+
+    _setRecoveryDeps({ tryResume: async () => null, tryRespawn: async () => { throw new Error('boom') } })
+    let release!: () => void
+    const held = withThreadLock(threadId, () => new Promise<void>(r => { release = r }))  // e.g. a `resume` typed in that thread
+    let settled = false
+    const refill = deliverToTarget(t, 'second', opts).then(r => { settled = true; return r })
+    await Bun.sleep(20)
+    expect(settled).toBe(false)
+    release(); await held
+    expect(await refill).toMatchObject({ ok: false, exit: 6 })
+    expect(getBackoff(threadId)).toBeDefined()
+    expect(getBackoff(perThreadName(key))).toBeUndefined()
+  })
+})
+
+describe('names on every verb', () => {
+  const cli = (command: string, params: Record<string, unknown>) => handleCLIRequest({ type: 'cli', command, id: `tg-${++n}`, params } as CLIRequest)
+
+  test('status takes a session name, a specialist\'s name (whoever is in its thread) or a thread id', async () => {
+    const live = occupy('tg-verbs', { tmuxName: 'tg-occupant' })
+    const name = specialist('tg-verbs')
+    for (const by of ['tg-occupant', name, 'tg-verbs']) {
+      expect(await cli('status', { name: by })).toMatchObject({ ok: true, data: { name: 'tg-occupant', sessionId: live.sessionId } })
+    }
+    expect(sessionByName('nobody')).toBeUndefined()
+  })
+
+  test('deliver --session S --thread T with S unknown falls back to whoever is in T', async () => {
+    const live = occupy('tg-fallback')
+    expect(await cli('deliver', { session: 'nobody', thread: 'tg-fallback', message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { sessionId: live.sessionId } })
+  })
+
+  test('the CLI passes `permanent` through, so a sender can drop rather than retry', async () => {
+    const name = specialist('tg-perm')
+    occupy('tg-perm')
+    expect(await cli('deliver', { to: name, message: 'x'.repeat(200_000), initiator: 't' })).toMatchObject({ ok: false, exitCode: 3, data: { permanent: true } })
+  })
+
+  test('specialist show reads the stored entry, flagged, as rm does', async () => {
+    const file = join(STATE_DIR, 'specialists.json')
+    const saved = (() => { try { return require('fs').readFileSync(file, 'utf8') } catch { return undefined } })()
+    try {
+      writeFileSync(file, JSON.stringify({ '4243': { threadId: 't-4243', updatedAt: 1 } }))
+      _reloadSpecialists()
+      expect(await cli('specialist', { action: 'show', name: '4243' })).toMatchObject({ ok: true, data: { name: '4243', invalid: expect.stringContaining('needs a letter') } })
+    } finally {
+      if (saved === undefined) rmSync(file, { force: true }); else writeFileSync(file, saved)
+      _reloadSpecialists()
+    }
+  })
+
+  test('main and parent are reserved: never a specialist name', async () => {
+    for (const name of ['main', 'parent']) {
+      expect(await cli('specialist', { action: 'set', name, channel: 'c', kickoff: 'k' })).toMatchObject({ ok: false, error: expect.stringContaining('reserved') })
+    }
+  })
+
+  test('deliver --to on the CLI: a specialist, or exit 8', async () => {
+    const name = specialist('tg-cli')
+    occupy('tg-cli')
+    expect(await cli('deliver', { to: name, message: 'm', initiator: 't' })).toMatchObject({ ok: true, data: { specialist: name } })
+    expect(await cli('deliver', { to: 'nobody-here', message: 'm', initiator: 't' })).toMatchObject({ ok: false, exitCode: 8 })
+  })
+})
+
+describe('send_to_thread', () => {
+  test('to a specialist with nobody home: it is filled by its rule, and the message reaches the new session', async () => {
+    const sent: string[] = [], delivered: string[] = []
+    ;(gateway as any).send = async (channel: string) => { sent.push(channel); return { id: 'm', channelId: channel } }
+    ;(transport as any).sendOrQueue = (to: string) => { delivered.push(to) }
+    const name = specialist('tg-heal')
+    occupy('tg-heal', { alive: false, connected: false, tmuxName: name })
+    const caller = occupy('tg-caller')
+    const r = await executeTool('send_to_thread', { target: name, type: 'progress', text: 'hello' }, caller.sessionId)
+    expect(r.isError).toBeFalsy()
+    expect(spawns).toHaveLength(1)
+    const healed = registry.getByThread('tg-heal')!
+    expect(delivered).toContain(healed)
+  })
+
+  test('a live session holding the name reaches the sender even when the specialist points elsewhere', async () => {
+    const delivered: string[] = []
+    ;(gateway as any).send = async (channel: string) => ({ id: 'm', channelId: channel })
+    ;(transport as any).sendOrQueue = (to: string) => { delivered.push(to) }
+    const name = specialist('tg-pointed')
+    const stray = occupy('tg-stray', { tmuxName: name })
+    const caller = occupy('tg-caller2')
+    expect((await executeTool('send_to_thread', { target: name, type: 'progress', text: 'hi' }, caller.sessionId)).isError).toBeFalsy()
+    expect(delivered).toContain(stray.sessionId)
+    expect(spawns).toHaveLength(0)
+  })
+})
+
+describe('specialists.json', () => {
+  test('a stored all-digit name is reported and refused, never renamed', () => {
+    const file = join(STATE_DIR, 'specialists.json')
+    const saved = (() => { try { return require('fs').readFileSync(file, 'utf8') } catch { return undefined } })()
+    try {
+      writeFileSync(file, JSON.stringify({ '4242': { threadId: 't-4242', updatedAt: 1 }, ops: { channel: 'c', updatedAt: 1 } }))
+      _reloadSpecialists()
+      expect(getSpecialist('4242')).toBeUndefined()
+      expect(getSpecialist('ops')).toBeDefined()
+      expect(listSpecialists().find(([n]) => n === '4242')![1].invalid).toContain('needs a letter')
+      expect(require('fs').readFileSync(file, 'utf8')).toContain('"4242"') // kept as it was
+    } finally {
+      if (saved === undefined) rmSync(file, { force: true }); else writeFileSync(file, saved)
+      _reloadSpecialists()
+    }
+  })
+})
