@@ -1,7 +1,7 @@
 # Durable jobs
 
-> Status: proposal v12, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
-> 1–10) and an independent pass. For review before building.
+> Status: proposal v13, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
+> 1–11) and an independent pass. For review before building.
 
 ## What hydra jobs should offer
 
@@ -218,8 +218,9 @@ The detached child:
   - The attempt enforces a hard deadline on itself: the check timeout (30m) + the action timeout + 2 minutes. When it
     hits, it writes a failed result, then kills its own process group, which it leads. That is one call, and it
     leaves no grandchild of the check running after the dispatch ends.
-- **SIGTERM** (a cancel, below): the attempt kills its own group, then writes "cancelled" as not-now, or "done" if
-  the action had already succeeded. A signal that arrives after the result is written does nothing.
+- **SIGTERM** (a cancel, below), in the same order as the deadline: the attempt decides "cancelled" (not-now), or
+  "done" if the action had already succeeded, **writes** it, **then** kills its own group. A signal that arrives
+  after the result is written does nothing.
 
 **A live dispatch is the record, not the process.** A job has a live dispatch while `dispatch` is set. It is cleared
 only when a result, or "ended without a result", is applied. The process is just how a dispatch ends. Nothing
@@ -260,14 +261,17 @@ reservation. If one appears, it is logged and left alone.
 ### Commands
 
 - **`hydra jobs run <platform> <name>`** is a dispatch like any other, waited on in the foreground. The daemon reserves
-  and spawns the same detached `jobs attempt … --dispatch <id> --nonce <n>` child the tick uses. The CLI waits for
-  its result file and prints it, and the daemon applies it on its next tick. There is one attempt runner, so a manual
+  and spawns the same detached `jobs attempt … --dispatch <id> --nonce <n>` child the tick uses, and answers the
+  request after the spawn with `{id, pid, lstart}`. The CLI never reads the result file. It waits until the job's
+  state shows `appliedDispatch >= id`, then prints `last`. That keeps the daemon the only one that interprets
+  results, and it survives a daemon restart. There is one attempt runner, so a manual
   run gets everything a scheduled one has: adoption after a daemon crash, the deadline kill, and the result
   surviving a closed terminal.
   - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap.
   - **For durable jobs**, its success marks the latest slot done. **For plain jobs** it changes nothing about
     the schedule: it never sets `attemptedSlot`, so the scheduled slot is still attempted.
-  - **Ctrl-C** sends SIGTERM to the attempt's group, and the attempt records "cancelled" (see above). A Ctrl-C before
+  - **Ctrl-C** sends SIGTERM to the attempt's group (`-pid`), only while `ps -o lstart= -p <pid>` still matches the
+    answer's `lstart`. The attempt records "cancelled" (see above). A Ctrl-C before
     the daemon has answered the request cancels nothing: the CLI exits, and if the reservation was made, its
     attempt runs and reports as usual.
   - With a live dispatch, the daemon refuses with "already running".
@@ -412,7 +416,8 @@ clock's last tick.
   - for spawn and main, it is "owed (unconfirmed)" and not run. A downgrade's schema mismatch is likelier than
     corruption, and the 24h key won't stop a second session.
 - **Turning on `durable`** is detected by the daemon: the job has `durable` in jobs.toml, but its state lacks
-  `durableApplied: true`. At that moment the daemon decides the latest slot once, sets `durableApplied: true`, and from then on
+  `durableApplied: true`. At that moment the daemon decides the latest slot once, sets `durableApplied: true`, and
+  from then on
   the normal rules apply. The decision reads `last` in whatever format it is: `last.v0` if present (a translated old
   record), otherwise `last.result` (a run under the new runner). The slot counts as done only if `last.at` is after
   the slot's instant and:
