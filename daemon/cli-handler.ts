@@ -8,9 +8,10 @@ import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
 import { deliverToSpecialist, spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
-import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
+import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, specialistForThread, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { ORPHAN_GRACE_MS, bridgeWaitMs, occupancy } from './session-reachability.js'
+import { reviveThreadForDelivery } from './recovery.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
@@ -259,7 +260,7 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 
 
 async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
-  const { thread, session, specialist, message, initiator, idempotencyKey, queue } = req.params as {
+  const { thread, session, specialist, message, initiator, idempotencyKey, revive } = req.params as {
     thread?: string
     session?: string
     specialist?: string
@@ -267,7 +268,9 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     initiator?: string
     idempotencyKey?: string
     queue?: boolean
+    revive?: boolean
   }
+  let { queue } = req.params as { queue?: boolean }
 
   if (!message) return respond(req, false, 'message is required')
   if (Buffer.byteLength(message) > DELIVER_MAX_MESSAGE_BYTES) {
@@ -275,6 +278,7 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   }
   if (!thread && !session && !specialist) return respond(req, false, '--thread, --session or --specialist is required')
   if (specialist && (thread || session)) return respond(req, false, '--specialist is its own address: drop --thread/--session')
+  if (revive && (!thread || session)) return respond(req, false, '--revive takes --thread (a specialist always revives)')
 
   if (idempotencyKey) {
     const check = checkIdempotency(idempotencyKey)
@@ -301,6 +305,25 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     transport.sendOrQueue('main', { type: 'notification', content: message, meta })
     if (idempotencyKey) registerIdempotency(idempotencyKey, 'main', DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
     return respond(req, true, { status: connected ? 'delivered' : 'queued', sessionId: 'main', sessionName: 'main' })
+  }
+
+  // A specialist's thread revives as the specialist: its name, its kickoff for a fresh start, its back-off.
+  const owner = revive ? specialistForThread(thread!) : undefined
+  if (owner) {
+    const r = await deliverToSpecialist({ specialist: owner, message, initiator, idempotencyKey })
+    if (!r.ok) return respond(req, false, r.error, r.data, r.exitCode)
+    const data = r.data as { spawned: boolean }
+    return respond(req, true, { ...data, revived: data.spawned })
+  }
+
+  // --revive always queues, as a specialist does: a revived (or still booting) session's bridge flushes the queue
+  // when it connects, after the session has read the thread.
+  let revived = false
+  if (revive) {
+    const r = await reviveThreadForDelivery(thread!, initiator)
+    if (!r.ok) return respond(req, false, r.reason, undefined, r.exitCode)
+    revived = r.revived
+    queue = true
   }
 
   let info = session
@@ -368,6 +391,7 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     sessionId: info.sessionId,
     sessionName: info.tmuxName,
     threadId: info.threadId,
+    ...(revive && { revived }),
   })
 }
 

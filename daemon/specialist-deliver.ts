@@ -1,9 +1,8 @@
 import { registry, threadRegistry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { backoffRefusal, reviveThread, threadStub } from './recovery.js'
+import { backoffRefusal, reviveDeps, reviveThread, threadStub } from './recovery.js'
 import { backoffClock, getBackoff } from './recovery-backoff.js'
-import { gateway } from './config.js'
 import { registerIdempotency, clearIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
 import { occupancy, occupied } from './session-reachability.js'
@@ -23,10 +22,8 @@ export class SpecialistError extends Error {
   constructor(message: string, readonly exitCode?: number, readonly sessionId?: string) { super(message) }
 }
 
-/** Test seam: the thread check. The spawn is recovery.ts's (`_setRecoveryDeps`), the clock recovery-backoff.ts's. */
-export const specialistDeps = {
-  threadExists: (threadId: string) => gateway.threadExists(threadId),
-}
+/** Test seam: the thread check (recovery.ts's). The spawn is `_setRecoveryDeps`, the clock recovery-backoff.ts's. */
+export const specialistDeps = reviveDeps
 
 function liveOccupant(threadId: string | undefined): SessionInfo | undefined {
   const id = threadId ? registry.getByThread(threadId) : undefined

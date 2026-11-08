@@ -65,6 +65,9 @@ Deliver (whisper channel — message to session context, not thread):
     --initiator <who>                  Who sent this (default: $USER)
     --idempotency-key <key>            Prevent duplicate delivery (optional, 15min TTL)
     --queue                            Queue if bridge disconnected (default: fail)
+    --revive                           With --thread: a dead session is revived in its thread first (resume, else fork,
+                                       else a fresh one that reads the thread); the message queues for it. Exit 3: the
+                                       thread is gone; 4: its session runs but is unreachable; 6: starting failed or backing off
 
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>]
@@ -362,6 +365,7 @@ async function main(): Promise<void> {
       let initiator: string | undefined
       let idempotencyKey: string | undefined
       let queue = false
+      let revive = false
 
       for (let i = 1; i < filtered.length; i++) {
         if (filtered[i] === '--thread' && i + 1 < filtered.length) {
@@ -378,6 +382,8 @@ async function main(): Promise<void> {
           idempotencyKey = filtered[++i]
         } else if (filtered[i] === '--queue') {
           queue = true
+        } else if (filtered[i] === '--revive') {
+          revive = true
         }
       }
 
@@ -402,8 +408,9 @@ async function main(): Promise<void> {
           initiator,
           ...(idempotencyKey && { idempotencyKey }),
           ...(queue && { queue }),
+          ...(revive && { revive }),
         },
-      }, specialist ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
+      }, specialist || revive ? SPAWNING_REQUEST_TIMEOUT_MS : undefined)
       printResponse(response, json)
       break
     }

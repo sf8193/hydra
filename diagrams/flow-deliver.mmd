@@ -2,6 +2,7 @@
 %% External process delivers a message to a session's context (not thread).
 %% Default: sendToBridge directly (binary outcome).
 %% --queue: sendOrQueue for disconnected bridges (fire-and-forget).
+%% --thread <id> --revive: a dead session is revived in its thread first (flow-revive.mmd), then the message queues.
 %% Codex sessions route through their adapter.
 
 sequenceDiagram
@@ -10,13 +11,14 @@ sequenceDiagram
     participant server as bridge-server.ts
     participant handler as cli-handler.ts
     participant idemp as idempotency.ts
+    participant recovery as recovery.ts
     participant sessions as sessions.ts
     participant transport as bridge-<br/>transport.ts
     participant cc as Claude Code / Codex<br/>(target session)
 
     Note left of caller: run_bookkeeper.sh detects<br/>stale pending items
 
-    caller->>cli: hydra deliver --session bloom<br/>--message "..." [--initiator cron:bk] [--queue]
+    caller->>cli: hydra deliver --session bloom<br/>--message "..." [--initiator cron:bk] [--queue]<br/>or --thread id --revive
     Note over cli: parse flags, validate<br/>--message required<br/>default --initiator to $USER
     cli->>server: unix socket + NDJSON<br/>{type: 'cli', command: 'deliver'}
     server->>handler: handleCLIRequest(req)
@@ -27,6 +29,28 @@ sequenceDiagram
             handler-->>cli: {ok: false, exitCode: 2}
             Note left of cli: exit 2 — dedup
         end
+    end
+
+    opt --thread id --revive, and a specialist owns the thread
+        handler->>handler: deliverToSpecialist (its name, kickoff, back-off), then return
+    end
+    opt --thread id --revive
+        handler->>recovery: reviveThreadForDelivery(id)<br/>under the thread's target lock
+        alt occupancy orphaned
+            handler-->>cli: {exitCode: 4, "running but not connected"}
+        else someone home (reachable / starting)
+            Note over recovery: nothing spawned
+        else backing off
+            handler-->>cli: {exitCode: 6, "not retrying until …"} (the platform is not asked)
+        else none / dead, thread gone on the platform (Discord 10003)
+            handler-->>cli: {exitCode: 3, "thread gone"}
+        else none / dead, thread still there (known to hydra or not)
+            recovery->>recovery: reviveThread: resume → fork → respawn<br/>(back-off keyed by thread id)
+            alt start failed or backing off
+                handler-->>cli: {exitCode: 6, "start failed: …" / "not retrying until …"}
+            end
+        end
+        Note over handler: --revive implies --queue: the new session's<br/>bridge flushes it once it has read the thread
     end
 
     alt --session name
@@ -44,9 +68,9 @@ sequenceDiagram
         end
     end
 
-    Note over handler: check reachability<br/>(isAlive + transport.has + ORPHAN_GRACE_MS)
+    Note over handler: occupancy(info)<br/>(session-reachability.ts, one 90s grace)
 
-    alt gone (tmux dead)
+    alt dead
         handler-->>cli: {exitCode: 3, "session gone"}
     else starting (within grace window)
         handler-->>cli: {exitCode: 5, "retry in ~30s"}
