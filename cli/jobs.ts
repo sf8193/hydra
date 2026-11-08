@@ -274,11 +274,75 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
   console.log(`clock: ${tick ? `last tick ${local(tick)} (${ago(new Date(tick), now)})` : 'no tick yet'}${stale ? '  STALE: is the daemon running?' : ''}`)
   const file = jobsToml(stateDir)
   if (!existsSync(file)) { console.log(`no jobs file at ${file}`); return }
+  printJobs(stateDir, parseJobsConfig(readFileSync(file, 'utf8')).jobs, now)
+}
+
+/** One line per job: what `jobs list` and `jobs sync` both print. */
+function printJobs(stateDir: string, jobs: Job[], now: Date): void {
   const sessions = readSessions(stateDir)
-  for (const j of parseJobsConfig(readFileSync(file, 'utf8')).jobs) {
+  for (const j of jobs) {
     const open = sessions.filter(s => isOpenJobSession(s, j.name)).map(s => s.tmuxName)
     console.log(describeJob(j, readJobState(stateDir, j.name, j.schedule), now, open))
   }
+}
+
+// ---------------------------------------------------------------------------
+// jobs sync: make the config live now
+// ---------------------------------------------------------------------------
+
+const TOML_KEY: Record<string, string> = { idleTtl: 'idle_ttl', alertAfterMs: 'alert_after' }
+
+/** What changed between the jobs the daemon had and the ones it has now, by jobs.toml key. */
+export function diffJobs(before: Job[], after: Job[]): string[] {
+  const had = new Map(before.map(j => [j.name, j as Record<string, unknown>]))
+  const has = new Set(after.map(j => j.name))
+  const lines: string[] = []
+  for (const j of after) {
+    const old = had.get(j.name)
+    if (!old) { lines.push(`added: ${j.name}`); continue }
+    const now = j as Record<string, unknown>
+    const keys = [...new Set([...Object.keys(old), ...Object.keys(now)])].filter(k => JSON.stringify(old[k]) !== JSON.stringify(now[k]))
+    if (keys.length) lines.push(`changed: ${j.name} (${keys.map(k => TOML_KEY[k] ?? k).join(', ')})`)
+  }
+  for (const j of before) if (!has.has(j.name)) lines.push(`removed: ${j.name}`)
+  return lines
+}
+
+/**
+ * `hydra jobs sync`: validate jobs.toml, have the daemon load it now, and say what changed. Exits non-zero only for
+ * an invalid file: with the daemon down, the file is still valid and the daemon loads it on start.
+ */
+export async function jobsSync(platform: string, stateDirOverride?: string): Promise<number> {
+  const stateDir = stateDirFor(platform, stateDirOverride)
+  const file = jobsToml(stateDir)
+  if (!existsSync(file)) { runIO.error(`error: no jobs file at ${file}`); return 1 }
+  let jobs: Job[]
+  try { jobs = parseJobsConfig(readFileSync(file, 'utf8')).jobs } catch (err) {
+    runIO.error(`error: ${err instanceof Error ? err.message : err}`)
+    return 1
+  }
+  const sock = join(stateDir, 'daemon.sock')
+  let resp: Record<string, unknown> | null = null
+  let unreachable = ''
+  if (existsSync(sock)) {
+    try { resp = await runIO.send(sock, { type: 'cli', command: 'jobs-sync', id: randomUUID(), params: {} }) } catch (err) {
+      unreachable = err instanceof Error ? err.message : String(err)
+    }
+  }
+  if (!resp) {
+    runIO.print(!existsSync(sock) || /ENOENT|ECONNREFUSED/.test(unreachable)
+      ? 'daemon not running; it will load this on start'
+      : `daemon did not answer (${unreachable}); it loads jobs.toml on its next tick`)
+  } else if (!resp.ok) {
+    runIO.print(`daemon: ${resp.error}; it loads jobs.toml on its next tick`)
+  } else {
+    const d = resp.data as { before: Job[]; after: Job[]; legacyRemoved: string[] }
+    const changes = diffJobs(d.before, d.after)
+    for (const l of changes.length ? changes : ['no changes: the daemon already had this config']) runIO.print(l)
+    for (const t of d.legacyRemoved) runIO.print(`removed legacy launchd entry ${t}`)
+  }
+  printJobs(stateDir, jobs, jobsIO.now())
+  return 0
 }
 
 /** The daemon's persisted session registry, read only to name a job's open sessions. Missing or unreadable: none. */

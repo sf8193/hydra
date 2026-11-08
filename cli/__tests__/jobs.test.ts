@@ -6,7 +6,7 @@ import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
 import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
-  isPlatform, describeJob, jobsMarkDone,
+  isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs,
 } from '../jobs.js'
 import { awakeTimeout, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
 
@@ -756,6 +756,85 @@ describe('jobs list lines', () => {
     expect(line(dur, { covered: { slot: '2026-11-04 10:05', at: '2026-11-04T18:06:00Z' }, last: { at: '2026-11-04T18:06:00Z', result: 'done', note: 'baseline: no work ran' } })).toContain('(baseline: no work ran)')
     expect(line(dur, { last: { at: '2026-11-04T18:06:00Z', result: 'failed', note: 'ended without a result' }, failures: 1, failingSince: '2026-11-04T18:06:00Z' })).toContain('(ended without a result)')
   })
+})
+
+describe('jobs sync (CLI)', () => {
+  const realR = { ...runIO }
+  afterEach(() => Object.assign(runIO, realR))
+  const A = `[a]\nschedule="0 6 * * *"\ncheck="a.sh"\nmode="none"\n`
+  const B = `[b]\nschedule="0 7 * * *"\nmode="main"\nprompt="p"\n`
+  const C = `[c]\nschedule="0 8 * * *"\ncheck="c.sh"\nmode="none"\n`
+  const setup = (toml: string | null, sock = true) => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-sync-'))
+    if (toml !== null) writeFileSync(join(dir, 'jobs.toml'), toml)
+    if (sock) writeFileSync(join(dir, 'daemon.sock'), '')
+    const out: string[] = []
+    const sent: Record<string, unknown>[] = []
+    Object.assign(runIO, { print: (x: string) => out.push(x), error: (x: string) => out.push(x) })
+    const log = console.log
+    console.log = (x: string) => { out.push(x) }
+    return { dir, out, sent, done: () => { console.log = log; rmSync(dir, { recursive: true }) } }
+  }
+
+  test('diffJobs: added, changed (by jobs.toml key), removed', () => {
+    const before = parseJobs(A + B + `[d]\nschedule="0 9 * * *"\nmode="main"\nprompt="p"\n`)
+    const after = parseJobs(`[a]\nschedule="0 5 * * *"\ncheck="a2.sh"\nmode="none"\ndurable=true\nalert_after="2d"\n` + B + C)
+    expect(diffJobs(before, after)).toEqual(['changed: a (schedule, check, durable, alert_after)', 'added: c', 'removed: d'])
+    expect(diffJobs(after, after)).toEqual([])
+  })
+
+  test('the daemon loads it now: prints what changed against what it had, legacy entries removed, then each job', async () => {
+    const t = setup(A + C)
+    runIO.send = async (_s: string, req: Record<string, unknown>) => { t.sent.push(req); return { ok: true, data: { before: parseJobs(A + B), after: parseJobs(A + C), legacyRemoved: ['bun.cron.hydra-job-test-a'] } } }
+    try {
+      expect(await jobsSync('test', t.dir)).toBe(0)
+      expect(t.sent[0]).toMatchObject({ type: 'cli', command: 'jobs-sync' })
+      expect(t.out.slice(0, 3)).toEqual(['added: c', 'removed: b', 'removed legacy launchd entry bun.cron.hydra-job-test-a'])
+      expect(t.out.filter(l => /^[ac] /.test(l))).toHaveLength(2)
+    } finally { t.done() }
+  })
+
+  test('nothing changed: says the daemon already had it', async () => {
+    const t = setup(A)
+    runIO.send = async () => ({ ok: true, data: { before: parseJobs(A), after: parseJobs(A), legacyRemoved: [] } })
+    try { expect(await jobsSync('test', t.dir)).toBe(0); expect(t.out[0]).toBe('no changes: the daemon already had this config') } finally { t.done() }
+  })
+
+  test('an invalid or missing jobs.toml exits 1, and the daemon is never asked', async () => {
+    for (const toml of [`[a]\nschedule="soon"\nmode="main"\nprompt="p"`, null]) {
+      const t = setup(toml)
+      runIO.send = async (_s: string, req: Record<string, unknown>) => { t.sent.push(req); return { ok: true, data: {} } }
+      try {
+        expect(await jobsSync('test', t.dir)).toBe(1)
+        expect(t.out[0]).toMatch(/^error: (jobs.toml \[a\]: schedule "soon" is not a cron expression|no jobs file at)/)
+        expect(t.sent).toEqual([])
+      } finally { t.done() }
+    }
+  })
+
+  test('daemon down (no socket, or refused): valid file, says it loads on start, exit 0', async () => {
+    const none = setup(A, false)
+    try { expect(await jobsSync('test', none.dir)).toBe(0); expect(none.out[0]).toBe('daemon not running; it will load this on start') } finally { none.done() }
+    const refused = setup(A)
+    runIO.send = async () => { throw new Error('socket error: connect ECONNREFUSED /x/daemon.sock') }
+    try { expect(await jobsSync('test', refused.dir)).toBe(0); expect(refused.out[0]).toBe('daemon not running; it will load this on start') } finally { refused.done() }
+  })
+
+  test('the real CLI entry: jobs sync with no daemon exits 0 for a valid file and 1 for an invalid one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-sync-real-'))
+    const run = async () => {
+      const p = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), '--state-dir', dir, 'jobs', 'sync', 'test'], { stdout: 'pipe', stderr: 'pipe' })
+      return [await p.exited, await new Response(p.stdout).text() + await new Response(p.stderr).text()] as const
+    }
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), A)
+      const [ok, out] = await run()
+      expect(ok).toBe(0)
+      expect(out).toContain('daemon not running; it will load this on start')
+      writeFileSync(join(dir, 'jobs.toml'), '[a]\nschedule="soon"')
+      expect((await run())[0]).toBe(1)
+    } finally { rmSync(dir, { recursive: true }) }
+  }, 15_000)
 })
 
 describe('jobs mark-done (CLI)', () => {

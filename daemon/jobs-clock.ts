@@ -274,15 +274,18 @@ export class JobsClock {
    * platform's live state dir, every tick (a readdir), so a `jobs sync` from an old checkout is undone within a minute.
    * A worktree or test daemon never touches them. (A firing entry only prints a message now; it shouldn't linger.)
    */
-  private async clearLegacyEntries(): Promise<void> {
-    if (resolve(this.d.stateDir) !== resolve(this.d.defaultStateDir)) return
+  private async clearLegacyEntries(): Promise<string[]> {
+    if (resolve(this.d.stateDir) !== resolve(this.d.defaultStateDir)) return []
     try {
-      for (const t of await this.d.removeLegacyEntries()) this.d.log(`jobs: removed legacy launchd entry ${t}`)
+      const removed = await this.d.removeLegacyEntries()
+      for (const t of removed) this.d.log(`jobs: removed legacy launchd entry ${t}`)
       this.legacyError = ''
+      return removed
     } catch (err) {
       const msg = String(err)
       if (msg !== this.legacyError) this.d.log(`jobs: removing legacy launchd entries failed (retrying each tick): ${msg}`)
       this.legacyError = msg
+      return []
     }
   }
 
@@ -489,6 +492,24 @@ export class JobsClock {
     if (d === 'already running') return { ok: false, error: `${name} is already running` }
     if (!d || d === 'not owed') return { ok: false, error: `state for ${name} is unreadable` }   // a manual dispatch is never "not owed"
     return { ok: true, reply: { id: d.id, ...(d.pid && { pid: d.pid, lstart: d.lstart }) } }
+  }
+
+  /**
+   * `hydra jobs sync`: load jobs.toml now instead of at the next tick. Answers with the jobs the daemon had and the
+   * jobs it has now (the CLI prints the difference), and the legacy launchd entries it removed; then runs a tick, so
+   * a slot the new config owes is dispatched at once.
+   */
+  async requestSync(): Promise<{ ok: true; before: Job[]; after: Job[]; legacyRemoved: string[] } | { ok: false; error: string }> {
+    if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
+    const before = this.lastGood(readDaemonState(this.d.stateDir).state).jobs
+    let text: string
+    try { text = readFileSync(jobsToml(this.d.stateDir), 'utf8') } catch { return { ok: false, error: `no jobs file at ${jobsToml(this.d.stateDir)}` } }
+    let after: Job[]
+    try { after = parseJobsConfig(text).jobs } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) } }
+    this.updateDaemon(s => { s.lastGoodConfig = text })
+    const legacyRemoved = await this.clearLegacyEntries()
+    await this.tick()
+    return { ok: true, before, after, legacyRemoved }
   }
 
   /** `hydra jobs mark-done`: record the latest slot as done without running anything (a cutover, an unconfirmed slot). */

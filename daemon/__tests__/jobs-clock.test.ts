@@ -189,6 +189,23 @@ describe('clock owner lock', () => {
 })
 
 describe('cutover heals itself', () => {
+  test('jobs sync: loads jobs.toml now, answers with the jobs before and after and the legacy entries removed, then ticks', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    toml(FIVE + HOURLY)
+    w.legacy = ['bun.cron.hydra-job-test-sweep']
+    at('2026-11-04T10:00:30-08:00')
+    const r = await c.requestSync()
+    if (!r.ok) throw new Error(r.error)
+    expect(r.before.map(j => j.name)).toEqual(['sweep'])
+    expect(r.after.map(j => j.name)).toEqual(['sweep', 'sync'])
+    expect(r.legacyRemoved).toEqual(['bun.cron.hydra-job-test-sweep'])
+    expect(JSON.parse(readFileSync(daemonFile(w.dir), "utf8")).lastGoodConfig).toBe(FIVE + HOURLY)
+    expect(JSON.parse(readFileSync(daemonFile(w.dir), "utf8")).lastTick).toBe(w.t.toISOString())   // the tick ran, not waiting a minute
+    toml('[broken')
+    expect(await c.requestSync()).toMatchObject({ ok: false })
+  })
+
   test('the clock owner removes its legacy launchd entries before dispatching, logging each', async () => {
     toml(FIVE)
     setState('sweep', { at: '2026-11-04T17:55:10.000Z', outcome: 'nothing' })   // a v0 record that owes a run now
