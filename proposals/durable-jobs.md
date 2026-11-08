@@ -153,14 +153,14 @@ a tick that finds slots owed. Each tick:
 
 1. **Reads jobs.toml.** If it is missing or doesn't parse, the daemon keeps running the last good config and alerts
    once a local day. A corrupt `_daemon.json` is treated the same way: the daemon alerts and starts it fresh.
-2. **Decides whether the machine is online:** the captive-portal probe (`captive.apple.com` returns "Success")
+2. **Applies results** first, and catches dispatches that ended without one (below), so every decision reads current
+   state. A result that lands mid-minute frees its job on the next tick, not the one after.
+3. **Decides whether the machine is online:** the captive-portal probe (`captive.apple.com` returns "Success")
    **or** the daemon's gateway connection (gateway-health). Two independent witnesses: a VPN that blocks the probe
    can't make every job "not now" forever, and a captive portal (probe fails, gateway down) still reads offline.
-3. **For each job,** computes the owed slot. Then it skips the job if it has a live dispatch, holds it if backoff
+4. **For each job,** computes the owed slot. Then it skips the job if it has a live dispatch, holds it if backoff
    says wait, and records not-now itself if `needs` is unmet or overlap has no verdict yet. Otherwise it decides
-   overlap and dispatches.
-4. **Applies results,** and catches dispatches that ended without one (below). Then it **decides alerts** from
-   current state.
+   overlap and dispatches. Then it **decides alerts** from current state.
 5. **Records the tick.**
 
 **Backoff:** after a failure, the next attempt waits min(2^n minutes, 1h, the schedule's period). n and the
