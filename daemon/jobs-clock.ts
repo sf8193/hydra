@@ -10,7 +10,7 @@ import { resolve } from 'path'
 import { platformStateDir } from '../shared/constants.js'
 import { latestSlot } from '../shared/cron-local.js'
 import {
-  ATTEMPT_DEADLINE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, localDay, lockFile, logFile,
   owedSlot, parseJobsConfig, parseResultName, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../shared/jobs.js'
@@ -19,8 +19,6 @@ import {
 export const ADOPT_GRACE_MS = 30_000
 /** After the process is gone, how long to wait for its final rename before calling it lost. */
 export const FINAL_WRITE_GRACE_MS = 2_000
-/** The attempt kills itself at its deadline; the daemon kills a wedged one this long after. */
-export const KILL_GRACE_MS = 60_000
 const TICK_MS = 60_000
 
 export type ClockDeps = {

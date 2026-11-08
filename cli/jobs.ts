@@ -12,7 +12,7 @@ import { join } from 'path'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { nextSlot } from '../shared/cron-local.js'
 import {
-  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, CHECK_TIMEOUT_MS, STALE_TICK_MS, jobInitiator, jobsDir, jobsToml, lstartOf, parseJobsConfig,
+  ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, jobInitiator, jobsDir, jobsToml, lstartOf, parseJobsConfig,
   readDaemonState, readJobState, resultFile, writeAtomic, type AttemptArgs, type AttemptResult, type Job,
 } from '../shared/jobs.js'
 
@@ -143,6 +143,7 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
 
 export const runIO = {
   send: (sock: string, req: Record<string, unknown>) => sendRequest(sock, req, 15_000),
+  now: () => Date.now(),
   sleep: (ms: number) => new Promise<void>(r => setTimeout(r, ms)),
   onSigint: (fn: () => void) => { process.on('SIGINT', fn) },
   lstartOf,
@@ -191,7 +192,14 @@ export async function jobsRun(platform: string, name: string, stateDirOverride?:
   reply = resp.data as { id: number; pid?: number; lstart?: string }
   runIO.print(`${name}: dispatch ${reply.id} started${reply.pid ? ` (pid ${reply.pid})` : ''}`)
 
+  // A daemon restart while waiting is fine (the next daemon applies the result). Past the attempt's deadline, the kill
+  // grace and a tick, nothing will: stop with a way to look.
+  const giveUpAt = runIO.now() + runWaitMs()
   for (;;) {
+    if (runIO.now() > giveUpAt) {
+      runIO.error(`error: no result applied for dispatch ${reply.id}; see hydra jobs list ${platform}`)
+      return 1
+    }
     const r = readJobState(stateDir, name)
     if (r.kind === 'ok' && (r.state.appliedDispatch ?? 0) >= reply.id) {
       const { last, notNow } = r.state

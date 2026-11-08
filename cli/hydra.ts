@@ -147,6 +147,11 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  if (command === 'jobs' && daemonName) {
+    console.error('error: jobs commands take --state-dir <dir>, not --daemon (a job\'s state lives in the daemon\'s state dir)')
+    process.exit(1)
+  }
+
   if (command === 'jobs') {
     const [, sub, platform, name] = filtered
     if (sub === 'attempt') {

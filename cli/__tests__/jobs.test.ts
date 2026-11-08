@@ -8,7 +8,7 @@ import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
   isPlatform,
 } from '../jobs.js'
-import { resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, type AttemptArgs } from '../../shared/jobs.js'
+import { resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
 
 const repo = join(import.meta.dir, '..', '..')
 
@@ -426,6 +426,29 @@ describe('jobs run', () => {
     expect(await jobsRun('test', 'sweep', dir, 0)).toBe(0)
     expect(out).toEqual(['sweep: dispatch 3 started (pid 50)', 'sweep: done (pruned 2) [dispatch 3]'])
   })
+
+  test('waits through a daemon restart, but not forever: past deadline + kill grace + a tick, exit 1 with a pointer', async () => {
+    let t = 0
+    runIO.now = () => t
+    onSleep = () => { t += 60_000 }                    // a minute per poll; nothing ever applies dispatch 3
+    expect(await jobsRun('test', 'sweep', dir, 0)).toBe(1)
+    expect(out.at(-1)).toBe('error: no result applied for dispatch 3; see hydra jobs list test')
+    expect(t).toBeGreaterThan(runWaitMs())
+    expect(t).toBeLessThanOrEqual(runWaitMs() + 120_000)
+  })
+
+  test('a result applied just inside the bound is still printed', async () => {
+    let t = 0
+    runIO.now = () => t
+    onSleep = n => { t += 60_000; if (t >= runWaitMs()) apply({ appliedDispatch: 3, last: { at: 'x', dispatch: 3, result: 'done' } }) }
+    expect(await jobsRun('test', 'sweep', dir, 0)).toBe(0)
+  })
+
+  test('jobs commands refuse --daemon and point to --state-dir', async () => {
+    const p = Bun.spawn([process.execPath, join(repo, 'cli', 'hydra.ts'), '--daemon', 'discord', 'jobs', 'list', 'discord'], { stdout: 'pipe', stderr: 'pipe' })
+    expect(await p.exited).toBe(1)
+    expect(await new Response(p.stderr).text()).toContain('jobs commands take --state-dir <dir>, not --daemon')
+  }, 15_000)
 
   test('a failed outcome exits 1', async () => {
     apply({ appliedDispatch: 3, last: { at: 'x', dispatch: 3, result: 'failed', note: 'check exited 1' } })

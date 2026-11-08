@@ -87,6 +87,10 @@ export const isJobName = (n: string) => NAME.test(n)
 
 export const CHECK_TIMEOUT_MS = 30 * 60_000
 export const ACTION_TIMEOUT_MS = 2 * 60_000
+/** The daemon kills a wedged attempt this long after its deadline. */
+export const KILL_GRACE_MS = 60_000
+/** How long `jobs run` waits for its dispatch to be applied: past the deadline, the kill grace and one tick, it is stuck. */
+export const runWaitMs = () => ATTEMPT_DEADLINE_MS + KILL_GRACE_MS + 60_000
 /** An attempt's whole budget: the check, the action, and 2 minutes of slack. The attempt enforces it on itself. */
 export const ATTEMPT_DEADLINE_MS = CHECK_TIMEOUT_MS + ACTION_TIMEOUT_MS + 2 * 60_000
 
