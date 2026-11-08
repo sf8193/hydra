@@ -270,6 +270,7 @@ describe('the tick', () => {
     expect(s.args.slice(0, 7)).toEqual(['/hydra/cli/hydra.ts', '--state-dir', w.dir, 'jobs', 'attempt', 'test', 'sweep'])
     expect(argOf(s.args, '--dispatch')).toBe('1')
     expect(argOf(s.args, '--slot')).toBe('2026-11-04 10:05')
+    expect(argOf(s.args, '--slot-at')).toBe(new Date('2026-11-04T10:05:00-08:00').toISOString())
     expect(argOf(s.args, '--state-dir')).toBe(w.dir)
     expect(s.args).not.toContain('--manual')
     expect(JSON.parse(s.stdin)).toEqual({ name: 'sweep', schedule: '*/5 * * * *', check: 'sweep.sh', mode: 'none' })

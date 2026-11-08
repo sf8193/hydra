@@ -211,7 +211,7 @@ export class JobsClock {
       const o = this.overlap(job, slot)
       if (o) return this.recordOutcome(job, { ...o, at: now.toISOString() }, target)
     }
-    this.dispatch(job, 'scheduled', slot.label)
+    this.dispatch(job, 'scheduled', slot)
   }
 
   /** Online if either witness says so: a VPN that blocks the probe can't hold every job, and a captive portal fails both. */
@@ -445,7 +445,8 @@ export class JobsClock {
    * Reserve and spawn. The reserve is one synchronous read-check-write, and the tick and `jobs run` both come through
    * here, so they can't both dispatch. The id is on disk before anything runs, so it is never reused.
    */
-  private dispatch(job: Job, kind: Dispatch['kind'], slot: string): Dispatch | 'already running' | 'not owed' | null {
+  private dispatch(job: Job, kind: Dispatch['kind'], owed: Slot | null): Dispatch | 'already running' | 'not owed' | null {
+    const slot = owed?.label ?? ''
     const r = readJobState(this.d.stateDir, job.name, job.schedule)
     if (r.kind !== 'ok') return null
     const s = r.state
@@ -460,7 +461,7 @@ export class JobsClock {
     s.dispatch = d
     this.write(job.name, s)
 
-    const args = [this.d.hydraEntry, ...attemptArgv({ platform: this.d.platform, name: job.name, dispatch: d.id, nonce: d.nonce, slot, manual: kind === 'manual', stateDir: this.d.stateDir })]
+    const args = [this.d.hydraEntry, ...attemptArgv({ platform: this.d.platform, name: job.name, dispatch: d.id, nonce: d.nonce, slot, ...(owed && { slotAt: owed.at.toISOString() }), manual: kind === 'manual', stateDir: this.d.stateDir })]
     let pid: number | undefined
     try { pid = this.d.spawnAttempt(args, JSON.stringify(job), logFile(this.d.stateDir, job.name)) } catch (err) {
       // No process exists, so there is nothing to wait for or adopt: the attempt is lost now.
@@ -484,7 +485,7 @@ export class JobsClock {
     if (!job) return { ok: false, error: `no job named ${name} in jobs.toml` }
     const now = this.d.now()
     if (!this.ensureState(job, now)) return { ok: false, error: `state for ${name} is unreadable` }
-    const d = this.dispatch(job, 'manual', latestSlot(job.schedule, now)?.label ?? '')
+    const d = this.dispatch(job, 'manual', latestSlot(job.schedule, now))
     if (d === 'already running') return { ok: false, error: `${name} is already running` }
     if (!d || d === 'not owed') return { ok: false, error: `state for ${name} is unreadable` }   // a manual dispatch is never "not owed"
     return { ok: true, reply: { id: d.id, ...(d.pid && { pid: d.pid, lstart: d.lstart }) } }

@@ -328,12 +328,16 @@ export const isOpenJobSession = (s: { initiator?: string; deadAt?: number }, nam
 // ---------------------------------------------------------------------------
 
 /** The `jobs attempt` contract. attemptArgv writes it (the daemon), parseAttemptArgs reads it (the attempt). */
-export type AttemptArgs = { platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string }
+export type AttemptArgs = {
+  platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string
+  /** The slot's instant (ISO). A label repeats after a westward zone change; the instant never does. */
+  slotAt?: string
+}
 
 /** `--state-dir` is the CLI's global daemon address, so it comes first: the attempt's own spawn or deliver uses it too. */
 export function attemptArgv(a: AttemptArgs): string[] {
   return ['--state-dir', a.stateDir, 'jobs', 'attempt', a.platform, a.name, '--dispatch', String(a.dispatch), '--nonce', a.nonce,
-    '--slot', a.slot, ...(a.manual ? ['--manual'] : [])]
+    '--slot', a.slot, ...(a.slotAt ? ['--slot-at', a.slotAt] : []), ...(a.manual ? ['--manual'] : [])]
 }
 
 /** The whole CLI argv of an attempt, or null if any part is missing or malformed. */
@@ -345,7 +349,8 @@ export function parseAttemptArgs(argv: string[]): AttemptArgs | null {
   const dispatch = Number(val('--dispatch'))
   const nonce = val('--nonce'), slot = val('--slot'), stateDir = val('--state-dir')
   if (!platform || !name || !isJobName(name) || !Number.isInteger(dispatch) || dispatch < 1 || !nonce || slot === undefined || !stateDir) return null
-  return { platform, name, dispatch, nonce, slot, manual: argv.includes('--manual'), stateDir }
+  const slotAt = val('--slot-at')
+  return { platform, name, dispatch, nonce, slot, ...(slotAt && { slotAt }), manual: argv.includes('--manual'), stateDir }
 }
 
 /** Whole-token match on `--dispatch <id>` and `--nonce <nonce>`, so dispatch 1 never matches 12 and another install's id never matches. */

@@ -267,10 +267,17 @@ describe('the attempt (in process)', () => {
     expect(existsSync(stateFile(dir, 'scan'))).toBe(false)
   })
 
-  test('scheduled runs use the slot key; manual runs the per-minute key, so a slot key never swallows them', async () => {
-    await jobsAttempt(opts())
+  test('scheduled runs key on the slot instant; manual runs on the minute, so a slot key never swallows them', async () => {
+    await jobsAttempt(opts({ slotAt: '2026-10-25T13:00:00.000Z' }))
     await jobsAttempt(opts({ dispatch: 4, manual: true }))
-    expect(keys).toEqual(['jobs-scan-2026-10-25 06:00', 'jobs-scan-2026-10-25T13:00'])
+    await jobsAttempt(opts({ dispatch: 5 }))   // from a daemon that predates --slot-at: the label
+    expect(keys).toEqual(['jobs-scan-2026-10-25T13:00:00.000Z', 'jobs-scan-2026-10-25T13:00', 'jobs-scan-2026-10-25 06:00'])
+  })
+
+  test('after a westward zone change the label repeats, the key does not: the second 06:00 is not a duplicate', async () => {
+    await jobsAttempt(opts({ slot: '2026-10-25 06:00', slotAt: '2026-10-25T13:00:00.000Z' }))              // 06:00 PDT
+    await jobsAttempt(opts({ dispatch: 4, slot: '2026-10-25 06:00', slotAt: '2026-10-25T16:00:00.000Z' }))  // 06:00 HST, same day
+    expect(new Set(keys).size).toBe(2)
   })
 
   test('arms a self-deadline of check + action + 2 minutes; at it: a failed result, then its group is killed', async () => {
@@ -316,6 +323,7 @@ describe('the attempt (in process)', () => {
   test('argv parsing: the daemon form round-trips; anything incomplete is refused', () => {
     // One contract, both halves in shared/jobs.ts: what the daemon writes, the attempt reads back.
     for (const a of [{ platform: 'test', name: 'scan', dispatch: 12, nonce: 'ab', slot: '2026-10-25 06:00', manual: true, stateDir: '/s' },
+      { platform: 'test', name: 'scan', dispatch: 13, nonce: 'ab', slot: '2026-10-25 06:00', slotAt: '2026-10-25T13:00:00.000Z', manual: false, stateDir: '/s' },
       { platform: 'discord', name: 'x-1', dispatch: 1, nonce: 'n', slot: '', manual: false, stateDir: '/tmp/a b' }])
       expect(parseAttemptArgs(attemptArgv(a))).toEqual(a)
     expect(attemptArgv({ platform: 'test', name: 'scan', dispatch: 1, nonce: 'n', slot: 's', manual: false, stateDir: '/s' }).slice(0, 2)).toEqual(['--state-dir', '/s'])

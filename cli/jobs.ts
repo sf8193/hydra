@@ -145,7 +145,9 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
   attemptIO.out(`${started.toISOString()} ${o.name} dispatch ${o.dispatch} (${o.manual ? 'manual' : `slot ${o.slot}`}) started, pid ${process.pid}`)
   const job = JSON.parse(await attemptIO.readStdin()) as Job   // unreadable stdin throws: the dispatch ends without a result
   if (job.name !== o.name) throw new Error(`stdin holds job ${job.name}, not ${o.name}`)
-  const key = o.manual ? `jobs-${o.name}-${started.toISOString().slice(0, 16)}` : `jobs-${o.name}-${o.slot}`
+  // A scheduled run keys on the slot's instant: its label repeats after a westward zone change, and the repeat would
+  // hit the first slot's key and record a false done. An attempt from a daemon without --slot-at keys on the label.
+  const key = o.manual ? `jobs-${o.name}-${started.toISOString().slice(0, 16)}` : `jobs-${o.name}-${o.slotAt ?? o.slot}`
   // The done result is written the moment the action lands: a cancel or a crash after that can't turn it into a rerun.
   const w = await runWork(job, o.stateDir, key, landed => { actionSent = true; write(landed.result, landed.note, landed.absorbedBy) })
   write(w.result, w.note, w.absorbedBy)
