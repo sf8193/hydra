@@ -15,7 +15,7 @@ function liveSession(id: string, threadId: string, anchorChannelId?: string): Se
   const info = {
     sessionId: id, topic: 't', threadId, createdAt: Date.now(), lastActive: Date.now(),
     tmuxName: id, listening: false, engine: 'claude', sessionType: 'thread_owner',
-    adapter: { provider: 'claude', isAlive: () => true },
+    adapter: { provider: 'claude', isAlive: () => true, isConnected: () => false },
     anchorChannelId,
   } as unknown as SessionInfo
   registry.set(id, info)

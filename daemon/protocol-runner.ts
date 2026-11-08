@@ -1,9 +1,10 @@
 import { gateway } from './config.js'
-import { registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas, type SessionInfo } from './sessions.js'
+import { markDead, registry, sessionEmoji, addCapability, removeCapability, setToolDescription, removeToolDescriptions, setToolInputSchema, removeToolInputSchemas, type SessionInfo } from './sessions.js'
 import { doSpawnSession as _doSpawnSession, killSession as _killSession, killsInProgress, waitForBridge as _waitForBridge } from './session-lifecycle.js'
 import { transport } from './bridge-transport.js'
 import { decideResume } from './auto-resume.js'
-import { isAlive, safeSend, type StatusLineState } from './util.js'
+import { safeSend, type StatusLineState } from './util.js'
+import { occupancy, occupied } from './session-reachability.js'
 import { isSessionWorking, isSessionWorkingAsync } from './session-activity.js'
 import { formatContextPercent, type ProviderId } from './engines/engine-adapter.js'
 import { recordSessionDeath } from './observability.js'
@@ -616,7 +617,7 @@ export function onRunDisconnect(sessionId: string): void {
       const attempts = run._resumeAttempts ?? 0
       const decision = decideResume(
         connected(),
-        currentInfo ? !isAlive(currentInfo) : true,
+        currentInfo ? !occupied(occupancy(currentInfo)) : true,
         !!claudeSessionId,
         attempts,
       )
@@ -877,7 +878,7 @@ async function resumeParticipant(run: ProtocolRun, role: string, deadSessionId: 
     return
   }
 
-  if (info) info.deadAt = Date.now()
+  if (info) markDead(info)
   sessionToRun.delete(deadSessionId)
   run.sessionToRole.delete(deadSessionId)
   run.disconnectTimers.delete(deadSessionId)
@@ -1024,8 +1025,9 @@ async function runHealthCheck(run: ProtocolRun): Promise<void> {
     const info = registry.get(actorSid)
     if (!info) return
 
-    const alive = info.adapter ? await info.adapter.isAlive(info) : isAlive(info)
-    const connected = transport.has(actorSid)
+    const occ = occupancy(info)
+    const alive = occupied(occ)
+    const connected = occ === 'reachable'
 
     // Hard cap check first — unconditional, never skipped for a working session
     const phaseElapsed = Date.now() - run._phaseStartedAt

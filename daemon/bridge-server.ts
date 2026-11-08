@@ -3,7 +3,7 @@ import { execSync, execFileSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { dirname } from 'path'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
-import { registry, threadRegistry, type SessionInfo } from './sessions.js'
+import { markDead, registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { transport, type BridgeConn } from './bridge-transport.js'
 import { executeTool } from './bridge-dispatch.js'
 import { BRIDGE_SHUTDOWN_GRACE_MS, spawnModel } from '../shared/constants.js'
@@ -164,8 +164,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
           if (info) {
             process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
             try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
-            info.deadAt = Date.now()
-            registry.persist()
+            markDead(info)
             void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
           } else {
             process.stderr.write(`daemon: circuit breaker: stray bridge ${sessionId} flapping — disconnecting\n`)
@@ -516,10 +515,7 @@ async function checkSessionDeath(sessionId: string): Promise<void> {
     }
     process.stderr.write(buildAutopsy(info, 'crashed (tmux dead, bridge disconnected)', tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext: getProtocolContext(info.sessionId), resumeCount: info.resumeCount }) + '\n')
 
-    threadRegistry.closeHistoryEntry(info.threadId, info)
-
-    info.deadAt = Date.now()
-    registry.persist()
+    markDead(info)
     clearInterceptsForSession(info.tmuxName)
 
     // Ephemeral sessions die silently — no crash message or skull visual

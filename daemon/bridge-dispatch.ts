@@ -8,7 +8,8 @@ import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
 import { claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, chunk, assertSendable, isAlive, tmuxHasSession, parseDuration } from './util.js'
+import { fallbackDescription, formatDuration, chunk, assertSendable, tmuxHasSession, parseDuration } from './util.js'
+import { occupancy, occupied } from './session-reachability.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
@@ -418,7 +419,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
       }
 
       case 'list_sessions': {
-        const sorted = [...registry.values()].filter(s => isAlive(s)).sort((a, b) => b.lastActive - a.lastActive)
+        const sorted = [...registry.values()].filter(s => occupied(occupancy(s))).sort((a, b) => b.lastActive - a.lastActive)
         const list = sorted.map(s => {
           const desc = s.description ?? fallbackDescription(s.topic)
           return {

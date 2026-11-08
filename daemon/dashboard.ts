@@ -5,14 +5,14 @@
 import { gateway, PLATFORM } from './config.js'
 import { registry, threadRegistry, sessionEmoji, type SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { formatDuration, executionAlive } from './util.js'
+import { formatDuration } from './util.js'
 import { loadAccess } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
 import { sessionLiveAsync } from './session-activity.js'
 import { homeRecoverable, homeStatus, homeStatusAccessory, type HomeStatus } from './home-status.js'
 import { confirmedStuckState, homeActionable, type BlockingState } from './pane-probe.js'
-import { daemonPastOrphanGrace } from './session-reachability.js'
+import { daemonPastOrphanGrace, occupancy, occupied } from './session-reachability.js'
 
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
@@ -80,7 +80,7 @@ async function getActiveSessions(): Promise<SessionRow[]> {
   all.sort((a, b) => b.lastActive - a.lastActive)
 
   const rows: SessionRow[] = []
-  const live = all.filter(executionAlive)
+  const live = all.filter(s => occupied(occupancy(s)))
   const statuses = await Promise.all(live.slice(0, MAX_SESSION_BLOCKS).map(sessionStatus))
   for (const [i, s] of live.entries()) {
     const rawDesc = s.description || s.topic || s.tmuxName

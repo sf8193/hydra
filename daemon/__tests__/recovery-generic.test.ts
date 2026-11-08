@@ -53,6 +53,14 @@ test('manual recover: a dead Codex record is not a candidate; a dead Claude one 
   expect(sent).toEqual(['"rg-none" not found in dead sessions.'])
 })
 
+test('manual recover: a record stamped dead whose tmux still runs is an orphan, not a candidate', async () => {
+  const msg = { channelId: 'ch', id: 'm1' } as any
+  dead('rg-orphan', 'claude')
+  fake.alive('rg-orphan')
+  await handleRecoverIntercept(msg, 'rg-none')
+  expect(sent).toEqual(['No dead sessions found.'])
+})
+
 test('auto-recover at boot: skips a dead Codex record, takes a dead Claude one', async () => {
   const env = { a: process.env.HYDRA_AUTO_RECOVER, s: process.env.SPAWN_CWD }
   process.env.HYDRA_AUTO_RECOVER = '1'

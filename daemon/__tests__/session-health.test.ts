@@ -108,15 +108,32 @@ describe('crash detection', () => {
     expect(to(info, '💀')[0].text).toContain(`**${info.tmuxName}** died`)
   })
 
-  test('inside spawn grace: not a crash', () => {
+  test('a fresh session whose tmux is gone is a crash: a missing execution gets no grace', () => {
     const info = seed({ ageMs: 1000 })
+    pollSessionsOnce(NOW)
+    expect(info.deadAt).toBe(NOW)
+    expect(to(info, '💀')).toHaveLength(1)
+  })
+
+  test('a fresh session whose tmux is alive is starting, not a crash and not an orphan', () => {
+    const info = seed({ ageMs: 1000 })
+    tmux.alive(info.tmuxName)
     pollSessionsOnce(NOW)
     expect(info.deadAt).toBeUndefined()
     expect(to(info, '💀')).toHaveLength(0)
+    expect(to(info, '⚠️')).toHaveLength(0)
   })
 })
 
 describe('orphan detection', () => {
+  test('a record stamped dead whose tmux is still alive is alerted as an orphan, not left silent', () => {
+    const info = seed({ ageMs: OLD, claudeSessionId: 'known', deadAt: NOW - 1000 })
+    tmux.alive(info.tmuxName)
+    pollSessionsOnce(NOW)
+    expect(to(info, '⚠️')).toHaveLength(1)
+    expect(to(info, '💀')).toHaveLength(0)
+  })
+
   test("a restarted daemon gives an old session's bridge the full grace window to reconnect", () => {
     const info = seed({ ageMs: OLD, claudeSessionId: 'known' })
     tmux.alive(info.tmuxName)
@@ -250,7 +267,7 @@ describe('orphan detection', () => {
 
       pollSessionsOnce(NOW)
       transport.bridges.set(reconnected.sessionId, {} as any)
-      died.deadAt = NOW
+      rmSync(join(tmux.dir, `alive-${died.tmuxName}`))
       registry.set(replaced.sessionId, { ...replaced })
       await settle()
 
@@ -323,15 +340,17 @@ describe('orphan detection', () => {
     expect(history(info).claudeSessionId).toBe(SID)
   })
 
-  test('C4: Codex orphan never asks tmux for the pane', () => {
-    // The real Codex adapter, disconnected, so the orphan branch is reached (its isConnected is a constant true).
+  test('C4: a disconnected Codex is neither an orphan nor a crash here, whatever its anchor tmux says (its runtime owns its death), and never asks tmux for the pane', () => {
+    // The real Codex adapter, disconnected: its socket is its execution, so it cannot be running without a channel.
     const adapter = Object.assign(Object.create(engines.codex), { isConnected: () => false })
     const info = seed({ ageMs: OLD, engine: 'codex', adapter })
     tmux.alive(info.tmuxName); tmux.pid(info.tmuxName, PID); tmux.seedClaudeSession(PID, SID)
     pollSessionsOnce(NOW)
     expect(tmux.calls().filter(c => c.startsWith('list-panes'))).toEqual([])
     expect(info.claudeSessionId).toBeUndefined()
-    expect(to(info, '⚠️')).toHaveLength(1)
+    expect(to(info, '⚠️')).toHaveLength(0)
+    expect(to(info, '💀')).toHaveLength(0)
+    expect(info.deadAt).toBeUndefined()
   })
 
   test('C4: discovery persists the registry', () => {
@@ -356,6 +375,7 @@ describe('context alert', () => {
   test('≥70% fires once; below 50 does not', () => {
     const hot = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 70 }) }) })
     const cool = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 49 }) }) })
+    tmux.alive(hot.tmuxName); tmux.alive(cool.tmuxName)
 
     pollSessionsOnce(NOW)
     pollSessionsOnce(NOW + 1000)
@@ -369,6 +389,7 @@ describe('context alert', () => {
     let pct = 50
     const climbing = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: pct }) }) })
     const jumping = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: 85 }) }) })
+    tmux.alive(climbing.tmuxName); tmux.alive(jumping.tmuxName)
 
     pollSessionsOnce(NOW)
     pollSessionsOnce(NOW + 1000)
@@ -384,6 +405,7 @@ describe('context alert', () => {
   test('a drop in context (/clear, /compact) re-arms the alerts', () => {
     let pct = 70
     const info = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => ({ usedTokens: 0, contextWindow: 0, percent: pct }) }) })
+    tmux.alive(info.tmuxName)
     pollSessionsOnce(NOW)
     pct = 10
     pollSessionsOnce(NOW + 1000)
@@ -416,6 +438,7 @@ describe('context alert', () => {
 
   test('unknown usage ("?") never alerts', () => {
     const info = seed({ ageMs: 1000, adapter: fakeAdapter({ usage: () => null }) })
+    tmux.alive(info.tmuxName)
     pollSessionsOnce(NOW)
     expect(to(info, 'context')).toHaveLength(0)
   })

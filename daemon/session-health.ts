@@ -1,19 +1,15 @@
-import { registry, threadRegistry } from './sessions.js'
-import { transport } from './bridge-transport.js'
+import { markDead, registry, threadRegistry } from './sessions.js'
 import { gateway } from './config.js'
-import { tmuxHasSession, fallbackDescription } from './util.js'
+import { fallbackDescription } from './util.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { mainChannel, mainContext, mainTmux } from './main-session.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
+import { bridgeWaitMs, occupancy } from './session-reachability.js'
 import { notifyOperator } from './access.js'
 import type { SessionInfo } from './sessions.js'
 import { autoHandoff } from './auto-handoff.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
-const SPAWN_GRACE_MS = 60_000
-// SYNC: shared with the recovery commands' reachability check, which must agree
-// on what counts as an orphan. See daemon/session-reachability.ts.
 const CONTEXT_ALERT_THRESHOLDS = [50, 70]
 
 const contextAlerted = new Set<string>()
@@ -28,14 +24,12 @@ export function startSessionHealthPoll(): void {
 export function pollSessionsOnce(now: number): void {
   const newOrphans: SessionInfo[] = []
   for (const info of registry.values()) {
-    // Crash detection — both tmux AND bridge must be gone. Bridge-only disconnects are handled
-    // by the bridge-server disconnect handler (3s delay + tmux check). Skip sessions in spawn
-    // grace period (bridge needs time to connect).
-    if (!crashAlerted.has(info.sessionId) && info.sessionType !== 'thread_guest' && !info.deadAt && (now - info.createdAt > SPAWN_GRACE_MS) && !tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
+    const occ = info.sessionType === 'thread_guest' ? undefined : occupancy(info, now)
+    // Bridge-only disconnects are handled by the bridge-server disconnect handler (3s delay + tmux check).
+    // An engine that owns its channel (Codex) owns its deaths too: finaliseCodexDeath drops its queue.
+    if (occ === 'dead' && !info.deadAt && info.adapter.channel === 'bridge' && !crashAlerted.has(info.sessionId)) {
       crashAlerted.add(info.sessionId)
-      info.deadAt = now
-      registry.persist()
-      threadRegistry.closeHistoryEntry(info.threadId, info)
+      markDead(info, now)
       process.stderr.write(`daemon: crash detected: ${info.tmuxName}\n`)
       void gateway.send(info.threadId, `💀 **${info.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
       refreshSessionVisual(info.threadId, { state: 'crashed' })
@@ -47,7 +41,7 @@ export function pollSessionsOnce(now: number): void {
     // the same condition at bridge-timeout time. Both paths must preserve.
     // Discovery retries every poll (claudeSessionId may become available later).
     // Alert fires once per orphan episode; clears when bridge reconnects.
-    if (info.sessionType !== 'thread_guest' && !info.deadAt && (bridgeWaitMs(info.createdAt, now) > ORPHAN_GRACE_MS) && tmuxHasSession(info.tmuxName) && !transport.has(info.sessionId)) {
+    if (occ === 'orphaned') {
       const discovered = info.adapter.recoveryPlan(info, { discover: true }).learnedId
       if (discovered) {
         registry.persist()
@@ -122,7 +116,7 @@ function alertOrphans(orphans: SessionInfo[], detectedAt: number): void {
     if (sent) return
     for (const info of orphans) {
       if (orphanAlerted.get(info.sessionId) !== detectedAt) continue
-      if (registry.get(info.sessionId) === info && !info.deadAt && !transport.has(info.sessionId)) alertOrphanThread(info)
+      if (registry.get(info.sessionId) === info && occupancy(info) === 'orphaned') alertOrphanThread(info)
       else orphanAlerted.delete(info.sessionId)
     }
   })

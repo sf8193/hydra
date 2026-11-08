@@ -6,7 +6,8 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { fakeCodexAdapter } from './test-harness.js'
 import { isCodexReconnecting, reconnectCodexSessions, reconnectDeps } from '../engines/codex-runtime.js'
 import { engines } from '../engines/instances.js'
-import { executionAlive, isAlive } from '../util.js'
+import { occupancy, occupied } from '../session-reachability.js'
+const isAlive = (info: any) => occupied(occupancy(info))
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { withFakeTmux } from './fake-tmux.js'
@@ -49,7 +50,7 @@ describe('the anchor never counts', () => {
   })
 })
 
-describe('util liveness', () => {
+describe('occupancy liveness', () => {
   test('codex connected with its tmux gone → alive (tmux is only an anchor)', () => {
     expect(isAlive(rec(codex(true)))).toBe(true)
   })
@@ -59,16 +60,11 @@ describe('util liveness', () => {
   })
 
   test('codex disconnected, no deadAt → not alive', () => {
-    expect(isAlive(rec(codex(false)))).toBe(false)
-    expect(executionAlive(rec(codex(false)))).toBe(false)
+    expect(occupancy(rec(codex(false)))).toBe('dead')
   })
 
-  test('claude keeps its deadAt veto', () => {
-    expect(isAlive(rec(engines.claude, { deadAt: Date.now() }))).toBe(false)
-  })
-
-  test('claude executionAlive is a boolean (its adapter isAlive is sync)', () => {
-    expect(typeof executionAlive(rec(engines.claude))).toBe('boolean')
+  test('claude with deadAt and no tmux → dead (the execution decides, not the stamp)', () => {
+    expect(occupancy(rec(engines.claude, { deadAt: Date.now() }))).toBe('dead')
   })
 })
 
@@ -84,6 +80,10 @@ describe('boot sweep grace', () => {
     const sweep = reconnectCodexSessions([a, b])
     expect(isCodexReconnecting(b.sessionId)).toBe(true)
     expect(isAlive(b)).toBe(true)
+    // Long past the grace window and even with a stale stamp, a Codex mid-reconnect is reachable (a queued turn waits
+    // out the reconnect), never dead or orphaned: a revive over it would run a second app-server.
+    expect(occupancy({ ...b, createdAt: 0, deadAt: 1 })).toBe('reachable')
+    expect(occupied(occupancy({ ...b, createdAt: 0, deadAt: 1 }))).toBe(true)
     release()
     await sweep
     expect(isCodexReconnecting(a.sessionId)).toBe(false)

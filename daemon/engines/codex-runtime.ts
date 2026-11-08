@@ -10,7 +10,7 @@
  */
 
 import { CodexEngine, type ReconciledTurn } from '../codex-engine.js'
-import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
+import { markDead, registry, threadRegistry, type SessionInfo } from '../sessions.js'
 import { dispatchDisconnect } from '../protocol-registry.js'
 import { handleSilenceEvent, noteActivityForSession } from '../reply-guard.js'
 import { appendFileSync } from 'fs'
@@ -167,9 +167,7 @@ export const isCodexReconnecting = (sessionId: string): boolean => reconnecting.
 // with a notice (Sam, 2026-09-28); piggyback items may be lost.
 export function finaliseCodexDeath(info: SessionInfo): void {
   reconnecting.delete(info.sessionId)
-  info.deadAt = Date.now()
-  registry.persist()
-  threadRegistry.closeHistoryEntry(info.threadId, info)
+  markDead(info)
   codexPiggyback.clear(info.sessionId)
   const { queued, unknown } = codexEngine.discardSession(info.sessionId)
   process.stderr.write(`codex-bootstrap: ${info.tmuxName} is dead (app-server unreachable); dropped ${queued} queued, ${unknown} unknown\n`)

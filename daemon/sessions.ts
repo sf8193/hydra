@@ -757,6 +757,13 @@ export class ThreadRegistry {
 
 export const threadRegistry = new ThreadRegistry()
 
+/** The one writer of a death: `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. */
+export function markDead(info: SessionInfo, at = Date.now()): void {
+  info.deadAt ??= at
+  registry.persist()
+  threadRegistry.closeHistoryEntry(info.threadId, info)
+}
+
 // ---------------------------------------------------------------------------
 // send_to_thread target resolution
 // ---------------------------------------------------------------------------

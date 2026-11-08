@@ -4,7 +4,7 @@
 
 import { readFileSync, statSync, fstatSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
 import { execFileSync } from 'child_process'
-import { registry } from './sessions.js'
+import { markDead, registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
 import { RAINDROP_DRYRUN_FILE } from './config.js'
@@ -462,7 +462,7 @@ export function recordSessionDeath(info: SessionInfo, reason: string, protocolCo
     try { const d = tailSpawnLog(info.debugLogPath, 10); if (d.length > 0) debugTail = d } catch {}
   }
   process.stderr.write(buildAutopsy(info, reason, tail, Date.now(), getVitalsSample(info.sessionId), { exitFileLines, stderrTail, debugTail, protocolContext, resumeCount: info.resumeCount }) + '\n')
-  info.deadAt = Date.now()
+  markDead(info)
 }
 
 // The channel crash notice: LINK, not CONVEY. It names the on-disk black box

@@ -33,7 +33,8 @@ import { notePendingReply } from './reply-guard.js'
 import { deliverUserMessage } from './typed-delivery.js'
 import { emit } from './event-bus.js'
 import { getThreadIntercept } from './pane-probe.js'
-import { isAlive, reportError } from './util.js'
+import { reportError } from './util.js'
+import { occupancy, occupied } from './session-reachability.js'
 import type { ProviderId, TmuxKeyAction } from './engines/engine-adapter.js'
 import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
@@ -680,7 +681,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const resolvedThread = registry.resolveThreadId(msg)
       const activeSession = registry.getByThread(resolvedThread)
       const activeInfo = activeSession ? registry.get(activeSession) : undefined
-      const liveInThread = activeInfo ? isAlive(activeInfo) : false
+      const liveInThread = activeInfo ? occupied(occupancy(activeInfo)) : false
 
       if (!liveInThread) {
         const colonIdx = msg.content.indexOf(':')
@@ -895,7 +896,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       process.stderr.write(`daemon: thread routing: channelId=${msg.channelId} effectiveThreadId=${msg.effectiveThreadId} resolvedThreadId=${resolvedThreadId} mappedSession=${mappedSession ?? 'none'} threadToSession keys=[${[...registry.threadToSession.keys()].join(',')}]\n`)
       if (mappedSession) {
         const info = registry.get(mappedSession)
-        if (info && isAlive(info)) {
+        if (info && occupied(occupancy(info))) {
           // Someone is talking to it: an ephemeral session's idle window starts over.
           touchIdleLimit(mappedSession)
           const listenMatch = msg.content.match(LISTEN_RE)
@@ -1125,7 +1126,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
     const mappedSession = registry.getByThread(rtid)
     if (mappedSession && registry.has(mappedSession)) {
       const info = registry.get(mappedSession)!
-      if (isAlive(info)) {
+      if (occupied(occupancy(info))) {
         targetSessionId = mappedSession
         info.lastActive = Date.now()
         registry.debouncedPersist()

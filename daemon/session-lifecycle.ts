@@ -4,8 +4,9 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, openSync, readSync,
 import { basename, dirname, join, resolve as resolvePath } from 'path'
 import { tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession, executionAlive } from './util.js'
-import { authorityId, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
+import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { occupancy, occupied } from './session-reachability.js'
+import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
 import { notePendingReply } from './reply-guard.js'
 import { transport } from './bridge-transport.js'
@@ -757,7 +758,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
       if (existingId) {
         const existing = registry.get(existingId)
         if (existing) {
-          if (!executionAlive(existing)) {
+          if (!occupied(occupancy(existing))) {
             respawnCount = (existing.respawnCount ?? 0) + 1
             // Lossless respawn (mirror the existingThreadId branch): carry the dead
             // record's deliverables/description to the replacement. Worktree destruction
@@ -830,7 +831,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     if (existingId) {
       const existing = registry.get(existingId)
       if (existing) {
-        if (executionAlive(existing)) {
+        if (occupied(occupancy(existing))) {
           throw new Error(`thread has a live session (${existing.tmuxName}) — kill it first or spawn in a new thread`)
         }
         respawnCount = (existing.respawnCount ?? 0) + 1
@@ -1215,11 +1216,9 @@ export async function tryResume(dead: {
       setTimeout(() => {
         const s = registry.get(recheckSessionId)
         if (!s || s.deadAt) return
-        if (transport.has(recheckSessionId)) return
-        if (!tmuxHasSession(s.tmuxName)) {
+        if (occupancy(s) === 'dead') {
           process.stderr.write(`daemon: resume recheck: ${s.tmuxName} died after orphan classification — marking dead\n`)
-          s.deadAt = Date.now()
-          registry.persist()
+          markDead(s)
           void gateway.send(s.threadId, `💀 **${s.tmuxName}** died. Use \`resume\` to restore context or \`respawn\` for a fresh start.`).catch(() => {})
           refreshSessionVisual(s.threadId, { state: 'crashed' })
         }

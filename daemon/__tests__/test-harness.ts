@@ -270,6 +270,8 @@ export class TestHarness {
     const info = registry.get(this.sessionId(role))
     if (info) {
       info.deadAt = Date.now()
+      // Its execution is gone too: a stamp alone over a running session reads orphaned.
+      info.adapter = Object.assign(Object.create(info.adapter), { isAlive: () => false })
       if (claudeSessionId) (info as any).claudeSessionId = claudeSessionId
     }
   }
