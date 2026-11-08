@@ -9,12 +9,13 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # the suite takes ~2 min; a hang otherwise runs to GitHub's 6h default
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2 # --isolate semantics are load-bearing; bump deliberately
+          bun-version: 1.4.4 # --isolate semantics are load-bearing; bump deliberately. 1.4.3 fixed spawnSync spinning forever after a GC (oven-sh/bun#34069)
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
