@@ -1,0 +1,48 @@
+%% Spin topology: which processes a session is, where each pid comes from, and who acts on them.
+%% The process tree is the live one (2026-11-08). A bridge's ppid is a bun wrapper, not Claude,
+%% and a pane's first child is not always Claude (byte's is caffeinate), so Claude is found by
+%% walking up from the bridge to the pane's direct child.
+
+flowchart TD
+    subgraph tree["Session process tree"]
+        pane["tmux pane<br/>zsh -c (exit-code wrapper)"]
+        claude["claude"]
+        wrapper["bun run … start<br/>(plugin launcher)"]
+        bridge["bun server.ts<br/>= bridge.ts"]
+        pane --> claude --> wrapper --> bridge
+    end
+
+    subgraph disk["State dir"]
+        life["bridge-life/&lt;sessionId&gt;-&lt;pid&gt;.jsonl<br/>start: pid, ppid (= wrapper), ts"]
+    end
+
+    subgraph sample["Vitals tick (cpu-watch.ts, pure parts in cpu-spin.ts)"]
+        ps["one ps -A<br/>pid, ppid, etime, cputime"]
+        live["record is live:<br/>pid started at start.ts (±60s)"]
+        own["session bridge:<br/>ppid still = start.ppid"]
+        orphan["orphan bridge:<br/>ppid changed (launcher died)"]
+        walk["Claude = paneChildOf(bridge, pane pid)"]
+        meter["CPU% = Δcputime / Δwall"]
+        spin["spinning: idle + ≥90% × 2 samples<br/>(orphan: always idle)"]
+    end
+
+    subgraph act["What happens"]
+        line["vitals line · hydra list / status"]
+        alert["operator alert<br/>(one per tick, once per episode)"]
+        heal["spin-heal.ts<br/>(HYDRA_SPIN_HEAL=1, session bridges only)"]
+    end
+
+    bridge -. "writes at start" .-> life
+    pane -. "pane pid (tmux list-panes)" .-> walk
+    life --> live
+    ps --> live
+    live --> own --> walk
+    live --> orphan
+    own --> meter
+    walk --> meter
+    orphan --> meter
+    meter --> line
+    meter --> spin
+    spin -- "session bridge, HYDRA_SPIN_HEAL on" --> heal
+    spin -- "otherwise (incl. hot Claude, orphans)" --> alert
+    heal -. "kill the hot pid; revive (reviveThread orphan)<br/>only if that left it bridgeless" .-> bridge

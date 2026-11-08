@@ -19,6 +19,7 @@ import { threadRegistry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { notifyOperator } from './access.js'
 import { isSessionWorking } from './session-activity.js'
+import type { HealReason } from './spin-heal.js'
 import { fallbackDescription, isTmuxRecentlyActiveSync } from './util.js'
 import { bridgeLifeDir, type BridgeLifeEvent } from '../shared/bridge-life.js'
 import { SPIN_CPU_PERCENT } from '../shared/constants.js'
@@ -35,6 +36,13 @@ export type CpuVitals = {
   spinning: SpinWho | null
   at: number
 }
+
+/**
+ * Takes over a newly spinning session bridge (spin-heal's healSession, under HYDRA_SPIN_HEAL): true when it will act, and then
+ * `fallback` is its alert if the heal doesn't take; false leaves it to this tick's alert. The caller passes
+ * it in, so sampling never reaches into the recovery layer.
+ */
+export type SpinHealer = (info: SessionInfo, reason: HealReason, fallback: () => void) => boolean
 
 /** A live bridge whose launcher has died (reparented): no session owns it any more. */
 export type OrphanBridge = { pid: number; key: string; pct?: number; spinning: boolean }
@@ -100,6 +108,20 @@ function psAll(): Map<number, ProcStat> {
   return parsePs(r.stdout ?? '')
 }
 
+/**
+ * A session's bridges that are running right now, re-checked at call time (one targeted `ps`):
+ * the pid is alive, started when its record says, and still has the parent it started under.
+ */
+export function liveBridgePids(sessionId: string): number[] {
+  const key = sessionId.replace(/[^\w-]/g, '_')
+  const mine = bridgeRecords(STATE_DIR).filter(r => r.key === key)
+  if (mine.length === 0) return []
+  const r = spawnSync('ps', ['-o', 'pid=,ppid=,etime=,time=,comm=', '-p', mine.map(b => b.pid).join(',')], { encoding: 'utf8' })
+  const stats = parsePs(r.stdout ?? '')
+  const now = Date.now()
+  return mine.filter(b => startedAt(stats.get(b.pid), b.ts, now) && stats.get(b.pid)?.ppid === b.ppid).map(b => b.pid)
+}
+
 function swapUsedMB(): number | undefined {
   if (process.platform === 'darwin') {
     const r = spawnSync('sysctl', ['vm.swapusage'], { encoding: 'utf8' })
@@ -120,6 +142,8 @@ export type MainSubject = { tmuxName: string; pid?: number }
 /** One thing to sample: a session, or main under the bridge-life key `main`. */
 type Subject = {
   id: string
+  /** A registry session: what spin-heal can revive. Main has none and is only ever alerted. */
+  info?: SessionInfo
   key: string
   fallbackClaude?: number
   idle: () => boolean
@@ -129,6 +153,7 @@ type Subject = {
 function sessionSubject(s: SessionInfo, pane: PaneProcs): Subject {
   return {
     id: s.sessionId,
+    info: s,
     key: s.sessionId.replace(/[^\w-]/g, '_'),
     fallbackClaude: pane.pid,
     idle: () => !isSessionWorking(s),
@@ -154,7 +179,7 @@ function mainSubject(m: MainSubject): Subject {
  * per episode. A subject's Claude is its bridge's nearest `claude` ancestor; `pane` gives a fallback
  * (the pane's first child) for a session with no live bridge.
  */
-export function sampleCpu(live: SessionInfo[], pane: (sessionId: string) => PaneProcs | undefined, pressure: SystemPressure, main?: MainSubject): CpuSample {
+export function sampleCpu(live: SessionInfo[], pane: (sessionId: string) => PaneProcs | undefined, pressure: SystemPressure, main?: MainSubject, heal?: SpinHealer): CpuSample {
   const records = bridgeRecords(STATE_DIR)
   const all = psAll()
   const now = Date.now()
@@ -193,12 +218,17 @@ export function sampleCpu(live: SessionInfo[], pane: (sessionId: string) => Pane
     readings.set(subject.id, v)
     latest.set(subject.id, v)
     if (state.newly && state.spinning) {
-      newly.push({
+      const entry: SpinEntry = {
         ...subject.entry(),
         who: state.spinning,
         pct: (state.spinning === 'bridge' ? reading.bridgePct : reading.claudePct) ?? 0,
         pid: state.spinning === 'bridge' ? bridge?.pid : claudePid,
-      })
+      }
+      // A spinning session bridge goes to the healer, which takes it when healing is on (alerted alone if the
+      // heal fails); otherwise, and for a hot Claude or main, it joins this tick's alert.
+      const info = subject.info
+      const healed = !!heal && !!info && state.spinning === 'bridge' && !!bridge && heal(info, { kind: 'spinning', pct: entry.pct, pid: bridge.pid }, () => alertSpinning([entry], pressure))
+      if (!healed) newly.push(entry)
     }
   }
 

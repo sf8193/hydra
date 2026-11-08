@@ -16,6 +16,12 @@ function read(info: SessionInfo): { live: LiveState | null; limitS?: number; bac
   } catch { return { live: null } }
 }
 
+/** The provider's own signals alone, with no tmux fallback: `live` is null when it has none; `background` as in sessionLiveAsync. */
+export function sessionLive(info: SessionInfo): { live: LiveState | null; background?: boolean } {
+  const { live, background } = read(info)
+  return { live, ...(background && { background }) }
+}
+
 export function isSessionWorking(info: SessionInfo): boolean {
   const { live, limitS } = read(info)
   if (live === 'working' && limitS) return !tmuxSilentLongerThanSync(info.tmuxName, limitS) // a failed lookup keeps the claim

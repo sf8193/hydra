@@ -1,0 +1,65 @@
+%% Spin-heal
+%% Two triggers, one heal handler. Off (HYDRA_SPIN_HEAL unset, the default): both triggers alert as before.
+%% On: the bridge is killed and the session revived by reviveThread's orphan request, under the thread's
+%% target lock (the one resume, respawn, a delivery revive and a handoff take). reviveThread is the only
+%% writer of the death. Claude Code does not restart a dead stdio MCP server, so a kill alone would leave
+%% the session deaf.
+
+sequenceDiagram
+    autonumber
+    participant obs as observability.ts<br/>(vitals tick, 60s)
+    participant cw as cpu-watch.ts
+    participant sh as session-health.ts<br/>(poll, 5m)
+    participant heal as spin-heal.ts
+    participant gw as {platform}-gateway.ts
+    participant lock as specialists.ts<br/>withThreadLock
+    participant br as bridge.ts process<br/>(bun server.ts)
+    participant srv as bridge-server.ts
+    participant rev as recovery.ts<br/>reviveThread
+    participant lc as session-lifecycle.ts
+
+    alt bridge spinning
+        obs->>cw: sampleCpu(live, pane, pressure, main, healSession)
+        Note over cw: one ps -A · bridge from bridge-life record<br/>idle + bridge ≥90% for 2 samples → newly spinning
+        cw->>heal: healer (injected) → healSession(info, spinning + hot pid, fallback)
+    else orphaned past grace
+        sh->>sh: tmux alive, no bridge past grace → newOrphans
+        sh->>heal: healSession(info, orphaned, fallback)
+    end
+
+    heal->>heal: decideHeal: HYDRA_SPIN_HEAL on · autoRecoverEligible (boot recovery's rule) ·<br/>owns its thread · not healing · past cooldown
+    alt alert (off, ineligible, in flight, or in cooldown)
+        heal-->>cw: false → alertSpinning (notifyOperator)
+        heal-->>sh: false → alertOrphans (operator / thread)
+    else heal (queued: one at a time)
+        heal-->>cw: true (no alert)
+        heal-->>sh: true (no alert)
+        heal->>lock: withThreadLock(thread)
+        activate lock
+        heal->>heal: still the thread's owner? (else done: someone revived it)
+        heal->>rev: backoffRefusal(targetKey)? → refuse: alert, bridge left alone
+        heal->>heal: healCheck: trigger still holds (orphaned · or the same bridge pid spinning, last tick)?<br/>else done, quietly · provider live ≠ idle (working · blocked · shell/unknown)? → alert, nothing killed
+        heal->>gw: send(thread, "🔥/🔌 … killing it and resuming / restarting")
+        gw-->>heal: notice id
+        heal->>cw: liveBridgePids(sessionId)<br/>(start time + ppid re-checked)
+        heal->>br: SIGTERM (spin: the hot pid only · orphan: every bridge),<br/>wait 2s, SIGKILL the same pids if still live
+        br--xsrv: socket closes → transport.delete,<br/>checkSessionDeath in 3s
+        heal->>heal: wait ≤5s until transport drops · occupancy()
+        alt reachable (a healthy sibling bridge serves it)
+            heal->>gw: "✅ killed the stuck bridge — still connected" (reply) · no revive
+        else orphaned, or starting after our own kill (grace window)
+            heal->>rev: reviveThread({ thread, orphan, backoffKey })
+            rev->>lc: killSession(orphan) + markDead<br/>(worktree, watches, children carried)
+            rev->>lc: T1 --resume → T2 fork → T3 respawn
+            lc-->>srv: new Claude + new bridge registers
+            rev-->>heal: outcome
+            heal->>gw: "⏯️ name resumed …" (reply to the notice)<br/>or bridgeOrphan: "⚠️ started, bridge not connected" + alert
+        end
+        deactivate lock
+        Note over srv: the 3s death check finds tmux alive (revive not yet run)<br/>or no record (killSession deleted it): no second death
+        opt backed off · not idle · notice failed · dead or starting with nothing killed · revive failed or deaf
+            heal-->>cw: fallback → alertSpinning([this session])
+            heal-->>sh: fallback → alertOrphans([this session])
+        end
+        Note over heal: cooldown starts at the kill · a throwing fallback is caught: the queue moves on ·<br/>a heal still running after 3m is logged
+    end

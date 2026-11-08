@@ -9,6 +9,7 @@ import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
 import { PLATFORM, RAINDROP_DRYRUN_FILE } from './config.js'
 import { transcriptPathFor } from './usage.js'
+import { healSession } from './spin-heal.js'
 import { sampleCpu, systemPressure, type CpuSample, type CpuVitals } from './cpu-watch.js'
 import { formatPct, formatPressure } from './cpu-spin.js'
 import { byteTmuxName } from '../shared/constants.js'
@@ -351,7 +352,7 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
     // Main has no registry record; byte's pane pid is its Claude, the fallback when its bridge has no record.
     const mainTmux = byteTmuxName(PLATFORM)
     const main = { tmuxName: mainTmux, pid: paneVitals(mainTmux).panePid }
-    try { cpu = sampleCpu(live, id => panes.get(id), pressure, main) } catch (err) { process.stderr.write(`daemon: cpu sample failed: ${err}\n`) }
+    try { cpu = sampleCpu(live, id => panes.get(id), pressure, main, healSession) } catch (err) { process.stderr.write(`daemon: cpu sample failed: ${err}\n`) }
     if (live.length === 0 && cpu.orphans.length === 0 && !cpu.main) return
     const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected, panes.get(s.sessionId), cpu.sessions.get(s.sessionId)))
     if (cpu.main) lines.push(`  ${mainTmux} (main) cpu=${formatPct(cpu.main.claudePct)} bridge=${cpu.main.bridgePid ?? '?'}/${formatPct(cpu.main.bridgePct)}${cpu.main.spinning ? ` [spinning: ${cpu.main.spinning}]` : ''}`)

@@ -53,8 +53,9 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 | `flow-fork` | Fork: thread command → resolve claudeSessionId → doSpawnSession with forkFrom |
 | `flow-list-sessions` | List sessions: registry query → format → gateway send |
 | `flow-respawn` | Respawn: thread command → read thread history → doSpawnSession with resurrectFrom |
-| `flow-recovery-cascade` | Resume/respawn tiers: --resume → fork-transcript → respawn + death detection |
+| `flow-recovery-cascade` | Every revive (resume, respawn, recover, boot, specialist deliver, spin-heal) runs `reviveThread`: --resume → fork → respawn, orphan teardown inside |
 | `flow-revive` | **Who is home, putting a session back, and where a message goes**: `occupancy()`'s decision; every revive under one lock per target through `reviveThread()`; `deliver --revive`; and every target (`to`, `spawn`, `perThread`) resolving to a session that lands through `deliverToSession` (stuck → exit 5) |
+| `flow-spin-heal` | Spin-heal: vitals spin or orphan poll → one heal handler → under the thread lock: checks, notice, kill the hot bridge (spin) or every bridge (orphan), then done if still connected, else `reviveThread({ orphan })`; a working session, or a heal that doesn't take, is alerted |
 | `flow-destroy` | Destroy: delete thread + anchor message (Discord only, dead/orphan threads), plus the `kill +d` composite that kills first |
 | `flow-deliver` | **Whisper channel**: CLI deliver → reachability → sendToBridge (default) or sendOrQueue (`--queue`). Codex sessions route through adapter. Delivery proof in response. |
 | `flow-dialog-dismiss` | Stuck dialog: pane-probe → re-read screen → Esc (or alert only on "No, exit" screens) → thread alert → notification to the session |
@@ -77,6 +78,7 @@ for f in diagrams/*.mmd; do [ -f "${f%.mmd}.png" ] || { echo "unrendered: $f"; e
 |---------|--------------|
 | `command-topology` | Two-channel routing (chat + CLI) converging on shared daemon primitives |
 | `health-topology` | Runtime components, state files, and health check connections |
+| `spin-topology` | A session's process tree, where each pid comes from (bridge-life, pane walk), and what spin detection does with it |
 
 ### Missing (candidates for future PRs)
 - `flow-daemon-restart` — module validation probe → kill incumbent → spawn replacement → verify

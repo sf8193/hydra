@@ -1,15 +1,18 @@
 // sampleCpu against real processes: a busy child of this test stands in for a spinning bridge,
 // found the way the daemon finds one, through its bridge-life record.
 
-import { describe, test, expect, beforeAll, afterAll, afterEach } from 'bun:test'
-import { mkdirSync, writeFileSync, rmSync } from 'fs'
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync, copyFileSync, chmodSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
-import { spawn, execFileSync, type ChildProcess } from 'child_process'
-import { sampleCpu, getCpuVitals, _setSpinThresholdForTesting } from '../cpu-watch.js'
+import { spawn, spawnSync, execFileSync, type ChildProcess } from 'child_process'
+import { sampleCpu, getCpuVitals, liveBridgePids, _setSpinThresholdForTesting } from '../cpu-watch.js'
 import { STATE_DIR, ACCESS_FILE, gateway } from '../config.js'
 import { bridgeLifePath } from '../../shared/bridge-life.js'
+import { registry, threadRegistry } from '../sessions.js'
 import type { SessionInfo } from '../sessions.js'
 import { fakeAdapter } from './test-harness.js'
+import { _setHealDepsForTesting, healSession, type HealDeps, type HealReason } from '../spin-heal.js'
 
 const PRESSURE = { load1: 1, cores: 10 }
 // The busy child is the bridge. Its Claude is its nearest `claude` ancestor, which exists when the suite runs
@@ -28,7 +31,7 @@ function session(id: string, live: 'idle' | 'working' = 'idle'): SessionInfo {
   return {
     sessionId: id, topic: 'topic', threadId: `thread-${id}`, createdAt: 0, lastActive: 0,
     tmuxName: `hydra-cpu-${id}`, listening: false, engine: 'claude', sessionType: 'thread_owner',
-    adapter: fakeAdapter({ turn: () => ({ live, activityAt: null, confirmedComplete: false, answer: () => null }) }),
+    adapter: fakeAdapter({ turn: () => ({ live, activityAt: null, confirmedComplete: false, answer: () => null }), recoveryPlan: () => ({ generic: true, resume: null, fork: null }) }),
   } as unknown as SessionInfo
 }
 
@@ -101,6 +104,96 @@ describe('sampleCpu', () => {
     expect(dms.length).toBe(1)
     expect(dms[0]).toContain('`hydra-cpu-byte (main)`')
   }, LOOP_TIMEOUT_MS)
+
+  describe('with HYDRA_SPIN_HEAL on', () => {
+    let prev: string | undefined
+    let healed: Array<{ thread: string; reason: HealReason }>
+    const threads: string[] = []
+    const healDeps = (): Partial<HealDeps> => ({
+      send: async () => ({ id: 'notice' }), bridges: () => [], kill: () => {}, connected: () => false,
+      sleep: async () => {}, occupancy: async () => 'orphaned', lock: (_t, fn) => fn(), backedOff: async () => undefined,
+      stillNeeded: async (info, reason) => { healed.push({ thread: info.threadId, reason }); return 'needed' },
+      revive: async () => ({ ok: true, method: 'resumed', result: { name: 'n', sessionId: 'n' }, lastTmuxName: 'x' }) as any,
+    })
+    function owned(id: string): SessionInfo {
+      const s = session(id)
+      registry.setThread(s.threadId, s.sessionId)
+      threadRegistry.recordSpawn(s.threadId, { topic: 't', respawnCount: 0, sessionId: s.sessionId, tmuxName: s.tmuxName, originType: 'spawn', label: undefined })
+      threads.push(s.threadId)
+      return s
+    }
+    beforeEach(() => {
+      prev = process.env.HYDRA_SPIN_HEAL
+      process.env.HYDRA_SPIN_HEAL = '1'
+      healed = []
+      _setHealDepsForTesting(healDeps())
+    })
+    afterEach(() => {
+      for (const t of threads.splice(0)) { registry.deleteThread(t); threadRegistry.delete(t) }
+      _setHealDepsForTesting(undefined)
+      if (prev === undefined) delete process.env.HYDRA_SPIN_HEAL
+      else process.env.HYDRA_SPIN_HEAL = prev
+    })
+
+    test('a spinning bridge is healed, naming the hot pid, and not alerted', async () => {
+      const s = owned('spin-heal')
+      record(s.sessionId, busy.pid!, process.pid, busyStartedAt)
+      for (let i = 0; i < 10 && healed.length === 0; i++) { sampleCpu([s], () => PANE, PRESSURE, undefined, healSession); await tick() }
+      expect(healed).toEqual([{ thread: s.threadId, reason: expect.objectContaining({ kind: 'spinning', pid: busy.pid }) }])
+      expect(dms.length).toBe(0) // healed: the thread notice replaces the operator alert
+    }, LOOP_TIMEOUT_MS)
+
+    test('a hot Claude is never healed (killing its bridge would not cool it), even with a live bridge: alerted as before', async () => {
+      // A busy loop named `claude` (a copy of bun) with a cool child as its bridge: the bridge is found through its
+      // record, its Claude by walking up to the nearest `claude`, and only the Claude is hot.
+      const dir = mkdtempSync(join(tmpdir(), 'hydra-fake-claude-'))
+      const fakeClaude = join(dir, 'claude')
+      copyFileSync(process.execPath, fakeClaude)
+      chmodSync(fakeClaude, 0o755)
+      const startedAt = Date.now()
+      const claude = spawn(fakeClaude, ['-e', `require('child_process').spawn('sleep', ['600'], { stdio: 'ignore' }); ${BUSY}`], { stdio: 'ignore' })
+      strays.push(claude.pid!)
+      try {
+        let bridgePid: number | undefined
+        for (let i = 0; i < 50 && !bridgePid; i++) {
+          await new Promise(r => setTimeout(r, 100))
+          bridgePid = Number(spawnSync('pgrep', ['-P', String(claude.pid)], { encoding: 'utf8' }).stdout.trim().split('\n')[0]) || undefined
+        }
+        strays.push(bridgePid!)
+        const s = owned('spin-claude')
+        record(s.sessionId, bridgePid!, claude.pid!, startedAt)
+        for (let i = 0; i < 10 && dms.length === 0; i++) { sampleCpu([s], () => PANE, PRESSURE, undefined, healSession); await tick() }
+        const v = getCpuVitals(s.sessionId)
+        expect(v?.bridgePid).toBe(bridgePid)
+        expect(v?.claudePid).toBe(claude.pid)
+        expect(v?.spinning).toBe('claude')
+        expect(healed).toEqual([])
+        expect(dms.length).toBe(1)
+      } finally {
+        claude.kill('SIGKILL')
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }, LOOP_TIMEOUT_MS)
+  })
+
+  describe('liveBridgePids (what a heal may kill)', () => {
+    test('a record whose pid is running, started when it says, under the parent it names', () => {
+      record('live-ok', busy.pid!, process.pid, busyStartedAt)
+      expect(liveBridgePids('live-ok')).toEqual([busy.pid!])
+    })
+    test('a pid now under another parent (recycled, or the launcher died) is not killed', () => {
+      record('live-ppid', busy.pid!, process.pid + 1, busyStartedAt)
+      expect(liveBridgePids('live-ppid')).toEqual([])
+    })
+    test('a pid that started at another time than its record (recycled) is not killed', () => {
+      record('live-ts', busy.pid!, process.pid, busyStartedAt - 86_400_000)
+      expect(liveBridgePids('live-ts')).toEqual([])
+    })
+    test('another session\'s bridge is not this session\'s', () => {
+      record('live-other', busy.pid!, process.pid, busyStartedAt)
+      expect(liveBridgePids('live-mine')).toEqual([])
+    })
+  })
 
   test('a working session is not spinning, however hot its bridge', async () => {
     const s = session('spin-2', 'working')

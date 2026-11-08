@@ -1,31 +1,34 @@
 %% Recovery Cascade
-%% Three tiers of session recovery, plus death detection trigger.
+%% Every way a session comes back runs reviveThread (recovery.ts): one cascade of three tiers.
+%% The caller takes the thread's target lock (specialists.ts withThreadLock) and checks occupancy();
+%% an orphan is handed in and torn down inside the revive, its worktree, PR watches and children carried.
 
 flowchart TD
-    subgraph triggers["Entry Points"]
-        resume["resume<br/><i>thread-scoped</i>"]
-        respawn["respawn<br/><i>thread-scoped</i>"]
-        recover["recover<br/><i>global batch</i>"]
-        auto["autoRecoverAfterBoot<br/><i>boot-triggered</i>"]
+    subgraph triggers["Entry Points (each under the thread's target lock)"]
+        resume["resume<br/><i>commands/thread.ts</i>"]
+        respawn["respawn<br/><i>respawnOnly</i>"]
+        recover["recover / autoRecoverAfterBoot<br/><i>recoverOne</i>"]
+        deliver["specialist deliver<br/><i>specialist-deliver.ts</i>"]
+        heal["spin-heal.ts<br/><i>spinning or orphaned bridge,<br/>HYDRA_SPIN_HEAL</i>"]
     end
 
-    subgraph primitives["Shared Primitives<br/><i>session-lifecycle.ts</i>"]
-        tryResume["<b>tryResume</b><br/>drives T1 + T2"]
+    revive["<b>reviveThread()</b> · recovery.ts<br/>back-off check · orphan teardown<br/>(killSession + markDead) · carryOver"]
+
+    subgraph primitives["Executors<br/><i>session-lifecycle.ts</i>"]
+        tryResume["<b>tryResume</b><br/>drives T1"]
+        spawn["<b>doSpawnSession</b><br/>drives T2 (fork)"]
         tryRespawn["<b>tryRespawn</b><br/>drives T3"]
-        waitForBridge["<b>waitForBridge</b><br/>validates health after recovery"]
     end
 
     subgraph cascade["Recovery Tiers"]
         t1["<b>T1: --resume</b><br/>full context restoration"]
         t2["<b>T2: --resume --fork-session</b><br/>transcript copy"]
-        t3["<b>T3: tryRespawn</b><br/>fresh session reads thread"]
+        t3["<b>T3: respawn</b><br/>fresh session reads thread"]
     end
 
     subgraph outcomes["Outcomes"]
-        full["full history"]
-        transcript["transcript"]
-        thread["thread context"]
-        fail["<b>report failure</b>"]
+        ok["revived: watches restored,<br/>children repointed, back-off cleared"]
+        fail["<b>all tiers failed</b><br/>dead record restored · back-off counted"]
     end
 
     subgraph death["Death Detection"]
@@ -34,26 +37,22 @@ flowchart TD
         crashed["name crashed → resume"]
     end
 
-    resume --> tryResume
-    recover --> tryResume
-    auto --> tryResume
-    respawn --> tryRespawn
+    resume -- "orphan if occupancy = orphaned" --> revive
+    respawn --> revive
+    recover --> revive
+    deliver --> revive
+    heal -- "kill bridge, then orphan" --> revive
 
-    tryResume --> t1
-    tryResume --> t2
-
-    t1 -- ok --> waitForBridge
-    t1 -- fail --> t2
-    t2 -- ok --> waitForBridge
+    revive -- "not respawnOnly" --> tryResume --> t1
+    t1 -- fail --> spawn --> t2
     t2 -- fail --> tryRespawn
-
+    revive -- "respawnOnly" --> tryRespawn
     tryRespawn --> t3
-    t3 -- ok --> waitForBridge
+
+    t1 -- ok --> ok
+    t2 -- ok --> ok
+    t3 -- ok --> ok
     t3 -- fail --> fail
 
-    waitForBridge -- healthy --> full
-    waitForBridge -- healthy --> transcript
-    waitForBridge -- healthy --> thread
-
     detect --> check --> crashed
-    crashed --> tryResume
+    crashed --> resume

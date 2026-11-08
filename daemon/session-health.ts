@@ -8,6 +8,7 @@ import { bridgeWaitMs, occupancy } from './session-reachability.js'
 import { notifyOperator } from './access.js'
 import type { SessionInfo } from './sessions.js'
 import { autoHandoff } from './auto-handoff.js'
+import { healSession } from './spin-heal.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const CONTEXT_ALERT_THRESHOLDS = [50, 70]
@@ -72,7 +73,7 @@ export function pollSessionsOnce(now: number): void {
   const channel = mainChannel()
   if (channel) alertContext('main', mainTmux(), mainContext() ?? '?', channel)
 
-  alertOrphans(newOrphans, now)
+  alertOrphans(newOrphans.filter(info => !healSession(info, { kind: 'orphaned' }, () => alertOrphans([info], now), now)), now)
 }
 
 function alertContext(id: string, name: string, pct: string, channel: string): void {

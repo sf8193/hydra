@@ -18,13 +18,16 @@ flowchart TD
         transport["bridge-transport.ts<br/>session delivery"]
         lifecycle["session-lifecycle.ts<br/>spawn / resume / kill"]
         server["bridge-server.ts<br/>socket accept + death detect"]
-        thread["commands/thread.ts<br/>destroy"]
+        thread["commands/thread.ts<br/>destroy / resume"]
+        rev["recovery.ts<br/>reviveThread"]
         rd["raindrop.ts<br/>event-bus subscriber<br/>(opt-in, off by default)"]
     end
 
     subgraph health["Health Monitors"]
         poll["session-health.ts poll<br/>5min: crash detect, orphan<br/>detect (90s grace), context alerts"]
         obs["observability.ts<br/>60s vitals, death reports,<br/>session ID correlation"]
+        cw["cpu-watch.ts<br/>60s CPU per Claude + bridge,<br/>spin + orphan-bridge alert"]
+        heal["spin-heal.ts<br/>HYDRA_SPIN_HEAL: kill bridge,<br/>revive (else alert)"]
         mbc["main-bridge-cycle.ts<br/>flap tracking, uptime"]
     end
 
@@ -46,6 +49,7 @@ flowchart TD
         logs["spawn-logs/{name}-{uuid}.log"]
         dlog["~/hydra-{platform}-daemon.log"]
         alive["daemon.alive<br/>heartbeat (connectivity-aware)"]
+        life["bridge-life/{sessionId}-{pid}.jsonl<br/>bridge start: pid, ppid, ts"]
         rdj["raindrop-dryrun.jsonl<br/>(dryrun mode only, 0600)"]
     end
 
@@ -74,6 +78,15 @@ flowchart TD
     b2 -- "MCP stdio" --> spawn2
 
     poll --> server
+    obs --> cw
+    cw -. "pids from" .-> life
+    b1 -. "writes at start" .-> life
+    cw -- "spinning bridge" --> heal
+    poll -- "orphan" --> heal
+    heal -. "kill pid" .-> b1
+    heal -- "revive (orphan)" --> rev
+    thread --> rev
+    rev --> lifecycle
     obs -.-> dlog
     obs -. "60s trim" .-> rdj
     router -. "reaction" .-> rd
@@ -96,5 +109,5 @@ flowchart TD
     classDef fail stroke:#e74c3c,stroke-width:2px,stroke-dasharray:5 5
     classDef health stroke:#27ae60,stroke-width:2px
 
-    class poll,obs,mbc,watchdog health
+    class poll,obs,cw,heal,mbc,watchdog health
     class dg,sg,b0,b1,b2 fail

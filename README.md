@@ -91,6 +91,8 @@ hydra preflight <platform>     # Verify deployment is ready
 
 The watchdog runs every 120s. It restarts the daemon when its tmux session is gone, when its heartbeat is more than 300s stale, or when it is spinning: 90% or more of a CPU core over the interval since the previous tick, two ticks in a row, the same definition the vitals tick uses for bridges and Claude (an event loop spinning in place starves its own timers, so the daemon can't catch this itself). The stale-heartbeat and CPU restarts wait while the platform's API is unreachable. Each restart is logged in `~/hydra-watchdog.log`. The third restart within an hour also sends you a DM listing them (or posts in the default channel if no one is allowlisted). The daemon sends it once it is connected again, since the watchdog has no chat connection of its own. A loop that keeps going is reported again about once an hour.
 
+Sessions get the same check: an idle session whose bridge spins, or whose bridge has been gone for more than 90 seconds while Claude still runs, is reported to you. With `HYDRA_SPIN_HEAL=1` in the state dir's `.env` (off by default; a change takes a restart), Hydra instead kills that bridge and resumes the session in its thread, with a one-line notice. It does this only when Claude reports the session idle (not mid-command, at a permission prompt, or running a background shell), and at most once per thread every 30 minutes. Anything else is reported as before.
+
 ### Lifecycle
 
 ```bash

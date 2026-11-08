@@ -4,7 +4,7 @@
 // executor is stubbed through recoveryDeps, so nothing is spawned.
 
 import { engines, codexEngine } from '../engines/instances.js'
-import { rmSync } from 'fs'
+import { rmSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test'
 import { handleResumeIntercept, handleRespawnIntercept, handleForkIntercept, _setRecoveryDeps, _resetRecoveryDeps } from '../commands/thread.js'
@@ -19,6 +19,8 @@ import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 import { getWatchesBySession, restoreWatches, unwatchBySession } from '../pr-watch.js'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
+import { healSession, _setHealDepsForTesting } from '../spin-heal.js'
+import { clearBackoff, recordFailure } from '../recovery-backoff.js'
 
 const THREAD = 'thread-t8'
 const PARENT = 'parent-t8'
@@ -329,6 +331,103 @@ describe('resume stamps a gone live record dead (Z5)', () => {
     await handleResumeIntercept(msg())
     expect(sent.some(s => s.includes('still starting up'))).toBe(true)
     expect(info.deadAt).toBeUndefined()
+  })
+})
+
+// Spin-heal through the real revive path: the thread lock, occupancy(), reviveThread's orphan teardown and its
+// cascade are all real; only the executors and the bridge kill are stubbed. After heal kills the bridge, the
+// session is exactly "an old record with no bridge" above.
+describe('spin-heal drives the real revive path', () => {
+  let tmux: FakeTmux
+  let fallbacks = 0
+  const prevEnv = process.env.HYDRA_SPIN_HEAL
+  beforeEach(() => {
+    tmux = withFakeTmux()
+    fallbacks = 0
+    process.env.HYDRA_SPIN_HEAL = '1'
+    _setHealDepsForTesting({ bridges: () => [], kill: () => {}, sleep: async () => {}, connected: () => false })
+  })
+  afterEach(() => {
+    tmux.restore()
+    _setDaemonStartedAtForTesting(undefined)
+    _setHealDepsForTesting(undefined)
+    if (prevEnv === undefined) delete process.env.HYDRA_SPIN_HEAL
+    else process.env.HYDRA_SPIN_HEAL = prevEnv
+  })
+
+  // `status` is what Claude's own status file says (the real Claude adapter reads it): the heal kills only on `idle`.
+  function liveOwner(claudeSessionId: string, status = 'idle'): SessionInfo {
+    const e = seedHistory({ claudeSessionId })
+    delete (e as any).endedAt
+    const info = { sessionId: e.sessionId, topic: TOPIC, threadId: THREAD, createdAt: 1, lastActive: 1,
+      tmuxName: e.tmuxName, listening: false, sessionType: 'thread_owner', engine: 'claude', adapter: engines.claude, claudeSessionId } as SessionInfo
+    registry.set(info.sessionId, info); registry.setThread(THREAD, info.sessionId); seeded.add(info.sessionId)
+    tmux.alive(info.tmuxName)
+    mkdirSync(join(tmux.claudeDir, 'sessions'), { recursive: true })
+    writeFileSync(join(tmux.claudeDir, 'sessions', `status-${info.tmuxName}.json`), JSON.stringify({ tmux: info.tmuxName, sessionId: claudeSessionId, status, pid: process.pid }))
+    return info
+  }
+  const until = async (cond: () => boolean) => { for (let i = 0; i < 200 && !cond(); i++) await new Promise(r => setTimeout(r, 5)) }
+
+  test('orphaned owner: torn down once (record gone, history closed), revived with its conversation, announced, no fallback', async () => {
+    _setDaemonStartedAtForTesting(0)
+    const info = liveOwner('C-heal')
+    expect(healSession(info, { kind: 'orphaned' }, () => { fallbacks++ })).toBe(true)
+    await until(() => sent.some(s => s.startsWith('⏯️')))
+    expect(sent[0]).toStartWith('🔌')                                      // the heal's notice comes first
+    expect(calls.find(c => c.fn === 'tryResume')!.args[0].claudeSessionId).toBe('C-heal')
+    expect(registry.get(info.sessionId)).toBeUndefined()                  // reviveThread's killSession removed it
+    expect(info.deadAt).toBeNumber()                                      // markDead, inside reviveThread
+    expect(typeof threadRegistry.get(THREAD)!.sessionHistory[0].endedAt).toBe('number')
+    expect(sent.at(-1)).toBe('⏯️ `resumed-name` resumed — full context restored.')
+    expect(stderr.join('')).toContain('revive: tearing down orphaned')
+    expect(fallbacks).toBe(0)
+  })
+
+  test('the thread is backed off (a revive just failed): refused before the kill, nothing torn down, the alert fires', async () => {
+    _setDaemonStartedAtForTesting(0)
+    recordFailure(THREAD, 'spawn failed')
+    try {
+      const info = liveOwner('C-heal-backoff')
+      healSession(info, { kind: 'orphaned' }, () => { fallbacks++ })
+      await until(() => fallbacks > 0)
+      expect(sent.some(s => s.startsWith('🔌'))).toBe(false)   // no "killing it" notice
+      expect(registry.get(info.sessionId)).toBe(info)
+      expect(calls.some(c => c.fn === 'tryResume')).toBe(false)
+      expect(stderr.join('')).toContain('revive backed off, bridge left alone')
+    } finally {
+      clearBackoff(THREAD)
+    }
+  })
+
+  test('reads "starting" with nothing killed (right after a daemon restart): nothing torn down, no revive, the alert fires', async () => {
+    _setDaemonStartedAtForTesting(Date.now())
+    _setHealDepsForTesting({ bridges: () => [], kill: () => {}, sleep: async () => {}, connected: () => false, stillNeeded: async () => 'needed' })
+    const info = liveOwner('C-heal-early')
+    healSession(info, { kind: 'spinning', pct: 99, pid: 1 }, () => { fallbacks++ })
+    await until(() => fallbacks > 0)
+    expect(info.deadAt).toBeUndefined()
+    expect(registry.get(info.sessionId)).toBe(info)
+    expect(calls.some(c => c.fn === 'tryResume')).toBe(false)
+    expect(fallbacks).toBe(1)
+  })
+
+  test('an orphan whose Claude is not idle (a background shell running, or a permission prompt) is left alone: nothing torn down, the alert fires', async () => {
+    _setDaemonStartedAtForTesting(0)
+    for (const status of ['shell', 'waiting', 'busy']) {
+      fallbacks = 0
+      sent.length = 0
+      const info = liveOwner(`C-heal-${status}`, status)
+      expect(healSession(info, { kind: 'orphaned' }, () => { fallbacks++ })).toBe(true)
+      await until(() => fallbacks > 0)
+      expect(fallbacks).toBe(1)
+      expect(sent).toEqual([])                       // no notice
+      expect(info.deadAt).toBeUndefined()
+      expect(registry.get(info.sessionId)).toBe(info)
+      expect(calls.some(c => c.fn === 'tryResume')).toBe(false)
+      registry.delete(info.sessionId)
+      _setHealDepsForTesting({ bridges: () => [], kill: () => {}, sleep: async () => {}, connected: () => false }) // a fresh in-flight/cooldown map
+    }
   })
 })
 

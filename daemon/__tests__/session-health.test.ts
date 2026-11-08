@@ -22,6 +22,7 @@ import { pendingPermissions } from '../permission.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
 import { fakeAdapter } from './test-harness.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
+import { _setHealDepsForTesting } from '../spin-heal.js'
 
 const SID = '66666666-7777-4888-8999-aaaaaaaaaaaa'
 const PID = '515151'
@@ -230,6 +231,36 @@ describe('orphan detection', () => {
       pollSessionsOnce(NOW + 1000)
       await settle()
       expect(dms).toHaveLength(1)
+    })
+
+    test('with HYDRA_SPIN_HEAL on, eligible orphans are healed instead of alerted; the rest alert as before', async () => {
+      writeFileSync(ACCESS_FILE, JSON.stringify({ allowFrom: ['U-op'] }))
+      const prev = process.env.HYDRA_SPIN_HEAL
+      process.env.HYDRA_SPIN_HEAL = '1'
+      const resumed: string[] = []
+      _setHealDepsForTesting({
+        send: async () => ({ id: 'notice' }), bridges: () => [], kill: () => {}, connected: () => false,
+        sleep: async () => {}, occupancy: async () => 'orphaned', lock: (_t, fn) => fn(), backedOff: async () => undefined, stillNeeded: async () => 'needed',
+        revive: async req => { resumed.push(req.thread.threadId); return { ok: true, method: 'resumed', result: { name: 'n', sessionId: 'n' }, lastTmuxName: 'x' } as any },
+      })
+      try {
+        const [a, b, c] = seedOrphans(3)
+        for (const o of [a, b, c]) registry.setThread(o.threadId, o.sessionId)
+        c.suppressAutoRecover = true
+        pollSessionsOnce(NOW)
+        await settle()
+        await settle()
+        expect(resumed.sort()).toEqual([a.threadId, b.threadId].sort())
+        expect(dms).toHaveLength(0)
+        expect(to(c, '⚠️')).toHaveLength(1) // the one left over gets today's single-orphan alert
+        pollSessionsOnce(NOW + 1000)
+        await settle()
+        expect(resumed).toHaveLength(2)
+      } finally {
+        _setHealDepsForTesting(undefined)
+        if (prev === undefined) delete process.env.HYDRA_SPIN_HEAL
+        else process.env.HYDRA_SPIN_HEAL = prev
+      }
     })
 
     test('a summary past the platform limit is split, not dropped', async () => {

@@ -6,8 +6,8 @@
 // recovery (autoRecoverAfterBoot, boot-wired in daemon.ts) share the recoverOne cascade,
 // work-key dedup, and the single-flight guard here.
 import { existsSync } from 'fs'
-import { gateway } from './config.js'
-import { markDead, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
+import { autoRecoverEnabled, gateway } from './config.js'
+import { autoRecoverEligible, markDead, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnResult } from './sessions.js'
 import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { tmuxHasSession, baseNameFromBranch } from './util.js'
@@ -666,7 +666,7 @@ async function postAutoRecoverySummary(
 // the resume→fork→respawn cascade. Idempotent — a session whose tmux is already
 // live is skipped.
 export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
-  if ((process.env.HYDRA_AUTO_RECOVER || '') !== '1') return
+  if (!autoRecoverEnabled()) return
   if (recoveryInProgress) return
 
   // Precondition: a systemic boot glitch (e.g. SPAWN_CWD unset) would fail every tier
@@ -685,12 +685,8 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
     // constructor — runs before this) stamps deadAt on EVERY tmux-gone non-guest session at boot,
     // so a session that was alive at crash time (never gracefully stamped) is already deadAt here.
     !!info.deadAt
-    && info.sessionType === 'thread_owner'  // only plain workers — excludes thread_guest and master_orchestrator
-    && !info.suppressAutoRecover
-    && !info.ephemeral
-    && info.adapter.recoveryPlan(info).generic  // Codex: no — its runtime's start() reconnects it at boot; recoverOne would relaunch it as Claude
-    && !tmuxHasSession(info.tmuxName)
-    && threadRegistry.has(info.threadId),
+    && autoRecoverEligible(info)  // Codex is not: its runtime's start() reconnects it at boot; recoverOne would relaunch it as Claude
+    && !tmuxHasSession(info.tmuxName),
   )
   if (deadInfos.length === 0) return
 

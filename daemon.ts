@@ -33,7 +33,7 @@ try {
   }
 } catch {}
 
-import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
+import { autoRecoverEnabled, gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
@@ -328,7 +328,7 @@ async function startGateway(attempt = 0): Promise<void> {
     // right before auto-recovery fixes them.
     if (startupGapMs !== null) {
       const hasDeadWorkers = [...registry.values()].some(s => !!s.deadAt && s.sessionType === 'thread_owner')
-      if (!hasDeadWorkers || (process.env.HYDRA_AUTO_RECOVER || '') !== '1') {
+      if (!hasDeadWorkers || !autoRecoverEnabled()) {
         sendRecoveryReport(startupGapMs)
       }
     }

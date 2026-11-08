@@ -70,6 +70,20 @@ export function idleReapMs(): number | undefined {
 
 export type TypedDeliveryMode = 'off' | 'paste' | 'hold'
 let warnedBadMode = false
+/** HYDRA_AUTO_RECOVER=1: revive dead workers at boot. Read per call. */
+export function autoRecoverEnabled(): boolean {
+  return (process.env.HYDRA_AUTO_RECOVER || '') === '1'
+}
+
+/**
+ * HYDRA_SPIN_HEAL=1: kill a spinning or orphaned session's bridge and revive it (spin-heal.ts). Off (the
+ * default) alerts only. Its own switch: it acts on live sessions, and the installer sets HYDRA_AUTO_RECOVER
+ * on every daemon. Read per call.
+ */
+export function spinHealEnabled(): boolean {
+  return (process.env.HYDRA_SPIN_HEAL || '') === '1'
+}
+
 /** HYDRA_TYPED_DELIVERY_MODE: off (default) | paste | hold. An unknown value means off and is logged once. Read per call. */
 export function typedDeliveryMode(): TypedDeliveryMode {
   const raw = (process.env.HYDRA_TYPED_DELIVERY_MODE || '').trim().toLowerCase()

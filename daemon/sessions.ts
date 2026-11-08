@@ -772,6 +772,21 @@ export class ThreadRegistry {
 
 export const threadRegistry = new ThreadRegistry()
 
+/**
+ * Whether the daemon may put this session back on its own, with nobody asking: boot recovery and spin-heal
+ * both use this one rule. Plain workers only (no guests or orchestrators), not ones marked to skip (a dead
+ * record whose worktree is gone), not ephemeral (a revive doesn't carry the flag, so it would come back
+ * permanent), only engines that recover generically (Codex reconnects through its own runtime), and only with
+ * a thread record to revive into. A manual `recover` or `resume` ignores this.
+ */
+export function autoRecoverEligible(info: SessionInfo): boolean {
+  return info.sessionType === 'thread_owner'
+    && !info.suppressAutoRecover
+    && !info.ephemeral
+    && !!info.adapter?.recoveryPlan(info).generic
+    && threadRegistry.has(info.threadId)
+}
+
 /** The one writer of a death: `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. */
 export function markDead(info: SessionInfo, at = Date.now()): void {
   info.deadAt ??= at
