@@ -65,6 +65,7 @@ export class JobsClock {
   private cancel: (() => void) | null = null
   private cancelHealth: (() => void) | null = null
   private ticking: Promise<void> | null = null
+  private tickStartedAt = 0
   private readonly startedAt: Date
   private staleFlagged = false
   private legacyError = ''
@@ -119,6 +120,7 @@ export class JobsClock {
   /** One tick. Ticks never overlap: a call while one runs waits for it and returns. */
   tick(): Promise<void> {
     if (this.ticking) return this.ticking
+    this.tickStartedAt = this.d.now().getTime()
     this.ticking = this.runTick().catch(err => this.d.log(`jobs: tick failed: ${err instanceof Error ? err.stack : err}`))
       .finally(() => { this.ticking = null })
     return this.ticking
@@ -461,12 +463,19 @@ export class JobsClock {
   /** Separate from the tick, so a dead tick is noticed. Flags once per stale episode, on the direct path. */
   async healthCheck(): Promise<void> {
     // After sleep the health timer and the tick timer both fire late, in no fixed order. A health check that itself
-    // overslept, or that runs within two intervals of waking, says nothing about the tick; nor does one mid-tick.
+    // overslept, or that runs within two intervals of waking, says nothing about the tick; nor does one during a tick
+    // that started less than two intervals ago. A tick running longer than that is hung, which is flagged.
     const now = this.d.now().getTime()
     const overslept = this.lastHealthAt !== null && now - this.lastHealthAt > 2 * TICK_MS
     this.lastHealthAt = now
     if (overslept) { this.wokeAt = now; return }
-    if (now - this.wokeAt < 2 * TICK_MS || this.ticking) return
+    if (now - this.wokeAt < 2 * TICK_MS) return
+    if (this.ticking) {
+      if (now - this.tickStartedAt < 2 * TICK_MS || this.staleFlagged) return
+      const text = `Jobs clock: tick stuck since ${new Date(this.tickStartedAt).toLocaleString()}; no job is dispatched or applied until it returns.`
+      if (await this.d.direct(text, this.d.homeChannel())) this.staleFlagged = true
+      return
+    }
     const h = this.health()
     if (!h.stale) { this.staleFlagged = false; return }
     if (this.staleFlagged) return

@@ -330,7 +330,7 @@ console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * 
   test("an attempt gets the daemon's environment minus hydra's credentials; which bun is logged once per change", async () => {
     const { spawnAttempt } = await import('../../daemon/jobs-clock.js')
     const saved = { ...process.env }
-    Object.assign(process.env, { DISCORD_BOT_TOKEN: 'secret-d', SLACK_BOT_TOKEN: 'secret-s', SLACK_APP_TOKEN: 'secret-a', SLOPBOT_SLACK_BOT_TOKEN: 'secret-w', JOBS_TEST_MARKER: 'kept' })
+    Object.assign(process.env, { DISCORD_BOT_TOKEN: 'secret-d', SLACK_BOT_TOKEN: 'secret-s', SLACK_APP_TOKEN: 'secret-a', SLOPBOT_SLACK_BOT_TOKEN: 'secret-w', SLOPBOT_SLACK_APP_TOKEN: 'secret-x', RAINDROP_WRITE_KEY: 'secret-r', RAINDROP_USER_ID: 'secret-u', JOBS_TEST_MARKER: 'kept' })
     const said: string[] = []
     try {
       const log = join(dir, 'env.log')
@@ -338,7 +338,7 @@ console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * 
       spawnAttempt(['-e', '0'], '', join(dir, 'other.log'), m => said.push(m))
       const env = await waitFor(() => readJSON(log))
       expect(env.JOBS_TEST_MARKER).toBe('kept')
-      for (const k of ['DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN']) expect(env[k]).toBeUndefined()
+      for (const k of ['DISCORD_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN', 'SLOPBOT_SLACK_APP_TOKEN', 'RAINDROP_WRITE_KEY', 'RAINDROP_USER_ID']) expect(env[k]).toBeUndefined()
       expect(said.filter(m => m.startsWith('jobs: attempts start with')).length).toBeLessThanOrEqual(1)
     } finally {
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]

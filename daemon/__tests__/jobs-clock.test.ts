@@ -769,14 +769,33 @@ describe('health', () => {
     expect(w.direct).toEqual([])
   })
 
-  test('a health check during a tick says nothing', async () => {
+  test('a health check during a tick that started under two intervals ago says nothing', async () => {
     toml(FIVE)
-    const c = clock(); await c.tick()
-    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:07:00-08:00', false)
-    w.direct.length = 0
-    const fresh = clock(); (fresh as any).ticking = new Promise(() => {})
-    await minutes(fresh, '2026-11-04T10:08:00-08:00', '2026-11-04T10:12:00-08:00', false)
+    let hang = false
+    const c = clock({ removeLegacyEntries: () => hang ? new Promise(() => {}) : Promise.resolve([]) })
+    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:05:00-08:00', true)
+    await minutes(c, '2026-11-04T10:06:00-08:00', '2026-11-04T10:09:00-08:00', false)
+    expect(w.direct).toEqual([])                       // nothing flagged yet
+    hang = true
+    at('2026-11-04T10:10:00-08:00'); void c.tick()     // a slow tick, started at 10:10
+    at('2026-11-04T10:11:00-08:00'); await c.healthCheck()
+    at('2026-11-04T10:11:50-08:00'); await c.healthCheck()
+    expect(c.health().stale).toBe(true)
+    expect(w.direct).toEqual([])                       // without the skip this would say "no tick since 10:05"
+  })
+
+  test('a hung tick is flagged once on the direct path, "tick stuck since"', async () => {
+    toml(FIVE)
+    let hang = false
+    const c = clock({ removeLegacyEntries: () => hang ? new Promise(() => {}) : Promise.resolve([]) })
+    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:04:00-08:00', true)
+    hang = true
+    at('2026-11-04T10:05:00-08:00'); void c.tick()     // Bun.cron.remove never returns
+    await c.healthCheck()
+    at('2026-11-04T10:06:00-08:00'); await c.healthCheck()
     expect(w.direct).toEqual([])
+    for (const m of ['10:07', '10:08', '10:09']) { at(`2026-11-04T${m}:00-08:00`); await c.healthCheck() }
+    expect(w.direct).toEqual([[expect.stringContaining('Jobs clock: tick stuck since'), 'home']])
   })
 
   test('a dead tick timer after waking is still caught', async () => {
