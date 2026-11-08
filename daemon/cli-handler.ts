@@ -1,7 +1,7 @@
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
-import { fallbackDescription, formatDuration, isAlive } from './util.js'
+import { fallbackDescription, formatDuration } from './util.js'
 import { parseIdleTtl, DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
 import { formatContextPercent, type DeliveryResult } from './engines/engine-adapter.js'
 import { existsSync } from 'fs'
@@ -10,7 +10,7 @@ import { deliveryOutcome } from './delivery-outcome.js'
 import { deliverToSpecialist, spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
-import { ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
+import { ORPHAN_GRACE_MS, bridgeWaitMs, occupancy } from './session-reachability.js'
 import { gateway } from './config.js'
 import { loadAccess } from './access.js'
 import { on } from './event-bus.js'
@@ -325,17 +325,16 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 
   if (!info) return respond(req, false, `${thread ? 'thread' : 'session'} "${thread ?? session}" not found`)
 
-  const executionAlive = isAlive(info)
-  const bridgeConnected = transport.has(info.sessionId)
+  const occ = occupancy(info)
+  const bridgeConnected = occ === 'reachable'
 
-  if (!executionAlive) {
+  if (occ === 'dead') {
     return respond(req, false, 'session gone — use \'hydra spawn\' to create a new session, or \'resume\'/\'respawn\' in chat', undefined, 3)
   }
-  if (!bridgeConnected && !queue) {
-    const waitMs = bridgeWaitMs(info.createdAt)
-    if (waitMs < ORPHAN_GRACE_MS) {
-      return respond(req, false, `session still booting — retry in ~${Math.ceil((ORPHAN_GRACE_MS - waitMs) / 1000)}s`, undefined, 5)
-    }
+  if (occ === 'starting' && !queue) {
+    return respond(req, false, `session still booting — retry in ~${Math.ceil((ORPHAN_GRACE_MS - bridgeWaitMs(info.createdAt)) / 1000)}s`, undefined, 5)
+  }
+  if (occ === 'orphaned' && !queue) {
     return respond(req, false, 'session orphaned (tmux alive, bridge disconnected) — try \'resume\' in the thread, or use --queue to queue for later', undefined, 4)
   }
 

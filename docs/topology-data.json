@@ -978,10 +978,6 @@
     ],
     [
       "daemon_session-health",
-      "daemon_bridge-transport"
-    ],
-    [
-      "daemon_session-health",
       "daemon_config"
     ],
     [

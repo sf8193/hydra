@@ -4,7 +4,8 @@ import { join } from 'path'
 import { STATE_DIR, gateway } from './config.js'
 import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { atomicWriteFileSync, formatDuration, executionAlive, safeSend } from './util.js'
+import { atomicWriteFileSync, formatDuration, safeSend } from './util.js'
+import { occupancy, occupied } from './session-reachability.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -743,7 +744,7 @@ export function restoreWatches(entries: WatchEntry[], newSessionId: string, newT
     const existing = watches.get(entry.prUrl)
     if (existing && existing.sessionId !== newSessionId) {
       const owner = registry.get(existing.sessionId)
-      if (owner && executionAlive(owner)) continue
+      if (owner && occupied(occupancy(owner))) continue
     }
     // The old pin lives in the dead thread; re-pin in the successor's thread.
     const moved = { ...entry, sessionId: newSessionId, threadId: newThreadId, pinMessageId: undefined }

@@ -325,7 +325,7 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
         const dead = seedDead({ parentId: 'au-parent', initiator: 'auparent' } as any)
         const { child } = parentAndKids(dead)
         const savedHas = transport.has
-        ;(transport as any).has = () => !failTier1  // tier 1 waits for the resumed bridge
+        ;(transport as any).has = (id: string) => !failTier1 && id !== dead.sessionId  // tier 1 waits for the resumed bridge
         try {
           await handleRecoverIntercept({ channelId: 'ch', id: `m-${seq}` } as any, dead.tmuxName)
         } finally { (transport as any).has = savedHas }

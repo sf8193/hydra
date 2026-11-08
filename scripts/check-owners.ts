@@ -47,14 +47,14 @@ export const RULES: Rule[] = [
     name: 'raw tmuxHasSession liveness',
     pattern: /\btmuxHasSession\b/g,
     skipLine: l => /^import\b/.test(l) || /\bfunction tmuxHasSession\b/.test(l),
-    // Existing owners. New code asks util.executionAlive / isAlive: for Codex, tmux is only an anchor.
+    // Existing owners. New code asks occupancy() (session-reachability.ts): for Codex, tmux is only an anchor.
     allowed: [
       'daemon.ts', 'daemon/util.ts', 'daemon/bridge-dispatch.ts', 'daemon/commands/thread.ts',
       'daemon/engines/claude-engine.ts', 'daemon/engines/codex-engine-adapter.ts', 'daemon/recovery.ts',
-      'daemon/session-health.ts', 'daemon/session-lifecycle.ts',
+      'daemon/session-lifecycle.ts', 'daemon/session-reachability.ts',
     ],
     tests: false, ts: true,
-    why: 'liveness is util.executionAlive / util.isAlive (the adapter decides)',
+    why: 'liveness is occupancy() in session-reachability.ts (the adapter decides)',
   },
   {
     name: 'raw tmux has-session / kill-session|window|pane exec',

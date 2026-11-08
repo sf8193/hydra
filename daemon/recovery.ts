@@ -10,7 +10,8 @@ import { gateway } from './config.js'
 import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, SessionInfo } from './sessions.js'
 import { doSpawnSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
-import { tmuxHasSession, isAlive, executionAlive, baseNameFromBranch } from './util.js'
+import { tmuxHasSession, baseNameFromBranch } from './util.js'
+import { occupancy, occupied } from './session-reachability.js'
 import { parsePrUrl, getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
 import type { WatchEntry } from './pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
@@ -28,15 +29,17 @@ const STAGGER_MS = 5_000
 
 // Dead, recoverable sessions for the manual `recover` command. Broader than the
 // auto-recover filter (which is thread_owner-only + excludes parked/ephemeral):
-// a user may deliberately recover any dead non-guest session the recoverOne cascade may
-// act on (recoveryPlan().generic: not Codex, which it would relaunch as Claude).
+// a user may deliberately recover any non-guest session whose occupancy is dead and that the
+// recoverOne cascade may act on (recoveryPlan().generic: not Codex, which it would relaunch as Claude).
+// An orphan (running, stamped dead or not) is never a candidate: a revive would race it. resume and
+// respawn tear it down first.
 function findDeadSessions(): SessionInfo[] {
   return [...registry.values()].filter(info =>
     info.sessionType !== 'thread_guest'
     && info.adapter.recoveryPlan(info).generic
     // suppressAutoRecover intentionally NOT checked — it gates only AUTOMATIC boot recovery
     // (parked awaiting_pm / branch-gone); an explicit manual `recover` overrides it.
-    && !isAlive(info)
+    && !occupied(occupancy(info))
     && threadRegistry.has(info.threadId),
   )
 }
@@ -355,14 +358,12 @@ export async function dedupForRecovery(candidates: SessionInfo[]): Promise<{
   skipped: Array<{ info: SessionInfo; reason: string }>
   siblingWatches: Map<string, WatchEntry[]>
 }> {
-  // Reserve keys owned by tmux-alive sessions that are NOT themselves being recovered.
-  // Excluding candidates is essential: the manual path's candidate filter is `!isAlive`,
-  // so a deadAt-set-but-tmux-alive session is a candidate yet also tmux-alive — without
-  // this it would reserve its own key and skip itself ("already live as <its own name>").
+  // Reserve keys owned by occupied sessions that are NOT themselves being recovered,
+  // or a candidate would reserve its own key and skip itself ("already live as <its own name>").
   const candidateIds = new Set(candidates.map(c => c.sessionId))
   const liveKeys = new Map<string, SessionInfo>()  // workKey → live owner (a real competitor, not a candidate)
   for (const info of registry.values()) {
-    if (info.sessionType === 'thread_guest' || !executionAlive(info)) continue
+    if (info.sessionType === 'thread_guest' || !occupied(occupancy(info))) continue
     if (candidateIds.has(info.sessionId)) continue
     const key = workKey(info)
     if (key && !liveKeys.has(key)) liveKeys.set(key, info)

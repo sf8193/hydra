@@ -334,6 +334,11 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(await deliver(info.sessionId, {})).toMatchObject({ ok: false, exitCode: 5 })
   })
 
+  test('a session stamped dead whose tmux is still running → exit 4 orphaned, not 3 gone', async () => {
+    const info = seed('claude', { deadAt: Date.now() })
+    expect(await deliver(info.sessionId, {})).toMatchObject({ ok: false, exitCode: 4 })
+  })
+
   test('claude --queue with no bridge right after a daemon restart → still queued', async () => {
     const info = seed('claude', { createdAt: 1 })
     _setDaemonStartedAtForTesting(Date.now())

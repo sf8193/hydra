@@ -358,6 +358,14 @@ describe('specialists', () => {
     expect(calls).toHaveLength(0)
   })
 
+  test('an occupant stamped dead whose tmux still runs is orphaned: exit 4, never respawned over', async () => {
+    _setDaemonStartedAtForTesting(0)
+    const calls = fakeSpawn()
+    occupy('thread-stamped', { deadAt: Date.now() })
+    expect(await deliver(specialist('thread-stamped'))).toMatchObject({ ok: false, exitCode: 4, error: expect.stringContaining('orphaned') })
+    expect(calls).toHaveLength(0)
+  })
+
   test('an old occupant with no bridge right after a daemon restart is booting, not orphaned', async () => {
     _setDaemonStartedAtForTesting(Date.now())
     occupy('thread-restarted', { createdAt: Date.now() - 10 * 60_000 })

@@ -3,7 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { unlinkSync } from 'fs'
 import { gateway } from '../config.js'
-import { authorityId, registry, repointChildren, sessionEmoji, threadRegistry } from '../sessions.js'
+import { authorityId, markDead, registry, repointChildren, sessionEmoji, threadRegistry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { killSession, doSpawnSession, tryResume, tryRespawn, emitSessionDeath, RECOVERY_REVERIFY_GUARD, requestHandoff } from '../session-lifecycle.js'
 import type { SessionInfo, SpawnResult } from '../sessions.js'
@@ -19,7 +19,7 @@ import { recoveryEntry, recoveryModel, deadSessionLabel } from '../recovery-sele
 import { recoveryEngine } from '../engines/history.js'
 import { formatContextPercent, type ProviderId } from '../engines/engine-adapter.js'
 import { claudeEngine, resolveEngine } from '../engines/instances.js'
-import { blocksRecovery, bridgeWaitMs, classifyReachability } from '../session-reachability.js'
+import { blocksRecovery, occupancy } from '../session-reachability.js'
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../main-session.js'
 
 // Recovery executors, swappable in tests (same pattern as reply-guard's deps).
@@ -33,23 +33,6 @@ function adapterFor(info: { engine?: ProviderId; adapter?: any }) {
   return info.adapter
 }
 
-async function executionAlive(info: NonNullable<ReturnType<typeof registry.get>>): Promise<boolean> {
-  return adapterFor(info).isAlive(info)
-}
-
-/**
- * A live process is not a reachable session. When the bridge is gone the
- * session keeps running with no channel back to the daemon, and Claude Code
- * never reconnects a stdio MCP server it has given up on — so recovery has to
- * tear the process down before it can resume onto the same conversation.
- */
-async function reachabilityOf(info: NonNullable<ReturnType<typeof registry.get>>) {
-  return classifyReachability({
-    executionAlive: await executionAlive(info),
-    bridgeConnected: transport.has(info.sessionId),
-    ageMs: bridgeWaitMs(info.createdAt),
-  })
-}
 
 export async function handleThreadKillIntercept(
   msg: InboundMessage,
@@ -101,7 +84,7 @@ export async function handleForkIntercept(msg: InboundMessage, description?: str
 
   const provider = adapterFor(info)
   if (!tmuxHasSession(info.tmuxName)) provider.surface(info)
-  if (!tmuxHasSession(info.tmuxName) && !(await provider.isAlive(info))) {
+  if (!tmuxHasSession(info.tmuxName) && occupancy(info) === 'dead') {
     void gateway.react(msg.channelId, msg.id, '❌').catch(() => {})
     void gateway.send(msg.channelId, `Cannot fork — **${info.tmuxName}** is no longer running.`, { replyTo: msg.id }).catch(() => {})
     return
@@ -309,11 +292,11 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
   if (liveSessionId) {
     const liveInfo = registry.get(liveSessionId)
     if (liveInfo) {
-      const reachability = await reachabilityOf(liveInfo)
-      if (blocksRecovery(reachability)) {
+      const occ = occupancy(liveInfo)
+      if (blocksRecovery(occ)) {
         const surfaceReady = adapterFor(liveInfo).surface(liveInfo) !== null
         void gateway.react(msg.channelId, msg.id, '⏯️').catch(() => {})
-        const note = reachability === 'starting'
+        const note = occ === 'starting'
           ? `Session **${liveInfo.tmuxName}** is still starting up — give its bridge a moment to connect.`
           : `Session **${liveInfo.tmuxName}** is already running.${surfaceReady ? '' : ' Its interactive surface is unavailable; the server is alive and may still be reconnecting.'}`
         try { await gateway.send(msg.channelId, note, { replyTo: msg.id }) } catch {}
@@ -322,7 +305,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
       // Orphaned: the process is up but unreachable. Tear it down so the resume
       // cascade below can reattach to its conversation — killSession closes the
       // history entry with the claudeSessionId that tier 1 needs.
-      if (reachability === 'orphaned') {
+      if (occ === 'orphaned') {
         process.stderr.write(`daemon: resume: tearing down orphaned ${liveInfo.tmuxName} before reattaching\n`)
         // Keep the worktree: recovery reuses the dead session's on-disk worktree
         // rather than recreating one, and it may hold unpushed work.
@@ -331,11 +314,7 @@ async function resumeThread(msg: RecoveryAnchor, claudeSessionIdArg?: string): P
       // Gone (or just torn down): mark it dead as the health poll would — stamp
       // and close its history entry — so the poll doesn't announce a second
       // death after this resume's own outcome.
-      if (!liveInfo.deadAt) {
-        liveInfo.deadAt = Date.now()
-        threadRegistry.closeHistoryEntry(liveInfo.threadId, liveInfo)
-      }
-      registry.persist()
+      markDead(liveInfo)
     }
   }
 
@@ -486,14 +465,14 @@ async function respawnThread(msg: InboundMessage, topic?: string, templateName?:
   if (respawnLiveId) {
     const liveInfo = registry.get(respawnLiveId)
     if (liveInfo) {
-      const reachability = await reachabilityOf(liveInfo)
-      if (blocksRecovery(reachability)) {
+      const occ = occupancy(liveInfo)
+      if (blocksRecovery(occ)) {
         await reportError(msg.channelId, msg.id, 'respawn', `thread has a live session (**${liveInfo.tmuxName}**)`, 'Use `kill` first, or `spawn:` for a new thread.')
         return
       }
       // An orphaned session would otherwise wedge respawn behind a kill the
       // alert never mentioned. Prefer resume, which keeps the transcript.
-      if (reachability === 'orphaned') {
+      if (occ === 'orphaned') {
         process.stderr.write(`daemon: respawn: tearing down orphaned ${liveInfo.tmuxName}\n`)
         await killSession(liveInfo, 'bridge was unreachable — respawning', { skipWorktreeDestroy: true })
       }

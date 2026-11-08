@@ -3,10 +3,9 @@ import type { SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession } from './session-lifecycle.js'
 import { gateway } from './config.js'
-import { isAlive } from './util.js'
 import { registerIdempotency, clearIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { deliveryOutcome } from './delivery-outcome.js'
-import { ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
+import { occupancy, occupied } from './session-reachability.js'
 import { pushToolSurface } from './tool-surface.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
 import { getSpecialist, setSpecialist, readKickoff, withSpecialistLock, type Specialist } from './specialists.js'
@@ -40,7 +39,7 @@ export function _resetSpecialistBackoff(): void { spawnBackoff.clear() }
 function liveOccupant(threadId: string | undefined): SessionInfo | undefined {
   const id = threadId ? registry.getByThread(threadId) : undefined
   const info = id ? registry.get(id) : undefined
-  return info && isAlive(info) ? info : undefined
+  return info && occupied(occupancy(info)) ? info : undefined
 }
 
 /**
@@ -91,7 +90,7 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
 
   // A live session already holding the name in some other thread (a stray from a re-point, or a hand-made one) makes the
   // spawn impossible: say so plainly, and do not count it as a failed refill.
-  const holder = [...registry.values()].find(i => i.tmuxName === name && isAlive(i))
+  const holder = [...registry.values()].find(i => i.tmuxName === name && occupied(occupancy(i)))
   if (holder) throw new SpecialistError(`specialist "${name}": a session named ${name} is already running in thread ${holder.threadId}, which is not the specialist's thread${specialist.threadId ? ` (${specialist.threadId})` : ''}; kill it, or point the specialist at it with 'hydra specialist set ${name} --thread ${holder.threadId}'`, 3, holder.sessionId)
 
   const thread = specialist.threadId ? threadRegistry.get(specialist.threadId) : undefined
@@ -189,8 +188,9 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
 
   try {
     const { info, spawned } = await ensureSpecialist(p.specialist, p.initiator)
-    const connected = transport.has(info.sessionId)
-    if (!spawned && !connected && bridgeWaitMs(info.createdAt, specialistDeps.now()) > ORPHAN_GRACE_MS) {
+    const occ = occupancy(info, specialistDeps.now())
+    const connected = occ === 'reachable'
+    if (!spawned && occ === 'orphaned') {
       release()
       return { ok: false, error: `specialist "${p.specialist}": occupant ${info.tmuxName} is orphaned (tmux alive, bridge disconnected) — try 'resume' in its thread`, exitCode: 4 }
     }
@@ -207,7 +207,7 @@ export async function deliverToSpecialist(p: { specialist: string; message: stri
     }
     const outcome = deliveryOutcome(result, !connected)
     // Queued behind a session that died after it was chosen: nobody will drain that queue.
-    if (outcome.ok && outcome.status === 'queued' && !spawned && !isAlive(info)) {
+    if (outcome.ok && outcome.status === 'queued' && !spawned && occupancy(info) === 'dead') {
       release()
       return { ok: false, error: `specialist "${p.specialist}": occupant ${info.tmuxName} died during delivery`, exitCode: 6 }
     }

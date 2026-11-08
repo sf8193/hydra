@@ -6,7 +6,8 @@ import { gateway, STATE_DIR, PLATFORM } from '../config.js'
 import { registry, sessionEmoji } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { doSpawnSession, killSession } from '../session-lifecycle.js'
-import { executionAlive, safeSend } from '../util.js'
+import { safeSend } from '../util.js'
+import { occupancy, occupied } from '../session-reachability.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { getActiveRuns } from '../protocol-runner.js'
 import type { SpawnTemplate } from '../templates.js'
@@ -24,7 +25,7 @@ export async function resolveSpawnTarget(msg: InboundMessage): Promise<string> {
     const staleId = registry.getByThread(resolvedThreadId)
     if (staleId && registry.has(staleId)) {
       const staleInfo = registry.get(staleId)!
-      if (executionAlive(staleInfo)) {
+      if (occupied(occupancy(staleInfo))) {
         // Live session already owns this thread: reusing resolvedThreadId as chatId
         // would just re-enter it (doSpawnSession treats an already-thread chatId as
         // "reuse this thread"). Redirect to its parent channel instead. If that's
