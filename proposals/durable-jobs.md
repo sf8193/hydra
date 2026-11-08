@@ -170,7 +170,8 @@ tick, because probing is cheap.
 
 ### Overlap
 
-Overlap counts only connected sessions with initiator `jobs:<name>`, using a per-session verdict that pane-probe
+Overlap counts every session in the registry with initiator `jobs:<name>` that isn't dead (a session whose bridge
+is down after a daemon restart still counts; a missing verdict makes it not-now, never invisible), using a per-session verdict that pane-probe
 exports: `clean | active | stuck(<kind>, confirmed) | unprobeable`.
 
 - `clean` and `active` **absorb**: the slot is done, by that session.
@@ -178,7 +179,9 @@ exports: `clean | active | stuck(<kind>, confirmed) | unprobeable`.
   backoff allows. A session stuck on a prompt must not turn into silent success.
 - `unprobeable` (Codex sessions today) **absorbs**. That choice is explicit: they can't be inspected, the idle limit
   reaps them, and the cross-slot rule below catches one that lingers.
-- **No verdict yet** since the daemon started is **not now** for that tick. That takes about 2 minutes.
+- **No verdict yet** since the daemon started is **not now** for that tick. That takes about 2 minutes. A session
+  with no verdict for more than 10 minutes makes the attempt a **failure** ("no verdict for <n>m"), so no session
+  state stays silent.
 - **Only a session spawned after the previous slot's instant may absorb.** Domain reason: a session that covers
   everything since its predecessor (like a weekly review) is still doing slot N−1's work when slot N arrives, so it
   legitimately covers N, once. Still open at N+1, it is not doing the work, so that is a **failure** ("session from
@@ -358,7 +361,8 @@ every reset to 0 is a success that also rewrites `last`.
 An alert means the work keeps failing, not that it is late.
 
 - **Durable jobs.** One alert per failure run, sent when the latest outcome is a failure and
-  `now − run start ≥ alert_after`. It is "alerted" iff `alertedFor` equals `failingSince`. A success
+  `last failure − run start ≥ alert_after`: the failures themselves span the window, so one failure followed by a
+  day offline doesn't alert on reconnect. It is "alerted" iff `alertedFor` equals `failingSince`. A success
   ends the run, so the next failure run can alert, and the daemon never has to write anything to reset it.
   - Not-now neither starts nor ends a run. Being offline is never alerted.
   - Frequent jobs work too: an hourly sync failing for two days alerts once, because the clock measures the failing
@@ -526,7 +530,10 @@ clock's last tick.
 - **A manual run on a durable job:**
   - success sets `doneSlot = dispatch.slot`;
   - failure counts toward the failure run but never touches the slot.
-- **A new durable job** gets the baseline plus `durableApplied: true`.
+- **A new durable job** gets the baseline plus `durableApplied: true`. Turning on `durable` for an existing job
+  resets its failure run, so it doesn't inherit plain-job history.
+- **The "owed (unconfirmed)" announcement** recommends `mark-done` when a session from the job is open, because a
+  manual run skips overlap.
 - **An unreadable record** on a durable spawn or main job becomes "owed (unconfirmed)".
 
 ## Tests
