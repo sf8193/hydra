@@ -497,14 +497,18 @@ Nothing is dropped silently: a message dropped because it stayed owed past a day
 
 ### Jobs
 
-`<state>/jobs.toml` declares recurring jobs (start from [`jobs.example.toml`](jobs.example.toml)). Each one has a 5-field cron `schedule` in local time, an optional `check` script whose output becomes the agent's message, and what to do with that message. The daemon's clock reads the file every minute and runs each owed slot as a detached attempt. A slot missed while the machine slept runs once on wake. A slot is owed until it is done: a failed one is retried with back-off, and a failure that lasts past `alert_after` (default 1d) is alerted once. `hydra jobs list <platform>` shows each job's next run and last result; `jobs sync` loads the file now; `jobs run <platform> <name>` runs a job in the foreground; `jobs mark-done` covers a slot without running it. Flows: [`flow-jobs-dispatch.mmd`](diagrams/flow-jobs-dispatch.mmd), [`flow-jobs-sync.mmd`](diagrams/flow-jobs-sync.mmd).
+`<state>/jobs.toml` declares recurring jobs (start from [`jobs.example.toml`](jobs.example.toml)). Each one has a 5-field cron `schedule` in local time, an optional `check` script whose output becomes the agent's message, and what to do with that message (`mode`). After editing it, run `hydra jobs sync <platform>`. `jobs list` shows each job's runner, next run and last result; `jobs run <platform> <name>` runs one now; `jobs mark-done` covers a slot without running it.
 
-**What changed from the launchd runner:**
-- **Jobs run only while the daemon runs.** The watchdog restarts it, and slots owed in the meantime run then, collapsed into one run per job.
-- **Per-job launchd entries are removed automatically,** from the platform's live state dir only. A stale entry that still fires only prints a message.
-- **`jobs sync` validates jobs.toml and has the daemon load it at once,** printing what changed. It registers nothing with launchd, and with the daemon down it still exits 0.
-- **A sleep, or a daemon restart, during a run is not a failure.**
-- **Known and accepted:** in the hour the clocks fall back, a frequent job (`*/5`) pauses for about an hour, once a year.
+**A job's `runner` decides what triggers it.** Delivery to a session is always the daemon's. Set `runner` at the top of the file for every job, or on a job to override that; with neither, it's `launchd`.
+
+| runner | What triggers the check | What it adds |
+|---|---|---|
+| `launchd` (default) | A launchd entry per job, registered by `jobs sync`, running a stable bun link (never a versioned Cellar path, which `brew upgrade` deletes). It runs at each slot, and once on wake for a slot missed asleep. | Its result waits in `jobs-state/results/` until the daemon delivers and records it, so a message is owed, not lost, while the daemon is down. |
+| `daemon` | The daemon's clock. | A failed slot is retried until it succeeds; `needs` and `alert_after`. These need `runner = "daemon"`. |
+
+**Nothing changes unless you opt in.** An existing file runs under launchd as before. The old runner's entries keep working until `jobs sync` moves them onto the stable bun path, and `jobs list` flags any that remain. `jobs sync` registers and unregisters launchd entries only for the platform's live state dir, and removes one only when its job leaves the file or moves to `runner = "daemon"`.
+
+Known and accepted for daemon-runner jobs: in the hour the clocks fall back, a frequent job (`*/5`) pauses for about an hour, once a year. Flows: [`flow-jobs-dispatch.mmd`](diagrams/flow-jobs-dispatch.mmd), [`flow-jobs-sync.mmd`](diagrams/flow-jobs-sync.mmd).
 
 ### Usage alerts
 

@@ -4,21 +4,26 @@ sequenceDiagram
     participant T as jobs.toml
     participant H as cli-handler.ts
     participant C as jobs-clock.ts
-    participant L as launchd (legacy entries)
+    participant L as launchd (~/Library/LaunchAgents)
 
     CLI->>T: read + parseJobsConfig
     alt invalid or missing
         CLI-->>CLI: error, exit 1 (the daemon is never asked)
-    else no socket / refused
-        CLI-->>CLI: daemon not running, it will load this on start + job lines, exit 0
+    end
+    opt live state dir only
+        CLI->>L: register each runner=launchd job (com.hydra.job.PLATFORM.NAME, stable bun), unchanged ones untouched
+        CLI->>L: unregister jobs gone or now runner=daemon, move the old runner's bun.cron entries over
+        Note over CLI: a failed registration is printed, and the sync exits 1 after the rest
+    end
+    alt no socket / refused
+        CLI-->>CLI: daemon not running, it will load this on start + job lines
     else daemon up
         CLI->>H: jobs-sync
         H->>C: requestSync()
         C->>C: before = last good config (_daemon.json)
         C->>T: read + parse, lastGoodConfig = text
-        C->>L: remove this platform's legacy entries (live state dir only)
         C->>C: tick now: an owed slot dispatches at once
-        C-->>H: {before, after, legacyRemoved}
+        C-->>H: {before, after}
         H-->>CLI: reply
-        CLI-->>CLI: added / changed (jobs.toml keys) / removed, legacy removed, job lines, exit 0
+        CLI-->>CLI: added / changed (jobs.toml keys) / removed, then job lines with each runner
     end

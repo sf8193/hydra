@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'crypto'
 import { join, resolve } from 'path'
-import { resolveSocket, sendRequest, printResponse } from './helpers.js'
+import { resolveConfig, resolveSocket, sendRequest, printResponse } from './helpers.js'
 import {
   lifecycleUp, lifecycleDown, lifecycleRestart,
   lifecycleWatchdog, lifecyclePreflight,
@@ -10,7 +10,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
-import { isPlatform, jobsAttempt, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
+import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
 import { parseAttemptArgs } from '../shared/jobs.js'
 import { MODEL_ALIASES } from '../shared/constants.js'
 
@@ -30,11 +30,11 @@ Setup:
   hydra uninstall <platform>           Remove launchd watchdog
 
 Jobs (recurring, from <state dir>/jobs.toml):
-  hydra jobs list <platform>           The clock's last tick; each job's next run and last result (validates jobs.toml)
+  hydra jobs list <platform>           Each job's runner, next run and last result (validates jobs.toml)
+  hydra jobs sync <platform>           Register runner = "launchd" jobs with launchd and have the daemon load the file now
   hydra jobs run <platform> <name>     Run one job now, through the daemon; Ctrl-C cancels it
   hydra jobs mark-done <platform> <name>  Mark the latest slot done without running it (a cutover, an unconfirmed slot)
-  hydra jobs sync <platform>           Validate jobs.toml and have the daemon load it now; shows what changed
-  The daemon also reads jobs.toml every minute on its own.
+  A job's runner is launchd unless it (or the file) says runner = "daemon"; delivery is always the daemon's.
 
 Lifecycle:
   hydra up <platform>                  Start daemon + byte
@@ -162,6 +162,11 @@ async function main(): Promise<void> {
       if (!o) { console.error('usage: hydra --state-dir <dir> jobs attempt <platform> <name> --dispatch <id> --nonce <n> --slot <label> [--manual]'); process.exit(64) }
       try { await jobsAttempt(o) } catch (err) { console.error(`attempt error: ${err instanceof Error ? err.stack : err}`); process.exit(1) }
       process.exit(0)
+    }
+    if (sub === 'launchd-run') {
+      // Run by a launchd-runner job's plist at each slot; not for direct use.
+      if (!platform || !isPlatform(platform) || !name) { console.error('usage: hydra [--state-dir <dir>] jobs launchd-run <platform> <name>'); process.exit(64) }
+      process.exit(await jobsLaunchdRun(platform, name, stateDirOpt ?? resolveConfig(platform).stateDir))
     }
     const named = sub === 'run' || sub === 'mark-done'
     if (!['list', 'sync', 'run', 'mark-done'].includes(sub) || !platform || !isPlatform(platform) || (named && (!name || name.startsWith('-')))) {

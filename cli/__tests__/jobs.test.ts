@@ -1,14 +1,15 @@
 import { describe, test, expect, beforeEach, afterAll, afterEach } from 'bun:test'
 import { spawn } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, closeSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, closeSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
 import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
-  isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs,
+  isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs, jobsLaunchdRun, syncLaunchd, launchdIO,
 } from '../jobs.js'
-import { awakeTimeout, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseLegacyTitle, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
+import { awakeTimeout, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
+import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
 
 const repo = join(import.meta.dir, '..', '..')
 
@@ -36,7 +37,7 @@ describe('parseJobs', () => {
   test('reads jobs, applies the top-level channel to every job', () => {
     const jobs = parseJobs(ok)
     expect(jobs.map(j => j.name)).toEqual(['vuln-scan', 'retro', 'cleanup'])
-    expect(jobs[0]).toEqual({ name: 'vuln-scan', schedule: '0 6 * * *', check: 'scan.sh', mode: 'spawn', prompt: 'Triage it.', channel: '123', alertAfterMs: 86_400_000 })
+    expect(jobs[0]).toEqual({ name: 'vuln-scan', schedule: '0 6 * * *', check: 'scan.sh', mode: 'spawn', runner: 'launchd', runnerFrom: 'default', prompt: 'Triage it.', channel: '123', alertAfterMs: 0 })
     expect(jobs[1].channel).toBe('123')   // any mode: where its direct alerts go
   })
 
@@ -74,18 +75,46 @@ describe('parseJobs', () => {
     ['an unknown need', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nneeds=["vpn"]`, /unknown precondition "vpn"/],
     ['needs that is not a list', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nneeds="internet"`, /needs must be a list/],
     ['overlap, which is gone', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\noverlap="absorb"`, /overlap is gone: for one standing session that sees every run, use to = "<specialist>"/],
-    ['alert_after over 30d', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true\nalert_after="31d"`, /at most 30d/],
-    ['alert_after that is not a duration', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=true\nalert_after="soon"`, /must be a duration/],
+    ['alert_after over 30d', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"\nalert_after="31d"`, /at most 30d/],
+    ['alert_after that is not a duration', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"\nalert_after="soon"`, /must be a duration/],
   ]
   for (const [label, text, err] of bad) test(`rejects ${label}`, () => expect(() => parseJobs(text)).toThrow(err))
 
-  test('every job is retried until done: durable = true is the default, durable = false parses with a note; needs, alert_after', () => {
-    const [j] = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true\nneeds=["internet","internet"]\nalert_after="3d"`)
+  test('a daemon job is retried until done: durable = true is the default, durable = false parses with a note; needs, alert_after', () => {
+    const [j] = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\nrunner="daemon"\ndurable=true\nneeds=["internet","internet"]\nalert_after="3d"`)
     expect(j).toMatchObject({ needs: ['internet'], alertAfterMs: 3 * 86_400_000 })
     expect(j.notes).toBeUndefined()
-    expect(parseJobs(`[d]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"`)[0].alertAfterMs).toBe(86_400_000)   // default 1d
+    expect(parseJobs(`[d]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"`)[0].alertAfterMs).toBe(86_400_000)   // default 1d
     const [off] = parseJobs(`[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ndurable=false`)
     expect(off.notes).toEqual(['durable = false is ignored: a job is retried until its slot is done; remove the key'])
+  })
+
+  test('runner: the job beats the file, the file beats the default (launchd), with where each came from', () => {
+    const jobs = (top: string) => parseJobs(`${top}[a]\nschedule="0 6 * * *"\ncheck="a"\nmode="none"\nrunner="daemon"\n[b]\nschedule="0 6 * * *"\ncheck="b"\nmode="none"\n[c]\nschedule="0 6 * * *"\ncheck="c"\nmode="none"\nrunner="launchd"\n`)
+      .map(j => runnerLabel(j))
+    expect(jobs('')).toEqual(['daemon', 'launchd (default)', 'launchd'])
+    expect(jobs('runner = "daemon"\n')).toEqual(['daemon', 'daemon (file)', 'launchd'])
+    expect(jobs('runner = "launchd"\n')).toEqual(['daemon', 'launchd (file)', 'launchd'])
+  })
+
+  test('durable, needs and alert_after need an effective runner of daemon, per job', () => {
+    const job = (top: string, extra: string) => () => parseJobs(`${top}channel="1"\n[a]\nschedule="0 6 * * *"\nmode="spawn"\nprompt="p"\n${extra}`)
+    for (const extra of ['durable=true', 'needs=["internet"]', 'alert_after="2d"']) {
+      const key = extra.split('=')[0]
+      expect(job('', extra)).toThrow(`jobs.toml [a]: ${key} needs runner = "daemon"`)
+      expect(job('runner = "launchd"\n', extra)).toThrow(`${key} needs runner = "daemon"`)
+      expect(job('runner = "launchd"\n', `${extra}\nrunner="daemon"`)).not.toThrow()
+      expect(job('runner = "daemon"\n', extra)).not.toThrow()
+      expect(job('runner = "daemon"\n', `${extra}\nrunner="launchd"`)).toThrow(`${key} needs runner = "daemon"`)
+    }
+    expect(job('', 'durable=false')).not.toThrow()
+  })
+
+  test('runner values, and a schedule too fine for a launchd calendar', () => {
+    expect(() => parseJobs('[a]\nschedule="0 6 * * *"\ncheck="a"\nmode="none"\nrunner="cron"')).toThrow('runner must be "launchd" (the default) or "daemon"')
+    expect(() => parseJobs('runner = "cron"\n[a]\nschedule="0 6 * * *"\ncheck="a"\nmode="none"')).toThrow('top-level runner must be')
+    expect(() => parseJobs('[a]\nschedule="0-58 0-22 * * *"\ncheck="a"\nmode="none"')).toThrow('needs 1357 launchd calendar entries')
+    expect(() => parseJobs('[a]\nschedule="0-58 0-22 * * *"\ncheck="a"\nmode="none"\nrunner="daemon"')).not.toThrow()
   })
 
   test('alert_after durations', () => {
@@ -276,6 +305,22 @@ describe('the attempt (in process)', () => {
   })
   afterEach(() => { Object.assign(jobsIO, real); Object.assign(attemptIO, realA); rmSync(dir, { recursive: true }) })
   const result = (id = 3) => JSON.parse(readFileSync(resultFile(dir, 'scan', id, 'n'), 'utf8'))
+
+  test('an external attempt delivers the launchd result for its slot: no check runs, the output goes with the prompt', async () => {
+    const slotAt = '2026-10-25T13:00:00.000Z'
+    mkdirSync(join(dir, 'jobs-state', 'results'), { recursive: true })
+    writeAtomic(externalFile(dir, 'scan', slotAt), JSON.stringify({ slot: '2026-10-25 06:00', slotAt, at: slotAt, result: 'done', output: 'CVE-9' }))
+    let checked = 0
+    const sent: string[][] = []
+    jobsIO.check = async () => { checked++; return { code: 0, out: 'other', err: '' } }
+    jobsIO.hydra = async (a: string[]) => { sent.push(a); return { code: 0, err: '', out: '{"ok":true}' } }
+    await jobsAttempt(opts({ slotAt, external: true }))
+    expect(checked).toBe(0)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].at(-1)).toBe('Triage.\n\nCheck output:\nCVE-9')
+    expect(sent[0][sent[0].indexOf('--idempotency-key') + 1]).toBe(`jobs-scan-${slotAt}`)
+    expect(result()).toMatchObject({ result: 'done' })
+  })
 
   test('writes one result file and never touches job state', async () => {
     await jobsAttempt(opts())
@@ -646,14 +691,23 @@ describe('jobs run', () => {
 // ---------------------------------------------------------------------------
 
 describe('the old launchd entries', () => {
-  test('an old launchd entry that still fires runs nothing: it only says how to remove itself', async () => {
-    const src = readFileSync(join(repo, 'cli', 'jobs-entry.ts'), 'utf8')
-    expect(src).not.toMatch(/^import /m)                // no runner, no state, no hydra calls can be reached
-    const p = Bun.spawn([process.execPath, '-e', `const m = await import(${JSON.stringify(join(repo, 'cli', 'jobs-entry.ts'))}); await m.default.scheduled()`], { stdout: 'pipe', stderr: 'pipe' })
-    expect(await p.exited).toBe(0)
-    expect(await new Response(p.stderr).text()).toContain('which removes this launchd entry on its next tick')
-    expect(await new Response(p.stdout).text()).toBe('')
-  })
+  test("an old runner's entry that still fires keeps its job running: the check runs and its result waits for the daemon", async () => {
+    // Exactly as launchd starts a Bun.cron entry, under a scratch HOME so the "live" state dir is a temp one.
+    const home = mkdtempSync(join(tmpdir(), 'jobs-entry-'))
+    const state = join(home, '.claude', 'channels', 'test')
+    mkdirSync(state, { recursive: true })
+    writeFileSync(join(state, 'jobs.toml'), '[x]\nschedule="* * * * *"\ncheck="echo found"\nmode="main"\nprompt="p"\n')
+    try {
+      const run = (title: string) => Bun.spawn([process.execPath, `--cron-title=${title}`, '--cron-period=* * * * *', join(repo, 'cli', 'jobs-entry.ts')], { env: { ...process.env, HOME: home }, stdout: 'pipe', stderr: 'pipe' })
+      expect(await run('hydra-job-test-x').exited).toBe(0)
+      const files = readdirSync(join(state, 'jobs-state', 'results'))
+      expect(files).toHaveLength(1)
+      expect(JSON.parse(readFileSync(join(state, 'jobs-state', 'results', files[0]), 'utf8'))).toMatchObject({ result: 'done', output: 'found' })
+      const p = run('not-ours')
+      expect(await p.exited).toBe(0)
+      expect(await new Response(p.stderr).text()).toContain('not a hydra job entry')
+    } finally { rmSync(home, { recursive: true }) }
+  }, 15_000)
 
   test('old titles parse back to platform and name', () => {
     expect(parseLegacyTitle('hydra-job-discord-vuln-scan')).toEqual({ platform: 'discord', name: 'vuln-scan' })
@@ -698,8 +752,8 @@ describe('jobs list lines', () => {
   const savedTZ = process.env.TZ
   beforeEach(() => { process.env.TZ = 'America/Los_Angeles' })
   afterEach(() => { process.env.TZ = savedTZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone })
-  const dur = parseJobs(`[pull]\nschedule="*/5 * * * *"\ncheck="p.sh"\nmode="none"\ndurable=true`)[0]
-  const review = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\ndurable=true`)[0]
+  const dur = parseJobs(`[pull]\nschedule="*/5 * * * *"\ncheck="p.sh"\nmode="none"\nrunner="daemon"\ndurable=true`)[0]
+  const review = parseJobs(`channel="1"\n[review]\nschedule="0 11 * * FRI"\nmode="spawn"\nprompt="p"\nrunner="daemon"\ndurable=true`)[0]
   const now = new Date('2026-11-04T10:08:00-08:00')
   const line = (j: typeof dur, s: object) => {
     const dir = mkdtempSync(join(tmpdir(), 'jobs-line-'))
@@ -752,7 +806,7 @@ describe('jobs sync (CLI)', () => {
   const C = `[c]\nschedule="0 8 * * *"\ncheck="c.sh"\nmode="none"\n`
   const setup = (toml: string | null, sock = true) => {
     const dir = mkdtempSync(join(tmpdir(), 'jobs-sync-'))
-    if (toml !== null) writeFileSync(join(dir, 'jobs.toml'), toml)
+    if (toml !== null) writeFileSync(join(dir, 'jobs.toml'), /^runner\b/m.test(toml) ? toml : 'runner = "daemon"\n' + toml)
     if (sock) writeFileSync(join(dir, 'daemon.sock'), '')
     const out: string[] = []
     const sent: Record<string, unknown>[] = []
@@ -764,25 +818,37 @@ describe('jobs sync (CLI)', () => {
 
   test('diffJobs: added, changed (by jobs.toml key), removed', () => {
     const before = parseJobs(A + B + `[d]\nschedule="0 9 * * *"\nmode="main"\nprompt="p"\n`)
-    const after = parseJobs(`[a]\nschedule="0 5 * * *"\ncheck="a2.sh"\nmode="none"\ndurable=true\nalert_after="2d"\n` + B + C)
-    expect(diffJobs(before, after)).toEqual(['changed: a (schedule, check, alert_after)', 'added: c', 'removed: d'])
+    const after = parseJobs(`[a]\nschedule="0 5 * * *"\ncheck="a2.sh"\nmode="none"\nrunner="daemon"\nalert_after="2d"\n` + B + C)
+    expect(diffJobs(before, after)).toEqual(['changed: a (schedule, runner, check, alert_after)', 'added: c', 'removed: d'])
     expect(diffJobs(after, after)).toEqual([])
   })
 
-  test('the daemon loads it now: prints what changed against what it had, legacy entries removed, then each job', async () => {
+  test('the daemon loads it now: prints what changed against what it had, then each job', async () => {
     const t = setup(A + C)
-    runIO.send = async (_s: string, req: Record<string, unknown>) => { t.sent.push(req); return { ok: true, data: { before: parseJobs(A + B), after: parseJobs(A + C), legacyRemoved: ['bun.cron.hydra-job-test-a'] } } }
+    runIO.send = async (_s: string, req: Record<string, unknown>) => { t.sent.push(req); return { ok: true, data: { before: parseJobs(A + B), after: parseJobs(A + C) } } }
     try {
       expect(await jobsSync('test', t.dir)).toBe(0)
       expect(t.sent[0]).toMatchObject({ type: 'cli', command: 'jobs-sync' })
-      expect(t.out.slice(0, 3)).toEqual(['added: c', 'removed: b', 'removed legacy launchd entry bun.cron.hydra-job-test-a'])
+      expect(t.out.slice(0, 2)).toEqual(['added: c', 'removed: b'])
       expect(t.out.filter(l => /^[ac] /.test(l))).toHaveLength(2)
     } finally { t.done() }
   })
 
+  test('a state dir that is not the live one: launchd jobs are named, and LaunchAgents are never touched', async () => {
+    const t = setup('runner = "launchd"\n' + A)
+    const realL = { ...launchdIO }
+    const boom = () => { throw new Error('touched launchd') }
+    Object.assign(launchdIO, { read: boom, write: boom, remove: boom, launchctl: boom, removeLegacy: boom, bun: boom })
+    runIO.send = async () => ({ ok: true, data: { before: [], after: parseJobs(A) } })
+    try {
+      expect(await jobsSync('test', t.dir)).toBe(0)
+      expect(t.out.filter(l => l.startsWith('launchd: entries are registered only for the live state dir'))).toHaveLength(1)
+    } finally { Object.assign(launchdIO, realL); t.done() }
+  })
+
   test('nothing changed: says the daemon already had it', async () => {
     const t = setup(A)
-    runIO.send = async () => ({ ok: true, data: { before: parseJobs(A), after: parseJobs(A), legacyRemoved: [] } })
+    runIO.send = async () => ({ ok: true, data: { before: parseJobs(A), after: parseJobs(A) } })
     try { expect(await jobsSync('test', t.dir)).toBe(0); expect(t.out[0]).toBe('no changes: the daemon already had this config') } finally { t.done() }
   })
 

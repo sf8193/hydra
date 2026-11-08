@@ -8,6 +8,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
 import { parseDuration, parseIdleTtl } from './constants.js'
+import { launchdCalendar } from './jobs-launchd.js'
 
 // ---------------------------------------------------------------------------
 // jobs.toml
@@ -20,6 +21,8 @@ export type Job = {
   schedule: string   // 5-field cron, local time
   check?: string     // shell command; prints nothing when all is well
   mode: Mode
+  runner: Runner     // what triggers it; delivery to a target is always the daemon's
+  runnerFrom: 'job' | 'file' | 'default'
   prompt?: string    // required for spawn and main
   channel?: string   // spawn: where the session opens; any mode: where a direct alert goes. Falls back to the top-level channel
   model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
@@ -28,6 +31,12 @@ export type Job = {
   alertAfterMs: number // how long a failure run lasts before it is alerted, once (alert_after, default 1d)
   notes?: string[]   // what jobs list says about keys that are kept only for old files
 }
+
+/**
+ * launchd (the default): a launchd calendar entry runs the check at each slot, once on wake for a slot missed asleep,
+ * and leaves its result for the daemon to deliver. daemon: the daemon's clock, which retries a slot until it is done.
+ */
+export type Runner = 'launchd' | 'daemon'
 
 export type Need = 'internet'
 const NEEDS: readonly Need[] = ['internet']
@@ -39,17 +48,24 @@ export const parseAlertAfter = (s: string): number | null => parseDuration(s, MA
 
 export type JobsConfig = { channel?: string; jobs: Job[] }
 
+/** How `jobs list` and `jobs sync` name a job's runner: `daemon`, `daemon (file)`, `launchd (default)`. */
+export const runnerLabel = (j: Pick<Job, 'runner' | 'runnerFrom'>) => j.runnerFrom === 'job' ? j.runner : `${j.runner} (${j.runnerFrom})`
+
 const MODES: readonly Mode[] = ['spawn', 'main', 'none']
 const NAME = /^[a-z0-9][a-z0-9-]*$/
 const MAX_PROMPT_BYTES = 4_000
 
 export function parseJobsConfig(text: string): JobsConfig {
   const doc = Bun.TOML.parse(text) as Record<string, unknown>
+  if (doc.runner !== undefined && doc.runner !== 'launchd' && doc.runner !== 'daemon') {
+    throw new Error('jobs.toml: top-level runner must be "launchd" or "daemon" (a job named "runner" is not allowed)')
+  }
+  const fileRunner = doc.runner as Runner | undefined
   if (doc.channel !== undefined && typeof doc.channel !== 'string') throw new Error('jobs.toml: top-level channel must be a quoted string (a job named "channel" is not allowed)')
   const defaultChannel = doc.channel as string | undefined
   const jobs: Job[] = []
   for (const [name, raw] of Object.entries(doc)) {
-    if (name === 'channel') continue
+    if (name === 'channel' || name === 'runner') continue
     const fail = (why: string): never => { throw new Error(`jobs.toml [${name}]: ${why}`) }
     if (!NAME.test(name)) fail('name must be lowercase letters, digits and dashes')
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) fail('must be a table')
@@ -60,7 +76,7 @@ export function parseJobsConfig(text: string): JobsConfig {
       return t[k] as string
     }
     for (const k of Object.keys(t)) {
-      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after'].includes(k)) fail(`unknown key ${k}`)
+      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after', 'runner'].includes(k)) fail(`unknown key ${k}`)
     }
     const schedule = str('schedule') ?? fail('schedule is required')
     // parseCron is the only reader of a schedule, so it is the only validator.
@@ -82,7 +98,7 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (idleTtl && parseIdleTtl(idleTtl) === null) fail(`idle_ttl "${idleTtl}" must be a duration like 90m, 12h or 4d, at most 7d`)
     const check = str('check')
     if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
-    // A slot is owed until it is done: every job is retried with back-off. durable = true is that; false is ignored.
+    // A daemon job's slot is owed until it is done. durable = true says that; false is ignored, for old files.
     if (t.durable !== undefined && typeof t.durable !== 'boolean') fail('durable must be true or false')
     const notes = t.durable === false ? ['durable = false is ignored: a job is retried until its slot is done; remove the key'] : []
     let needs: Need[] = []
@@ -95,9 +111,18 @@ export function parseJobsConfig(text: string): JobsConfig {
     const alertAfter = str('alert_after')
     const alertAfterMs = alertAfter === undefined ? DEFAULT_ALERT_AFTER_MS : parseAlertAfter(alertAfter)
     if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most 30d`)
+    const own = str('runner')
+    if (own !== undefined && own !== 'daemon' && own !== 'launchd') fail('runner must be "launchd" (the default) or "daemon"')
+    const runner = (own ?? fileRunner ?? 'launchd') as Runner
+    const runnerFrom = own ? 'job' as const : fileRunner ? 'file' as const : 'default' as const
+    if (runner === 'launchd') {
+      for (const k of ['durable', 'needs', 'alert_after']) if (t[k] !== undefined && t[k] !== false) fail(`${k} needs runner = "daemon"`)
+      try { launchdCalendar(schedule) } catch (e) { fail((e as Error).message) }
+    }
     jobs.push({
-      name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
-      alertAfterMs: alertAfterMs!, ...(needs.length && { needs }), ...(notes.length && { notes }),
+      name, schedule, mode, runner, runnerFrom, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
+      // launchd has no retries: a failure is the run, so it is alerted at once
+      alertAfterMs: runner === 'launchd' ? 0 : alertAfterMs!, ...(needs.length && { needs }), ...(notes.length && { notes }),
     })
   }
   return { ...(defaultChannel && { channel: defaultChannel }), jobs }
@@ -140,6 +165,7 @@ export type Dispatch = {
   slot: string        // scheduled: the slot it serves; manual: the latest slot label, for display only
   deadline: string    // moved later by any gap in the daemon's watch (sleep): the attempt's own timers count only awake time
   seenAt?: string     // when the daemon last saw the attempt running
+  external?: string   // the slot instant of a launchd run's result whose output this attempt delivers (no check)
   pid?: number        // added after the spawn
   lstart?: string
 }
@@ -151,6 +177,7 @@ export type JobState = {
   covered?: Covered               // the one record the owed rule reads
   dispatch?: Dispatch             // set = a live dispatch
   appliedDispatch?: number        // the last dispatch id whose result (or loss) was applied
+  appliedExternal?: string        // the latest slot instant whose launchd result was applied: a replay of it is dropped
   failures?: number
   failingSince?: string
   last?: { at: string; dispatch?: number; result: Exclude<Result, 'not-now'>; note?: string; absorbedBy?: string }
@@ -180,6 +207,25 @@ export const resultFile = (stateDir: string, name: string, id: number, nonce: st
 export const daemonFile = (stateDir: string) => join(jobsDir(stateDir), '_daemon.json')
 export const lockFile = (stateDir: string) => join(jobsDir(stateDir), '_daemon.lock')
 export const jobsToml = (stateDir: string) => join(stateDir, 'jobs.toml')
+
+/**
+ * What a launchd run leaves for the daemon: the check's outcome for one slot, with its output when there is some.
+ * `<name>@<slot ms>.json`, a name a dispatch's result never has, so neither is ever taken for the other.
+ */
+export type ExternalResult = Outcome & { slot: string; slotAt: string; at: string; output?: string }
+export const externalFile = (stateDir: string, name: string, slotAt: string) =>
+  join(resultsDir(stateDir), `${name}@${new Date(slotAt).getTime()}.json`)
+export function parseExternalName(file: string): { name: string; slotAt: string } | null {
+  const m = /^([a-z0-9][a-z0-9-]*)@(\d+)\.json$/.exec(file)
+  return m ? { name: m[1], slotAt: new Date(Number(m[2])).toISOString() } : null
+}
+/** A job's launchd results waiting for the daemon, oldest slot first. */
+export function externalResults(stateDir: string, name: string): string[] {
+  let files: string[] = []
+  try { files = readdirSync(resultsDir(stateDir)) } catch {}
+  return files.map(parseExternalName).filter((p): p is { name: string; slotAt: string } => p?.name === name)
+    .map(p => p.slotAt).sort()
+}
 
 /** `<name>.<id>.<nonce>.json` → its parts, or null for anything else in the results dir (a tmp file, say). */
 export function parseResultName(file: string): { name: string; id: number; nonce: string } | null {
@@ -336,12 +382,14 @@ export type AttemptArgs = {
   platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string
   /** The slot's instant (ISO). A label repeats after a westward zone change; the instant never does. */
   slotAt?: string
+  /** Deliver the launchd run's result for slotAt instead of running the check. */
+  external?: boolean
 }
 
 /** `--state-dir` is the CLI's global daemon address, so it comes first: the attempt's own spawn or deliver uses it too. */
 export function attemptArgv(a: AttemptArgs): string[] {
   return ['--state-dir', a.stateDir, 'jobs', 'attempt', a.platform, a.name, '--dispatch', String(a.dispatch), '--nonce', a.nonce,
-    '--slot', a.slot, ...(a.slotAt ? ['--slot-at', a.slotAt] : []), ...(a.manual ? ['--manual'] : [])]
+    '--slot', a.slot, ...(a.slotAt ? ['--slot-at', a.slotAt] : []), ...(a.external ? ['--external'] : []), ...(a.manual ? ['--manual'] : [])]
 }
 
 /** The whole CLI argv of an attempt, or null if any part is missing or malformed. */
@@ -354,7 +402,8 @@ export function parseAttemptArgs(argv: string[]): AttemptArgs | null {
   const nonce = val('--nonce'), slot = val('--slot'), stateDir = val('--state-dir')
   if (!platform || !name || !isJobName(name) || !Number.isInteger(dispatch) || dispatch < 1 || !nonce || slot === undefined || !stateDir) return null
   const slotAt = val('--slot-at')
-  return { platform, name, dispatch, nonce, slot, ...(slotAt && { slotAt }), manual: argv.includes('--manual'), stateDir }
+  if (argv.includes('--external') && !slotAt) return null
+  return { platform, name, dispatch, nonce, slot, ...(slotAt && { slotAt }), ...(argv.includes('--external') && { external: true }), manual: argv.includes('--manual'), stateDir }
 }
 
 /** Whole-token match on `--dispatch <id>` and `--nonce <nonce>`, so dispatch 1 never matches 12 and another install's id never matches. */
@@ -400,21 +449,6 @@ export function listProcesses(): Proc[] {
   return out
 }
 
-
-// ---------------------------------------------------------------------------
-// Legacy launchd entries: before the daemon owned the clock, each job was bun.cron.hydra-job-<platform>-<name>
-// ---------------------------------------------------------------------------
-
-export const LAUNCH_AGENTS_DIR = join(homedir(), 'Library', 'LaunchAgents')
-const LEGACY_TITLE = /^hydra-job-([a-z]+)-([a-z0-9][a-z0-9-]*)$/
-export const parseLegacyTitle = (t: string) => { const m = LEGACY_TITLE.exec(t); return m ? { platform: m[1], name: m[2] } : null }
-
-/** The legacy entries for one platform, by title (depends on Bun naming the file bun.cron.<title>.plist). */
-export function legacyTitles(agentsDir: string, platform: string): string[] {
-  let files: string[] = []
-  try { files = readdirSync(agentsDir) } catch {}
-  return files.map(f => /^bun\.cron\.(.+)\.plist$/.exec(f)?.[1] ?? '').filter(t => parseLegacyTitle(t)?.platform === platform)
-}
 
 // ---------------------------------------------------------------------------
 // The attempt's environment
