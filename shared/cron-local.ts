@@ -1,16 +1,26 @@
 // A cron matcher in the process's local time zone (TZ respected), for the times jobs fire at.
-// Bun.cron.parse can't stand in everywhere: its zone depends on the Bun version (UTC on 1.3.14, local on 1.4.2).
+// Bun.cron.parse can't stand in: it has no previous-match API (the jobs clock needs "the latest slot at or before
+// now"), and its zone depends on the Bun version (UTC on 1.3.14, local on 1.4.2).
 //
 // Syntax is what Bun.cron accepts: 5 fields, numbers, `*`, lists, ranges, steps (`a/n` runs a to the field max),
 // case-insensitive month and weekday names (3-letter or full), 0 and 7 both Sunday, and the @yearly/@annually/
 // @monthly/@weekly/@daily/@midnight/@hourly nicknames. Day-of-month and day-of-week combine as Bun documents: when
 // neither field is literally `*`, a day matches if either one does.
 //
-// Our rule, not a claim about any other scheduler: each matching local wall-clock minute maps to one instant:
+// A slot is an instant the schedule fires at, named by a label: a local wall-clock `YYYY-MM-DD HH:MM`. Each matching
+// wall-clock minute maps to an instant, by our rule (not a claim about any other scheduler):
 // - normally, the one instant showing that wall-clock time;
-// - at a fall-back, where the time occurs twice, its first occurrence, so the repeated hour adds no firings;
+// - at a fall-back, where the time occurs twice, its first occurrence. The repeated hour adds no slots: the latest
+//   match at or before any instant past the second occurrence is still the first;
 // - at a spring-forward, where the time doesn't exist, the first instant after the gap.
-// Instants never decrease as minutes increase, which is what lets the search walk minutes in order.
+// One instant is one slot. When several matching minutes map to the same instant (hourly 02:00 and 03:00 both land
+// on 03:00 PDT in Los Angeles), the slot's label is the EARLIEST of them, its nominal label: "2026-03-08 02:00".
+// nextSlot and latestSlot apply the same rule, so latestSlot(nextSlot(t).at) equals nextSlot(t).
+// Instants never decrease as minutes increase, which is what lets the searches walk minutes in order. A gap slot's
+// instant shows a later wall-clock time than its label, so a slot's label only ever comes from the Slot itself; this
+// module exports no way to label an instant.
+
+export interface Slot { at: Date; label: string }
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -100,7 +110,7 @@ function instantOf(w: number): number {
   if (hits.length) return Math.min(...hits)
   // In a gap: the first instant whose wall-clock time is past w.
   let lo = w - Math.max(before, after), hi = w - Math.min(before, after)
-  if (wallKey(lo) >= w || wallKey(hi) <= w) throw new Error(`cannot place local time ${new Date(w).toISOString().slice(0, 16)}`)
+  if (wallKey(lo) >= w || wallKey(hi) <= w) throw new Error(`cannot place local time ${labelOfKey(w)}`)
   while (hi - lo > 1) {
     const mid = Math.floor((lo + hi) / 2)
     if (wallKey(mid) > w) hi = mid
@@ -119,23 +129,46 @@ function dayMatches(c: Cron, day: number): boolean {
   return dom || dow
 }
 
-// Matching wall-clock minutes from `from` upward, within the search window.
-function* minutes(c: Cron, from: number): Generator<number> {
+const pad = (n: number) => String(n).padStart(2, '0')
+function labelOfKey(w: number): string {
+  const d = new Date(w)
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+}
+
+// Matching wall-clock minutes from `from` upward (step 1) or downward (step -1), within the search window.
+function* minutes(c: Cron, from: number, step: 1 | -1): Generator<number> {
+  const hours = step > 0 ? c.hours : [...c.hours].reverse()
+  const mins = step > 0 ? c.minutes : [...c.minutes].reverse()
   let day = from - (((from % DAY) + DAY) % DAY)
-  for (let i = 0; i < SEARCH_DAYS; i++, day += DAY) {
+  for (let i = 0; i < SEARCH_DAYS; i++, day += step * DAY) {
     if (!dayMatches(c, day)) continue
-    for (const h of c.hours) for (const m of c.minutes) {
+    for (const h of hours) for (const m of mins) {
       const w = day + h * HOUR + m * MIN
-      if (w >= from) yield w
+      if (step > 0 ? w >= from : w <= from) yield w
     }
   }
 }
 
-/** The first local-time firing strictly after `from`, or null if the expression never matches (e.g. Feb 31). */
-export function nextMatch(expr: string, from: Date): Date | null {
-  for (const w of minutes(parseCron(expr), wallKey(from.getTime()) - SLACK)) {
+/** The first slot whose instant is strictly after `from`, or null if the expression never matches. */
+export function nextSlot(expr: string, from: Date): Slot | null {
+  // Walking up, the first minute whose instant is past `from` is the earliest minute of that instant.
+  for (const w of minutes(parseCron(expr), wallKey(from.getTime()) - SLACK, 1)) {
     const t = instantOf(w)
-    if (t > from.getTime()) return new Date(t)
+    if (t > from.getTime()) return { at: new Date(t), label: labelOfKey(w) }
   }
   return null
+}
+
+/** The latest slot whose instant is at or before `at`, or null if none in the search window. */
+export function latestSlot(expr: string, at: Date): Slot | null {
+  // Walking down, find the first minute at or before `at`, then keep going while minutes share its instant.
+  let found: number | undefined, label = 0
+  for (const w of minutes(parseCron(expr), wallKey(at.getTime()) + SLACK, -1)) {
+    const t = instantOf(w)
+    if (found === undefined) {
+      if (t <= at.getTime()) [found, label] = [t, w]
+    } else if (t === found) label = w
+    else break
+  }
+  return found === undefined ? null : { at: new Date(found), label: labelOfKey(label) }
 }
