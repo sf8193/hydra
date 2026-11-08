@@ -1,7 +1,7 @@
 # Until-done jobs
 
-> Status: proposal v11, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
-> 1–9) and an independent pass. For review before building.
+> Status: proposal v12, 2026-11-07. The user approved the direction. Shaped by the adversarial review (critic rounds
+> 1–10) and an independent pass. For review before building.
 
 ## What hydra jobs should offer
 
@@ -150,8 +150,8 @@ looks at its own reservation in the middle of its own spawn.
 A wall-clock jump larger than the interval (wake from sleep) is just
 a tick that finds slots owed. Each tick:
 
-1. **Reads jobs.toml.** If it doesn't parse, the daemon keeps running the last good config and alerts once a local
-   day.
+1. **Reads jobs.toml.** If it is missing or doesn't parse, the daemon keeps running the last good config and alerts
+   once a local day. A corrupt `_daemon.json` is treated the same way: the daemon alerts and starts it fresh.
 2. **Decides whether the machine is online:** the captive-portal probe (`captive.apple.com` returns "Success")
    **or** the daemon's gateway connection (gateway-health). Two independent witnesses: a VPN that blocks the probe
    can't make every job "not now" forever, and a captive portal (probe fails, gateway down) still reads offline.
@@ -194,8 +194,7 @@ needs unmet or no verdict yet (not now), and the baseline.
 **Everything else is dispatched, in two phases:**
 
 1. **Reserve.** Check "no live dispatch" and write `dispatch: {id, nonce, at, slot, deadline}` with the next per-job
-   id and a random nonce, as
-   one synchronous step with no `await` in between. The tick and a `jobs run` request both go through this one step,
+   id and a random nonce, as one synchronous step with no `await` in between. The tick and a `jobs run` request both go through this one step,
    so they can't both dispatch. The id is reserved before anything runs, so it is never reused.
 2. **Spawn**, then add `pid` and `lstart` to the record.
 
@@ -215,10 +214,17 @@ The detached child:
 - **Deadlines:**
   - The action has its own timeout: `hydra spawn` and `deliver` are killed after 2 minutes.
   - The attempt enforces a hard deadline on itself: the check timeout (30m) + the action timeout + 2 minutes. When it
-    hits, it writes a failed result and exits.
+    hits, it writes a failed result, then kills its own process group, which it leads. That is one call, and it
+    leaves no grandchild of the check running after the dispatch ends.
+- **SIGTERM** (a cancel, below): the attempt kills its own group, then writes "cancelled" as not-now, or "done" if
+  the action had already succeeded. A signal that arrives after the result is written does nothing.
 
-**On each tick the daemon applies results.** It reads any result for the live dispatch, applies it to state, and
-then deletes the file. Applying is idempotent: state keeps `appliedDispatch`, and a result whose id is at or below
+**A live dispatch is the record, not the process.** A job has a live dispatch while `dispatch` is set. It is cleared
+only when a result, or "ended without a result", is applied. The process is just how a dispatch ends. Nothing
+dispatches a job that has a live dispatch.
+
+**On each tick the daemon applies results.** It reads any result for the live dispatch, applies it to state, clears
+`dispatch`, and then deletes the file. Applying is idempotent: state keeps `appliedDispatch`, and a result whose id is at or below
 it is ignored. So a crash between applying and deleting changes nothing.
 
 **A dispatch that ends without a result is a failure**, "ended without a result". It is one outcome for every way an
@@ -231,12 +237,11 @@ attempt can be lost: a bun upgrade breaking the import, unreadable stdin, an unw
   `pid`, but only while `lstart` still matches, so a reused pid is never killed. The next tick then sees "process
   gone, no result".
 
-**Liveness is the dispatched process,** identified by `pid` + `lstart`. While it runs, the job has a live dispatch,
-and nothing dispatches it again. No per-job lock and no marker are needed: only the daemon dispatches, and every
-dispatch is reserved before its process exists.
+The dispatched process is identified by `pid` + `lstart`, which is all the daemon needs to tell whether it still
+runs.
 
-**A reservation without a `pid`** means the daemon died between spawning and recording. On the next tick, past a grace measured
-from `dispatch.at`, it looks for the orphan with `ps -ax -o pid=,lstart=,command=`. It matches by whole argv tokens:
+**A reservation without a `pid`** means the daemon died between spawning and recording. On the next tick, past a
+grace measured from `dispatch.at`, it looks for the orphan with `ps -ax -o pid=,lstart=,command=`. It matches by whole argv tokens:
 `--dispatch <id>` **and** `--nonce <nonce>`. The nonce makes the match unique across installs (a worktree or test
 daemon has its own small ids), and token matching keeps `--dispatch 1` from matching `--dispatch 12`.
 - **found:** the daemon adopts it and records its `pid` and `lstart`;
@@ -251,20 +256,20 @@ reservation. If one appears, it is logged and left alone.
 
 ### Commands
 
-- **`hydra jobs run <platform> <name>`** asks the daemon for a dispatch. The daemon records it, with the CLI's own
-  `pid` and `lstart`. The CLI runs the attempt **in the foreground**, writes the result file, and prints the result.
-  The daemon applies it on its next tick, the same as any other result.
-  - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap. It never sets
-    `attemptedSlot`, so it doesn't use up a plain job's scheduled slot.
-  - **Ctrl-C:** the CLI traps SIGINT and writes a not-now result, "cancelled", so a cancelled run isn't a failure. A
-    Ctrl-C that lands after the result is written does nothing, so the result file stays immutable.
-  - The CLI runs its work (the check and the action) in a **process group of its own**, as a dispatched attempt does.
-    It records that group's leader as the dispatch's `pid` and `lstart`, so the daemon's kill takes the whole group,
-    guarded by `lstart`, and no child is left working after the dispatch is given up.
+- **`hydra jobs run <platform> <name>`** is a dispatch like any other, waited on in the foreground. The daemon reserves
+  and spawns the same detached `jobs attempt … --dispatch <id> --nonce <n>` child the tick uses. The CLI waits for
+  its result file and prints it, and the daemon applies it on its next tick. There is one attempt runner, so a manual
+  run gets everything a scheduled one has: adoption after a daemon crash, the deadline kill, and the result
+  surviving a closed terminal.
+  - A manual run means "run now": it ignores owed state, backoff and `needs`, and skips overlap.
+  - **For until-done jobs**, its success marks the latest slot done. **For plain jobs** it changes nothing about
+    the schedule: it never sets `attemptedSlot`, so the scheduled slot is still attempted.
+  - **Ctrl-C** sends SIGTERM to the attempt's group, and the attempt records "cancelled" (see above). A Ctrl-C before
+    the daemon has answered the request cancels nothing: the CLI exits, and if the reservation was made, its
+    attempt runs and reports as usual.
   - With a live dispatch, the daemon refuses with "already running".
-  - With the daemon down, it refuses with "daemon not running". The daemon is the one source of decisions, and a
-    dead daemon is the thing to fix.
-  - Success marks the latest slot done.
+  - With the daemon down, or without the clock lock, it refuses ("daemon not running", "clock not owned"). The daemon
+    is the one source of decisions, and a dead daemon is the thing to fix.
 - **`hydra jobs mark-done <platform> <name>`** asks the daemon to record a baseline: the latest slot is marked done
   without running anything. It is for cutovers and for an "owed (unconfirmed)" slot.
 - **`hydra jobs sync <platform>`** validates jobs.toml and removes the old launchd entries.
@@ -293,8 +298,7 @@ idempotency key loads as failed, and a spawn that actually landed can be repeate
 
 ## State
 
-**One writer, the daemon.** Attempts only add immutable result files. Every file is written atomically
-(tmp + rename).
+Every file is written atomically (tmp + rename).
 
 ```ts
 type JobState = {                 // jobs-state/<name>.json
@@ -302,7 +306,8 @@ type JobState = {                 // jobs-state/<name>.json
   doneAt?: string                 // its success instant
   attemptedSlot?: string          // plain jobs: label of the latest attempted slot
   attemptedAt?: string            // plain jobs: its instant
-  dispatch?: { id: number; at: string; slot: string; pid: number; lstart: string; deadline: string }  // live
+  dispatch?: { id: number; nonce: string; at: string; slot: string; deadline: string;
+               pid?: number; lstart?: string }   // set = a live dispatch; pid/lstart added after the spawn
   appliedDispatch?: number        // the last dispatch id whose result was applied
   failures?: number               // consecutive failures (backoff)
   failingSince?: string           // first failure since the last success; cleared on success
@@ -330,8 +335,8 @@ type DaemonState = {              // jobs-state/_daemon.json
 | **Failure:** failed, stuck, ended without a result | — | +1 | set if unset | failed, with the note ("previous session stuck: <kind>", "ended without a result") |
 | **Not now:** needs unmet, no verdict yet, exit 75, dup-hit pending | — | — | — | "not now: <reason>" |
 
-For plain jobs, success and failure also set `attemptedSlot` and `attemptedAt`, and not-now doesn't. A plain job
-whose dispatch ended without a result is a failure, so its slot is used. It is reported daily.
+For plain jobs, success and failure also set `attemptedSlot` and `attemptedAt` (except a manual run), and not-now
+doesn't.
 
 `last.at` is the time of the last failure whenever `failures > 0`: not-now never touches `last` or `failures`, and
 every reset to 0 is a success that also rewrites `last`.
@@ -421,6 +426,12 @@ clock's last tick.
 - **Editing a schedule** needs no reset. The owed rule works with any schedule: the new schedule's latest slot is
   owed if it falls after the last success. A slot can therefore run twice on the day the schedule changes, which is
   accepted for a deliberate edit.
+- **Scripts that read hydra's job state files** (for example, a check that reads `<name>.json`'s `outcome` to clear
+  its own stamp) break at PR 2, when the format changes. They must move with PR 2. A script that misreads the new
+  format can silently lose a slot.
+- **Moving a self-gating job onto `until_done`** (an hourly schedule with a stamp file, becoming a weekly schedule
+  with `until_done` and `overlap`) is **one edit**: schedule, keys, and the script's removal together. Overlap on the
+  old hourly schedule would read the session as "still open" across slots two hours after each spawn.
 - **Check scripts written for the old runner** should drop their own gating (stamps, internet probes, "print to
   spawn") and stop masking failures. A failed step exits nonzero, so the runner's failure clock times it. Only domain
   checks remain.
@@ -430,13 +441,15 @@ clock's last tick.
 1. **Local-time matcher**, plus fixing `jobs list` "next". This is a bug fix, useful on its own.
 2. **The clock moves into the daemon.** Keeping today's behaviour without launchd already needs most of the
    machinery:
+   - the clock-owner lock, retried each tick
    - plain-job owed state from the matcher, or the catch-up run on wake is lost
    - the daemon as the only writer, with v0 translation
-   - detached attempts that report result files, with deadlines and the action timeout
-   - "ended without a result" and the safe kill
+   - two-phase dispatch: synchronous reserve, a nonce, adoption by argv
+   - detached attempts that report result files, with deadlines, the action timeout and the group kill
+   - `appliedDispatch`, the stale-result sweep, and "ended without a result" with the safe kill
    - the baseline
    - the definition on stdin
-   - `jobs run` in the foreground
+   - `jobs run` as a dispatch waited on in the foreground
    - the config alert and the direct path
    - plain-job messages sent by the daemon on local days
 3. **Owed slots:** `until_done`, `needs` and the online witnesses, exit 75, `overlap` with pane-probe's verdict, the
@@ -457,7 +470,10 @@ has a test.** In addition, these cases a builder wouldn't derive from the rules:
   later tick;
 - an attempt from another install with the same name and id: never adopted (nonce);
 - a late result after "ended without a result": deleted, not applied;
-- Ctrl-C on `jobs run`: not-now "cancelled", with no failure and the slot not used;
+- Ctrl-C on `jobs run`: the attempt's group is killed, the result is "cancelled" (or "done" if the action had
+  landed), and no work is left running;
+- a closed terminal during `jobs run`: the attempt finishes and its result is applied;
+- an attempt hitting its own deadline: its whole group is gone before the next dispatch;
 - a daemon restart while an attempt runs: the result waits on disk and is applied once;
 - a crash between applying a result and deleting it: no double apply;
 - EPIPE: an attempt writing output after a daemon restart;
