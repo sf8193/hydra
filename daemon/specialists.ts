@@ -4,6 +4,7 @@ import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
 import { SESSION_NAMES } from './sessions.js'
 import { clearBackoff } from './recovery-backoff.js'
+import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName } from '../shared/specialist-name.js'
 
 /**
  * A specialist is a named pointer to a thread (or the channel to open one in) plus the recipe for filling it.
@@ -28,16 +29,10 @@ export type Specialist = {
   updatedAt: number
 }
 
-export const SPECIALIST_NAME_RE = /^[a-z0-9][a-z0-9-]*$/
+export { SPECIALIST_NAME_RE }
 
-/** Why a name can't be a specialist's, or undefined. It needs a letter: an all-digit `to` is a thread id. */
-export function invalidSpecialistName(name: string): string | undefined {
-  if (!SPECIALIST_NAME_RE.test(name)) return 'specialist name must be lowercase letters, digits and dashes'
-  if (!/[a-z]/.test(name)) return `specialist name "${name}" needs a letter: an all-digit name reads as a thread id`
-  if (SESSION_NAMES.includes(name)) return `"${name}" is a default session name; a specialist needs its own name`
-  if (name === 'main' || name === 'parent') return `"${name}" is a reserved address (to = "main", send_to_thread target "parent")`
-  return undefined
-}
+/** Why a name can't be a specialist's, or undefined (the rule is in shared/specialist-name.ts). */
+export const invalidSpecialistName = (name: string): string | undefined => invalidName(name, SESSION_NAMES)
 
 const specialistsPath = () => join(STATE_DIR, 'specialists.json')
 
