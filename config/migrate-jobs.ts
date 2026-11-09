@@ -14,7 +14,8 @@
 
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { parseJobsConfig, type Job } from '../shared/jobs.js'
+import { jobInitiator, owedSlot, parseJobsConfig, readJobState, type Job } from '../shared/jobs.js'
+import { nextSlot } from '../shared/cron-local.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import type { MigrateStep } from './migrate.js'
 
@@ -138,13 +139,33 @@ export const jobsStep: MigrateStep = {
     if (!existsSync(path)) return undefined
     const m = migrateJobs(readFileSync(path, 'utf8'), { sessionNames: env.sessionNames, defaultWorkdir: spawnCwd })
     if (m.refusals.length) throw new Error(m.refusals.join('; '))
+    const now = new Date()
     return {
       doc: {
         ...(Object.keys(m.schedules).length > 0 && { schedules: m.schedules }),
         ...(Object.keys(m.specialists).length > 0 && { specialists: m.specialists }),
       },
       consumed: ['jobs.toml'],
-      notes: m.notes,
+      notes: [...m.notes, ...Object.entries(m.schedules).map(([id, s]) => equivalence(stateDir, id, s, m.specialists[id], now))],
     }
   },
+}
+
+/**
+ * One line per schedule that a dry run can be checked against: the next slot, and whether a slot is owed now (from the
+ * same jobs-state/<id>.state.json, so a covered slot stays covered), the runner, and where a run goes and as whom.
+ */
+function equivalence(stateDir: string, id: string, s: ScheduleTable, spec: SpecialistTable | undefined, now: Date): string {
+  const next = nextSlot(s.cron, now)
+  let owed = ''
+  if (s.runner === 'daemon') {
+    const r = readJobState(stateDir, id, s.cron)
+    const slot = r.kind === 'ok' ? owedSlot(s.cron, r.state, now) : null
+    owed = r.kind === 'missing' ? ', no record yet (nothing owed)' : r.kind === 'unreadable' ? `, record unreadable (${r.error})` : slot ? `, owed: ${slot.label}` : ', not owed'
+  }
+  const extras = [...(s.needs ? [`needs ${s.needs.join(', ')}`] : []), ...(s.alert_after ? [`alert_after ${s.alert_after}`] : [])]
+  const where = !s.to ? 'a sensor (no message)'
+    : spec ? `to ${s.to}: a fresh session in a new thread in ${spec.home}`
+    : `to ${s.to}`
+  return `${id}: next ${next ? next.label : 'never'}${owed}; runner ${s.runner}${extras.length ? `, ${extras.join(', ')}` : ''}; ${where}; initiator ${jobInitiator(id)}`
 }

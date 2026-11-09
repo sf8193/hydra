@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { jobsStep, migrateJobs } from '../migrate-jobs.js'
 import { applyMigrate, planMigrate } from '../migrate.js'
 import { loadHydraConfig } from '../load.js'
+import { stateFile } from '../../shared/jobs.js'
+import { latestSlot, nextSlot } from '../../shared/cron-local.js'
 
 const opts = { sessionNames: ['byte'], defaultWorkdir: '/home/u/work' }
 // The live discord/jobs.toml's shapes, with its paths and prompts shortened.
@@ -84,6 +86,22 @@ describe('migrate jobs.toml → [schedules]', () => {
       expect(existsSync(join(dir, 'jobs.toml'))).toBe(false)
       expect(readFileSync(join(dir, 'jobs.toml.migrated'), 'utf8')).toBe(LIVE)
       expect(jobsStep.pending(dir)).toBe(false)
+    } finally { rmSync(dir, { recursive: true }) }
+  })
+
+  test('the dry run shows each schedule plainly: next slot, owed or not from the same record, runner, where it goes, as whom', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), LIVE)
+      // ledger-review ran its latest Friday: covered, so not owed again after migrate.
+      const latest = latestSlot('0 11 * * FRI', new Date())!
+      mkdirSync(join(dir, 'jobs-state'), { recursive: true })
+      writeFileSync(stateFile(dir, 'review'), JSON.stringify({ v: 1, covered: { slot: latest.label, at: latest.at.toISOString() }, last: { at: latest.at.toISOString(), result: 'done' } }))
+      const out = jobsStep.run({ stateDir: dir, env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] }, spawnCwd: '/h/work', platform: 'discord' })!
+      const line = (id: string) => out.notes.find(n => n.startsWith(`${id}: next `))
+      expect(line('review')).toBe(`review: next ${nextSlot('0 11 * * FRI', new Date())!.label}, not owed; runner daemon, needs internet; to review: a fresh session in a new thread in 1551794455227404370; initiator jobs:review`)
+      expect(line('pull')).toMatch(/^pull: next \S+ \S+, no record yet \(nothing owed\); runner daemon, needs internet, alert_after 2d; a sensor \(no message\); initiator jobs:pull$/)
+      expect(line('health')).toMatch(/^health: next \S+ \S+; runner launchd; to main; initiator jobs:health$/)
     } finally { rmSync(dir, { recursive: true }) }
   })
 
