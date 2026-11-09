@@ -5,7 +5,7 @@ import { atomicWriteFileSync } from './util.js'
 import { SESSION_NAMES } from './sessions.js'
 import { clearBackoff } from './recovery-backoff.js'
 import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName } from '../shared/specialist-name.js'
-import { currentHydraConfig } from './hydra-config.js'
+import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from './hydra-config.js'
 import type { Specialist as DeclaredSpecialist } from '../config/types.js'
 
 /**
@@ -50,25 +50,49 @@ let specialists: Map<string, Specialist> = new Map()
 type Pointer = { threadId: string; updatedAt: number }
 let pointers: Map<string, Pointer> = new Map()
 
-/** hydra.toml declares the specialists once it names an operator (any non-empty hydra.toml must). */
-export const declaredInToml = (): boolean => currentHydraConfig().operator !== undefined
-
 /**
- * The channel a hydra.toml specialist opens a new thread in: its `home` when that's a channel id on this platform,
- * else the default session channel (the operator's). A `#name` home needs a lookup that doesn't exist yet.
+ * hydra.toml declares the specialists while it governs: it names an operator, or it has content that failed to load
+ * at boot (then nothing is declared, rather than falling back to specialists.json). A deleted file hands back.
  */
-function homeChannel(s: DeclaredSpecialist): string | undefined {
-  if (s.home === undefined) return DEFAULT_SESSION_CHANNEL || undefined
-  if (/^\d+$/.test(s.home)) return s.home
-  const m = s.home.match(/^(discord|slack):([A-Z0-9]+|\d+)$/)
-  if (m && m[1] === PLATFORM) return m[2]
-  process.stderr.write(`daemon: specialist "${s.id}": home ${s.home} isn't a channel id on ${PLATFORM}, so a new thread can't open there\n`)
-  return undefined
+export const declaredInToml = (): boolean => hydraConfigInUse()
+
+/** A `home` that names a channel id on this platform, or undefined (a `#name` needs a lookup that doesn't exist yet). */
+function homeChannelId(home: string): string | undefined {
+  if (/^\d+$/.test(home)) return home
+  const m = home.match(/^(discord|slack):([A-Z0-9]+|\d+)$/)
+  return m && m[1] === PLATFORM ? m[2] : undefined
 }
 
-/** Its pointer, or one left under an old id (`was`), so a rename keeps its thread. */
+/** The channel a hydra.toml specialist opens a new thread in: its `home` when usable, else the operator's default channel. */
+function homeChannel(s: DeclaredSpecialist): string | undefined {
+  return (s.home !== undefined ? homeChannelId(s.home) : undefined) ?? (DEFAULT_SESSION_CHANNEL || undefined)
+}
+
+/** Its pointer, or one left under an old id (`was`) not yet moved. */
 function pointerFor(s: DeclaredSpecialist): Pointer | undefined {
   return pointers.get(s.id) ?? s.was.map(old => pointers.get(old)).find(p => p !== undefined)
+}
+
+/**
+ * On each hydra.toml load: a renamed specialist's pointer moves to its new id (so dropping `was` later keeps its
+ * thread), and a pointer for an id no longer declared goes (so a later specialist reusing the id starts fresh).
+ * A `home` that can't be used is reported here, once per load.
+ */
+function reconcilePointers(): void {
+  if (!declaredInToml()) return
+  const declared = Object.values(currentHydraConfig().specialists)
+  const next = new Map<string, Pointer>()
+  for (const s of declared) {
+    const p = pointerFor(s)
+    if (p) next.set(s.id, p)
+    if (s.home !== undefined && !homeChannelId(s.home)) {
+      process.stderr.write(`daemon: specialist "${s.id}": home ${s.home} isn't a channel id on ${PLATFORM}; its new threads open in the default channel\n`)
+    }
+  }
+  const same = next.size === pointers.size && [...next].every(([k, v]) => pointers.get(k) === v)
+  if (same) return
+  pointers = next
+  persistPointers()
 }
 
 function fromToml(s: DeclaredSpecialist): Specialist {
@@ -220,3 +244,4 @@ export function _reloadSpecialists(): void {
 
 load()
 loadPointers()
+onHydraConfigLoad(() => reconcilePointers())

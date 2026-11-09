@@ -211,7 +211,7 @@ export function formatSlackWatchesFor(caller: Pick<SessionInfo, 'threadId'>, now
 /** A route whose `to` names no specialist is a config error: said here, before any message is owed to it. */
 function routeNote(to: string): { note?: string } {
   if (to === 'main') return { note: MAIN_NOTE }
-  if (!getSpecialist(to)) return { note: `no such specialist: ${to}; declare it with hydra specialist set, or fix the route` }
+  if (!getSpecialist(to)) return { note: `no such specialist: ${to}; declare it in hydra.toml (or with hydra specialist set before hydra migrate), or fix the route` }
   return {}
 }
 

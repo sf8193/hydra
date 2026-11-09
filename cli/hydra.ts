@@ -81,8 +81,9 @@ Deliver (whisper channel — message to session context, not thread):
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>] [--idle <30m|4h|1d>]
                                        a new specialist needs --channel (its first session opens a thread there) or --thread;
-                                       a name needs a letter (an all-digit one reads as a thread id)
-  hydra specialist show <name> | list | rm <name>
+                                       a name needs a letter (an all-digit one reads as a thread id);
+                                       once hydra.toml declares specialists, recipes live there and set takes only --thread
+  hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
 
 Slack watches (threads whose replies reach a specialist):
   hydra slack-watch list               Watched threads and health
