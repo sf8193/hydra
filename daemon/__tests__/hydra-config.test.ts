@@ -72,6 +72,15 @@ describe('the daemon\'s live hydra.toml', () => {
     expect(sent).toEqual([])
   })
 
+  test('a subscriber reading currentHydraConfig() during the first load sees that config, not the empty one', () => {
+    writeFileSync(hydraConfigPath(), config('op'))
+    const seen: (string | undefined)[] = []
+    const off = onHydraConfigLoad(() => seen.push(currentHydraConfig().operator))
+    startHydraConfig({ env })
+    expect(seen).toEqual(['op'])
+    off()
+  })
+
   test('a test can stand in for the file, and subscribers hear it', () => {
     const seen: (string | undefined)[] = []
     const off = onHydraConfigLoad(c => seen.push(c.operator))

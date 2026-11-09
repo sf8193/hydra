@@ -6,7 +6,7 @@ import { SESSION_NAMES } from './sessions.js'
 import { clearBackoff } from './recovery-backoff.js'
 import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName } from '../shared/specialist-name.js'
 import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from './hydra-config.js'
-import type { Specialist as DeclaredSpecialist } from '../config/types.js'
+import type { HydraConfig, Specialist as DeclaredSpecialist } from '../config/types.js'
 
 /**
  * A specialist is a named pointer to a thread (or the channel to open one in) plus the recipe for filling it.
@@ -68,31 +68,32 @@ function homeChannel(s: DeclaredSpecialist): string | undefined {
   return (s.home !== undefined ? homeChannelId(s.home) : undefined) ?? (DEFAULT_SESSION_CHANNEL || undefined)
 }
 
-/** Its pointer, or one left under an old id (`was`) not yet moved. */
+/** Its pointer: one under an old id (`was`) not yet moved wins, since a rename means that thread; else its own. */
 function pointerFor(s: DeclaredSpecialist): Pointer | undefined {
-  return pointers.get(s.id) ?? s.was.map(old => pointers.get(old)).find(p => p !== undefined)
+  return s.was.map(old => pointers.get(old)).find(p => p !== undefined) ?? pointers.get(s.id)
 }
 
 /**
- * On each hydra.toml load: a renamed specialist's pointer moves to its new id (so dropping `was` later keeps its
- * thread), and a pointer for an id no longer declared goes (so a later specialist reusing the id starts fresh).
- * A `home` that can't be used is reported here, once per load.
+ * On each hydra.toml load, from the config that loaded: a renamed specialist's pointer moves from its `was` id to
+ * its new id, so dropping `was` later keeps its thread. Nothing is deleted for being absent: a pointer for an id
+ * not declared is inert, and survives a load caught mid-save or a table commented out for a while; an id declared
+ * again later finds its thread. A `home` that can't be used is reported here, once per load.
  */
-function reconcilePointers(): void {
+function reconcilePointers(config: HydraConfig): void {
   if (!declaredInToml()) return
-  const declared = Object.values(currentHydraConfig().specialists)
-  const next = new Map<string, Pointer>()
-  for (const s of declared) {
-    const p = pointerFor(s)
-    if (p) next.set(s.id, p)
+  let moved = false
+  for (const s of Object.values(config.specialists)) {
+    const old = s.was.find(o => pointers.has(o))
+    if (old) {
+      pointers.set(s.id, pointers.get(old)!)
+      for (const o of s.was) pointers.delete(o)
+      moved = true
+    }
     if (s.home !== undefined && !homeChannelId(s.home)) {
       process.stderr.write(`daemon: specialist "${s.id}": home ${s.home} isn't a channel id on ${PLATFORM}; its new threads open in the default channel\n`)
     }
   }
-  const same = next.size === pointers.size && [...next].every(([k, v]) => pointers.get(k) === v)
-  if (same) return
-  pointers = next
-  persistPointers()
+  if (moved) persistPointers()
 }
 
 function fromToml(s: DeclaredSpecialist): Specialist {
@@ -126,11 +127,17 @@ function load(): void {
   }
 }
 
+/** Set when specialist-threads.json exists but couldn't be read: it is never written over, so nothing is lost. */
+let pointersUnreadable: string | undefined
+
 function loadPointers(): void {
+  pointersUnreadable = undefined
   try {
     pointers = existsSync(threadsPath()) ? new Map(Object.entries(JSON.parse(readFileSync(threadsPath(), 'utf8')) as Record<string, Pointer>)) : new Map()
-  } catch {
+  } catch (e) {
     pointers = new Map()
+    pointersUnreadable = (e as Error).message
+    process.stderr.write(`daemon: ${threadsPath()} couldn't be read (${pointersUnreadable}); specialists' threads are unknown and it won't be written over until it's fixed\n`)
   }
 }
 
@@ -139,6 +146,7 @@ function persist(): void {
 }
 
 function persistPointers(): void {
+  if (pointersUnreadable) throw new Error(`${threadsPath()} couldn't be read (${pointersUnreadable}); fix or remove it, then restart`)
   atomicWriteFileSync(threadsPath(), JSON.stringify(Object.fromEntries(pointers), null, 2))
 }
 
@@ -244,4 +252,6 @@ export function _reloadSpecialists(): void {
 
 load()
 loadPointers()
-onHydraConfigLoad(() => reconcilePointers())
+onHydraConfigLoad(config => {
+  try { reconcilePointers(config) } catch (e) { process.stderr.write(`daemon: ${(e as Error).message}\n`) }
+})

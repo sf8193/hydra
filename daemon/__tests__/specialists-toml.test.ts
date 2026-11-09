@@ -1,9 +1,9 @@
 import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, DEFAULT_SESSION_CHANNEL } from '../config.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, specialistForThread } from '../specialists.js'
-import { _setHydraConfigForTesting, hydraConfigPath, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
+import { _setHydraConfigForTesting, hydraConfigPath, onHydraConfigLoad, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import type { HydraConfig, Specialist as Declared } from '../../config/types.js'
 
 const threads = join(STATE_DIR, 'specialist-threads.json')
@@ -60,13 +60,42 @@ describe('specialists declared in hydra.toml', () => {
     expect(specialistForThread('900')).toBe('desk')
   })
 
-  test('a load drops pointers for ids no longer declared, so a later specialist reusing the id starts fresh', () => {
+  test('a load keeps pointers for ids it doesn\'t declare (a save caught mid-write, a table commented out), and was wins over a leftover', () => {
     _setHydraConfigForTesting(config(declared('ops', { prompt: 'p' }), declared('desk', { prompt: 'p' })))
     setSpecialistThread('ops', '900')
     setSpecialistThread('desk', '950')
     _setHydraConfigForTesting(config(declared('desk', { prompt: 'p' })))
+    expect(JSON.parse(readFileSync(threads, 'utf8'))).toMatchObject({ ops: { threadId: '900' }, desk: { threadId: '950' } })
+    _setHydraConfigForTesting(config(declared('ops', { prompt: 'p' }), declared('desk', { prompt: 'p' })))
+    expect(getSpecialist('ops')?.threadId).toBe('900')
+    // desk renamed to ops: the rename means desk's thread, not ops's leftover.
     _setHydraConfigForTesting(config(declared('ops', { prompt: 'p', was: ['desk'] })))
     expect(getSpecialist('ops')?.threadId).toBe('950')
+  })
+
+  test('a daemon boot with hydra.toml keeps the pointers on disk (the first load reads the config it loaded)', () => {
+    mkdirSync(join(STATE_DIR, 'ops-w'), { recursive: true })
+    writeFileSync(hydraConfigPath(), `operator = "op"\n[people.op]\nids = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/srv/ops"\nprompt = "p"\nwas = ["old-ops"]\n`)
+    writeFileSync(threads, JSON.stringify({ ops: { threadId: '900', updatedAt: 7 }, gone: { threadId: '901', updatedAt: 7 } }))
+    _reloadSpecialists()
+    const seen: (string | undefined)[] = []
+    const off = onHydraConfigLoad(() => seen.push(getSpecialist('ops')?.threadId))
+    startHydraConfig({ env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] } })
+    try {
+      expect(seen).toEqual(['900'])
+      expect(getSpecialist('ops')?.threadId).toBe('900')
+      expect(JSON.parse(readFileSync(threads, 'utf8'))).toEqual({ ops: { threadId: '900', updatedAt: 7 }, gone: { threadId: '901', updatedAt: 7 } })
+    } finally {
+      off(); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true })
+    }
+  })
+
+  test('an unreadable specialist-threads.json is never written over', () => {
+    writeFileSync(threads, '{ not json')
+    _reloadSpecialists()
+    _setHydraConfigForTesting(config(declared('ops', { prompt: 'p' })))
+    expect(() => setSpecialistThread('ops', '900')).toThrow("couldn't be read")
+    expect(readFileSync(threads, 'utf8')).toBe('{ not json')
   })
 
   test('a home that isn\'t a channel id here falls back to the default channel', () => {

@@ -1178,6 +1178,19 @@ describe('jobs list warnings', () => {
       expect(lines.find(l => l.startsWith('c '))).toContain('spawn')
     } finally { console.log = log; rmSync(dir, { recursive: true }) }
   })
+  test('jobs list reads the declared specialists from hydra.toml once it has content', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jobs-spec-'))
+    const lines: string[] = []
+    const log = console.log
+    console.log = (s: string) => { lines.push(s) }
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), `channel="1"\n[a]\nschedule="0 2 * * *"\nprompt="p"\nto="ops"\n[b]\nschedule="0 2 * * *"\nprompt="p"\nto="old"`)
+      writeFileSync(join(dir, 'specialists.json'), JSON.stringify({ old: { channel: 'C0TEST', updatedAt: 1 } }))
+      writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\nids = ["discord:1"]\n[specialists.ops]\nworkdir = "/w"\n')
+      jobsList('test', dir)
+      expect(lines.filter(l => l.includes('no such specialist'))).toEqual(['  warning: no such specialist "old" (hydra specialist list)'])
+    } finally { console.log = log; rmSync(dir, { recursive: true }) }
+  })
   test('a cwd or env_file under a folder macOS gates gets a warning naming the folder and the key; others none', () => {
     const job = (cwd: string, env: string) => parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="c.sh"\nmode="none"\ncwd="${cwd}"\nenv_file="${env}"`)[0]
     const w = jobWarnings(job(at('Documents/build'), at('Desktop/.env')))

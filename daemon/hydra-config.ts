@@ -14,6 +14,9 @@ export const hydraConfigPath = () => join(STATE_DIR, HYDRA_CONFIG_FILE)
 
 let watch: HydraConfigWatch | undefined
 let override: HydraConfig | undefined
+/** The config that last loaded. Set before subscribers hear it, so one reading currentHydraConfig() during the first
+ * load (inside startHydraConfig, before the watch is returned) sees that config, not the empty one. */
+let live: HydraConfig | undefined
 const listeners = new Set<(config: HydraConfig) => void>()
 
 type Send = (text: string) => Promise<boolean>
@@ -67,6 +70,7 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
     onAlert: text => { process.stderr.write(`daemon: ${text}\n`); undelivered = text; void deliver() },
     onLoad: (config, warnings) => {
       undelivered = undefined
+      live = config
       inUse = config.operator !== undefined
       const op = config.operator ? config.people[config.operator] : undefined
       if (op && !op.ids.some(a => a.startsWith(`${PLATFORM}:`))) {
@@ -82,6 +86,7 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
 
 export function stopHydraConfig(): void {
   inUse = false
+  live = undefined
   inFlight = undefined
   undelivered = undefined
   send = undefined
@@ -97,7 +102,7 @@ function notify(config: HydraConfig): void {
 
 /** The last config that loaded; the empty config before the first. */
 export function currentHydraConfig(): HydraConfig {
-  return override ?? watch?.current() ?? EMPTY_CONFIG
+  return override ?? live ?? EMPTY_CONFIG
 }
 
 /** Tests: stand in for the file. Set, it is current and subscribers hear it; undefined goes back to the file's. */
