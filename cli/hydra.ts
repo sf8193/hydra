@@ -32,12 +32,13 @@ Setup:
     --config-dir <path>                Claude config dir (default: ~/.claude)
   hydra uninstall <platform>           Remove launchd watchdog
 
-Jobs (recurring, from <state dir>/jobs.toml):
-  hydra jobs list <platform>           Each job's runner, next run and last result (validates jobs.toml)
-  hydra jobs sync <platform>           Register runner = "launchd" jobs with launchd and have the daemon load the file now
-  hydra jobs run <platform> <name>     Run one job now, through the daemon; Ctrl-C cancels it
-  hydra jobs mark-done <platform> <name>  Mark a daemon job's latest slot done without running it
-  A job's runner is launchd unless it (or the file) says runner = "daemon"; delivery is always the daemon's.
+Schedules (hydra.toml's [schedules]; <state dir>/jobs.toml until \`hydra migrate\` moves it there):
+  hydra schedules list <platform>      Each schedule's runner, next run and last result
+  hydra schedules sync <platform>      Have the daemon load them now, and register runner = "launchd" ones with launchd
+  hydra schedules run <platform> <name>  Run one now, through the daemon; Ctrl-C cancels it
+  hydra schedules mark-done <platform> <name>  Mark a daemon schedule's latest slot done without running it
+  A schedule's runner is launchd unless it says runner = "daemon"; delivery is always the daemon's.
+  \`hydra jobs …\` is the same command, for now.
 
 Lifecycle:
   hydra up <platform>                  Start daemon + byte
@@ -76,6 +77,8 @@ Deliver (whisper channel — message to session context, not thread):
     --idempotency-key <key>            Prevent duplicate delivery (optional; remembered 15m)
     --idempotency-ttl <dur>            How long the key is remembered: 1m to 7d, e.g. 24h (default 15m)
     --queue                            Queue if bridge disconnected (default: fail)
+    --conversation <key>               With --to <specialist> that runs per-conversation sessions: that conversation's own
+                                       session, opened for it (a fresh thread in the specialist's home) if it has none
     --revive                           With --to <thread id> or --thread: a dead session is revived in its thread first
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
   Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 not now (booting,
@@ -162,12 +165,13 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  if (command === 'jobs' && daemonName) {
-    console.error('error: jobs commands take --state-dir <dir>, not --daemon (a job\'s state lives in the daemon\'s state dir)')
+  const schedulesCmd = command === 'schedules' || command === 'jobs'   // `jobs`: the old name, kept for one release
+  if (schedulesCmd && daemonName) {
+    console.error(`error: ${command} commands take --state-dir <dir>, not --daemon (a schedule's state lives in the daemon's state dir)`)
     process.exit(1)
   }
 
-  if (command === 'jobs') {
+  if (schedulesCmd) {
     const [, sub, platform, name] = filtered
     if (sub === 'attempt') {
       // Started by the daemon's clock, detached; not for direct use.
@@ -183,7 +187,7 @@ async function main(): Promise<void> {
     }
     const named = sub === 'run' || sub === 'mark-done'
     if (!['list', 'sync', 'run', 'mark-done'].includes(sub) || !platform || !isPlatform(platform) || (named && (!name || name.startsWith('-')))) {
-      console.error('usage: hydra [--state-dir <dir>] jobs list|sync <platform>   |   hydra [--state-dir <dir>] jobs run|mark-done <platform> <name>')
+      console.error(`usage: hydra [--state-dir <dir>] ${command} list|sync <platform>   |   hydra [--state-dir <dir>] ${command} run|mark-done <platform> <name>`)
       process.exit(1)
     }
     try {
@@ -431,6 +435,7 @@ async function main(): Promise<void> {
       let initiator: string | undefined
       let idempotencyKey: string | undefined
       let idempotencyTtl: string | undefined
+      let conversation: string | undefined
       let queue = false
       let revive = false
 
@@ -451,6 +456,8 @@ async function main(): Promise<void> {
           idempotencyKey = filtered[++i]
         } else if (filtered[i] === '--idempotency-ttl') {
           idempotencyTtl = filtered[++i] ?? ''   // given with no value: refused below, never silently dropped
+        } else if (filtered[i] === '--conversation') {
+          conversation = filtered[++i] ?? ''   // with no value: the daemon refuses it
         } else if (filtered[i] === '--queue') {
           queue = true
         } else if (filtered[i] === '--revive') {
@@ -484,6 +491,7 @@ async function main(): Promise<void> {
           initiator,
           ...(idempotencyKey && { idempotencyKey }),
           ...(idempotencyTtl !== undefined && { idempotencyTtl }),
+          ...(conversation !== undefined && { conversation }),
           ...(queue && { queue }),
           ...(revive && { revive }),
         },

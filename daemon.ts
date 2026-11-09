@@ -239,7 +239,9 @@ if ('homeSpawnHandler' in gateway) {
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/slack-watch-runtime.js'
-import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert } from './daemon/hydra-config.js'
+import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
+import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
+import { readDaemonState } from './shared/jobs.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
@@ -514,8 +516,9 @@ setInterval(() => {
 // Lower cadence than reply guard — these stalls are minutes-scale.
 setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
 
-// Jobs clock: runs jobs.toml's jobs as detached attempts and applies their results (daemon/jobs-clock.ts).
-// Failure reports go to a job's `to` target, then main; if neither can take one, straight to a channel.
+// Jobs clock: runs jobs.toml's jobs, or once migrate has moved them, hydra.toml's [schedules], as detached attempts and
+// applies their results (daemon/jobs-clock.ts). A job's failure goes to its `to` target, then main; a schedule's to main;
+// if neither can take one, straight to a channel.
 startJobsClock(realDeps({
   stateDir: STATE_DIR,
   platform: PLATFORM,
@@ -526,6 +529,9 @@ startJobsClock(realDeps({
     return true
   },
   toTarget: async (to, text, initiator) => (await deliverToTarget({ to }, text, { initiator, queue: true })).ok,
+  schedules: () => jobsFromSchedules(currentHydraConfig()),
+  reloadSchedules: reloadHydraConfig,
+  schedulesLoadedOk: hydraConfigLoadedOk,
   // The clock resolves job channel → top-level channel → home channel; this only sends.
   direct: async (text, channel) => {
     if (!channel) { process.stderr.write(`daemon: jobs alert has no channel: ${text}\n`); return false }
@@ -534,6 +540,13 @@ startJobsClock(realDeps({
   homeChannel: () => DEFAULT_SESSION_CHANNEL || undefined,
   gatewayConnected: () => gateway.isConnected(),
 }))
+// An edited [schedules] re-registers its launchd entries: `schedules sync` asks this daemon for them, and its reload
+// finds the file unchanged, so it can't come back here.
+onHydraConfigLoad(() => {
+  if (!schedulesAreSource(STATE_DIR, readDaemonState(STATE_DIR).state)) return
+  const p = Bun.spawn([process.execPath, join(import.meta.dir, 'cli', 'hydra.ts'), '--state-dir', STATE_DIR, 'schedules', 'sync', PLATFORM], { stdout: 'ignore', stderr: 'pipe' })
+  void p.exited.then(async code => { if (code) process.stderr.write(`daemon: schedules sync after a hydra.toml change exited ${code}: ${(await new Response(p.stderr).text()).trim().slice(-300)}\n`) })
+})
 
 let shuttingDown = false
 

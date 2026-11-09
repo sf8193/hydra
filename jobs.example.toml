@@ -1,3 +1,6 @@
+# The old format. New setups declare [schedules.<id>] in <state dir>/hydra.toml (README, "Schedules"); an existing
+# jobs.toml runs exactly as before until `hydra migrate` moves its jobs there.
+#
 # Copy to <state dir>/jobs.toml, then `hydra jobs sync <platform>`. Each job runs at its local-time slots; a slot
 # missed while the machine slept runs once on wake. `hydra jobs list <platform>` validates the file and shows each
 # job's state.

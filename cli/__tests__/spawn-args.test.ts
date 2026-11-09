@@ -70,3 +70,11 @@ describe('hydra deliver --idempotency-ttl', () => {
     expect(noValue).toMatchObject({ code: 1, req: undefined })
   }, 20_000)
 })
+
+describe('hydra deliver --conversation', () => {
+  test('sent with --to, as given', async () => {
+    const r = await cliRequest('deliver', ['--to', 'rev', '--conversation', 'clock:k', '--message', 'm'])
+    expect(r.code).toBe(0)
+    expect(r.req?.params).toMatchObject({ to: 'rev', conversation: 'clock:k' })
+  }, 20_000)
+})

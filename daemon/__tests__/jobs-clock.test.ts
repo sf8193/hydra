@@ -1,13 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach, afterAll } from 'bun:test'
-import { closeSync, constants as fsc, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { closeSync, constants as fsc, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { JobsClock, openClockLock, ADOPT_GRACE_MS, applyOutcome, type ClockDeps } from '../jobs-clock.js'
 import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, externalFile, backoffUntil, commandMatches, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, externalFile, backoffUntil, commandMatches, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readDaemonState, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
 } from '../../shared/jobs.js'
 import { legacyTitles, runnerJobs } from '../../shared/jobs-launchd.js'
+import { jobsFromSchedules } from '../../shared/schedules.js'
+import type { HydraConfig, Schedule } from '../../config/types.js'
 
 // A fake world: a clock you move, a process table you control, and recorded messages. The lock is the real one.
 type World = {
@@ -1592,4 +1594,157 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
     expect(argOf(w.spawns[1].args, '--slot-at')).toBe(new Date(SLOT).toISOString())
   })
 
+})
+
+describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until then, jobs.toml exactly as today", () => {
+  const schedule = (over: Partial<Schedule> & { id: string }): Schedule => ({ cron: '*/5 * * * *', to: '', prompt: '', runner: 'daemon', ...over })
+  const cfg = (...ss: Schedule[]) => ({ schedules: Object.fromEntries(ss.map(s => [s.id, s])), specialists: {} as HydraConfig['specialists'] })
+  const sweep = cfg(schedule({ id: 'sweep', check: 'sweep.sh' }))
+
+  test('a state dir with only jobs.toml, and a restart: the same dispatches, with schedules on offer and ignored', async () => {
+    const run = async (withSchedules: boolean) => {
+      w.spawns = []
+      rmSync(join(w.dir, 'jobs-state'), { recursive: true, force: true })
+      toml(HOURLY)
+      at('2026-11-04T09:59:00-08:00')
+      const c = clock(withSchedules ? { schedules: () => jobsFromSchedules(cfg(schedule({ id: 'other', check: 'o.sh' }))) } : {})
+      await c.tick()
+      at('2026-11-04T10:00:30-08:00'); await c.tick()
+      finish('sync', 1, 'done', undefined, 1000)
+      c.stop()
+      const restarted = clock(withSchedules ? { schedules: () => jobsFromSchedules(cfg(schedule({ id: 'other', check: 'o.sh' }))) } : {})
+      at('2026-11-04T11:00:30-08:00'); await restarted.tick()
+      restarted.stop()
+      return w.spawns.map(s => [s.args[6], argOf(s.args, '--slot')])
+    }
+    const today = await run(false)
+    expect(today).toEqual([['sync', '2026-11-04 10:00'], ['sync', '2026-11-04 11:00']])
+    expect(await run(true)).toEqual(today)
+    expect(readDaemonState(w.dir).state.scheduleJobs).toBeUndefined()
+  })
+
+  test('migrated: the schedules run, keep the job state path, and are recorded for the CLI', async () => {
+    toml(FIVE)
+    const c = clock({ schedules: () => jobsFromSchedules(sweep) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()                               // a fresh record: the baseline
+    at('2026-11-04T10:00:30-08:00'); await c.tick()
+    finish('sweep', 1, 'done', undefined, 1000)
+    renameSync(join(w.dir, 'jobs.toml'), join(w.dir, 'jobs.toml.migrated'))   // what hydra migrate does
+    at('2026-11-04T10:05:30-08:00'); await c.tick()
+    expect(w.spawns.map(s => argOf(s.args, '--slot'))).toEqual(['2026-11-04 10:00', '2026-11-04 10:05'])
+    expect(existsSync(stateFile(w.dir, 'sweep'))).toBe(true)                     // jobs-state/sweep.state.json, as before
+    expect(state('sweep').last).toMatchObject({ result: 'done' })
+    expect(readDaemonState(w.dir).state.scheduleJobs?.map(j => j.name)).toEqual(['sweep'])
+    expect(w.logs.some(l => l.includes('missing'))).toBe(false)
+  })
+
+  test('after migrate, schedules run and mark-done act on the [schedules] definition, never the saved jobs.toml', async () => {
+    toml(`[sweep]\nschedule = "*/5 * * * *"\ncheck = "old.sh"\nmode = "none"\n`)
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'new.sh' }), schedule({ id: 'fresh', check: 'f.sh' }))) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()                               // jobs.toml saved as the last good copy
+    renameSync(join(w.dir, 'jobs.toml'), join(w.dir, 'jobs.toml.migrated'))
+    expect(c.requestRun('sweep').ok).toBe(true)
+    expect(JSON.parse(w.spawns[0].stdin)).toMatchObject({ name: 'sweep', check: 'new.sh', fromSchedule: true })
+    expect(c.requestRun('fresh').ok).toBe(true)                                  // a schedule jobs.toml never had
+    expect(c.requestRun('ghost')).toEqual({ ok: false, error: 'no schedule named ghost in hydra.toml' })
+    finish('fresh', 1, 'done', undefined, w.spawns[1].pid)
+    at('2026-11-04T10:00:30-08:00'); await c.tick()
+    expect(c.requestMarkDone('ghost')).toEqual({ ok: false, error: 'no schedule named ghost in hydra.toml' })
+  })
+
+  test('schedules sync re-reads hydra.toml, so it sees an edit made this second', async () => {
+    let loaded = cfg()
+    const c = clock({ schedules: () => jobsFromSchedules(loaded), reloadSchedules: () => { loaded = sweep } })
+    const r = await c.requestSync()
+    expect(r).toMatchObject({ ok: true, before: [], after: [{ name: 'sweep' }] })
+  })
+
+  test('a hydra.toml that failed to load keeps every waiting launchd result owed, even with schedules standing in', async () => {
+    let ok = false
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'other', check: 'o.sh' }))), schedulesLoadedOk: () => ok })
+    const slotAt = new Date('2026-11-04T10:00:00-08:00').toISOString()
+    writeAtomic(externalFile(w.dir, 'sweep', slotAt), JSON.stringify({ slot: '2026-11-04 10:00', slotAt, at: slotAt, result: 'done', output: 'x' }))
+    at('2026-11-04T10:00:40-08:00'); await c.tick()
+    expect(existsSync(externalFile(w.dir, 'sweep', slotAt))).toBe(true)
+    ok = true                                                                     // loaded cleanly, and it doesn't name sweep
+    at('2026-11-04T10:01:40-08:00'); await c.tick()
+    expect(existsSync(externalFile(w.dir, 'sweep', slotAt))).toBe(false)
+  })
+
+  test('no schedules at all (hydra.toml not loaded yet) keeps waiting launchd results owed; a loaded config without the job drops them', async () => {
+    let loaded = cfg()
+    const c = clock({ schedules: () => jobsFromSchedules(loaded) })
+    const slotAt = new Date('2026-11-04T10:00:00-08:00').toISOString()
+    writeAtomic(externalFile(w.dir, 'sweep', slotAt), JSON.stringify({ slot: '2026-11-04 10:00', slotAt, at: slotAt, result: 'done', output: 'x' }))
+    at('2026-11-04T10:00:40-08:00'); await c.tick()
+    expect(existsSync(externalFile(w.dir, 'sweep', slotAt))).toBe(true)
+    loaded = cfg(schedule({ id: 'other', check: 'o.sh' }))
+    at('2026-11-04T10:01:40-08:00'); await c.tick()
+    expect(existsSync(externalFile(w.dir, 'sweep', slotAt))).toBe(false)
+  })
+
+  test('migrate brings no spurious run: a covered weekly slot stays covered under [schedules]', async () => {
+    toml(`[review]\nschedule = "0 11 * * FRI"\nneeds = ["internet"]\ncheck = "r.sh"\nmode = "none"\n`)
+    const review = cfg(schedule({ id: 'review', cron: '0 11 * * FRI', check: 'r.sh', needs: ["internet"] }))
+    const c = clock({ schedules: () => jobsFromSchedules(review) })
+    at('2026-11-06T10:59:00-08:00'); await c.tick()
+    at('2026-11-06T11:00:30-08:00'); await c.tick()
+    finish('review', 1, 'done', undefined, 1000)
+    at('2026-11-06T11:01:30-08:00'); await c.tick()
+    expect(state('review').covered?.slot).toBe('2026-11-06 11:00')
+    renameSync(join(w.dir, 'jobs.toml'), join(w.dir, 'jobs.toml.migrated'))
+    for (const t of ['2026-11-08T18:45:00-08:00', '2026-11-08T18:46:00-08:00']) { at(t); await c.tick() }
+    expect(w.spawns).toHaveLength(1)                                              // Fri 11/6 is not owed again
+    const restarted = clock({ schedules: () => jobsFromSchedules(review) })
+    c.stop()
+    at('2026-11-08T18:47:00-08:00'); await restarted.tick()
+    expect(w.spawns).toHaveLength(1)
+  })
+
+  test('jobs.toml gone without a migrate is still today\'s case: alerted, and its last good copy runs', async () => {
+    toml(FIVE)
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'other' }))) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()
+    rmSync(join(w.dir, 'jobs.toml'))
+    at('2026-11-04T10:00:30-08:00'); await c.tick()
+    expect(w.direct.some(([text]) => text.includes('is missing'))).toBe(true)
+    expect(w.spawns.map(s => s.args[6])).toEqual(['sweep'])
+  })
+
+  test("a schedule's failure alerts the operator, never its target", async () => {
+    const targets: string[] = []
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', to: 'ops', alertAfterMs: 0 }))), toTarget: async to => { targets.push(to); return true } })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()
+    at('2026-11-04T10:00:30-08:00'); await c.tick()
+    finish('sweep', 1, 'failed', 'boom', 1000)
+    at('2026-11-04T10:01:30-08:00'); await c.tick()
+    expect(targets).toEqual([])
+    expect(w.main).toHaveLength(1)
+  })
+})
+
+describe('jobsFromSchedules', () => {
+  test('to, none, main and a per-conversation specialist; a schedule launchd cannot hold runs on the daemon', () => {
+    const jobs = jobsFromSchedules({
+      schedules: {
+        a: { id: 'a', cron: '0 6 * * *', to: 'ops', prompt: 'p', runner: 'launchd' },
+        b: { id: 'b', cron: '0 6 * * *', to: '', prompt: '', check: 'c.sh', cwd: '/srv', envFile: '/srv/.env', runner: 'launchd' },
+        c: { id: 'c', cron: '0 6 * * *', to: 'main', prompt: 'p', runner: 'daemon' },
+        d: { id: 'd', cron: '0 * * * *', to: 'review', prompt: '', check: 'r.sh', runner: 'launchd' },
+        e: { id: 'e', cron: '*/2 9-17 * * 1-5', to: '', prompt: '', check: 'e.sh', runner: 'launchd' },
+      },
+      specialists: { review: { sessions: 'per-conversation' } as HydraConfig['specialists'][string] },
+    })
+    expect(jobs.map(j => [j.name, j.runner, j.target, j.alertAfterMs])).toEqual([
+      ['a', 'launchd', { to: 'ops' }, 0],
+      ['b', 'launchd', undefined, 0],
+      ['c', 'daemon', { to: 'main' }, 86_400_000],
+      ['d', 'launchd', { to: 'review', conversation: true }, 0],
+      ['e', 'daemon', undefined, 86_400_000],
+    ])
+    expect(jobs[1]).toMatchObject({ check: 'c.sh', cwd: '/srv', envFile: '/srv/.env', fromSchedule: true })
+    expect(jobs[4]).toMatchObject({ runnerFrom: 'schedule' })
+    expect(jobs[0].prompt).toBe('p')
+    expect(jobs[1].prompt).toBeUndefined()
+  })
 })

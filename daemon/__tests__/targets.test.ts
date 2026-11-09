@@ -411,3 +411,28 @@ describe('specialists.json', () => {
     }
   })
 })
+
+describe('hydra deliver --conversation: a per-conversation specialist opens that conversation (a schedule run)', () => {
+  const cli = (params: Record<string, unknown>) => handleCLIRequest({ type: 'cli', command: 'deliver', id: `tg-conv-${++n}`, params } as CLIRequest)
+  const CFG = `operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.rev]\nworkdir = "/w"\nprompt = "Weekly review."\nhome = "777"\nsessions = "per-conversation"\nidle = "4d"\n[specialists.shared]\nworkdir = "/w"\nprompt = "k"\n`
+
+  test("its own session, a fresh thread in the specialist's home, run as the sender (jobs:<name>); the same key reaches it again", async () => {
+    _setHydraConfigForTesting(hydra(CFG))
+    const conversation = 'clock:jobs-rev-2026-11-13T19:00:00.000Z'
+    const r = await cli({ to: 'rev', conversation, message: 'Check output:\nweek 45', initiator: 'jobs:rev' })
+    expect(r).toMatchObject({ ok: true, data: { sessionName: 'rev_clock-jobs-rev-2026-11-13t19-00-00-000z' } })
+    expect(spawns[0][0]).toBe('Weekly review.')                                   // the prompt first; the check output follows
+    expect(spawns[0][1]).toBe('777')
+    expect(spawns[0][3]).toMatchObject({ initiator: 'jobs:rev' })
+    expect(await cli({ to: 'rev', conversation, message: 'again', initiator: 'jobs:rev' })).toMatchObject({ ok: true })
+    expect(spawns).toHaveLength(1)
+  })
+
+  test('refused without --to, for a shared specialist, or with no key', async () => {
+    _setHydraConfigForTesting(hydra(CFG))
+    expect(await cli({ thread: '1', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to <specialist>' })
+    expect(await cli({ to: 'rev', conversation: '', message: 'm' })).toMatchObject({ ok: false, error: '--conversation <key> goes with --to <specialist>' })
+    expect(await cli({ to: 'shared', conversation: 'clock:x', message: 'm' })).toMatchObject({ ok: false, error: "shared isn't a per-conversation specialist in hydra.toml, so it has no conversations to open" })
+    expect(spawns).toHaveLength(0)
+  })
+})

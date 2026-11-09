@@ -172,6 +172,35 @@ describe('jobs launchd-run: what the plist runs', () => {
     expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'done', output: 'CVE-1' })
   })
 
+  test('[schedules]: the job comes from what the daemon last loaded, while that is as new as hydra.toml', async () => {
+    const job = { name: 'scan', schedule: '0 * * * *', check: 's.sh', runner: 'launchd', runnerFrom: 'job', alertAfterMs: 0, fromSchedule: true }
+    mkdirSync(dirname(daemonFile(dir)), { recursive: true })
+    writeFileSync(join(dir, 'hydra.toml'), 'not toml at all [')   // older than the record: not read
+    writeFileSync(daemonFile(dir), JSON.stringify({ scheduleJobs: [job], scheduleJobsAt: new Date(Date.now() + 60_000).toISOString() }))
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
+    expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'done', output: 'CVE-1' })
+    expect(await jobsLaunchdRun('test', 'other', dir)).toBe(0)                    // not one of them: nothing runs
+    expect(checks).toBe(1)
+  })
+
+  test('[schedules] right after migrate (no daemon record yet), or edited since: read from hydra.toml; one that fails to load falls back', async () => {
+    writeFileSync(join(dir, 'jobs.toml.migrated'), '')
+    mkdirSync(dirname(daemonFile(dir)), { recursive: true })
+    writeFileSync(daemonFile(dir), JSON.stringify({ lastGoodConfig: '[old]' }))   // migrated: the daemon hasn't ticked since
+    writeFileSync(join(dir, 'hydra.toml'), 'operator = "op"\n[people.op]\nids = ["discord:1"]\n[schedules.scan]\ncron = "0 * * * *"\ncheck = "s.sh"\n')
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
+    expect(checks).toBe(1)
+    const stale = { name: 'scan', schedule: '0 * * * *', check: 'gone.sh', runner: 'daemon', runnerFrom: 'job', alertAfterMs: 0 }
+    writeFileSync(daemonFile(dir), JSON.stringify({ lastGoodConfig: '[old]', scheduleJobs: [stale], scheduleJobsAt: '2020-01-01T00:00:00Z' }))
+    rmSync(externalFile(dir, 'scan', slot))
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)                     // hydra.toml is newer: launchd, s.sh
+    expect(checks).toBe(2)
+    writeFileSync(join(dir, 'hydra.toml'), 'broken [')
+    rmSync(externalFile(dir, 'scan', slot))
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)                     // the record: a daemon job, not launchd's to run
+    expect(checks).toBe(2)
+  })
+
   test('a failed check is left as a failed result and exits 1', async () => {
     writeFileSync(join(dir, 'jobs.toml'), '[scan]\nschedule="0 * * * *"\ncheck="s.sh"\nmode="none"\n')
     jobsIO.check = async () => ({ code: 3, out: '', err: 'boom' })
