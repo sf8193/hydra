@@ -154,7 +154,9 @@ describe('hydra config add', () => {
 
 describe('hydra config add, concurrently', () => {
   test('six setups at once, beside a people add: every one that says added is in the file, the same fragment twice lands once', async () => {
+    // The CLI loads with the real environment: the workdir must be a folder that exists on any machine.
     const d = at(LIVE)
+    writeFileSync(join(d, 'hydra.toml'), LIVE.replaceAll('~/Documents/ledger-agent-system', d), { mode: 0o600 })
     const root = join(import.meta.dir, '..', '..')
     const frags = [2, 3, 4, 5, 5, 6].map((n, i) => { const f = join(d, `frag${i}.toml`); writeFileSync(f, `[schedules.s${n}]\ncron = "${n} * * * *"\ncheck = "/bin/true"\n`); return { n, f } })
     const run = (args: string[]) => Bun.spawn(['bun', join(root, 'cli', 'hydra.ts'), '--state-dir', d, ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe', env: { ...process.env, HYDRA_NO_LAUNCHD: '1' } })
