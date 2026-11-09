@@ -274,7 +274,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       .filter(([k]) => !((k === 'prompt' || k === 'prompt_file') && (own.prompt !== undefined || own.prompt_file !== undefined)))
       .map(([k, v]) => [k, fillId(v, id)]))
     const t: Table = { ...inherited, ...own }
-    const at = (k: string) => k in own ? `${path}.${k}` : `${path}.${k} (from defaults.specialist)`
+    const at = (k: string) => has(own, k) ? `${path}.${k}` : `${path}.${k} (from defaults.specialist)`
 
     const workdirRaw = str(t, 'workdir', path)
     let workdir = ''
@@ -286,7 +286,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     }
     const prompt = str(t, 'prompt', path)
     const promptFileRaw = str(t, 'prompt_file', path)
-    const promptFile = promptFileRaw === undefined ? undefined : isAbsolute(expand(promptFileRaw)) ? expand(promptFileRaw) : join(workdir, promptFileRaw)
+    const underWorkdir = (p: string) => isAbsolute(expand(p)) ? expand(p) : join(workdir, p)
+    const promptFile = promptFileRaw === undefined ? undefined : underWorkdir(promptFileRaw)
 
     const listens: Place[] = []
     for (const [i, rawPlace] of (strList(t, 'listens', path) ?? []).entries()) {
@@ -317,6 +318,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
     const envFile = str(t, 'env_file', path)
     const home = str(t, 'home', path)
+    // A place, or a thread or channel by its platform id.
+    if (home !== undefined && !normalizePlace(home) && !/^\d+$/.test(home)) error(at('home'), `"${home}" must be a place (slack:#channel, discord:#channel, …) or a thread id`)
     const model = str(t, 'model', path)
     const engine = oneOf(t, 'engine', path, ENGINES)
     specialists[id] = {
@@ -327,10 +330,10 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       ...(prompt !== undefined && { prompt }),
       ...(promptFile !== undefined && { promptFile }),
       ...(idleMs !== undefined && { idleMs }),
-      ...(home !== undefined && { home }),
+      ...(home !== undefined && { home: normalizePlace(home) ?? home }),
       ...(model !== undefined && { model }),
       ...(engine !== undefined && { engine }),
-      ...(envFile !== undefined && { envFile: expand(envFile) }),
+      ...(envFile !== undefined && { envFile: underWorkdir(envFile) }),
     }
   }
   // `main` is the built-in specialist: a valid target, never declared, never in `listens`.
@@ -374,14 +377,19 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     else if (to !== undefined && !isTarget(to)) error(`${path}.to`, `no specialist "${to}"`)
     const prompt = t.prompt === '' ? '' : str(t, 'prompt', path) ?? ''
     const check = str(t, 'check', path)
-    const cwd = str(t, 'cwd', path)
-    const envFile = str(t, 'env_file', path)
+    const cwdRaw = str(t, 'cwd', path)
+    const cwd = cwdRaw === undefined ? undefined : expand(cwdRaw)
+    if (cwd !== undefined && !isAbsolute(cwd)) error(`${path}.cwd`, `"${cwdRaw}" must be an absolute path or start with ~`)
+    // Relative to the schedule's cwd, as prompt_file and env_file are to a specialist's workdir.
+    const envFileRaw = str(t, 'env_file', path)
+    const envFile = envFileRaw === undefined ? undefined : isAbsolute(expand(envFileRaw)) ? expand(envFileRaw) : cwd && isAbsolute(cwd) ? join(cwd, envFileRaw) : undefined
+    if (envFileRaw !== undefined && envFile === undefined) error(`${path}.env_file`, `"${envFileRaw}" is relative, so it needs an absolute cwd`)
     schedules[id] = {
       id, cron: cron ?? '', to: to ?? '', prompt,
       runner: oneOf(t, 'runner', path, ['launchd', 'daemon'] as const) ?? 'launchd',
       ...(check !== undefined && { check }),
-      ...(cwd !== undefined && { cwd: expand(cwd) }),
-      ...(envFile !== undefined && { envFile: expand(envFile) }),
+      ...(cwd !== undefined && { cwd }),
+      ...(envFile !== undefined && { envFile }),
     }
   }
 
@@ -423,7 +431,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   // A rule for everyone at a place is checked before `listens`, so the place's listener never hears it there.
   for (const [i, r] of rules.entries()) {
     const heard = listener.get(r.at)
-    if (r.from === undefined && heard && heard !== r.to) warn(`rules[${i}]`, `takes every message at ${r.at}, so ${heard}, which listens there, never hears it`)
+    if (senders(r.from) === 'everyone' && heard && heard !== r.to) warn(`rules[${i}]`, `takes every message at ${r.at}, so ${heard}, which listens there, never hears it`)
   }
 
   // --- guard (checked now, run by a later step) ----------------------------------------------------------------------

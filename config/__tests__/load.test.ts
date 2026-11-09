@@ -287,6 +287,27 @@ describe('found in review', () => {
   })
 })
 
+describe('found in the second review', () => {
+  test('a rule from anyone takes the place from its listener too', () => {
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nat = "slack:#y"\nfrom = "anyone"\nto = "crm"\n`).warnings)
+      .toEqual(['rules[0]: takes every message at slack:#y, so ops, which listens there, never hears it'])
+  })
+  test('relative paths resolve under the workdir, or the schedule\'s cwd, or are refused', () => {
+    const { config } = ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nenv_file = ".env"\n[schedules.a]\ncron = "@daily"\nto = "ops"\ncwd = "~/jobs"\nenv_file = "a.env"\n`)
+    expect(config.specialists.ops.envFile).toBe('/home/op/agents/ops/.env')
+    expect(config.schedules.a).toMatchObject({ cwd: '/home/op/jobs', envFile: '/home/op/jobs/a.env' })
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n[schedules.a]\ncron = "@daily"\nto = "ops"\ncwd = "jobs"\n[schedules.b]\ncron = "@daily"\nto = "ops"\nenv_file = "b.env"\n`)).toEqual([
+      'schedules.a.cwd: "jobs" must be an absolute path or start with ~',
+      'schedules.b.env_file: "b.env" is relative, so it needs an absolute cwd',
+    ])
+  })
+  test('home is a place or a thread id', () => {
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["cli"]\nhome = "discord:#ops"\n`).config.specialists.ops.home).toBe('discord:#ops')
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["cli"]\nhome = "1234567890"\n`).config.specialists.ops.home).toBe('1234567890')
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["cli"]\nhome = "my channel"\n`)).toEqual(['specialists.ops.home: "my channel" must be a place (slack:#channel, discord:#channel, …) or a thread id'])
+  })
+})
+
 describe('load warnings', () => {
   test('a rule for everyone at a place takes it from its listener', () => {
     expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nat = "slack:#y"\nto = "crm"\n`).warnings)

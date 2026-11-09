@@ -32,6 +32,9 @@ export function watchHydraConfig(opts: WatchOpts): HydraConfigWatch {
   let config: HydraConfig = EMPTY_CONFIG
   let lastText: string | undefined
   let lastAlert: string | undefined
+  /** Whether lastText loaded. A failed load is retried on every read, even with the same text: a missing workdir or
+   * guard is fixed on the machine, not in the file. */
+  let lastOk = false
 
   const read = (): string => {
     try { return readFileSync(opts.path, 'utf8') } catch (e) {
@@ -50,21 +53,24 @@ export function watchHydraConfig(opts: WatchOpts): HydraConfigWatch {
       alert(message)
       return { ok: false, errors: [{ path: '', message }], warnings: [] }
     }
-    if (text === lastText) return undefined
+    if (text === lastText && lastOk) return undefined
     // A save that truncates and then writes, or replaces by delete-then-create, can be read in between. A file that goes
     // empty or missing is read once more before that empties the config.
     if (text.trim() === '' && lastText?.trim() && !confirmEmpty) {
-      confirmEmpty = setTimeout(() => { reload(); confirmEmpty = undefined }, EMPTY_CONFIRM_MS)
+      confirmEmpty = setTimeout(() => { try { reload() } finally { confirmEmpty = undefined } }, EMPTY_CONFIRM_MS)
       return undefined
     }
+    const emptied = text.trim() === '' && !!lastText?.trim()
     lastText = text
     const result = loadHydraConfig(text, opts.env)
+    lastOk = result.ok
     if (result.ok) {
       config = result.config
       lastAlert = undefined
       opts.onLoad?.(config, result.warnings)
+      if (emptied) alert('hydra.toml is empty or missing now, so the empty config is live: no people, specialists or connectors until it is restored.')
     } else {
-      alert(`hydra.toml didn't load, so the last good config stays:\n${formatIssues(result.errors)}`)
+      alert(`hydra.toml didn't load, so the last good config stays. It is retried every read, so fixing the file or the machine is enough:\n${formatIssues(result.errors)}`)
     }
     return result
   }

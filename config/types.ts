@@ -50,10 +50,11 @@ export type Specialist = {
   max: number
   /** End a session after this long without activity, and resume on the next message. Absent: never. */
   idleMs?: number
-  /** Where you watch it, and where replies with no conversation go. Absent: a new thread in the operator's channel. */
+  /** Where you watch it, and where replies with no conversation go: a place or a thread id. Absent: a new thread in the operator's channel. */
   home?: string
   model?: string
   engine?: 'claude' | 'codex' | 'omp'
+  /** `~` expanded; a relative path is under `workdir`. */
   envFile?: string
   /** Old ids, so a rename keeps its thread, session and owed messages. */
   was: string[]
@@ -87,7 +88,7 @@ export type Schedule = {
   prompt: string
   /** A script run first: empty output sends nothing; its output is appended. */
   check?: string
-  /** `~` expanded, as is `envFile`. */
+  /** Absolute, `~` expanded. A relative `envFile` is under it. */
   cwd?: string
   envFile?: string
   runner: 'launchd' | 'daemon'
