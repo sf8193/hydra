@@ -106,8 +106,9 @@ export const attemptIO = {
 
 /**
  * One run of a job's work, detached from the daemon. Reads the job definition on stdin (it never reads jobs.toml),
- * writes one result file, and never touches job state. At its deadline, or on SIGTERM, it writes its result first and
- * then kills its own group, so no grandchild of the check outlives the dispatch.
+ * writes one result file, and never touches job state. However it ends (done, at its deadline, on SIGTERM) it writes
+ * its result first and then kills its own group, so no grandchild of the check outlives the dispatch: a timed-out
+ * check's shell is killed, not what it started.
  */
 export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null> {
   let written: AttemptResult | null = null
@@ -134,6 +135,7 @@ export async function jobsAttempt(o: AttemptArgs): Promise<AttemptResult | null>
   // The done result is written the moment the action lands: a cancel or a crash after that can't turn it into a rerun.
   const w = await runWork(job, o.stateDir, key, () => { actionSent = true; write('done') })
   write(w.result, w.note)
+  attemptIO.killOwnGroup()
   return written
 }
 

@@ -244,9 +244,17 @@ describe('the attempt (in process)', () => {
 
   test('the action landed: done is on disk at once, and a later SIGTERM or deadline does nothing', async () => {
     await jobsAttempt(opts())
+    expect(killed).toBe(1)   // the attempt's own end
     sigterm(); timers[0].fn()
     expect(result().result).toBe('done')
-    expect(killed).toBe(0)
+    expect(killed).toBe(1)
+  })
+
+  test("a check that timed out: the failed result is written, then the group goes, so the check's children don't outlive it", async () => {
+    jobsIO.check = async () => ({ code: 124, out: '', err: 'timed out after 1800s' })
+    await jobsAttempt(opts())
+    expect(result()).toMatchObject({ result: 'failed', note: 'check exited 124: timed out after 1800s' })
+    expect(killed).toBe(1)
   })
 
   test('stdin that is not this job ends the attempt without a result', async () => {
