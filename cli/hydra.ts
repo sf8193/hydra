@@ -11,6 +11,7 @@ import {
 } from './lifecycle.js'
 import { peek } from './peek.js'
 import { migrateCommand } from './migrate.js'
+import { peopleCommand } from './people.js'
 import { readBootRefusal } from './boot-refusal.js'
 import { bootRefusal } from '../config/migrate.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
@@ -88,6 +89,9 @@ Config:
   hydra migrate [<platform>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom, specialists.json and slack-watch.json,
                                        keeping each file it changes or retires as *.migrated; --dry-run prints it and writes
                                        nothing. Stop the daemon first; an interrupted run is finished by running it again
+
+  hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]
+                                       add a person to hydra.toml's roster (appended; written only if it loads)
 
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>] [--idle <30m|4h|1d>]
@@ -200,6 +204,11 @@ async function main(): Promise<void> {
       process.exit(1)
     }
     process.exit(0)
+  }
+
+  if (command === 'people') {
+    if (daemonName) { console.error('error: people takes --state-dir <dir>, not --daemon'); process.exit(1) }
+    process.exit(peopleCommand(filtered.slice(1), stateDirOpt))
   }
 
   if (command === 'migrate') {
