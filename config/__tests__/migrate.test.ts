@@ -1,8 +1,8 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { accessStep, applyMigrate, mergeDocs, planMigrate, specialistsStep, toToml, type MigrateInput } from '../migrate.js'
+import { accessStep, applyMigrate, finishMigrate, mergeDocs, planMigrate, specialistsStep, toToml, type MigrateInput } from '../migrate.js'
 import { loadHydraConfig } from '../load.js'
 import type { LoadEnv } from '../types.js'
 
@@ -65,7 +65,7 @@ describe('hydra migrate', () => {
   test('a result that doesn\'t load is refused: specialists with no allowFrom have no operator', () => {
     const plan = planMigrate(state({ 'specialists.json': SPECIALISTS }))
     expect(plan.ok).toBe(false)
-    if (!plan.ok) expect(plan.errors[0]).toContain('operator: is required')
+    if (!plan.ok) expect(plan.errors[0]).toContain('no operator')
     expect(existsSync(join(dir, 'hydra.toml'))).toBe(false)
     expect(existsSync(join(dir, 'specialists.json'))).toBe(true)
   })
@@ -81,6 +81,75 @@ describe('hydra migrate', () => {
     applyMigrate(dir, plan)
     expect(accessStep.pending(dir)).toBe(false)
     expect(specialistsStep.pending(dir)).toBe(false)
+  })
+})
+
+describe('hydra migrate: found in review', () => {
+  const okPlan = (input: MigrateInput) => { const p = planMigrate(input); if (!p.ok) throw new Error(p.errors.join('\n')); return p }
+  const endState = () => Object.fromEntries(readdirSync(dir).sort().map(f => [f, read(f)]))
+
+  test('never writes a hydra.toml without an operator', () => {
+    expect(planMigrate(state({ 'access.json': { allowFrom: ['U012ABCDEF'] } }))).toMatchObject({ ok: false, errors: [expect.stringContaining('no allowFrom id is a discord user id')] })
+    expect(existsSync(join(dir, 'hydra.toml'))).toBe(false)
+    expect(planMigrate(state({ 'access.json': { allowFrom: [] }, 'specialists.json': { ops: { kickoff: 'k' } } }))).toMatchObject({ ok: false, errors: [expect.stringContaining('no operator')] })
+  })
+
+  test('allowFrom ids are trimmed and deduplicated, numbers taken as ids; no false note', () => {
+    const plan = okPlan(state({ 'access.json': { allowFrom: [' 100000000000000001', '100000000000000001', 100000000000000002] } }))
+    expect(plan.text).toContain('[people.operator]\nids = ["discord:100000000000000001"]')
+    expect(plan.notes.filter(n => n.includes('isn\'t the operator'))).toHaveLength(1)
+  })
+
+  test('a crash before the commit point leaves the old state working; running again completes it', () => {
+    const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
+    applyMigrate(dir, okPlan(input), { stopAfter: 'stage' })
+    expect(existsSync(join(dir, 'hydra.toml'))).toBe(false)
+    expect(JSON.parse(read('access.json'))).toEqual(ACCESS)
+    applyMigrate(dir, okPlan(input))
+    const once = endState()
+    expect(Object.keys(once)).toEqual(['access.json', 'access.json.migrated', 'hydra.toml', 'specialist-threads.json', 'specialists.json.migrated'])
+  })
+
+  test('a crash after the commit point is finished, not planned again, and ends the same', () => {
+    const clean = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
+    applyMigrate(dir, okPlan(clean))
+    const want = endState()
+    const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
+    applyMigrate(dir, okPlan(input), { stopAfter: 'journal' })
+    expect(planMigrate(input)).toMatchObject({ ok: false, errors: [expect.stringContaining('interrupted after it committed')] })
+    expect(finishMigrate(dir)).toBe(true)
+    expect(endState()).toEqual(want)
+    expect(finishMigrate(dir)).toBe(false)
+  })
+
+  test('state files are written 0600, as the daemon writes them', () => {
+    const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
+    applyMigrate(dir, okPlan(input))
+    for (const f of readdirSync(dir)) expect((statSync(join(dir, f)).mode & 0o777).toString(8)).toBe('600')
+  })
+
+  test('existing pointers are merged (newer wins) and backed up; a different backup is never overwritten', () => {
+    const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS, 'specialist-threads.json': { ops: { threadId: '1234', updatedAt: 99 }, desk: { threadId: '777', updatedAt: 1 } } })
+    const plan = okPlan(input)
+    expect(JSON.parse(plan.writes['specialist-threads.json'])).toEqual({ ops: { threadId: '1234', updatedAt: 99 }, desk: { threadId: '777', updatedAt: 1 } })
+    expect(plan.writes['specialist-threads.json.migrated']).toBeDefined()
+    writeFileSync(join(dir, 'access.json.migrated'), '{"older":true}')
+    expect(planMigrate(input)).toMatchObject({ ok: false, errors: [expect.stringContaining('access.json.migrated already exists with other content')] })
+  })
+
+  test('a relative kickoffFile is made absolute from the old daemon\'s folder; an unnameable channel is left out, both with a note', () => {
+    const input = state({ 'access.json': { allowFrom: ['U0OP'] }, 'specialists.json': { ops: { kickoffFile: 'prompts/k.md', channel: 'D0123ABC' } } })
+    const plan = okPlan({ ...input, platform: 'slack', daemonCwd: '/opt/hydra' })
+    expect(plan.text).toContain('prompt_file = "/opt/hydra/prompts/k.md"')
+    expect(plan.text).not.toContain('home =')
+    expect(plan.notes.join('\n')).toContain('was relative to the daemon\'s folder')
+    expect(plan.notes.join('\n')).toContain('channel D0123ABC isn\'t a channel hydra.toml can name')
+  })
+
+  test('kickoffs with DEL or a lone surrogate still write TOML that loads', () => {
+    const plan = okPlan(state({ 'access.json': ACCESS, 'specialists.json': { ops: { kickoff: 'a\u007fb\ud800c' } } }))
+    const loaded = loadHydraConfig(plan.text, env)
+    expect(loaded.ok && loaded.config.specialists.ops.prompt).toBe('a\u007fb\ufffdc')
   })
 })
 

@@ -81,7 +81,8 @@ Deliver (whisper channel — message to session context, not thread):
 
 Config:
   hydra migrate [<platform>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom and specialists.json,
-                                       keeping each retired file as *.migrated; --dry-run prints it and writes nothing
+                                       keeping each file it changes or retires as *.migrated; --dry-run prints it and writes
+                                       nothing. Stop the daemon first; an interrupted run is finished by running it again
 
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>] [--idle <30m|4h|1d>]
@@ -195,7 +196,7 @@ async function main(): Promise<void> {
   if (command === 'migrate') {
     if (daemonName) { console.error('error: migrate takes --state-dir <dir> or a platform, not --daemon'); process.exit(1) }
     const platform = filtered.slice(1).find(a => !a.startsWith('-'))
-    process.exit(migrateCommand({ platform, stateDir: stateDirOpt, dryRun: filtered.includes('--dry-run') }))
+    process.exit(await migrateCommand({ platform, stateDir: stateDirOpt, dryRun: filtered.includes('--dry-run') }))
   }
 
   // Lifecycle commands

@@ -117,14 +117,6 @@ describe('specialists declared in hydra.toml', () => {
     }
   })
 
-  test('switching to hydra.toml re-reads the pointers hydra migrate wrote while this daemon ran', () => {
-    // Booted with no pointer file; migrate then writes it, and hydra.toml appears.
-    writeFileSync(threads, JSON.stringify({ ops: { threadId: '900', updatedAt: 7 } }))
-    _setHydraConfigForTesting(config(declared('ops', { prompt: 'p' })))
-    expect(getSpecialist('ops')?.threadId).toBe('900')
-    expect(specialistForThread('900')).toBe('ops')
-  })
-
   test('declaring or removing by hand is refused: hydra.toml is where recipes live', () => {
     _setHydraConfigForTesting(config(declared('ops')))
     expect(() => setSpecialist('ops', { channel: 'C1', kickoff: 'k' })).toThrow('declared in hydra.toml')

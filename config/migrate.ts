@@ -5,10 +5,10 @@
 // join as their own steps.
 
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { isAbsolute, join, resolve } from 'path'
 import { parseIdleTtl } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
-import { loadHydraConfig, normalizeAddress, formatIssues } from './load.js'
+import { loadHydraConfig, normalizeAddress, normalizePlace, formatIssues } from './load.js'
 import type { ConfigIssue, LoadEnv } from './types.js'
 
 export const HYDRA_TOML = 'hydra.toml'
@@ -21,6 +21,8 @@ export type MigrateInput = {
   /** The folder sessions spawn in today: a migrated specialist's workdir. */
   spawnCwd: string
   platform: 'discord' | 'slack'
+  /** Where the old daemon ran, which its relative paths (a kickoffFile) were read from. Default: as written. */
+  daemonCwd?: string
 }
 
 type Doc = Record<string, unknown>
@@ -52,8 +54,8 @@ function allowFromOf(stateDir: string): { raw: Doc; allowFrom: string[] } | unde
   if (!existsSync(path)) return undefined
   const raw = readJson(path)
   if (!isTable(raw)) throw new Error('access.json is not a JSON object')
-  const allowFrom = Array.isArray(raw.allowFrom) ? raw.allowFrom.filter((x): x is string => typeof x === 'string') : []
-  return { raw, allowFrom }
+  const ids = Array.isArray(raw.allowFrom) ? raw.allowFrom.map(x => typeof x === 'number' ? String(x) : x).filter((x): x is string => typeof x === 'string').map(x => x.trim()).filter(Boolean) : []
+  return { raw, allowFrom: [...new Set(ids)] }
 }
 
 export const accessStep: MigrateStep = {
@@ -75,7 +77,9 @@ export const accessStep: MigrateStep = {
       if (operator === undefined) operator = personId
       else notes.push(`${address} (now people.${personId}) was in allowFrom but isn't the operator: they no longer reach main by DM or use admin commands. Route their DMs to a specialist, or make them the operator.`)
     })
-    if (operator) notes.unshift(`allowFrom's first id is the operator, as people.operator; rename the id if you like (and update operator =).`)
+    // Never write a hydra.toml with no operator: allowFrom would be gone and nobody would pass admin checks.
+    if (!operator) throw new Error(`no allowFrom id is a ${platform} user id (${found.allowFrom.join(', ')}); is this a ${platform} state dir?`)
+    notes.unshift(`allowFrom's first id is the operator, as people.operator; rename the id if you like (and update operator =).`)
     // B1 retires only allowFrom: the rest of access.json (DM policy, groups, pending codes) stays until places replace it.
     const { allowFrom: _gone, ...rest } = found.raw
     return {
@@ -97,7 +101,7 @@ type OldSpecialist = { threadId?: string; channel?: string; kickoff?: string; ki
 export const specialistsStep: MigrateStep = {
   name: 'specialists.json',
   pending: stateDir => existsSync(join(stateDir, 'specialists.json')),
-  run({ stateDir, env, spawnCwd }) {
+  run({ stateDir, env, spawnCwd, platform, daemonCwd }) {
     const path = join(stateDir, 'specialists.json')
     if (!existsSync(path)) return undefined
     const raw = readJson(path)
@@ -112,15 +116,23 @@ export const specialistsStep: MigrateStep = {
       const s = value as OldSpecialist
       const spec: Doc = { workdir: spawnCwd }
       // kickoffFile won over kickoff in specialists.json.
-      if (s.kickoffFile) spec.prompt_file = s.kickoffFile
-      else if (s.kickoff) spec.prompt = s.kickoff
+      if (s.kickoffFile) {
+        // hydra.toml reads a relative prompt_file under the workdir; the old daemon read it from its own cwd.
+        const absolute = isAbsolute(s.kickoffFile) || s.kickoffFile.startsWith('~') || !daemonCwd ? s.kickoffFile : resolve(daemonCwd, s.kickoffFile)
+        if (absolute !== s.kickoffFile) notes.push(`specialist "${name}": kickoffFile ${s.kickoffFile} was relative to the daemon's folder; written as ${absolute}`)
+        spec.prompt_file = absolute
+      } else if (s.kickoff) spec.prompt = s.kickoff
       if (s.model) spec.model = s.model
       if (s.idle) {
         if (parseIdleTtl(s.idle) !== null) spec.idle = s.idle
         else notes.push(`specialist "${name}": idle "${s.idle}" isn't a duration hydra.toml takes; left out`)
       }
-      // A channel id is where its threads open. Digits stand alone; a Slack id is written as a place.
-      if (s.channel) spec.home = /^\d+$/.test(s.channel) ? s.channel : `slack:${s.channel}`
+      // A channel id is where its threads open. Digits stand alone; any other id is written as a place on this platform.
+      if (s.channel) {
+        const home = /^\d+$/.test(s.channel) ? s.channel : normalizePlace(`${platform}:${s.channel}`)
+        if (home) spec.home = home
+        else notes.push(`specialist "${name}": channel ${s.channel} isn't a channel hydra.toml can name; left out, so its new threads open in the operator's channel`)
+      }
       specialists[name] = spec
       if (s.threadId) pointers[name] = { threadId: s.threadId, updatedAt: s.updatedAt ?? Date.now() }
     }
@@ -128,12 +140,21 @@ export const specialistsStep: MigrateStep = {
       notes.push(`each specialist's workdir is ${spawnCwd}, where sessions start today; point it at the specialist's own folder when it has one.`)
       notes.push('a "nobody can reach it" warning counts only listens, rules and schedules: hydra deliver and jobs still reach these specialists as before.')
     }
-    return {
-      doc: { specialists },
-      consumed: ['specialists.json'],
-      notes,
-      writes: { [SPECIALIST_THREADS]: JSON.stringify(pointers, null, 2) + '\n' },
+    // Pointers already here (a hydra.toml tried earlier) are kept; per name, the more recently updated one wins.
+    const writes: Record<string, string> = {}
+    const existingPath = join(stateDir, SPECIALIST_THREADS)
+    if (existsSync(existingPath)) {
+      const text = readFileSync(existingPath, 'utf8')
+      const existing = readJson(existingPath)
+      if (!isTable(existing)) throw new Error(`${SPECIALIST_THREADS} is not a JSON object`)
+      for (const [name, p] of Object.entries(existing as Record<string, { threadId: string; updatedAt?: number }>)) {
+        if (!pointers[name] || (p.updatedAt ?? 0) > pointers[name].updatedAt) pointers[name] = { threadId: p.threadId, updatedAt: p.updatedAt ?? 0 }
+      }
+      writes[`${SPECIALIST_THREADS}.migrated`] = text
+      notes.push(`${SPECIALIST_THREADS} already existed: merged with the migrated threads (the newer wins per specialist), kept as ${SPECIALIST_THREADS}.migrated`)
     }
+    writes[SPECIALIST_THREADS] = JSON.stringify(pointers, null, 2) + '\n'
+    return { doc: { specialists }, consumed: ['specialists.json'], notes, writes }
   },
 }
 
@@ -222,7 +243,8 @@ function lookAlikes(people: Record<string, PersonDoc>): string[] {
 const ORDER = ['operator', 'connectors', 'people', 'defaults', 'specialists', 'places', 'schedules', 'rules', 'guard']
 const key = (k: string) => /^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k)
 const value = (v: unknown): string => {
-  if (typeof v === 'string') return JSON.stringify(v) // a JSON string is a valid TOML basic string
+  // A JSON string is a TOML basic string, once DEL is escaped and a lone surrogate (not Unicode) is replaced.
+  if (typeof v === 'string') return JSON.stringify(v.toWellFormed()).replace(/\x7f/g, '\\u007f')
   if (typeof v === 'number' || typeof v === 'boolean') return String(v)
   if (Array.isArray(v)) return `[${v.map(value).join(', ')}]`
   throw new Error(`can't write ${JSON.stringify(v)} as a TOML value`)
@@ -263,9 +285,13 @@ export type MigratePlan =
 
 /** Everything `hydra migrate` would do, without writing. */
 export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): MigratePlan {
+  if (existsSync(join(input.stateDir, MIGRATE_JOURNAL))) return { ok: false, errors: ['a migration was interrupted after it committed: run hydra migrate again to finish it'] }
   const toml = join(input.stateDir, HYDRA_TOML)
   if (existsSync(toml) && readFileSync(toml, 'utf8').trim()) {
-    return { ok: false, errors: [`${toml} already has content: hydra migrate writes it only once. To start over, move it aside and run it again.`] }
+    const pending = steps.filter(s => s.pending(input.stateDir)).map(s => s.name)
+    return { ok: false, errors: [pending.length
+      ? `${toml} already has content, and ${pending.join(', ')} is still here (hydra.toml written by hand?). Move hydra.toml aside and run hydra migrate again.`
+      : `${toml} already has content and nothing is left to migrate: this state dir is migrated.`] }
   }
   const unhandled = UNHANDLED.filter(f => existsSync(join(input.stateDir, f)))
   if (unhandled.length) {
@@ -285,6 +311,8 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
   if (!outputs.length) return { ok: false, errors: ['nothing to migrate: no allowFrom in access.json and no specialists.json'] }
   const merged = mergeDocs(outputs.map(o => o.doc))
   if (merged.conflicts.length) return { ok: false, errors: merged.conflicts.map(c => `two sources disagree on ${c}`) }
+  // A hydra.toml governs only once it names an operator; one without would retire allowFrom and leave nobody in charge.
+  if (typeof merged.doc.operator !== 'string') return { ok: false, errors: ['no operator: access.json has no allowFrom to take one from. Add an allowFrom id (or write hydra.toml by hand).'] }
   const text = toToml(merged.doc)
   const loaded = loadHydraConfig(text, input.env)
   if (!loaded.ok) return { ok: false, errors: [`the migrated hydra.toml doesn't load:\n${formatIssues(loaded.errors)}\n\n${text}`] }
@@ -294,27 +322,53 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
     writes[path] = content
   }
   const consumed = outputs.flatMap(o => o.consumed)
-  const taken = consumed.filter(f => existsSync(join(input.stateDir, `${f}.migrated`)))
-  if (taken.length) return { ok: false, errors: [`${taken.map(f => `${f}.migrated`).join(', ')} already exists; move it aside first`] }
+  for (const f of consumed) writes[`${f}.migrated`] ??= readFileSync(join(input.stateDir, f), 'utf8')
+  // A backup already here is fine when it's this same content (a rerun after an interruption); never overwrite another.
+  const clash = Object.entries(writes).filter(([f, content]) => f.endsWith('.migrated') && existsSync(join(input.stateDir, f)) && readFileSync(join(input.stateDir, f), 'utf8') !== content).map(([f]) => f)
+  if (clash.length) return { ok: false, errors: [`${clash.join(', ')} already exists with other content; move it aside first`] }
   return { ok: true, text, warnings: loaded.warnings, notes: [...outputs.flatMap(o => o.notes), ...merged.notes], consumed, writes }
 }
 
+const STAGED = '.migrating'
+/** Written once everything is staged: the commit point. While it exists, a migration is in flight. */
+export const MIGRATE_JOURNAL = 'migrate-journal.json'
+type Journal = { renames: [string, string][]; unlinks: string[] }
+
 /**
- * Carries out a clean plan. The order keeps every crash recoverable: the old files are copied to *.migrated first,
- * then the other writes (the pointers exist before hydra.toml appears, since a running daemon switches over the
- * moment it does), then hydra.toml, and only then are the consumed originals removed. Interrupted before the last
- * step, the originals are intact: move hydra.toml aside and run it again.
+ * Carries out a clean plan so that an interruption anywhere is recovered by running `hydra migrate` again.
+ * 1. Stage: each new file as <name>.migrating, and the backups (*.migrated). Nothing live has changed; a rerun
+ *    plans again from the untouched originals.
+ * 2. The journal (the commit point): the renames and removals left to do.
+ * 3. Commit: the renames (hydra.toml last), the retired files removed, the journal removed. Every step can be
+ *    repeated, so a rerun that finds the journal finishes it (finishMigrate) instead of planning again.
+ * The daemon must not be running (see the CLI).
+ * State files are written 0600, as the daemon writes them.
  */
-export function applyMigrate(stateDir: string, plan: Extract<MigratePlan, { ok: true }>): void {
+export function applyMigrate(stateDir: string, plan: Extract<MigratePlan, { ok: true }>, failpoint?: { stopAfter: 'stage' | 'journal' }): void {
   const at = (f: string) => join(stateDir, f)
-  const atomic = (f: string, content: string) => { writeFileSync(`${at(f)}.tmp`, content); renameSync(`${at(f)}.tmp`, at(f)) }
-  for (const f of plan.consumed) atomic(`${f}.migrated`, readFileSync(at(f), 'utf8'))
-  // Backups (*.migrated) first, then the rest, but never the files a running daemon reads before hydra.toml exists.
-  const entries = Object.entries(plan.writes)
-  for (const [f, content] of entries) if (f.endsWith('.migrated')) atomic(f, content)
-  for (const [f, content] of entries) if (!f.endsWith('.migrated') && f !== 'access.json') atomic(f, content)
-  atomic(HYDRA_TOML, plan.text)
-  // allowFrom is ignored once hydra.toml governs, so it goes after.
-  if ('access.json' in plan.writes) atomic('access.json', plan.writes['access.json'])
-  for (const f of plan.consumed) unlinkSync(at(f))
+  const live = { ...Object.fromEntries(Object.entries(plan.writes).filter(([f]) => !f.endsWith('.migrated'))), [HYDRA_TOML]: plan.text }
+  for (const [f, content] of Object.entries(live)) writeState(at(f + STAGED), content)
+  for (const [f, content] of Object.entries(plan.writes)) if (f.endsWith('.migrated')) writeState(at(f), content)
+  if (failpoint?.stopAfter === 'stage') return // tests: a crash before the commit point
+  const order = [...Object.keys(live).filter(f => f !== HYDRA_TOML), HYDRA_TOML]
+  const journal: Journal = { renames: order.map(f => [f + STAGED, f]), unlinks: plan.consumed }
+  writeState(at(MIGRATE_JOURNAL), JSON.stringify(journal, null, 2) + '\n')
+  if (failpoint?.stopAfter === 'journal') return // tests: a crash just after the commit point
+  finishMigrate(stateDir)
+}
+
+/** Finishes the journaled commit, if one is in flight: true when it did. */
+export function finishMigrate(stateDir: string): boolean {
+  const at = (f: string) => join(stateDir, f)
+  if (!existsSync(at(MIGRATE_JOURNAL))) return false
+  const journal = JSON.parse(readFileSync(at(MIGRATE_JOURNAL), 'utf8')) as Journal
+  for (const [from, to] of journal.renames) if (existsSync(at(from))) renameSync(at(from), at(to))
+  for (const f of journal.unlinks) if (existsSync(at(f))) unlinkSync(at(f))
+  unlinkSync(at(MIGRATE_JOURNAL))
+  return true
+}
+
+function writeState(path: string, content: string): void {
+  writeFileSync(`${path}.tmp`, content, { mode: 0o600 })
+  renameSync(`${path}.tmp`, path)
 }

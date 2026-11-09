@@ -49,8 +49,6 @@ let specialists: Map<string, Specialist> = new Map()
 
 type Pointer = { threadId: string; updatedAt: number }
 let pointers: Map<string, Pointer> = new Map()
-/** Whether the last hydra.toml load governed: the switch from specialists.json re-reads the pointers. */
-let governed = false
 
 /**
  * hydra.toml declares the specialists while it governs: it names an operator, or it has content that failed to load
@@ -248,18 +246,12 @@ export function threadLockHeld(threadId: string): boolean {
 /** Test seam: re-read specialists.json and specialist-threads.json from the current STATE_DIR. */
 export function _reloadSpecialists(): void {
   specialists = new Map()
-  governed = false
   load()
   loadPointers()
 }
 
 load()
 loadPointers()
-// Entering hydra.toml's governance re-reads the pointers: `hydra migrate` writes them just before hydra.toml appears,
-// while this daemon may be running with the (empty) store it read at boot.
 onHydraConfigLoad(config => {
-  const now = declaredInToml()
-  if (now && !governed) loadPointers()
-  governed = now
   try { reconcilePointers(config) } catch (e) { process.stderr.write(`daemon: ${(e as Error).message}\n`) }
 })
