@@ -25,13 +25,18 @@
 #                         or ~/Downloads works only if the daemon's tmux server has access there
 #                         (docs/macos-permissions.md). `jobs list` warns about such paths.
 #
-# mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
-# mode = "main"   the prompt goes to the main session
-# mode = "none"   no agent: the check runs and the result is recorded
-#
-# model = "haiku"  (spawn only) model id or alias for the spawned session; default is the daemon's default.
-# idle_ttl = "4d"  (spawn only) how long the session may go with no one posting in its thread before it is
-#                  nudged, then ended 5m later (default 30m, max 7d). Raise it when the session waits on a reply.
+# Each job has one target: where its message (prompt, then the check's output) goes.
+# to = "ops"          a specialist (hydra specialist list), "main", or a thread id. A specialist with no live
+#                     session gets one, started from its kickoff. `jobs list` flags a name that isn't declared.
+# revive = true       (to a thread id) restart the thread's session if it is gone; a specialist heals anyway.
+# spawn = { channel = "…", kickoff = "…", model = "haiku", idle = "4d" }
+#                     a fresh session every time, closed when it finishes. channel falls back to the job's, then
+#                     the top-level one. kickoff (or kickoff_file, read at each run) comes before the prompt.
+#                     model: default is the daemon's. idle: how long the session may go with no one posting in its
+#                     thread before it is nudged, then ended 5m later (default 30m, max 7d).
+# mode = "none"       no agent: the check runs and the result is recorded.
+# A prompt is optional when there is a check (or a spawn kickoff): the check's output is then the whole message.
+# Older files keep working: mode = "main" is to = "main"; mode = "spawn" (with model, idle_ttl) is spawn = { … }.
 
 runner = "launchd"
 
@@ -43,7 +48,7 @@ channel = "000000000000000000"
 # The prompt tells main to hand the reading to a cheap subagent and post only the bullets.
 [thread-digest]
 schedule = "30 7 * * *"
-mode = "main"
+to = "main"
 prompt = """Daily thread digest for Sam. Start a Haiku subagent (Agent tool, model haiku) to do the work, then post its result to Sam.
 
 Subagent steps:
@@ -59,12 +64,12 @@ Post only the bullets under a one-line heading. No session list, no tables, no "
 [dependency-scan]
 schedule = "0 6 * * *"            # 5-field cron, local time
 check = "~/scripts/dependency_scan.sh"
-mode = "spawn"
+spawn = { model = "haiku", idle = "4h" }
 prompt = "Triage the scan output below. Report only new, reachable findings."
 
 [security-digest]
 schedule = "0 9 * * MON"
-mode = "main"
+to = "main"
 prompt = "Summarize this week's security scan results for the user."
 
 [nightly-build]
@@ -72,8 +77,7 @@ schedule = "0 2 * * *"
 check = "./scripts/nightly-check.sh"
 cwd = "~/build"
 env_file = "~/build/.env"
-mode = "main"
-prompt = "Last night's build failed. Find the cause and propose a fix."
+to = "ops"                        # a specialist: the same thread, and the history, every night
 
 [log-cleanup]
 schedule = "0 1 * * *"
@@ -84,6 +88,6 @@ mode = "none"
 [weekly-review]
 runner = "daemon"
 schedule = "0 11 * * FRI"
-mode = "spawn"
+spawn = {}
 prompt = "Run the weekly review."
 needs = ["internet"]

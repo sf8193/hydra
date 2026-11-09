@@ -43,6 +43,8 @@ export type ClockDeps = {
   kill: (pid: number, signal: NodeJS.Signals) => void
   /** Hands a message to main. False if main can't take it. */
   toMain: (text: string, initiator: string) => boolean
+  /** Delivers to a job's `to` target (a specialist or a thread). False if it can't. Absent: alerts start at main. */
+  toTarget?: (to: string, text: string, initiator: string) => Promise<boolean>
   /** Posts straight to a channel (safeSend). False if it couldn't. */
   direct: (text: string, channel: string | undefined) => Promise<boolean>
   homeChannel: () => string | undefined
@@ -304,7 +306,7 @@ export class JobsClock {
       s = {
         failures: 1, failingSince: at,
         last: { at, result: 'failed', note: 'state unreadable, reset' },
-        ...(job.mode !== 'none' && slot && { covered: { slot: slot.label, at } }),
+        ...(job.target && slot && { covered: { slot: slot.label, at } }),
         ...(applied && { appliedDispatch: applied }),
       }
       this.d.log(`jobs: ${job.name}: state unreadable (${r.error}), reset`)
@@ -464,7 +466,7 @@ export class JobsClock {
       if (st.appliedExternal && slotAt <= st.appliedExternal) { drop('already applied (a replay)'); continue }
       let res: ExternalResult
       try { res = JSON.parse(readFileSync(file, 'utf8')) } catch (err) { drop(`unreadable (${err})`); continue }
-      if (res.result === 'done' && job.mode !== 'none') {
+      if (res.result === 'done' && job.target) {
         this.dispatch(job, 'scheduled', { label: res.slot, at: new Date(res.slotAt) }, slotAt)
         return
       }
@@ -606,11 +608,22 @@ export class JobsClock {
       // The last failure itself must be past the window: one failure, then a day offline, is not a failing job.
       if (new Date(last.at).getTime() - new Date(since).getTime() < job.alertAfterMs) continue
       const text = `Job ${job.name} has been failing since ${new Date(since).toLocaleString()} (${r.state.failures ?? 1} failure${r.state.failures === 1 ? '' : 's'}): ${last.note ?? 'failed'}`
-      const sent = this.d.toMain(`${text}. Tell the user about it now.`, jobInitiator(job.name))
-        || await this.d.direct(text, job.channel ?? cfg.channel ?? this.d.homeChannel())
+      const sent = await this.alert(job, cfg, text)
       if (this.stopped) return
       if (sent) this.update(job.name, job.schedule, s => { s.alertedFor = since })
     }
+  }
+
+  /** A failure alert goes where the job's work goes: its `to` target, then main, then straight to a channel. */
+  private async alert(job: Job, cfg: JobsConfig, text: string): Promise<boolean> {
+    const initiator = jobInitiator(job.name)
+    const ask = `${text}. Tell the user about it now.`
+    const to = job.target && 'to' in job.target && job.target.to !== 'main' ? job.target.to : undefined
+    if (to !== undefined && this.d.toTarget) {
+      try { if (await this.d.toTarget(to, ask, initiator)) return true } catch (err) { this.d.log(`jobs: ${job.name}: alert to ${to} failed: ${err}`) }
+      if (this.stopped) return false
+    }
+    return this.d.toMain(ask, initiator) || await this.d.direct(text, job.channel ?? cfg.channel ?? this.d.homeChannel())
   }
 
   /** Separate from the tick, so a dead tick is noticed. Flags once per stale episode, on the direct path. */
@@ -741,7 +754,7 @@ export function systemZone(): string | null {
 }
 
 /** Real deps, minus what only the daemon knows (how to reach main and a channel). */
-export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
+export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'toTarget' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
   return {
     ...o,
     now: () => new Date(),

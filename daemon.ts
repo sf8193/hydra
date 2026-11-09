@@ -48,6 +48,7 @@ import { announceRestartComplete } from './daemon/commands/global.js'
 import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
 import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
+import { deliverToTarget } from './daemon/targets.js'
 
 threadRegistry.boot(registry)
 reattachAdapters(resolveEngine)
@@ -496,7 +497,7 @@ setInterval(() => {
 setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
 
 // Jobs clock: runs jobs.toml's jobs as detached attempts and applies their results (daemon/jobs-clock.ts).
-// Failure reports go to main; if main can't take one, straight to a channel.
+// Failure reports go to a job's `to` target, then main; if neither can take one, straight to a channel.
 startJobsClock(realDeps({
   stateDir: STATE_DIR,
   platform: PLATFORM,
@@ -506,6 +507,7 @@ startJobsClock(realDeps({
     transport.sendOrQueue('main', { type: 'notification', content: text, meta: { source: 'jobs', initiator } })
     return true
   },
+  toTarget: async (to, text, initiator) => (await deliverToTarget({ to }, text, { initiator, queue: true })).ok,
   // The clock resolves job channel → top-level channel → home channel; this only sends.
   direct: async (text, channel) => {
     if (!channel) { process.stderr.write(`daemon: jobs alert has no channel: ${text}\n`); return false }
