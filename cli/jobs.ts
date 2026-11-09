@@ -273,7 +273,9 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
   if (fromSchedules) {
     const s = cliSchedules(stateDir)
     if ('error' in s) { runIO.error(`${name}: ${s.error}; not running`); return 1 }
-    job = s.jobs.find(j => j.name === name)
+    // A hydra.toml read mid-save (truncated, partial) can lack the job: the daemon's record still names it, so the
+    // slot runs from that instead of being skipped for good.
+    job = s.jobs.find(j => j.name === name) ?? daemonState.scheduleJobs?.find(j => j.name === name)
   } else try { job = parseJobsConfig(readFileSync(file, 'utf8')).jobs.find(j => j.name === name) } catch (err) {
     // The daemon alerts on a broken or missing jobs.toml and runs the last good copy; a launchd job runs it too.
     const lastGood = readDaemonState(stateDir).state.lastGoodConfig
