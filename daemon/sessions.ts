@@ -805,7 +805,7 @@ export function resolveSendTarget(
   reg: Pick<SessionRegistry, 'values' | 'get' | 'getByThread'> = registry,
   threads: Pick<ThreadRegistry, 'threads'> = threadRegistry,
 ): { session: SessionInfo; replaced?: string } | undefined {
-  const live = [...reg.values()].find(s => s.tmuxName === targetName && occupied(occupancy(s)))
+  const live = [...reg.values()].find(s => s.tmuxName === targetName && occupied(occupancy(s, undefined, reg.values())))
   if (live) return { session: live }
 
   // Session names are recycled, so one name can appear in several threads'
@@ -828,7 +828,7 @@ export function resolveSendTarget(
   for (const [threadId] of ranked) {
     const successorId = reg.getByThread(threadId)
     const successor = successorId ? reg.get(successorId) : undefined
-    if (successor && occupied(occupancy(successor)) && successor.tmuxName !== targetName) {
+    if (successor && occupied(occupancy(successor, undefined, reg.values())) && successor.tmuxName !== targetName) {
       return { session: successor, replaced: targetName }
     }
   }

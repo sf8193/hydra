@@ -111,6 +111,16 @@ describe('occupancy of a record', () => {
       expect(occupancy(info)).toBe('reachable')
     } finally { tmux.restore() }
   })
+
+  it('a connected bridge answers without asking tmux: occupancy sits on per-message paths', () => {
+    const tmux = withFakeTmux()
+    try {
+      const info = rec()
+      transport.bridges.set(info.sessionId, {} as any)
+      expect(occupancy(info)).toBe('reachable')
+      expect(tmux.calls().filter(c => c.startsWith('has-session'))).toEqual([])
+    } finally { tmux.restore() }
+  })
 })
 
 describe('markDead', () => {

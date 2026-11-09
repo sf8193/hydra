@@ -430,6 +430,20 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     } finally { registry.delete('fp-l2-old'); registry.deleteThread('fp-l2-thread') }
   })
 
+  test('L2: a claimed name stamps an unstamped dead record of that name before it runs again, so it is retired too', async () => {
+    seedDead()
+    // Liveness by name, as tmux answers it: the name runs once the new session launches under it.
+    const byName = { ...fakeClaude, isAlive: () => launches.some(l => l.tmuxName === 'opsl3') }
+    registry.set('fp-l3-old', { sessionId: 'fp-l3-old', topic: 't', threadId: 'fp-l3-thread', createdAt: 1, lastActive: 1, tmuxName: 'opsl3',
+      listening: false, engine: 'claude', sessionType: 'thread_owner', adapter: byName } as any)
+    registry.setThread('fp-l3-thread', 'fp-l3-old')
+    try {
+      const r = await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, name: 'opsl3' })
+      expect(registry.get('fp-l3-old')).toBeUndefined()
+      expect(registry.findByName('opsl3')?.sessionId).toBe(r.sessionId)
+    } finally { registry.delete('fp-l3-old'); registry.deleteThread('fp-l3-thread') }
+  })
+
   test('prompts: a fork keeps buildForkPrompt', async () => {
     seedDead()
     await doSpawnSession('q2', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' } })
