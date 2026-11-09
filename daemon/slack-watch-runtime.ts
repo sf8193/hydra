@@ -297,6 +297,8 @@ export function unbindConversation(caller: Pick<SessionInfo, 'threadId'> | undef
 
 /** Slack's own advice is to keep a message under 4,000 characters; longer ones are split. */
 const SLACK_CHUNK = 3900
+/** Errors that say a post did not happen: a platform refusal (`An API error occurred: …`), a rate limit, no connection. */
+const CLEANLY_REFUSED = /An API error occurred|rate.?limit|not connected/i
 /** A backstop past the posting client's own deadline (it neither retries nor waits longer). */
 const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
 
@@ -313,16 +315,18 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const home = me ? homeChannel(h, me) : undefined
   if (home && (conversation === h.specialists[me!]?.home || conversation === `slack:${home}`)) {
     const where = `${me}'s home (${h.specialists[me!]!.home})`
-    const { first: ts } = await postParts(home, undefined, text, where, true, () => homeChannel(hydraConfig(), me!) === home)
-    // Its thread is a conversation bound to it, counted with the ones it binds by hand: a loop can't fill the table.
-    const w = getSlackWatcher()
-    const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
-    if (held >= TOOL_BIND_MAX || !w.bind(home, ts, me!, 'home')) {
-      const why = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
-      alert(`⚠️ ${me}'s post to its home opened no conversation (${why}): replies under it go to whoever listens there, not back to ${me}.`, me)
-      return `posted to ${where}, but its thread is not bound to ${me}: ${why}`
+    // Its thread is a conversation bound to it as soon as the first part lands (whatever becomes of the rest), counted
+    // with the ones it binds by hand, so a loop can't fill the table. Past that, the post goes unbound, and is alerted.
+    let unbound: string | undefined
+    const bindThread = (ts: string) => {
+      const w = getSlackWatcher()
+      const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
+      if (held < TOOL_BIND_MAX && w.bind(home, ts, me!, 'home')) return
+      unbound = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
+      alert(`⚠️ ${me}'s post to its home opened no conversation (${unbound}): replies under it go to whoever listens there, not back to ${me}.`, me)
     }
-    return `posted to ${where}; replies in its thread come back to ${me}`
+    await postParts(home, undefined, text, where, true, () => homeChannel(hydraConfig(), me!) === home, bindThread)
+    return unbound ? `posted to ${where}, but its thread is not bound to ${me}: ${unbound}` : `posted to ${where}; replies in its thread come back to ${me}`
   }
   const c = parseConversation(conversation)
   const id = conversationId(c)
@@ -353,7 +357,7 @@ function homeChannel(h: HydraConfig, id: string): string | undefined {
  * the first part at the top level, and with `threadRest` the others in its thread. Posting never retries on its own, so
  * a part either landed, failed, or (past the deadline) is unknown: said as such, so a resend is the caller's choice.
  */
-async function postParts(channel: string, thread: string | undefined, text: string, where: string, threadRest: boolean, allowed: () => boolean): Promise<{ first: string; posted: number }> {
+async function postParts(channel: string, thread: string | undefined, text: string, where: string, threadRest: boolean, allowed: () => boolean, onFirst?: (ts: string) => void): Promise<{ first: string; posted: number }> {
   const parts = chunk(text, SLACK_CHUNK, 'markdown')
   let posted = 0
   let first: string | undefined
@@ -368,12 +372,14 @@ async function postParts(channel: string, thread: string | undefined, text: stri
       ]).finally(() => clearTimeout(timer))
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
-      const unknown = /timeout|timed out|ETIMEDOUT|ECONNRESET|socket hang up/i.test(why)
+      // Only an answer that says it didn't post counts as not posted: Slack refusing it outright, a rate limit, or no
+      // connection at all. Anything else (fatal_error, a 5xx, a timeout, a dropped socket) may have half succeeded.
+      const unknown = !CLEANLY_REFUSED.test(why) || /fatal_error/.test(why)
       throw new Error(unknown
         ? `${posted} of ${parts.length} message(s) posted to ${where}; part ${posted + 1}'s outcome is unknown (no answer from Slack: it may have posted). Check ${where} before sending the rest.`
         : `reply failed after ${posted} of ${parts.length} message(s) posted to ${where}: ${why}. Part ${posted + 1} did not post; send from there.`)
     }
-    first ??= ts
+    if (first === undefined) { first = ts; onFirst?.(ts) }
     if (threadRest) thread ??= ts
     posted++
   }

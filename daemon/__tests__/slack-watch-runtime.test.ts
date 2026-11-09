@@ -234,6 +234,30 @@ describe('replies: posted only into the conversation they answer', () => {
     await expect(replyInConversation('r-food', 'slack:C1:11.000001', 'hi')).rejects.toThrow("0 of 1 message(s) posted to slack:C1:11.000001; part 1's outcome is unknown (no answer from Slack: it may have posted)")
   })
 
+  test('only a clean refusal counts as "did not post"; fatal_error, a 5xx or a dropped socket may have half succeeded: unknown', async () => {
+    session('r-food', FOOD_THREAD)
+    getSlackWatcher().bind('C1', '13.000001', FOOD)
+    const fate = async (msg: string) => {
+      slackRuntimeDeps.post = async () => { throw new Error(msg) }
+      return replyInConversation('r-food', 'slack:C1:13.000001', 'hi').then(() => 'posted', (e: Error) => e.message.includes('outcome is unknown') ? 'unknown' : e.message.includes('did not post') ? 'did not post' : e.message)
+    }
+    expect(await fate('An API error occurred: channel_not_found')).toBe('did not post')
+    expect(await fate('An API error occurred: ratelimited')).toBe('did not post')
+    expect(await fate('Slack is not connected; try again once it is')).toBe('did not post')
+    expect(await fate('An API error occurred: fatal_error')).toBe('unknown')
+    expect(await fate('An HTTP protocol error occurred: statusCode = 503')).toBe('unknown')
+    expect(await fate('A request error occurred: socket hang up')).toBe('unknown')
+  })
+
+  test("a home reply's thread is bound as soon as its first part lands, even if a later part fails", async () => {
+    session('r-food', FOOD_THREAD)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:C7"`))
+    let n = 0
+    slackRuntimeDeps.post = async () => { if (++n === 2) throw new Error('An API error occurred: ratelimited'); return '300.000001' }
+    await expect(replyInConversation('r-food', 'slack:C7', 'para one\n\n'.repeat(800))).rejects.toThrow('reply failed after 1 of 3')
+    expect(getSlackWatcher().get('C7', '300.000001')).toMatchObject({ specialist: FOOD, mentionedBy: 'home' })
+  })
+
   test('a conversation moved away mid-reply gets no more of it', async () => {
     session('r-food', FOOD_THREAD)
     getSlackWatcher().bind('C1', '12.000001', FOOD)
