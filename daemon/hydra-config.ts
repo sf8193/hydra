@@ -100,6 +100,11 @@ function notify(config: HydraConfig): void {
   }
 }
 
+/** Reads hydra.toml now instead of at the next interval (`schedules sync`). Listeners hear it only if it changed. */
+export function reloadHydraConfig(): void {
+  watch?.reload()
+}
+
 /** The last config that loaded; the empty config before the first. */
 export function currentHydraConfig(): HydraConfig {
   return override ?? live ?? EMPTY_CONFIG

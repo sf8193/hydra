@@ -518,9 +518,22 @@ Nothing is dropped silently: a message dropped because it stayed owed past a day
 
 **Runbook.** Silent in the channel: `hydra health`; `state: up` with `catchUp.accepted > 0` pass after pass means a second connection holds the app. `exhausted`: check both tokens and the app's Socket Mode setting. Catch-up `reason` mentions a budget or rate limit: the next pass resumes from the held cursor. A start-up log line `slack listener off (…)` names what is missing. A first connection that fails is retried with backoff (10 s doubling to 5 min) until it connects, then a catch-up pass runs.
 
-### Jobs
+### Schedules (formerly jobs)
 
-`<state>/jobs.toml` declares recurring jobs (start from [`jobs.example.toml`](jobs.example.toml)). Each one has a 5-field cron `schedule` in local time, an optional `check` script whose output becomes the agent's message, and what to do with that message (`mode`). After editing it, run `hydra jobs sync <platform>`. `jobs list` shows each job's runner, next run and last result; `jobs run <platform> <name>` runs one now; `jobs mark-done` covers a slot without running it.
+A schedule is a clock that sends a message to a specialist. It's declared in `<state>/hydra.toml` under `[schedules.<id>]`: `cron` (5 fields, local time), `to` (a specialist, or `main`; none makes it a sensor), `prompt`, and an optional `check` script whose output is appended (empty output sends nothing). See `signal-routing.md`'s `[schedules.<id>]`. A schedule's message carries the operator's authority; a failure alerts the operator. A run to a `sessions = "per-conversation"` specialist opens a new conversation for that slot: a fresh session in a new thread in the specialist's home, run as `jobs:<id>`.
+
+```toml
+[schedules.ledger-review]
+cron = "0 11 * * FRI"
+runner = "daemon"
+needs = ["internet"]
+check = "~/ledger/review-check.sh"
+to = "ledger-review"        # a per-conversation specialist: each run, a fresh session in a new thread
+```
+
+**`<state>/jobs.toml` keeps running exactly as before until `hydra migrate` moves it** (start from [`jobs.example.toml`](jobs.example.toml)). Its jobs become `[schedules]`, a spawn job becomes a per-conversation specialist, and the file is kept as `jobs.toml.migrated`. Each schedule keeps its job's id, so its record (`jobs-state/<id>.state.json`), its covered slots and its launchd entry carry over. The migrate dry run shows each schedule's next slot, whether one is owed, its runner, where it goes and as whom.
+
+`hydra schedules sync <platform>` has the daemon load them now and registers launchd ones; the daemon also re-registers them whenever hydra.toml changes. `schedules list` shows each one's runner, next run and last result; `schedules run <platform> <name>` runs one now; `schedules mark-done` covers a daemon schedule's slot without running it. `hydra jobs …` is the same command, for now.
 
 **A job's `runner` decides what triggers it; delivery to a session is always the daemon's.** Both are on time when all is well. They differ only when something fails:
 

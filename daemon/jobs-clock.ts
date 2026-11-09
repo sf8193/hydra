@@ -15,6 +15,7 @@ import {
   owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, parseExternalName, externalFile, externalResults, type ExternalResult, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../shared/jobs.js'
+import { schedulesAreSource } from '../shared/schedules.js'
 
 /** A reservation with no pid this old means the daemon died between spawning and recording: look for the orphan. */
 export const ADOPT_GRACE_MS = 30_000
@@ -43,6 +44,10 @@ export type ClockDeps = {
   kill: (pid: number, signal: NodeJS.Signals) => void
   /** Hands a message to main. False if main can't take it. */
   toMain: (text: string, initiator: string) => boolean
+  /** hydra.toml's [schedules] as jobs (shared/schedules.ts), read each tick. Absent: jobs.toml is the only source. */
+  schedules?: () => Job[]
+  /** Re-reads hydra.toml now (`jobs sync`), so a sync sees an edit made this second. */
+  reloadSchedules?: () => void
   /** Delivers to a job's `to` target (a specialist or a thread). False if it can't. Absent: alerts start at main. */
   toTarget?: (to: string, text: string, initiator: string) => Promise<boolean>
   /** Posts straight to a channel (safeSend). False if it couldn't. */
@@ -220,6 +225,7 @@ export class JobsClock {
       await this.d.direct(`Jobs: ${daemonFile(this.d.stateDir)} was unreadable (${corrupt}); started it fresh.`, this.d.homeChannel())
       if (this.stopped) return { jobs: [] }
     }
+    if (this.d.schedules && schedulesAreSource(this.d.stateDir, state)) return { jobs: this.scheduleJobs(state), fromSchedules: true }
     let problem: string
     const file = jobsToml(this.d.stateDir)
     if (existsSync(file)) {
@@ -242,6 +248,18 @@ export class JobsClock {
       if (await this.d.direct(text, fallback.channel ?? this.d.homeChannel()) && !this.stopped) this.updateDaemon(s => { s.configAlertedFor = problem })
     }
     return fallback
+  }
+
+  /**
+   * The schedules as jobs, recorded for the CLI's processes (launchd-run, jobs list), which never read hydra.toml.
+   * hydra.toml is re-read first: migrate writes it just before it removes jobs.toml, and a tick between that and the
+   * watch's next read would otherwise run no schedules, and drop a waiting launchd result as gone from the file.
+   */
+  private scheduleJobs(state: DaemonState): Job[] {
+    this.d.reloadSchedules?.()
+    const jobs = this.d.schedules!()
+    if (JSON.stringify(state.scheduleJobs ?? []) !== JSON.stringify(jobs)) this.updateDaemon(s => { s.scheduleJobs = jobs })
+    return jobs
   }
 
   private parsedOrEmpty(text: string | undefined): Job[] {
@@ -389,6 +407,12 @@ export class JobsClock {
     // Against the config the last sync made live: the tick reloads jobs.toml every minute, so the last good copy
     // would show "no changes" for any edit older than a minute.
     const state = readDaemonState(this.d.stateDir).state
+    if (this.d.schedules && schedulesAreSource(this.d.stateDir, state)) {
+      const before = state.scheduleJobs ?? []
+      const after = this.scheduleJobs(state)
+      await this.tick()
+      return { ok: true, before, after, hydraEntry: this.d.hydraEntry }
+    }
     const before = this.parsedOrEmpty(state.syncedConfig ?? state.lastGoodConfig)
     let text: string
     try { text = readFileSync(jobsToml(this.d.stateDir), 'utf8') } catch { return { ok: false, error: `no jobs file at ${jobsToml(this.d.stateDir)}` } }
@@ -434,7 +458,8 @@ export class JobsClock {
     // Every job in the file: one that just moved from launchd to the daemon still has its waiting result applied, so
     // its check doesn't run that slot again.
     for (const job of cfg.jobs) this.applyExternal(job)
-    this.dropStrandedExternal(cfg)
+    // No schedules at all is a config that hasn't loaded yet, not one that retired every job: results stay owed.
+    if (!(cfg.fromSchedules && cfg.jobs.length === 0)) this.dropStrandedExternal(cfg)
     this.sweep()
   }
 
@@ -618,7 +643,8 @@ export class JobsClock {
   private async alert(job: Job, cfg: JobsConfig, text: string): Promise<boolean> {
     const initiator = jobInitiator(job.name)
     const ask = `${text}. Tell the user about it now.`
-    const to = job.target && 'to' in job.target && job.target.to !== 'main' ? job.target.to : undefined
+    // A schedule's failure is the operator's to hear: hydra writes no prose into a specialist's content.
+    const to = !job.fromSchedule && job.target && 'to' in job.target && job.target.to !== 'main' ? job.target.to : undefined
     if (to !== undefined && this.d.toTarget) {
       try { if (await this.d.toTarget(to, ask, initiator)) return true } catch (err) { this.d.log(`jobs: ${job.name}: alert to ${to} failed: ${err}`) }
       if (this.stopped) return false
@@ -754,7 +780,7 @@ export function systemZone(): string | null {
 }
 
 /** Real deps, minus what only the daemon knows (how to reach main and a channel). */
-export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'toTarget' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
+export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'toTarget' | 'schedules' | 'reloadSchedules' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
   return {
     ...o,
     now: () => new Date(),

@@ -17,8 +17,11 @@ import { launchdCalendar } from './jobs-launchd.js'
 /** How a job's spawned session starts: the same recipe shape as a specialist's (specialists-and-targets §3). */
 export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
 
-/** Where a job's message goes: a specialist, `main` or a thread id; or a fresh session each time. */
-export type JobTarget = { to: string; revive?: true } | { spawn: Recipe }
+/**
+ * Where a job's message goes: a specialist, `main` or a thread id; or a fresh session each time. `conversation`: the
+ * specialist runs per-conversation sessions, so each slot opens its own (a schedule's, from hydra.toml).
+ */
+export type JobTarget = { to: string; revive?: true; conversation?: true } | { spawn: Recipe }
 
 export type Job = {
   name: string
@@ -34,6 +37,7 @@ export type Job = {
   needs?: Need[]     // preconditions the daemon checks before dispatch; unmet = not now
   alertAfterMs: number // how long a failure run lasts before it is alerted, once (alert_after, default 1d)
   notes?: string[]   // what jobs list says about keys that are kept only for old files
+  fromSchedule?: true // read from hydra.toml's [schedules]: a failure alerts the operator only, never the target
 }
 
 /**
@@ -65,7 +69,8 @@ const MAX_ALERT_AFTER_MS = 30 * 24 * 60 * 60_000
 /** alert_after: a duration up to 30d. */
 export const parseAlertAfter = (s: string): number | null => parseDuration(s, MAX_ALERT_AFTER_MS)
 
-export type JobsConfig = { channel?: string; jobs: Job[] }
+/** `fromSchedules`: hydra.toml's [schedules] are the source, not jobs.toml. */
+export type JobsConfig = { channel?: string; jobs: Job[]; fromSchedules?: true }
 
 /** How `jobs list` and `jobs sync` name a job's runner: `daemon`, `daemon (file)`, `launchd (default)`. */
 export const runnerLabel = (j: Pick<Job, 'runner' | 'runnerFrom'>) => j.runnerFrom === 'job' ? j.runner : `${j.runner} (${j.runnerFrom})`
@@ -304,6 +309,7 @@ export type DaemonState = {
   configAlertedFor?: string       // the config problem already alerted: once per episode, cleared when it parses
   staleAlertedFor?: string        // the stale-clock episode already alerted (its last tick, or "never"), so a restart doesn't repeat it
   lastTick?: string
+  scheduleJobs?: Job[]            // hydra.toml's [schedules] as the daemon last loaded them: what launchd-run and jobs list read
 }
 
 /** What an attempt reports, once, in results/<name>.<id>.json. */

@@ -423,6 +423,15 @@ describe('runWork', () => {
     expect(calls[0].at(-1)).toBe('Fix it.\n\nCheck output:\n3 failures')
   })
 
+  test('a schedule to a per-conversation specialist opens its own conversation, keyed like the run', async () => {
+    checkResult = { code: 0, out: 'week 45\n', err: '' }
+    const job = { ...toJob(), target: { to: 'rev', conversation: true as const } }
+    expect((await runWork(job, dir, 'jobs-nb-2026-11-13T19:00:00.000Z')).result).toBe('done')
+    expect(calls[0].slice(0, 4)).toEqual(['deliver', '--to', 'rev', '--conversation'])
+    expect(calls[0][4]).toBe('clock:jobs-nb-2026-11-13T19:00:00.000Z')
+    expect(calls[0].at(-1)).toBe('Check output:\nweek 45')
+  })
+
   test('to: what deliver answers decides the outcome; 8 (no such specialist) is a failure, never sent', async () => {
     checkResult = { code: 0, out: 'x', err: '' }
     const outcome = async (code: number) => {
@@ -1118,9 +1127,10 @@ describe('jobs sync (CLI)', () => {
     try { expect(await jobsSync('test', t.dir)).toBe(0); expect(t.out[0]).toBe('no changes since the last sync') } finally { t.done() }
   })
 
-  test('an invalid or missing jobs.toml exits 1, and the daemon is never asked', async () => {
+  test('an invalid jobs.toml, or one that went missing (the daemon had it), exits 1, and the daemon is never asked', async () => {
     for (const toml of [`[a]\nschedule="soon"\nmode="main"\nprompt="p"`, null]) {
       const t = setup(toml)
+      if (toml === null) { mkdirSync(join(t.dir, 'jobs-state'), { recursive: true }); writeFileSync(daemonFile(t.dir), JSON.stringify({ lastGoodConfig: A })) }
       runIO.send = async (_s: string, req: Record<string, unknown>) => { t.sent.push(req); return { ok: true, data: {} } }
       try {
         expect(await jobsSync('test', t.dir)).toBe(1)
@@ -1128,6 +1138,28 @@ describe('jobs sync (CLI)', () => {
         expect(t.sent).toEqual([])
       } finally { t.done() }
     }
+  })
+
+  test('hydra.toml [schedules] (no jobs.toml, or it was migrated): the list is the daemon\'s answer; no answer leaves launchd alone', async () => {
+    const sched = { name: 's', schedule: '0 6 * * *', runner: 'daemon', runnerFrom: 'job', alertAfterMs: 0, fromSchedule: true }
+    const t = setup(null)
+    runIO.send = async (_s: string, req: Record<string, unknown>) => { t.sent.push(req); return { ok: true, data: { before: [], after: [sched] } } }
+    try {
+      expect(await jobsSync('test', t.dir)).toBe(0)
+      expect(t.sent).toHaveLength(1)
+      expect(t.out).toContain('added: s')
+      expect(t.out.some(l => l.startsWith('s '))).toBe(true)
+    } finally { t.done() }
+    const down = setup(null, false)
+    try {
+      expect(await jobsSync('test', down.dir)).toBe(0)
+      expect(down.out).toEqual(['daemon not running; it will load this on start', 'launchd: entries stay as they are until the daemon answers'])
+    } finally { down.done() }
+    const migrated = setup(null)
+    writeFileSync(join(migrated.dir, 'jobs.toml.migrated'), A)
+    mkdirSync(join(migrated.dir, 'jobs-state'), { recursive: true }); writeFileSync(daemonFile(migrated.dir), JSON.stringify({ lastGoodConfig: A }))
+    runIO.send = async (_s: string, req: Record<string, unknown>) => { migrated.sent.push(req); return { ok: true, data: { before: [], after: [] } } }
+    try { expect(await jobsSync('test', migrated.dir)).toBe(0); expect(migrated.sent).toHaveLength(1) } finally { migrated.done() }
   })
 
   test('daemon down (no socket, or refused): valid file, says it loads on start, exit 0', async () => {

@@ -172,6 +172,17 @@ describe('jobs launchd-run: what the plist runs', () => {
     expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'done', output: 'CVE-1' })
   })
 
+  test('[schedules]: the job comes from what the daemon last loaded, never from hydra.toml', async () => {
+    const job = { name: 'scan', schedule: '0 * * * *', check: 's.sh', runner: 'launchd', runnerFrom: 'job', alertAfterMs: 0, fromSchedule: true }
+    mkdirSync(dirname(daemonFile(dir)), { recursive: true })
+    writeFileSync(daemonFile(dir), JSON.stringify({ scheduleJobs: [job] }))
+    writeFileSync(join(dir, 'hydra.toml'), 'not toml at all [')   // never read here
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
+    expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'done', output: 'CVE-1' })
+    expect(await jobsLaunchdRun('test', 'other', dir)).toBe(0)                    // not one of them: nothing runs
+    expect(checks).toBe(1)
+  })
+
   test('a failed check is left as a failed result and exits 1', async () => {
     writeFileSync(join(dir, 'jobs.toml'), '[scan]\nschedule="0 * * * *"\ncheck="s.sh"\nmode="none"\n')
     jobsIO.check = async () => ({ code: 3, out: '', err: 'boom' })

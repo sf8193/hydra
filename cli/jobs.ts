@@ -15,6 +15,7 @@ import { MAX_DELIVER_IDEMPOTENCY_TTL_MS, platformStateDir } from '../shared/cons
 import { LAUNCHD_PATH, LAUNCH_AGENTS_DIR, jobAgentLabel, plistEntry, launchdCalendar, launchdPlist, legacyTitles, parseLegacyTitle, runnerJobs, stableBun } from '../shared/jobs-launchd.js'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { isUnder } from '../shared/path-containment.js'
+import { schedulesAreSource } from '../shared/schedules.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
@@ -166,7 +167,9 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
       ...(target.spawn.idle ? ['--idle-ttl', target.spawn.idle] : []), ...(target.spawn.model ? ['--model', target.spawn.model] : []), '--', message]
     // --queue for main only: a specialist and a revive queue anyway, and a plain thread's orphaned session must
     // answer 4, not take a message nobody will read until someone resumes it.
-    : ['deliver', '--to', target.to, ...(target.revive ? ['--revive'] : []), ...(target.to === 'main' ? ['--queue'] : []), '--initiator', initiator,
+    // A per-conversation specialist: each run is its own conversation (a fresh session in a new thread), keyed like the run.
+    : ['deliver', '--to', target.to, ...(target.conversation ? ['--conversation', `clock:${key}`] : []), ...(target.revive ? ['--revive'] : []),
+      ...(target.to === 'main' ? ['--queue'] : []), '--initiator', initiator,
       '--idempotency-key', key, '--idempotency-ttl', keyTtl(job.schedule, jobsIO.now()), '--message', message]
   // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
   // --json: the reply carries the duplicate-key status, so a key the daemon already holds is an outcome, not an error.
@@ -263,9 +266,13 @@ async function deliverExternal(job: Job, o: AttemptArgs, key: string, landed: (w
  * already has a result waiting is not run again. Returns the exit code: the check's outcome, 0 for nothing to do.
  */
 export async function jobsLaunchdRun(platform: string, name: string, stateDir: string): Promise<number> {
-  const file = jobsToml(stateDir)
+  const daemonState = readDaemonState(stateDir).state
+  const fromSchedules = schedulesAreSource(stateDir, daemonState)
+  const file = fromSchedules ? 'hydra.toml [schedules]' : jobsToml(stateDir)
   let job: Job | undefined
-  try { job = parseJobsConfig(readFileSync(file, 'utf8')).jobs.find(j => j.name === name) } catch (err) {
+  // [schedules]: the daemon loaded hydra.toml and recorded them as jobs; this process never reads hydra.toml itself.
+  if (fromSchedules) job = daemonState.scheduleJobs?.find(j => j.name === name)
+  else try { job = parseJobsConfig(readFileSync(file, 'utf8')).jobs.find(j => j.name === name) } catch (err) {
     // The daemon alerts on a broken or missing jobs.toml and runs the last good copy; a launchd job runs it too.
     const lastGood = readDaemonState(stateDir).state.lastGoodConfig
     try { job = parseJobsConfig(lastGood ?? '').jobs.find(j => j.name === name) } catch {}
@@ -276,7 +283,7 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
     runIO.error(`${name}: ${file} is unreadable (${err instanceof Error ? err.message : err}); running the last good copy`)
   }
   if (job?.runner !== 'launchd') {
-    runIO.print(`${name}: not a launchd-runner job in ${file}; \`hydra jobs sync ${platform}\` removes this entry`)
+    runIO.print(`${name}: not a launchd-runner job in ${file}; \`hydra schedules sync ${platform}\` removes this entry`)
     return 0
   }
   const now = jobsIO.now()
@@ -416,6 +423,12 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
   const tick = readDaemonState(stateDir).state.lastTick
   const stale = !tick || now.getTime() - new Date(tick).getTime() > STALE_TICK_MS
   console.log(`clock: ${tick ? `last tick ${local(tick)} (${ago(new Date(tick), now)})` : 'no tick yet'}${stale ? '  STALE: is the daemon running?' : ''}`)
+  const state = readDaemonState(stateDir).state
+  if (schedulesAreSource(stateDir, state)) {
+    console.log(`from hydra.toml [schedules], as the daemon last loaded them`)
+    printJobs(platform, stateDir, state.scheduleJobs ?? [], now)
+    return
+  }
   const file = jobsToml(stateDir)
   if (!existsSync(file)) { console.log(`no jobs file at ${file}`); return }
   printJobs(platform, stateDir, parseJobsConfig(readFileSync(file, 'utf8')).jobs, now)
@@ -482,9 +495,11 @@ export function diffJobs(before: Job[], after: Job[]): string[] {
 export async function jobsSync(platform: string, stateDirOverride?: string): Promise<number> {
   const stateDir = stateDirFor(platform, stateDirOverride)
   const file = jobsToml(stateDir)
-  if (!existsSync(file)) { runIO.error(`error: no jobs file at ${file}`); return 1 }
-  let jobs: Job[]
-  try { jobs = parseJobsConfig(readFileSync(file, 'utf8')).jobs } catch (err) {
+  // [schedules]: the daemon validates hydra.toml (a bad load is alerted, the last good config stays); its answer is the list.
+  const fromSchedules = schedulesAreSource(stateDir, readDaemonState(stateDir).state)
+  if (!fromSchedules && !existsSync(file)) { runIO.error(`error: no jobs file at ${file}`); return 1 }
+  let jobs: Job[] = []
+  if (!fromSchedules) try { jobs = parseJobsConfig(readFileSync(file, 'utf8')).jobs } catch (err) {
     runIO.error(`error: ${err instanceof Error ? err.message : err}`)
     return 1
   }
@@ -507,6 +522,11 @@ export async function jobsSync(platform: string, stateDirOverride?: string): Pro
   if (d) {
     const changes = diffJobs(d.before, d.after)
     for (const l of changes.length ? changes : ['no changes since the last sync']) runIO.print(l)
+  }
+  if (fromSchedules) {
+    // Only the daemon reads hydra.toml: without its answer there is no list, and an empty one would unregister them all.
+    if (!d) { runIO.print('launchd: entries stay as they are until the daemon answers'); return 0 }
+    jobs = d.after
   }
   let code = 0
   if (resolve(stateDir) === resolve(platformStateDir(platform))) {

@@ -300,8 +300,9 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 
 
 async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
-  const { to, thread, session, specialist, message, initiator, idempotencyKey, idempotencyTtl, queue, revive } = req.params as {
+  const { to, thread, session, specialist, message, initiator, idempotencyKey, idempotencyTtl, queue, revive, conversation } = req.params as {
     to?: string
+    conversation?: string
     thread?: string
     session?: string
     specialist?: string
@@ -322,6 +323,11 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
   if (to && addresses > 1) return respond(req, false, '--to is the whole address: drop --thread/--session/--specialist')
   if (specialist && (thread || session)) return respond(req, false, '--specialist is its own address: drop --thread/--session')
   if (revive && !(to || (thread && !session))) return respond(req, false, '--revive takes --to or --thread (a specialist always revives)')
+  // A conversation of a per-conversation specialist: its own session, opened for it if it has none (targets.ts).
+  if (conversation !== undefined) {
+    if (!to || !conversation) return respond(req, false, '--conversation <key> goes with --to <specialist>')
+    if (currentHydraConfig().specialists[to]?.sessions !== 'per-conversation') return respond(req, false, `${to} isn't a per-conversation specialist in hydra.toml, so it has no conversations to open`)
+  }
 
   if (idempotencyKey) {
     const check = checkIdempotency(idempotencyKey)
@@ -337,7 +343,8 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 
   const opts = { initiator: initiator ?? 'unknown', ...(idempotencyKey && { idempotencyKey }), ...(idempotencyTtlMs && { idempotencyTtlMs }), ...(queue && { queue }) }
   let r: DeliverOutcome
-  if (to) r = await deliverToTarget({ to, ...(revive && { revive }) }, message, opts)
+  if (to && conversation) r = await deliverToTarget({ perConversation: to, conversation }, message, opts)
+  else if (to) r = await deliverToTarget({ to, ...(revive && { revive }) }, message, opts)
   else if (specialist) r = await deliverToTarget({ to: specialist }, message, opts)
   else if (session === 'main') r = await deliverToTarget({ to: 'main' }, message, opts)
   else if (thread && !session) r = await deliverVia(() => toThread(thread, message, opts, !!revive), message, opts)
