@@ -105,6 +105,28 @@ describe('migrate jobs.toml → [schedules]', () => {
     } finally { rmSync(dir, { recursive: true }) }
   })
 
+  test('a dir #553 already migrated, plus jobs.toml: the schedules and the spawn specialist are appended; the file stays byte for byte', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
+    try {
+      const migrated = '# Written by `hydra migrate`. Edit freely: hydra re-reads this file when it changes.\n\noperator = "dan"\n\n[people.dan]\nids = ["discord:100000000000000001"]\n'
+      writeFileSync(join(dir, 'hydra.toml'), migrated)
+      writeFileSync(join(dir, 'access.json.migrated'), JSON.stringify({ allowFrom: ['100000000000000001'] }))
+      writeFileSync(join(dir, 'jobs.toml'), LIVE)
+      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' })
+      if (!plan.ok) throw new Error(plan.errors.join('\n'))
+      expect(plan.text.startsWith(migrated.trimEnd())).toBe(true)
+      expect(plan.notes[0]).toBe("appends to the existing hydra.toml, leaving what's there as it is: [specialists.review], [schedules.review], [schedules.nudge], [schedules.keepalive], [schedules.pull], [schedules.health]")
+      const loaded = loadHydraConfig(plan.text, env)
+      if (!loaded.ok) throw new Error('must load')
+      expect(loaded.config.operator).toBe('dan')
+      expect(Object.keys(loaded.config.schedules)).toEqual(['review', 'nudge', 'keepalive', 'pull', 'health'])
+      applyMigrate(dir, plan)
+      expect(existsSync(join(dir, 'jobs.toml'))).toBe(false)
+      expect(readFileSync(join(dir, 'jobs.toml.migrated'), 'utf8')).toBe(LIVE)
+    } finally { rmSync(dir, { recursive: true }) }
+  })
+
   test('a job that cannot be carried over refuses the whole migrate, naming it, and writes nothing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
     try {
