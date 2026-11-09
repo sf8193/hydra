@@ -3,7 +3,7 @@ import { readFileSync } from 'fs'
 import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
-import { STATE_DIR } from './config.js'
+import { STATE_DIR, STATE_WRITABLE } from './config.js'
 import { emit } from './event-bus.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
@@ -514,7 +514,8 @@ export class SessionRegistry {
         // Orphaned guests can't be re-associated with their review state
         // after restart — kill them and discard
         if (info.sessionType === 'thread_guest') {
-          try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+          // Only the state's owner kills: a one-off script importing this module must not touch live sessions.
+          if (STATE_WRITABLE) try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
           pruned++
           continue
         }
