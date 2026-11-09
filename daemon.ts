@@ -44,6 +44,7 @@ import { loadAccess } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
 import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
+import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
 
 threadRegistry.boot(registry)
@@ -320,6 +321,7 @@ async function startGateway(attempt = 0): Promise<void> {
     const { resolveDefaultChannel } = await import('./daemon/config.js')
     await resolveDefaultChannel()
     void announceRestartComplete()
+    void deliverWatchdogAlert()
     // Send the standalone recovery report only if auto-recovery won't run —
     // otherwise the gap info is folded into the auto-recovery summary (which
     // fires ~30s later) and the standalone report would mislead with "N disconnected"
