@@ -13,7 +13,7 @@ import { _resetBackoff, getBackoff } from '../../daemon/recovery-backoff.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withThreadLock } from '../specialists.js'
 import { deliverToTarget, parseTarget, conversationSessionName, sessionByName, targetDeps } from '../targets.js'
 import { _setHydraConfigForTesting } from '../../daemon/hydra-config.js'
-import { hydra } from '../../daemon/__tests__/slack-config.js'
+import { hydra } from '../../connectors/slack/__tests__/slack-config.js'
 import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
 import { _setDaemonStartedAtForTesting } from '../../daemon/session-reachability.js'
 

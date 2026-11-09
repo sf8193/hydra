@@ -6,8 +6,8 @@ import {
   SlackWatcher, formatDelivery, renderItem, packItems, cmpTs, placesOf, routedChannels, hearsDms, unresolvedPlaces,
   ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES, REFUSED_REACTION,
   type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item, type SlackWatchDeps, type SlackActions, type SlackFile,
-} from '../slack-watch.js'
-import type { GuardInput, GuardVerdict } from '../../routing/guard.js'
+} from '../watch.js'
+import type { GuardInput, GuardVerdict } from '../../../routing/guard.js'
 import { BASE, BOT, oneListener, view, directory, type ViewOver } from './slack-config.js'
 
 const CH = 'C0FOOD'

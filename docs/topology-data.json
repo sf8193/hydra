@@ -201,14 +201,14 @@
       "desc": "Spawn templates (review:, fix:, design:)"
     },
     {
-      "id": "daemon_pr-watch",
-      "label": "daemon/pr-watch.ts",
+      "id": "connectors_github_pr-watch",
+      "label": "connectors/github/pr-watch.ts",
       "layer": "domain",
       "desc": "GitHub PR polling, comment delivery"
     },
     {
-      "id": "daemon_jobs-clock",
-      "label": "daemon/jobs-clock.ts",
+      "id": "connectors_clock_jobs-clock",
+      "label": "connectors/clock/jobs-clock.ts",
       "layer": "domain",
       "desc": "Jobs clock: tick, dispatch detached attempts, apply results"
     },
@@ -392,7 +392,7 @@
     ],
     [
       "daemon",
-      "daemon_jobs-clock"
+      "connectors_clock_jobs-clock"
     ],
     [
       "daemon",
@@ -424,7 +424,7 @@
     ],
     [
       "daemon",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon",
@@ -540,7 +540,7 @@
     ],
     [
       "daemon_bridge-dispatch",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_bridge-dispatch",
@@ -620,7 +620,7 @@
     ],
     [
       "daemon_bridge-server",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_bridge-server",
@@ -684,7 +684,7 @@
     ],
     [
       "daemon_cli-handler",
-      "daemon_jobs-clock"
+      "connectors_clock_jobs-clock"
     ],
     [
       "daemon_session-lifecycle",
@@ -736,7 +736,7 @@
     ],
     [
       "daemon_session-lifecycle",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_session-lifecycle",
@@ -764,7 +764,7 @@
     ],
     [
       "daemon_recovery",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_recovery",
@@ -875,19 +875,19 @@
       "shared_constants"
     ],
     [
-      "daemon_pr-watch",
+      "connectors_github_pr-watch",
       "daemon_config"
     ],
     [
-      "daemon_pr-watch",
+      "connectors_github_pr-watch",
       "daemon_sessions"
     ],
     [
-      "daemon_pr-watch",
+      "connectors_github_pr-watch",
       "daemon_util"
     ],
     [
-      "daemon_pr-watch",
+      "connectors_github_pr-watch",
       "shared_constants"
     ],
     [
@@ -912,7 +912,7 @@
     ],
     [
       "daemon_dashboard",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_idempotency",
@@ -1140,7 +1140,7 @@
     ],
     [
       "daemon_commands_status",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_commands_status",
@@ -1180,7 +1180,7 @@
     ],
     [
       "daemon_commands_thread",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_commands_thread",
@@ -1216,7 +1216,7 @@
     ],
     [
       "daemon_commands_watch",
-      "daemon_pr-watch"
+      "connectors_github_pr-watch"
     ],
     [
       "daemon_commands_watch",

@@ -9,7 +9,7 @@ import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { spawnSpecialist, specialistStatus, SpecialistError } from '../specialists/specialist-deliver.js'
 import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, withTargetLock, type Specialist } from '../specialists/specialists.js'
-import { slackWatchHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from './slack-watch-runtime.js'
+import { slackWatchHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from '../connectors/slack/runtime.js'
 import { currentHydraConfig } from './hydra-config.js'
 import { route, explain } from '../routing/route.js'
 import { normalizeAddress } from '../config/load.js'
@@ -21,7 +21,7 @@ import { on } from './event-bus.js'
 import { raindropStatusLine } from './raindrop.js'
 import { getCpuVitals } from './cpu-watch.js'
 import { formatCpuSummary } from './cpu-spin.js'
-import { jobsClock } from './jobs-clock.js'
+import { jobsClock } from '../connectors/clock/jobs-clock.js'
 
 // ---------------------------------------------------------------------------
 // Idempotency completion on session death

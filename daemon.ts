@@ -64,7 +64,7 @@ import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
-import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
+import { startJobsClock, stopJobsClock, realDeps } from './connectors/clock/jobs-clock.js'
 import { deliverToTarget } from './specialists/targets.js'
 
 threadRegistry.boot(registry)
@@ -237,8 +237,8 @@ if ('homeSpawnHandler' in gateway) {
 
 // Importing router wires up gateway.onMessage / onThreadDelete / onMessageDelete
 import { fetchSlackThreadSummary } from './daemon/router.js'
-import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
-import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/slack-watch-runtime.js'
+import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './connectors/github/pr-watch.js'
+import { startSlackWatch, stopSlackWatch, startSlackListener } from './connectors/slack/runtime.js'
 import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
@@ -517,7 +517,7 @@ setInterval(() => {
 setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
 
 // Jobs clock: runs jobs.toml's jobs, or once migrate has moved them, hydra.toml's [schedules], as detached attempts and
-// applies their results (daemon/jobs-clock.ts). A job's failure goes to its `to` target, then main; a schedule's to main;
+// applies their results (connectors/clock/jobs-clock.ts). A job's failure goes to its `to` target, then main; a schedule's to main;
 // if neither can take one, straight to a channel.
 startJobsClock(realDeps({
   stateDir: STATE_DIR,

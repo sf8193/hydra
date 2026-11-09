@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { conflictChange, shouldNotifyCiChange, shouldNotifyGreen, type CheckStatusType } from '../daemon/pr-watch.js'
+import { conflictChange, shouldNotifyCiChange, shouldNotifyGreen, type CheckStatusType } from '../connectors/github/pr-watch.js'
 
 const SHA_A = 'aaaa'
 const SHA_B = 'bbbb'

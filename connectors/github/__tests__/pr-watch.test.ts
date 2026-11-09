@@ -1,10 +1,10 @@
 import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
-import { gateway } from '../config.js'
+import { gateway } from '../../../daemon/config.js'
 import { parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, listWatches, parsePersistedWatches, applyCheckResult, formatWatchEntry, selectNewReviews, _setWatchForTesting, type WatchEntry, type CheckResult } from '../pr-watch.js'
-import { parseWatchCommand } from '../commands/watch.js'
-import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
-import { registry } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
+import { parseWatchCommand } from '../../../daemon/commands/watch.js'
+import { UNIVERSAL_TOOLS } from '../../../shared/tool-definitions.js'
+import { registry } from '../../../daemon/sessions.js'
+import { transport } from '../../../daemon/bridge-transport.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any

@@ -1,15 +1,15 @@
 import { readFileSync, existsSync, statSync, readdirSync, rmSync } from 'fs'
 import { join, basename } from 'path'
 import { randomBytes } from 'crypto'
-import { STATE_DIR } from './config.js'
-import { atomicWriteFileSync } from './util.js'
-import type { Address, HydraConfig, Place, PlaceOptions } from '../config/types.js'
-import { route, refusal, identify, currentId, MAIN } from '../routing/route.js'
+import { STATE_DIR } from '../../daemon/config.js'
+import { atomicWriteFileSync } from '../../daemon/util.js'
+import type { Address, HydraConfig, Place, PlaceOptions } from '../../config/types.js'
+import { route, refusal, identify, currentId, MAIN } from '../../routing/route.js'
 
 /** Where a delivery goes: a specialist (or `main`), and the conversation it is for, so a per-conversation specialist can give it its own session. */
 export type RouteTarget = { to: string; conversation?: string }
-import { runGuard, type GuardInput, type GuardVerdict } from '../routing/guard.js'
-import type { Guard } from '../config/types.js'
+import { runGuard, type GuardInput, type GuardVerdict } from '../../routing/guard.js'
+import type { Guard } from '../../config/types.js'
 
 /**
  * Slack conversations: the Slack connector's side of routing (routing/route.ts).

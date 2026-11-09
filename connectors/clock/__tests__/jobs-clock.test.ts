@@ -6,10 +6,10 @@ import { JobsClock, openClockLock, ADOPT_GRACE_MS, applyOutcome, type ClockDeps 
 import {
   ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, externalFile, backoffUntil, commandMatches, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readDaemonState, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
-} from '../../shared/jobs.js'
-import { legacyTitles, runnerJobs } from '../../shared/jobs-launchd.js'
-import { jobsFromSchedules } from '../../shared/schedules.js'
-import type { HydraConfig, Schedule } from '../../config/types.js'
+} from '../../../shared/jobs.js'
+import { legacyTitles, runnerJobs } from '../../../shared/jobs-launchd.js'
+import { jobsFromSchedules } from '../../../shared/schedules.js'
+import type { HydraConfig, Schedule } from '../../../config/types.js'
 
 // A fake world: a clock you move, a process table you control, and recorded messages. The lock is the real one.
 type World = {

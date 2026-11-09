@@ -6,14 +6,14 @@ import {
   prWatchDeps, listWatches, unwatchPr, unwatchBySession, retargetWatches, getWatchesBySession, parsePersistedWatches,
   _pollForTesting, _pollAllForTesting, _setWatchForTesting, type WatchEntry,
 } from '../pr-watch.js'
-import { deliverToSession, targetDeps, type DeliverOutcome } from '../../specialists/targets.js'
-import { registry, type SessionInfo } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
-import { setSpecialist, removeSpecialist } from '../../specialists/specialists.js'
-import { killSession } from '../session-lifecycle.js'
-import { gateway } from '../config.js'
-import { reviveThreadForDelivery, reviveDeps } from '../recovery.js'
-import { deliveryOutcome } from '../delivery-outcome.js'
+import { deliverToSession, targetDeps, type DeliverOutcome } from '../../../specialists/targets.js'
+import { registry, type SessionInfo } from '../../../daemon/sessions.js'
+import { transport } from '../../../daemon/bridge-transport.js'
+import { setSpecialist, removeSpecialist } from '../../../specialists/specialists.js'
+import { killSession } from '../../../daemon/session-lifecycle.js'
+import { gateway } from '../../../daemon/config.js'
+import { reviveThreadForDelivery, reviveDeps } from '../../../daemon/recovery.js'
+import { deliveryOutcome } from '../../../daemon/delivery-outcome.js'
 
 process.stderr.write = (() => true) as any
 

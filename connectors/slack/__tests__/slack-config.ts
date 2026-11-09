@@ -1,7 +1,7 @@
 // Test helper: a Slack view of a hydra.toml, as the listener would build it once connected.
-import { loadHydraConfig } from '../../config/load.js'
-import type { HydraConfig, LoadEnv } from '../../config/types.js'
-import { SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig } from '../slack-watch.js'
+import { loadHydraConfig } from '../../../config/load.js'
+import type { HydraConfig, LoadEnv } from '../../../config/types.js'
+import { SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig } from '../watch.js'
 
 export const BOT = 'UBOT'
 const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }

@@ -7,7 +7,7 @@ import { registry, threadRegistry, sessionEmoji, type SessionInfo } from './sess
 import { transport } from './bridge-transport.js'
 import { formatDuration } from './util.js'
 import { loadAccess, operatorIds } from './access.js'
-import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
+import { getWatchesBySession, type WatchEntry } from '../connectors/github/pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
 import { sessionLiveAsync } from './session-activity.js'
 import { homeRecoverable, homeStatus, homeStatusAccessory, type HomeStatus } from './home-status.js'

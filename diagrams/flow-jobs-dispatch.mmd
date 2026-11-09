@@ -1,4 +1,4 @@
-%% A runner = "daemon" slot, from tick to settled (daemon/jobs-clock.ts, cli/jobs.ts).
+%% A runner = "daemon" slot, from tick to settled (connectors/clock/jobs-clock.ts, cli/jobs.ts).
 %% A launchd job's slot: flow-jobs-launchd.mmd. jobs sync: flow-jobs-sync.mmd.
 flowchart TD
   T["tick, once a minute<br/>syncZone; tryLock _daemon.lock"] -->|not the owner| X[return]

@@ -1,5 +1,5 @@
 // Recurring jobs, the part both sides read: jobs.toml, the state files the daemon writes, and the owed rule.
-// The daemon's clock (daemon/jobs-clock.ts) is the only writer of job state; attempts (cli/jobs.ts) write one
+// The daemon's clock (connectors/clock/jobs-clock.ts) is the only writer of job state; attempts (cli/jobs.ts) write one
 // result file each; the CLI only reads.
 
 import { spawnSync } from 'child_process'

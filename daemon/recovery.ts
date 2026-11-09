@@ -12,7 +12,7 @@ import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnR
 import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { tmuxHasSession, baseNameFromBranch } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
-import { parsePrUrl, retargetWatches, unwatchBySession } from './pr-watch.js'
+import { parsePrUrl, retargetWatches, unwatchBySession } from '../connectors/github/pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
 import { notifyOperator } from './access.js'
 import { deadSessionLabel, recoveryEntry, recoveryModel } from './recovery-selection.js'

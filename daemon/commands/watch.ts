@@ -1,6 +1,6 @@
 import { gateway } from '../config.js'
 import { registry } from '../sessions.js'
-import { watchPr, unwatchPr, listWatches, formatWatchEntry, detectPrUrl, WATCH_ERRORS, type WatchOpts } from '../pr-watch.js'
+import { watchPr, unwatchPr, listWatches, formatWatchEntry, detectPrUrl, WATCH_ERRORS, type WatchOpts } from '../../connectors/github/pr-watch.js'
 import { reportError } from '../util.js'
 import type { InboundMessage } from '../../gateway.js'
 

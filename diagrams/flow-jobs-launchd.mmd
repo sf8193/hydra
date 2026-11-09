@@ -1,5 +1,5 @@
 %% A runner = "launchd" slot: plist, then an external result, then the daemon's delivery
-%% (cli/jobs.ts jobsLaunchdRun, daemon/jobs-clock.ts applyExternal).
+%% (cli/jobs.ts jobsLaunchdRun, connectors/clock/jobs-clock.ts applyExternal).
 flowchart TD
   PL["com.hydra.job.PLATFORM.NAME<br/>StartCalendarInterval; once on wake"] --> LR["stable bun + the daemon's hydra.ts<br/>--state-dir DIR jobs launchd-run"]
   LEG["old bun.cron.hydra-job-PLATFORM-NAME<br/>(Cellar bun; until jobs sync moves it)"] --> ENT["cli/jobs-entry.ts"] --> LR

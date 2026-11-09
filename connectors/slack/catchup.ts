@@ -1,5 +1,5 @@
-import { route } from '../routing/route.js'
-import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './slack-watch.js'
+import { route } from '../../routing/route.js'
+import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 
 /**
  * The catch-up pass: replays into the watcher what Slack did not push while the listener

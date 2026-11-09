@@ -12,7 +12,7 @@ import { withoutIntents, type EngineAdapter } from '../engines/engine-adapter.js
 import type { SessionLabel } from '../../shared/constants.js'
 import { resolveSpawnLabel, tmuxHasSession } from '../util.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
-import { _setWatchForTesting, type WatchEntry } from '../pr-watch.js'
+import { _setWatchForTesting, type WatchEntry } from '../../connectors/github/pr-watch.js'
 import type { CodexPiggyback } from '../engines/codex-piggyback.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')

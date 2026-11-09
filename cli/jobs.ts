@@ -1,4 +1,4 @@
-// Recurring jobs, the CLI side. The daemon owns the clock (daemon/jobs-clock.ts): it decides, dispatches and records.
+// Recurring jobs, the CLI side. The daemon owns the clock (connectors/clock/jobs-clock.ts): it decides, dispatches and records.
 // This file holds what runs outside it:
 // - `jobs attempt`: one detached run of a job's work, started by the daemon, reporting one result file;
 // - `jobs run`: asks the daemon for a dispatch and waits for its outcome in the foreground;

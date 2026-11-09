@@ -11,7 +11,7 @@ import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
 import { isThreadOccupied } from '../protocol-registry.js'
-import { unwatchBySession } from "../pr-watch.js"
+import { unwatchBySession } from "../../connectors/github/pr-watch.js"
 import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'

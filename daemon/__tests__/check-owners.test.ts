@@ -69,9 +69,9 @@ describe('check-owners: deleting work only in worktree-manager', () => {
 
 describe('check-owners: raw tmux liveness and exec only in owners', () => {
   test('a new raw tmuxHasSession gate is caught (with or without a space); owners, imports and the definition pass', () => {
-    expect(hits('daemon/pr-watch.ts', 'if (owner && tmuxHasSession(owner.tmuxName)) continue')).toHaveLength(1)
-    expect(hits('daemon/pr-watch.ts', 'if (tmuxHasSession (n)) continue')).toHaveLength(1)
-    expect(hits('daemon/pr-watch.ts', "import { tmuxHasSession as t } from './util.js'")).toEqual([])
+    expect(hits('connectors/github/pr-watch.ts', 'if (owner && tmuxHasSession(owner.tmuxName)) continue')).toHaveLength(1)
+    expect(hits('connectors/github/pr-watch.ts', 'if (tmuxHasSession (n)) continue')).toHaveLength(1)
+    expect(hits('connectors/github/pr-watch.ts', "import { tmuxHasSession as t } from './util.js'")).toEqual([])
     expect(hits('daemon/util.ts', 'return tmuxHasSession(info.tmuxName)')).toEqual([])
     expect(hits('daemon/x.ts', 'export function tmuxHasSession(name: string): boolean {')).toEqual([])
   })
