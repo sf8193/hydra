@@ -13,6 +13,7 @@ import { _resetBackoff, getBackoff } from '../recovery-backoff.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withThreadLock } from '../specialists.js'
 import { deliverToTarget, parseTarget, perThreadName, sessionByName, targetDeps } from '../targets.js'
 import { fakeAdapter } from './test-harness.js'
+import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 
 process.stderr.write = (() => true) as any
 
@@ -23,11 +24,11 @@ const names: string[] = []
 const real = { threadExists: reviveDeps.threadExists, stuck: targetDeps.stuckState, send: gateway.send, sendOrQueue: transport.sendOrQueue }
 let spawns: any[][] = []
 
-/** A session in `threadId`: alive and bridged unless told otherwise. */
-function occupy(threadId: string, o: { alive?: boolean; connected?: boolean; tmuxName?: string } = {}): SessionInfo {
+/** A session in `threadId`: alive and bridged unless told otherwise; ten minutes old unless just spawned. */
+function occupy(threadId: string, o: { alive?: boolean; connected?: boolean; tmuxName?: string; createdAt?: number } = {}): SessionInfo {
   const sessionId = `tg-sess-${++n}`
   const info = {
-    sessionId, tmuxName: o.tmuxName ?? `tg-${n}`, topic: 't', threadId, createdAt: Date.now() - 600_000, lastActive: 1, listening: false,
+    sessionId, tmuxName: o.tmuxName ?? `tg-${n}`, topic: 't', threadId, createdAt: o.createdAt ?? Date.now() - 600_000, lastActive: 1, listening: false,
     engine: 'claude', sessionType: 'thread_owner', adapter: fakeAdapter({ isAlive: () => o.alive ?? true, usage: () => null }),
   } as unknown as SessionInfo
   registry.set(sessionId, info)
@@ -40,9 +41,10 @@ function occupy(threadId: string, o: { alive?: boolean; connected?: boolean; tmu
 function stubSpawn() {
   const spawn = async (...args: any[]) => {
     spawns.push(args)
-    await Bun.sleep(5)
+    await new Promise(r => setImmediate(r))  // a spawn is never instant: concurrent deliveries pile up behind it
     const threadId = args[3]?.existingThreadId ?? `tg-new-thread-${++n}`
-    const info = occupy(threadId, { tmuxName: args[3]?.name ?? `tg-new-${n}`, connected: false })
+    // Just spawned: no bridge yet, inside its grace window, so it reads starting (a ten-minute-old one reads orphaned).
+    const info = occupy(threadId, { tmuxName: args[3]?.name ?? `tg-new-${n}`, connected: false, createdAt: Date.now() })
     return { name: info.tmuxName, sessionId: info.sessionId, threadId, url: '' }
   }
   _setRecoveryDeps({
@@ -60,8 +62,11 @@ const specialist = (threadId: string | undefined, extra: Record<string, unknown>
 }
 const opts = { initiator: 'tester' }
 
-beforeEach(() => { spawns = []; reviveDeps.threadExists = async () => true; stubSpawn() })
+// The daemon has been up for hours: a bridgeless session's grace runs from its own start, never from this process's.
+// (Left to the process clock, it read starting only while the test process was under 90s old.)
+beforeEach(() => { spawns = []; reviveDeps.threadExists = async () => true; stubSpawn(); _setDaemonStartedAtForTesting(0) })
 afterEach(() => {
+  _setDaemonStartedAtForTesting(undefined)
   _resetRecoveryDeps(); _resetBackoff()
   Object.assign(reviveDeps, { threadExists: real.threadExists }); targetDeps.stuckState = real.stuck
   ;(gateway as any).send = real.send; (transport as any).sendOrQueue = real.sendOrQueue
@@ -151,8 +156,7 @@ describe('the landing', () => {
     const gate = new Promise<void>(r => { release = r })
     _setRecoveryDeps({ tryResume: async () => null, tryRespawn: async () => { await gate; return null as any } })
     registry.deleteThread('tg-flight') // vacant: the first send waits in the refill
-    const first = deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: key })
-    await Bun.sleep(5)
+    const first = deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: key })  // reserves the key before its first await
     expect(await deliverToTarget({ to: name }, 'm', { ...opts, idempotencyKey: key })).toMatchObject({ ok: false, exit: 7 })
     release()
     await first
@@ -210,7 +214,7 @@ describe('perThread shares its thread\'s lock and back-off once it has a thread'
     const held = withThreadLock(threadId, () => new Promise<void>(r => { release = r }))  // e.g. a `resume` typed in that thread
     let settled = false
     const refill = deliverToTarget(t, 'second', opts).then(r => { settled = true; return r })
-    await Bun.sleep(20)
+    for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r))  // turns of the loop, not wall time: held, it cannot settle
     expect(settled).toBe(false)
     release(); await held
     expect(await refill).toMatchObject({ ok: false, exit: 6 })
