@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync, unlinkSync, readFileSync, writeFileS
 import { join } from 'path'
 import { homedir } from 'os'
 import { execSync, execFileSync } from 'child_process'
-import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir } from '../shared/constants.js'
+import { spawnModel, TRANSCRIBE_TMUX, byteTmuxName, claudeConfigDir, platformStateDir } from '../shared/constants.js'
 import { tmuxNewSession, captureSpawnVars, withRaisedFdLimit } from '../shared/spawn-env.js'
 import { sourceEnvFiles, parseEnvLine } from '../shared/env-parse.js'
 
@@ -100,8 +100,8 @@ export function resolveConfig(platform?: string): HydraConfig {
   // a different platform (e.g. a session spawned by the slack daemon running
   // `hydra up discord` inherits HYDRA_STATE_DIR pointing at slack).
   const stateDir = platformExplicit
-    ? join(homedir(), '.claude', 'channels', platform)
-    : process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', platform)
+    ? platformStateDir(platform)
+    : process.env.HYDRA_STATE_DIR ?? process.env.DISCORD_STATE_DIR ?? platformStateDir(platform)
 
   const { configDir, spawnCwd, spawnCwdBlank } = sourceStateDirEnv(stateDir)
 

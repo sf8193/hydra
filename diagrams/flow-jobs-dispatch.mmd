@@ -1,0 +1,39 @@
+sequenceDiagram
+    autonumber
+    participant CLI as cli/jobs.ts (jobs run)
+    participant H as cli-handler.ts
+    participant C as jobs-clock.ts
+    participant S as jobs-state/NAME.json
+    participant A as cli/jobs.ts (jobs attempt, detached)
+    participant R as jobs-state/results/NAME.ID.json
+
+    Note over C: one tick a minute, one at a time, only while holding _daemon.lock
+    alt tick: latest slot owed
+        C->>S: reserve dispatch {id, nonce, at, kind: scheduled, slot, deadline} (sync, no await)
+    else jobs run
+        CLI->>H: jobs-run {name}
+        H->>C: requestRun(name)
+        C->>S: reserve dispatch {..., kind: manual} (same sync step: refuses "already running")
+    end
+    C->>A: spawn detached: jobs attempt PLATFORM NAME --dispatch --nonce --slot [--manual] --state-dir<br/>stdin = job definition, stdout/stderr = NAME.log
+    C->>S: add pid + lstart
+    opt jobs run
+        H-->>CLI: {id, pid, lstart}
+        Note over CLI: Ctrl-C: SIGTERM to pid (not the group), only while lstart matches
+    end
+    A->>A: check, then action (2 min timeout), self-deadline 34 min
+    A->>R: write result once {dispatch, at, result, note}
+    Note over A: deadline or SIGTERM: write first, then kill own group
+    loop each tick
+        C->>R: read result for the live dispatch
+        alt result present
+            C->>S: apply (idempotent via appliedDispatch), clear dispatch
+            C->>R: delete
+        else pid gone (lstart mismatch) / no pid past grace and no orphan by argv
+            C->>S: failure "ended without a result", appliedDispatch = id
+        else alive past deadline
+            C->>A: SIGKILL -pid (lstart re-checked)
+        end
+        C->>R: sweep results with id <= appliedDispatch
+    end
+    CLI->>S: poll until appliedDispatch >= id, print last/notNow tagged with id

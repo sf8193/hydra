@@ -51,6 +51,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/access.ts':         { layer: 'domain',    desc: 'Access control, allowlists, maxChunkLimit' },
   'daemon/templates.ts':      { layer: 'domain',    desc: 'Spawn templates (review:, fix:, design:)' },
   'daemon/pr-watch.ts':       { layer: 'domain',    desc: 'GitHub PR polling, comment delivery' },
+  'daemon/jobs-clock.ts':     { layer: 'domain',    desc: 'Jobs clock: tick, dispatch detached attempts, apply results' },
   'daemon/dashboard.ts':      { layer: 'domain',    desc: 'Slack Home tab dashboard' },
   'daemon/idempotency.ts':    { layer: 'domain',    desc: 'Message deduplication' },
   'daemon/state-machine.ts':  { layer: 'domain',    desc: 'Generic state machine for protocols' },

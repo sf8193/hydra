@@ -50,6 +50,7 @@ graph TD
     daemon_access["access.ts"]
     daemon_templates["templates.ts"]
     daemon_pr-watch["pr-watch.ts"]
+    daemon_jobs-clock["jobs-clock.ts"]
     daemon_dashboard["dashboard.ts"]
     daemon_idempotency["idempotency.ts"]
     daemon_state-machine["state-machine.ts"]
@@ -87,6 +88,7 @@ graph TD
   daemon --> daemon_bridge-server
   daemon --> daemon_commands_global
   daemon --> daemon_recovery
+  daemon --> daemon_jobs-clock
   daemon --> daemon_raindrop
   daemon --> daemon_phase-budget
   daemon --> daemon_idle-limit
@@ -159,6 +161,7 @@ graph TD
   daemon_cli-handler --> daemon_config
   daemon_cli-handler --> daemon_access
   daemon_cli-handler --> daemon_raindrop
+  daemon_cli-handler --> daemon_jobs-clock
   daemon_session-lifecycle --> daemon_config
   daemon_session-lifecycle --> daemon_util
   daemon_session-lifecycle --> daemon_sessions
@@ -210,6 +213,7 @@ graph TD
   daemon_pr-watch --> daemon_sessions
   daemon_pr-watch --> daemon_bridge-transport
   daemon_pr-watch --> daemon_util
+  daemon_jobs-clock --> shared_constants
   daemon_dashboard --> daemon_config
   daemon_dashboard --> daemon_sessions
   daemon_dashboard --> daemon_bridge-transport

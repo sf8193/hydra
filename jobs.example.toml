@@ -1,8 +1,9 @@
-# Copy to <state dir>/jobs.toml, then run: hydra jobs sync <platform>
-# Run sync from the main hydra checkout: the launchd plist points at the checkout it ran from.
+# Copy to <state dir>/jobs.toml. The daemon reads it every minute and runs each job at its local-time slots;
+# a slot missed while the machine slept runs once on wake. `hydra jobs list <platform>` validates the file and shows
+# each job's state.
 #
 # A job's check script prints nothing when all is well. Anything it prints is passed to the agent.
-# A nonzero exit posts one "job failed" message per day.
+# A nonzero exit is a failure: the daemon posts one "job failed" message per local day while it keeps failing.
 #
 # mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
 # mode = "main"   the prompt goes to the main session

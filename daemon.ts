@@ -33,7 +33,8 @@ try {
   }
 } catch {}
 
-import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath } from './daemon/config.js'
+// DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
+import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL } from './daemon/config.js'
 import { syncMods } from './shared/mods.js'
 import { PLUGIN_MANIFEST, MCP_CONFIG, ensureBridgeReady } from './daemon/plugin-manifest.js'
 import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daemon/sessions.js'
@@ -46,6 +47,7 @@ import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
 import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
+import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
 
 threadRegistry.boot(registry)
 reattachAdapters(resolveEngine)
@@ -222,7 +224,7 @@ import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/sl
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
-import { tmuxHasSession } from './daemon/util.js'
+import { tmuxHasSession, safeSend } from './daemon/util.js'
 
 // ---------------------------------------------------------------------------
 // Recovery report on reconnect
@@ -491,6 +493,25 @@ setInterval(() => {
 // Lower cadence than reply guard — these stalls are minutes-scale.
 setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
 
+// Jobs clock: runs jobs.toml's jobs as detached attempts and applies their results (daemon/jobs-clock.ts).
+// Failure reports go to main; if main can't take one, straight to a channel.
+startJobsClock(realDeps({
+  stateDir: STATE_DIR,
+  platform: PLATFORM,
+  hydraEntry: join(import.meta.dir, 'cli', 'hydra.ts'),
+  toMain: (text, initiator) => {
+    if (!transport.has('main')) return false
+    transport.sendOrQueue('main', { type: 'notification', content: text, meta: { source: 'jobs', initiator } })
+    return true
+  },
+  // The clock resolves job channel → top-level channel → home channel; this only sends.
+  direct: async (text, channel) => {
+    if (!channel) { process.stderr.write(`daemon: jobs alert has no channel: ${text}\n`); return false }
+    return (await safeSend(channel, text)).length > 0
+  },
+  homeChannel: () => DEFAULT_SESSION_CHANNEL || undefined,
+}))
+
 let shuttingDown = false
 
 function shutdown(): void {
@@ -499,6 +520,7 @@ function shutdown(): void {
   process.stderr.write('daemon: shutting down\n')
 
   stopSlackWatch()
+  stopJobsClock()
   registry.persist()
   transport.persistQueues()
   socketServer.close()
