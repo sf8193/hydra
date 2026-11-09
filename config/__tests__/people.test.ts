@@ -22,7 +22,7 @@ describe('hydra people add', () => {
     const plan = planAddPerson(d, env, { id: 'bob', address: 'discord:100000000000000002', roles: ['staff'] })
     if (!plan.ok) throw new Error(plan.error)
     expect(plan.text.startsWith(MINE)).toBe(true)
-    applyAddPerson(d, plan.text)
+    expect(applyAddPerson(d, plan)).toBeUndefined()
     const loaded = loadHydraConfig(readFileSync(join(d, 'hydra.toml'), 'utf8'), env)
     expect(loaded.ok && loaded.config.people.bob).toEqual({ id: 'bob', ids: ['discord:100000000000000002'], roles: ['staff'], name: 'bob' })
     expect(statSync(join(d, 'hydra.toml')).mode & 0o777).toBe(0o640)
@@ -35,5 +35,33 @@ describe('hydra people add', () => {
     expect(planAddPerson(at(), env, { id: 'eve', address: 'discord:3' })).toMatchObject({ ok: false, error: expect.stringContaining('isn\'t in use yet') })
     expect(planAddPerson(at(MINE), env, { id: 'Eve', address: 'discord:3' })).toMatchObject({ ok: false })
     expect(planAddPerson(at(MINE), env, { id: 'eve', address: 'U0EVE' })).toMatchObject({ ok: false, error: expect.stringContaining('is not an address') })
+  })
+})
+
+describe('hydra people add, concurrently and beside hand edits', () => {
+  test('a hand edit between planning and writing is never overwritten', () => {
+    const d = at(MINE)
+    const plan = planAddPerson(d, env, { id: 'bob', address: 'discord:100000000000000002' })
+    if (!plan.ok) throw new Error(plan.error)
+    writeFileSync(join(d, 'hydra.toml'), MINE + '# edited by hand\n')
+    expect(applyAddPerson(d, plan)).toContain('hydra.toml changed while this was being planned')
+    expect(readFileSync(join(d, 'hydra.toml'), 'utf8')).toBe(MINE + '# edited by hand\n')
+  })
+
+  test('six adds at once: every one that says added is in the file, and none crashes', async () => {
+    const d = at(MINE)
+    const root = join(import.meta.dir, '..', '..')
+    const runs = await Promise.all([2, 3, 4, 5, 6, 7].map(async n => {
+      const p = Bun.spawn(['bun', join(root, 'cli', 'hydra.ts'), '--state-dir', d, 'people', 'add', `p${n}`, `discord:10000000000000000${n}`], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+      return { n, code: await p.exited, out: await new Response(p.stdout).text(), err: await new Response(p.stderr).text() }
+    }))
+    const loaded = loadHydraConfig(readFileSync(join(d, 'hydra.toml'), 'utf8'), env)
+    if (!loaded.ok) throw new Error('hydra.toml must still load')
+    for (const r of runs) {
+      expect(r.err).not.toContain('ENOENT')
+      if (r.code === 0) expect(loaded.config.people[`p${r.n}`]).toBeDefined()
+      else expect(r.err).toContain('run it again')
+    }
+    expect(runs.some(r => r.code === 0)).toBe(true)
   })
 })

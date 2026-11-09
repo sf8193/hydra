@@ -1,7 +1,7 @@
 // `hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]`: add a person to hydra.toml (config/people.ts).
 
 import { resolveConfig } from './helpers.js'
-import { applyAddPerson, planAddPerson } from '../config/people.js'
+import { addPerson } from '../config/people.js'
 import { systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
 
@@ -20,10 +20,10 @@ export function peopleCommand(args: string[], stateDirOpt: string | undefined): 
     else if (args[i] !== '--dry-run') { console.error(`error: unknown option ${args[i]}`); return 1 }
   }
   const stateDir = stateDirOpt ?? resolveConfig().stateDir
-  const plan = planAddPerson(stateDir, systemEnv(SESSION_NAMES), { id, address, roles, ...(name && { name }) })
+  const dryRun = args.includes('--dry-run')
+  const plan = addPerson(stateDir, systemEnv(SESSION_NAMES), { id, address, roles, ...(name && { name }) }, { dryRun })
   if (!plan.ok) { console.error(`error: ${plan.error}`); console.error('hydra.toml was not changed'); return 1 }
-  if (args.includes('--dry-run')) { console.log(plan.text); console.log(`dry run: would append ${plan.added}`); return 0 }
-  applyAddPerson(stateDir, plan.text)
+  if (dryRun) { console.log(plan.text); console.log(`dry run: would append ${plan.added}`); return 0 }
   console.log(`added ${plan.added} to ${stateDir}/hydra.toml; the daemon picks it up within a second`)
   return 0
 }

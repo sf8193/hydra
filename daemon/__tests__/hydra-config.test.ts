@@ -4,7 +4,8 @@ import { _setHydraConfigForTesting, currentHydraConfig, hydraConfigPath, onHydra
 import type { LoadEnv } from '../../config/types.js'
 
 const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }
-const config = (op: string) => `operator = "${op}"\n[people.${op}]\nids = ["slack:U0${op.toUpperCase()}"]\n`
+// Discord addresses: the suite runs as the discord platform, and an operator with none there is alerted.
+const config = (op: string) => `operator = "${op}"\n[people.${op}]\nids = ["discord:${[...op].map(c => c.charCodeAt(0)).join('')}"]\n`
 
 afterEach(() => { _setHydraConfigForTesting(undefined); stopHydraConfig(); rmSync(hydraConfigPath(), { force: true }) })
 
@@ -79,6 +80,14 @@ describe('the daemon\'s live hydra.toml', () => {
     startHydraConfig({ env })
     expect(seen).toEqual(['op'])
     off()
+  })
+
+  test('a load whose operator has no address on this platform alerts: nobody is in charge here', async () => {
+    writeFileSync(hydraConfigPath(), 'operator = "op"\n[people.op]\nids = ["slack:U0OP"]\n')
+    const sent: string[] = []
+    startHydraConfig({ env, alert: async t => { sent.push(t); return true } })
+    await retryHydraConfigAlert()
+    expect(sent.join('\n')).toContain('the operator op has no discord: address')
   })
 
   test('a test can stand in for the file, and subscribers hear it', () => {

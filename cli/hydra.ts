@@ -12,6 +12,7 @@ import {
 import { peek } from './peek.js'
 import { migrateCommand } from './migrate.js'
 import { peopleCommand } from './people.js'
+import { configCheckCommand } from './config-check.js'
 import { readBootRefusal } from './boot-refusal.js'
 import { bootRefusal } from '../config/migrate.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
@@ -90,6 +91,7 @@ Config:
                                        keeping each file it changes or retires as *.migrated; --dry-run prints it and writes
                                        nothing. Stop the daemon first; an interrupted run is finished by running it again
 
+  hydra config check [<platform>]      load hydra.toml as the daemon would; print errors and warnings
   hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]
                                        add a person to hydra.toml's roster (appended; written only if it loads)
 
@@ -204,6 +206,12 @@ async function main(): Promise<void> {
       process.exit(1)
     }
     process.exit(0)
+  }
+
+  if (command === 'config') {
+    const [, sub, platform] = filtered
+    if (sub !== 'check') { console.error('usage: hydra [--state-dir <dir>] config check [<platform>]'); process.exit(1) }
+    process.exit(configCheckCommand(platform, stateDirOpt))
   }
 
   if (command === 'people') {

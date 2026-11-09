@@ -8,6 +8,7 @@ allowed-tools:
   - Bash(ls *)
   - Bash(mkdir *)
   - Bash(hydra people add *)
+  - Bash(hydra config check *)
 ---
 
 # /discord:access — Discord Channel Access Management
@@ -164,18 +165,22 @@ roles = ["staff"]                            # labels a specialist's `allow` nam
     does that, and there's exactly one.
 - **`remove <senderId>`**: delete `discord:<senderId>` from the person whose
   `ids` holds it. If that leaves the person with no addresses, delete their
-  whole `[people.<id>]` table. Refuse to remove the operator's last address:
-  hydra would refuse to load the file. Say to change `operator` first.
+  whole `[people.<id>]` table. Refuse to remove the operator's last
+  `discord:` address, even if they have a `slack:` one: on Discord nobody
+  would pass admin checks or reach main. Say to change `operator` first.
 - **`pair <code>` / `deny <code>`**: pairing is off once hydra.toml exists: the
   daemon gives strangers no code. Say so, and offer `allow <senderId>` if the
   user knows who it is. A leftover `pending` entry can be denied as below.
 - **`operator <person-id>`**: set the top-level `operator = "<person-id>"`. The
   person must already be in `[people.*]`, with a `discord:` address.
 
-After writing, the daemon re-reads hydra.toml within a second. If the file
-doesn't load (a typo, an address under two people, an `allow` naming a role no
-one holds), the daemon keeps the last good config and DMs the operator why. So
-check your edit carefully, and re-read the file if the user reports an alert.
+**After every hand edit, run `hydra config check discord`** and relay its
+output. It loads the file as the daemon will. It names any error (a typo, an
+address under two people, an `allow` naming a role no one holds), which the
+daemon would answer by keeping its last good config. It also names any
+warning, including an operator with no `discord:` address. If it reports an
+error, fix the edit before you finish. The daemon re-reads hydra.toml within a
+second of a good write.
 
 If `access.json` still has a non-empty `allowFrom` beside a hydra.toml with
 content, the daemon will refuse to start until it's migrated. Tell the user to
