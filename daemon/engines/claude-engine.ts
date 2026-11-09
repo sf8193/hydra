@@ -211,6 +211,7 @@ export class ClaudeEngine implements EngineAdapter {
       get confirmedComplete() { return outcome.confirmedComplete }, answer: outcome.answer,
       get activityAt() { try { return tmuxWindowActivity(info.tmuxName) } catch { return null } },
       get live() { return outcome.live },
+      get backgroundWork() { return outcome.backgroundWork },
       // A live turn keeps its spinner moving; a hung one (API retry loop, stuck tool) goes silent while the
       // status file still says busy, so isSessionWorking bounds the claim by pane activity.
       workingSilenceLimitS: CLAUDE_WORKING_SILENCE_S,

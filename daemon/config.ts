@@ -58,6 +58,16 @@ export function envPercent(name: string, fallback?: number): number | undefined 
 export const typedDeliveryUserIds = (): Set<string> =>
   new Set((process.env.HYDRA_TYPED_DELIVERY_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean))
 
+/**
+ * HYDRA_IDLE_REAP_DAYS: a positive number of days (`7`, `1.5`) after which an idle spawned
+ * session is nudged, then ended, resumably (daemon/idle-limit.ts). Unset or malformed: off. Read per call.
+ */
+export function idleReapMs(): number | undefined {
+  const raw = (process.env.HYDRA_IDLE_REAP_DAYS || '').trim()
+  const days = /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : 0
+  return days > 0 ? Math.round(days * 86_400_000) : undefined
+}
+
 export type TypedDeliveryMode = 'off' | 'paste' | 'hold'
 let warnedBadMode = false
 /** HYDRA_TYPED_DELIVERY_MODE: off (default) | paste | hold. An unknown value means off and is logged once. Read per call. */

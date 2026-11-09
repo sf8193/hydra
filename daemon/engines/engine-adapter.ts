@@ -97,7 +97,10 @@ export type TurnOutcome = { readonly confirmedComplete: boolean; answer(): strin
 export type LiveState = 'working' | 'idle' | 'blocked'
 // workingSilenceLimitS: set by an engine whose 'working' claim can outlive a hung process (Claude's status
 // file stays busy): isSessionWorking then also requires pane activity within this many seconds.
-export type Turn = TurnOutcome & { readonly activityAt: number | null; readonly live: LiveState | null; readonly workingSilenceLimitS?: number }
+// backgroundWork: the session is between turns but something it started is still running (Claude's
+// `shell` status: a background shell). Not 'working' (it is at its prompt, so input lands as a new turn),
+// but not idle either. Absent when the engine can't tell.
+export type Turn = TurnOutcome & { readonly activityAt: number | null; readonly live: LiveState | null; readonly workingSilenceLimitS?: number; readonly backgroundWork?: boolean }
 
 /** A tmux keystroke action: raw key names, or literal text plus an optional trailing key. */
 export type TmuxKeyAction =

@@ -51,7 +51,7 @@ function settledAfterConsume(f: ConversationForensics): boolean {
 // One snapshot per outcome, taken on first use: `live`, confirmedComplete and answer() describe
 // the same status and transcript, and the poller builds an outcome every tick just for
 // activityAt, so nothing is read before it is asked (the transcript only when its answer is).
-export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: TranscriptSources): TurnOutcome & { readonly live: LiveState | null } {
+export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: TranscriptSources): TurnOutcome & { readonly live: LiveState | null; readonly backgroundWork: boolean } {
   let status: { sessionId: string | undefined; status: string | undefined } | undefined
   let forensics: ConversationForensics | null | undefined
   const st = () => status ??= (() => {
@@ -68,6 +68,7 @@ export function claudeTurnOutcome(info: TurnInfo, sinceMs: number, src: Transcri
   }
   return {
     get live() { const s = st().status; return s ? liveStateOf(s) : null },
+    get backgroundWork() { return st().status === 'shell' },
     get confirmedComplete() {
       return !!f() && answerFrom(f(), sinceMs) !== null && settledAfterConsume(f()!)
     },

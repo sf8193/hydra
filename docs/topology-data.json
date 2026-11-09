@@ -970,6 +970,14 @@
     ],
     [
       "daemon_idle-limit",
+      "daemon_config"
+    ],
+    [
+      "daemon_idle-limit",
+      "daemon_protocol-registry"
+    ],
+    [
+      "daemon_idle-limit",
       "shared_constants"
     ],
     [
