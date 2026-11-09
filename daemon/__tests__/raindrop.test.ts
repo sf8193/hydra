@@ -3076,8 +3076,10 @@ describe('raindrop: default allowedUsers and liveSessionIds', () => {
   })
 
   test('liveSessionIds excludes the already-dead, so boot does not reseed them', () => {
-    registry.set('live-1', sessionInfo({ sessionId: 'live-1' }))
-    registry.set('dead-1', sessionInfo({ sessionId: 'dead-1', deadAt: 123 }))
+    // running unless stamped dead, as occupancy() asks the adapter
+    const stand = { isAlive: (i: any) => !i.deadAt, isConnected: () => false } as any
+    registry.set('live-1', sessionInfo({ sessionId: 'live-1', adapter: stand }))
+    registry.set('dead-1', sessionInfo({ sessionId: 'dead-1', deadAt: 123, adapter: stand }))
     const ids = defaultLiveSessionIds()
     expect(ids).toContain('live-1')
     expect(ids).not.toContain('dead-1')

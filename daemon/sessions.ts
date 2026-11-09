@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto'
 import { readFileSync } from 'fs'
+import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
@@ -804,7 +805,7 @@ export function resolveSendTarget(
   reg: Pick<SessionRegistry, 'values' | 'get' | 'getByThread'> = registry,
   threads: Pick<ThreadRegistry, 'threads'> = threadRegistry,
 ): { session: SessionInfo; replaced?: string } | undefined {
-  const live = [...reg.values()].find(s => s.tmuxName === targetName && !s.deadAt)
+  const live = [...reg.values()].find(s => s.tmuxName === targetName && occupied(occupancy(s)))
   if (live) return { session: live }
 
   // Session names are recycled, so one name can appear in several threads'
@@ -827,7 +828,7 @@ export function resolveSendTarget(
   for (const [threadId] of ranked) {
     const successorId = reg.getByThread(threadId)
     const successor = successorId ? reg.get(successorId) : undefined
-    if (successor && !successor.deadAt && successor.tmuxName !== targetName) {
+    if (successor && occupied(occupancy(successor)) && successor.tmuxName !== targetName) {
       return { session: successor, replaced: targetName }
     }
   }

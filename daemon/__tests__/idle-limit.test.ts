@@ -20,7 +20,8 @@ const settle = () => new Promise<void>(r => queueMicrotask(() => queueMicrotask(
 function add(id: string, over: Partial<SessionInfo> = {}): SessionInfo {
   const info = {
     sessionId: id, topic: 't', threadId: `thread-${id}`, createdAt: Date.now(), lastActive: Date.now(),
-    tmuxName: id, listening: false, sessionType: 'thread_owner', ephemeral: true, ...over,
+    tmuxName: id, listening: false, sessionType: 'thread_owner', ephemeral: true,
+    adapter: { isAlive: (i: any) => !i.deadAt, isConnected: () => false } as any, ...over,  // running unless stamped dead
   } as SessionInfo
   registry.set(id, info)
   return info

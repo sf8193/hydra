@@ -111,7 +111,7 @@ describe('send_to_thread', () => {
       lastActive: Date.now(),
       tmuxName: 'file-test-session',
       listening: false,
-      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: fakeAdapter({ isAlive: () => true }) as any, sessionType: 'thread_owner' as const,
     })
     const { gateway } = await import('../config.js')
     const real = gateway.send
@@ -138,7 +138,7 @@ describe('send_to_thread', () => {
       lastActive: Date.now(),
       tmuxName: 'orch-test-session',
       listening: false,
-      engine: 'claude', adapter: engines.claude, sessionType: 'thread_owner' as const,
+      engine: 'claude', adapter: fakeAdapter({ isAlive: () => true }) as any, sessionType: 'thread_owner' as const,
     })
     const { gateway } = await import('../config.js')
     const real = gateway.send

@@ -238,6 +238,7 @@ function makeTestIO(): PaneProbeIO {
     },
     getSessions: () => registryEntries.values(),
     transportHas: (sessionId: string) => connectedSessions.has(sessionId),
+    occupancy: (s: { deadAt?: number }) => s.deadAt ? 'dead' : 'reachable', // a stand-in record stamped dead is dead
     transportSendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
     loadAccess: () => ({ allowFrom: ['user-123'] }),
     platform: 'discord',

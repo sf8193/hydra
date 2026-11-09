@@ -433,7 +433,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
   // successor, and polling resumes from the as-of-death cursors). A truly-absent owner still
   // falls through to the prune path below; 'main' has no dead record so it's unaffected.
   const owner = registry.get(entry.sessionId)
-  if (owner?.deadAt) return
+  if (owner && occupancy(owner) === 'dead') return
 
   // Fetch PR state once — reused for merge check and check status
   let prData: any = null

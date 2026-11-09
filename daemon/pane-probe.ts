@@ -9,6 +9,7 @@
 // are replaceable for testing.
 
 import { execFile } from 'child_process'
+import { occupancy, type Occupancy } from './session-reachability.js'
 import { promisify } from 'util'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -84,6 +85,7 @@ export type PaneProbeIO = {
   react: (channelId: string, messageId: string, emoji: string) => Promise<void>
   getSessions: () => Iterable<SessionInfo>
   transportHas: (sessionId: string) => boolean
+  occupancy: (info: SessionInfo) => Occupancy
   transportSendOrQueue: (sessionId: string, msg: any) => void
   loadAccess: () => { allowFrom: string[] }
   platform: string
@@ -152,6 +154,7 @@ const defaultIO: PaneProbeIO = {
   react: (channelId, messageId, emoji) => gateway.react(channelId, messageId, emoji).catch(() => {}),
   getSessions: () => registry.values(),
   transportHas: (sessionId) => transport.has(sessionId),
+  occupancy: (info) => occupancy(info),
   transportSendOrQueue: (sessionId, msg) => transport.sendOrQueue(sessionId, msg),
   loadAccess: () => loadAccess(),
   platform: PLATFORM,
@@ -326,7 +329,7 @@ const probeEntries = new Map<string, ProbeEntry>()
 
 // Sessions whose login just succeeded while their spawn prompt is still unanswered.
 const resendAfterLogin = new Set<string>()
-const findSession = (tmuxName: string) => [...io.getSessions()].find(s => s.tmuxName === tmuxName && !s.deadAt)
+const findSession = (tmuxName: string) => [...io.getSessions()].find(s => s.tmuxName === tmuxName && io.occupancy(s) !== 'dead')
 
 const threadIntercepts = new Map<string, {
   tmuxName: string
@@ -816,7 +819,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
   targets.push({ tmuxName: probeByteTmuxName(), threadId: io.defaultChannel, isMain: true })
 
   for (const info of io.getSessions()) {
-    if (info.deadAt) continue
+    if (io.occupancy(info) === 'dead') continue
     // Probing is for bridge-channel sessions: its idle nudge is a bridge
     // notification and its abort notice is about a lost bridge. A provider on its
     // own engine channel (Codex) is never a target, so it spends no tmux reads
@@ -851,7 +854,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
     if (target.isMain) checkWeeklyUsage(tailText)
 
-    const sessionInfo = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && !s.deadAt)
+    const sessionInfo = [...io.getSessions()].find(s => s.tmuxName === target.tmuxName && io.occupancy(s) !== 'dead')
     let detected = sessionInfo?.adapter
       ? sessionInfo.adapter.detectBlockingState(sessionInfo, tailText)
       : detectBlockingState(tailText)

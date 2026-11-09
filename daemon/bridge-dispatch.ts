@@ -48,7 +48,7 @@ function resolveParentTarget(caller: SessionInfo | undefined): { session: Sessio
   if (!caller) throw new Error('target="parent" requires a session context')
   const parent = parentSessionOf(caller)
   if (!parent) throw new Error(`${caller.tmuxName} has no parent session to send to`)
-  if (parent.deadAt) throw new Error(`${caller.tmuxName}'s parent ${parent.tmuxName} has ended`)
+  if (occupancy(parent) === 'dead') throw new Error(`${caller.tmuxName}'s parent ${parent.tmuxName} has ended`)
   return { session: parent }
 }
 
@@ -58,7 +58,7 @@ function resolveParentTarget(caller: SessionInfo | undefined): { session: Sessio
  */
 function findSessionByName(name: string): { record: SessionInfo } | { history: ThreadSessionEntry } | undefined {
   const records = [...registry.values()].filter(s => s.tmuxName === name)
-  const record = records.find(s => !s.deadAt) ?? records.sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
+  const record = records.find(s => occupancy(s) !== 'dead') ?? records.sort((a, b) => (b.deadAt ?? 0) - (a.deadAt ?? 0))[0]
   if (record) return { record }
   let latest: ThreadSessionEntry | undefined
   for (const thread of threadRegistry.threads.values()) {
@@ -621,7 +621,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
           : heal ? { session: (await ensureSpecialist(target, caller?.tmuxName ?? 'send_to_thread')).info }
           : byName
         if (!resolved) {
-          const known = [...registry.values()].filter(s => !s.deadAt).map(s => s.tmuxName).join(', ')
+          const known = [...registry.values()].filter(s => occupied(occupancy(s))).map(s => s.tmuxName).join(', ')
           throw new Error(`no session named "${target}". Known sessions: ${known || '(none)'}`)
         }
         const targetSession = resolved.session

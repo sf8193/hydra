@@ -13,6 +13,7 @@
 // A message is never dropped: every failure falls back to the channel path.
 
 import { typedDeliveryUserIds, typedDeliveryMode, typedDeliveryHoldMaxMs, PLATFORM, type TypedDeliveryMode } from './config.js'
+import { occupancy, type Occupancy } from './session-reachability.js'
 import { pasteTypedInput } from './pane-probe.js'
 import { isSessionWorkingAsync } from './session-activity.js'
 import { registry } from './sessions.js'
@@ -97,6 +98,7 @@ export type DeliveryDeps = {
   paste: (info: SessionInfo, content: string, meta: Record<string, string>) => Promise<boolean>
   now: () => number
   getSession: (sessionId: string) => SessionInfo | undefined
+  occupancy: (info: SessionInfo) => Occupancy
   onOutcome: (sessionId: string, meta: Record<string, string>, outcome: DeliveryOutcome) => void
 }
 
@@ -105,6 +107,7 @@ const defaultDeps: DeliveryDeps = {
   paste: tryTypedDelivery,
   now: () => Date.now(),
   getSession: id => registry.get(id),
+  occupancy: info => occupancy(info),
   onOutcome: (sessionId, meta, o) => {
     if (o.by !== 'channel') process.stderr.write(`daemon: typed-delivery ${sessionId} msg ${meta.message_id}: ${JSON.stringify(o)}\n`)
   },
@@ -115,7 +118,7 @@ export function _resetDelivery(): void { deps = defaultDeps; held.clear() }
 export function _heldCount(sessionId: string): number { return held.get(sessionId)?.length ?? 0 }
 
 const claudeLive = (info: SessionInfo | undefined): info is SessionInfo =>
-  !!info && !info.deadAt && info.engine === 'claude'
+  !!info && deps.occupancy(info) !== 'dead' && info.engine === 'claude'
 
 /** Release one held message: channel when asked, else paste with the channel as fallback. */
 async function release(info: SessionInfo | undefined, h: Held, how: 'channel' | 'paste', reason: 'idle' | 'max-hold' | 'death'): Promise<void> {

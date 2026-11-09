@@ -43,7 +43,7 @@ test('kill_session: agent kill reaches the hook as "session ended by <caller>", 
   ;(threadRegistry as any).persist = () => {}
   const mk = (id: string, name: string, extra = {}) => registry.set(id, {
     sessionId: id, tmuxName: name, topic: '', threadId: `t-${id}`, createdAt: Date.now(), lastActive: Date.now(),
-    listening: false, engine: 'claude', adapter: { stop: async () => {} }, sessionType: 'thread_owner', ...extra,
+    listening: false, engine: 'claude', adapter: { stop: async () => {}, isAlive: (i: any) => !i.deadAt, isConnected: () => false }, sessionType: 'thread_owner', ...extra,
   } as any)
   try {
     mk('kh-caller', 'kh-owner')

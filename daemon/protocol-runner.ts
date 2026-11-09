@@ -602,6 +602,7 @@ export function onRunDisconnect(sessionId: string): void {
   const run = runs.get(runId)
   if (!run || isTerminal(run)) return
   if (run.disconnectTimers.has(sessionId)) return // this episode is already being handled
+  // Connected and not given up on: a Codex runtime's deadAt is its verdict even while its socket lingers (C1).
   const connected = () => transport.has(sessionId) && !registry.get(sessionId)?.deadAt
   if (connected()) return
 

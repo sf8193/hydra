@@ -13,10 +13,11 @@ import { describe, test, expect } from 'bun:test'
 import { resolveSendTarget } from '../sessions.js'
 import type { SessionInfo, ThreadMetadata } from '../sessions.js'
 
-type FakeSession = { sessionId: string; tmuxName: string; threadId: string; deadAt?: number }
+type FakeSession = { sessionId: string; tmuxName: string; threadId: string; deadAt?: number; running?: boolean }
 
 function fakeRegistry(sessions: FakeSession[]) {
-  const byId = new Map(sessions.map(s => [s.sessionId, s as unknown as SessionInfo]))
+  // A stand-in is running unless it is stamped dead: liveness is occupancy()'s question, answered by the adapter.
+  const byId = new Map(sessions.map(s => [s.sessionId, { ...s, adapter: { isAlive: () => s.running ?? !s.deadAt, isConnected: () => false } } as unknown as SessionInfo]))
   // Mirrors the real registry: every entry claims its thread as it loads or
   // spawns, so later entries overwrite earlier ones. A restart leaves a dead
   // session still holding the mapping until a successor takes the thread.
@@ -76,6 +77,17 @@ describe('resolveSendTarget', () => {
       { sessionId: 's-glyph', tmuxName: 'glyph', threadId: 'thread-restarted' },
     ])
     const resolved = resolveSendTarget('spark', reg, fakeThreads({}))
+    expect(resolved?.session.sessionId).toBe('s-glyph')
+    expect(resolved?.replaced).toBe('spark')
+  })
+
+  test('a session that has died but is not stamped yet is not live: the sender reaches its successor', () => {
+    // The window before the health poll writes the death: the record has no deadAt, and its tmux is gone.
+    const reg = fakeRegistry([
+      { sessionId: 's-spark', tmuxName: 'spark', threadId: 'thread-unstamped', running: false },
+      { sessionId: 's-glyph', tmuxName: 'glyph', threadId: 'thread-unstamped' },
+    ])
+    const resolved = resolveSendTarget('spark', reg, fakeThreads({ 'thread-unstamped': ['spark', 'glyph'] }))
     expect(resolved?.session.sessionId).toBe('s-glyph')
     expect(resolved?.replaced).toBe('spark')
   })

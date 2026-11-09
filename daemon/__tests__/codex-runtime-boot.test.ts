@@ -184,9 +184,9 @@ describe('T0.7 engine events', () => {
 
   test('turnCompleted: idle, complete, surface now, silence handled', async () => {
     let surfaced = 0
-    const info = put({ sessionId: 't07-done', adapter: { surface: () => { surfaced++; return null } } as any })
+    const info = put({ sessionId: 't07-done', adapter: { surface: () => { surfaced++; return null }, isAlive: () => true, isConnected: () => true } as any })
     noteCodexTurnState('t07-done', false)
-    const gone = put({ sessionId: 't07-done-dead', deadAt: 1, adapter: { surface: () => null } as any })
+    const gone = put({ sessionId: 't07-done-dead', deadAt: 1, adapter: { surface: () => null, isAlive: () => false, isConnected: () => false } as any })
     notePendingReply(gone.sessionId, { chat_id: 'c-done', message_id: 'm', user: 'u' })
 
     codexEngine.emit('turnCompleted', 't07-done')

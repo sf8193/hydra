@@ -525,7 +525,7 @@ export function scratchSessionIds(info: SessionInfo, sessions: Iterable<SessionI
   const ids = new Set<string>()
   if (info.claudeSessionId) ids.add(info.claudeSessionId)
   if (info.sessionType !== 'thread_guest') for (const h of history) if (h.claudeSessionId) ids.add(h.claudeSessionId)
-  for (const s of sessions) if (s !== info && !s.deadAt && s.claudeSessionId) ids.delete(s.claudeSessionId)
+  for (const s of sessions) if (s !== info && occupancy(s) !== 'dead' && s.claudeSessionId) ids.delete(s.claudeSessionId)
   return [...ids]
 }
 
