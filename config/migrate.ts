@@ -402,7 +402,7 @@ export function appendText(existingText: string, body: string): string {
  * with the exact edits to make by hand. A table written inline or with dotted keys at the top of the file can't take
  * appended sub-tables either, and is refused by name.
  */
-export function appendOnly(existing: Doc, merged: Doc, existingText = ''): { doc: Doc; tables: string[] } | { refusal: string } {
+export function appendOnly(existing: Doc, merged: Doc, existingText = '', by = 'hydra migrate'): { doc: Doc; tables: string[] } | { refusal: string } {
   const doc: Doc = {}
   const tables: string[] = []
   const edits: string[] = []
@@ -444,7 +444,7 @@ export function appendOnly(existing: Doc, merged: Doc, existingText = ''): { doc
   const top = firstTable < 0 ? existingText : existingText.slice(0, firstTable)
   const inline = new Set([...top.matchAll(/^\s*([A-Za-z0-9_-]+)\s*[.=]/gm)].map(m => m[1]))
   const blocked = Object.keys(doc).filter(k => inline.has(k))
-  if (blocked.length) return { refusal: `hydra.toml sets ${blocked.join(', ')} inline or with dotted keys at the top of the file (e.g. ${blocked[0]} = { … }), and hydra migrate can only append [${blocked[0]}.<id>] tables after it. Rewrite ${blocked.length > 1 ? 'them' : 'it'} as tables, then run hydra migrate again.` }
+  if (blocked.length) return { refusal: `hydra.toml sets ${blocked.join(', ')} inline or with dotted keys at the top of the file (e.g. ${blocked[0]} = { … }), and ${by} can only append [${blocked[0]}.<id>] tables after it. Rewrite ${blocked.length > 1 ? 'them' : 'it'} as tables, then run ${by} again.` }
   return { doc, tables }
 }
 

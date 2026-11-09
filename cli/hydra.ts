@@ -12,6 +12,7 @@ import {
 import { peek } from './peek.js'
 import { migrateCommand } from './migrate.js'
 import { peopleCommand } from './people.js'
+import { configAddCommand } from './config-add.js'
 import { configCheckCommand } from './config-check.js'
 import { readBootRefusal } from './boot-refusal.js'
 import { bootRefusal } from '../config/migrate.js'
@@ -92,6 +93,9 @@ Config:
                                        nothing. Stop the daemon first; an interrupted run is finished by running it again
 
   hydra config check [<platform>]      load hydra.toml as the daemon would; print errors and warnings
+  hydra config add <fragment.toml> [--dry-run]
+                                       add a fragment's [specialists.<id>] and [schedules.<id>] to hydra.toml while the daemon runs:
+                                       new tables are appended, identical ones are already there, a changed one is refused
   hydra people add <id> <address> [--role <r>]... [--name <n>] [--dry-run]
                                        add a person to hydra.toml's roster (appended; written only if it loads)
 
@@ -210,7 +214,11 @@ async function main(): Promise<void> {
 
   if (command === 'config') {
     const [, sub, platform] = filtered
-    if (sub !== 'check') { console.error('usage: hydra [--state-dir <dir>] config check [<platform>]'); process.exit(1) }
+    if (sub === 'add') {
+      if (daemonName) { console.error('error: config add takes --state-dir <dir>, not --daemon'); process.exit(1) }
+      process.exit(configAddCommand(filtered.slice(2), stateDirOpt))
+    }
+    if (sub !== 'check') { console.error('usage: hydra [--state-dir <dir>] config check [<platform>] | config add <fragment.toml> [--dry-run]'); process.exit(1) }
     process.exit(configCheckCommand(platform, stateDirOpt))
   }
 

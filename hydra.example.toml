@@ -2,6 +2,8 @@
 # hydra re-reads it within a second of a change; a file that fails to load keeps the last good config and tells the
 # operator why. An empty file is valid: the operator's DMs go to main and nothing else is heard.
 # Start from your old files with `hydra migrate` rather than writing it by hand (see README › Configuration).
+# Another repo's specialist and schedules: ship them as a fragment of [specialists.*] and [schedules.*] tables, and
+# add it with `hydra config add <fragment.toml>` (README › Configuration).
 # Every key below is optional unless it says required. Unknown keys are errors, so a typo never passes silently.
 
 # The one person whose DMs reach main and who passes every admin check and every specialist's `allow`.
@@ -76,6 +78,7 @@ files = true                          # download attachments (default false)
 bots = false                          # hear other bots (default false; hydra's own bot is never heard)
 
 # --- schedules: clocks that send a message to a specialist. A schedule's message carries the operator's authority. ---
+# (A repo adding its own: `hydra config add <fragment.toml>`.)
 
 [schedules.nightly-review]
 cron = "0 3 * * *"                    # required: 5 fields, local time

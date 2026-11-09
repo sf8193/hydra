@@ -2,8 +2,8 @@
 // there (one address, one person), appended after the operator's text (which is kept exactly), and written only if
 // the result loads. Removing someone is an edit to an existing table, which the operator (or the access skill) makes.
 
-import { closeSync, openSync, readFileSync, statSync, unlinkSync } from 'fs'
-import { atomicWriteFileSync } from '../shared/atomic-write.js'
+import { readFileSync } from 'fs'
+import { withHydraTomlLock, writeIfUnchanged } from './append.js'
 import { join } from 'path'
 import { formatIssues, loadHydraConfig, normalizeAddress } from './load.js'
 import { appendOnly, appendText, HYDRA_TOML, hydraTomlInUse, mergeDocs, toToml } from './migrate.js'
@@ -40,40 +40,17 @@ export function planAddPerson(stateDir: string, env: LoadEnv, p: AddPerson): Add
   return { ok: true, text, added: `[people.${p.id}]`, from: existingText }
 }
 
-const LOCK = 'hydra.toml.lock'
-const STALE_LOCK_MS = 10_000
-
-/**
- * Plans and writes under hydra.toml.lock (created exclusively; one older than 10s is a crashed writer's and is
- * taken over), so two adds at once can't both read the old file and lose one person.
- */
+/** Plans and writes under hydra.toml.lock, so two adds at once can't both read the old file and lose one person. */
 export function addPerson(stateDir: string, env: LoadEnv, p: AddPerson, opts: { dryRun?: boolean } = {}): AddPersonPlan {
-  const lock = join(stateDir, LOCK)
-  let fd: number
-  try { fd = openSync(lock, 'wx') } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
-    try { if (Date.now() - statSync(lock).mtimeMs < STALE_LOCK_MS) return { ok: false, error: 'another hydra people add is writing hydra.toml; run it again in a moment' } } catch {}
-    try { unlinkSync(lock) } catch {}
-    try { fd = openSync(lock, 'wx') } catch { return { ok: false, error: 'another hydra people add is writing hydra.toml; run it again in a moment' } }
-  }
-  try {
+  return withHydraTomlLock(stateDir, () => {
     const plan = planAddPerson(stateDir, env, p)
     if (!plan.ok || opts.dryRun) return plan
     const changed = applyAddPerson(stateDir, plan)
     return changed ? { ok: false, error: changed } : plan
-  } finally {
-    closeSync(fd)
-    try { unlinkSync(lock) } catch {}
-  }
+  }, error => ({ ok: false, error }))
 }
 
-/**
- * Writes the planned hydra.toml in one step, keeping the file's mode, unless the file changed since it was planned
- * (a hand edit meanwhile): then it writes nothing and says so. The daemon re-reads it within a second.
- */
+/** Writes the planned hydra.toml, unless it changed since it was planned (a hand edit meanwhile). */
 export function applyAddPerson(stateDir: string, plan: Extract<AddPersonPlan, { ok: true }>): string | undefined {
-  const path = join(stateDir, HYDRA_TOML)
-  if (readFileSync(path, 'utf8') !== plan.from) return 'hydra.toml changed while this was being planned; nothing written, run it again'
-  atomicWriteFileSync(path, plan.text, statSync(path).mode & 0o777)
-  return undefined
+  return writeIfUnchanged(stateDir, plan.from, plan.text)
 }
