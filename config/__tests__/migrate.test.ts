@@ -210,6 +210,9 @@ describe('bootRefusal: hydra.toml beside the old state it replaces', () => {
   test('refuses, naming each old state, only while hydra.toml has content', () => {
     expect(bootRefusal(state({ 'specialists.json': SPECIALISTS, 'access.json': ACCESS }).stateDir)).toBeUndefined()
     expect(bootRefusal(state({ 'hydra.toml': '\n', 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
+    // The daemon's test for "in use": a comment-only file isn't; one that doesn't parse is.
+    expect(bootRefusal(state({ 'hydra.toml': '# nothing yet\n', 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
+    expect(bootRefusal(state({ 'hydra.toml': 'operator = \n', 'specialists.json': SPECIALISTS }).stateDir)).toContain('specialists.json')
     expect(bootRefusal(state({ 'hydra.toml': TOML, 'access.json': { allowFrom: [] } }).stateDir)).toBeUndefined()
     const r = bootRefusal(state({ 'hydra.toml': TOML, 'specialists.json': SPECIALISTS, 'access.json': ACCESS, 'slack-watch.json': '{}' }).stateDir)
     expect(r).toContain('old state it replaces is still in')

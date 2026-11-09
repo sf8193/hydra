@@ -166,6 +166,16 @@ export const STEPS: MigrateStep[] = [accessStep, specialistsStep, slackWatchStep
 /** Old files no step migrates yet: migrate refuses while one is here, so nothing goes quiet on upgrade. */
 export const UNHANDLED: string[] = []
 
+/**
+ * Whether hydra.toml governs, by the daemon's own test: it has something in it (a comment-only file doesn't), or it
+ * doesn't parse (a file that fails to load still governs, rather than handing back to the old files).
+ */
+export function hydraTomlInUse(stateDir: string): boolean {
+  let text: string
+  try { text = readFileSync(join(stateDir, HYDRA_TOML), 'utf8') } catch { return false }
+  try { return Object.keys(Bun.TOML.parse(text) as object).length > 0 } catch { return true }
+}
+
 /** Where a daemon that refused to start says why, for the watchdog and `hydra health` (it never reaches chat). */
 export const BOOT_REFUSED_FILE = 'boot-refused.json'
 
@@ -176,8 +186,7 @@ export const BOOT_REFUSED_FILE = 'boot-refused.json'
  */
 export function bootRefusal(stateDir: string, steps: MigrateStep[] = STEPS): string | undefined {
   if (existsSync(join(stateDir, MIGRATE_JOURNAL))) return `refusing to start: a hydra migrate in ${stateDir} was interrupted after it committed; run 'hydra migrate' to finish it.`
-  const toml = join(stateDir, HYDRA_TOML)
-  try { if (!readFileSync(toml, 'utf8').trim()) return undefined } catch { return undefined }
+  if (!hydraTomlInUse(stateDir)) return undefined
   const old = [...steps.filter(s => s.pending(stateDir)).map(s => s.name), ...UNHANDLED.filter(f => existsSync(join(stateDir, f)))]
   if (!old.length) return undefined
   return `refusing to start: hydra.toml is in use, but old state it replaces is still in ${stateDir}: ${old.join(', ')}. `

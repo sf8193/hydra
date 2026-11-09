@@ -12,6 +12,7 @@ import {
 import { peek } from './peek.js'
 import { migrateCommand } from './migrate.js'
 import { readBootRefusal } from './boot-refusal.js'
+import { bootRefusal } from '../config/migrate.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
 import { parseAttemptArgs } from '../shared/jobs.js'
 import { MODEL_ALIASES, parseIdempotencyTtl } from '../shared/constants.js'
@@ -383,10 +384,12 @@ async function main(): Promise<void> {
       try {
         response = await sendRequest(socketPath(), { type: 'cli', command: 'health', id: randomUUID(), params: {} })
       } catch (err) {
-        // A daemon that refused to start left its reason; it's the one thing worth saying here.
-        const refused = stateDirOpt || !daemonName ? readBootRefusal(stateDirOpt ?? resolveConfig().stateDir) : undefined
+        // Why the daemon isn't up, checked now (a refusal recorded earlier may be fixed since).
+        const dir = stateDirOpt || !daemonName ? stateDirOpt ?? resolveConfig().stateDir : undefined
+        const refused = dir ? bootRefusal(dir) : undefined
         console.error(`error: daemon not reachable: ${err instanceof Error ? err.message : err}`)
         if (refused) console.error(`the daemon is ${refused}`)
+        else if (dir && readBootRefusal(dir)) console.error('it refused to start earlier, but the cause is fixed now: start it (hydra up)')
         process.exit(1)
       }
       printResponse(response, json)
