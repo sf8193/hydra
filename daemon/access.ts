@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync, readdirSync, rmSync, renameSync, mkdirSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
-import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
+import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_CHANNEL, PLATFORM } from './config.js'
+import { currentHydraConfig, hydraConfigInUse } from './hydra-config.js'
 import { chunk, safeSend } from './util.js'
 import type { InboundMessage } from '../gateway.js'
 
@@ -48,6 +49,19 @@ export type GateResult =
 // ---------------------------------------------------------------------------
 
 export function maxChunkLimit(): number { return gateway.maxMessageLength }
+
+/**
+ * The operator's user ids on this platform: every admin check and admin DM reads this. hydra.toml's operator while
+ * hydra.toml governs, else access.json's allowFrom (until `hydra migrate` moves it). A hydra.toml that hasn't loaded
+ * yet gives nobody, never allowFrom. Callers pass the access they loaded.
+ */
+export function operatorIds(access: Pick<Access, 'allowFrom'>): string[] {
+  if (!hydraConfigInUse()) return access.allowFrom ?? []
+  const cfg = currentHydraConfig()
+  if (!cfg.operator) return []
+  const prefix = `${PLATFORM}:`
+  return cfg.people[cfg.operator].ids.filter(a => a.startsWith(prefix)).map(a => a.slice(prefix.length))
+}
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
@@ -111,8 +125,9 @@ function pruneExpired(a: Access): boolean {
 export async function notifyOperator(text: string): Promise<boolean> {
   const access = loadAccess()
   const parts = chunk(text, gateway.maxMessageLength, 'markdown')
-  if (access.allowFrom.length > 0) {
-    const delivered = await Promise.all(access.allowFrom.map(async userId => {
+  const operator = operatorIds(access)
+  if (operator.length > 0) {
+    const delivered = await Promise.all(operator.map(async userId => {
       try {
         for (const part of parts) await gateway.sendDM(userId, part)
         return true
@@ -147,8 +162,9 @@ export async function gate(msg: InboundMessage): Promise<GateResult> {
   const senderId = msg.authorId
 
   if (msg.isDM) {
-    if (access.allowFrom.includes(senderId)) return { action: 'deliver', access }
-    if (access.dmPolicy === 'allowlist') return { action: 'drop' }
+    if (operatorIds(access).includes(senderId)) return { action: 'deliver', access }
+    // Pairing adds to allowFrom, which hydra.toml replaces: a code there would pair into nothing.
+    if (access.dmPolicy === 'allowlist' || hydraConfigInUse()) return { action: 'drop' }
 
     for (const [code, p] of Object.entries(access.pending)) {
       if (p.senderId === senderId) {

@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from 'bun:test'
 import { rmSync, writeFileSync } from 'fs'
-import { _setHydraConfigForTesting, currentHydraConfig, hydraConfigPath, onHydraConfigLoad, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
+import { _setHydraConfigForTesting, currentHydraConfig, hydraConfigPath, onHydraConfigLoad, retryHydraConfigAlert, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
 import type { LoadEnv } from '../../config/types.js'
 
 const env: LoadEnv = { home: '/home/op', isDir: () => true, isCommand: () => true, sessionNames: [] }
@@ -16,7 +16,7 @@ async function until(cond: () => boolean) {
 describe('the daemon\'s live hydra.toml', () => {
   test('before start, and with no file, it is the empty config', () => {
     expect(currentHydraConfig().people).toEqual({})
-    expect(startHydraConfig({ env, alert: () => {} }).ok).toBe(true)
+    expect(startHydraConfig({ env }).ok).toBe(true)
     expect(currentHydraConfig().operator).toBeUndefined()
   })
 
@@ -25,7 +25,7 @@ describe('the daemon\'s live hydra.toml', () => {
     const alerts: string[] = []
     const seen: (string | undefined)[] = []
     const off = onHydraConfigLoad(c => seen.push(c.operator))
-    startHydraConfig({ env, alert: t => alerts.push(t), intervalMs: 20 })
+    startHydraConfig({ env, alert: async t => { alerts.push(t); return true }, intervalMs: 20 })
     expect(currentHydraConfig().operator).toBe('op')
     writeFileSync(hydraConfigPath(), config('next'))
     await until(() => currentHydraConfig().operator === 'next')
@@ -35,6 +35,41 @@ describe('the daemon\'s live hydra.toml', () => {
     expect(currentHydraConfig().operator).toBe('next')
     expect(alerts[0]).toContain('"ghost" is not a person')
     off()
+  })
+
+  test('an alert that couldn\'t be delivered at boot is sent once the gateway is up', async () => {
+    writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
+    let up = false
+    const sent: string[] = []
+    startHydraConfig({ env, intervalMs: 20, alert: async t => { if (!up) return false; sent.push(t); return true } })
+    await Bun.sleep(100) // re-reads of the same bad file don't re-alert
+    expect(sent).toEqual([])
+    up = true
+    await retryHydraConfigAlert()
+    await retryHydraConfigAlert()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('"ghost" is not a person')
+  })
+
+  test('a retry while the first send is still in flight sends once', async () => {
+    writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
+    const sent: string[] = []
+    startHydraConfig({ env, alert: async t => { await Bun.sleep(50); sent.push(t); return true } })
+    await retryHydraConfigAlert()
+    await Bun.sleep(80)
+    expect(sent).toHaveLength(1)
+  })
+
+  test('a good load drops an undelivered alert, so a stale one is never sent', async () => {
+    writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
+    let up = false
+    const sent: string[] = []
+    startHydraConfig({ env, intervalMs: 20, alert: async t => { if (!up) return false; sent.push(t); return true } })
+    writeFileSync(hydraConfigPath(), config('op'))
+    await until(() => currentHydraConfig().operator === 'op')
+    up = true
+    await retryHydraConfigAlert()
+    expect(sent).toEqual([])
   })
 
   test('a test can stand in for the file, and subscribers hear it', () => {
@@ -50,8 +85,8 @@ describe('the daemon\'s live hydra.toml', () => {
 
   test('a second start is a no-op that returns the first result', () => {
     writeFileSync(hydraConfigPath(), config('op'))
-    const first = startHydraConfig({ env, alert: () => {} })
+    const first = startHydraConfig({ env })
     writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
-    expect(startHydraConfig({ env, alert: () => {} })).toBe(first)
+    expect(startHydraConfig({ env })).toBe(first)
   })
 })

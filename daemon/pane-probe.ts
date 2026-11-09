@@ -16,7 +16,7 @@ import { join } from 'path'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
-import { loadAccess } from './access.js'
+import { loadAccess, operatorIds } from './access.js'
 import { safeSend } from './util.js'
 import { transport } from './bridge-transport.js'
 import { byteTmuxName, claudeConfigDir } from '../shared/constants.js'
@@ -711,7 +711,7 @@ async function notifyLoginRequired(entry: ProbeEntry, now: number): Promise<void
     const name = entry.tmuxName
     const stage = entry.state.loginStage
     const access = io.loadAccess()
-    const adminUserId = access.allowFrom[0]
+    const adminUserId = operatorIds(access)[0]
 
     let channelId: string
     let mention = ''

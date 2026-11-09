@@ -41,7 +41,7 @@ import { registry, threadRegistry, sessionEmoji, reattachAdapters } from './daem
 import { engines, resolveEngine } from './daemon/engines/instances.js'
 import { engineRecords } from './daemon/engines/boot.js'
 import { transport } from './daemon/bridge-transport.js'
-import { loadAccess, notifyOperator } from './daemon/access.js'
+import { loadAccess, operatorIds, notifyOperator } from './daemon/access.js'
 import { setupPermissionHandler } from './daemon/permission.js'
 import { socketServer, startBridgeServer } from './daemon/bridge-server.js'
 import { announceRestartComplete } from './daemon/commands/global.js'
@@ -222,7 +222,7 @@ if ('homeSpawnHandler' in gateway) {
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/slack-watch-runtime.js'
-import { startHydraConfig, stopHydraConfig } from './daemon/hydra-config.js'
+import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert } from './daemon/hydra-config.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
@@ -245,7 +245,7 @@ function sendRecoveryReport(gapMs: number): void {
     `• Queued messages: ${queuedMsgCount}`,
   ].join('\n')
   const access = loadAccess()
-  for (const userId of access.allowFrom) {
+  for (const userId of operatorIds(access)) {
     void gateway.sendDM(userId, report).catch(e =>
       process.stderr.write(`daemon: recovery report DM failed: ${e}\n`),
     )
@@ -326,6 +326,7 @@ async function startGateway(attempt = 0): Promise<void> {
     await resolveDefaultChannel()
     void announceRestartComplete()
     void deliverWatchdogAlert()
+    void retryHydraConfigAlert()
     // Send the standalone recovery report only if auto-recovery won't run —
     // otherwise the gap info is folded into the auto-recovery summary (which
     // fires ~30s later) and the standalone report would mislead with "N disconnected"
@@ -417,7 +418,7 @@ async function backfillArtifacts(): Promise<void> {
 // PR watcher — polls GitHub for new PR comments/reviews
 // ---------------------------------------------------------------------------
 
-startHydraConfig({ alert: text => { void notifyOperator(text).catch(() => false) } })
+startHydraConfig({ alert: notifyOperator })
 startPrWatcher()
 startSlackWatch()
 

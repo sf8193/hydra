@@ -50,6 +50,7 @@ export function watchHydraConfig(opts: WatchOpts): HydraConfigWatch {
     let text: string
     try { text = read() } catch (e) {
       const message = `hydra.toml couldn't be read, so the last good config stays: ${(e as Error).message}`
+      lastOk = false // the next good read loads, even unchanged, and clears this
       alert(message)
       return { ok: false, errors: [{ path: '', message }], warnings: [] }
     }

@@ -3,7 +3,7 @@
 // A failed load keeps the last good config, and the alert the caller passes hears it.
 
 import { join } from 'path'
-import { STATE_DIR } from './config.js'
+import { STATE_DIR, PLATFORM } from './config.js'
 import { SESSION_NAMES } from './sessions.js'
 import { EMPTY_CONFIG, formatIssues, systemEnv } from '../config/load.js'
 import { watchHydraConfig, type HydraConfigWatch } from '../config/watch.js'
@@ -16,27 +16,75 @@ let watch: HydraConfigWatch | undefined
 let override: HydraConfig | undefined
 const listeners = new Set<(config: HydraConfig) => void>()
 
+type Send = (text: string) => Promise<boolean>
+let send: Send | undefined
+/** The latest alert not yet delivered. At boot the gateway isn't connected, so the first try can fail; a newer alert
+ * replaces it, and a good load clears it, so a stale "didn't load" is never sent. */
+let undelivered: string | undefined
+let inFlight: Promise<void> | undefined
+/** Whether hydra.toml governs: a live config names an operator, or the file has content that hasn't loaded yet. */
+let inUse = false
+
+/** One send at a time: a retry that lands while the boot send is still out waits for it instead of sending again. */
+function deliver(): Promise<void> {
+  if (inFlight) return inFlight
+  const text = undelivered
+  if (!text || !send) return Promise.resolve()
+  const run = send(text).catch(() => false).then(ok => { if (ok && undelivered === text) undelivered = undefined })
+  inFlight = run.finally(() => {
+    inFlight = undefined
+    // A newer alert that arrived during this send goes next.
+    if (undelivered && undelivered !== text) void deliver()
+  })
+  return inFlight
+}
 
 /**
- * Starts the watch once; later calls return the first result. `alert` hears each failed load (the daemon DMs the
- * operator; passed in, since access.ts reads this module). Every alert and warning is logged too.
+ * Whether hydra.toml decides who the operator is. A file that failed to load at boot counts: falling back to
+ * access.json then would hand admin back to ids the operator meant to leave out. An emptied or deleted file doesn't.
  */
-export function startHydraConfig(opts: { alert?: (text: string) => void; env?: LoadEnv; intervalMs?: number } = {}): LoadResult {
+export function hydraConfigInUse(): boolean {
+  return override ? override.operator !== undefined : inUse
+}
+
+/** Sends the alert that couldn't be delivered, if any. The daemon calls it once the gateway is up. */
+export function retryHydraConfigAlert(): Promise<void> {
+  return deliver()
+}
+
+/**
+ * Starts the watch once; later calls return the first result. `alert` sends each failed load to the operator and
+ * says whether it was delivered (passed in, since access.ts reads this module). Every alert and warning is logged too.
+ */
+export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs?: number } = {}): LoadResult {
   if (watch) return watch.initial
+  send = opts.alert
+  inUse = false
   watch = watchHydraConfig({
     path: hydraConfigPath(),
     env: opts.env ?? systemEnv(SESSION_NAMES),
     intervalMs: opts.intervalMs,
-    onAlert: text => { process.stderr.write(`daemon: ${text}\n`); opts.alert?.(text) },
+    onAlert: text => { process.stderr.write(`daemon: ${text}\n`); undelivered = text; void deliver() },
     onLoad: (config, warnings) => {
+      undelivered = undefined
+      inUse = config.operator !== undefined
+      const op = config.operator ? config.people[config.operator] : undefined
+      if (op && !op.ids.some(a => a.startsWith(`${PLATFORM}:`))) {
+        process.stderr.write(`daemon: hydra.toml: the operator ${op.id} has no ${PLATFORM}: address, so nobody passes admin checks on ${PLATFORM}\n`)
+      }
       if (warnings.length) process.stderr.write(`daemon: hydra.toml loaded with warnings:\n${formatIssues(warnings)}\n`)
       notify(config)
     },
   })
+  if (!watch.initial.ok) inUse = true
   return watch.initial
 }
 
 export function stopHydraConfig(): void {
+  inUse = false
+  inFlight = undefined
+  undelivered = undefined
+  send = undefined
   watch?.stop()
   watch = undefined
 }

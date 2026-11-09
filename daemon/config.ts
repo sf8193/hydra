@@ -96,7 +96,7 @@ export async function resolveDefaultChannel(): Promise<void> {
   try {
     const { loadAccess } = await import('./access.js')
     const access = loadAccess()
-    const userId = access.allowFrom[0]
+    const userId = (await import('./access.js')).operatorIds(access)[0]
     if (!userId) return
     if ('sendDM' in gateway) {
       const ch = await (gateway as any).app?.client?.conversations?.open({ users: userId })

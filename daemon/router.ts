@@ -4,7 +4,7 @@ import { cacheSlackChannel, cacheSlackThread } from './artifacts.js'
 import { refreshDashboard } from './dashboard.js'
 import { registry, threadRegistry } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { loadAccess, gate } from './access.js'
+import { loadAccess, operatorIds, gate } from './access.js'
 import type { Access } from './access.js'
 import type { DownloadedFile } from '../gateway.js'
 import type { InboundMessage } from '../gateway.js'
@@ -40,9 +40,9 @@ import { RESPAWN_RE } from './recovery-selection.js'
 import { listTemplates, getTemplate } from './templates.js'
 import { markUserMessaged } from './home-status.js'
 
-// Global command prefixes — gated on top-level allowFrom. Thread-scoped
+// Global command prefixes — gated on the operator (operatorIds). Thread-scoped
 // commands (fork, watch, build, respawn, resume) are excluded: those are
-// gated on session ownership, not allowFrom, so non-allowlisted users
+// gated on session ownership, not on the operator, so other users
 // can never trigger them.
 const COMMAND_PREFIXES = [
   'new session:', 'spawn:', '/spawn', 'spawn-wt:', '/spawn-wt',
@@ -371,7 +371,7 @@ if (gateway.onReaction) {
     emit('reaction', event)
     if (!isDeleteReaction(event.emoji)) return
     const access = loadAccess()
-    if (!access.allowFrom.includes(event.userId)) return
+    if (!operatorIds(access).includes(event.userId)) return
     try {
       await gateway.delete(event.channelId, event.messageId)
       process.stderr.write(`daemon: deleted message ${event.messageId} via reaction from ${event.userId}\n`)
@@ -390,10 +390,10 @@ gateway.onMessage(async (msg: InboundMessage) => {
 
   const access = loadAccess()
   const senderId = msg.authorId
-  const isAllowed = access.allowFrom.includes(senderId)
+  const isAllowed = operatorIds(access).includes(senderId)
 
   if (!isAllowed && COMMAND_RE.test(msg.content)) {
-    process.stderr.write(`daemon: command-shaped message from non-allowlisted sender ${senderId} ignored — add them to access.json allowFrom to enable commands\n`)
+    process.stderr.write(`daemon: command-shaped message from non-allowlisted sender ${senderId} ignored — only the operator may use commands\n`)
   }
 
   if (isAllowed) {
@@ -882,7 +882,7 @@ gateway.onMessage(async (msg: InboundMessage) => {
       const resolvedThreadId = registry.resolveThreadId(msg)
 
       // Pane-probe temporary intercept: "approve" / "reject" for plan-mode stuck sessions.
-      // Gated on allowFrom — sending keystrokes to a tmux pane is a privileged action.
+      // Gated on the operator — sending keystrokes to a tmux pane is a privileged action.
       const intercept = getThreadIntercept(resolvedThreadId)
       if (intercept && isAllowed) {
         const lower = msg.content.trim().toLowerCase()

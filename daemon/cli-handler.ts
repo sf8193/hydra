@@ -12,7 +12,7 @@ import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withTa
 import { getSlackWatcher, slackWatchHealth, addSlackWatch, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from './targets.js'
 import { gateway } from './config.js'
-import { loadAccess } from './access.js'
+import { loadAccess, operatorIds } from './access.js'
 import { on } from './event-bus.js'
 import { raindropStatusLine } from './raindrop.js'
 import { getCpuVitals } from './cpu-watch.js'
@@ -131,8 +131,9 @@ async function handleSpawn(req: CLIRequest): Promise<CLIResponse> {
 
   if (!quiet) {
     const access = loadAccess()
-    if (access.allowFrom.length > 0) {
-      const mentions = access.allowFrom.map(id => `<@${id}>`).join(' ')
+    const operator = operatorIds(access)
+    if (operator.length > 0) {
+      const mentions = operator.map(id => `<@${id}>`).join(' ')
       void gateway.send(result.threadId, `${mentions} spawned via CLI by **${initiator}**`).catch(() => {})
     }
   }
