@@ -90,6 +90,22 @@ describe('the daemon\'s live hydra.toml', () => {
     expect(sent.join('\n')).toContain('the operator op has no discord: address')
   })
 
+  test('every good load logs one line: the operator and how many people, specialists and schedules', async () => {
+    const lines: string[] = []
+    const write = process.stderr.write
+    process.stderr.write = ((t: string) => { lines.push(String(t)); return true }) as typeof process.stderr.write
+    try {
+      writeFileSync(hydraConfigPath(), config('op') + '[people.b]\nids = ["discord:2"]\n')
+      startHydraConfig({ env, intervalMs: 20 })
+      expect(lines.filter(l => l.includes('hydra.toml loaded:'))).toEqual(['daemon: hydra.toml loaded: operator op, 2 people, 0 specialists, 0 schedules\n'])
+      writeFileSync(hydraConfigPath(), config('next'))
+      await until(() => currentHydraConfig().operator === 'next')
+      expect(lines.filter(l => l.includes('hydra.toml loaded:')).at(-1)).toBe('daemon: hydra.toml loaded: operator next, 1 person, 0 specialists, 0 schedules\n')
+    } finally {
+      process.stderr.write = write
+    }
+  })
+
   test('a test can stand in for the file, and subscribers hear it', () => {
     const seen: (string | undefined)[] = []
     const off = onHydraConfigLoad(c => seen.push(c.operator))

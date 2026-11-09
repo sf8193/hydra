@@ -370,7 +370,12 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
 
 async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
   const p = req.params as { action?: string; name?: string; thread?: string; channel?: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
-  const view = (name: string, s: Specialist & { invalid?: string }) => ({ name, ...s, ...specialistStatus(name) })
+  // hydra.toml's sessions mode, and max only where it applies (per-conversation).
+  const mode = (name: string) => {
+    const d = Object.hasOwn(currentHydraConfig().specialists, name) ? currentHydraConfig().specialists[name] : undefined
+    return d && { sessions: d.sessions, ...(d.sessions === 'per-conversation' && { max: d.max }) }
+  }
+  const view = (name: string, s: Specialist & { invalid?: string }) => ({ name, ...s, ...mode(name), ...specialistStatus(name) })
   switch (p.action) {
     case 'list': return respond(req, true, listSpecialists().map(([name, s]) => view(name, s)))
     case 'show': {
