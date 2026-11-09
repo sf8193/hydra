@@ -1302,6 +1302,13 @@ describe('jobs run and mark-done', () => {
     expect(c.requestMarkDone('pull')).toEqual({ ok: false, error: 'pull is already running' })
     expect(clock().requestMarkDone('pull')).toEqual({ ok: false, error: expect.stringContaining('clock not owned') })
   })
+
+  test('mark-done refuses a launchd job: launchd never reads state, so its next slot would run anyway', async () => {
+    toml(`runner = "launchd"\n[sweep]\nschedule = "*/5 * * * *"\ncheck = "sweep.sh"\nmode = "none"\n`)
+    const c = clock(); await c.tick()
+    expect(c.requestMarkDone('sweep')).toEqual({ ok: false, error: expect.stringContaining('mark-done needs runner = "daemon"') })
+    expect(existsSync(stateFile(w.dir, 'sweep')) && state('sweep').covered).toBeFalsy()
+  })
 })
 
 describe('alerts: one per failure run, after alert_after', () => {

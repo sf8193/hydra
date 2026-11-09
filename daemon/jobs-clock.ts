@@ -397,6 +397,8 @@ export class JobsClock {
     if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
     const job = this.currentConfig().jobs.find(j => j.name === name)
     if (!job) return { ok: false, error: `no job named ${name} in jobs.toml` }
+    // launchd fires on its own calendar and never reads job state, so a covered slot would not stop its next run.
+    if (job.runner !== 'daemon') return { ok: false, error: `mark-done needs runner = "daemon": launchd runs ${name} at its next slot regardless` }
     const now = this.d.now()
     const st = this.ensureState(job, now)
     if (!st) return { ok: false, error: `state for ${name} is unreadable` }
