@@ -77,7 +77,11 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
       inUse = config.operator !== undefined
       const op = config.operator ? config.people[config.operator] : undefined
       if (op && !op.ids.some(a => a.startsWith(`${PLATFORM}:`))) {
-        process.stderr.write(`daemon: hydra.toml: the operator ${op.id} has no ${PLATFORM}: address, so nobody passes admin checks on ${PLATFORM}\n`)
+        // Loud: on this platform nobody is in charge now. The alert falls back to the default channel (no operator id here).
+        const text = `hydra.toml: the operator ${op.id} has no ${PLATFORM}: address, so on ${PLATFORM} nobody passes admin checks or reaches main by DM. Add one under [people.${op.id}].`
+        process.stderr.write(`daemon: ${text}\n`)
+        undelivered = text
+        void deliver()
       }
       if (warnings.length) process.stderr.write(`daemon: hydra.toml loaded with warnings:\n${formatIssues(warnings)}\n`)
       notify(config)

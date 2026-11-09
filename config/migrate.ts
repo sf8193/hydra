@@ -354,9 +354,7 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
   // A hydra.toml governs only once it names an operator; one without would retire allowFrom and leave nobody in charge.
   if (typeof merged.doc.operator !== 'string') return { ok: false, errors: ['no operator: access.json has no allowFrom to take one from. Add an allowFrom id (or write hydra.toml by hand).'] }
   // A hydra.toml with only comments in it is kept above the new content.
-  // What's already in hydra.toml is kept exactly, line endings included; new text follows in the file's own style.
-  const eol = existingText.includes('\r\n') ? '\r\n' : '\n'
-  const after = (body: string) => existingText + (existingText === '' || existingText.endsWith('\n') ? '' : eol) + eol + body.replace(/\n/g, eol)
+  const after = (body: string) => appendText(existingText, body)
   let text = existingText.trim() && !existing ? after(toToml(merged.doc)) : toToml(merged.doc)
   const appendNotes: string[] = []
   if (existing) {
@@ -389,6 +387,12 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
   const offset = existing ? 1 : 0
   const stepNotes = outputs.flatMap((o, i) => o.notes.map(n => n.replace(/people\.([a-z0-9-]+)/g, (m, id: string) => `people.${merged.renames[i + offset].get(id) ?? id}`)))
   return { ok: true, text, warnings: loaded.warnings, notes: [...appendNotes, ...stepNotes, ...merged.notes], consumed, writes }
+}
+
+/** New text after an existing hydra.toml, which is kept exactly (line endings included); the new text follows in its style. */
+export function appendText(existingText: string, body: string): string {
+  const eol = existingText.includes('\r\n') ? '\r\n' : '\n'
+  return existingText + (existingText === '' || existingText.endsWith('\n') ? '' : eol) + eol + body.replace(/\n/g, eol)
 }
 
 /**

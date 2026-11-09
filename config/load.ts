@@ -466,6 +466,14 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
   // --- warnings that need the whole file -----------------------------------------------------------------------------
 
+  // The operator passes admin checks only through an address on the platform a daemon runs: on a connected platform
+  // with none, nobody is in charge there.
+  if (operator) for (const platform of ['discord', 'slack'] as const) {
+    if (connectors[platform] && !people[operator].ids.some(a => a.startsWith(`${platform}:`))) {
+      warn('operator', `${operator} has no ${platform}: address, so on ${platform} nobody passes admin checks or reaches main by DM`)
+    }
+  }
+
   const ruleTargets = new Set(rules.map(r => r.to))
   const scheduleTargets = new Set(Object.values(schedules).map(s => s.to))
   for (const s of Object.values(specialists)) {
@@ -503,7 +511,7 @@ const join2 = (path: string, key: string) => path ? `${path}.${key}` : key
 /** `slack:U0TEST`, `discord:123`, `github:Alice` → canonical form (GitHub logins lowercased), or undefined. */
 export function normalizeAddress(raw: string): Address | undefined {
   const platform = raw.split(':')[0] as Platform
-  if (!(platform in ADDRESS_RE)) return undefined
+  if (!Object.hasOwn(ADDRESS_RE, platform)) return undefined
   const a = platform === 'github' ? raw.toLowerCase() : raw
   return ADDRESS_RE[platform].test(a) ? a as Address : undefined
 }

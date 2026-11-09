@@ -418,6 +418,18 @@ to = "desk"
       .toEqual(['specialists.ops.workdir: /home/op is your whole home folder: its sessions can read everything there, and hydra won\'t pre-approve Claude\'s trust for it; give the specialist a folder of its own'])
   })
 
+  test('an operator with no address on a connected platform warns: nobody is in charge there', () => {
+    expect(ok(`${BASE}\n[connectors.discord]\nbot_token_env = "T"\n`).warnings)
+      .toEqual(['operator: op has no discord: address, so on discord nobody passes admin checks or reaches main by DM'])
+  })
+
+  test('an address naming an inherited property is refused, not a crash', () => {
+    expect(errorsOf(`operator = "op"\n[people.op]\nids = ["constructor:x", "__proto__:y"]\n`)).toEqual([
+      'people.op.ids[0]: "constructor:x" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+      'people.op.ids[1]: "__proto__:y" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+    ])
+  })
+
   test('a place on a platform that isn\'t connected', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
       .toEqual(["specialists.ops: listens on discord:#feed, but [connectors.discord] isn't set, so it won't hear it"])
