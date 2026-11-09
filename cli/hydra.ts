@@ -11,6 +11,7 @@ import {
 } from './lifecycle.js'
 import { peek } from './peek.js'
 import { migrateCommand } from './migrate.js'
+import { readBootRefusal } from './boot-refusal.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
 import { parseAttemptArgs } from '../shared/jobs.js'
 import { MODEL_ALIASES, parseIdempotencyTtl } from '../shared/constants.js'
@@ -378,9 +379,16 @@ async function main(): Promise<void> {
     }
 
     case 'health': {
-      const response = await sendRequest(socketPath(), {
-        type: 'cli', command: 'health', id: randomUUID(), params: {},
-      })
+      let response: Record<string, unknown>
+      try {
+        response = await sendRequest(socketPath(), { type: 'cli', command: 'health', id: randomUUID(), params: {} })
+      } catch (err) {
+        // A daemon that refused to start left its reason; it's the one thing worth saying here.
+        const refused = stateDirOpt || !daemonName ? readBootRefusal(stateDirOpt ?? resolveConfig().stateDir) : undefined
+        console.error(`error: daemon not reachable: ${err instanceof Error ? err.message : err}`)
+        if (refused) console.error(`the daemon is ${refused}`)
+        process.exit(1)
+      }
       printResponse(response, json)
       break
     }

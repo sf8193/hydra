@@ -13,6 +13,8 @@ import { isKnownModel, SPIN_CPU_PERCENT } from '../shared/constants.js'
 import { modsExport, syncMods } from '../shared/mods.js'
 import { checkDaemonCpu } from './watchdog-cpu.js'
 import { noteRestart } from './watchdog-restarts.js'
+import { bootRefusal } from '../config/migrate.js'
+import { noteBootRefusal } from './boot-refusal.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)
@@ -138,6 +140,7 @@ export async function lifecycleUp(platform: string): Promise<void> {
   const cfg = resolveConfig(platform)
 
   requireSpawnCwd(cfg)
+  refuseIfBootWouldBeRefused(cfg, false)
 
   const aliveSessions = [cfg.daemonTmux, cfg.byteTmux].filter(tmuxExists)
   if (aliveSessions.length > 0) {
@@ -242,6 +245,8 @@ export async function lifecycleRestart(platform: string, opts?: { validate?: boo
   const validate = opts?.validate ?? false
 
   requireSpawnCwd(cfg)
+  // Before anything is stopped: a daemon that would refuse to start must not replace one that runs.
+  refuseIfBootWouldBeRefused(cfg, true)
 
   if (!isKnownModel(cfg.byteModel)) {
     console.warn(`\u26a0\ufe0f  Unrecognized model "${cfg.byteModel}" \u2014 may be a new release or typo. Restarting anyway.`)
@@ -371,6 +376,14 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
     networkUp: () => networkUp(platform),
     cpu: () => checkDaemonCpu(cfg.stateDir, now, msg => appendLog(cfg.watchdogLog, msg)),
   }, staleSeconds)
+  // A daemon that would refuse to start isn't restarted into a loop: the reason is logged once, and kept where
+  // `hydra health` reads it, until the state dir is fixed.
+  const refused = reason ? bootRefusal(cfg.stateDir) : undefined
+  if (refused) {
+    const line = noteBootRefusal(cfg.stateDir, refused, now)
+    if (line) appendLog(cfg.watchdogLog, `${reason}, but not restarting: ${line}`)
+    return
+  }
   const daemonRestartedThisTick = reason !== null
   if (reason) {
     appendLog(cfg.watchdogLog, reason)
@@ -388,6 +401,15 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
     const transcribeMsg = startTranscribeAuto(cfg)
     if (transcribeMsg) appendLog(cfg.watchdogLog, transcribeMsg)
   }
+}
+
+/** `hydra up` / `hydra restart`: say why the daemon would refuse to start, and stop before touching anything. */
+function refuseIfBootWouldBeRefused(cfg: HydraConfig, restarting: boolean): void {
+  const refused = bootRefusal(cfg.stateDir)
+  if (!refused) return
+  console.error(`error: the daemon would be ${refused}`)
+  if (restarting) console.error('nothing was stopped: the running daemon, if any, is left as it is')
+  process.exit(1)
 }
 
 export type DaemonProbe = {
