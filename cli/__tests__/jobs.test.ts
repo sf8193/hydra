@@ -6,7 +6,7 @@ import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
 import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
-  isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs, jobWarnings, jobsLaunchdRun, syncLaunchd, launchdIO,
+  isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs, jobWarnings, jobsLaunchdRun, syncLaunchd, launchdIO, keyTtl,
 } from '../jobs.js'
 import { awakeTimeout, jobFromWire, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs, type Job } from '../../shared/jobs.js'
 import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
@@ -267,7 +267,16 @@ describe('runWork', () => {
   test('no check script: delivers the prompt to main, queued', async () => {
     expect((await runWork(mainJob, dir, 'k')).result).toBe('done')
     expect(calls).toEqual([['deliver', '--to', 'main', '--queue', '--initiator', 'jobs:retro',
-      '--idempotency-key', 'k', '--message', 'Run the retro.']])
+      '--idempotency-key', 'k', '--idempotency-ttl', '10080m', '--message', 'Run the retro.']])   // weekly: a week
+  })
+
+  test("a delivery key lives one schedule period, the window a slot is retried in; 15m to 7d", () => {
+    const now = new Date(2026, 10, 4, 10, 30)   // local time, like the schedules
+    expect(keyTtl('0 * * * *', now)).toBe('60m')
+    expect(keyTtl('0 2 * * *', now)).toBe('1440m')
+    expect(keyTtl('*/5 * * * *', now)).toBe('15m')        // the floor: the in-flight default
+    expect(keyTtl('0 9 1 * *', now)).toBe('10080m')       // monthly: the 7d cap
+    expect(keyTtl('0 9,17 * * *', now)).toBe('480m')      // the gap after the latest slot: 09:00 → 17:00
   })
 
   test('failed check: failed, and the attempt itself sends nothing (the daemon reports failures)', async () => {
@@ -404,7 +413,7 @@ describe('runWork', () => {
   test('to: delivers the check output to the named target; no prompt means the output alone; only main is --queue', async () => {
     checkResult = { code: 0, out: '3 failures\n', err: '' }
     expect((await runWork(toJob(), dir, 'k')).result).toBe('done')
-    expect(calls).toEqual([['deliver', '--to', 'integrator', '--initiator', 'jobs:nb', '--idempotency-key', 'k', '--message', 'Check output:\n3 failures']])
+    expect(calls).toEqual([['deliver', '--to', 'integrator', '--initiator', 'jobs:nb', '--idempotency-key', 'k', '--idempotency-ttl', '1440m', '--message', 'Check output:\n3 failures']])
     calls.length = 0
     await runWork(parseJobs(`[t]\nschedule="0 2 * * *"\ncheck="n.sh"\nto="1234567890"`)[0], dir, 'k')   // an orphaned thread answers 4
     expect(calls[0]).not.toContain('--queue')
