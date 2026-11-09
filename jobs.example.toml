@@ -1,15 +1,22 @@
-# Copy to <state dir>/jobs.toml. The daemon reads it every minute and runs each job at its local-time slots;
-# a slot missed while the machine slept runs once on wake. `hydra jobs list <platform>` validates the file and shows
-# each job's state.
+# Copy to <state dir>/jobs.toml, then `hydra jobs sync <platform>`. Each job runs at its local-time slots; a slot
+# missed while the machine slept runs once on wake. `hydra jobs list <platform>` validates the file and shows each
+# job's state.
+#
+# runner: launchd tries once, no matter what. daemon keeps trying, as long as hydra runs (and adds needs and
+# alert_after below). Delivery is always the daemon's. Set it here for the whole file, or on a job to override it;
+# absent everywhere, it's launchd.
 #
 # A job's check script prints nothing when all is well. Anything it prints is passed to the agent.
-# Exit 75 means "not now": not an attempt, no slot used, no message; it is tried again on the next tick.
-# Any other nonzero exit is a failure. A slot is owed until it is done: a failed attempt is retried with back-off
-# (min(2^n minutes, 1h, the schedule's period)), and a failure run is alerted once, after alert_after.
+# Exit 75 means "not now": not an attempt, no message. A daemon-runner job tries again on the next tick; under launchd,
+# which has no retries, that slot is skipped.
+# Any other nonzero exit is a failure. A daemon-runner job's slot is owed until it is done: a failed attempt is retried
+# with back-off (min(2^n minutes, 1h, the schedule's period)), and a failure run is alerted once, after alert_after.
+# Under launchd, a failure is alerted at once.
 #
+# A daemon-runner job can add:
 # alert_after = "2d"      how long a failure run lasts before it is alerted, 1m to 30d (default 1d)
 # needs = ["internet"]    not now while offline (the captive-portal probe and the daemon's gateway both down)
-# `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it.
+# `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it (runner = "daemon" only).
 #
 # mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
 # mode = "main"   the prompt goes to the main session
@@ -18,6 +25,8 @@
 # model = "haiku"  (spawn only) model id or alias for the spawned session; default is the daemon's default.
 # idle_ttl = "4d"  (spawn only) how long the session may go with no one posting in its thread before it is
 #                  nudged, then ended 5m later (default 30m, max 7d). Raise it when the session waits on a reply.
+
+runner = "launchd"
 
 # Default for spawn jobs. Use a server channel: Discord cannot open a thread inside a DM, and a DM id
 # makes every spawn fail with "no channel to spawn in".
@@ -58,6 +67,7 @@ mode = "none"
 
 # A weekly obligation: no script at all. Runs once per Friday slot, retried while offline or failing.
 [weekly-review]
+runner = "daemon"
 schedule = "0 11 * * FRI"
 mode = "spawn"
 prompt = "Run the weekly review."

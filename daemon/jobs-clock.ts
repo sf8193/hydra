@@ -1,19 +1,18 @@
-// The jobs clock: the daemon decides when each job in jobs.toml runs, dispatches it as a detached attempt, and
-// applies the result the attempt leaves on disk. It is the only writer of job state. It lives in the daemon, not
-// launchd, so firings aren't lost in sleep, a running job stalls nothing, and one owner decides every slot. Each tick:
-// apply results, decide each job (owed slot, back-off, needs), then alerts. Everything outside goes through
-// ClockDeps, so tests drive the clock with a fake time and fake processes.
+// The jobs clock, in the daemon. It triggers `runner = "daemon"` jobs: it decides when each one runs, dispatches it as
+// a detached attempt, and retries a slot until it is done. For every job it is the delivery stage and the only writer
+// of job state: it applies each attempt's result, and each result a launchd run leaves (runner = "launchd").
+// Each tick: apply results, decide each daemon job (owed slot, back-off, needs), then alerts. Everything outside goes
+// through ClockDeps, so tests drive the clock with a fake time and fake processes.
 
 import { spawn } from 'child_process'
 import { dlopen, FFIType } from 'bun:ffi'
 import { randomBytes } from 'crypto'
+import { join } from 'path'
 import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from 'fs'
-import { resolve } from 'path'
-import { platformStateDir } from '../shared/constants.js'
 import { latestSlot, type Slot } from '../shared/cron-local.js'
 import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, LAUNCH_AGENTS_DIR, legacyTitles, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, lockFile, logFile,
-  owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, lockFile, logFile,
+  owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, parseExternalName, externalFile, externalResults, type ExternalResult, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../shared/jobs.js'
 
@@ -42,10 +41,6 @@ export type ClockDeps = {
   killGroup: (pid: number, signal: NodeJS.Signals) => void
   /** Signals one process (not its group). */
   kill: (pid: number, signal: NodeJS.Signals) => void
-  /** Removes this platform's legacy launchd job entries; returns the titles removed. */
-  removeLegacyEntries: () => Promise<string[]>
-  /** The platform's live state dir. Legacy entries belong to the daemon on it; a worktree or test daemon leaves them. */
-  defaultStateDir: string
   /** Hands a message to main. False if main can't take it. */
   toMain: (text: string, initiator: string) => boolean
   /** Posts straight to a channel (safeSend). False if it couldn't. */
@@ -69,6 +64,9 @@ type Recorded = Outcome & { at: string; dispatch?: number }
 /** The slot an outcome is for: scheduled (it serves the slot) or manual (run now; its success covers the latest slot). */
 type Target = { kind: Dispatch['kind']; slot: string; at: string }
 
+/** A dispatch covers slots up to when its work ran: a daemon run, now; a delivered launchd result, at its own slot. */
+const coveredAt = (d: Dispatch) => d.external ?? d.at
+
 export class JobsClock {
   private lockFd: number | null = null
   private cancel: (() => void) | null = null
@@ -79,10 +77,11 @@ export class JobsClock {
   private readonly startedAt: Date
   private staleFlagged = false
   private lockError = false
-  private legacyError = ''
   private lastHealthAt: number | null = null
   private wokeAt: number
   private readonly strayLogged = new Set<string>()
+  /** Jobs whose manual run ended this tick: `jobs run` is polling for its outcome, so a waiting launchd result keeps. */
+  private readonly manualEnded = new Set<string>()
 
   constructor(private readonly d: ClockDeps) {
     this.startedAt = d.now()
@@ -149,7 +148,6 @@ export class JobsClock {
   private async runTick(): Promise<void> {
     this.syncZone()
     if (!this.tryLock()) return
-    await this.clearLegacyEntries()
     if (this.stopped) return
     const cfg = await this.loadConfig()
     if (this.stopped) return
@@ -170,6 +168,7 @@ export class JobsClock {
    * else dispatch. A slot is owed until it is done.
    */
   private async decide(job: Job, cfg: JobsConfig, isOnline: () => Promise<boolean>): Promise<void> {
+    if (job.runner !== 'daemon') return   // launchd triggers it: the clock only delivers its results (applyExternal)
     const now = this.d.now()
     const state = this.ensureState(job, now)
     if (!state || state.dispatch) return
@@ -195,27 +194,7 @@ export class JobsClock {
   /** An outcome the daemon decides itself (no process): not-now, a baseline, a mark-done. */
   private recordOutcome(job: Job, o: Recorded, t: Target | null): void {
     this.update(job.name, job.schedule, s => applyOutcome(s, o, t))
-    this.d.log(`jobs: ${job.name}: ${o.result}${o.absorbedBy ? ` (absorbed by ${o.absorbedBy})` : ''}${o.note ? ` (${o.note})` : ''}`)
-  }
-
-  /**
-   * Cutover heals itself: the launchd entries the old runner registered are removed by the clock owner on the
-   * platform's live state dir, every tick (a readdir), so a `jobs sync` from an old checkout is undone within a minute.
-   * A worktree or test daemon never touches them. (A firing entry only prints a message now; it shouldn't linger.)
-   */
-  private async clearLegacyEntries(): Promise<string[]> {
-    if (resolve(this.d.stateDir) !== resolve(this.d.defaultStateDir)) return []
-    try {
-      const removed = await this.d.removeLegacyEntries()
-      for (const t of removed) this.d.log(`jobs: removed legacy launchd entry ${t}`)
-      this.legacyError = ''
-      return removed
-    } catch (err) {
-      const msg = String(err)
-      if (msg !== this.legacyError) this.d.log(`jobs: removing legacy launchd entries failed (retrying each tick): ${msg}`)
-      this.legacyError = msg
-      return []
-    }
+    this.d.log(`jobs: ${job.name}: ${o.result}${o.servedBy ? ` (served by ${o.servedBy})` : ''}${o.note ? ` (${o.note})` : ''}`)
   }
 
   /** A traveling laptop changes zone under a long-running daemon. Follow the system's zone unless TZ was set on purpose. */
@@ -261,6 +240,10 @@ export class JobsClock {
       if (await this.d.direct(text, fallback.channel ?? this.d.homeChannel()) && !this.stopped) this.updateDaemon(s => { s.configAlertedFor = problem })
     }
     return fallback
+  }
+
+  private parsedOrEmpty(text: string | undefined): Job[] {
+    try { return text ? parseJobsConfig(text).jobs : [] } catch { return [] }
   }
 
   private lastGood(state: DaemonState): JobsConfig {
@@ -348,7 +331,7 @@ export class JobsClock {
    * Reserve and spawn. The reserve is one synchronous read-check-write, and the tick and `jobs run` both come through
    * here, so they can't both dispatch. The id is on disk before anything runs, so it is never reused.
    */
-  private dispatch(job: Job, kind: Dispatch['kind'], owed: Slot | null): Dispatch | 'already running' | 'not owed' | null {
+  private dispatch(job: Job, kind: Dispatch['kind'], owed: Slot | null, external?: string): Dispatch | 'already running' | 'not owed' | null {
     const slot = owed?.label ?? ''
     const r = readJobState(this.d.stateDir, job.name, job.schedule)
     if (r.kind !== 'ok') return null
@@ -356,15 +339,15 @@ export class JobsClock {
     if (s.dispatch) return 'already running'
     const now = this.d.now()
     // The tick decided this slot before an await (the online probe); a mark-done or a result may have covered it since.
-    if (kind === 'scheduled' && owedSlot(job.schedule, s, now)?.label !== slot) return 'not owed'
+    if (kind === 'scheduled' && !external && owedSlot(job.schedule, s, now)?.label !== slot) return 'not owed'
     const d: Dispatch = {
       id: (s.appliedDispatch ?? 0) + 1, nonce: randomBytes(8).toString('hex'), at: now.toISOString(), kind, slot,
-      deadline: new Date(now.getTime() + ATTEMPT_DEADLINE_MS).toISOString(),
+      deadline: new Date(now.getTime() + ATTEMPT_DEADLINE_MS).toISOString(), ...(external && { external }),
     }
     s.dispatch = d
     this.write(job.name, s)
 
-    const args = [this.d.hydraEntry, ...attemptArgv({ platform: this.d.platform, name: job.name, dispatch: d.id, nonce: d.nonce, slot, ...(owed && { slotAt: owed.at.toISOString() }), manual: kind === 'manual', stateDir: this.d.stateDir })]
+    const args = [this.d.hydraEntry, ...attemptArgv({ platform: this.d.platform, name: job.name, dispatch: d.id, nonce: d.nonce, slot, ...(owed && { slotAt: owed.at.toISOString() }), ...(external && { external: true }), manual: kind === 'manual', stateDir: this.d.stateDir })]
     let pid: number | undefined
     try { pid = this.d.spawnAttempt(args, JSON.stringify(job), logFile(this.d.stateDir, job.name)) } catch (err) {
       // No process exists, so there is nothing to wait for or adopt: the attempt is lost now.
@@ -396,20 +379,22 @@ export class JobsClock {
 
   /**
    * `hydra jobs sync`: load jobs.toml now instead of at the next tick. Answers with the jobs the daemon had and the
-   * jobs it has now (the CLI prints the difference), and the legacy launchd entries it removed; then runs a tick, so
-   * a slot the new config owes is dispatched at once.
+   * jobs it has now (the CLI prints the difference); then runs a tick, so a slot the new config owes is dispatched at
+   * once.
    */
-  async requestSync(): Promise<{ ok: true; before: Job[]; after: Job[]; legacyRemoved: string[] } | { ok: false; error: string }> {
+  async requestSync(): Promise<{ ok: true; before: Job[]; after: Job[]; hydraEntry: string } | { ok: false; error: string }> {
     if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
-    const before = this.lastGood(readDaemonState(this.d.stateDir).state).jobs
+    // Against the config the last sync made live: the tick reloads jobs.toml every minute, so the last good copy
+    // would show "no changes" for any edit older than a minute.
+    const state = readDaemonState(this.d.stateDir).state
+    const before = this.parsedOrEmpty(state.syncedConfig ?? state.lastGoodConfig)
     let text: string
     try { text = readFileSync(jobsToml(this.d.stateDir), 'utf8') } catch { return { ok: false, error: `no jobs file at ${jobsToml(this.d.stateDir)}` } }
     let after: Job[]
     try { after = parseJobsConfig(text).jobs } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) } }
-    this.updateDaemon(s => { s.lastGoodConfig = text })
-    const legacyRemoved = await this.clearLegacyEntries()
+    this.updateDaemon(s => { s.lastGoodConfig = text; s.syncedConfig = text })
     await this.tick()
-    return { ok: true, before, after, legacyRemoved }
+    return { ok: true, before, after, hydraEntry: this.d.hydraEntry }
   }
 
   /** `hydra jobs mark-done`: record the latest slot as done without running anything (a cutover, a slot you handled). */
@@ -417,6 +402,8 @@ export class JobsClock {
     if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
     const job = this.currentConfig().jobs.find(j => j.name === name)
     if (!job) return { ok: false, error: `no job named ${name} in jobs.toml` }
+    // launchd fires on its own calendar and never reads job state, so a covered slot would not stop its next run.
+    if (job.runner !== 'daemon') return { ok: false, error: `mark-done needs runner = "daemon": launchd runs ${name} at its next slot regardless` }
     const now = this.d.now()
     const st = this.ensureState(job, now)
     if (!st) return { ok: false, error: `state for ${name} is unreadable` }
@@ -440,8 +427,56 @@ export class JobsClock {
     const names = new Set<string>(cfg.jobs.map(j => j.name))
     // A job dropped from jobs.toml can still have a dispatch running: settle it too.
     try { for (const f of readdirSync(jobsDir(this.d.stateDir))) { const m = /^([a-z0-9][a-z0-9-]*)\.state\.json$/.exec(f); if (m) names.add(m[1]) } } catch {}
+    this.manualEnded.clear()
     for (const name of names) { if (this.stopped) return; await this.settle(name, jobs.get(name)) }
+    // Every job in the file: one that just moved from launchd to the daemon still has its waiting result applied, so
+    // its check doesn't run that slot again.
+    for (const job of cfg.jobs) this.applyExternal(job)
+    this.dropStrandedExternal(cfg)
     this.sweep()
+  }
+
+  /** Launchd results of a job that left the file: nothing will deliver them, so they go. */
+  private dropStrandedExternal(cfg: JobsConfig): void {
+    const inFile = new Set(cfg.jobs.map(j => j.name))
+    let files: string[] = []
+    try { files = readdirSync(resultsDir(this.d.stateDir)) } catch {}
+    for (const f of files) {
+      const p = parseExternalName(f)
+      if (!p || inFile.has(p.name)) continue
+      try { unlinkSync(join(resultsDir(this.d.stateDir), f)) } catch {}
+      this.d.log(`jobs: ${p.name}: launchd result for ${p.slotAt} dropped: the job is no longer in jobs.toml`)
+    }
+  }
+
+  /**
+   * A launchd job's results, oldest slot first. One that needs no delivery is recorded here. One with output for a
+   * target is delivered by an attempt, and recorded when that attempt's result is applied. A slot already applied is
+   * a replay, and is dropped. While the daemon is down, results wait: they are owed until applied.
+   */
+  private applyExternal(job: Job): void {
+    if (this.manualEnded.has(job.name)) return
+    for (const slotAt of externalResults(this.d.stateDir, job.name)) {
+      const st = this.ensureState(job, this.d.now())
+      if (!st || st.dispatch) return
+      const file = externalFile(this.d.stateDir, job.name, slotAt)
+      const drop = (why?: string) => { try { unlinkSync(file) } catch {} if (why) this.d.log(`jobs: ${job.name}: launchd result for ${slotAt} dropped: ${why}`) }
+      if (st.appliedExternal && slotAt <= st.appliedExternal) { drop('already applied (a replay)'); continue }
+      let res: ExternalResult
+      try { res = JSON.parse(readFileSync(file, 'utf8')) } catch (err) { drop(`unreadable (${err})`); continue }
+      if (res.result === 'done' && job.mode !== 'none') {
+        this.dispatch(job, 'scheduled', { label: res.slot, at: new Date(res.slotAt) }, slotAt)
+        return
+      }
+      const note = res.result === 'done' ? res.output?.slice(0, 300) : res.note
+      // The outcome and the applied mark in one write: a crash between them can't record the slot twice.
+      this.update(job.name, job.schedule, s => {
+        applyOutcome(s, { at: res.at, result: res.result, ...(note && { note }) }, { kind: 'scheduled', slot: res.slot, at: res.at })
+        s.appliedExternal = slotAt
+      })
+      this.d.log(`jobs: ${job.name}: launchd result for ${res.slot}: ${res.result}${note ? ` (${note})` : ''}`)
+      drop()
+    }
   }
 
   /** Ends a live dispatch if it has ended: by its result, or as "ended without a result". Kills a wedged one. */
@@ -509,12 +544,16 @@ export class JobsClock {
   private apply(name: string, job: Job | undefined, d: Dispatch, res: AttemptResult): void {
     const applied = this.update(name, job?.schedule, s => {
       if (res.dispatch <= (s.appliedDispatch ?? 0)) return
-      applyOutcome(s, { ...res, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: d.at })
+      applyOutcome(s, { ...res, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: coveredAt(d) })
       if (s.dispatch?.id === d.id) delete s.dispatch
       s.appliedDispatch = d.id
+      if (d.external && res.result !== 'not-now') s.appliedExternal = d.external
     })
     if (!applied) return   // state went unreadable: keep the result for the tick after the reset
+    if (d.kind === 'manual') this.manualEnded.add(name)
     try { unlinkSync(resultFile(this.d.stateDir, name, d.id, d.nonce)) } catch {}
+    // A delivery that was "not now" (the daemon restarting under it, a key still pending) leaves the result owed.
+    if (d.external && res.result !== 'not-now') try { unlinkSync(externalFile(this.d.stateDir, name, d.external)) } catch {}
     this.d.log(`jobs: ${name}: dispatch ${d.id} -> ${res.result}${res.note ? ` (${res.note})` : ''}`)
   }
 
@@ -523,10 +562,13 @@ export class JobsClock {
     const at = this.d.now().toISOString()
     this.update(name, job?.schedule, s => {
       if (s.dispatch?.id !== d.id) return
-      applyOutcome(s, { at, result: 'failed', note, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: d.at })
+      applyOutcome(s, { at, result: 'failed', note, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: coveredAt(d) })
       delete s.dispatch
       s.appliedDispatch = d.id
+      if (d.external) s.appliedExternal = d.external   // launchd jobs aren't retried: a lost delivery is that slot's failure
     })
+    if (d.external) try { unlinkSync(externalFile(this.d.stateDir, name, d.external)) } catch {}
+    if (d.kind === 'manual') this.manualEnded.add(name)
     this.d.log(`jobs: ${name}: dispatch ${d.id} ${note}`)
   }
 
@@ -628,7 +670,7 @@ export function applyOutcome(s: JobState, o: Recorded, t: Target | null): void {
     s.notNow = { since: keep ? s.notNow!.since : o.at, reason, ...(o.dispatch !== undefined && { dispatch: o.dispatch }) }
     return
   }
-  s.last = { at: o.at, ...(o.dispatch !== undefined && { dispatch: o.dispatch }), result: o.result, ...(o.note && { note: o.note }), ...(o.absorbedBy && { absorbedBy: o.absorbedBy }) }
+  s.last = { at: o.at, ...(o.dispatch !== undefined && { dispatch: o.dispatch }), result: o.result, ...(o.note && { note: o.note }), ...(o.servedBy && { servedBy: o.servedBy }) }
   const success = o.result !== 'failed'
   if (success) { s.failures = 0; delete s.failingSince } else { s.failures = (s.failures ?? 0) + 1; s.failingSince ??= o.at }
   if (t?.slot && success) s.covered = { slot: t.slot, at: t.at }
@@ -709,14 +751,8 @@ export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntr
     closeLock: fd => closeSync(fd),
     spawnAttempt: (args, stdin, log) => spawnAttempt(args, stdin, log, o.log ?? (m => process.stderr.write(`daemon: ${m}\n`))),
     lstartOf, listProcesses,
-    defaultStateDir: platformStateDir(o.platform),
     killGroup: (pid, signal) => process.kill(-pid, signal),
     kill: (pid, signal) => process.kill(pid, signal),
-    removeLegacyEntries: async () => {
-      const titles = legacyTitles(LAUNCH_AGENTS_DIR, o.platform)
-      for (const t of titles) await Bun.cron.remove(t)
-      return titles
-    },
     captiveProbe,
     systemZone,
     explicitTZ: !!process.env.TZ,

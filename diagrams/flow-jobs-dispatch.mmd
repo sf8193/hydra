@@ -1,39 +1,37 @@
-sequenceDiagram
-    autonumber
-    participant CLI as cli/jobs.ts (jobs run)
-    participant H as cli-handler.ts
-    participant C as jobs-clock.ts
-    participant S as jobs-state/NAME.json
-    participant A as cli/jobs.ts (jobs attempt, detached)
-    participant R as jobs-state/results/NAME.ID.json
-
-    Note over C: one tick a minute, one at a time, only while holding _daemon.lock<br/>each tick: apply results, then decide each job (backoff, needs, overlap), then alerts
-    alt tick: latest slot owed
-        C->>S: reserve dispatch {id, nonce, at, kind: scheduled, slot, deadline} (sync, no await)
-    else jobs run
-        CLI->>H: jobs-run {name}
-        H->>C: requestRun(name)
-        C->>S: reserve dispatch {..., kind: manual} (same sync step: refuses "already running")
-    end
-    C->>A: spawn detached: jobs attempt PLATFORM NAME --dispatch --nonce --slot [--manual] --state-dir<br/>stdin = job definition, stdout/stderr = NAME.log
-    C->>S: add pid + lstart
-    opt jobs run
-        H-->>CLI: {id, pid, lstart}
-        Note over CLI: Ctrl-C: SIGTERM to pid (not the group), only while lstart matches
-    end
-    A->>A: check, then action (2 min timeout), self-deadline 34 min
-    A->>R: write result once {dispatch, at, result, note}
-    Note over A: deadline or SIGTERM: write first, then kill own group
-    loop each tick
-        C->>R: read result for the live dispatch
-        alt result present
-            C->>S: apply (idempotent via appliedDispatch), clear dispatch
-            C->>R: delete
-        else pid gone (lstart mismatch) / no pid past grace and no orphan by argv
-            C->>S: failure "ended without a result", appliedDispatch = id
-        else alive past deadline
-            C->>A: SIGKILL -pid (lstart re-checked)
-        end
-        C->>R: sweep results with id <= appliedDispatch
-    end
-    CLI->>S: poll until appliedDispatch >= id, print last/notNow tagged with id
+%% A runner = "daemon" slot, from tick to settled (daemon/jobs-clock.ts, cli/jobs.ts).
+%% A launchd job's slot: flow-jobs-launchd.mmd. jobs sync: flow-jobs-sync.mmd.
+flowchart TD
+  T["tick, once a minute<br/>syncZone; tryLock _daemon.lock"] -->|not the owner| X[return]
+  T --> L["loadConfig: jobs.toml, else lastGoodConfig<br/>(broken file: alerted once per episode)"]
+  L --> AR["applyResults: settle every NAME.state.json with a dispatch,<br/>then applyExternal (every job), dropStrandedExternal, sweep"]
+  AR --> D{"decide: runner = daemon?"}
+  D -->|launchd| SK["skip: launchd triggers it"]
+  D -->|daemon| ES["ensureState<br/>missing: baseline, covered = latest slot<br/>unreadable: reset as a failure (spawn/main skip the slot)<br/>v0: translate, write back"]
+  ES --> LV{dispatch live?}
+  LV -->|yes| W1[left to settle]
+  LV -->|no| OW{"owedSlot: latest slot,<br/>instant after covered.at AND label != covered.slot"}
+  OW -->|no| IDLE[nothing owed]
+  OW -->|yes| BO{"back-off: last failure + min(2^n m, 1h, period)"}
+  BO -->|waiting| IDLE
+  BO -->|ready| NE{"needs internet:<br/>gateway connected OR captive probe"}
+  NE -->|offline| NN["not-now: notNow only, the slot stays owed"]
+  NE -->|ok| RS["reserve, one synchronous write:<br/>re-check owed; id = appliedDispatch + 1; nonce;<br/>deadline = now + 34m"]
+  RUN["hydra jobs run (manual, any runner)"] --> RS
+  RS --> SP["spawnAttempt: detached, env minus hydra secrets,<br/>job JSON on stdin, log = NAME.log"]
+  SP -->|throws| LOST
+  SP --> AT["jobs attempt: key = jobs-NAME-slotAt (manual: the minute)<br/>self-deadline 34m awake; SIGTERM: write, then kill own group"]
+  AT --> CK["runCheck: the check in sh, 30m awake"]
+  CK -->|"exit 75"| RNN[not-now]
+  CK -->|nonzero| RF[failed]
+  CK -->|empty stdout| RN[nothing]
+  CK -->|"output, or no check"| ACT["runAction: hydra spawn / deliver<br/>with --idempotency-key"]
+  ACT -->|"ok, or exit 2 already served"| RD[done]
+  ACT -->|"daemon away; spawn 2 pending; deliver 7"| RNN
+  ACT -->|"other exit, timeout"| RF
+  RNN & RF & RN & RD --> RFILE["results/NAME.ID.NONCE.json, written once, atomic"]
+  RFILE --> ST["settle, next tick: only the live dispatch's id + nonce"]
+  ST -->|result present| AO
+  ST -.->|"pid gone, lstart differs, or no pid past 30s and no orphan by argv<br/>(2s grace for the final rename)"| LOST["lost: failed, ended without a result"]
+  ST -.->|"alive: deadline += any gap over 2 ticks (sleep)<br/>past deadline + 1m"| KILL["SIGTERM the attempt; past + 2m SIGKILL the group"]
+  LOST --> AO["applyOutcome<br/>done / nothing: covered = slot, failures = 0<br/>failed: failures + 1, failingSince ??= at<br/>not-now: notNow only"]
+  AO --> AL["reportFailures: once per failure run (alertedFor = failingSince),<br/>when last failure - failingSince >= alert_after: main, else direct"]

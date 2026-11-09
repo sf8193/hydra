@@ -259,7 +259,7 @@ async function handleJobsSync(req: CLIRequest): Promise<CLIResponse> {
   const clock = jobsClock()
   if (!clock) return respond(req, false, 'jobs clock not running in this daemon')
   const r = await clock.requestSync()
-  return r.ok ? respond(req, true, { before: r.before, after: r.after, legacyRemoved: r.legacyRemoved }) : respond(req, false, r.error)
+  return r.ok ? respond(req, true, { before: r.before, after: r.after, hydraEntry: r.hydraEntry }) : respond(req, false, r.error)
 }
 
 // `hydra jobs run`: a manual dispatch through the clock. Answered after the spawn, with {id, pid, lstart}.

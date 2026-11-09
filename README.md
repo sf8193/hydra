@@ -497,14 +497,35 @@ Nothing is dropped silently: a message dropped because it stayed owed past a day
 
 ### Jobs
 
-`<state>/jobs.toml` declares recurring jobs (start from [`jobs.example.toml`](jobs.example.toml)). Each one has a 5-field cron `schedule` in local time, an optional `check` script whose output becomes the agent's message, and what to do with that message. The daemon's clock reads the file every minute and runs each owed slot as a detached attempt. A slot missed while the machine slept runs once on wake. A slot is owed until it is done: a failed one is retried with back-off, and a failure that lasts past `alert_after` (default 1d) is alerted once. `hydra jobs list <platform>` shows each job's next run and last result; `jobs sync` loads the file now; `jobs run <platform> <name>` runs a job in the foreground; `jobs mark-done` covers a slot without running it. Flows: [`flow-jobs-dispatch.mmd`](diagrams/flow-jobs-dispatch.mmd), [`flow-jobs-sync.mmd`](diagrams/flow-jobs-sync.mmd).
+`<state>/jobs.toml` declares recurring jobs (start from [`jobs.example.toml`](jobs.example.toml)). Each one has a 5-field cron `schedule` in local time, an optional `check` script whose output becomes the agent's message, and what to do with that message (`mode`). After editing it, run `hydra jobs sync <platform>`. `jobs list` shows each job's runner, next run and last result; `jobs run <platform> <name>` runs one now; `jobs mark-done` covers a slot without running it.
 
-**What changed from the launchd runner:**
-- **Jobs run only while the daemon runs.** The watchdog restarts it, and slots owed in the meantime run then, collapsed into one run per job.
-- **Per-job launchd entries are removed automatically,** from the platform's live state dir only. A stale entry that still fires only prints a message.
-- **`jobs sync` validates jobs.toml and has the daemon load it at once,** printing what changed. It registers nothing with launchd, and with the daemon down it still exits 0.
-- **A sleep, or a daemon restart, during a run is not a failure.**
-- **Known and accepted:** in the hour the clocks fall back, a frequent job (`*/5`) pauses for about an hour, once a year.
+**A job's `runner` decides what triggers it; delivery to a session is always the daemon's.** Both are on time when all is well. They differ only when something fails:
+
+| | `launchd` (default) | `daemon` |
+|---|---|---|
+| Depends on hydra running? | no | yes |
+| After a failure | one shot: the next slot tries again | keeps trying until done |
+
+In one line: **launchd tries once, no matter what. daemon keeps trying, as long as hydra runs.** Set `runner` at the top of the file for every job, or on a job to override that. With neither, it's `launchd`.
+
+Take a weekly job, `weekly-review`, due Friday 11:00:
+
+| On Friday at 11:00… | `launchd` | `daemon` |
+|---|---|---|
+| the lid is shut until 14:00 | runs at 14:00 on wake, once | runs at 14:00 on wake, once |
+| Wi-Fi is down | runs, fails, and is gone until next Friday | waits (`needs = ["internet"]`), and runs when you're back online |
+| the check hits an API error | fails, alerts, and is gone until next Friday | retries with back-off; you're told only if it's still failing after `alert_after` |
+| the hydra daemon is down | the check runs at 11:00; its output is delivered once hydra is back | waits for the watchdog to restart hydra (~5 min), then runs |
+| bun was just upgraded | keeps working | keeps working |
+
+- **Pick `daemon`** for obligations: a review that has to happen this week, a backup that has to succeed eventually.
+- **Pick `launchd`** for keepalives and probes, where the next run makes up for a missed one, or for anything that must run while hydra itself is broken.
+
+A launchd job's entry is registered by `jobs sync` and runs a stable bun link, never a versioned Cellar path, which `brew upgrade` deletes. `needs` and `alert_after` need `runner = "daemon"`.
+
+**Nothing changes unless you opt in.** An existing file runs under launchd as before. The old runner's entries keep working until `jobs sync` moves them onto the stable bun path, and `jobs list` flags any that remain. `jobs sync` registers and unregisters launchd entries only for the platform's live state dir, and removes one only when its job leaves the file or moves to `runner = "daemon"`.
+
+Known and accepted for daemon-runner jobs: in the hour the clocks fall back, a frequent job (`*/5`) pauses for about an hour, once a year. Flows: [`flow-jobs-dispatch.mmd`](diagrams/flow-jobs-dispatch.mmd) (a daemon-runner slot), [`flow-jobs-launchd.mmd`](diagrams/flow-jobs-launchd.mmd) (a launchd-runner slot), [`flow-jobs-sync.mmd`](diagrams/flow-jobs-sync.mmd).
 
 ### Usage alerts
 

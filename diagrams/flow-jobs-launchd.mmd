@@ -1,0 +1,30 @@
+%% A runner = "launchd" slot: plist, then an external result, then the daemon's delivery
+%% (cli/jobs.ts jobsLaunchdRun, daemon/jobs-clock.ts applyExternal).
+flowchart TD
+  PL["com.hydra.job.PLATFORM.NAME<br/>StartCalendarInterval; once on wake"] --> LR["stable bun + the daemon's hydra.ts<br/>--state-dir DIR jobs launchd-run"]
+  LEG["old bun.cron.hydra-job-PLATFORM-NAME<br/>(Cellar bun; until jobs sync moves it)"] --> ENT["cli/jobs-entry.ts"] --> LR
+  LR --> RT{"jobs.toml parses AND the job's runner is launchd?"}
+  RT -->|"unparseable: exit 1"| GONE["nothing written"]
+  RT -->|"a daemon job: exit 0"| NOOP[no-op]
+  RT -->|yes| LS["slot = latestSlot(now)"]
+  LS --> EX{"results/NAME@SLOTMS.json waiting?"}
+  EX -->|yes| NOOP
+  EX -->|no| CK["runCheck, env scrubbed of hydra's credentials"]
+  CK -.->|"SIGTERM (bootout by a re-sync)"| NNW["write not-now for the slot, end the group"]
+  CK --> EF["write ExternalResult {slot, slotAt, at, result, note, output}"]
+  EF -.->|"daemon down: the file waits, owed"| TK["daemon tick: applyExternal, oldest slot first<br/>(also for a job just moved to the daemon)"]
+  NNW --> TK
+  TK --> BUSY{"ensureState ok AND no live dispatch?"}
+  BUSY -->|no| W2[wait a tick]
+  BUSY -->|yes| RP{"slotAt at or below appliedExternal?"}
+  RP -->|yes| DROP["drop: a replay"]
+  RP -->|no| KIND{"done AND mode is not none?"}
+  KIND -->|"nothing, failed, not-now, or mode none"| REC["applyOutcome + appliedExternal = slotAt, one write; delete the file"]
+  KIND -->|yes| DSP["reserve a dispatch, kind scheduled, external = slotAt"]
+  DSP --> ATT["jobs attempt --external: runAction on the saved output<br/>key = jobs-NAME-slotAt"]
+  ATT --> SET["settle, then apply"]
+  SET -->|"not-now (daemon away, key pending)"| KEEP["the file stays: delivered again next tick"]
+  SET -->|"done or failed"| FIN["appliedExternal = slotAt; delete the file"]
+  SET -.->|lost| FIN
+  REC & FIN --> AL["reportFailures: alert_after = 0 for launchd, so a run's first failure alerts"]
+  STR["dropStrandedExternal: the job left jobs.toml"] -.-> DROP

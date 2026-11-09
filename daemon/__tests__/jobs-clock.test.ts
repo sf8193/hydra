@@ -4,9 +4,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { JobsClock, openClockLock, ADOPT_GRACE_MS, applyOutcome, type ClockDeps } from '../jobs-clock.js'
 import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, backoffUntil, commandMatches, legacyTitles, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, externalFile, backoffUntil, commandMatches, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
 } from '../../shared/jobs.js'
+import { legacyTitles, runnerJobs } from '../../shared/jobs-launchd.js'
 
 // A fake world: a clock you move, a process table you control, and recorded messages. The lock is the real one.
 type World = {
@@ -26,8 +27,6 @@ type World = {
   tz: string | undefined
   directGate?: Promise<void>
   directCalls: number
-  legacy: string[]
-  legacyFail: number
   events: string[]
   gateway: boolean
   probe: boolean | 'throw'
@@ -58,14 +57,8 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     listProcesses: () => [...w.procs].map(([pid, p]) => ({ pid, ...p })),
     killGroup: (pid, sig) => { w.kills.push([pid, sig]); w.procs.delete(pid) },
     kill: (pid, sig) => { w.kills.push([pid, sig]) },
-    defaultStateDir: w.dir,
     gatewayConnected: () => w.gateway,
     captiveProbe: async () => { w.probes++; await w.probeGate; if (w.probe === 'throw') throw new Error('ENOTFOUND'); return w.probe },
-    removeLegacyEntries: async () => {
-      w.events.push('legacy')
-      if (w.legacyFail-- > 0) throw new Error('launchctl busy')
-      const removed = w.legacy; w.legacy = []; return removed
-    },
     toMain: text => { if (w.mainOk) w.main.push(text); return w.mainOk },
     direct: async (text, channel) => { w.directCalls++; await w.directGate; w.direct.push([text, channel]); return w.directOk },
     homeChannel: () => 'home',
@@ -85,7 +78,9 @@ function clock(over: Partial<ClockDeps> = {}): JobsClock {
 }
 
 const at = (iso: string) => { w.t = new Date(iso) }
-const toml = (text: string) => writeFileSync(join(w.dir, 'jobs.toml'), text)
+/** The clock triggers only daemon-runner jobs, so these files say so once, at the top. */
+const DAEMON = 'runner = "daemon"\n'
+const toml = (text: string) => writeFileSync(join(w.dir, 'jobs.toml'), /^runner\b/m.test(text) ? text : DAEMON + text)
 const state = (name: string): JobState => {
   const r = readJobState(w.dir, name)
   if (r.kind !== 'ok') throw new Error(`state ${name}: ${r.kind}`)
@@ -126,7 +121,7 @@ beforeEach(() => {
     dir: mkdtempSync(join(tmpdir(), 'jobs-clock-')), t: new Date('2026-11-04T10:00:30-08:00'),
     procs: new Map(), spawns: [], kills: [], main: [], direct: [], logs: [],
     mainOk: true, directOk: true, directCalls: 0, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
-    legacy: [], legacyFail: 0, events: [], gateway: true, probe: true, probes: 0,
+    events: [], gateway: true, probe: true, probes: 0,
   }
 })
 afterEach(() => {
@@ -186,78 +181,42 @@ describe('clock owner lock', () => {
   })
 })
 
-describe('cutover heals itself', () => {
-  test('jobs sync: loads jobs.toml now, answers with the jobs before and after and the legacy entries removed, then ticks', async () => {
+describe('jobs sync, and launchd entries the daemon leaves alone', () => {
+  test('jobs sync: loads jobs.toml now, answers with the jobs before and after, then ticks', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     toml(FIVE + HOURLY)
-    w.legacy = ['bun.cron.hydra-job-test-sweep']
     at('2026-11-04T10:00:30-08:00')
     const r = await c.requestSync()
     if (!r.ok) throw new Error(r.error)
     expect(r.before.map(j => j.name)).toEqual(['sweep'])
     expect(r.after.map(j => j.name)).toEqual(['sweep', 'sync'])
-    expect(r.legacyRemoved).toEqual(['bun.cron.hydra-job-test-sweep'])
-    expect(JSON.parse(readFileSync(daemonFile(w.dir), "utf8")).lastGoodConfig).toBe(FIVE + HOURLY)
-    expect(JSON.parse(readFileSync(daemonFile(w.dir), "utf8")).lastTick).toBe(w.t.toISOString())   // the tick ran, not waiting a minute
+    expect(JSON.parse(readFileSync(daemonFile(w.dir), 'utf8')).lastGoodConfig).toBe(DAEMON + FIVE + HOURLY)
+    expect(JSON.parse(readFileSync(daemonFile(w.dir), 'utf8')).lastTick).toBe(w.t.toISOString())   // the tick ran, not waiting a minute
     toml('[broken')
     expect(await c.requestSync()).toMatchObject({ ok: false })
   })
 
-  test('the clock owner removes its legacy launchd entries before dispatching, logging each', async () => {
+  test('the diff is against the last sync, so an edit the tick already loaded still shows', async () => {
     toml(FIVE)
-    setState('sweep', { at: '2026-11-04T17:55:10.000Z', outcome: 'nothing' })   // a v0 record that owes a run now
-    w.legacy = ['hydra-job-test-sweep', 'hydra-job-test-other']
-    await clock().tick()
-    expect(w.events).toEqual(['legacy', 'spawn'])
-    expect(w.logs.filter(l => l.startsWith('jobs: removed legacy'))).toEqual([
-      'jobs: removed legacy launchd entry hydra-job-test-sweep', 'jobs: removed legacy launchd entry hydra-job-test-other'])
+    const c = clock(); await c.tick()
+    expect(await c.requestSync()).toMatchObject({ ok: true })
+    toml(FIVE + HOURLY)
+    at('2026-11-04T10:02:00-08:00'); await c.tick()                    // the tick picks up the edit on its own
+    const r = await c.requestSync()
+    if (!r.ok) throw new Error(r.error)
+    expect(r.before.map(j => j.name)).toEqual(['sweep'])
+    expect(r.after.map(j => j.name)).toEqual(['sweep', 'sync'])
   })
 
-  test('re-checked every tick: entries an old checkout re-registers are removed within a minute', async () => {
-    toml(FIVE)
-    const c = clock()
-    await c.tick()
-    w.legacy = ['hydra-job-test-sweep']                 // `jobs sync` from an old checkout
-    at('2026-11-04T10:01:30-08:00'); await c.tick()
-    expect(w.logs).toContain('jobs: removed legacy launchd entry hydra-job-test-sweep')
-    expect(w.events.filter(e => e === 'legacy')).toHaveLength(2)
-  })
-
-  test('a daemon without the clock lock never touches them', async () => {
-    toml(FIVE)
-    await clock().tick()
-    w.events.length = 0
-    w.legacy = ['hydra-job-test-sweep']
-    await clock().tick()
-    expect(w.events).toEqual([])
-    expect(w.legacy).toEqual(['hydra-job-test-sweep'])
-  })
-
-  test("a daemon on another state dir (a worktree, a test) never strips the live daemon's entries", async () => {
-    toml(FIVE)
-    w.legacy = ['hydra-job-test-sweep']
-    await clock({ defaultStateDir: '/somewhere/else' }).tick()
-    expect(w.events).toEqual([])
-  })
-
-  test('a failed removal does not stop the clock; it is retried each tick and logged once per distinct error', async () => {
-    toml(FIVE)
-    w.legacy = ['hydra-job-test-sweep']; w.legacyFail = 2
-    const c = clock()
-    await c.tick(); await c.tick()
-    expect(state('sweep').last?.note).toBe('baseline: no work ran')
-    expect(w.logs.filter(l => l.includes('removing legacy launchd entries failed'))).toHaveLength(1)
-    await c.tick()
-    expect(w.logs).toContain('jobs: removed legacy launchd entry hydra-job-test-sweep')
-  })
-
-  test("only this platform's entries are legacy", () => {
+  test("only this platform's old Bun.cron entries are legacy: never a runner agent, never the watchdog", () => {
     const agents = mkdtempSync(join(tmpdir(), 'agents-'))
     try {
-      for (const f of ['bun.cron.hydra-job-test-a.plist', 'bun.cron.hydra-job-test-b-c.plist', 'bun.cron.hydra-job-other-a.plist', 'com.hydra.watchdog.test.plist', 'bun.cron.unrelated.plist'])
+      for (const f of ['bun.cron.hydra-job-test-a.plist', 'bun.cron.hydra-job-test-b-c.plist', 'bun.cron.hydra-job-other-a.plist',
+        'com.hydra.watchdog.test.plist', 'com.hydra.job.test.a.plist', 'com.hydra.job.other.z.plist', 'bun.cron.unrelated.plist'])
         writeFileSync(join(agents, f), '')
       expect(legacyTitles(agents, 'test').sort()).toEqual(['hydra-job-test-a', 'hydra-job-test-b-c'])
+      expect(runnerJobs(agents, 'test')).toEqual(['a'])   // the watchdog shares the com.hydra prefix, never the job one
       expect(legacyTitles(join(agents, 'missing'), 'test')).toEqual([])
     } finally { rmSync(agents, { recursive: true }) }
   })
@@ -297,7 +256,7 @@ describe('the tick', () => {
     expect(argOf(s.args, '--slot-at')).toBe(new Date('2026-11-04T10:05:00-08:00').toISOString())
     expect(argOf(s.args, '--state-dir')).toBe(w.dir)
     expect(s.args).not.toContain('--manual')
-    expect(JSON.parse(s.stdin)).toEqual({ name: 'sweep', schedule: '*/5 * * * *', check: 'sweep.sh', mode: 'none', alertAfterMs: 86_400_000 })
+    expect(JSON.parse(s.stdin)).toEqual({ name: 'sweep', schedule: '*/5 * * * *', check: 'sweep.sh', mode: 'none', runner: 'daemon', runnerFrom: 'file', alertAfterMs: 86_400_000 })
     expect(s.log).toBe(join(w.dir, 'jobs-state', 'sweep.log'))
     expect(state('sweep').dispatch).toMatchObject({ id: 1, kind: 'scheduled', slot: '2026-11-04 10:05', pid: 1000, lstart: 'L1000', nonce: argOf(s.args, '--nonce') })
     expect(new Date(state('sweep').dispatch!.deadline).getTime() - w.t.getTime()).toBe(ATTEMPT_DEADLINE_MS)
@@ -838,9 +797,10 @@ describe('health', () => {
   })
 
   test('a health check during a tick that started under two intervals ago says nothing', async () => {
-    toml(FIVE)
+    toml(FIVE + 'needs = ["internet"]\n')
+    w.gateway = false
     let hang = false
-    const c = clock({ removeLegacyEntries: () => hang ? new Promise(() => {}) : Promise.resolve([]) })
+    const c = clock({ captiveProbe: () => hang ? new Promise(() => {}) : Promise.resolve(true) })
     await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:05:00-08:00', true)
     await minutes(c, '2026-11-04T10:06:00-08:00', '2026-11-04T10:09:00-08:00', false)
     expect(w.direct).toEqual([])                       // nothing flagged yet
@@ -853,12 +813,13 @@ describe('health', () => {
   })
 
   test('a hung tick is flagged once on the direct path, "tick stuck since"', async () => {
-    toml(FIVE)
+    toml(FIVE + 'needs = ["internet"]\n')
+    w.gateway = false
     let hang = false
-    const c = clock({ removeLegacyEntries: () => hang ? new Promise(() => {}) : Promise.resolve([]) })
+    const c = clock({ captiveProbe: () => hang ? new Promise(() => {}) : Promise.resolve(true) })
     await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:04:00-08:00', true)
     hang = true
-    at('2026-11-04T10:05:00-08:00'); void c.tick()     // Bun.cron.remove never returns
+    at('2026-11-04T10:05:00-08:00'); void c.tick()     // the captive probe never answers
     await c.healthCheck()
     at('2026-11-04T10:06:00-08:00'); await c.healthCheck()
     expect(w.direct).toEqual([])
@@ -1253,7 +1214,7 @@ describe('exit 75 and other not-now results', () => {
     expect(w.spawns).toHaveLength(2)
   })
 
-  test('a duplicate-key "pending" result is not now; "served" is done, absorbed by the session', async () => {
+  test('a duplicate-key "pending" result is not now; "served" is done, served by the session', async () => {
     toml(DUR5)
     const c = clock(); await c.tick()
     at('2026-11-04T10:05:01-08:00'); await c.tick()
@@ -1261,10 +1222,10 @@ describe('exit 75 and other not-now results', () => {
     expect(state('pull').notNow?.dispatch).toBe(1)
     at('2026-11-04T10:06:30-08:00'); await c.tick()
     const d = state('pull').dispatch!
-    writeAtomic(rfile('pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', absorbedBy: 'sess-9' }))
+    writeAtomic(rfile('pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', servedBy: 'sess-9' }))
     w.procs.delete(d.pid!)
     await c.tick()
-    expect(state('pull').last).toMatchObject({ result: 'done', absorbedBy: 'sess-9', dispatch: 2 })
+    expect(state('pull').last).toMatchObject({ result: 'done', servedBy: 'sess-9', dispatch: 2 })
     expect(state('pull').covered?.slot).toBe('2026-11-04 10:05')
   })
 
@@ -1340,6 +1301,13 @@ describe('jobs run and mark-done', () => {
     c.requestRun('pull')
     expect(c.requestMarkDone('pull')).toEqual({ ok: false, error: 'pull is already running' })
     expect(clock().requestMarkDone('pull')).toEqual({ ok: false, error: expect.stringContaining('clock not owned') })
+  })
+
+  test('mark-done refuses a launchd job: launchd never reads state, so its next slot would run anyway', async () => {
+    toml(`runner = "launchd"\n[sweep]\nschedule = "*/5 * * * *"\ncheck = "sweep.sh"\nmode = "none"\n`)
+    const c = clock(); await c.tick()
+    expect(c.requestMarkDone('sweep')).toEqual({ ok: false, error: expect.stringContaining('mark-done needs runner = "daemon"') })
+    expect(existsSync(stateFile(w.dir, 'sweep')) && state('sweep').covered).toBeFalsy()
   })
 })
 
@@ -1458,4 +1426,150 @@ describe('flights and DST', () => {
       expect(owedSlot('0 * * * *', { covered: { slot: '2026-11-13 15:00', at: '2026-11-13T14:00:20Z' } }, new Date('2026-11-13T16:10:00Z'))?.label).toBe('2026-11-13 08:00')
     })
   })
+})
+
+describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
+  // runner = "launchd" (the default): the plist's run leaves results/<name>@<slot ms>.json; the clock delivers it.
+  const LD = `runner = "launchd"\nchannel = "top"\n[scan]\nschedule = "0 6 * * *"\ncheck = "scan.sh"\nmode = "spawn"\nprompt = "Triage."\n`
+  const LD_NONE = `runner = "launchd"\n[sweep]\nschedule = "*/5 * * * *"\ncheck = "sweep.sh"\nmode = "none"\n`
+  const SLOT = '2026-11-04T06:00:00-08:00'
+  const leave = (name: string, slot: string, label: string, res: object) =>
+    writeAtomic(externalFile(w.dir, name, new Date(slot).toISOString()), JSON.stringify({ slot: label, slotAt: new Date(slot).toISOString(), at: new Date(new Date(slot).getTime() + 20_000).toISOString(), ...res }))
+
+  test('the clock never triggers a launchd job, however many of its slots pass', async () => {
+    toml(LD)
+    const c = clock()
+    for (const t of ['2026-11-04T05:00:00-08:00', '2026-11-04T06:00:30-08:00', '2026-11-05T06:00:30-08:00']) { at(t); await c.tick() }
+    expect(w.spawns).toEqual([])
+  })
+
+  test('output for a target: delivered by an attempt keyed on the slot instant, applied once; a replay is dropped', async () => {
+    toml(LD)
+    at('2026-11-04T06:00:40-08:00')
+    leave('scan', SLOT, '2026-11-04 06:00', { result: 'done', output: 'CVE-1' })
+    const c = clock(); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+    const args = w.spawns[0].args
+    expect(args).toContain('--external')
+    expect(argOf(args, '--slot-at')).toBe(new Date(SLOT).toISOString())
+    finish('scan', 1, 'done', undefined, 1000)
+    at('2026-11-04T06:01:40-08:00'); await c.tick()
+    expect(state('scan')).toMatchObject({ appliedExternal: new Date(SLOT).toISOString(), last: { result: 'done' } })
+    expect(existsSync(externalFile(w.dir, 'scan', new Date(SLOT).toISOString()))).toBe(false)
+    leave('scan', SLOT, '2026-11-04 06:00', { result: 'done', output: 'CVE-1' })   // launchd fires the same slot again
+    at('2026-11-04T06:02:40-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+    expect(existsSync(externalFile(w.dir, 'scan', new Date(SLOT).toISOString()))).toBe(false)
+  })
+
+  test('the daemon was down at the slot: the result waits, and is delivered once when it comes back', async () => {
+    toml(LD)
+    leave('scan', SLOT, '2026-11-04 06:00', { result: 'done', output: 'CVE-1' })   // launchd ran at 06:00; no daemon
+    at('2026-11-04T09:00:00-08:00')
+    const c = clock(); await c.tick()                                               // back three hours later
+    expect(w.spawns).toHaveLength(1)
+    await c.tick()
+    expect(w.spawns).toHaveLength(1)                                                // one live dispatch, not two
+    finish('scan', 1, 'done', undefined, 1000)
+    for (const t of ['09:01', '09:02', '09:03']) { at(`2026-11-04T${t}:00-08:00`); await c.tick() }
+    expect(w.spawns).toHaveLength(1)
+    expect(state('scan').last?.result).toBe('done')
+  })
+
+  test('nothing to do, a failure, or a job with no target: recorded at once, no attempt; a failure is alerted', async () => {
+    toml(LD_NONE)
+    at('2026-11-04T06:00:40-08:00')
+    leave('sweep', SLOT, '2026-11-04 06:00', { result: 'done', output: 'pruned 3' })
+    const c = clock(); await c.tick()
+    expect(w.spawns).toEqual([])
+    expect(state('sweep').last).toMatchObject({ result: 'done', note: 'pruned 3' })
+    leave('sweep', '2026-11-04T06:05:00-08:00', '2026-11-04 06:05', { result: 'failed', note: 'check exited 2: disk' })
+    at('2026-11-04T06:05:40-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'failed', note: 'check exited 2: disk' })
+    expect(w.main).toHaveLength(1)                                                  // launchd has no retries: alerted at once
+    expect(w.main[0]).toMatch(/^Job sweep has been failing since .* \(1 failure\): check exited 2: disk\. Tell the user about it now\.$/)
+  })
+
+  test("an external result is never a dispatch's result, nor the reverse: each is applied by its own path, once", async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()                                 // dispatch 1 live
+    leave('sweep', '2026-11-04T10:00:00-08:00', '2026-11-04 10:00', { result: 'failed', note: 'not mine', dispatch: 1 })
+    at('2026-11-04T10:06:00-08:00'); await c.tick()
+    expect(state('sweep').dispatch?.id).toBe(1)                                     // not taken for the dispatch's result
+    expect(state('sweep').last?.note).not.toBe('not mine')
+    finish('sweep', 1, 'done', 'from the dispatch', 1000)
+    at('2026-11-04T10:07:00-08:00'); await c.tick()
+    expect(w.logs.filter(l => l.includes('dispatch 1 -> done (from the dispatch)'))).toHaveLength(1)
+    expect(state('sweep')).toMatchObject({ appliedDispatch: 1, appliedExternal: new Date('2026-11-04T10:00:00-08:00').toISOString() })
+    expect(w.spawns).toHaveLength(1)
+  })
+
+  test('a job moved from launchd to the daemon has its waiting result applied, so the check does not run that slot again', async () => {
+    toml(LD_NONE)
+    at('2026-11-04T06:05:40-08:00')
+    leave('sweep', '2026-11-04T06:05:00-08:00', '2026-11-04 06:05', { result: 'done', output: 'pruned 3' })
+    toml(LD_NONE.replace('runner = "launchd"', 'runner = "daemon"'))                // switched before the daemon saw it
+    const c = clock(); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'done', note: 'pruned 3' })
+    at('2026-11-04T06:06:40-08:00'); await c.tick()
+    expect(w.spawns).toEqual([])                                                    // 06:05 is covered: no second check
+    expect(existsSync(externalFile(w.dir, 'sweep', new Date('2026-11-04T06:05:00-08:00').toISOString()))).toBe(false)
+  })
+
+  test("a waiting result delivered after a move to the daemon covers its own slot, not the ones after it", async () => {
+    const hourly = LD.replace('0 6 * * *', '0 * * * *')
+    leave('scan', '2026-11-04T10:00:00-08:00', '2026-11-04 10:00', { result: 'done', output: 'CVE-1' })
+    toml(hourly.replace('runner = "launchd"', 'runner = "daemon"'))
+    at('2026-11-04T11:30:00-08:00')
+    const c = clock(); await c.tick()
+    expect(w.spawns[0].args).toContain('--external')                               // 10:00's output, delivered
+    finish('scan', 1, 'done', undefined, 1000)
+    for (const t of ['11:31', '11:32']) { at(`2026-11-04T${t}:00-08:00`); await c.tick() }
+    expect(state('scan').covered?.slot).not.toBe('2026-11-04 11:00')
+    expect(w.spawns).toHaveLength(2)                                                // 11:00 still runs its own check
+    expect(w.spawns[1].args).not.toContain('--external')
+  })
+
+  test('a manual run that ends as a launchd result waits: its outcome stands for a tick, so `jobs run` can read it', async () => {
+    toml(LD_NONE)
+    at('2026-11-04T06:04:00-08:00')
+    const c = clock(); await c.tick()
+    expect(c.requestRun('sweep').ok).toBe(true)
+    leave('sweep', '2026-11-04T06:05:00-08:00', '2026-11-04 06:05', { result: 'failed', note: 'launchd: disk' })
+    finish('sweep', 1, 'done', 'manual', 1000)
+    at('2026-11-04T06:05:40-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ dispatch: 1, result: 'done', note: 'manual' })
+    at('2026-11-04T06:06:40-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'failed', note: 'launchd: disk' })   // applied a tick later
+  })
+
+  test("a job gone from the file: its waiting result is dropped, and says so", async () => {
+    toml(LD_NONE)
+    leave('gone', SLOT, '2026-11-04 06:00', { result: 'done', output: 'x' })
+    at('2026-11-04T06:00:40-08:00'); await clock().tick()
+    expect(existsSync(externalFile(w.dir, 'gone', new Date(SLOT).toISOString()))).toBe(false)
+    expect(w.logs.some(l => l.includes('gone: launchd result') && l.includes('no longer in jobs.toml'))).toBe(true)
+  })
+
+
+  test('a launchd job with no check delivers its prompt: the result is done with no output, and still goes to the target', async () => {
+    toml(LD.replace('check = "scan.sh"\n', ''))
+    leave('scan', SLOT, '2026-11-04 06:00', { result: 'done', output: '' })
+    at('2026-11-04T06:00:40-08:00'); const c = clock(); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+    expect(w.spawns[0].args).toContain('--external')
+  })
+
+  test('a delivery that comes back "not now" (the daemon restarting under it) leaves the slot owed, and it is sent again', async () => {
+    toml(LD)
+    leave('scan', SLOT, '2026-11-04 06:00', { result: 'done', output: 'CVE-1' })
+    at('2026-11-04T06:00:40-08:00'); const c = clock(); await c.tick()
+    finish('scan', 1, 'not-now', 'daemon not reachable', 1000)
+    at('2026-11-04T06:01:40-08:00'); await c.tick()
+    expect(state('scan').appliedExternal).toBeUndefined()
+    expect(w.spawns).toHaveLength(2)                                                // re-dispatched for the same slot
+    expect(argOf(w.spawns[1].args, '--slot-at')).toBe(new Date(SLOT).toISOString())
+  })
+
 })
