@@ -1,9 +1,9 @@
-// contract PR-0 T0.2: pins what the pr-watch notice and the three protocol
-// notices put on the wire today, before S0.2 turns them into intents
-// (lowPriority / handoff) on the Notification. Claude: the exact JSON written
-// to the bridge and the exact persisted queue entry. No record: the same, via
-// sendOrQueue's fallback. Codex: protocol notices queue a next turn; pr-watch
-// buffers for piggyback while alive and delivers at once when deadAt.
+// contract PR-0 T0.2: pins what the three protocol notices put on the wire today,
+// before S0.2 turns them into intents (handoff) on the Notification. Claude: the
+// exact JSON written to the bridge and the exact persisted queue entry. No record:
+// the same, via sendOrQueue's fallback. Codex: protocol notices queue a next turn;
+// a low-priority delivery (a PR update, through targets.ts) buffers for piggyback
+// while alive, and a dead session gets nothing.
 import { describe, test, expect, beforeEach, afterEach, setSystemTime } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
@@ -12,7 +12,7 @@ import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import { deliverPrUpdate } from '../pr-watch.js'
+import { deliverToSession } from '../targets.js'
 import { __test } from '../protocol-runner.js'
 
 const { notifyNextActor, notifyActorOfTimeout, notifyParticipant } = __test!
@@ -49,18 +49,13 @@ const persisted = (id: string) => JSON.stringify(JSON.parse(readFileSync(join(ST
 const tick = () => new Promise(r => setTimeout(r, 0))
 
 // The exact envelopes today's senders build, key order included.
-const prEnvelope = (content: string) => JSON.stringify({
-  type: 'notification', content,
-  meta: { chat_id: THREAD, message_id: '', user: 'pr-watch', user_id: 'system', ts: TS },
-})
 const systemEnvelope = (content: string) => JSON.stringify({
   type: 'notification', content,
   meta: { chat_id: THREAD, message_id: '', user: 'system', user_id: 'system', ts: TS },
 })
 
-// The four senders, each with the content it produces for an actor named `id`.
+// The three senders, each with the content it produces for an actor named `id`.
 const senders: Array<[string, (id: string) => void, (id: string) => string, (id: string) => string]> = [
-  ['pr-watch', id => deliverPrUpdate(id, THREAD, 'CI failed on PR #7'), () => 'CI failed on PR #7', prEnvelope],
   ['notifyNextActor', id => notifyNextActor(run(id), 'prev'), () => 'TURN', systemEnvelope],
   ['notifyActorOfTimeout', id => notifyActorOfTimeout(run(id), id, 'p'),
     id => `[system] ⏰ ${registry.get(id) ? `**${id}**, phase` : 'Phase'} "p" timed out. The protocol is advancing.`, systemEnvelope],
@@ -122,7 +117,7 @@ describe('T0.2 no record (sendOrQueue fallback)', () => {
 })
 
 describe('T0.2 Codex', () => {
-  for (const [name, send, content] of senders.slice(1)) {
+  for (const [name, send, content] of senders) {
     test(`${name}: queued for the next turn, never steered`, () => {
       const calls: string[] = []
       const id = sid(); codex(id, calls)
@@ -131,10 +126,12 @@ describe('T0.2 Codex', () => {
     })
   }
 
-  test('pr-watch, alive: buffered, then carried by the next allowPiggyback delivery and consumed', async () => {
+  const prUpdate = (id: string) => deliverToSession(registry.get(id)!, 'CI failed on PR #7', { source: 'pr-watch', queue: true, lowPriority: true })
+
+  test('a low-priority delivery (a PR update), alive: buffered, then carried by the next allowPiggyback delivery and consumed', async () => {
     const calls: string[] = []
-    const id = sid(); codex(id, calls)
-    deliverPrUpdate(id, THREAD, 'CI failed on PR #7')
+    const id = sid(); codex(id, calls, { createdAt: Date.now() })
+    expect((await prUpdate(id)).ok).toBe(true)
     expect(calls).toEqual([])
     transport.sendOrQueue(id, { type: 'notification', content: 'real', allowPiggyback: true })
     expect(calls).toEqual(['steer:CI failed on PR #7\n\n---\n\nreal'])
@@ -143,10 +140,10 @@ describe('T0.2 Codex', () => {
     expect(calls[1]).toBe('steer:next')
   })
 
-  test('dead: pr-watch and user input are rejected — nothing steered, queued or buffered', async () => {
+  test('dead: a PR update and user input are rejected — nothing steered, queued or buffered', async () => {
     const calls: string[] = []
     const id = sid(); codex(id, calls, { deadAt: 1 })
-    deliverPrUpdate(id, THREAD, 'CI failed on PR #7')
+    expect((await prUpdate(id)).ok).toBe(false)
     transport.sendOrQueue(id, { type: 'notification', content: 'real', allowPiggyback: true })
     await tick()
     expect(calls).toEqual([])

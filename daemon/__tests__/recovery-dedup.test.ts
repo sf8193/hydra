@@ -1,7 +1,8 @@
 import { describe, test, expect } from 'bun:test'
 import { workKey, dedupForRecovery } from '../recovery.js'
 import { SESSION_NAMES, type SessionInfo } from '../sessions.js'
-import { restoreWatches, getWatchesBySession, unwatchBySession, type WatchEntry } from '../pr-watch.js'
+import { listWatches, unwatchPr } from '../pr-watch.js'
+import { seedPrWatch } from './test-harness.js'
 
 // workKey drives auto-recovery dedup: two dead sessions sharing a PR/ticket must
 // map to the same key so only one is revived (the "two sessions on one PR" bug).
@@ -103,26 +104,19 @@ describe('dedupForRecovery — winner/loser + sibling watches', () => {
     expect(skipped).toHaveLength(0)
   })
 
-  test('a skipped sibling\'s PR watches (with cursors) are handed to the winner', async () => {
-    const winner = mk({ sessionId: 'sw-winner', artifacts: ['https://github.com/testorg/testrepo/pull/70021'], lastActive: 200 })
-    const loser = mk({ sessionId: 'sw-loser', artifacts: ['https://github.com/testorg/testrepo/pull/70021'], lastActive: 100 })
-    const entry: WatchEntry = {
-      prUrl: 'https://github.com/testorg/testrepo/pull/70021', owner: 'testorg', repo: 'testrepo', prNumber: 70021,
-      sessionId: loser.sessionId, threadId: loser.threadId,
-      lastCheckedAt: 'T', lastReviewCommentId: 5, lastIssueCommentId: 6, lastReviewId: 7,
-      lastHeadSha: 'abc', lastCheckStatus: 'success', createdAt: 0,
-    }
-    restoreWatches([entry], loser.sessionId, loser.threadId)
+  test('a skipped sibling\'s PR watches (with cursors) deliver to the winner\'s thread', async () => {
+    const url = 'https://github.com/testorg/testrepo/pull/70021'
+    const winner = mk({ sessionId: 'sw-winner', artifacts: [url], lastActive: 200 })
+    const loser = mk({ sessionId: 'sw-loser', artifacts: [url], lastActive: 100 })
+    seedPrWatch(url, loser.threadId, { lastCheckedAt: 'T', lastReviewCommentId: 5, lastIssueCommentId: 6, lastReviewId: 7 })
     try {
-      const { unique, skipped, siblingWatches } = await dedupForRecovery([winner, loser])
+      const { unique, skipped } = await dedupForRecovery([winner, loser])
       expect(unique.map(u => u.sessionId)).toEqual(['sw-winner'])
       expect(skipped.map(s => s.info.sessionId)).toEqual(['sw-loser'])
-      const handed = siblingWatches.get(winner.sessionId)
-      expect(handed?.map(w => w.prUrl)).toContain('https://github.com/testorg/testrepo/pull/70021')
-      expect(handed?.[0].lastReviewCommentId).toBe(5)  // cursor preserved through the handoff
+      // Not the loser's thread: a review there would revive a session whose work the winner does.
+      expect(listWatches().find(w => w.prUrl === url)).toMatchObject({ to: winner.threadId, revive: true, lastReviewCommentId: 5 })
     } finally {
-      unwatchBySession(loser.sessionId)
-      unwatchBySession(winner.sessionId)
+      unwatchPr(url)
     }
   })
 })

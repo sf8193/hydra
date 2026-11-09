@@ -15,7 +15,6 @@ import { gateway } from '../config.js'
 import { handleSpawnIntercept } from '../commands/global.js'
 import { doSpawnSession } from '../session-lifecycle.js'
 import { dedupForRecovery } from '../recovery.js'
-import { restoreWatches, getWatchesBySession, unwatchBySession, type WatchEntry } from '../pr-watch.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 
 const codex = (connected: boolean) => {
@@ -187,39 +186,6 @@ describe('gate 3: recovery dedupe reserves work keys only for live owners', () =
     const { unique, skipped } = await dedupForRecovery([cand])
     expect(unique).toEqual([])
     expect(skipped[0].reason).toContain(`already live as ${owner.tmuxName}`)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// 4. pr-watch.ts restoreWatches never steals from a live owner
-// ---------------------------------------------------------------------------
-
-describe('gate 4: restoreWatches', () => {
-  const entry = (owner: any): WatchEntry => {
-    const num = 90000 + ++n
-    return {
-      prUrl: `https://github.com/testorg/testrepo/pull/${num}`, owner: 'testorg', repo: 'testrepo', prNumber: num,
-      sessionId: owner.sessionId, threadId: owner.threadId, createdAt: 0,
-    } as WatchEntry
-  }
-  const cleanup = (...sids: string[]) => { for (const s of sids) unwatchBySession(s) }
-
-  test('(a) Codex dead with anchor tmux → watch is transferred', () => {
-    const owner = codexDead(), e = entry(owner)
-    try {
-      restoreWatches([e], owner.sessionId, owner.threadId)
-      expect(restoreWatches([e], 'lg-new', 'lg-new-t')).toBe(1)
-      expect(getWatchesBySession('lg-new').map(w => w.prUrl)).toEqual([e.prUrl])
-    } finally { cleanup(owner.sessionId, 'lg-new') }
-  })
-
-  test('(b) Codex connected, no tmux → watch stays with the live owner', () => {
-    const owner = codexLive(), e = entry(owner)
-    try {
-      restoreWatches([e], owner.sessionId, owner.threadId)
-      expect(restoreWatches([e], 'lg-new', 'lg-new-t')).toBe(0)
-      expect(getWatchesBySession(owner.sessionId).map(w => w.prUrl)).toEqual([e.prUrl])
-    } finally { cleanup(owner.sessionId, 'lg-new') }
   })
 })
 

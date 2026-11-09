@@ -12,8 +12,7 @@ import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnR
 import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { tmuxHasSession, baseNameFromBranch } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
-import { parsePrUrl, getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
-import type { WatchEntry } from './pr-watch.js'
+import { parsePrUrl, retargetWatches, unwatchBySession } from './pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
 import { notifyOperator } from './access.js'
 import { deadSessionLabel, recoveryEntry, recoveryModel } from './recovery-selection.js'
@@ -43,7 +42,7 @@ export type ReviveRequest = {
   entry?: ThreadSessionEntry
   /** The dead record, when the caller already holds it. Default: the entry's record, else the thread's. */
   dead?: SessionInfo
-  /** A running but unreachable session to tear down first (its worktree kept). Its record, PR watches and children
+  /** A running but unreachable session to tear down first (its worktree and PR watches kept). Its record and children
    *  are taken before the kill deletes them, so the revive carries them as it would a dead one's. */
   orphan?: { info: SessionInfo; reason: string }
   /** Skip resume and fork: a fresh session that reads the thread (the `respawn` command). */
@@ -61,7 +60,6 @@ export type ReviveRequest = {
   promptPrefix?: string
   /** On the resume tier, keep the dead session's name (boot recovery). */
   reuseName?: boolean
-  siblingWatches?: WatchEntry[]
   initiator?: string
   trigger?: string
   /** Back-off key (a specialist name, or the thread id): refuse while it backs off, and count a failure toward it. */
@@ -98,11 +96,9 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
     if (refusal) return { ok: false, lastTmuxName, ...refusal }
   }
 
-  // Snapshot PR watches before any kill unwatches them: the survivor has a new id.
-  const savedWatches = [...(dead ? getWatchesBySession(dead.sessionId) : []), ...(req.siblingWatches ?? [])]
   if (req.orphan) {
     process.stderr.write(`daemon: revive: tearing down orphaned ${req.orphan.info.tmuxName} first\n`)
-    await killSession(req.orphan.info, req.orphan.reason, { skipWorktreeDestroy: true })
+    await killSession(req.orphan.info, req.orphan.reason, { skipWorktreeDestroy: true, keepWatches: true })
     markDead(req.orphan.info)
   }
 
@@ -139,24 +135,19 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
 
   if (revived) {
     if (dead) repointChildren(dead, revived.result.sessionId)
-    if (savedWatches.length > 0) {
-      const n = restoreWatches(savedWatches, revived.result.sessionId, revived.result.threadId)
-      if (n > 0) process.stderr.write(`daemon: revive ${lastTmuxName}: restored ${n} PR watch(es) onto ${revived.result.sessionId}\n`)
-    }
     if (req.backoffKey) clearBackoff(req.backoffKey)
     return revived
   }
   if (busy) return { ok: false, busy: true, lastTmuxName, reason: 'a resume of this session is already in progress' }
 
-  // Total failure: the spawn deleted the dead record and its watches before it threw. Put them back so a later
-  // revive can still find them, unless a fallback tier already claimed the thread.
+  // Total failure: the spawn deleted the dead record before it threw. Put it back so a later revive can still find
+  // it, unless a fallback tier already claimed the thread. (Its PR watches deliver to the thread, and stayed.)
   if (dead && !req.newThreadIn && registry.getByThread(thread.threadId) === undefined) {
     dead.deadAt ??= Date.now()
     registry.set(dead.sessionId, dead)
     registry.setThread(dead.threadId, dead.sessionId)
-    if (savedWatches.length > 0) restoreWatches(savedWatches, dead.sessionId, dead.threadId)
     registry.persist()
-    process.stderr.write(`daemon: revive ${lastTmuxName}: all tiers failed — restored the dead record + ${savedWatches.length} watch(es)\n`)
+    process.stderr.write(`daemon: revive ${lastTmuxName}: all tiers failed — restored the dead record\n`)
   }
   const backoff = req.backoffKey ? recordFailure(req.backoffKey, lastError ?? 'all recovery methods failed') : undefined
   return { ok: false, lastTmuxName, reason: lastError ? `start failed: ${lastError}` : 'all recovery methods failed', ...(backoff && { backoff }) }
@@ -287,7 +278,7 @@ export type ThreadReviveResult =
  * off is refused before the platform is asked; otherwise, while the platform still has the thread, a session is
  * revived there with the plain resume prompt, even when hydra has no record of the thread. A deleted thread is exit 3.
  */
-export function reviveThreadForDelivery(threadId: string, initiator?: string): Promise<ThreadReviveResult> {
+export function reviveThreadForDelivery(threadId: string, initiator?: string, wanted?: () => boolean): Promise<ThreadReviveResult> {
   return withThreadLock(threadId, async () => {
     const home = registry.get(registry.getByThread(threadId) ?? '')
     const occ = occupancy(home)
@@ -296,6 +287,7 @@ export function reviveThreadForDelivery(threadId: string, initiator?: string): P
     const refusal = backoffRefusal(threadId)
     if (refusal) return { ok: false, exitCode: 6, reason: refusal.reason }
     if (!(await reviveDeps.threadExists(threadId))) return { ok: false, exitCode: 3, reason: `thread ${threadId} is gone` }
+    if (wanted && !wanted()) return { ok: false, exitCode: 3, reason: 'withdrawn by its sender' }
     const thread = threadRegistry.get(threadId) ?? threadStub(threadId, 'Continue the work in this thread.')
     const outcome = await reviveThread({ thread, backoffKey: threadId, ...(initiator && { initiator }), trigger: 'deliver --revive' })
     if (!outcome.ok) return { ok: false, exitCode: outcome.busy ? 5 : 6, reason: outcome.reason }
@@ -339,14 +331,13 @@ function findDeadSessions(): SessionInfo[] {
 
 // Map a dead SessionInfo to recoverOne's input (thread metadata resolved from the
 // registry; guaranteed present since callers filter on threadRegistry.has).
-function toRecoverInput(info: SessionInfo, siblingWatches?: WatchEntry[], promptPrefix?: string) {
+function toRecoverInput(info: SessionInfo, promptPrefix?: string) {
   return {
     sessionId: info.sessionId,
     thread: threadRegistry.get(info.threadId)!,
     claudeSessionId: info.claudeSessionId,
     lastTmuxName: info.tmuxName,
     model: info.sessionMetadata?.model,
-    siblingWatches,
     promptPrefix,
     description: info.description,
   }
@@ -354,7 +345,7 @@ function toRecoverInput(info: SessionInfo, siblingWatches?: WatchEntry[], prompt
 
 type RecoverResult = { name: string; method: 'resumed' | 'forked' | 'resurrected'; newName: string; threadUrl?: string; displayName?: string } | { name: string; method: 'failed'; reason: string; threadUrl?: string; displayName?: string }
 
-async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string; siblingWatches?: WatchEntry[]; promptPrefix?: string; description?: string }): Promise<RecoverResult> {
+async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; claudeSessionId?: string; lastTmuxName: string; model?: string; promptPrefix?: string; description?: string }): Promise<RecoverResult> {
   const { thread, lastTmuxName, model } = dead
   const displayName = dead.description || thread.description || thread.topic
 
@@ -388,7 +379,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
       // Terminal (branch gone ⇒ never revived): drop its PR watches. They'd otherwise linger
       // frozen forever — pollPr skips dead-owner watches, so they can never self-unwatch on
       // merge. The branch is gone (PR merged/pruned), so the watch is dead weight anyway.
-      unwatchBySession(deadInfo.sessionId)
+      unwatchBySession(deadInfo)
       registry.persist()
       process.stderr.write(`daemon: recover ${lastTmuxName}: worktree + branch ${worktree.branch} gone — skipping auto-recovery (manual recover still available)\n`)
       return { name: lastTmuxName, method: 'failed', reason: `worktree + branch gone (${worktree.branch}, likely merged/pruned) — not auto-revived`, threadUrl: thread.threadUrl, displayName }
@@ -397,7 +388,7 @@ async function recoverOne(dead: { sessionId?: string; thread: ThreadMetadata; cl
   }
 
   const outcome = await reviveThread({
-    thread, dead: deadInfo, model, promptPrefix: dead.promptPrefix ?? RECOVERY_REVERIFY_GUARD, reuseName: true, siblingWatches: dead.siblingWatches,
+    thread, dead: deadInfo, model, promptPrefix: dead.promptPrefix ?? RECOVERY_REVERIFY_GUARD, reuseName: true,
     backoffKey: targetKeyForThread(thread.threadId), ignoreBackoff: true,
   })
   if (!outcome.ok) return { name: lastTmuxName, method: 'failed', reason: outcome.reason, threadUrl: thread.threadUrl, displayName }
@@ -449,12 +440,10 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
     // bare) dedups by work-key so it can't put two sessions on one PR (same guard the
     // auto path uses). dedupForRecovery does git I/O — safe, single-flight is already set.
     let unique: SessionInfo[]
-    let siblingWatches: Map<string, WatchEntry[]>
     if (single) {
       unique = candidates
-      siblingWatches = new Map()
     } else {
-      ({ unique, skipped, siblingWatches } = await dedupForRecovery(candidates))
+      ({ unique, skipped } = await dedupForRecovery(candidates))
     }
     // Most-recently-active first (dedupForRecovery already sorts; sort the single/no-dedup case too).
     unique.sort((a, b) => b.lastActive - a.lastActive)
@@ -469,7 +458,7 @@ export async function handleRecoverIntercept(msg: InboundMessage, targetName?: s
       const wavePromises = wave.map(async (info, j) => {
         if (j > 0) await new Promise(r => setTimeout(r, STAGGER_MS * j))
         try {
-          const r = await recoverLocked(info, toRecoverInput(info, siblingWatches.get(info.sessionId)))
+          const r = await recoverLocked(info, toRecoverInput(info))
           if (r.method !== 'failed') {
             const e = sessionEmoji(r.newName)
             void gateway.send(info.threadId, `${e} \`${r.newName}\` recovered (${r.method})`).catch(() => {})
@@ -576,13 +565,12 @@ async function skipReason(info: SessionInfo, base: string): Promise<string> {
 // Shared dedup for BOTH auto-recovery and manual `recover all`: collapse candidates to
 // one session per real work-key (PR/ticket), so a batch never puts two sessions on one
 // PR. Reserves keys owned by ALREADY-LIVE sessions (tmux-alive). Watches
-// of a skipped session are handed to the surviving owner (live → in place; dead winner →
-// via siblingWatches) so PR feedback is never stranded on a never-revived record. Null
-// work-key → always unique (no shared identity to collapse).
+// of a skipped session are retargeted to the surviving owner's thread, live or not, so PR
+// feedback never revives a thread whose work another session does. Null work-key → always
+// unique (no shared identity to collapse).
 export async function dedupForRecovery(candidates: SessionInfo[]): Promise<{
   unique: SessionInfo[]
   skipped: Array<{ info: SessionInfo; reason: string }>
-  siblingWatches: Map<string, WatchEntry[]>
 }> {
   // Reserve keys owned by occupied sessions that are NOT themselves being recovered,
   // or a candidate would reserve its own key and skip itself ("already live as <its own name>").
@@ -602,28 +590,25 @@ export async function dedupForRecovery(candidates: SessionInfo[]): Promise<{
   const byKey = new Map<string, SessionInfo>()
   const unique: SessionInfo[] = []
   const skipped: Array<{ info: SessionInfo; reason: string }> = []
-  const siblingWatches = new Map<string, WatchEntry[]>()  // winner sessionId → watches from skipped siblings
   for (const info of [...candidates].sort((a, b) => b.lastActive - a.lastActive)) {
     const key = workKey(info)
     if (!key) { unique.push(info); continue }
     const liveOwner = liveKeys.get(key)
     if (liveOwner) {
-      const w = getWatchesBySession(info.sessionId)
-      if (w.length > 0) restoreWatches(w, liveOwner.sessionId, liveOwner.threadId)
+      retargetWatches(info, liveOwner)
       skipped.push({ info, reason: await skipReason(info, `already live as ${liveOwner.tmuxName} (${key})`) })
       continue
     }
     const winner = byKey.get(key)
     if (winner) {
-      const w = getWatchesBySession(info.sessionId)
-      if (w.length > 0) siblingWatches.set(winner.sessionId, [...(siblingWatches.get(winner.sessionId) ?? []), ...w])
+      retargetWatches(info, winner)
       skipped.push({ info, reason: await skipReason(info, `same work as ${winner.tmuxName} (${key})`) })
       continue
     }
     byKey.set(key, info)
     unique.push(info)
   }
-  return { unique, skipped, siblingWatches }
+  return { unique, skipped }
 }
 
 function formatGap(ms: number): string {
@@ -706,7 +691,7 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
       const wave = deadInfos.slice(i, i + MAX_CONCURRENT)
       const settled = await Promise.allSettled(wave.map(async (info, j) => {
         if (j > 0) await new Promise(r => setTimeout(r, STAGGER_MS * j))
-        return recoverLocked(info, toRecoverInput(info, undefined, promptPrefix))
+        return recoverLocked(info, toRecoverInput(info, promptPrefix))
       }))
       for (const s of settled) {
         if (s.status === 'fulfilled') results.push(s.value)

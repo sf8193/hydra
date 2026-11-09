@@ -1,0 +1,51 @@
+%% PR watch (PR 11): a watch stores a target, not a session id. Delivery resolves it each time through
+%% targets.ts, so a dead owner heals (a specialist refills, a thread revives) instead of freezing the watch.
+%% The read position (lastCheckedAt, comment/review ids, CI status) moves only when the update lands.
+sequenceDiagram
+    autonumber
+    participant D as bridge-dispatch.ts / bridge-server.ts
+    participant W as pr-watch.ts
+    participant GH as GitHub API
+    participant T as targets.ts
+    participant SD as specialist-deliver.ts
+    participant R as recovery.ts
+    participant L as session-lifecycle.ts
+    participant S as session (bridge)
+
+    Note over D,W: A. Watch: the target is derived once, from the watcher
+    D->>W: watchPr(url, watcher)
+    W->>W: to = "main" | specialistForThread(thread) | thread id + revive
+    W->>W: store prUrl, to, revive, threadId for the pin, read position
+
+    Note over W,S: B. Poll (3 min): nothing is seen until it lands
+    W->>GH: PR, comments, reviews, checks since the read position
+    GH-->>W: new items, or none: persist and stop
+    alt merged or closed
+        W->>W: unwatch, unpin
+    else new items
+        W->>W: hold the current read position aside, build the update
+        W->>T: deliverToTarget(to + revive, update), keyed by the next read position, queued, low priority
+        alt to = specialist
+            T->>SD: ensureSpecialist: dead → refill under the target lock
+        else to = thread id, revive
+            T->>R: reviveThreadForDelivery: resume → fork → fresh, back-off
+        else to = main
+            T->>S: main is never revived
+        end
+        T->>S: deliverToSession (queue while it boots)
+        alt ok (delivered, queued, or duplicate key)
+            T-->>W: ok
+            W->>W: persist the new read position
+        else 3, 4, 5, 6, 7: not landed
+            T-->>W: exit + reason
+            W->>W: restore the held read position: owed, fetched and sent again next poll
+        else 8 or permanent
+            T-->>W: no such specialist / too large
+            W->>W: drop the watch, say why in its thread
+        end
+    end
+
+    Note over W,L: C. Lifecycle: the target outlives its sessions
+    L->>L: killSession with keepWatches (handoff, replacement, revive teardown) or keepRecord (reap): watches stay
+    L->>W: any other kill (hydra kill, kill_session, done, a deleted thread): unwatchBySession (not for a guest)
+    R->>W: recovery dedup: retargetWatches, a skipped sibling's watches to the winner's thread

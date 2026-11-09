@@ -26,7 +26,7 @@ import { hydraPrompt } from './prompts/request.js'
 import { readHandoffTemplate } from './handoff-templates.js'
 import { projectDirName, transcriptPathFor } from './usage.js'
 import { refreshSessionVisual } from './anchor-state.js'
-import { getWatchesBySession, restoreWatches, unwatchBySession } from './pr-watch.js'
+import { unwatchBySession } from './pr-watch.js'
 import { loadAccess } from './access.js'
 import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
@@ -331,7 +331,7 @@ export function handoffArrival(opts: SpawnOpts, vars: { from: string; session: s
 }
 
 // Injectable for tests (like recoveryDeps): the real ones kill tmux and spawn sessions.
-export const handoffIO = { killSession: (i: SessionInfo, r: string, o: { skipWorktreeDestroy: boolean }) => killSession(i, r, o), doSpawnSession: (t: string, c?: string, m?: string, o?: SpawnOpts) => doSpawnSession(t, c, m, o) }
+export const handoffIO = { killSession: (i: SessionInfo, r: string, o: { skipWorktreeDestroy: boolean; keepWatches: boolean }) => killSession(i, r, o), doSpawnSession: (t: string, c?: string, m?: string, o?: SpawnOpts) => doSpawnSession(t, c, m, o) }
 
 /**
  * Replace a live session with a fresh one in the same thread, seeded from a
@@ -344,10 +344,8 @@ export async function handOff(info: SessionInfo, artifact: string): Promise<Spaw
     // A second handoff of the same session waited behind the first, which has since replaced it.
     if (registry.get(info.sessionId) !== info) throw new Error(`${info.tmuxName} is already handing off (or gone)`)
     const opts = handoffSpawnOpts(info, artifact)
-    const watches = getWatchesBySession(info.sessionId)  // before the kill unwatches them
-    await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true })
+    await handoffIO.killSession(info, 'handed off', { skipWorktreeDestroy: true, keepWatches: true })
     const r = await handoffIO.doSpawnSession(info.topic, undefined, undefined, opts)
-    if (watches.length > 0) restoreWatches(watches, r.sessionId, r.threadId)
     repointChildren(info, r.sessionId)  // its children now answer to the successor
     return r
   })
@@ -542,10 +540,20 @@ export function splitOwnFromHistory(allIds: readonly string[], ownId: string | u
 // this conversation still names their paths, and a resume reuses the scratchpad itself).
 // keepRecord: end it the way a crash leaves it, so `resume` in the thread continues it in full:
 // the record stays, stamped dead, with its worktree, scratchpads, PR watches and launch
-// settings, and is left out of automatic boot recovery.
-export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean; keepRecord?: boolean }): Promise<void> {
+// settings, and is left out of automatic boot recovery. keepWatches: the thread goes on (a handoff,
+// a replacement, a revive's teardown), so its PR watches do too; any other kill ends them.
+export async function killSession(info: SessionInfo, reason: string, opts?: { skipWorktreeDestroy?: boolean; keepScratch?: boolean; keepRecord?: boolean; keepWatches?: boolean }): Promise<void> {
   if (killsInProgress.has(info.sessionId)) return
   killsInProgress.add(info.sessionId)
+
+  // A successor holding this record's name owns what runs under it, and what it carried over: stop and destroy nothing.
+  const replaced = nameHeldByAnother(info)
+  // A watch delivers to the thread, not this session. A deliberate end ends it first, before any await, so no poll
+  // in flight can revive the thread; a guest, or a record a successor replaced, speaks for no thread's watches.
+  if (!opts?.keepRecord && !opts?.keepWatches && !replaced && info.sessionType !== 'thread_guest') {
+    const removedWatches = unwatchBySession(info)
+    if (removedWatches > 0) process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
+  }
 
   try {
     // Join members and ephemeral sessions don't own a real thread
@@ -588,8 +596,6 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     const tmuxName = info.tmuxName
-    // A successor holding this record's name owns what runs under it, and what it carried over: stop and destroy nothing.
-    const replaced = nameHeldByAnother(info)
     // Stop learns a missing native id first where the provider can (Claude: pane discovery).
     if (!replaced) await info.adapter.stop(info)
 
@@ -646,17 +652,6 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       registry.delete(info.sessionId)
     }
     registry.persist()
-
-    // Recovery re-establishes watches on the replacement via restoreWatches (snapshot
-    // taken before this kill) — so deleting here is safe and avoids orphaning entries
-    // on the now-deleted sessionId (which pollPr would prune mid-recovery). A kept record
-    // keeps its watches: pollPr holds a dead owner's watch, and the revive moves it on.
-    if (!opts?.keepRecord) {
-      const removedWatches = unwatchBySession(info.sessionId)
-      if (removedWatches > 0) {
-        process.stderr.write(`daemon: removed ${removedWatches} PR watch(es) for session ${info.sessionId}\n`)
-      }
-    }
 
     if (info.sessionType === 'thread_guest') {
       registry.removeMember(info.threadId, info.sessionId)
@@ -798,7 +793,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
             carriedArtifacts ??= existing.artifacts
             carriedContextLinks ??= existing.contextLinks
             carriedDescription ??= existing.description
-            await killSession(existing, 'replaced by new spawn', { keepScratch: isResume || !!opts?.forkFrom })
+            await killSession(existing, 'replaced by new spawn', { keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
           }
         }
       }
@@ -897,7 +892,7 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
             branch: existing.worktreeBranch ?? `wt/${existing.tmuxName}`,
           }
         }
-        await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree, keepScratch: isResume || !!opts?.forkFrom })
+        await killSession(existing, 'replaced by new spawn', { skipWorktreeDestroy: !!opts?.preserveWorktree, keepScratch: isResume || !!opts?.forkFrom, keepWatches: true })
       }
     }
     if (!anchorMessageId) {
@@ -1255,7 +1250,7 @@ export async function tryResume(dead: {
         // fallback tiers can still adopt it (they pass the same descriptor
         // explicitly, since this kill deletes the record). Watches unwatch normally —
         // keeping them here would only orphan them on the now-deleted record.
-        await killSession(info, 'resume health check failed', { skipWorktreeDestroy: true }).catch(() => {})
+        await killSession(info, 'resume health check failed', { skipWorktreeDestroy: true, keepWatches: true }).catch(() => {})
         return null
       }
 

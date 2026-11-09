@@ -480,7 +480,7 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
     registry.delete(sessionId)
     registry.deleteThread(threadId)
     registry.persist()
-    unwatchBySession(sessionId)
+    unwatchBySession(info)
     emitSessionDeath(info)
   }
   threadRegistry.delete(threadId)

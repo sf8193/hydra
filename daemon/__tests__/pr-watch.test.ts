@@ -1,12 +1,10 @@
-import { describe, test, expect, afterEach } from 'bun:test'
+import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
 import { gateway } from '../config.js'
-import { deliverPrUpdate, parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, restoreWatches, listWatches, parsePersistedWatches, applyCheckResult, formatWatchEntry, selectNewReviews, type WatchEntry, type CheckResult } from '../pr-watch.js'
+import { parsePrUrl, maxId, WATCH_ERRORS, watchPr, unwatchPr, listWatches, parsePersistedWatches, applyCheckResult, formatWatchEntry, selectNewReviews, _setWatchForTesting, type WatchEntry, type CheckResult } from '../pr-watch.js'
 import { parseWatchCommand } from '../commands/watch.js'
 import { UNIVERSAL_TOOLS } from '../../shared/tool-definitions.js'
 import { registry } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { ClaudeEngine } from '../engines/claude-engine.js'
-import { fakeCodexAdapter } from './test-harness.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -110,23 +108,29 @@ describe('WATCH_ERRORS', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Watch map operations (real module map; seeded via restoreWatches, no network)
+// Watch map operations (real module map; seeded directly, no network)
 // ---------------------------------------------------------------------------
+
+// A watch made in thread-1 delivers to thread-1, revived when its session is dead.
+function seedWatch(prUrl: string, extra: Partial<WatchEntry> = {}): void {
+  _setWatchForTesting({ prUrl, owner: 'o', repo: 'r', prNumber: 1, to: 'thread-1', revive: true, threadId: 'thread-1', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'unknown', createdAt: Date.now(), ...extra })
+}
 
 describe('watch map operations', () => {
   const URL1 = 'https://github.com/o/r/pull/1'
-
-  function seed(prUrl: string, sessionId: string) {
-    restoreWatches([{ prUrl, owner: 'o', repo: 'r', prNumber: 1, sessionId, threadId: 'thread-1', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'unknown', createdAt: Date.now() } as WatchEntry], sessionId, 'thread-1')
-  }
+  const seed = (prUrl: string) => seedWatch(prUrl)
   const watched = (prUrl: string) => listWatches().some(w => w.prUrl === prUrl)
 
-  afterEach(() => { unwatchPr(URL1) })
+  beforeEach(() => {
+    registry.set('sess-1', { sessionId: 'sess-1', threadId: 'thread-1', tmuxName: 'one' } as any)
+    registry.set('sess-2', { sessionId: 'sess-2', threadId: 'thread-2', tmuxName: 'two' } as any)
+  })
+  afterEach(() => { unwatchPr(URL1); registry.delete('sess-1'); registry.delete('sess-2') })
 
-  test('duplicate watch returns already watching, without replacing the owner', async () => {
-    seed(URL1, 'sess-1')
-    expect(await watchPr(URL1, 'sess-2', 'thread-2')).toBe(`already watching ${URL1} (session: sess-1)`)
-    expect(listWatches().find(w => w.prUrl === URL1)!.sessionId).toBe('sess-1')
+  test('duplicate watch returns already watching, without replacing the target', async () => {
+    seed(URL1)
+    expect(await watchPr(URL1, 'sess-2', 'thread-2')).toBe(`already watching ${URL1} (→ thread thread-1)`)
+    expect(listWatches().find(w => w.prUrl === URL1)!.to).toBe('thread-1')
   })
 
   test('invalid URL throws', async () => {
@@ -134,7 +138,7 @@ describe('watch map operations', () => {
   })
 
   test('unwatch removes entry', () => {
-    seed(URL1, 'sess-1')
+    seed(URL1)
     expect(unwatchPr(URL1, 'sess-1')).toBe(`stopped watching ${URL1}`)
     expect(watched(URL1)).toBe(false)
   })
@@ -144,91 +148,21 @@ describe('watch map operations', () => {
   })
 
   test('unwatch by wrong session is rejected', () => {
-    seed(URL1, 'sess-1')
-    expect(unwatchPr(URL1, 'sess-2')).toBe('cannot unwatch — owned by session sess-1')
+    seed(URL1)
+    expect(unwatchPr(URL1, 'sess-2')).toBe('cannot unwatch — it delivers to thread thread-1')
     expect(watched(URL1)).toBe(true)
   })
 
   test('unwatch by main session is allowed', () => {
-    seed(URL1, 'sess-1')
+    seed(URL1)
     expect(unwatchPr(URL1, 'main')).toBe(`stopped watching ${URL1}`)
     expect(watched(URL1)).toBe(false)
   })
 
   test('unwatch without callerSessionId is allowed', () => {
-    seed(URL1, 'sess-1')
+    seed(URL1)
     expect(unwatchPr(URL1)).toBe(`stopped watching ${URL1}`)
     expect(watched(URL1)).toBe(false)
-  })
-})
-
-describe('deliverPrUpdate (the real production wiring, not a simulation)', () => {
-  let delivered: string[]
-
-  function codexSession(sessionId: string, opts: { deadAt?: number } = {}) {
-    delivered = []
-    registry.set(sessionId, {
-      sessionId, engine: 'codex', threadId: 'thread-1', ...opts,
-      // A real Codex adapter (it owns the piggyback buffer) with only its
-      // one-turn delivery faked.
-      // A dead record's app-server socket is gone (the runtime stamps deadAt then).
-      adapter: Object.assign(fakeCodexAdapter({ isConnected: () => !opts.deadAt }), {
-        deliverTurn: async (_i: any, m: any) => { delivered.push(m.content); return { status: 'accepted' } },
-      }),
-    } as any)
-  }
-
-  // registry is a module-level singleton shared by the whole bun test
-  // process, not reset between files. These adapters deliberately omit
-  // usage() (they only need deliver()) — left behind, they're exactly the
-  // shape that broke list-display.test.ts's isAlive()-filtered registry
-  // scan in CI (order-dependent: only reproduced when this file happened
-  // to run first on CI's file ordering, never locally on macOS's).
-  afterEach(() => {
-    for (const id of ['pr-s1', 'pr-s2', 'pr-s3']) registry.delete(id)
-  })
-
-  // Claude sessions deliver through their adapter onto the bridge socket — a
-  // fake socket, not the codex mock, is what proves "delivered immediately."
-  function claudeSession(sessionId: string): string[] {
-    const written: string[] = []
-    registry.set(sessionId, {
-      sessionId, engine: 'claude', threadId: 'thread-1',
-      adapter: new ClaudeEngine(transport),
-    } as any)
-    transport.set(sessionId, { sessionId, socket: { write: (d: string) => { written.push(d); return true }, end() {}, destroyed: false }, buf: '' } as any)
-    return written
-  }
-
-  test('a codex session buffers instead of firing its own turn', () => {
-    codexSession('pr-s1')
-    deliverPrUpdate('pr-s1', 'thread-1', 'CI failed on PR #1')
-    expect(delivered).toEqual([]) // not delivered yet — buffered
-    // Prove it's actually buffered (not dropped) by piggybacking a real turn onto it.
-    transport.sendOrQueue('pr-s1', { type: 'notification', content: 'real user message', allowPiggyback: true })
-    expect(delivered[0]).toContain('CI failed on PR #1')
-  })
-
-  test('a claude session gets it immediately, not buffered', () => {
-    const written = claudeSession('pr-s2')
-    deliverPrUpdate('pr-s2', 'thread-1', 'CI failed on PR #2')
-    expect(written).toHaveLength(1)
-    expect(written[0]).toContain('CI failed on PR #2')
-  })
-
-  // Dead: rejected outright — neither buffered for a turn that will never come
-  // nor delivered (Sam, 2026-09-28: PR notices may be lost).
-  test('a dead codex session neither buffers nor delivers', () => {
-    codexSession('pr-s3', { deadAt: Date.now() })
-    deliverPrUpdate('pr-s3', 'thread-1', 'CI failed on PR #3')
-    expect(delivered).toEqual([])
-    const info = registry.get('pr-s3') as any
-    expect(info.adapter.piggyback.begin('pr-s3')).toBeUndefined()
-  })
-
-  test('an unknown session id does not throw', () => {
-    delivered = []
-    expect(() => deliverPrUpdate('no-such-session', 'thread-1', 'content')).not.toThrow()
   })
 })
 
@@ -237,7 +171,7 @@ describe('deliverPrUpdate (the real production wiring, not a simulation)', () =>
 // ---------------------------------------------------------------------------
 
 describe('notify-green: persistence', () => {
-  const base = { prUrl: 'https://github.com/o/r/pull/7', owner: 'o', repo: 'r', prNumber: 7, sessionId: 's', threadId: 't', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, createdAt: 1 }
+  const base = { prUrl: 'https://github.com/o/r/pull/7', owner: 'o', repo: 'r', prNumber: 7, to: 't', revive: true, threadId: 't', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, createdAt: 1 }
 
   test('old JSON without the fields loads as opted out, with backfilled CI fields', () => {
     const [e] = parsePersistedWatches(JSON.stringify([base]))
@@ -259,9 +193,7 @@ describe('notify-green: persistence', () => {
 describe('notify-green: watch_pr schema + upgrade path', () => {
   const URL7 = 'https://github.com/o/r/pull/7'
   const entry = () => listWatches().find(w => w.prUrl === URL7)!
-  function seed(extra: Partial<WatchEntry> = {}) {
-    restoreWatches([{ prUrl: URL7, owner: 'o', repo: 'r', prNumber: 7, sessionId: 'sess-1', threadId: 'thread-1', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'unknown', createdAt: Date.now(), ...extra } as WatchEntry], 'sess-1', 'thread-1')
-  }
+  const seed = (extra: Partial<WatchEntry> = {}) => seedWatch(URL7, { prNumber: 7, ...extra })
   afterEach(() => { unwatchPr(URL7) })
 
   test('watch_pr declares an optional boolean notify_green', () => {
@@ -275,13 +207,13 @@ describe('notify-green: watch_pr schema + upgrade path', () => {
     const res = await watchPr(URL7, 'sess-2', 'thread-2', { notifyGreen: true })
     expect(res).toContain('will now post when CI goes green')
     expect(entry().notifyGreen).toBe(true)
-    expect(entry().sessionId).toBe('sess-1')
+    expect(entry().to).toBe('thread-1')
     expect(entry().threadId).toBe('thread-1')
   })
 
   test('plain duplicate watch keeps the existing message and never downgrades', async () => {
     seed({ notifyGreen: true })
-    expect(await watchPr(URL7, 'sess-2', 'thread-2')).toBe(`already watching ${URL7} (session: sess-1)`)
+    expect(await watchPr(URL7, 'sess-2', 'thread-2')).toBe(`already watching ${URL7} (→ thread thread-1)`)
     expect(entry().notifyGreen).toBe(true)
   })
 
@@ -326,7 +258,7 @@ describe('notify-green: delivery is a thread post, never a session turn', () => 
   const ok = (headSha: string): CheckResult => ({ headSha, status: 'success', failed: [], total: 4 })
 
   function mkEntry(extra: Partial<WatchEntry> = {}): WatchEntry {
-    return { prUrl: 'https://github.com/o/r/pull/9', owner: 'o', repo: 'r', prNumber: 9, title: 'Add [thing]', sessionId: 'sess-g', threadId: 'thread-g', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'pending', createdAt: 1, notifyGreen: true, ...extra }
+    return { prUrl: 'https://github.com/o/r/pull/9', owner: 'o', repo: 'r', prNumber: 9, title: 'Add [thing]', to: 'thread-g', revive: true, threadId: 'thread-g', lastCheckedAt: '', lastReviewCommentId: 0, lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'pending', createdAt: 1, notifyGreen: true, ...extra }
   }
 
   afterEach(() => {

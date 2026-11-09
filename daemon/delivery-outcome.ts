@@ -14,7 +14,8 @@ export function deliveryOutcome(result: DeliveryResult, queued: boolean): Delive
   const via = result.status === 'accepted' ? result.via : undefined
   if (result.status === 'rejected') return { ok: false, error: `delivery rejected: ${result.reason}` }
   if (result.status === 'unknown') return { ok: false, error: `delivery outcome unknown: ${result.reason} — transient, retry`, exitCode: 6 }
-  if (via === 'requeued') return { ok: false, error: 'bridge write failed (socket destroyed) — transient, retry', exitCode: 6 }
+  if (via === 'requeued' && !queued) return { ok: false, error: 'bridge write failed (socket destroyed) — transient, retry', exitCode: 6 }
+  if (via === 'requeued') return { ok: true, status: 'queued', proof: 'persisted' }
   if (via === 'queued' && !queued) return { ok: false, error: 'bridge unexpectedly absent after reachability check', exitCode: 6 }
   if (via === 'queued') return { ok: true, status: 'queued', proof: 'persisted' }
   if (via === 'bridge-socket') return { ok: true, status: 'delivered', proof: 'socket_write' }

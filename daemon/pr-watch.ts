@@ -1,11 +1,13 @@
 import { execSync } from 'child_process'
+import { createHash } from 'crypto'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, gateway } from './config.js'
-import { registry } from './sessions.js'
-import { transport } from './bridge-transport.js'
+import { registry, type SessionInfo } from './sessions.js'
 import { atomicWriteFileSync, formatDuration, safeSend } from './util.js'
-import { occupancy, occupied } from './session-reachability.js'
+import { specialistForThread } from './specialists.js'
+import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
+import type { DeliverOpts, DeliverOutcome } from './targets.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,8 +37,11 @@ export type WatchEntry = {
   repo: string
   prNumber: number
   title?: string
-  sessionId: string
-  threadId: string
+  // Where updates go: `main`, a specialist, or a thread id with `revive`, resolved at each delivery (targets.ts), so
+  // a dead owner heals instead of stranding the watch. Derived once from the watcher; the target outlives its sessions.
+  to: string
+  revive?: true
+  threadId: string  // where the pin and the green notice are posted
   lastCheckedAt: string
   lastReviewCommentId: number
   lastIssueCommentId: number
@@ -62,22 +67,30 @@ export function conflictChange(last: boolean | undefined, mergeable: boolean | n
 
 export type CheckStatusType = WatchEntry['lastCheckStatus']
 
-// A PR update is low priority: an engine where every delivery is a priced turn
-// (Codex) may hold it for the next turn the user creates; others deliver it now.
-export function deliverPrUpdate(sessionId: string, threadId: string, content: string): void {
-  transport.sendOrQueue(sessionId, {
-    type: 'notification',
-    content,
-    meta: {
-      chat_id: threadId,
-      message_id: '',
-      user: 'pr-watch',
-      user_id: 'system',
-      ts: new Date().toISOString(),
-    },
-    lowPriority: true,
-  })
+/** Test seams: GitHub, and delivery to a watch's target (targets.ts, loaded late: it reaches recovery, which imports this module). */
+export const prWatchDeps = {
+  api: (endpoint: string): Promise<any> => ghApiFetch(endpoint),
+  deliver: async (t: { to: string; revive?: true }, text: string, opts: DeliverOpts): Promise<DeliverOutcome> =>
+    (await import('./targets.js')).deliverToTarget(t, text, opts),
 }
+
+/** The target a session's watches deliver to: `main`, its thread's specialist, or its thread, revived when dead. */
+export function targetOf(sessionId: string, threadId: string): { to: string; revive?: true } {
+  if (sessionId === 'main') return { to: 'main' }
+  const specialist = specialistForThread(threadId)
+  return specialist ? { to: specialist } : { to: threadId, revive: true }
+}
+
+type Watcher = Pick<SessionInfo, 'sessionId' | 'threadId'>
+
+/** A session's watches: those whose target is its thread (or its thread's specialist), or `main`'s. */
+function watchedBy(e: WatchEntry, who: Watcher | undefined): boolean {
+  if (!who) return false
+  if (who.sessionId === 'main') return e.to === 'main'
+  return e.to === who.threadId || e.to === specialistForThread(who.threadId)
+}
+
+const watcher = (sessionId: string): Watcher | undefined => sessionId === 'main' ? { sessionId, threadId: '' } : registry.get(sessionId)
 
 export function shouldNotifyCiChange(
   lastStatus: CheckStatusType, lastSha: string,
@@ -151,23 +164,29 @@ function unpinWatch(entry: WatchEntry): void {
 
 // Backfill fields older persisted data lacks. notifyGreen/greenAnnouncedSha are
 // optional: absent reads as opted out / nothing announced.
+// A watch persisted before targets names its owner session instead: its target is that session's. One whose
+// owner record is gone was ended with it (the old rule), so it is dropped rather than revived.
 export function parsePersistedWatches(raw: string): WatchEntry[] {
-  const data = JSON.parse(raw) as WatchEntry[]
+  const data = JSON.parse(raw) as Array<WatchEntry & { sessionId?: string }>
+  const kept: WatchEntry[] = []
   for (const entry of data) {
     if (!entry.lastHeadSha) entry.lastHeadSha = ''
     if (!entry.lastCheckStatus) entry.lastCheckStatus = 'unknown'
+    if (!entry.to) {
+      const owner = entry.sessionId === 'main' ? { sessionId: 'main', threadId: '' } : entry.sessionId ? registry.get(entry.sessionId) : undefined
+      if (!owner) continue
+      Object.assign(entry, targetOf(owner.sessionId, owner.threadId))
+    }
+    delete entry.sessionId
+    kept.push(entry)
   }
-  return data
+  return kept
 }
 
 function loadPersisted(): void {
   try {
     const raw = readFileSync(PERSIST_FILE, 'utf8')
-    for (const entry of parsePersistedWatches(raw)) {
-      if (registry.has(entry.sessionId) || entry.sessionId === 'main') {
-        watches.set(entry.prUrl, entry)
-      }
-    }
+    for (const entry of parsePersistedWatches(raw)) watches.set(entry.prUrl, entry)
     if (watches.size > 0) {
       process.stderr.write(`daemon: pr-watch: restored ${watches.size} watch(es)\n`)
     }
@@ -212,7 +231,9 @@ function loadGhToken(): string | null {
   }
 }
 
-async function ghApi(endpoint: string): Promise<any> {
+const ghApi = (endpoint: string): Promise<any> => prWatchDeps.api(endpoint)
+
+async function ghApiFetch(endpoint: string): Promise<any> {
   const token = loadGhToken()
   if (!token) return null
 
@@ -425,15 +446,9 @@ export async function applyCheckResult(entry: WatchEntry, check: CheckResult | n
 async function pollPr(entry: WatchEntry): Promise<void> {
   const pollTime = new Date().toISOString()
 
-  // Freeze a watch whose owner record is present but DEAD (crashed / recovery-preserved):
-  // no live agent can consume a notification, and advancing the seen-cursors here would mark
-  // PR feedback seen without delivering it — so a later recovery would resume from the
-  // advanced cursor and never surface the comments/CI changes that arrived while dead. Hold
-  // until the owner is revived (recovery's restoreWatches re-points the watch to the live
-  // successor, and polling resumes from the as-of-death cursors). A truly-absent owner still
-  // falls through to the prune path below; 'main' has no dead record so it's unaffected.
-  const owner = registry.get(entry.sessionId)
-  if (owner && occupancy(owner) === 'dead') return
+  // Nothing counts as seen until the update lands: an update that does not land is owed, and the next poll
+  // fetches it again from the same read position.
+  const held = readPosition(entry)
 
   // Fetch PR state once — reused for merge check and check status
   let prData: any = null
@@ -445,9 +460,9 @@ async function pollPr(entry: WatchEntry): Promise<void> {
       watches.delete(entry.prUrl)
       persist()
       unpinWatch(entry)
-      // Scrub the PR from the session's artifact list so it disappears from the home tab
-      const info = registry.get(entry.sessionId)
-      if (info?.artifacts?.length) {
+      // Scrub the PR from the artifact lists so it disappears from the home tab
+      for (const info of registry.values()) {
+        if (!info.artifacts?.includes(entry.prUrl)) continue
         info.artifacts = info.artifacts.filter(u => u !== entry.prUrl)
         registry.persist()
       }
@@ -547,36 +562,80 @@ async function pollPr(entry: WatchEntry): Promise<void> {
     parts.push('Categorize the above into: **real bugs to fix**, **valid suggestions**, **false positives/noise**, **nits**. Lead with a TL;DR of what actually needs action.')
   }
 
-  // Deliver to the session
-  const sessionExists = registry.has(entry.sessionId) || entry.sessionId === 'main'
-  if (!sessionExists) {
-    process.stderr.write(`daemon: pr-watch: session ${entry.sessionId} gone, removing watch for ${entry.prUrl}\n`)
-    watches.delete(entry.prUrl)
-    persist()
+  const content = fitToCap(parts, entry.prUrl)
+  // Keyed by what it says: resent after a lost answer, it lands once; a new failure of the same head carries new job URLs.
+  const key = `prwatch:${entry.prUrl}:${createHash('sha256').update(content).digest('hex').slice(0, 32)}`
+  // Killed or unwatched while this poll fetched: the thread was ended on purpose, so nothing may revive it.
+  if (watches.get(entry.prUrl) !== entry) { Object.assign(entry, held); return }
+  // Low priority: an engine where every delivery is a priced turn (Codex) may hold it for the next turn.
+  const r = await prWatchDeps.deliver({ to: entry.to, ...(entry.revive && { revive: true }) }, content, {
+    initiator: 'pr-watch', source: 'pr-watch', idempotencyKey: key, queue: true, lowPriority: true,
+    wanted: () => watches.get(entry.prUrl) === entry,
+  })
+  if (!r.ok) {
+    Object.assign(entry, held)
+    if (r.exit === 8) {
+      process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${entry.to}: ${r.reason} — unwatching\n`)
+      dropWatch(entry)
+      void safeSend(entry.threadId, `⚠️ Stopped watching [#${entry.prNumber}](${entry.prUrl}): ${r.reason}`, { unfurl: false })
+      return
+    }
+    process.stderr.write(`daemon: pr-watch: ${entry.prUrl} → ${entry.to} not delivered (exit ${r.exit}: ${r.reason}) — owed, retried next poll\n`)
     return
   }
-
-  const content = parts.join('\n')
-  deliverPrUpdate(entry.sessionId, entry.threadId, content)
-
   if (watches.get(entry.prUrl) === entry) persist()
-  process.stderr.write(`daemon: pr-watch: delivered ${allComments.length} comment(s) + ${reviews.length} review(s) for ${entry.prUrl}\n`)
+  process.stderr.write(`daemon: pr-watch: delivered ${allComments.length} comment(s) + ${reviews.length} review(s) for ${entry.prUrl} → ${r.sessionName}${r.revived ? ' (revived)' : ''}\n`)
+}
+
+/** A burst of feedback can outgrow one delivery: keep the lines that fit, and the closing instruction, and point at the PR. */
+function fitToCap(parts: string[], prUrl: string): string {
+  const text = parts.join('\n')
+  if (Buffer.byteLength(text) <= DELIVER_MAX_MESSAGE_BYTES) return text
+  const cut = parts.lastIndexOf('---')
+  const tail = [`_…more on the PR: ${prUrl}_`, '', ...parts.slice(cut)].join('\n')
+  let budget = DELIVER_MAX_MESSAGE_BYTES - Buffer.byteLength(tail) - 1
+  const head: string[] = []
+  for (const line of parts.slice(0, cut)) {
+    budget -= Buffer.byteLength(line) + 1
+    if (budget < 0) break
+    head.push(line)
+  }
+  return [...head, tail].join('\n')
+}
+
+type ReadPosition = Pick<WatchEntry, 'lastCheckedAt' | 'lastReviewCommentId' | 'lastIssueCommentId' | 'lastReviewId' | 'lastHeadSha' | 'lastCheckStatus' | 'lastConflict'>
+
+function readPosition(e: WatchEntry): ReadPosition {
+  const { lastCheckedAt, lastReviewCommentId, lastIssueCommentId, lastReviewId, lastHeadSha, lastCheckStatus, lastConflict } = e
+  return { lastCheckedAt, lastReviewCommentId, lastIssueCommentId, lastReviewId, lastHeadSha, lastCheckStatus, lastConflict }
+}
+
+function dropWatch(entry: WatchEntry): void {
+  if (watches.get(entry.prUrl) !== entry) return
+  watches.delete(entry.prUrl)
+  unpinWatch(entry)
+  persist()
 }
 
 // ---------------------------------------------------------------------------
 // Poll loop
 // ---------------------------------------------------------------------------
 
-async function pollAll(): Promise<void> {
-  if (watches.size === 0) return
+let polling = false
 
-  for (const entry of watches.values()) {
-    try {
-      await pollPr(entry)
-    } catch (err) {
-      process.stderr.write(`daemon: pr-watch: poll failed for ${entry.prUrl}: ${err}\n`)
+// One cycle at a time: a delivery may revive its target, which can outlast the poll interval.
+async function pollAll(): Promise<void> {
+  if (watches.size === 0 || polling) return
+  polling = true
+  try {
+    for (const entry of [...watches.values()]) {
+      try {
+        await pollPr(entry)
+      } catch (err) {
+        process.stderr.write(`daemon: pr-watch: poll failed for ${entry.prUrl}: ${err}\n`)
+      }
     }
-  }
+  } finally { polling = false }
 }
 
 // ---------------------------------------------------------------------------
@@ -645,9 +704,9 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
       existing.notifyGreen = true
       persist()
       process.stderr.write(`daemon: pr-watch: ${prUrl} upgraded to notify-green\n`)
-      return `already watching ${prUrl} (session: ${existing.sessionId}) — will now post when CI goes green`
+      return `already watching ${prUrl} (→ ${targetName(existing)}) — will now post when CI goes green`
     }
-    return `already watching ${prUrl} (session: ${existing.sessionId})`
+    return `already watching ${prUrl} (→ ${targetName(existing)})`
   }
 
   const parsed = parsePrUrl(prUrl)
@@ -660,7 +719,7 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
     owner: parsed.owner,
     repo: parsed.repo,
     prNumber: parsed.prNumber,
-    sessionId,
+    ...targetOf(sessionId, threadId),
     threadId,
     lastCheckedAt: new Date().toISOString(),
     lastReviewCommentId: 0,
@@ -696,7 +755,7 @@ export async function watchPr(prUrl: string, sessionId: string, threadId: string
   watches.set(prUrl, entry)
   persist()
   void pinWatch(entry)
-  process.stderr.write(`daemon: pr-watch: watching ${prUrl} → session ${sessionId}, thread ${threadId}${entry.notifyGreen ? ' (notify-green)' : ''}\n`)
+  process.stderr.write(`daemon: pr-watch: watching ${prUrl} → ${entry.to}, thread ${threadId}${entry.notifyGreen ? ' (notify-green)' : ''}\n`)
   return `watching ${prUrl} — will poll every ${POLL_INTERVAL_MS / 60000} minutes${entry.notifyGreen ? ' and post when CI goes green' : ''}`
 }
 
@@ -705,8 +764,8 @@ export function unwatchPr(prUrl: string, callerSessionId?: string): string {
   if (!entry) {
     return `not watching ${prUrl}`
   }
-  if (callerSessionId && callerSessionId !== entry.sessionId && callerSessionId !== 'main') {
-    return `cannot unwatch — owned by session ${entry.sessionId}`
+  if (callerSessionId && callerSessionId !== 'main' && !watchedBy(entry, watcher(callerSessionId))) {
+    return `cannot unwatch — it delivers to ${targetName(entry)}`
   }
   watches.delete(prUrl)
   persist()
@@ -715,10 +774,14 @@ export function unwatchPr(prUrl: string, callerSessionId?: string): string {
   return `stopped watching ${prUrl}`
 }
 
-export function unwatchBySession(sessionId: string): number {
+/**
+ * A deliberate end of the session (kill, `[done]`, a deleted thread): its thread's watches end with it. A
+ * specialist's watches do not: the specialist outlives its sessions, and ends with `specialist rm` (exit 8).
+ */
+export function unwatchBySession(who: Watcher): number {
   let removed = 0
   for (const [url, entry] of watches) {
-    if (entry.sessionId === sessionId) {
+    if (watchedBy(entry, who) && (entry.to === 'main' || entry.to === who.threadId)) {
       watches.delete(url)
       unpinWatch(entry)
       removed++
@@ -728,32 +791,22 @@ export function unwatchBySession(sessionId: string): number {
   return removed
 }
 
-// Re-establish a dead session's watches onto its recovered replacement, preserving
-// the seen-cursors (lastReviewCommentId/lastHeadSha/lastCheckStatus/…) — a naive
-// re-watch would reset them and re-notify old comments or miss a CI change. Snapshot
-// via getWatchesBySession BEFORE the dead session is killed, restore AFTER the
-// replacement exists. Idempotent by prUrl.
-export function restoreWatches(entries: WatchEntry[], newSessionId: string, newThreadId: string): number {
-  let restored = 0
-  for (const entry of entries) {
-    // Never downgrade a watch a DIFFERENT, still-live session holds — its cursors are
-    // fresher/authoritative. (In practice the map is one-owner-per-prUrl so the sets are
-    // disjoint; this guard makes that safety explicit and survives future changes.)
-    // Overwriting an entry held by a dead record IS intended: re-pointing a stranded
-    // watch to the survivor.
-    const existing = watches.get(entry.prUrl)
-    if (existing && existing.sessionId !== newSessionId) {
-      const owner = registry.get(existing.sessionId)
-      if (owner && occupied(occupancy(owner))) continue
-    }
-    // The old pin lives in the dead thread; re-pin in the successor's thread.
-    const moved = { ...entry, sessionId: newSessionId, threadId: newThreadId, pinMessageId: undefined }
-    watches.set(entry.prUrl, moved)
-    void pinWatch(moved)
-    restored++
+/**
+ * Recovery dedup: a skipped session's watches deliver to the session that does the same work. The read position
+ * moves with them, so nothing is re-sent or missed; the pin moves to the new thread.
+ */
+export function retargetWatches(from: Watcher, to: Watcher): number {
+  let moved = 0
+  // In place: a poll in flight holds this object, and its read position must stay the one it restores.
+  for (const entry of [...watches.values()].filter(e => watchedBy(e, from))) {
+    unpinWatch(entry)
+    delete entry.revive
+    Object.assign(entry, targetOf(to.sessionId, to.threadId), { threadId: to.threadId, pinMessageId: undefined })
+    void pinWatch(entry)
+    moved++
   }
-  if (restored > 0) persist()
-  return restored
+  if (moved > 0) persist()
+  return moved
 }
 
 export function listWatches(): WatchEntry[] {
@@ -761,14 +814,20 @@ export function listWatches(): WatchEntry[] {
 }
 
 export function getWatchesBySession(sessionId: string): WatchEntry[] {
-  return [...watches.values()].filter(e => e.sessionId === sessionId)
+  const who = watcher(sessionId)
+  return [...watches.values()].filter(e => watchedBy(e, who))
+}
+
+/** Who a watch delivers to now: a specialist's name, `main`, or its thread's session name. */
+function targetName(e: WatchEntry): string {
+  if (e.to === 'main' || !e.revive) return e.to
+  const id = registry.getByThread(e.to)
+  return (id && registry.get(id)?.tmuxName) || `thread ${e.to}`
 }
 
 export function formatWatchEntry(e: WatchEntry): string {
   const age = formatDuration(Date.now() - e.createdAt)
-  const sessionInfo = registry.get(e.sessionId)
-  const name = sessionInfo?.tmuxName ?? e.sessionId
-  return `[#${e.prNumber}](${e.prUrl})${e.notifyGreen ? ' 🟢' : ''} → **${name}** (${age})`
+  return `[#${e.prNumber}](${e.prUrl})${e.notifyGreen ? ' 🟢' : ''} → **${targetName(e)}** (${age})`
 }
 
 export async function backfillTitles(): Promise<number> {
@@ -810,3 +869,7 @@ export function stopPrWatcher(): void {
     pollTimer = undefined
   }
 }
+
+export const _pollForTesting = (entry: WatchEntry): Promise<void> => pollPr(entry)
+export const _pollAllForTesting = (): Promise<void> => pollAll()
+export function _setWatchForTesting(entry: WatchEntry): void { watches.set(entry.prUrl, entry) }
