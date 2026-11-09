@@ -221,6 +221,29 @@ describe('specialists', () => {
     }
   })
 
+  test('a hydra.toml specialist\'s fresh session starts in its workdir, on a new thread and on the respawn tier alike', async () => {
+    const calls = fakeSpawn()
+    const name = `t-specialist-${++n}`
+    _setHydraConfigForTesting({
+      operator: 'op', connectors: {}, places: {}, schedules: {}, rules: [],
+      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      specialists: { [name]: { id: name, workdir: '/srv/ops', prompt: 'be the slopbot', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [] } },
+    })
+    try {
+      expect((await deliver(name)).ok).toBe(true)
+      expect((calls[0][3] as any).cwd).toBe('/srv/ops')
+      // Its session dies; the thread is still there, so the refill respawns into it, in the workdir again.
+      const thread = getSpecialist(name)!.threadId!
+      threadRegistry.set(thread, { threadId: thread, sessionHistory: [] } as any)
+      registry.delete(registry.threadToSession.get(thread)!)
+      expect((await deliver(name, { idempotencyKey: `specialist-k-${++n}` })).ok).toBe(true)
+      expect(calls).toHaveLength(2)
+      expect((calls[1][3] as any)).toMatchObject({ existingThreadId: thread, cwd: '/srv/ops' })
+    } finally {
+      _setHydraConfigForTesting(undefined)
+    }
+  })
+
   test('a new specialist needs a channel or a thread', async () => {
     const name = `t-specialist-${++n}`
     names.push(name)

@@ -57,6 +57,9 @@ export type ReviveRequest = {
   engine?: ProviderId
   /** Layered onto the respawn tier only (a template's tools and session type). */
   respawnOpts?: Partial<SpawnOpts>
+  /** Where a fresh session starts (a specialist's workdir): the respawn tier and a new thread. Resume and fork start
+   *  where their transcript was made, and a kept worktree wins. */
+  cwd?: string
   promptPrefix?: string
   /** On the resume tier, keep the dead session's name (boot recovery). */
   reuseName?: boolean
@@ -226,7 +229,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
 
     try {
       const result = await recoveryDeps.tryRespawn(thread.threadId, respawnTopic(), entry?.tmuxName ?? dead?.tmuxName, model, {
-        ...shared, ...req.respawnOpts, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }),
+        ...shared, ...req.respawnOpts, ...(req.promptPrefix && { promptPrefix: req.promptPrefix }), ...(req.cwd && { cwd: req.cwd }),
       })
       if (result) return ok(result, 'respawned')
     } catch (err) {
@@ -242,7 +245,7 @@ export async function reviveThread(req: ReviveRequest): Promise<ReviveOutcome> {
         ? `[system] Your previous thread (${thread.threadId}) is gone, so this is a new one; its history cannot be read here.\n\n${respawnTopic()}`
         : respawnTopic()
       return ok(await recoveryDeps.doSpawnSession(prompt, channel, undefined, {
-        model, engine, label, carryOver: carried, ...keep, ...named, ...origin,
+        model, engine, label, carryOver: carried, ...keep, ...named, ...origin, ...(req.cwd && { cwd: req.cwd }),
       }), 'respawned')
     } catch (err) {
       lastError = errorText(err)

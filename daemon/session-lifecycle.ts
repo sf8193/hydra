@@ -961,37 +961,13 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     effectiveCwd = wt.worktreePath
 
     // Pre-approve Claude trust for the worktree paths (Claude-specific, not git)
-    const claudeJsonPath = join(CLAUDE_CONFIG, '.claude.json')
-    try {
-      const claudeJson = JSON.parse(readFileSync(claudeJsonPath, 'utf8'))
-      if (!claudeJson.projects) claudeJson.projects = {}
-      const trustEntry = {
-        allowedTools: [] as string[],
-        mcpContextUris: [] as string[],
-        mcpServers: {} as Record<string, unknown>,
-        enabledMcpjsonServers: [] as string[],
-        disabledMcpjsonServers: [] as string[],
-        hasTrustDialogAccepted: true,
-        hasClaudeMdExternalIncludesApproved: true,
-        hasClaudeMdExternalIncludesWarningShown: true,
-        hasCompletedProjectOnboarding: true,
-        projectOnboardingSeenCount: 0,
-      }
-      let changed = false
-      for (const p of [wt.worktreePath, wt.repoDir]) {
-        const existing = claudeJson.projects[p]
-        if (!existing || !existing.hasClaudeMdExternalIncludesApproved) {
-          claudeJson.projects[p] = { ...existing, ...trustEntry }
-          changed = true
-        }
-      }
-      if (changed) {
-        writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n')
-        process.stderr.write(`daemon: pre-approved trust for worktree paths\n`)
-      }
-    } catch (err) {
-      process.stderr.write(`daemon: trust pre-approval failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
-    }
+    preApproveClaudeTrust([wt.worktreePath, wt.repoDir], 'worktree paths')
+  } else if (opts?.cwd) {
+    // A specialist's workdir. Checked here too, not only at load: the folder can go away after hydra.toml loaded.
+    if (!existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
+    effectiveCwd = opts.cwd
+    // The operator chose this folder in hydra.toml; without this a first launch there waits on Claude's trust dialog.
+    preApproveClaudeTrust([opts.cwd], `workdir ${opts.cwd}`)
   }
 
   const promptParams = { sessionId, tmuxName, threadId: threadId!, topic, topicIsRequest: opts?.topicIsRequest }
@@ -1303,3 +1279,41 @@ export async function tryRespawn(
 
 // Claude session ID discovery lives in the Claude engine; re-exported for existing importers.
 export { discoverClaudeSessionId } from './engines/claude-engine.js'
+
+/**
+ * Marks folders as trusted in Claude's config, so a session launched there doesn't wait on the trust dialog.
+ * For folders hydra chose (a worktree it made) or the operator declared (a specialist's workdir). Never fatal.
+ */
+function preApproveClaudeTrust(paths: string[], what: string): void {
+  const claudeJsonPath = join(CLAUDE_CONFIG, '.claude.json')
+  try {
+    const claudeJson = JSON.parse(readFileSync(claudeJsonPath, 'utf8'))
+    if (!claudeJson.projects) claudeJson.projects = {}
+    const trustEntry = {
+      allowedTools: [] as string[],
+      mcpContextUris: [] as string[],
+      mcpServers: {} as Record<string, unknown>,
+      enabledMcpjsonServers: [] as string[],
+      disabledMcpjsonServers: [] as string[],
+      hasTrustDialogAccepted: true,
+      hasClaudeMdExternalIncludesApproved: true,
+      hasClaudeMdExternalIncludesWarningShown: true,
+      hasCompletedProjectOnboarding: true,
+      projectOnboardingSeenCount: 0,
+    }
+    let changed = false
+    for (const p of paths) {
+      const existing = claudeJson.projects[p]
+      if (!existing || !existing.hasClaudeMdExternalIncludesApproved) {
+        claudeJson.projects[p] = { ...existing, ...trustEntry }
+        changed = true
+      }
+    }
+    if (changed) {
+      writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n')
+      process.stderr.write(`daemon: pre-approved trust for ${what}\n`)
+    }
+  } catch (err) {
+    process.stderr.write(`daemon: trust pre-approval failed (non-fatal): ${err instanceof Error ? err.message : String(err)}\n`)
+  }
+}

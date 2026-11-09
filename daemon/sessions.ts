@@ -258,6 +258,7 @@ export type SpawnOpts = {
   engine?: ProviderId  // which backend to use (default: claude)
   disallowedTools?: string[]  // Claude built-in tools to block (e.g. ['Edit', 'Write'])
   launchCwd?: string          // fork: launch from the source's launch dir, where --resume finds its transcript (no worktree)
+  cwd?: string                // a fresh launch's working dir (a specialist's workdir) in place of SPAWN_CWD; a fork, resume or worktree wins
   tools?: string[]            // Claude --tools whitelist (must include MCP tools with prefix)
   sessionType?: SessionType  // declared at spawn — determines base tool set
   worktree?: string           // git repo subdirectory to create a worktree from (structural alternative to topic prefix)
