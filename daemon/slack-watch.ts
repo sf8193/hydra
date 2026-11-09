@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
 import { parseIdleTtl } from '../shared/constants.js'
+import { runGuard, parseGuardTimeout, type Guard, type GuardInput, type GuardVerdict } from './slack-guard.js'
 
 /**
  * Slack thread watches: the Slack sibling of pr-watch.
@@ -43,7 +44,7 @@ export type From = 'anyone' | 'people' | string[]
 export type Target = { to: string; revive?: boolean }
 
 /** Some channels, where their messages go, and who may send them. A channel belongs to one route. */
-export type Route = { channels: string[]; to: string; from: From }
+export type Route = { channels: string[]; to: string; from: From; guard?: Guard }
 
 export type SlackWatchConfig = {
   /** The bot's Slack user id: `<@id>` in a message text is a tag. */
@@ -104,6 +105,8 @@ export type SlackWatchDeps = {
   log: (line: string) => void
   /** Slack user id to display name (users.info). Optional; deliveries carry the id either way. */
   resolveName?: (userId: string) => Promise<string | undefined>
+  /** Runs a route's beforeDeliver. Defaults to the real subprocess; tests pass a fake. */
+  guard?: (g: Guard, input: GuardInput) => Promise<GuardVerdict>
   /** A plain message to a person (not a session turn): how a drop is surfaced. `channel`: the Slack channel it concerns, whose route's target should hear it. */
   alert?: (text: string, channel?: string) => void
 }
@@ -112,7 +115,7 @@ export type SlackWatchDeps = {
 export type HandleOutcome = 'mention' | 'follow-up' | 'subscribed' | 'refused' | 'ignored'
 
 /** Why an accepted (or would-be accepted) message will never be delivered. */
-export type DropKind = 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full'
+export type DropKind = 'expired' | 'owed-full' | 'too-large' | 'tag-cap' | 'table-full' | 'guard'
 
 export type SlackWatchStats = { refused: number; refusedBy: Record<string, number>; dropped: Partial<Record<DropKind, number>> }
 
@@ -165,6 +168,7 @@ function parseRoutes(t: Record<string, unknown>, people: Record<string, Person>,
   if (legacy && t.routes !== undefined) return fail('use routes, or channels and specialist, not both')
   if (!legacy && t.from !== undefined) return fail('from belongs inside each route')
   const noRoster = t.people === undefined || t.people === null
+  const topGuard = parseGuard(t.beforeDeliver, 'beforeDeliver', fail)
   const one = (r: Record<string, unknown>, where: string, dfltFrom: From): Route => {
     const channels = r.channels
     if (!Array.isArray(channels) || channels.length === 0 || channels.some(c => typeof c !== 'string' || !c)) {
@@ -172,7 +176,9 @@ function parseRoutes(t: Record<string, unknown>, people: Record<string, Person>,
     }
     const to = legacy ? r.specialist : r.to
     if (typeof to !== 'string' || !to.trim()) fail(`${where}${legacy ? 'specialist' : 'to'} must be a non-empty string`)
-    return { channels: channels as string[], to: (to as string).trim(), from: parseFrom(r.from, people, dfltFrom, fail, where) }
+    // A route's own beforeDeliver overrides the top-level one; false or null turns it off for this route.
+    const guard = legacy || r.beforeDeliver === undefined ? topGuard : parseGuard(r.beforeDeliver, `${where}beforeDeliver`, fail)
+    return { channels: channels as string[], to: (to as string).trim(), from: parseFrom(r.from, people, dfltFrom, fail, where), ...(guard && { guard }) }
   }
   // Today's form, with no roster, stays open to anyone; declaring one closes the door to everyone not in it.
   const routes = legacy
@@ -190,6 +196,17 @@ function parseRoutes(t: Record<string, unknown>, people: Record<string, Person>,
     owner.set(c, i)
   }))
   return routes
+}
+
+function parseGuard(raw: unknown, where: string, fail: (why: string) => never): Guard | undefined {
+  if (raw === undefined || raw === null || raw === false) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) return fail(`${where} must be {command, includeText, timeout}, or false`)
+  const g = raw as Record<string, unknown>
+  if (typeof g.command !== 'string' || !g.command.trim()) fail(`${where}.command must be a non-empty string`)
+  if (g.includeText !== undefined && typeof g.includeText !== 'boolean') fail(`${where}.includeText must be true or false`)
+  const timeoutMs = g.timeout === undefined || g.timeout === '' ? 5000 : typeof g.timeout === 'string' ? parseGuardTimeout(g.timeout) : null
+  if (timeoutMs === null) fail(`${where}.timeout must be a duration like 5s or 1500ms, at most 30s`)
+  return { command: (g.command as string).trim(), includeText: g.includeText === true, timeoutMs: timeoutMs! }
 }
 
 /** The route a channel belongs to, from this config: where its messages go, who may send them. The one lookup delivery, alerts and the watch tools share. */
@@ -300,10 +317,36 @@ const PERSIST_DEBOUNCE_MS = 200
 /** Alerts of one kind closer together than this are one episode: alerted once. */
 const ALERT_EPISODE_GAP_MS = 60 * 60_000
 const NOTED_KEEP = 10_000
+const GUARD_CONCURRENCY = 4
+
+/** `fn` over `xs`, at most `limit` at a time, results in order. */
+async function mapLimit<T, R>(xs: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(xs.length)
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(limit, xs.length) }, async () => {
+    while (next < xs.length) { const n = next++; out[n] = await fn(xs[n]) }
+  }))
+  return out
+}
 const OWED_FULL_WHY = `more than ${OWED_KEEP} messages were owed in one thread, so the oldest is no longer retried`
 
 const watchKey = (channel: string, threadTs: string) => `${channel}:${threadTs}`
 const tagRe = (botUserId: string) => new RegExp(`<@${botUserId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\|[^>]*)?>`)
+
+/**
+ * The delivered list is the exact dedupe, capped at DELIVERED_KEEP. Catch-up rereads a thread from its oldest owed
+ * message, and Slack returns the thread's parent with every read, so neither those messages nor the parent are ever
+ * trimmed away: a delivered ts trimmed there would be delivered again.
+ */
+function keepDelivered(delivered: string[], owed: string[] | undefined, parent: string): string[] {
+  if (delivered.length <= DELIVERED_KEEP) return delivered
+  const floor = owed?.length ? [...owed].sort(cmpTs)[0] : undefined
+  const cut = delivered.length - DELIVERED_KEEP
+  const reread = floor ? delivered.findIndex(t => cmpTs(t, floor) >= 0) : -1
+  const firstKept = reread === -1 ? cut : Math.min(cut, reread)
+  const kept = delivered.slice(firstKept)
+  return delivered.includes(parent) && !kept.includes(parent) ? [parent, ...kept] : kept
+}
 
 const insertTs = (list: string[] | undefined, ts: string, keep: number): string[] => {
   const out = list ?? []
@@ -400,6 +443,8 @@ export class SlackWatcher {
   private readonly nameFlights = new Map<string, Promise<string | undefined>>()
   // Deliveries go out one at a time, in the order they were scheduled.
   private chain: Promise<void> = Promise.resolve()
+  // Each thread's flushes run in order, but the work before sending (names, beforeDeliver) runs beside other threads': one slow guard holds back only its own thread.
+  private readonly threadRuns = new Map<string, Promise<void>>()
   private dirty = false
   private persistTimer: ReturnType<typeof setTimeout> | undefined
   private botId: string | undefined
@@ -653,14 +698,14 @@ export class SlackWatcher {
   }
 
   /** A message that will never be delivered: logged every time, counted, and alerted once per episode of its kind. */
-  private drop(kind: DropKind, where: Pick<SlackWatchEntry, 'channel' | 'threadTs'>, ts: string[], why: string): void {
+  private drop(kind: DropKind, where: Pick<SlackWatchEntry, 'channel' | 'threadTs'>, ts: string[], why: string, alert = true): void {
     const fresh = ts.filter(t => this.firstTime(this.noted.dropped, `${where.channel}:${t}`))
     if (!fresh.length) return
     this.stats_.dropped[kind] = (this.stats_.dropped[kind] ?? 0) + fresh.length
     const line = `dropped ${fresh.length} Slack message${fresh.length === 1 ? '' : 's'} in ${where.channel}:${where.threadTs} (${kind}, ts ${fresh.join(', ')}): ${why}`
     this.deps.log(`daemon: slack-watch: ${line}\n`)
     // Keyed by kind and by who hears it: one route's trouble does not silence another's.
-    this.alertOnce(`${kind}:${routeFor(this.deps.config(), where.channel)?.to ?? '-'}`, where.channel, `⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra slack-watch list\` counts them.`)
+    if (alert) this.alertOnce(`${kind}:${routeFor(this.deps.config(), where.channel)?.to ?? '-'}`, where.channel, `⚠️ ${line[0].toUpperCase()}${line.slice(1)}. Further ${kind} drops within the hour are logged, not alerted; \`hydra slack-watch list\` counts them.`)
   }
 
   /**
@@ -710,7 +755,11 @@ export class SlackWatcher {
     const flying = this.inflight.get(key) ?? new Set<string>()
     for (const i of items) flying.add(i.ts)
     this.inflight.set(key, flying)
-    this.chain = this.chain.then(() => this.deliverItems(key, entry, items, cfg))
+    const run = (this.threadRuns.get(key) ?? Promise.resolve())
+      .then(() => this.deliverItems(key, entry, items, cfg))
+      .catch(err => this.deps.log(`daemon: slack-watch: delivering ${key} failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`))
+    this.threadRuns.set(key, run)
+    void run.finally(() => { if (this.threadRuns.get(key) === run) this.threadRuns.delete(key) })
   }
 
   private async deliverItems(key: string, entry: SlackWatchEntry, items: Item[], cfg: SlackWatchConfig): Promise<void> {
@@ -732,7 +781,6 @@ export class SlackWatcher {
       this.deps.log(`daemon: slack-watch: ${key} is in no route now; ${items.length} message(s) stay owed until a route covers ${entry.channel} again or they expire\n`)
       return
     }
-    const target: Target = { to: route.to }
     // The gate travels with the target: a message admitted by the route it arrived under is judged again by the route it leaves by.
     const admitted = items.filter(i => {
       if (admits(route.from, cfg.people, i.user)) return true
@@ -758,11 +806,72 @@ export class SlackWatcher {
       const slackName = i.user ? resolved.get(i.user)?.replace(/[()]/g, '') : undefined
       return { ...i, name: p?.name ?? slackName, ...(p?.role && { role: p.role }) }
     })
-    for (const batch of packItems(named)) {
+    // beforeDeliver judges each message, and may send it somewhere else. Groups keep the burst's order.
+    const verdicts = await mapLimit(named, GUARD_CONCURRENCY, i => route.guard ? this.judge(route, route.guard, entry, i) : Promise.resolve<GuardVerdict>({ fate: 'deliver' }))
+    const groups = new Map<string, Item[]>()
+    named.forEach((item, n) => {
+      const v = verdicts[n]
+      if (v.fate === 'drop') {
+        this.drop('guard', entry, [item.ts], 'beforeDeliver dropped it (exit 10)', false)
+        this.settle(key, entry, [item.ts])
+        return
+      }
+      if (v.fate === 'later') {
+        // Kept owed for the next pass, unless the owed list was full and already cut it: then nothing would retry it.
+        if (!entry.owed?.includes(item.ts)) { this.drop('owed-full', entry, [item.ts], OWED_FULL_WHY); return }
+        this.deps.log(`daemon: slack-watch: beforeDeliver said not now (exit 75) for ${key} ts ${item.ts}; it stays owed and the next catch-up pass offers it again\n`)
+        return
+      }
+      if (v.fate === 'open') this.deps.log(`daemon: slack-watch: beforeDeliver ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
+      let to = v.fate === 'deliver' && v.to ? v.to : route.to
+      // A redirect does not get around the gate: where a route already delivers to that target, its `from` must admit the sender too.
+      const there = cfg.routes.filter(r => r.to === to)
+      if (to !== route.to && there.length && !there.some(r => admits(r.from, cfg.people, item.user))) {
+        this.deps.log(`daemon: slack-watch: beforeDeliver redirected ${key} ts ${item.ts} to ${to}, whose routes do not admit ${item.user ?? 'this sender'}; delivering to ${route.to}\n`)
+        to = route.to
+      }
+      if (to !== route.to) this.deps.log(`daemon: slack-watch: beforeDeliver redirected ${key} ts ${item.ts} from ${route.to} to ${to}\n`)
+      groups.set(to, [...(groups.get(to) ?? []), item])
+    })
+    // Only the sending is serialized across threads.
+    const send = this.chain.then(async () => {
+      for (const [to, group] of groups) await this.deliverGroup(key, entry, { to }, group, cfg, to === route.to ? undefined : route.to)
+    })
+    this.chain = send.catch(() => {})
+    await send
+  }
+
+  /** One message's verdict from beforeDeliver. A guard that throws fails open, like one that crashes. */
+  private async judge(route: Route, g: Guard, entry: SlackWatchEntry, i: Item): Promise<GuardVerdict> {
+    const input: GuardInput = {
+      from: { ...(i.user && { id: i.user }), ...(i.name && { name: i.name }), ...(i.role && { role: i.role }) },
+      channel: entry.channel, thread: entry.threadTs, to: route.to,
+      ...(g.includeText && { text: i.text }),
+    }
+    try { return await (this.deps.guard ?? runGuard)(g, input) } catch (err) {
+      return { fate: 'open', why: `threw: ${err instanceof Error ? err.message : err}` }
+    }
+  }
+
+  /** These ts are done with: delivered, or dropped for good. Replays of them deliver nothing. */
+  private settle(key: string, entry: SlackWatchEntry, ts: string[]): void {
+    if (this.entries.get(key) !== entry) return
+    for (const t of ts) entry.delivered = insertTs(entry.delivered, t, Infinity)
+    entry.delivered = keepDelivered(entry.delivered!, entry.owed?.filter(t => !ts.includes(t)), entry.threadTs)
+    const settled = new Set(ts)
+    const owed = (entry.owed ?? []).filter(t => !settled.has(t))
+    if (owed.length) entry.owed = owed; else delete entry.owed
+    this.persist()
+  }
+
+  /** `fallback`: the route's own target, for a beforeDeliver redirect that names no specialist. A broken guard never holds a message back. */
+  private async deliverGroup(key: string, entry: SlackWatchEntry, target: Target, items: Item[], cfg: SlackWatchConfig, fallback?: string): Promise<void> {
+    for (const batch of packItems(items)) {
       const first = batch[0].ts
       const last = batch[batch.length - 1].ts
       const message = formatDelivery(entry, batch, cfg.workspaceUrl)
-      const idempotencyKey = `slack-watch-${entry.channel}-${entry.threadTs}-${first}-${last}`
+      // The target is part of the key: the same messages re-routed elsewhere are a different send.
+      const idempotencyKey = `slack-watch-${entry.channel}-${entry.threadTs}-${first}-${last}-${target.to}`
       let result: DeliverResult
       try { result = await this.deps.deliver(target, message, idempotencyKey) } catch (err) {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -771,18 +880,20 @@ export class SlackWatcher {
         // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
         this.deps.log(`daemon: slack-watch: delivery to ${target.to} failed for ${key} (${first}..${last}): ${result.error}\n`)
         // Not to the channel's route: its target is the one that does not exist. Every other route's target hears it.
-        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages for ${entry.channel} are owed but undeliverable: ${result.error}. The route's \`to\` names no specialist; fix slack-watch.json or declare it with \`hydra specialist set\`. They stay owed for up to a day.`)
+        if (result.exit === 8 && fallback) {
+          this.deps.log(`daemon: slack-watch: beforeDeliver redirected ${key} (${first}..${last}) to ${target.to}, which is no specialist; delivering to ${fallback}\n`)
+          // The guard is misconfigured: said once per episode, or a typo would quietly send everything to the default forever.
+          this.alertOnce(`guard-redirect:${routeFor(cfg, entry.channel)?.guard?.command ?? ''}:${target.to}`, entry.channel, `⚠️ beforeDeliver redirected a Slack message in ${entry.channel} to "${target.to}", which is no specialist, so it went to the route's \`to\` (${fallback}) instead. Fix the guard, or declare "${target.to}" with \`hydra specialist set\`.`)
+          await this.deliverGroup(key, entry, { to: fallback }, batch, cfg)
+          continue
+        }
+        if (result.exit === 8) this.alertOnce(`no-such-specialist:${target.to}`, undefined, `⚠️ Slack messages for ${entry.channel} are owed but undeliverable: ${result.error}. Its route's \`to\` (or a beforeDeliver redirect) names no specialist; fix it, or declare it with \`hydra specialist set\`. They stay owed for up to a day.`)
         const cut = batch.map(i => i.ts).filter(ts => !entry.owed?.includes(ts))
         if (cut.length && this.entries.get(key) === entry) this.drop('owed-full', entry, cut, OWED_FULL_WHY)
         continue
       }
       if (!result.ok) this.drop('too-large', entry, batch.map(i => i.ts), `it can never be delivered: ${result.error}`)
-      if (this.entries.get(key) !== entry) continue
-      for (const i of batch) entry.delivered = insertTs(entry.delivered, i.ts, DELIVERED_KEEP)
-      const settled = new Set(batch.map(i => i.ts))
-      const owed = (entry.owed ?? []).filter(ts => !settled.has(ts))
-      if (owed.length) entry.owed = owed; else delete entry.owed
-      this.persist()
+      this.settle(key, entry, batch.map(i => i.ts))
     }
   }
 
@@ -790,6 +901,7 @@ export class SlackWatcher {
   async flush(): Promise<void> {
     const cfg = this.deps.config()
     if (cfg) for (const key of [...this.pending.keys()]) this.flushKey(key, cfg)
+    while (this.threadRuns.size) await Promise.all([...this.threadRuns.values()])
     await this.chain
     this.persistNow()
   }

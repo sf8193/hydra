@@ -237,3 +237,23 @@ test('owed threads in a channel no route covers are not fetched: nothing would t
   await catchUp(w, api, routed, opts())
   expect(calls.filter(c => c.kind === 'replies')).toHaveLength(0)
 })
+
+test('a message the guard put off (exit 75) is refetched by catch-up and judged again, like any owed message', async () => {
+  const guarded: SlackWatchConfig = { ...cfg, routes: [{ channels: [CH], to: 'slopbot', from: 'anyone', guard: { command: 'g', includeText: false, timeoutMs: 1000 } }] }
+  const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
+  dirs.push(dir)
+  let fate: 'later' | 'deliver' = 'later'
+  const sent: string[] = []
+  const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => guarded,
+    guard: async () => ({ fate }), deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
+  w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
+  await w.flush()
+  expect(sent).toHaveLength(0)
+  fate = 'deliver'
+  const thread = { [`${CH}:1000.000001`]: [{ ts: '1000.000001', user: 'UA', text: mention }] }
+  const r = await catchUp(w, fakeApi({ [CH]: [] }, thread).api, guarded, opts())
+  await w.flush()
+  expect(r.accepted).toBe(1)
+  expect(sent).toHaveLength(1)
+  expect(w.owedHints()).toEqual([])
+})

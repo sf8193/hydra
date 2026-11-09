@@ -5,7 +5,7 @@ import { join } from 'path'
 import {
   SlackWatcher, parseSlackWatchConfig, fileConfig, formatDelivery, renderItem, packItems, cmpTs,
   ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES,
-  type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item, type From,
+  type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item, type From, type SlackWatchDeps,
 } from '../slack-watch.js'
 
 const BOT = 'UBOT'
@@ -20,7 +20,7 @@ const cfg = ({ from = 'anyone', ...over }: Over = {}): SlackWatchConfig => ({
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: Over = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>) {
+function setup(over: Over = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>, guard?: SlackWatchDeps['guard']) {
   const alerts: string[] = []
   const alertChannels: (string | undefined)[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
@@ -31,7 +31,7 @@ function setup(over: Over = {}, deliver?: (specialist: string, msg: string, key:
   const logs: string[] = []
   let config = cfg(over)
   const make = () => new SlackWatcher({
-    now: () => now, file, log: l => logs.push(l), config: () => config, resolveName, alert: (t, ch) => { alerts.push(t); alertChannels.push(ch) },
+    now: () => now, file, log: l => logs.push(l), config: () => config, resolveName, guard, alert: (t, ch) => { alerts.push(t); alertChannels.push(ch) },
     deliver: async ({ to: specialist }, msg, key) => { sent.push({ specialist, msg, key }); return deliver ? deliver(specialist, msg, key) : { ok: true } },
   })
   return { w: make(), make, sent, logs, alerts, alertChannels, file, tick: (ms: number) => { now += ms }, config, setConfig: (c: SlackWatchConfig) => { config = c }, now: () => now }
@@ -147,7 +147,7 @@ describe('delivery', () => {
     w.handle(ev({ ts: '1000.000002', threadTs: '1000.000001', text: 'second' }))
     await w.flush()
     expect(sent).toHaveLength(1)
-    expect(sent[0].key).toBe(`slack-watch-${CH}-1000.000001-1000.000001-1000.000003`)
+    expect(sent[0].key).toBe(`slack-watch-${CH}-1000.000001-1000.000001-1000.000003-slopbot`) // the target is in the key
     const m = sent[0].msg
     expect(m.indexOf('second')).toBeLessThan(m.indexOf('third'))
     expect(m).toContain('3 new messages')
@@ -724,5 +724,199 @@ describe('routes', () => {
     await w.flush()
     expect(s.sent.map(x => x.specialist)).toEqual(['slopbot'])
     expect(readFileSync(s.file, 'utf8')).not.toContain('"old"')
+  })
+})
+
+describe('beforeDeliver', () => {
+  const G = { command: 'guard', includeText: false, timeoutMs: 5000 }
+  const guarded = (over: Partial<SlackWatchConfig> = {}): SlackWatchConfig => cfg({ routes: [{ channels: [CH], to: 'ops', from: 'anyone', guard: G }], ...over })
+  type V = import('../slack-guard.js').GuardVerdict
+  const byText = (verdicts: Record<string, V>) => {
+    const inputs: import('../slack-guard.js').GuardInput[] = []
+    const fn: SlackWatchDeps['guard'] = async (_g, input) => { inputs.push(input); return verdicts[input.text ?? ''] ?? verdicts[input.from.id ?? ''] ?? { fate: 'deliver' } }
+    return { fn, inputs }
+  }
+
+  test('parse: top level, a route override, false turns it off; bad shapes are errors', () => {
+    const c = parseSlackWatchConfig({ botUserId: 'U', beforeDeliver: { command: '~/bin/guard.sh', timeout: '2s' }, routes: [
+      { channels: ['C1'], to: 'a', from: 'anyone' },
+      { channels: ['C2'], to: 'b', from: 'anyone', beforeDeliver: { command: 'other', includeText: true } },
+      { channels: ['C3'], to: 'c', from: 'anyone', beforeDeliver: false },
+    ] })
+    expect(c.routes.map(r => r.guard)).toEqual([
+      { command: '~/bin/guard.sh', includeText: false, timeoutMs: 2000 },
+      { command: 'other', includeText: true, timeoutMs: 5000 },
+      undefined,
+    ])
+    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', beforeDeliver: { command: 'g' } }).routes[0].guard).toMatchObject({ command: 'g' })
+    expect(() => parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', beforeDeliver: { command: '' } })).toThrow('beforeDeliver.command')
+    expect(() => parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', beforeDeliver: { command: 'g', timeout: '5m' } })).toThrow('beforeDeliver.timeout')
+  })
+
+  test('stdin carries who (roster name and role), where, the route target, and the text only when asked', async () => {
+    const { fn, inputs } = byText({})
+    const s = setup({}, undefined, undefined, fn)
+    s.setConfig(guarded({ people: { UALICE: { name: 'Alice', role: 'ops' } } }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(inputs).toEqual([{ from: { id: 'UALICE', name: 'Alice', role: 'ops' }, channel: CH, thread: '1.000001', to: 'ops' }])
+    s.setConfig(guarded({ routes: [{ channels: [CH], to: 'ops', from: 'anyone', guard: { ...G, includeText: true } }] }))
+    s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'secret words' }))
+    await s.w.flush()
+    expect(inputs[1].text).toBe('secret words')
+  })
+
+  test('exit 0 delivers, a redirect sends that message elsewhere, and the burst keeps its order per target', async () => {
+    const { fn } = byText({ 'to billing': { fate: 'deliver', to: 'billing' } })
+    const s = setup({ coalesceMs: 20 }, undefined, undefined, fn)
+    s.setConfig(guarded({ routes: [{ channels: [CH], to: 'ops', from: 'anyone', guard: { ...G, includeText: true } }] }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'to billing' }))
+    s.w.handle(ev({ ts: '3.000001', threadTs: '1.000001', text: 'plain' }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['ops', 'billing'])
+    expect(s.sent[0].msg).toContain('ts 1.000001')
+    expect(s.sent[0].msg).toContain('ts 3.000001')
+    expect(s.sent[1].msg).toContain('ts 2.000001')
+    expect(s.w.owedHints()).toEqual([])
+    expect(s.logs.join()).toContain('redirected')
+  })
+
+  test('exit 10 drops: logged and counted, not owed, not alerted, and a replay is not judged again', async () => {
+    const { fn, inputs } = byText({ UALICE: { fate: 'drop' } })
+    const s = setup({}, undefined, undefined, fn)
+    s.setConfig(guarded())
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent).toHaveLength(0)
+    expect(s.w.owedHints()).toEqual([])
+    expect(s.w.stats().dropped).toEqual({ guard: 1 })
+    expect(s.alerts).toHaveLength(0)
+    expect(s.w.handle(ev({ ts: '1.000001', text: mention }))).toBe('ignored')
+    expect(inputs).toHaveLength(1)
+  })
+
+  test('exit 75 keeps it owed; the replay is judged again and delivered once the guard says yes', async () => {
+    let verdict: V = { fate: 'later' }
+    const s = setup({}, undefined, undefined, async () => verdict)
+    s.setConfig(guarded())
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent).toHaveLength(0)
+    expect(s.w.owedHints()).toHaveLength(1)
+    verdict = { fate: 'deliver' }
+    s.w.handle(ev({ ts: '1.000001', text: mention })) // the catch-up replay of what is owed
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
+    expect(s.w.owedHints()).toEqual([])
+  })
+
+  test('a broken guard fails open: delivered to the route, and the reason logged; one that throws too', async () => {
+    const s = setup({}, undefined, undefined, async () => ({ fate: 'open', why: 'exited 2' }))
+    s.setConfig(guarded())
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
+    expect(s.logs.join()).toContain('beforeDeliver exited 2')
+    const t = setup({}, undefined, undefined, async () => { throw new Error('boom') })
+    t.setConfig(guarded())
+    t.w.handle(ev({ ts: '1.000001', text: mention }))
+    await t.w.flush()
+    expect(t.sent).toHaveLength(1)
+    expect(t.logs.join()).toContain('threw: boom')
+  })
+
+  test("a slow guard holds back only its own thread's messages, not another thread's", async () => {
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    const s = setup({ coalesceMs: 5 }, undefined, undefined, async (_g, input) => { if (input.thread === '1.000001') await gate; return { fate: 'deliver' } })
+    s.setConfig(guarded())
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await Bun.sleep(20)
+    s.w.handle(ev({ ts: '2.000001', text: mention }))
+    await Bun.sleep(40)
+    expect(s.sent.map(x => x.msg.includes('ts 2.000001'))).toEqual([true])
+    release()
+    await s.w.flush()
+    expect(s.sent).toHaveLength(2)
+  })
+
+  test('at most four guards run at once for a burst', async () => {
+    let running = 0
+    let peak = 0
+    const s = setup({ coalesceMs: 20 }, undefined, undefined, async () => { peak = Math.max(peak, ++running); await Bun.sleep(5); running--; return { fate: 'deliver' } })
+    s.setConfig(guarded())
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    for (let i = 2; i <= 12; i++) s.w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
+    await s.w.flush()
+    expect(peak).toBe(4)
+    expect(s.w.owedHints()).toEqual([])
+  })
+
+  test('a redirect to no such specialist falls back to the route target: a broken guard never holds a message back', async () => {
+    const s = setup({}, to => to === 'ghost' ? { ok: false, error: 'no such specialist: ghost', exit: 8 } : { ok: true }, undefined, async () => ({ fate: 'deliver', to: 'ghost' }))
+    s.setConfig(guarded())
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['ghost', 'ops'])
+    expect(s.w.owedHints()).toEqual([])
+    expect(s.logs.join()).toContain('which is no specialist; delivering to ops')
+    expect(s.alerts).toHaveLength(1)
+    expect(s.alerts[0]).toContain('redirected a Slack message in C_FOOD to "ghost"')
+    s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'again' }))
+    await s.w.flush()
+    expect(s.alerts).toHaveLength(1) // once per episode
+  })
+
+  test('a "not now" for a message the full owed list already cut is a counted drop, not silence', async () => {
+    const s = setup({ coalesceMs: 60_000 }, undefined, undefined, async () => ({ fate: 'later' }))
+    s.setConfig(guarded({ coalesceMs: 60_000 }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    for (let i = 2; i <= 201; i++) s.w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' }))
+    await s.w.flush()
+    expect(s.w.stats().dropped).toEqual({ 'owed-full': 1 })
+    expect(s.w.get(CH, '1.000001')!.owed).toHaveLength(200)
+  })
+
+  test("a redirect does not get around the gate: the destination route's from must admit the sender", async () => {
+    const s = setup({}, undefined, undefined, async () => ({ fate: 'deliver', to: 'billing' }))
+    s.setConfig(cfg({ people: { UALICE: { role: 'ops' } }, routes: [
+      { channels: [CH], to: 'ops', from: 'anyone', guard: G },
+      { channels: ['C_BILLING'], to: 'billing', from: ['U0FINANCE0'] },
+    ] }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['ops'])
+    expect(s.logs.join()).toContain('whose routes do not admit UALICE')
+  })
+
+  test('a message held by "not now" is never delivered twice, however many later ones pass it', async () => {
+    let hold = true
+    const s = setup({ coalesceMs: 60_000 }, undefined, undefined, async (_g, input) => ({ fate: hold && input.text === 'held' ? 'later' : 'deliver' }))
+    s.setConfig(guarded({ coalesceMs: 60_000, routes: [{ channels: [CH], to: 'ops', from: 'anyone', guard: { ...G, includeText: true } }] }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    s.w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'held' }))
+    await s.w.flush()
+    // more than the delivered list keeps, in bursts small enough that the held message stays owed
+    for (let i = 3; i <= 320; i++) { s.w.handle(ev({ ts: `${i}.000001`, threadTs: '1.000001', text: 'x' })); if (i % 100 === 0) await s.w.flush() }
+    await s.w.flush()
+    expect(s.w.get(CH, '1.000001')!.owed).toEqual(['2.000001'])
+    const before = s.sent.length
+    hold = false
+    // catch-up rereads the thread from the held message: everything after it comes round again
+    for (let i = 1; i <= 320; i++) s.w.handle(ev({ ts: `${i}.000001`, threadTs: i === 1 ? undefined : '1.000001', text: i === 1 ? mention : i === 2 ? 'held' : 'x' }))
+    await s.w.flush()
+    const resent = s.sent.slice(before).map(x => x.msg).join('\n')
+    expect(resent).toContain('ts 2.000001')
+    expect(resent.match(/ts \d+\.000001/g)).toEqual(['ts 2.000001'])
+  })
+
+  test('a route with no guard never runs one', async () => {
+    const { fn, inputs } = byText({})
+    const s = setup({}, undefined, undefined, fn)
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(inputs).toHaveLength(0)
+    expect(s.sent).toHaveLength(1)
   })
 })
