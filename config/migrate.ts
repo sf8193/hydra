@@ -4,8 +4,8 @@
 // what its build step deletes: access.json's allowFrom and specialists.json here; slack-watch.json and jobs.toml
 // join as their own steps.
 
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
-import { isAbsolute, join, resolve } from 'path'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
+import { dirname, isAbsolute, join, resolve } from 'path'
 import { parseIdleTtl } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { loadHydraConfig, normalizeAddress, normalizePlace, formatIssues } from './load.js'
@@ -488,6 +488,7 @@ export function finishMigrate(stateDir: string): boolean {
 }
 
 function writeState(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })   // jobs-state/ may not exist yet
   writeFileSync(`${path}.tmp`, content, { mode: 0o600 })
   renameSync(`${path}.tmp`, path)
 }

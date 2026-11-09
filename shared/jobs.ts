@@ -305,6 +305,7 @@ export type JobState = {
 
 export type DaemonState = {
   lastGoodConfig?: string
+  jobsMigrated?: string           // when the clock first found jobs.toml.migrated: migrate is done, even if that file is later deleted
   syncedConfig?: string           // the jobs.toml the last `jobs sync` made live: what its diff is against
   configAlertedFor?: string       // the config problem already alerted: once per episode, cleared when it parses
   staleAlertedFor?: string        // the stale-clock episode already alerted (its last tick, or "never"), so a restart doesn't repeat it

@@ -5,7 +5,8 @@ import { join } from 'path'
 import { jobsStep, migrateJobs } from '../migrate-jobs.js'
 import { applyMigrate, planMigrate } from '../migrate.js'
 import { loadHydraConfig } from '../load.js'
-import { stateFile } from '../../shared/jobs.js'
+import { daemonFile, readDaemonState, stateFile } from '../../shared/jobs.js'
+import { schedulesAreSource } from '../../shared/schedules.js'
 import { latestSlot, nextSlot } from '../../shared/cron-local.js'
 
 const opts = { sessionNames: ['byte'], defaultWorkdir: '/home/u/work' }
@@ -86,6 +87,38 @@ describe('migrate jobs.toml → [schedules]', () => {
       expect(existsSync(join(dir, 'jobs.toml'))).toBe(false)
       expect(readFileSync(join(dir, 'jobs.toml.migrated'), 'utf8')).toBe(LIVE)
       expect(jobsStep.pending(dir)).toBe(false)
+    } finally { rmSync(dir, { recursive: true }) }
+  })
+
+  test('migrate records itself in _daemon.json, keeping what is there, so deleting jobs.toml.migrated before the daemon starts changes nothing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), LIVE)
+      writeFileSync(join(dir, 'access.json'), JSON.stringify({ allowFrom: ['100000000000000001'] }))
+      mkdirSync(join(dir, 'jobs-state'))
+      writeFileSync(daemonFile(dir), JSON.stringify({ lastGoodConfig: LIVE, lastTick: '2026-11-09T07:00:00.000Z' }))
+      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' as const })
+      if (!plan.ok) throw new Error(plan.errors.join('\n'))
+      applyMigrate(dir, plan)
+      const { state } = readDaemonState(dir)
+      expect(state).toMatchObject({ lastGoodConfig: LIVE, lastTick: '2026-11-09T07:00:00.000Z' })
+      expect(state.jobsMigrated).toBeDefined()
+      rmSync(join(dir, 'jobs.toml.migrated'))
+      expect(schedulesAreSource(dir, state)).toBe(true)
+    } finally { rmSync(dir, { recursive: true }) }
+  })
+
+  test('a state dir that never ran a job: migrate creates jobs-state/ for its record', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), LIVE)
+      writeFileSync(join(dir, 'access.json'), JSON.stringify({ allowFrom: ['100000000000000001'] }))
+      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const plan = planMigrate({ stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' as const })
+      if (!plan.ok) throw new Error(plan.errors.join('\n'))
+      applyMigrate(dir, plan)
+      expect(readDaemonState(dir).state.jobsMigrated).toBeDefined()
     } finally { rmSync(dir, { recursive: true }) }
   })
 

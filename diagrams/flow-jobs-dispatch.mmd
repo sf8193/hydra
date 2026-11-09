@@ -3,8 +3,8 @@
 flowchart TD
   T["tick, once a minute<br/>syncZone; tryLock _daemon.lock"] -->|not the owner| X[return]
   T --> SRC{"jobs.toml here?<br/>(migrate pending)"}
-  SRC -->|"yes, or gone with no .migrated"| L["loadConfig: jobs.toml, else lastGoodConfig<br/>(broken file: alerted once per episode)"]
-  SRC -->|"no: migrated, or never had one"| SC["re-read hydra.toml; [schedules] as jobs (same ids)<br/>recorded in _daemon.json scheduleJobs for the CLI"]
+  SRC -->|"yes, or gone with no migrate on record"| L["loadConfig: jobs.toml, else lastGoodConfig<br/>(broken file: alerted once per episode)"]
+  SRC -->|"no: migrated (.migrated here, or _daemon.json jobsMigrated), or never had one"| SC["re-read hydra.toml; [schedules] as jobs (same ids)<br/>recorded in _daemon.json scheduleJobs for the CLI"]
   SC --> AR
   L --> AR["applyResults: settle every NAME.state.json with a dispatch,<br/>then applyExternal (every job), dropStrandedExternal<br/>(not while [schedules] names no job at all), sweep"]
   AR --> D{"decide: runner = daemon?"}

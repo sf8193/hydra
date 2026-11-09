@@ -15,7 +15,7 @@ import {
   owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, parseExternalName, externalFile, externalResults, type ExternalResult, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../../shared/jobs.js'
-import { schedulesAreSource } from '../../shared/schedules.js'
+import { migratedJobsToml, schedulesAreSource } from '../../shared/schedules.js'
 
 const noSuch = (cfg: JobsConfig, name: string) => cfg.fromSchedules ? `no schedule named ${name} in hydra.toml` : `no job named ${name} in jobs.toml`
 
@@ -229,14 +229,17 @@ export class JobsClock {
       await this.d.direct(`Jobs: ${daemonFile(this.d.stateDir)} was unreadable (${corrupt}); started it fresh.`, this.d.homeChannel())
       if (this.stopped) return { jobs: [] }
     }
-    if (this.d.schedules && schedulesAreSource(this.d.stateDir, state)) return { jobs: this.scheduleJobs(state), fromSchedules: true }
+    if (this.d.schedules && schedulesAreSource(this.d.stateDir, state)) {
+      if (state.jobsMigrated === undefined && existsSync(migratedJobsToml(this.d.stateDir))) this.updateDaemon(s => { s.jobsMigrated = this.d.now().toISOString() })
+      return { jobs: this.scheduleJobs(state), fromSchedules: true }
+    }
     let problem: string
     const file = jobsToml(this.d.stateDir)
     if (existsSync(file)) {
       const text = readFileSync(file, 'utf8')
       try {
         const cfg = parseJobsConfig(text)
-        if (state.lastGoodConfig !== text || state.configAlertedFor) this.updateDaemon(s => { s.lastGoodConfig = text; delete s.configAlertedFor })
+        if (state.lastGoodConfig !== text || state.configAlertedFor || state.jobsMigrated) this.updateDaemon(s => { s.lastGoodConfig = text; delete s.configAlertedFor; delete s.jobsMigrated })   // jobs.toml is back: its migrate is pending again
         return cfg
       } catch (err) {
         problem = `${file} doesn't parse: ${err instanceof Error ? err.message : err}`
