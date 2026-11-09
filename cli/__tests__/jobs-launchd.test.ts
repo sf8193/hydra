@@ -1,10 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { attemptIO, jobsIO, jobsLaunchdRun, jobsList, launchdIO, parseJobs, runIO, syncLaunchd } from '../jobs.js'
 import { launchdCalendar, launchdPlist, stableBun } from '../../shared/jobs-launchd.js'
-import { externalFile } from '../../shared/jobs.js'
+import { daemonFile, externalFile } from '../../shared/jobs.js'
 
 describe('a cron schedule as a launchd calendar', () => {
   test('only the restricted fields appear; a full field is launchd\'s wildcard', () => {
@@ -159,6 +159,17 @@ describe('jobs launchd-run: what the plist runs', () => {
     expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
     expect(checks).toBe(0)
     expect(existsSync(externalFile(dir, 'scan', slot))).toBe(false)
+  })
+
+  test('an unparseable jobs.toml runs the last good copy, as the daemon does; with none, nothing runs', async () => {
+    const good = '[scan]\nschedule="0 * * * *"\ncheck="s.sh"\nmode="none"\n'
+    writeFileSync(join(dir, 'jobs.toml'), '[scan\n')
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(1)
+    expect(checks).toBe(0)
+    mkdirSync(dirname(daemonFile(dir)), { recursive: true })
+    writeFileSync(daemonFile(dir), JSON.stringify({ lastGoodConfig: good }))
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
+    expect(JSON.parse(readFileSync(externalFile(dir, 'scan', slot), 'utf8'))).toMatchObject({ result: 'done', output: 'CVE-1' })
   })
 
   test('a failed check is left as a failed result and exits 1', async () => {

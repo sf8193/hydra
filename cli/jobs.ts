@@ -195,8 +195,14 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
   const file = jobsToml(stateDir)
   let job: Job | undefined
   try { job = parseJobsConfig(readFileSync(file, 'utf8')).jobs.find(j => j.name === name) } catch (err) {
-    runIO.error(`${name}: ${file} is unreadable (${err instanceof Error ? err.message : err}); not running`)
-    return 1
+    // The daemon alerts on a broken or missing jobs.toml and runs the last good copy; a launchd job runs it too.
+    const lastGood = readDaemonState(stateDir).state.lastGoodConfig
+    try { job = parseJobsConfig(lastGood ?? '').jobs.find(j => j.name === name) } catch {}
+    if (!lastGood || !job) {
+      runIO.error(`${name}: ${file} is unreadable (${err instanceof Error ? err.message : err}) and no last good copy has it; not running`)
+      return 1
+    }
+    runIO.error(`${name}: ${file} is unreadable (${err instanceof Error ? err.message : err}); running the last good copy`)
   }
   if (job?.runner !== 'launchd') {
     runIO.print(`${name}: not a launchd-runner job in ${file}; \`hydra jobs sync ${platform}\` removes this entry`)
