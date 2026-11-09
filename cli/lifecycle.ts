@@ -12,6 +12,7 @@ import {
 import { isKnownModel, SPIN_CPU_PERCENT } from '../shared/constants.js'
 import { modsExport, syncMods } from '../shared/mods.js'
 import { checkDaemonCpu } from './watchdog-cpu.js'
+import { noteRestart } from './watchdog-restarts.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)
@@ -373,7 +374,10 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
   const daemonRestartedThisTick = reason !== null
   if (reason) {
     appendLog(cfg.watchdogLog, reason)
-    await restartDaemonForWatchdog(cfg)
+    if (await restartDaemonForWatchdog(cfg)) {
+      const alert = noteRestart(cfg.stateDir, now, reason, cfg.watchdogLog)
+      if (alert) appendLog(cfg.watchdogLog, `Crash loop: ${alert.split('\n')[0]} — alert left for the daemon to post`)
+    }
   }
 
   // Skip byte revival if daemon was just restarted — socket won't be ready yet.
@@ -431,11 +435,12 @@ function networkUp(platform: string): boolean {
   }
 }
 
-async function restartDaemonForWatchdog(cfg: HydraConfig): Promise<void> {
+/** False when the compile check refused the restart. */
+async function restartDaemonForWatchdog(cfg: HydraConfig): Promise<boolean> {
   const check = await compileCheck(cfg.hydraDir)
   if (!check.ok) {
     appendLog(cfg.watchdogLog, 'COMPILE FAILED — refusing to restart daemon')
-    return
+    return false
   }
 
   if (cfg.spawnCwdBlank) {
@@ -446,6 +451,7 @@ async function restartDaemonForWatchdog(cfg: HydraConfig): Promise<void> {
   try { unlinkSync(cfg.sockPath) } catch {}
   tmuxSpawn(cfg.daemonTmux,
     `cd ${shq(cfg.hydraDir)} && ${buildDaemonEnvs(cfg)} bun run daemon.ts 2>&1 | tee -a ${cfg.daemonLog}`)
+  return true
 }
 
 // ---------------------------------------------------------------------------

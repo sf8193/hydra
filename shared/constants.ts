@@ -28,6 +28,9 @@ export const DELIVER_MAX_MESSAGE_BYTES = 10_000
 
 export const BRIDGE_SHUTDOWN_GRACE_MS = 1_000
 
+/** In the state dir: an alert the watchdog (a fresh process, no chat connection) leaves for the daemon to post. */
+export const WATCHDOG_ALERT_FILE = 'watchdog-alert.json'
+
 // Spinning, for every process Hydra watches. A process is hot when the CPU it used since the
 // previous sample, over the wall time since then, is at least SPIN_CPU_PERCENT of one core; it
 // is spinning when hot for SPIN_CONSECUTIVE_SAMPLES samples in a row. The daemon's vitals tick
