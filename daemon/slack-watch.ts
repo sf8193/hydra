@@ -3,12 +3,11 @@ import { join, basename } from 'path'
 import { randomBytes } from 'crypto'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
-import type { Target } from './targets.js'
 import type { Address, HydraConfig, Place, PlaceOptions } from '../config/types.js'
 import { route, refusal, identify, currentId, MAIN } from '../routing/route.js'
 
-/** The targets a route names today: a specialist, `main` or a thread id (targets.ts's `to` arm). */
-export type RouteTarget = Extract<Target, { to: string }>
+/** Where a delivery goes: a specialist (or `main`), and the conversation it is for, so a per-conversation specialist can give it its own session. */
+export type RouteTarget = { to: string; conversation?: string }
 import { runGuard, type GuardInput, type GuardVerdict } from '../routing/guard.js'
 import type { Guard } from '../config/types.js'
 
@@ -95,6 +94,8 @@ export type SlackWatchEntry = {
   ambient?: true
   /** When the guard first said "not now" (exit 75) to an owed ts: `owed_max` counts from here. */
   heldSince?: Record<string, number>
+  /** Since when it has waited for a session of its own (its specialist at `max`): its owed messages don't expire meanwhile, and the oldest waiter takes the next freed place. */
+  waitingSince?: number
 }
 
 /** The fields of a Slack `message` event this module reads. */
@@ -113,7 +114,8 @@ export type DeliverResult =
   | { ok: true; duplicate?: boolean }
   // `permanent`: this message can never be delivered (too large). It is dropped, not retried.
   // `exit` 8: the binding names no such specialist. Kept owed (a fixed config delivers it) and alerted.
-  | { ok: false; error: string; permanent?: boolean; exit?: number }
+  // `wait`: its specialist runs `max` conversation sessions already. Kept owed, and never expires while it waits.
+  | { ok: false; error: string; permanent?: boolean; exit?: number; wait?: true }
 
 export type SlackWatchDeps = {
   now: () => number
@@ -236,6 +238,8 @@ export const cmpTs = (a: string, b: string): number => { const d = tsValue(a) - 
 
 const DELIVERED_KEEP = 300
 const AMBIENT_IDLE_MS = 86_400_000
+/** The longest a conversation waits for a session of its own before its messages are dropped, alerted. */
+const WAIT_MAX_MS = 3 * 86_400_000
 /**
  * Chatter answered by no one: a conversation opened by an untagged message, delivered, nothing owed, no reply under it.
  * It holds no slot in the table (it stays a day only so a late reply follows its binding and a replay is not delivered twice).
@@ -535,7 +539,15 @@ export class SlackWatcher {
         this.persist()
         continue
       }
-      if (e.owed?.length) {
+      // A wait has an end too: past WAIT_MAX_MS nothing has freed a place, and something is wrong that a person must see.
+      if (e.owed?.length && e.waitingSince !== undefined && now - e.waitingSince > WAIT_MAX_MS) {
+        this.drop('expired', e, e.owed, `waited ${Math.round(WAIT_MAX_MS / 86_400_000)} days for a session of its own (its specialist stayed at max)`)
+        delete e.owed
+        delete e.waitingSince
+        this.persist()
+        continue
+      }
+      if (e.owed?.length && e.waitingSince === undefined) {
         const kept = e.owed.filter(ts => cmpTs(ts, owedFloor) >= 0 || this.pending.get(key)?.items.some(i => i.ts === ts))
         if (kept.length !== e.owed.length) {
           this.drop('expired', e, e.owed.filter(ts => !kept.includes(ts)), `still undelivered after ${OWED_MAX_AGE_S / 3600}h`)
@@ -555,9 +567,25 @@ export class SlackWatcher {
   /** Newest ts seen in a channel before the current gap; where a catch-up scan starts. */
   channelCursor(channel: string): string | undefined { return this.channelCursors[channel] }
 
-  /** Where each thread with owed messages needs refetching from. */
+  /** Where each thread with owed messages needs refetching from. Waiters first, the oldest first: it takes the next freed place. */
   owedHints(): { channel: string; threadTs: string; fromTs: string }[] {
-    return this.list().filter(e => e.owed?.length).map(e => ({ channel: e.channel, threadTs: e.threadTs, fromTs: e.owed![0] }))
+    const order = (e: SlackWatchEntry) => e.waitingSince ?? Infinity
+    return this.list().filter(e => e.owed?.length).sort((a, b) => order(a) - order(b)).map(e => ({ channel: e.channel, threadTs: e.threadTs, fromTs: e.owed![0] }))
+  }
+
+  /** The conversations waiting for a session of `to` (current id, after renames), the oldest first. */
+  waiters(isTo: (specialist: string) => boolean): SlackWatchEntry[] {
+    return this.list().filter(e => e.waitingSince !== undefined && e.owed?.length && e.specialist && isTo(e.specialist)).sort((a, b) => a.waitingSince! - b.waitingSince!)
+  }
+
+  /** Catch-up can't read the thread (gone, or its channel closed to the bot): what it owed can't be fetched. A drop, surfaced; it waits no more. */
+  threadGone(channel: string, threadTs: string, why: string): void {
+    const e = this.get(channel, threadTs)
+    if (!e?.owed?.length) return
+    this.drop('expired', e, e.owed, `its thread can't be read any more (${why}), so they can never be fetched again`)
+    delete e.owed
+    delete e.waitingSince
+    this.persist()
   }
 
   /** While catching up, live events must not move the cursor past the gap being filled. */
@@ -1022,9 +1050,17 @@ export class SlackWatcher {
       // The target is part of the key: the same messages re-routed elsewhere are a different send.
       const idempotencyKey = `slack-watch-${entry.channel}-${entry.threadTs}-${first}-${last}-${target.to}`
       let result: DeliverResult
-      try { result = await this.deps.deliver(target, message, idempotencyKey) } catch (err) {
+      try { result = await this.deps.deliver({ ...target, conversation: conversationId(entry) }, message, idempotencyKey) } catch (err) {
         result = { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
+      if (!result.ok && result.wait) {
+        // Not a failure: a turn. Said once an hour while it lasts, so a specialist stuck at max (no idle) is noticed.
+        if (entry.waitingSince === undefined) { entry.waitingSince = this.deps.now(); this.persist() }
+        this.deps.log(`daemon: slack-watch: ${key} waits: ${result.error}\n`)
+        this.alertOnce(`max:${target.to}`, target.to, `⏳ ${result.error}. Its messages stay owed until then.`)
+        continue
+      }
+      if (entry.waitingSince !== undefined) { delete entry.waitingSince; this.persist() }
       if (!result.ok && !result.permanent) {
         // Still owed: it stays in `owed`, so the catch-up pass fetches it again. Unless the owed list was full and cut it.
         this.deps.log(`daemon: slack-watch: delivery to ${target.to} failed for ${key} (${first}..${last}): ${result.error}\n`)

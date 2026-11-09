@@ -223,7 +223,32 @@ test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the 
   await w.flush()
   expect(r).toMatchObject({ complete: true, accepted: 1 })
   expect(sent.join()).toContain('missed reply')
-  expect(logs.join()).toContain(`thread ${CH}:1.000001 is not there`)
+  expect(logs.join()).toContain(`thread ${CH}:1.000001 can't be read`)
+})
+
+test("a thread whose channel the bot can no longer read is dropped like a gone one: the pass goes on, the queue isn't pinned", async () => {
+  const { w } = setup(() => ({ ok: false, error: 'down' }))
+  w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
+  w.bind(CH, '1500.000001', 'slopbot')
+  const e = w.get(CH, '1500.000001')!
+  e.owed = ['1500.000002']; e.waitingSince = 1
+  const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: not_in_channel') } }
+  expect(await catchUp(w, api, cfg, opts())).toMatchObject({ complete: true })
+  expect(w.get(CH, '1500.000001')!.waitingSince).toBeUndefined()
+  expect(w.stats().dropped).toEqual({ expired: 1 })
+})
+
+test('a gone thread that still owed messages drops them (and stops waiting): they can never be fetched', async () => {
+  const { w } = setup(() => ({ ok: false, error: 'down' }))
+  w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
+  w.bind(CH, '1500.000001', 'slopbot')
+  const e = w.get(CH, '1500.000001')!
+  e.owed = ['1500.000002']; e.waitingSince = 1
+  const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: thread_not_found') } }
+  await catchUp(w, api, cfg, opts())
+  expect(w.get(CH, '1500.000001')!.owed).toBeUndefined()
+  expect(w.get(CH, '1500.000001')!.waitingSince).toBeUndefined()
+  expect(w.stats().dropped).toEqual({ expired: 1 })
 })
 
 describe('catch-up across routes', () => {

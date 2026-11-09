@@ -14,6 +14,8 @@ import type { ProviderId } from './engines/engine-adapter.js'
 export interface EventMap {
   'delivery:failed': { sessionId: string; status: 'rejected' | 'unknown'; reason: string; messageId?: string }
   'reply': { sessionId: string; text: string; chatId: string; sentIds: string[] }
+  // A session found dead, by any path (a kill, a crash the health poll sees, a lost bridge): fires once, when its deadAt is set.
+  'session:marked-dead': { sessionId: string; tmuxName: string }
   'session:death': { sessionId: string; threadId: string; wasOwner: boolean; tmuxName: string; deadAt?: number; claudeSessionId?: string; engine?: ProviderId; codexThreadId?: string; codexHomeName?: string }
   // Fires on every successful bridge registration, including reconnects —
   // subscribers must be idempotent.

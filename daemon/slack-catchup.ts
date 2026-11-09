@@ -88,7 +88,7 @@ export function _resetCatchUpLogs(): void { dmListFailLoggedAt = -Infinity }
 const nowTs = (now: number) => `${Math.floor(now / 1000)}.000000`
 
 /** Slack's answers for a thread that doesn't exist. Anything else (a rate limit, auth) still fails the pass. */
-const GONE_THREAD = /thread_not_found|message_not_found/
+const GONE_THREAD = /thread_not_found|message_not_found|not_in_channel|channel_not_found|is_archived/
 
 export const MIN_CALLS = 60
 /** On top of one call per wanted thread, what DM scans leave for threads the channel scans turn up. */
@@ -236,7 +236,9 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
         } catch (err) {
           // One thread Slack says isn't there (a made-up or deleted ts) must not cost every other thread its pass.
           if (!GONE_THREAD.test(err instanceof Error ? err.message : String(err))) throw err
-          opts.log(`daemon: slack catch-up: thread ${t.channel}:${t.threadTs} is not there (${err instanceof Error ? err.message : err}); skipped\n`)
+          const why = err instanceof Error ? err.message : String(err)
+          opts.log(`daemon: slack catch-up: thread ${t.channel}:${t.threadTs} can't be read (${why}); skipped\n`)
+          watcher.threadGone(t.channel, t.threadTs, why)
           break
         }
         // A reply's ts never moves the channel cursor: only history does. A top-level message posted after the

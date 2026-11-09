@@ -7,12 +7,14 @@ import { registry } from '../sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../specialists.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import {
-  getSlackWatcher, bindConversation, unbindConversation, formatConversations, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation,
+  getSlackWatcher, bindConversation, unbindConversation, formatConversations, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation, targetFor, startSlackWatch, stopSlackWatch,
 } from '../slack-watch-runtime.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../tool-surface.js'
+import { emit } from '../event-bus.js'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
 import { executeTool } from '../bridge-dispatch.js'
 import { BASE, hydra, view } from './slack-config.js'
+import { fakeAdapter } from './test-harness.js'
 
 process.stderr.write = (() => true) as any
 
@@ -285,6 +287,86 @@ describe('replies: posted only into the conversation they answer', () => {
     const out = await executeTool('reply', { chat_id: 'slack:C1:10.000001', text: 'done' }, 'r-tool')
     expect((out.content[0] as { text: string }).text).toBe('posted 1 message to slack:C1:10.000001')
     expect(posts).toEqual(['C1|10.000001|done'])
+  })
+})
+
+describe('sessions = "per-conversation"', () => {
+  test('first come, first served: a newer conversation waits behind older waiters, and a freed place wakes them', async () => {
+    configure(TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax = 1\n`))
+    const w = getSlackWatcher()
+    w.bind('C1', '1.000001', FOOD)
+    const old = w.get('C1', '1.000001')!
+    old.owed = ['1.000001']; old.waitingSince = Date.now() - 60_000
+    w.handle({ channel: 'C1', ts: `${Math.floor(Date.now() / 1000)}.000002`, user: 'UA', text: '<@UBOT> newer' })
+    await w.flush()
+    const newer = w.list().find(e => e.threadTs !== '1.000001')!
+    expect(newer.waitingSince).toBeDefined() // behind the older waiter, never spawned
+    expect(w.owedHints()[0]).toMatchObject({ threadTs: '1.000001' }) // the oldest is refetched first
+    let woke = 0
+    const realWake = slackRuntimeDeps.wake
+    slackRuntimeDeps.wake = () => { woke++ }
+    startSlackWatch()
+    try {
+      emit('session:death', { sessionId: 'x', threadId: 't', wasOwner: true, tmuxName: `${FOOD}_c1-9-000001` })
+      emit('session:death', { sessionId: 'y', threadId: 't', wasOwner: true, tmuxName: 'someone-else' })
+      expect(woke).toBe(1)
+      emit('session:marked-dead', { sessionId: 'z', tmuxName: `${FOOD}_c1-8-000001` }) // a crash the health poll found
+      expect(woke).toBe(2)
+    } finally { stopSlackWatch(); slackRuntimeDeps.wake = realWake }
+  })
+
+  test("first come, first served only when places are short: with a place to spare, a newer conversation doesn't wait", async () => {
+    configure(TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax = 3\n`))
+    const w = getSlackWatcher()
+    w.bind('C1', '1.000001', FOOD)
+    const old = w.get('C1', '1.000001')!
+    old.owed = ['1.000001']; old.waitingSince = Date.now() - 60_000 // waiting for its refetch, though places are free
+    w.handle({ channel: 'C1', ts: `${Math.floor(Date.now() / 1000)}.000003`, user: 'UA', text: '<@UBOT> newer' })
+    await w.flush()
+    const newer = w.list().find(e => e.threadTs !== '1.000001')!
+    expect(newer.waitingSince).toBeUndefined() // 3 places, 1 waiter ahead: it went on to its own session
+  })
+
+  test('a conversation session acts for its specialist: the tools, its home, but replies only into its own conversation', async () => {
+    configure(TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nhome = "slack:C7"\n`))
+    fakePost()
+    const conv = { threadId: 'conv-thread', tmuxName: `${FOOD}_c1-4-000001` }
+    expect(isSpecialistOccupant(conv)).toBe(true)
+    sessionIds.push('pc-own')
+    registry.set('pc-own', { sessionId: 'pc-own', ...conv, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
+    getSlackWatcher().bind('C1', '4.000001', FOOD)
+    getSlackWatcher().bind('C1', '5.000001', FOOD)
+    expect(await replyInConversation('pc-own', 'slack:C7', 'scheduled report')).toContain(`posted to ${FOOD}'s home`)
+    expect(await replyInConversation('pc-own', 'slack:C1:4.000001', 'mine')).toContain('posted 1')
+    await expect(replyInConversation('pc-own', 'slack:C1:5.000001', 'a sibling\'s')).rejects.toThrow("and from a conversation's own session only to that conversation")
+  })
+
+  const PER = TOML.replace(`allow = ["anyone"]\n`, `allow = ["anyone"]\nsessions = "per-conversation"\nmax = 2\n`)
+  const live = (name: string) => {
+    const id = `pc-${name}`
+    sessionIds.push(id)
+    registry.set(id, { sessionId: id, tmuxName: name, threadId: `t-${name}`, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() - 600_000,
+      adapter: fakeAdapter({ isAlive: () => true, usage: () => null }) } as any)
+  }
+
+  test('a shared specialist is one target; a per-conversation one names the conversation (targets.ts counts max)', () => {
+    expect(targetFor(OPS, 'slack:C2:1.000001')).toEqual({ to: OPS })
+    configure(PER)
+    expect(targetFor(FOOD, 'slack:C1:1.000001')).toEqual({ perConversation: FOOD, conversation: 'slack:C1:1.000001' })
+    expect(targetFor(FOOD, undefined)).toEqual({ to: FOOD }) // nothing to give its own session to
+  })
+
+  test("a conversation's own session answers its conversation, and no other; a renamed one still does", async () => {
+    configure(PER.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nwas = ["old-food"]`))
+    fakePost()
+    getSlackWatcher().bind('C1', '4.000001', FOOD)
+    getSlackWatcher().bind('C1', '5.000001', FOOD)
+    live(`${FOOD}_c1-4-000001`)
+    live('old-food_c1-5-000001')
+    expect(await replyInConversation(`pc-${FOOD}_c1-4-000001`, 'slack:C1:4.000001', 'yours')).toContain('posted 1')
+    await expect(replyInConversation(`pc-${FOOD}_c1-4-000001`, 'slack:C1:5.000001', 'not yours')).rejects.toThrow('a reply goes only')
+    expect(await replyInConversation('pc-old-food_c1-5-000001', 'slack:C1:5.000001', 'still mine')).toContain('posted 1')
+    expect(posts).toEqual(['C1|4.000001|yours', 'C1|5.000001|still mine'])
   })
 })
 

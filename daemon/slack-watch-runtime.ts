@@ -1,9 +1,10 @@
 import { SlackWatcher, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './slack-watch.js'
-import { getSpecialist } from './specialists.js'
+import { getSpecialist, conversationSpecialistOf } from './specialists.js'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { pushToolSurface } from './tool-surface.js'
-import { deliverToTarget } from './targets.js'
+import { deliverToTarget, conversationSessionName, conversationSessionRunning, placesFree, type Target } from './targets.js'
+import { on } from './event-bus.js'
 import { SlackListener, boltApp, POST_TIMEOUT_MS, type ListenerHealth } from './slack-listener.js'
 import { SCRUBBED_ENV, STATE_DIR } from './config.js'
 import { SCRUBBED_SPAWN_VARS } from '../shared/spawn-env.js'
@@ -21,6 +22,8 @@ const log = (line: string) => { process.stderr.write(line) }
 /** Test seams: the watcher's view of hydra.toml (the listener's, once Slack has connected), and posting to Slack. */
 export const slackRuntimeDeps = {
   view: (): SlackWatchConfig | null => listener?.view() ?? null,
+  /** A place freed under max: catch-up refetches what waits, the oldest waiter first. */
+  wake: (): void => { void listener?.runCatchUp(false, 'a place freed') },
   post: (channel: string, threadTs: string | undefined, text: string): Promise<string> => {
     if (!listener) return Promise.reject(new Error('Slack is not connected (hydra.toml has no [connectors.slack], or its tokens are not set)'))
     return listener.post(channel, threadTs, text)
@@ -86,11 +89,28 @@ export function getSlackWatcher(): SlackWatcher {
     config,
     alert,
     deliver: async (target, message, idempotencyKey) => {
-      const r = await deliverToTarget(target, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
+      const t = targetFor(target.to, target.conversation)
+      // First come, first served, when places are short: a newer conversation without a session takes a place only if
+      // one is left over after every older waiter has had theirs.
+      if ('perConversation' in t && !conversationSessionRunning(t.perConversation, t.conversation)) {
+        const h = hydraConfig()
+        const waiters = getSlackWatcher().waiters(id => currentId(h, id) === t.perConversation)
+        const ahead = waiters.findIndex(e => conversationId(e) === t.conversation)
+        const before = ahead === -1 ? waiters.length : ahead
+        if (before > 0 && placesFree(t.perConversation) <= before) return { ok: false, error: `${t.perConversation} is at max with ${before} conversation${before === 1 ? '' : 's'} waiting ahead of ${t.conversation}`, wait: true }
+      }
+      const r = await deliverToTarget(t, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
+      if (!r.ok && r.atMax) return { ok: false, error: r.reason, wait: true }
       if (r.ok) return { ok: true, ...(r.duplicate && { duplicate: true }) }
       return { ok: false, error: r.reason, exit: r.exit, ...(r.permanent && { permanent: true }) }
     },
   })
+}
+
+/** A per-conversation specialist gives the conversation its own session (targets.ts counts `max`); any other is one target. */
+export function targetFor(to: string, conversation: string | undefined): Target {
+  const s = hydraConfig().specialists[to]
+  return s?.sessions === 'per-conversation' && conversation ? { perConversation: to, conversation } : { to }
 }
 
 let listener: SlackListener | undefined
@@ -174,7 +194,17 @@ export function startSlackWatch(): void {
   sweepTimer = setInterval(() => { w.sweep() }, SWEEP_INTERVAL_MS)
   ;(sweepTimer as { unref?: () => void }).unref?.()
   refreshSlackSpecialistSurface()
-  unsubscribe = onHydraConfigLoad(() => queueMicrotask(refreshSlackSpecialistSurface))
+  const offConfig = onHydraConfigLoad(() => queueMicrotask(refreshSlackSpecialistSurface))
+  // A conversation session ending frees a place: the waiters are offered it at once (catch-up refetches them, oldest first).
+  const freed = ({ tmuxName }: { tmuxName: string }) => {
+    const to = conversationSpecialistOf(tmuxName)
+    const h = hydraConfig()
+    if (to && getSlackWatcher().waiters(id => currentId(h, id) === to).length) slackRuntimeDeps.wake()
+  }
+  // Killed, reaped, [done], or found dead by the health poll or a lost bridge: either way a place is free.
+  const offDeath = on('session:death', freed, 'slack-watch: wake conversations waiting at max')
+  const offDead = on('session:marked-dead', freed, 'slack-watch: wake conversations waiting at max (found dead)')
+  unsubscribe = () => { offConfig(); offDeath(); offDead() }
 }
 
 /**
@@ -205,10 +235,20 @@ export function parseConversation(raw: unknown): { channel: string; threadTs: st
 }
 
 /** The specialist whose thread this session sits in, if it is one in hydra.toml. */
-export function specialistOf(caller: Pick<SessionInfo, 'threadId'> | undefined, h: HydraConfig = hydraConfig()): string | undefined {
+/**
+ * The specialist this session acts for: it sits in the specialist's thread, or it is one of a per-conversation
+ * specialist's conversation sessions (named `<id>_…`). A conversation session answers only its own conversation
+ * (replyInConversation checks that), but it may post to its specialist's home and bind and unbind for it.
+ */
+export function specialistOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>> | undefined, h: HydraConfig = hydraConfig()): string | undefined {
+  const own = conversationSpecialistOf(caller?.tmuxName)
+  if (own) return own
   if (!caller?.threadId) return undefined
   return Object.keys(h.specialists).find(id => getSpecialist(id)?.threadId === caller.threadId)
 }
+
+/** Whether this session is one conversation's own session, rather than a specialist's shared one. */
+const isConversationSession = (caller: Partial<Pick<SessionInfo, 'tmuxName'>> | undefined): boolean => !!conversationSpecialistOf(caller?.tmuxName)
 
 /** Whether `to` listens on this channel. A rule there doesn't count: it takes chosen people's messages, not the place. */
 function listensOn(v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, to: string, channel: string): boolean {
@@ -289,9 +329,13 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const e = getSlackWatcher().get(c.channel, c.threadTs)
   if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to answer`)
   const bound = e.specialist ? currentId(h, e.specialist) : undefined
-  if (!me || bound !== me) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home)`)
+  // A per-conversation session answers its own conversation, and no other.
+  const caller = callerSessionId ? registry.get(callerSessionId) : undefined
+  const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.was ?? [])].some(sid => caller.tmuxName === conversationSessionName(sid, id))
+  // A conversation's own session answers its conversation and no other; a shared session, any bound to its specialist.
+  if (isConversationSession(caller) ? !ownSession : (!me || bound !== me)) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home)${isConversationSession(caller) ? ', and from a conversation\'s own session only to that conversation' : ''}`)
   // Checked again before every part: a conversation moved away mid-reply gets no more of it.
-  const stillMine = () => { const now = getSlackWatcher().get(c.channel, c.threadTs)?.specialist; return !!now && currentId(hydraConfig(), now) === me }
+  const stillMine = () => { const now = getSlackWatcher().get(c.channel, c.threadTs)?.specialist; return !!now && currentId(hydraConfig(), now) === bound }
   const { posted } = await postParts(c.channel, c.threadTs === TOP_LEVEL ? undefined : c.threadTs, text, id, false, stillMine)
   return `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}`
 }

@@ -255,3 +255,16 @@ loadPointers()
 onHydraConfigLoad(config => {
   try { reconcilePointers(config) } catch (e) { process.stderr.write(`daemon: ${(e as Error).message}\n`) }
 })
+
+/**
+ * The per-conversation specialist a session named `<id>_<conversation>` belongs to, by its current id (a rename through
+ * `was` followed). No specialist name holds `_`, so the part before the first one is the id.
+ */
+export function conversationSpecialistOf(tmuxName: string | undefined): string | undefined {
+  const i = tmuxName?.indexOf('_') ?? -1
+  if (!tmuxName || i <= 0) return undefined
+  const id = tmuxName.slice(0, i)
+  const declared = currentHydraConfig().specialists
+  const s = declared[id] ?? Object.values(declared).find(d => d.was.includes(id))
+  return s?.sessions === 'per-conversation' ? s.id : undefined
+}

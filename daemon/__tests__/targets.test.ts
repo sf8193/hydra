@@ -11,7 +11,9 @@ import { executeTool } from '../bridge-dispatch.js'
 import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
 import { _resetBackoff, getBackoff } from '../recovery-backoff.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withThreadLock } from '../specialists.js'
-import { deliverToTarget, parseTarget, perThreadName, sessionByName, targetDeps } from '../targets.js'
+import { deliverToTarget, parseTarget, conversationSessionName, sessionByName, targetDeps } from '../targets.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { hydra } from './slack-config.js'
 import { fakeAdapter } from './test-harness.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 
@@ -66,6 +68,7 @@ const opts = { initiator: 'tester' }
 // (Left to the process clock, it read starting only while the test process was under 90s old.)
 beforeEach(() => { spawns = []; reviveDeps.threadExists = async () => true; stubSpawn(); _setDaemonStartedAtForTesting(0) })
 afterEach(() => {
+  _setHydraConfigForTesting(undefined)
   _setDaemonStartedAtForTesting(undefined)
   _resetRecoveryDeps(); _resetBackoff()
   Object.assign(reviveDeps, { threadExists: real.threadExists }); targetDeps.stuckState = real.stuck
@@ -76,18 +79,17 @@ afterEach(() => {
 })
 
 describe('parseTarget', () => {
-  test('exactly one of to, spawn, perThread; revive only with to; recipes are checked; errors name where', () => {
+  test('exactly one of to, spawn; revive only with to; recipes are checked; errors name where', () => {
     expect(parseTarget({ to: 'ops' }, 'job x')).toEqual({ to: 'ops' })
     expect(parseTarget({ to: '123', revive: true }, 'job x')).toEqual({ to: '123', revive: true })
     expect(parseTarget({ spawn: { channel: 'C1', kickoff: 'k', idle: '4h' } }, 'job x')).toEqual({ spawn: { channel: 'C1', kickoff: 'k', idle: '4h' } })
-    expect(parseTarget({ perThread: { channel: 'C1', kickoffFile: '/k.md' }, key: 'slack-C0-1.2' }, 'route 1')).toMatchObject({ key: 'slack-C0-1.2' })
-    expect(() => parseTarget({ to: 'ops', spawn: { channel: 'C1', kickoff: 'k' } }, 'job x')).toThrow('job x: give exactly one of to, spawn, perThread')
+    expect(() => parseTarget({ to: 'ops', spawn: { channel: 'C1', kickoff: 'k' } }, 'job x')).toThrow('job x: give exactly one of to, spawn')
     expect(() => parseTarget({}, 'job x')).toThrow('job x')
     expect(() => parseTarget({ spawn: { channel: 'C1', kickoff: 'k' }, revive: true }, 'job x')).toThrow('revive goes with to')
     expect(() => parseTarget({ spawn: { channel: 'C1' } }, 'job x')).toThrow('job x.spawn: kickoff or kickoffFile is required')
     expect(() => parseTarget({ spawn: { channel: 'C1', kickoff: 'k', idle: 'soon' } }, 'job x')).toThrow('idle "soon"')
     expect(() => parseTarget({ spawn: { channel: 'C1', kickoff: 'k', prompt: 'p' } }, 'job x')).toThrow('unknown recipe field "prompt"')
-    expect(() => parseTarget({ perThread: { channel: 'C1', kickoff: 'k' } }, 'route 1')).toThrow('perThread needs the key')
+    expect(() => parseTarget({ perThread: { channel: 'C1', kickoff: 'k' }, key: 'k' }, 'route 1')).toThrow('give exactly one of to, spawn (got none)')
   })
 })
 
@@ -174,23 +176,27 @@ describe('recipes', () => {
     ])
   })
 
-  test('perThread: one specialist per key, named from it, never stored; a second message reaches the same session', async () => {
-    const key = 'slack-C0REQ-1700000000.0001'
-    const t = { perThread: { channel: 'chan-req', kickoff: 'handle this request', idle: '1d' }, key }
+  test("perConversation: one session per conversation from the specialist's recipe, never stored; a second message reaches the same session", async () => {
+    setSpecialist('req', { channel: 'chan-req', threadId: 'req-shared-thread', kickoff: 'handle this request', idle: '1d' }); names.push('req')
+    const key = 'slack:C0REQ:1700000000.0001'
+    const name = conversationSessionName('req', key)
+    const t = { perConversation: 'req', conversation: key }
     const a = await deliverToTarget(t, 'first', opts)
-    expect(a).toMatchObject({ ok: true, revived: true, specialist: perThreadName(key), sessionName: perThreadName(key) })
-    expect(perThreadName(key)).toBe('slack-c0req-1700000000-0001')
+    expect(a).toMatchObject({ ok: true, revived: true, specialist: name, sessionName: name })
+    expect(name).toBe('req_c0req-1700000000-0001')
     expect(spawns[0][0]).toBe('handle this request')
+    expect(spawns[0][1]).toBe('chan-req') // its own thread in the specialist's channel, never the shared thread
     expect(registry.get((a as any).sessionId)).toMatchObject({ ephemeral: true, idleTtlMs: 86_400_000 })
     const b = await deliverToTarget(t, 'second', opts)
     expect(b).toMatchObject({ ok: true, revived: false, sessionId: (a as any).sessionId })
     expect(spawns).toHaveLength(1)
-    expect(getSpecialist(perThreadName(key))).toBeUndefined()
+    expect(getSpecialist(name)).toBeUndefined()
+    expect(await deliverToTarget({ perConversation: 'nobody', conversation: key }, 'x', opts)).toMatchObject({ ok: false, exit: 8 })
 
     // Killed (its record gone): the next message revives it in the same Slack-thread's session thread, not a new one.
     const threadId = (a as any).threadId
     threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
-      sessionHistory: [{ sessionId: (a as any).sessionId, tmuxName: perThreadName(key), originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] } as any)
+      sessionHistory: [{ sessionId: (a as any).sessionId, tmuxName: name, originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] } as any)
     registry.delete((a as any).sessionId); registry.deleteThread(threadId)
     const c = await deliverToTarget(t, 'third', opts)
     expect(c).toMatchObject({ ok: true, revived: true, threadId })
@@ -198,15 +204,102 @@ describe('recipes', () => {
   })
 })
 
-describe('perThread shares its thread\'s lock and back-off once it has a thread', () => {
+describe('a conversation session\'s thread', () => {
+  test('a specialists.json specialist declared by its thread alone opens its conversations\' threads in that thread\'s channel', async () => {
+    setSpecialist('thr', { threadId: 'thr-shared', kickoff: 'k' }); names.push('thr')
+    const realFetch = gateway.fetchChannel
+    ;(gateway as any).fetchChannel = async (id: string) => ({ id, parentId: id === 'thr-shared' ? 'chan-parent' : null, isThread: true })
+    try {
+      const r = await deliverToTarget({ perConversation: 'thr', conversation: 'slack:C0T:1.000001' }, 'x', opts)
+      expect(r).toMatchObject({ ok: true })
+      expect(spawns[0][1]).toBe('chan-parent')
+    } finally { (gateway as any).fetchChannel = realFetch }
+  })
+
+  test("a hydra.toml specialist's conversations take its recipe: its idle, its home channel", async () => {
+    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.hid]\nworkdir = "/w"\nprompt = "k"\nhome = "123456"\nsessions = "per-conversation"\nidle = "90m"\n`))
+    const r = await deliverToTarget({ perConversation: 'hid', conversation: 'slack:C0T:1.000001' }, 'x', opts)
+    expect(r).toMatchObject({ ok: true, sessionName: 'hid_c0t-1-000001' })
+    expect(spawns[0][1]).toBe('123456')
+    expect(registry.get((r as any).sessionId)).toMatchObject({ ephemeral: true, idleTtlMs: 90 * 60_000 })
+  })
+})
+
+describe('max: counted under one lock per specialist, from the sessions running under its names', () => {
+  const PER = (extra = '') => hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nprompt = "k"\nsessions = "per-conversation"\nmax = 2\n${extra}\n[specialists.mx-c1]\nworkdir = "/w"\nprompt = "k"\n`)
+  beforeEach(() => { setSpecialist('mx', { channel: 'chan-mx', kickoff: 'k' }); names.push('mx') })
+
+  test('past max, a conversation without a running session waits (exit 5, atMax); one with a session goes', async () => {
+    _setHydraConfigForTesting(PER())
+    occupy('t-mx-1', { tmuxName: 'mx_c1-1-000001' })
+    occupy('t-mx-2', { tmuxName: 'mx_c1-2-000001' })
+    occupy('t-other', { tmuxName: 'other_c1-9-000001' }) // another specialist's: not counted
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'x', opts))
+      .toMatchObject({ ok: false, exit: 5, atMax: true, reason: expect.stringContaining('mx already runs 2 conversation sessions (max 2); slack:C1:3.000001 waits for one to end, and none ends on its own: give the specialist an idle') })
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, sessionName: 'mx_c1-1-000001' })
+    expect(spawns).toHaveLength(0)
+  })
+
+  test("a real specialist named like a session (mx-c1) is never taken for one: the `_` keeps them apart", async () => {
+    _setHydraConfigForTesting(PER())
+    occupy('t-real', { tmuxName: 'mx-c1' })
+    const r = await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1' }, 'x', opts)
+    expect(r).toMatchObject({ ok: true, sessionName: 'mx_c1', revived: true })
+  })
+
+  test('a rename through `was` keeps the conversation in the session it runs in, and its sessions still count', async () => {
+    _setHydraConfigForTesting(PER('was = ["old-mx"]'))
+    occupy('t-old-1', { tmuxName: 'old-mx_c1-1-000001' })
+    occupy('t-old-2', { tmuxName: 'old-mx_c1-2-000001' })
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, sessionName: 'old-mx_c1-1-000001' })
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'x', opts)).toMatchObject({ ok: false, atMax: true })
+  })
+
+  test('a slow cold start holds up no one: the lock covers only the decision, and the start counts against max while it runs', async () => {
+    _setHydraConfigForTesting(PER())
+    occupy('t-live', { tmuxName: 'mx_c1-1-000001' })
+    let release!: () => void
+    const gate = new Promise<void>(r => { release = r })
+    const realSpawn = (await import('../recovery.js')).currentRecoveryDeps().doSpawnSession
+    _setRecoveryDeps({ doSpawnSession: (async (...a: any[]) => { await gate; return (realSpawn as any)(...a) }) as any })
+    const cold = deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:2.000001' }, 'x', opts) // hangs in its start
+    await Bun.sleep(10)
+    // a conversation whose session runs goes straight through
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'y', opts)).toMatchObject({ ok: true, sessionName: 'mx_c1-1-000001' })
+    // a third, cold, is told no at once: the hanging start holds the second place
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:3.000001' }, 'z', opts)).toMatchObject({ ok: false, atMax: true })
+    release()
+    expect(await cold).toMatchObject({ ok: true, sessionName: 'mx_c1-2-000001' })
+  })
+
+  test("a conversation's own live session is found even when a dead predecessor's record is listed first", async () => {
+    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nprompt = "k"\nsessions = "per-conversation"\nmax = 1\n`))
+    occupy('t-dead', { tmuxName: 'mx_c1-1-000001', alive: false, connected: false })
+    occupy('t-alive', { tmuxName: 'mx_c1-1-000001' })
+    expect(await deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts)).toMatchObject({ ok: true, threadId: 't-alive' })
+  })
+
+  test('two conversations at once cannot both take the last place', async () => {
+    _setHydraConfigForTesting(hydra(`operator = "op"\n[people.op]\nids = ["slack:UOP"]\n[specialists.mx]\nworkdir = "/w"\nprompt = "k"\nsessions = "per-conversation"\nmax = 1\n`))
+    const [a, b] = await Promise.all([
+      deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:1.000001' }, 'x', opts),
+      deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:2.000001' }, 'x', opts),
+    ])
+    expect([a.ok, b.ok].sort()).toEqual([false, true])
+    expect(spawns).toHaveLength(1)
+  })
+})
+
+describe('a conversation\'s session shares its thread\'s lock and back-off once it has a thread', () => {
   test('a refill waits on a resume holding the thread, and its failure counts under the thread', async () => {
-    const key = 'slack-C0LK-1700000000.0002'
-    const t = { perThread: { channel: 'chan-req', kickoff: 'handle it' }, key }
+    setSpecialist('lk', { channel: 'chan-req', kickoff: 'handle it' }); names.push('lk')
+    const key = 'slack:C0LK:1700000000.0002'
+    const t = { perConversation: 'lk', conversation: key }
     const a = await deliverToTarget(t, 'first', opts)
     const threadId = (a as any).threadId
     threads.push(threadId)
     threadRegistry.threads.set(threadId, { threadId, topic: 't', respawnCount: 0, createdAt: 1, lastActive: 1, totalMessages: 0,
-      sessionHistory: [{ sessionId: (a as any).sessionId, tmuxName: perThreadName(key), originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] } as any)
+      sessionHistory: [{ sessionId: (a as any).sessionId, tmuxName: conversationSessionName('lk', key), originType: 'spawn', startedAt: 1, endedAt: 2, messageCount: 0 }] } as any)
     registry.delete((a as any).sessionId); registry.deleteThread(threadId)
 
     _setRecoveryDeps({ tryResume: async () => null, tryRespawn: async () => { throw new Error('boom') } })
@@ -219,7 +312,7 @@ describe('perThread shares its thread\'s lock and back-off once it has a thread'
     release(); await held
     expect(await refill).toMatchObject({ ok: false, exit: 6 })
     expect(getBackoff(threadId)).toBeDefined()
-    expect(getBackoff(perThreadName(key))).toBeUndefined()
+    expect(getBackoff(conversationSessionName('lk', key))).toBeUndefined()
   })
 })
 
