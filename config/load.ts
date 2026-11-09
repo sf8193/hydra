@@ -464,6 +464,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       if (s.listens.length >= 2) warn(path, `one shared session hears ${s.listens.join(', ')}, so what's said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place`)
       else if (s.listens.some(p => p.endsWith(':dm')) && s.allow.length > 0) warn(path, `one shared session hears everyone's DMs (allow = ${JSON.stringify(s.allow)}), so one person's DM is remembered in another's; use sessions = "per-conversation" or allow = []`)
     }
+    // Without idle, a per-conversation session never ends on its own, so its slot under max never frees.
+    if (s.sessions === 'per-conversation' && s.idleMs === undefined) warn(path, `conversations past max (${s.max}) will wait until a session is ended by hand; set idle`)
     for (const p of s.listens) {
       const platform = p.split(':')[0] as Platform | 'cli'
       if (platform === 'cli') continue
