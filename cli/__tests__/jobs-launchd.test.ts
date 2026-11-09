@@ -201,6 +201,16 @@ describe('jobs launchd-run: what the plist runs', () => {
     expect(checks).toBe(2)
   })
 
+  test('[schedules]: a hydra.toml read mid-save that lacks the job still runs it from the daemon\'s record', async () => {
+    writeFileSync(join(dir, 'jobs.toml.migrated'), '')
+    mkdirSync(dirname(daemonFile(dir)), { recursive: true })
+    const job = { name: 'scan', schedule: '0 * * * *', check: 's.sh', runner: 'launchd', runnerFrom: 'job', alertAfterMs: 0, fromSchedule: true }
+    writeFileSync(daemonFile(dir), JSON.stringify({ lastGoodConfig: '[old]', scheduleJobs: [job], scheduleJobsAt: '2020-01-01T00:00:00Z' }))
+    writeFileSync(join(dir, 'hydra.toml'), '')                                     // truncated by an editor's save: newer, loads, names nothing
+    expect(await jobsLaunchdRun('test', 'scan', dir)).toBe(0)
+    expect(checks).toBe(1)
+  })
+
   test('a failed check is left as a failed result and exits 1', async () => {
     writeFileSync(join(dir, 'jobs.toml'), '[scan]\nschedule="0 * * * *"\ncheck="s.sh"\nmode="none"\n')
     jobsIO.check = async () => ({ code: 3, out: '', err: 'boom' })
