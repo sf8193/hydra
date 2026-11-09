@@ -222,7 +222,7 @@ if ('homeSpawnHandler' in gateway) {
 import { fetchSlackThreadSummary } from './daemon/router.js'
 import { startPrWatcher, backfillTitles, fetchPrTitle, parsePrUrl } from './daemon/pr-watch.js'
 import { startSlackWatch, stopSlackWatch, startSlackListener } from './daemon/slack-watch-runtime.js'
-import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig } from './daemon/hydra-config.js'
+import { startHydraConfig, stopHydraConfig, retryHydraConfigAlert, currentHydraConfig, onHydraConfigLoad, reloadHydraConfig, hydraConfigLoadedOk } from './daemon/hydra-config.js'
 import { jobsFromSchedules, schedulesAreSource } from './shared/schedules.js'
 import { readDaemonState } from './shared/jobs.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
@@ -514,6 +514,7 @@ startJobsClock(realDeps({
   toTarget: async (to, text, initiator) => (await deliverToTarget({ to }, text, { initiator, queue: true })).ok,
   schedules: () => jobsFromSchedules(currentHydraConfig()),
   reloadSchedules: reloadHydraConfig,
+  schedulesLoadedOk: hydraConfigLoadedOk,
   // The clock resolves job channel → top-level channel → home channel; this only sends.
   direct: async (text, channel) => {
     if (!channel) { process.stderr.write(`daemon: jobs alert has no channel: ${text}\n`); return false }

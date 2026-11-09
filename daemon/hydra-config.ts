@@ -27,6 +27,8 @@ let undelivered: string | undefined
 let inFlight: Promise<void> | undefined
 /** Whether hydra.toml governs: a live config names an operator, or the file has content that hasn't loaded yet. */
 let inUse = false
+/** Whether the latest read loaded; false while a failed load keeps the last good config. */
+let lastLoadOk = true
 
 /** One send at a time: a retry that lands while the boot send is still out waits for it instead of sending again. */
 function deliver(): Promise<void> {
@@ -67,9 +69,10 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
     path: hydraConfigPath(),
     env: opts.env ?? systemEnv(SESSION_NAMES),
     intervalMs: opts.intervalMs,
-    onAlert: text => { process.stderr.write(`daemon: ${text}\n`); undelivered = text; void deliver() },
+    onAlert: text => { process.stderr.write(`daemon: ${text}\n`); undelivered = text; lastLoadOk = false; void deliver() },
     onLoad: (config, warnings) => {
       undelivered = undefined
+      lastLoadOk = true
       live = config
       inUse = config.operator !== undefined
       const op = config.operator ? config.people[config.operator] : undefined
@@ -80,7 +83,7 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
       notify(config)
     },
   })
-  if (!watch.initial.ok) inUse = true
+  if (!watch.initial.ok) { inUse = true; lastLoadOk = false }
   return watch.initial
 }
 
@@ -98,6 +101,11 @@ function notify(config: HydraConfig): void {
   for (const fn of listeners) {
     try { fn(config) } catch (e) { process.stderr.write(`daemon: a hydra.toml listener failed: ${(e as Error).message}\n`) }
   }
+}
+
+/** Whether the latest read of hydra.toml loaded. While false, current() is the last good config, not the file. */
+export function hydraConfigLoadedOk(): boolean {
+  return override !== undefined || lastLoadOk
 }
 
 /** Reads hydra.toml now instead of at the next interval (`schedules sync`). Listeners hear it only if it changed. */

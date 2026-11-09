@@ -15,7 +15,7 @@ import { MAX_DELIVER_IDEMPOTENCY_TTL_MS, platformStateDir } from '../shared/cons
 import { LAUNCHD_PATH, LAUNCH_AGENTS_DIR, jobAgentLabel, plistEntry, launchdCalendar, launchdPlist, legacyTitles, parseLegacyTitle, runnerJobs, stableBun } from '../shared/jobs-launchd.js'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { isUnder } from '../shared/path-containment.js'
-import { schedulesAreSource } from '../shared/schedules.js'
+import { cliSchedules, schedulesAreSource } from '../shared/schedules.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
@@ -270,9 +270,11 @@ export async function jobsLaunchdRun(platform: string, name: string, stateDir: s
   const fromSchedules = schedulesAreSource(stateDir, daemonState)
   const file = fromSchedules ? 'hydra.toml [schedules]' : jobsToml(stateDir)
   let job: Job | undefined
-  // [schedules]: the daemon loaded hydra.toml and recorded them as jobs; this process never reads hydra.toml itself.
-  if (fromSchedules) job = daemonState.scheduleJobs?.find(j => j.name === name)
-  else try { job = parseJobsConfig(readFileSync(file, 'utf8')).jobs.find(j => j.name === name) } catch (err) {
+  if (fromSchedules) {
+    const s = cliSchedules(stateDir)
+    if ('error' in s) { runIO.error(`${name}: ${s.error}; not running`); return 1 }
+    job = s.jobs.find(j => j.name === name)
+  } else try { job = parseJobsConfig(readFileSync(file, 'utf8')).jobs.find(j => j.name === name) } catch (err) {
     // The daemon alerts on a broken or missing jobs.toml and runs the last good copy; a launchd job runs it too.
     const lastGood = readDaemonState(stateDir).state.lastGoodConfig
     try { job = parseJobsConfig(lastGood ?? '').jobs.find(j => j.name === name) } catch {}
@@ -425,8 +427,10 @@ export function jobsList(platform: string, stateDirOverride?: string): void {
   console.log(`clock: ${tick ? `last tick ${local(tick)} (${ago(new Date(tick), now)})` : 'no tick yet'}${stale ? '  STALE: is the daemon running?' : ''}`)
   const state = readDaemonState(stateDir).state
   if (schedulesAreSource(stateDir, state)) {
-    console.log(`from hydra.toml [schedules], as the daemon last loaded them`)
-    printJobs(platform, stateDir, state.scheduleJobs ?? [], now)
+    const s = cliSchedules(stateDir)
+    if ('error' in s) { console.log(s.error); return }
+    console.log(`hydra.toml [schedules], ${s.from}`)
+    printJobs(platform, stateDir, s.jobs, now)
     return
   }
   const file = jobsToml(stateDir)

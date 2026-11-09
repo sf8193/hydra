@@ -17,6 +17,8 @@ import {
 } from '../shared/jobs.js'
 import { schedulesAreSource } from '../shared/schedules.js'
 
+const noSuch = (cfg: JobsConfig, name: string) => cfg.fromSchedules ? `no schedule named ${name} in hydra.toml` : `no job named ${name} in jobs.toml`
+
 /** A reservation with no pid this old means the daemon died between spawning and recording: look for the orphan. */
 export const ADOPT_GRACE_MS = 30_000
 /** After the process is gone, how long to wait for its final rename before calling it lost. */
@@ -46,8 +48,10 @@ export type ClockDeps = {
   toMain: (text: string, initiator: string) => boolean
   /** hydra.toml's [schedules] as jobs (shared/schedules.ts), read each tick. Absent: jobs.toml is the only source. */
   schedules?: () => Job[]
-  /** Re-reads hydra.toml now (`jobs sync`), so a sync sees an edit made this second. */
+  /** Re-reads hydra.toml now (`schedules sync`), so a sync sees an edit made this second. */
   reloadSchedules?: () => void
+  /** Whether hydra.toml's latest read loaded. A failed one keeps the last good schedules, so nothing is retired. */
+  schedulesLoadedOk?: () => boolean
   /** Delivers to a job's `to` target (a specialist or a thread). False if it can't. Absent: alerts start at main. */
   toTarget?: (to: string, text: string, initiator: string) => Promise<boolean>
   /** Posts straight to a channel (safeSend). False if it couldn't. */
@@ -250,15 +254,12 @@ export class JobsClock {
     return fallback
   }
 
-  /**
-   * The schedules as jobs, recorded for the CLI's processes (launchd-run, jobs list), which never read hydra.toml.
-   * hydra.toml is re-read first: migrate writes it just before it removes jobs.toml, and a tick between that and the
-   * watch's next read would otherwise run no schedules, and drop a waiting launchd result as gone from the file.
-   */
+  /** The schedules as jobs, recorded (with when) for launchd-run and schedules list. */
   private scheduleJobs(state: DaemonState): Job[] {
-    this.d.reloadSchedules?.()
     const jobs = this.d.schedules!()
-    if (JSON.stringify(state.scheduleJobs ?? []) !== JSON.stringify(jobs)) this.updateDaemon(s => { s.scheduleJobs = jobs })
+    if (JSON.stringify(state.scheduleJobs ?? []) !== JSON.stringify(jobs) || !state.scheduleJobsAt) {
+      this.updateDaemon(s => { s.scheduleJobs = jobs; s.scheduleJobsAt = this.d.now().toISOString() })
+    }
     return jobs
   }
 
@@ -271,8 +272,11 @@ export class JobsClock {
   }
 
   /** The config without side effects, for a `jobs run` between ticks. */
+  /** The jobs `run` and `mark-done` act on: from the same source the tick runs. */
   private currentConfig(): JobsConfig {
-    try { return parseJobsConfig(readFileSync(jobsToml(this.d.stateDir), 'utf8')) } catch { return this.lastGood(readDaemonState(this.d.stateDir).state) }
+    const state = readDaemonState(this.d.stateDir).state
+    if (this.d.schedules && schedulesAreSource(this.d.stateDir, state)) return { jobs: this.d.schedules(), fromSchedules: true }
+    try { return parseJobsConfig(readFileSync(jobsToml(this.d.stateDir), 'utf8')) } catch { return this.lastGood(state) }
   }
 
   // -------------------------------------------------------------------------
@@ -387,8 +391,9 @@ export class JobsClock {
   /** `hydra jobs run`: a manual dispatch, answered after the spawn. It ignores owed state and runs now. */
   requestRun(name: string): { ok: true; reply: RunReply } | { ok: false; error: string } {
     if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
-    const job = this.currentConfig().jobs.find(j => j.name === name)
-    if (!job) return { ok: false, error: `no job named ${name} in jobs.toml` }
+    const cfg = this.currentConfig()
+    const job = cfg.jobs.find(j => j.name === name)
+    if (!job) return { ok: false, error: noSuch(cfg, name) }
     const now = this.d.now()
     if (!this.ensureState(job, now)) return { ok: false, error: `state for ${name} is unreadable` }
     const d = this.dispatch(job, 'manual', latestSlot(job.schedule, now))
@@ -409,6 +414,7 @@ export class JobsClock {
     const state = readDaemonState(this.d.stateDir).state
     if (this.d.schedules && schedulesAreSource(this.d.stateDir, state)) {
       const before = state.scheduleJobs ?? []
+      this.d.reloadSchedules?.()
       const after = this.scheduleJobs(state)
       await this.tick()
       return { ok: true, before, after, hydraEntry: this.d.hydraEntry }
@@ -426,8 +432,9 @@ export class JobsClock {
   /** `hydra jobs mark-done`: record the latest slot as done without running anything (a cutover, a slot you handled). */
   requestMarkDone(name: string): { ok: true; slot: string | null } | { ok: false; error: string } {
     if (!this.tryLock()) return { ok: false, error: 'clock not owned: another daemon holds the jobs lock' }
-    const job = this.currentConfig().jobs.find(j => j.name === name)
-    if (!job) return { ok: false, error: `no job named ${name} in jobs.toml` }
+    const cfg = this.currentConfig()
+    const job = cfg.jobs.find(j => j.name === name)
+    if (!job) return { ok: false, error: noSuch(cfg, name) }
     // launchd fires on its own calendar and never reads job state, so a covered slot would not stop its next run.
     if (job.runner !== 'daemon') return { ok: false, error: `mark-done needs runner = "daemon": launchd runs ${name} at its next slot regardless` }
     const now = this.d.now()
@@ -458,8 +465,9 @@ export class JobsClock {
     // Every job in the file: one that just moved from launchd to the daemon still has its waiting result applied, so
     // its check doesn't run that slot again.
     for (const job of cfg.jobs) this.applyExternal(job)
-    // No schedules at all is a config that hasn't loaded yet, not one that retired every job: results stay owed.
-    if (!(cfg.fromSchedules && cfg.jobs.length === 0)) this.dropStrandedExternal(cfg)
+    // Under [schedules], a result is retired only by a config that loaded cleanly and doesn't name its job: no
+    // schedules at all (not loaded yet) or a failed load (the last good config stands in) keeps it owed.
+    if (!cfg.fromSchedules || (cfg.jobs.length > 0 && this.d.schedulesLoadedOk?.() !== false)) this.dropStrandedExternal(cfg)
     this.sweep()
   }
 
@@ -780,7 +788,7 @@ export function systemZone(): string | null {
 }
 
 /** Real deps, minus what only the daemon knows (how to reach main and a channel). */
-export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'toTarget' | 'schedules' | 'reloadSchedules' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
+export function realDeps(o: Pick<ClockDeps, 'stateDir' | 'platform' | 'hydraEntry' | 'toMain' | 'toTarget' | 'schedules' | 'reloadSchedules' | 'schedulesLoadedOk' | 'direct' | 'homeChannel' | 'gatewayConnected'> & { log?: (m: string) => void }): ClockDeps {
   return {
     ...o,
     now: () => new Date(),

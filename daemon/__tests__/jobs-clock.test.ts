@@ -1638,17 +1638,37 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
     expect(w.logs.some(l => l.includes('missing'))).toBe(false)
   })
 
-  test('the tick right after migrate re-reads hydra.toml first, so a waiting launchd result is delivered, not dropped', async () => {
-    toml(`runner = "launchd"\n[sweep]\nschedule = "*/5 * * * *"\ncheck = "sweep.sh"\nmode = "none"\n`)
-    let loaded = cfg()                                                            // the watch hasn't seen hydra.toml yet
-    const c = clock({ schedules: () => jobsFromSchedules(loaded), reloadSchedules: () => { loaded = cfg(schedule({ id: 'sweep', check: 'sweep.sh', runner: 'launchd' })) } })
-    at('2026-11-04T09:59:00-08:00'); await c.tick()
-    const slotAt = new Date('2026-11-04T10:00:00-08:00').toISOString()
-    writeAtomic(externalFile(w.dir, 'sweep', slotAt), JSON.stringify({ slot: '2026-11-04 10:00', slotAt, at: slotAt, result: 'done', output: 'pruned' }))
+  test('after migrate, schedules run and mark-done act on the [schedules] definition, never the saved jobs.toml', async () => {
+    toml(`[sweep]\nschedule = "*/5 * * * *"\ncheck = "old.sh"\nmode = "none"\n`)
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'new.sh' }), schedule({ id: 'fresh', check: 'f.sh' }))) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()                               // jobs.toml saved as the last good copy
     renameSync(join(w.dir, 'jobs.toml'), join(w.dir, 'jobs.toml.migrated'))
+    expect(c.requestRun('sweep').ok).toBe(true)
+    expect(JSON.parse(w.spawns[0].stdin)).toMatchObject({ name: 'sweep', check: 'new.sh', fromSchedule: true })
+    expect(c.requestRun('fresh').ok).toBe(true)                                  // a schedule jobs.toml never had
+    expect(c.requestRun('ghost')).toEqual({ ok: false, error: 'no schedule named ghost in hydra.toml' })
+    finish('fresh', 1, 'done', undefined, w.spawns[1].pid)
+    at('2026-11-04T10:00:30-08:00'); await c.tick()
+    expect(c.requestMarkDone('ghost')).toEqual({ ok: false, error: 'no schedule named ghost in hydra.toml' })
+  })
+
+  test('schedules sync re-reads hydra.toml, so it sees an edit made this second', async () => {
+    let loaded = cfg()
+    const c = clock({ schedules: () => jobsFromSchedules(loaded), reloadSchedules: () => { loaded = sweep } })
+    const r = await c.requestSync()
+    expect(r).toMatchObject({ ok: true, before: [], after: [{ name: 'sweep' }] })
+  })
+
+  test('a hydra.toml that failed to load keeps every waiting launchd result owed, even with schedules standing in', async () => {
+    let ok = false
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'other', check: 'o.sh' }))), schedulesLoadedOk: () => ok })
+    const slotAt = new Date('2026-11-04T10:00:00-08:00').toISOString()
+    writeAtomic(externalFile(w.dir, 'sweep', slotAt), JSON.stringify({ slot: '2026-11-04 10:00', slotAt, at: slotAt, result: 'done', output: 'x' }))
     at('2026-11-04T10:00:40-08:00'); await c.tick()
-    expect(state('sweep').last).toMatchObject({ result: 'done', note: 'pruned' })
-    expect(w.logs.some(l => l.includes('no longer in jobs.toml'))).toBe(false)
+    expect(existsSync(externalFile(w.dir, 'sweep', slotAt))).toBe(true)
+    ok = true                                                                     // loaded cleanly, and it doesn't name sweep
+    at('2026-11-04T10:01:40-08:00'); await c.tick()
+    expect(existsSync(externalFile(w.dir, 'sweep', slotAt))).toBe(false)
   })
 
   test('no schedules at all (hydra.toml not loaded yet) keeps waiting launchd results owed; a loaded config without the job drops them', async () => {

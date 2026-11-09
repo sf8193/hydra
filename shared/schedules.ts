@@ -4,9 +4,11 @@
 // jobs.toml stays the source while it exists: its migrate step is pending (config/migrate-jobs.ts). With no hydra.toml,
 // or before migrate, a state dir runs exactly as it did.
 
-import { existsSync } from 'fs'
+import { existsSync, readFileSync, statSync } from 'fs'
+import { join } from 'path'
 import { launchdCalendar } from './jobs-launchd.js'
-import { jobsToml, type DaemonState, type Job, type Need } from './jobs.js'
+import { jobsToml, readDaemonState, type DaemonState, type Job, type Need } from './jobs.js'
+import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
 import type { HydraConfig, Schedule } from '../config/types.js'
 
 const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
@@ -57,4 +59,25 @@ export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'speciali
       ...(notes.length && { notes }),
     } satisfies Job
   })
+}
+
+/**
+ * The schedules a CLI process (launchd-run, schedules list) acts on. The daemon's record while it is at least as new
+ * as hydra.toml; otherwise hydra.toml itself, which covers the time between migrate and the daemon's first tick, and
+ * an edit the daemon hasn't read. A hydra.toml that doesn't load falls back to the record.
+ */
+export function cliSchedules(stateDir: string): { jobs: Job[]; from: string } | { error: string } {
+  const state = readDaemonState(stateDir).state
+  const file = join(stateDir, 'hydra.toml')
+  let changed = 0
+  try { changed = statSync(file).mtimeMs } catch {}
+  const recorded = state.scheduleJobs && state.scheduleJobsAt ? new Date(state.scheduleJobsAt).getTime() : -1
+  if (state.scheduleJobs && recorded >= changed) return { jobs: state.scheduleJobs, from: 'as the daemon last loaded them' }
+  let text = ''
+  try { text = readFileSync(file, 'utf8') } catch {}
+  // The daemon's own session names aren't known here; a specialist that takes one is refused by the daemon's load.
+  const r = loadHydraConfig(text, systemEnv([]))
+  if (r.ok) return { jobs: jobsFromSchedules(r.config), from: 'read from hydra.toml (newer than the daemon\'s record)' }
+  if (state.scheduleJobs) return { jobs: state.scheduleJobs, from: 'as the daemon last loaded them (hydra.toml does not load)' }
+  return { error: `hydra.toml does not load:\n${formatIssues(r.errors)}` }
 }

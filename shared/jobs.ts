@@ -310,6 +310,7 @@ export type DaemonState = {
   staleAlertedFor?: string        // the stale-clock episode already alerted (its last tick, or "never"), so a restart doesn't repeat it
   lastTick?: string
   scheduleJobs?: Job[]            // hydra.toml's [schedules] as the daemon last loaded them: what launchd-run and jobs list read
+  scheduleJobsAt?: string         // when the daemon recorded them: hydra.toml changed after this is read afresh
 }
 
 /** What an attempt reports, once, in results/<name>.<id>.json. */
