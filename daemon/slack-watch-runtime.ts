@@ -1,15 +1,14 @@
-import { SlackWatcher, currentSlackWatchConfig, cmpTs, slackWatchesPath, routeFor, routedChannels, routeTargets, DM_THREAD, isDm, type SlackWatchConfig, type SlackWatchStats, type Target } from './slack-watch.js'
-import { deliverToSpecialist } from './specialist-deliver.js'
+import { SlackWatcher, currentSlackWatchConfig, cmpTs, slackWatchesPath, routeFor, routedChannels, routeTargets, DM_THREAD, isDm, type SlackWatchConfig, type SlackWatchStats } from './slack-watch.js'
 import { getSpecialist } from './specialists.js'
 import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { pushToolSurface } from './tool-surface.js'
+import { deliverToTarget } from './targets.js'
 import { SlackListener, boltApp, type ListenerHealth } from './slack-listener.js'
 import { SCRUBBED_ENV, STATE_DIR } from './config.js'
 import { join } from 'path'
 import { safeSend } from './util.js'
 import { mainChannel } from './main-session.js'
-import { transport } from './bridge-transport.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 const readConfig = currentSlackWatchConfig
@@ -49,30 +48,6 @@ function alertChannel(to: string): string | undefined {
   return to === 'main' ? mainChannel() || undefined : getSpecialist(to)?.threadId
 }
 
-// -- delivery: the brief's Target contract ------------------------------------------
-
-type DeliverOutcome =
-  | { ok: true; sessionName: string; threadId: string; revived: boolean }
-  // exit 2: already delivered with this key. 8: no such specialist. `permanent`: this message can never be delivered.
-  | { ok: false; exit: number; reason: string; permanent?: true }
-
-/**
- * Until daemon/targets.ts lands (lane A), the brief's deliverToTarget served by today's deliverToSpecialist.
- * Then this function goes and its callers import the real one.
- */
-async function deliverToTarget(t: Target, text: string, opts: { initiator: string; idempotencyKey?: string }): Promise<DeliverOutcome> {
-  if (t.to === 'main') {
-    // main has no registry record; it is reached by its bridge id. Its queue does not survive a restart, so an unconnected main stays owed.
-    if (!transport.has('main')) return { ok: false, exit: 4, reason: 'main is not connected' }
-    transport.sendOrQueue('main', { type: 'notification', content: text, meta: { source: 'slack-watch', initiator: opts.initiator } })
-    return { ok: true, sessionName: 'main', threadId: '', revived: false }
-  }
-  if (!getSpecialist(t.to)) return { ok: false, exit: 8, reason: `no such specialist: ${t.to}` }
-  const r = await deliverToSpecialist({ specialist: t.to, message: text, initiator: opts.initiator, idempotencyKey: opts.idempotencyKey, source: 'slack-watch' })
-  if (r.ok) { const d = r.data as { sessionName: string; threadId: string; spawned: boolean }; return { ok: true, sessionName: d.sessionName, threadId: d.threadId, revived: d.spawned } }
-  return { ok: false, exit: r.exitCode ?? 3, reason: r.error, ...(r.permanent && { permanent: true as const }) }
-}
-
 let watcher: SlackWatcher | undefined
 let sweepTimer: ReturnType<typeof setInterval> | undefined
 
@@ -90,9 +65,8 @@ export function getSlackWatcher(): SlackWatcher {
     config,
     alert,
     deliver: async (target, message, idempotencyKey) => {
-      const r = await deliverToTarget(target, message, { initiator: 'slack-watch', idempotencyKey })
-      if (r.ok) return { ok: true }
-      if (r.exit === 2) return { ok: true, duplicate: true }
+      const r = await deliverToTarget(target, message, { initiator: 'slack-watch', idempotencyKey, source: 'slack-watch' })
+      if (r.ok) return { ok: true, ...(r.duplicate && { duplicate: true }) }
       return { ok: false, error: r.reason, exit: r.exit, ...(r.permanent && { permanent: true }) }
     },
   })

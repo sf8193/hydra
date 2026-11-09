@@ -4,6 +4,10 @@ import { randomBytes } from 'crypto'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync } from './util.js'
 import { parseIdleTtl } from '../shared/constants.js'
+import type { Target } from './targets.js'
+
+/** The targets a route names today: a specialist, `main` or a thread id (targets.ts's `to` arm). */
+export type RouteTarget = Extract<Target, { to: string }>
 import { runGuard, parseGuardTimeout, type Guard, type GuardInput, type GuardVerdict } from './slack-guard.js'
 
 /**
@@ -38,11 +42,6 @@ export type Person = { name?: string; role?: string }
 /** Who may reach the specialist: anyone, anyone in `people`, or these roles and user ids. */
 export type From = 'anyone' | 'people' | string[]
 
-/**
- * The brief's delivery target (daemon/targets.ts, lane A). Until that lands, only the `to` arm exists here;
- * replace this with an import when it does.
- */
-export type Target = { to: string; revive?: boolean }
 
 /** Some channels, where their messages go, and who may send them. A channel belongs to one route. */
 /**
@@ -115,7 +114,7 @@ export type DeliverResult =
 
 export type SlackWatchDeps = {
   now: () => number
-  deliver: (target: Target, message: string, idempotencyKey: string) => Promise<DeliverResult>
+  deliver: (target: RouteTarget, message: string, idempotencyKey: string) => Promise<DeliverResult>
   /** Read per event so edits apply without a restart. Null: nothing is watched. */
   config: () => SlackWatchConfig | null
   file: string
@@ -1026,7 +1025,7 @@ export class SlackWatcher {
   }
 
   /** `fallback`: the route's own target, for a beforeDeliver redirect that names no specialist. A broken guard never holds a message back. */
-  private async deliverGroup(key: string, entry: SlackWatchEntry, target: Target, items: Item[], cfg: SlackWatchConfig, fallback?: string): Promise<void> {
+  private async deliverGroup(key: string, entry: SlackWatchEntry, target: RouteTarget, items: Item[], cfg: SlackWatchConfig, fallback?: string): Promise<void> {
     for (const batch of packItems(items)) {
       const first = batch[0].ts
       const last = batch[batch.length - 1].ts
