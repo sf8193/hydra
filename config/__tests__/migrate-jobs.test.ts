@@ -61,7 +61,7 @@ describe('migrate jobs.toml → [schedules]', () => {
     expect(m.specialists).toEqual({ review: { workdir: '/home/u/work', home: '1551794455227404370', sessions: 'per-conversation', idle: '4d', prompt: 'Weekly review.' } })
     expect(m.notes).toEqual([
       'review: a per-conversation specialist; each run is a fresh session in a new thread, as before',
-      'review: workdir /home/u/work is where spawned sessions ran (SPAWN_CWD); to run it elsewhere, set cwd on the job before migrating, or workdir after',
+      'review: workdir /home/u/work is where its spawned sessions ran (SPAWN_CWD); set workdir to run them elsewhere',
     ])
   })
 
@@ -115,10 +115,22 @@ describe('migrate jobs.toml → [schedules]', () => {
     } finally { rmSync(dir, { recursive: true }) }
   })
 
-  test('a spawn table carries its kickoff, model and cwd; the prompt stays on the schedule; with no idle, 4d, so it frees', () => {
+  test("a spawn table carries its kickoff and model; the session stays in SPAWN_CWD, the check in its cwd; no idle is today's 30m", () => {
     const m = migrateJobs(`[s]\nschedule="0 6 * * *"\ncwd="/srv/s"\ncheck="c.sh"\nprompt="Triage."\nspawn={ channel="c1", kickoff_file="/k.md", model="haiku" }\n`, opts)
-    expect(m.specialists.s).toEqual({ workdir: '/srv/s', home: 'c1', sessions: 'per-conversation', idle: '4d', prompt_file: '/k.md', model: 'haiku' })
+    expect(m.specialists.s).toEqual({ workdir: '/home/u/work', home: 'c1', sessions: 'per-conversation', idle: '30m', prompt_file: '/k.md', model: 'haiku' })
     expect(m.schedules.s).toMatchObject({ to: 's', cwd: '/srv/s', prompt: 'Triage.' })
+    expect(m.notes).toEqual([
+      's: a per-conversation specialist; each run is a fresh session in a new thread, as before',
+      's: workdir /home/u/work is where its spawned sessions ran (SPAWN_CWD); its check still runs in /srv/s; set workdir to run them elsewhere',
+      's: idle 30m, the default its spawned sessions had',
+    ])
+  })
+
+  test('a spawn job with a prompt and no check keeps its prompt on the schedule: it is the only message a run has', () => {
+    const m = migrateJobs(`[s]\nschedule="0 9 * * MON"\nprompt="Run the retro."\nspawn={ channel="c1" }\n`, opts)
+    expect(m.schedules.s).toEqual({ cron: '0 9 * * MON', prompt: 'Run the retro.', runner: 'launchd', to: 's' })
+    expect(m.specialists.s.prompt).toBe('Run the retro.')
+    expect(m.notes).toContain('s: no check, so the schedule sends the prompt each run, and a fresh session also starts with it')
   })
 
   test('daemon keys carry over; runner is written on each schedule; the file-wide channel and runner are noted', () => {
@@ -143,7 +155,7 @@ describe('migrate jobs.toml → [schedules]', () => {
     const m = migrateJobs(`[t]\nschedule="0 6 * * *"\nprompt="p"\nto="1234567890"\n[s]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ channel="c" }\n[byte]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ channel="c" }\n`, { sessionNames: ['byte'] })
     expect(m.refusals).toHaveLength(3)
     expect(m.refusals[0]).toBe('t: to = "1234567890" is a thread; declare a specialist for it and send to that')
-    expect(m.refusals[1]).toBe('s: a spawn job becomes a specialist, which needs a workdir; give the job a cwd')
+    expect(m.refusals[1]).toBe('s: a spawn job becomes a specialist, which needs a workdir, and SPAWN_CWD is not set; set it and run migrate again')
     expect(m.refusals[2]).toStartWith('byte: a spawn job becomes a specialist of the same name, and ')
     expect(m.schedules).toEqual({})
   })

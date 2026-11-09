@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { jobInitiator, owedSlot, parseJobsConfig, readJobState, type Job } from '../shared/jobs.js'
 import { nextSlot } from '../shared/cron-local.js'
+import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import type { MigrateStep } from './migrate.js'
 
@@ -52,8 +53,8 @@ export type JobsMigrationOpts = {
 }
 
 const DEFAULT_ALERT_AFTER_MS = 24 * 3_600_000
-/** A spawned run's session lives this long without activity, unless its spawn said: a review left open for days still frees. */
-const SPAWN_IDLE = '4d'
+/** What a spawned run's session got when its spawn named no idle (the daemon's default), so it still frees. */
+const SPAWN_IDLE = duration(DEFAULT_IDLE_TTL_MS)
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** The largest whole unit: `90m`, `12h`, `2d`. */
@@ -96,9 +97,10 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
     } else if ('spawn' in target) {
       const r = target.spawn
       const why = invalidSpecialistName(j.name, opts.sessionNames)
-      const workdir = j.cwd ?? opts.defaultWorkdir
+      // Where the session ran: SPAWN_CWD, whatever the job's cwd (that is the check's folder, and stays on the schedule).
+      const workdir = opts.defaultWorkdir
       if (why) { out.refusals.push(`${j.name}: a spawn job becomes a specialist of the same name, and ${why}; rename the job first`); continue }
-      if (!workdir) { out.refusals.push(`${j.name}: a spawn job becomes a specialist, which needs a workdir; give the job a cwd`); continue }
+      if (!workdir) { out.refusals.push(`${j.name}: a spawn job becomes a specialist, which needs a workdir, and SPAWN_CWD is not set; set it and run migrate again`); continue }
       // The fresh session's first words are today's: the kickoff, or with none, the prompt (then not sent twice).
       const kickoff = r.kickoff !== undefined || r.kickoffFile !== undefined
       out.specialists[j.name] = {
@@ -111,10 +113,14 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
         ...(!kickoff && j.prompt !== undefined && { prompt: j.prompt }),
         ...(r.model !== undefined && { model: r.model }),
       }
-      if (!kickoff) delete s.prompt
+      // With a check, its output is the run's message and the prompt is the session's first words. With none, the
+      // prompt is the only message there is, so the schedule keeps it too (the session reads it twice).
+      if (!kickoff && j.check !== undefined) delete s.prompt
       s.to = j.name
       note(`${j.name}: a per-conversation specialist; each run is a fresh session in a new thread, as before`)
-      if (!j.cwd) note(`${j.name}: workdir ${workdir} is where spawned sessions ran (SPAWN_CWD); to run it elsewhere, set cwd on the job before migrating, or workdir after`)
+      if (!kickoff && j.check === undefined) note(`${j.name}: no check, so the schedule sends the prompt each run, and a fresh session also starts with it`)
+      note(`${j.name}: workdir ${workdir} is where its spawned sessions ran (SPAWN_CWD)${j.cwd ? `; its check still runs in ${j.cwd}` : ''}; set workdir to run them elsewhere`)
+      if (r.idle === undefined) note(`${j.name}: idle ${SPAWN_IDLE}, the default its spawned sessions had`)
     } else if (target.to === 'main' || !/^\d+$/.test(target.to)) {
       s.to = target.to
       if (target.revive) note(`${j.name}: revive dropped; a specialist always revives`)
