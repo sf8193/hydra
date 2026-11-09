@@ -29,6 +29,7 @@ const SESSIONS: readonly SessionsMode[] = ['shared', 'per-conversation']
 const ENGINES = ['claude', 'codex', 'omp'] as const
 const MAX_DAY_MS = 86_400_000
 const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the guard
+const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
 const TOP_KEYS = ['operator', 'connectors', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard']
@@ -366,17 +367,19 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (!ID_RE.test(id)) error(path, 'a schedule\'s id must be lowercase letters, digits and dashes')
     const t = table(raw, path)
     if (!t) continue
-    unknownKeys(t, ['cron', 'to', 'prompt', 'check', 'cwd', 'env_file', 'runner'], path)
+    unknownKeys(t, ['cron', 'to', 'prompt', 'check', 'cwd', 'env_file', 'runner', 'needs', 'alert_after'], path)
     const cron = str(t, 'cron', path)
     if (t.cron === undefined) error(`${path}.cron`, 'is required: 5 fields, local time')
     else if (cron !== undefined) {
       try { parseCron(cron) } catch (e) { error(`${path}.cron`, (e as Error).message) }
     }
     const to = str(t, 'to', path)
-    if (t.to === undefined) error(`${path}.to`, 'is required: a specialist, or main')
-    else if (to !== undefined && !isTarget(to)) error(`${path}.to`, `no specialist "${to}"`)
+    if (to !== undefined && !isTarget(to)) error(`${path}.to`, `no specialist "${to}"`)
     const prompt = t.prompt === '' ? '' : str(t, 'prompt', path) ?? ''
     const check = str(t, 'check', path)
+    // No `to`: a sensor. It sends nothing, so it needs a check and takes no prompt.
+    if (t.to === undefined && check === undefined) error(`${path}.to`, 'is required unless there is a check (a sensor): a specialist, or main')
+    if (t.to === undefined && prompt !== '') error(`${path}.prompt`, 'a schedule with no to sends nothing, so it takes no prompt')
     const cwdRaw = str(t, 'cwd', path)
     const cwd = cwdRaw === undefined ? undefined : expand(cwdRaw)
     if (cwd !== undefined && !isAbsolute(cwd)) error(`${path}.cwd`, `"${cwdRaw}" must be an absolute path or start with ~`)
@@ -384,9 +387,17 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     const envFileRaw = str(t, 'env_file', path)
     const envFile = envFileRaw === undefined ? undefined : isAbsolute(expand(envFileRaw)) ? expand(envFileRaw) : cwd && isAbsolute(cwd) ? join(cwd, envFileRaw) : undefined
     if (envFileRaw !== undefined && envFile === undefined) error(`${path}.env_file`, `"${envFileRaw}" is relative, so it needs an absolute cwd`)
+    const runner = oneOf(t, 'runner', path, ['launchd', 'daemon'] as const) ?? 'launchd'
+    // A daemon schedule is retried until done; launchd fires once. needs and alert_after only mean something retried.
+    const needs = strList(t, 'needs', path)
+    for (const [i, n] of (needs ?? []).entries()) if (n !== 'internet') error(`${path}.needs[${i}]`, `unknown precondition "${n}" (known: internet)`)
+    const alertAfterMs = duration(t, 'alert_after', path, MAX_ALERT_AFTER_MS)
+    for (const k of ['needs', 'alert_after']) if (t[k] !== undefined && runner !== 'daemon') error(`${path}.${k}`, 'needs runner = "daemon"')
     schedules[id] = {
-      id, cron: cron ?? '', to: to ?? '', prompt,
-      runner: oneOf(t, 'runner', path, ['launchd', 'daemon'] as const) ?? 'launchd',
+      id, cron: cron ?? '', prompt, runner,
+      ...(to !== undefined && { to }),
+      ...(needs?.length && { needs: [...new Set(needs)] as 'internet'[] }),
+      ...(alertAfterMs !== undefined && { alertAfterMs }),
       ...(check !== undefined && { check }),
       ...(cwd !== undefined && { cwd }),
       ...(envFile !== undefined && { envFile }),

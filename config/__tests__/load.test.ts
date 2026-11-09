@@ -202,6 +202,26 @@ ids = ["github:alice"]
     expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "agents/ops"\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.ops.workdir: "agents/ops" must be an absolute path or start with ~'])
   })
 
+  test('a schedule with no to is a sensor: it needs a check and takes no prompt', () => {
+    expect(ok(`${BASE}\n[schedules.keepalive]\ncron = "*/5 * * * *"\ncheck = "~/ensure.sh"\n`).config.schedules.keepalive)
+      .toEqual({ id: 'keepalive', cron: '*/5 * * * *', prompt: '', check: '~/ensure.sh', runner: 'launchd' })
+    expect(errorsOf(`${BASE}\n[schedules.a]\ncron = "@daily"\n[schedules.b]\ncron = "@daily"\ncheck = "c.sh"\nprompt = "hi"\n`)).toEqual([
+      'schedules.a.to: is required unless there is a check (a sensor): a specialist, or main',
+      'schedules.b.prompt: a schedule with no to sends nothing, so it takes no prompt',
+    ])
+  })
+
+  test('needs and alert_after: a daemon schedule\'s, refused on launchd', () => {
+    const { config } = ok(`${BASE}\n[schedules.pull]\ncron = "23 * * * *"\ncheck = "pull.sh"\nrunner = "daemon"\nneeds = ["internet", "internet"]\nalert_after = "2d"\n`)
+    expect(config.schedules.pull).toEqual({ id: 'pull', cron: '23 * * * *', prompt: '', check: 'pull.sh', runner: 'daemon', needs: ['internet'], alertAfterMs: 2 * 86_400_000 })
+    expect(errorsOf(`${BASE}\n[schedules.a]\ncron = "@daily"\ncheck = "c.sh"\nneeds = ["internet"]\nalert_after = "1h"\n[schedules.b]\ncron = "@daily"\ncheck = "c.sh"\nrunner = "daemon"\nneeds = ["power"]\nalert_after = "31d"\n`)).toEqual([
+      'schedules.a.needs: needs runner = "daemon"',
+      'schedules.a.alert_after: needs runner = "daemon"',
+      'schedules.b.needs[0]: unknown precondition "power" (known: internet)',
+      'schedules.b.alert_after: "31d" must be a duration like 90s, 5m or 2h, at most 30d',
+    ])
+  })
+
   test('main is a target for a schedule or a rule, though never declared', () => {
     const { config } = ok(`${BASE}\n[schedules.digest]\ncron = "@daily"\nto = "main"\n[[rules]]\nat = "slack:#ops"\nto = "main"\n`)
     expect(config.schedules.digest.to).toBe('main')
