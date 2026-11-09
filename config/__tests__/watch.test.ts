@@ -70,6 +70,16 @@ describe('watchHydraConfig', () => {
     expect(Object.keys(w.current().specialists)).toEqual(['ops'])
   })
 
+  test('after a read error, the next good read loads again even unchanged, so whatever held its alert hears it', () => {
+    const { path, w, loads, alerts } = start(GOOD)
+    rmSync(path); mkdirSync(path)
+    w.reload()
+    expect(alerts[0]).toStartWith("hydra.toml couldn't be read")
+    rmSync(path, { recursive: true }); writeFileSync(path, GOOD)
+    expect(w.reload()?.ok).toBe(true)
+    expect(loads).toEqual(['op', 'op'])
+  })
+
   test('a failed first load leaves the empty config and says why', () => {
     const { w, alerts } = start(BAD)
     expect(w.initial.ok).toBe(false)

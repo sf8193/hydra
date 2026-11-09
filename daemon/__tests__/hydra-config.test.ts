@@ -51,6 +51,15 @@ describe('the daemon\'s live hydra.toml', () => {
     expect(sent[0]).toContain('"ghost" is not a person')
   })
 
+  test('a retry while the first send is still in flight sends once', async () => {
+    writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
+    const sent: string[] = []
+    startHydraConfig({ env, alert: async t => { await Bun.sleep(50); sent.push(t); return true } })
+    await retryHydraConfigAlert()
+    await Bun.sleep(80)
+    expect(sent).toHaveLength(1)
+  })
+
   test('a good load drops an undelivered alert, so a stale one is never sent', async () => {
     writeFileSync(hydraConfigPath(), 'operator = "ghost"\n')
     let up = false
