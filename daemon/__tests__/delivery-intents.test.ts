@@ -12,7 +12,7 @@ import { registry } from '../sessions.js'
 import { STATE_DIR } from '../config.js'
 import { ClaudeEngine } from '../engines/claude-engine.js'
 import { fakeCodexAdapter } from './test-harness.js'
-import { deliverToSession } from '../targets.js'
+import { deliverToSession } from '../../specialists/targets.js'
 import { __test } from '../protocol-runner.js'
 
 const { notifyNextActor, notifyActorOfTimeout, notifyParticipant } = __test!

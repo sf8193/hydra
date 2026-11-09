@@ -4,7 +4,7 @@ import { join } from 'path'
 import { STATE_DIR, gateway } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
 import { registry } from '../sessions.js'
-import { setSpecialistThread, _reloadSpecialists } from '../specialists.js'
+import { setSpecialistThread, _reloadSpecialists } from '../../specialists/specialists.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import {
   getSlackWatcher, bindConversation, unbindConversation, formatConversations, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation, targetFor, startSlackWatch, stopSlackWatch,

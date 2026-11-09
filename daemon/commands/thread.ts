@@ -22,7 +22,7 @@ import { claudeEngine, resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, occupancy } from '../session-reachability.js'
 import { currentRecoveryDeps, reviveThread, threadStub } from '../recovery.js'
 export { _setRecoveryDeps, _resetRecoveryDeps } from '../recovery.js'
-import { targetKeyForThread, threadLockHeld, withThreadLock } from '../specialists.js'
+import { targetKeyForThread, threadLockHeld, withThreadLock } from '../../specialists/specialists.js'
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../main-session.js'
 
 function adapterFor(info: { engine?: ProviderId; adapter?: any }) {

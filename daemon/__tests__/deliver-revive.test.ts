@@ -8,7 +8,7 @@ import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js
 import { _resetBackoff } from '../recovery-backoff.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
 import { fakeAdapter } from './test-harness.js'
-import { removeSpecialist, setSpecialist } from '../specialists.js'
+import { removeSpecialist, setSpecialist } from '../../specialists/specialists.js'
 import { getBackoff } from '../recovery-backoff.js'
 
 process.stderr.write = (() => true) as any

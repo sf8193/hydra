@@ -6,10 +6,10 @@ import {
   prWatchDeps, listWatches, unwatchPr, unwatchBySession, retargetWatches, getWatchesBySession, parsePersistedWatches,
   _pollForTesting, _pollAllForTesting, _setWatchForTesting, type WatchEntry,
 } from '../pr-watch.js'
-import { deliverToSession, targetDeps, type DeliverOutcome } from '../targets.js'
+import { deliverToSession, targetDeps, type DeliverOutcome } from '../../specialists/targets.js'
 import { registry, type SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
-import { setSpecialist, removeSpecialist } from '../specialists.js'
+import { setSpecialist, removeSpecialist } from '../../specialists/specialists.js'
 import { killSession } from '../session-lifecycle.js'
 import { gateway } from '../config.js'
 import { reviveThreadForDelivery, reviveDeps } from '../recovery.js'

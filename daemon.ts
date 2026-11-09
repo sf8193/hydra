@@ -65,7 +65,7 @@ import { announceRestartComplete } from './daemon/commands/global.js'
 import { deliverWatchdogAlert } from './daemon/watchdog-alert.js'
 import { autoRecoverAfterBoot } from './daemon/recovery.js'
 import { startJobsClock, stopJobsClock, realDeps } from './daemon/jobs-clock.js'
-import { deliverToTarget } from './daemon/targets.js'
+import { deliverToTarget } from './specialists/targets.js'
 
 threadRegistry.boot(registry)
 reattachAdapters(resolveEngine)

@@ -3,7 +3,7 @@
 import { expect, test } from 'bun:test'
 import { handOff, handoffIO } from '../session-lifecycle.js'
 import { registry, ThreadRegistry, type SessionInfo } from '../sessions.js'
-import { withThreadLock } from '../specialists.js'
+import { withThreadLock } from '../../specialists/specialists.js'
 
 process.stderr.write = (() => true) as any
 

@@ -1,9 +1,9 @@
 import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, DEFAULT_SESSION_CHANNEL } from '../config.js'
+import { STATE_DIR, DEFAULT_SESSION_CHANNEL } from '../../daemon/config.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, specialistForThread } from '../specialists.js'
-import { _setHydraConfigForTesting, hydraConfigPath, onHydraConfigLoad, startHydraConfig, stopHydraConfig } from '../hydra-config.js'
+import { _setHydraConfigForTesting, hydraConfigPath, onHydraConfigLoad, startHydraConfig, stopHydraConfig } from '../../daemon/hydra-config.js'
 import type { HydraConfig, Specialist as Declared } from '../../config/types.js'
 
 const threads = join(STATE_DIR, 'specialist-threads.json')

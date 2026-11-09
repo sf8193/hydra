@@ -7,19 +7,19 @@
  * carries the message. Healing a dead session is the specialist's rule (specialist-deliver.ts) or, for a thread
  * id, an explicit `revive`.
  */
-import { registry, threadRegistry, type SessionInfo } from './sessions.js'
-import { transport } from './bridge-transport.js'
-import { gateway } from './config.js'
-import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
-import { confirmedStuckState } from './pane-probe.js'
-import { deliveryOutcome } from './delivery-outcome.js'
-import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
+import { registry, threadRegistry, type SessionInfo } from '../daemon/sessions.js'
+import { transport } from '../daemon/bridge-transport.js'
+import { gateway } from '../daemon/config.js'
+import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from '../daemon/session-reachability.js'
+import { confirmedStuckState } from '../daemon/pane-probe.js'
+import { deliveryOutcome } from '../daemon/delivery-outcome.js'
+import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from '../daemon/idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
 import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from './specialists.js'
-import { currentHydraConfig } from './hydra-config.js'
+import { currentHydraConfig } from '../daemon/hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
-import { currentRecoveryDeps, reviveThreadForDelivery } from './recovery.js'
-import type { DeliveryResult } from './engines/engine-adapter.js'
+import { currentRecoveryDeps, reviveThreadForDelivery } from '../daemon/recovery.js'
+import type { DeliveryResult } from '../daemon/engines/engine-adapter.js'
 
 export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
 export type Target =
