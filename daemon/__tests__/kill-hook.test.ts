@@ -15,7 +15,9 @@ test('on-kill hook runs with the dead session identity in env; missing hook is a
 
     runKillHook(info, 'missing', join(dir, 'nope'))  // must not throw
     runKillHook(info, 'session ended', hook)
-    for (let i = 0; i < 50 && !existsSync(out); i++) await Bun.sleep(20)
+    // The shell creates the file before echo writes to it: wait for the line, not the file.
+    const written = () => existsSync(out) && readFileSync(out, 'utf8').includes('\n')
+    for (let i = 0; i < 50 && !written(); i++) await Bun.sleep(20)
     expect(readFileSync(out, 'utf8').trim()).toBe('glyph|session ended|codex|glyph')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
