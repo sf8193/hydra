@@ -1,11 +1,12 @@
 import { chmodSync } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 
 import type { ChatGateway } from '../gateway.js'
 import { sourceEnvFiles } from '../shared/env-parse.js'
 import { captureSpawnVars } from '../shared/spawn-env.js'
 import { claudeConfigDir, platformStateDir } from '../shared/constants.js'
+import { isUnder } from '../shared/path-containment.js'
 
 // ---------------------------------------------------------------------------
 // Paths & env
@@ -21,6 +22,14 @@ if (process.env.NODE_ENV === 'test' && process.env.HYDRA_TEST_PRELOADED !== '1')
 export const STATE_DIR = process.env.HYDRA_STATE_DIR
   ?? process.env.DISCORD_STATE_DIR
   ?? platformStateDir(process.env.CHAT_PLATFORM ?? 'discord')
+/**
+ * Whether this process may write the daemon's state. The daemon may (its entry file is daemon.ts), and so may
+ * anything pointed at a state dir that isn't a live one: a test's temp dir, or a scratch dir. Anything else only
+ * reads. A one-off `bun -e "import './daemon/…'"` run from a hydra session inherits the live HYDRA_STATE_DIR, and
+ * importing must never write live state: it once stamped every live session dead.
+ */
+export const STATE_WRITABLE = ['daemon.ts', 'daemon.js'].includes(basename(Bun.main)) || !isUnder(STATE_DIR, join(homedir(), '.claude', 'channels'), { realpath: true })
+
 export const ACCESS_FILE = join(STATE_DIR, 'access.json')
 export const APPROVED_DIR = join(STATE_DIR, 'approved')
 export const ENV_FILE = join(STATE_DIR, '.env')

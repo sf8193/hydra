@@ -1,11 +1,29 @@
 import { realpathSync } from 'fs'
 import { join, sep } from 'path'
 import { execSync, execFileSync, execFile } from 'child_process'
-import { gateway, STATE_DIR } from './config.js'
+import { gateway, STATE_DIR, STATE_WRITABLE } from './config.js'
+import { isUnder } from '../shared/path-containment.js'
 import { formatDiscordTables } from '../discord-table-format.js'
 import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 
-export { atomicWriteFileSync } from '../shared/atomic-write.js'
+import { atomicWriteFileSync as writeAtomically } from '../shared/atomic-write.js'
+
+/**
+ * Every daemon-module write of its state goes through here. A process that doesn't own the state (STATE_WRITABLE:
+ * not the daemon, and pointed at a live state dir) writes nothing into it, and says so once per file: importing a
+ * daemon module from a one-off script must never change a running daemon's state.
+ */
+const refusedWrites = new Set<string>()
+export function atomicWriteFileSync(filePath: string, data: string, mode?: number): void {
+  if (!STATE_WRITABLE && isUnder(filePath, STATE_DIR)) {
+    if (!refusedWrites.has(filePath)) {
+      refusedWrites.add(filePath)
+      process.stderr.write(`hydra: not writing ${filePath}: it's a live daemon's state, and this process isn't that daemon\n`)
+    }
+    return
+  }
+  writeAtomically(filePath, data, mode)
+}
 
 // Base session name embedded in a worktree branch: `wt/<name>` or `wt/<name>-<suffix>` → `<name>`.
 // Load-bearing: pickSessionName reserves this token and createWorktree's stale
