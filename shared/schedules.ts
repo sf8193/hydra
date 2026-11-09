@@ -7,9 +7,9 @@
 import { existsSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { launchdCalendar } from './jobs-launchd.js'
-import { jobsToml, readDaemonState, type DaemonState, type Job, type Need } from './jobs.js'
+import { jobsToml, readDaemonState, type DaemonState, type Job } from './jobs.js'
 import { formatIssues, loadHydraConfig, systemEnv } from '../config/load.js'
-import type { HydraConfig, Schedule } from '../config/types.js'
+import type { HydraConfig } from '../config/types.js'
 
 const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
 
@@ -26,11 +26,8 @@ export function schedulesAreSource(stateDir: string, state: DaemonState): boolea
   return state.lastGoodConfig === undefined || existsSync(migratedJobsToml(stateDir))
 }
 
-/** Keys a daemon schedule may carry: loaded by config/load.ts once it reads them. */
-type ScheduleKeys = Schedule & { to?: string; needs?: Need[]; alertAfterMs?: number }
-
 export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'specialists'>): Job[] {
-  return Object.values(cfg.schedules as Record<string, ScheduleKeys>).map(s => {
+  return Object.values(cfg.schedules).map(s => {
     let runner = s.runner
     let runnerFrom: Job['runnerFrom'] = 'job'
     const notes: string[] = []

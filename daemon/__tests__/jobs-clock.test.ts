@@ -1685,7 +1685,7 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
 
   test('migrate brings no spurious run: a covered weekly slot stays covered under [schedules]', async () => {
     toml(`[review]\nschedule = "0 11 * * FRI"\nneeds = ["internet"]\ncheck = "r.sh"\nmode = "none"\n`)
-    const review = cfg(schedule({ id: 'review', cron: '0 11 * * FRI', check: 'r.sh', needs: ['internet'] } as unknown as Schedule))
+    const review = cfg(schedule({ id: 'review', cron: '0 11 * * FRI', check: 'r.sh', needs: ["internet"] }))
     const c = clock({ schedules: () => jobsFromSchedules(review) })
     at('2026-11-06T10:59:00-08:00'); await c.tick()
     at('2026-11-06T11:00:30-08:00'); await c.tick()
@@ -1713,7 +1713,7 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
 
   test("a schedule's failure alerts the operator, never its target", async () => {
     const targets: string[] = []
-    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', to: 'ops', alertAfterMs: 0 } as unknown as Schedule))), toTarget: async to => { targets.push(to); return true } })
+    const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'sweep.sh', to: 'ops', alertAfterMs: 0 }))), toTarget: async to => { targets.push(to); return true } })
     at('2026-11-04T09:59:00-08:00'); await c.tick()
     at('2026-11-04T10:00:30-08:00'); await c.tick()
     finish('sweep', 1, 'failed', 'boom', 1000)
