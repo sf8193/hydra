@@ -119,6 +119,13 @@ function buildPeekSession(sessions: SessionEntry[]): void {
   }
 }
 
+/** A specialist's name or a thread id: the daemon says which session that is (`status` resolves both). */
+async function byDaemonName(socketPath: string, name: string, sessions: SessionEntry[]): Promise<SessionEntry | undefined> {
+  const response = await peekIO.sendRequest(socketPath, { type: 'cli', command: 'status', id: randomUUID(), params: { name } })
+  const resolved = response.ok ? (response.data as { name?: string }).name : undefined
+  return resolved ? sessions.find(s => s.name === resolved) : undefined
+}
+
 export async function peek(args: string[], daemonName?: string): Promise<void> {
   const socketPath = peekIO.resolveSocket(daemonName)
   const sessions = await getLiveSessions(socketPath)
@@ -130,7 +137,7 @@ export async function peek(args: string[], daemonName?: string): Promise<void> {
 
   // hydra peek <name> — attach to specific session
   if (args.length > 0) {
-    const target = sessions.find(s => s.name === args[0])
+    const target = sessions.find(s => s.name === args[0]) ?? await byDaemonName(socketPath, args[0], sessions)
     if (!target) {
       console.error(`error: no live session named "${args[0]}"`)
       console.error(`live: ${sessions.map(s => s.name).join(', ')}`)

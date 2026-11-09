@@ -7,6 +7,8 @@ import { transport } from './bridge-transport.js'
 import { loadAccess, maxChunkLimit, MAX_ATTACHMENT_BYTES } from './access.js'
 import { quietSend, shouldQuiet } from './quiet-send.js'
 import { beginMainHandoff } from './main-handoff.js'
+import { getSpecialist } from './specialists.js'
+import { ensureSpecialist } from './specialist-deliver.js'
 import { READ_ONLY_DISALLOWED_TOOLS, claudeLaunchCwd, doSpawnSession, handOff, handoffNoteFate, killSession, predecessorOf, runPreHandoffHook, sessionDir, type PreHandoffVerdict } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration, chunk, assertSendable, tmuxHasSession, parseDuration } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
@@ -612,7 +614,12 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         // Resolve by session name only — no raw thread IDs (use reply for those).
         // "parent" is the caller's parent by id, so a child never needs its name.
         const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-        const resolved = target === 'parent' ? resolveParentTarget(caller) : resolveSendTarget(target)
+        // A live session by the name gets it; a declared specialist with nobody home is filled by its rule first.
+        const byName = target === 'parent' ? undefined : resolveSendTarget(target)
+        const heal = target !== 'parent' && !!getSpecialist(target) && !(byName && !byName.replaced && occupied(occupancy(byName.session)))
+        const resolved = target === 'parent' ? resolveParentTarget(caller)
+          : heal ? { session: (await ensureSpecialist(target, caller?.tmuxName ?? 'send_to_thread')).info }
+          : byName
         if (!resolved) {
           const known = [...registry.values()].filter(s => !s.deadAt).map(s => s.tmuxName).join(', ')
           throw new Error(`no session named "${target}". Known sessions: ${known || '(none)'}`)

@@ -1,6 +1,7 @@
 %% Who is home, and putting a session back into a thread. Drawn from the code (reconciled by a cold review of the
 %% stack, then corrected for its findings). (a) occupancy() decides; (b) every revive goes through reviveThread()
-%% under one lock per target; (c) `deliver --thread T --revive` asks for it. Later changes extend this to `deliver --to`.
+%% under one lock per target; (c) `deliver --thread T --revive` asks for it; (d) every target resolves to a session and
+%% lands through deliverToSession (targets.ts).
 flowchart TD
   subgraph A["(a) occupancy(info): session-reachability.ts"]
     A0{"record?"} -- no --> AN[none]
@@ -85,4 +86,21 @@ flowchart TD
     DR -- ok --> DQ2["revived: true"]
     DQ --> DD["queue = true → deliver: queued or delivered"]
     DQ2 --> DD
+  end
+
+  subgraph D["(d) deliverToTarget(t): targets.ts"]
+    T0["size cap → permanent exit 3 · idempotency: in flight → 5, landed → ok duplicate, else reserve"] --> TK{"target"}
+    TK -- "to" --> TR{"resolveTo"}
+    TR -- main --> TM["main: bridge or --queue (exit 4); never revived"]
+    TR -- "declared specialist" --> TS["ensureSpecialist(name) (b) → orphaned: exit 4"]
+    TR -- "all digits" --> TT["toThread (c)"]
+    TR -- "anything else" --> T8["exit 8: no such specialist"]
+    TK -- "spawn" --> TF["a fresh session from the recipe (idle → reaped when quiet)"]
+    TK -- "perThread + key" --> TP["ensureSpecialist(perThreadName(key), recipe), never stored"]
+    TS & TT & TF & TP --> LS["deliverToSession: dead 3 · orphaned 4 · booting 5 (unless queued)<br/>reachable but stuck on a dialog → 5 'stuck: kind'<br/>→ adapter.deliver"]
+    LS --> TO["landed: key kept · else key released"]
+    ST["send_to_thread(target = a specialist)"] --> TS
+    SET["specialist set / rm"] --> SL["withTargetLock(name)"] --> SG{"set --thread elsewhere while the old thread is occupied?"}
+    SG -- yes --> G3["G: exit 3 'is live in T1; hydra kill X first'"]
+    SG -- no --> SW["write the record"]
   end
