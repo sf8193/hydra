@@ -11,7 +11,7 @@ import { randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
 import { existsSync, mkdirSync, opendirSync, readFileSync, rmSync, writeFileSync, writeSync } from 'fs'
 import { dirname, join, resolve } from 'path'
-import { platformStateDir } from '../shared/constants.js'
+import { MAX_DELIVER_IDEMPOTENCY_TTL_MS, platformStateDir } from '../shared/constants.js'
 import { LAUNCHD_PATH, LAUNCH_AGENTS_DIR, jobAgentLabel, plistEntry, launchdCalendar, launchdPlist, legacyTitles, parseLegacyTitle, runnerJobs, stableBun } from '../shared/jobs-launchd.js'
 import { resolveConfig, sendRequest } from './helpers.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
@@ -121,6 +121,17 @@ export async function runCheck(job: Job): Promise<{ output: string } | { outcome
   return output ? { output } : { outcome: { result: 'nothing' } }
 }
 
+/**
+ * How long a delivery's key is remembered: one schedule period, because a slot is retried until the next one is due.
+ * A retry inside that window (after a crash, a sleep, a back-off) is then a duplicate. Between 15m and 7d.
+ */
+export function keyTtl(schedule: string, now: Date): string {
+  const slot = latestSlot(schedule, now)
+  const next = slot && nextSlot(schedule, slot.at)
+  const period = next ? next.at.getTime() - slot!.at.getTime() : MAX_DELIVER_IDEMPOTENCY_TTL_MS
+  return `${Math.ceil(Math.min(Math.max(period, 15 * 60_000), MAX_DELIVER_IDEMPOTENCY_TTL_MS) / 60_000)}m`
+}
+
 /** The action for a check's output: none records it; spawn and main send the prompt with it. */
 export async function runAction(job: Job, stateDir: string, key: string, output: string, onActionSent: (w: Work) => void = () => {}): Promise<Work> {
   const initiator = jobInitiator(job.name)
@@ -154,7 +165,8 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
       ...(target.spawn.idle ? ['--idle-ttl', target.spawn.idle] : []), ...(target.spawn.model ? ['--model', target.spawn.model] : []), '--', message]
     // --queue for main only: a specialist and a revive queue anyway, and a plain thread's orphaned session must
     // answer 4, not take a message nobody will read until someone resumes it.
-    : ['deliver', '--to', target.to, ...(target.revive ? ['--revive'] : []), ...(target.to === 'main' ? ['--queue'] : []), '--initiator', initiator, '--idempotency-key', key, '--message', message]
+    : ['deliver', '--to', target.to, ...(target.revive ? ['--revive'] : []), ...(target.to === 'main' ? ['--queue'] : []), '--initiator', initiator,
+      '--idempotency-key', key, '--idempotency-ttl', keyTtl(job.schedule, jobsIO.now()), '--message', message]
   // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
   // --json: the reply carries the duplicate-key status, so a key the daemon already holds is an outcome, not an error.
   const r = await jobsIO.hydra(['--state-dir', stateDir, '--json', ...args])
