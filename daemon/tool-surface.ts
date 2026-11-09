@@ -5,7 +5,7 @@ import { BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPAB
 import type { SessionType, Capability, DerivedCapability } from '../shared/constants.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
-import { getSpecialist } from './specialists.js'
+import { getSpecialist, conversationSpecialistOf } from './specialists.js'
 import { currentHydraConfig } from './hydra-config.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
@@ -26,12 +26,13 @@ export const canAskPredecessor = (info: Pick<SessionInfo, 'engine' | 'predecesso
 
 
 /** Whether this session sits in the thread of a specialist declared in hydra.toml: the sessions that bind conversations to themselves. */
-export function isSpecialistOccupant(info: Partial<Pick<SessionInfo, 'threadId'>>): boolean {
+export function isSpecialistOccupant(info: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>>): boolean {
+  if (conversationSpecialistOf(info.tmuxName)) return true // a per-conversation specialist's session, by its name
   return !!info.threadId && Object.keys(currentHydraConfig().specialists).some(id => getSpecialist(id)?.threadId === info.threadId)
 }
 
 /** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that sits in a specialist, gets those tools. */
-export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId'>>): Set<Capability | DerivedCapability> {
+export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>>): Set<Capability | DerivedCapability> {
   const caps = new Set<Capability | DerivedCapability>(info.capabilities ?? [])
   if (canAskPredecessor(info)) caps.add('predecessor')
   if (isSpecialistOccupant(info)) caps.add('specialist')

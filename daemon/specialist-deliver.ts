@@ -49,7 +49,7 @@ export async function spawnSpecialist(name: string, initiator: string): Promise<
  * Fill a vacant specialist by the rule (reviveThread): in its thread while the platform still has it, so the
  * session resumes the conversation or reads the history; in a new thread in its channel when it is gone.
  * The kickoff is the respawn tier's prompt only. Runs under the specialist's lock, which `set` and `rm` take too,
- * so the record read here is the one the new thread is written to. An unstored specialist (a `perThread` route's)
+ * so the record read here is the one the new thread is written to. An unstored specialist (a conversation's own session)
  * is never written.
  */
 async function fill(name: string, specialist: Specialist, initiator: string | undefined, opts: { ignoreBackoff?: boolean; unstored?: boolean; key?: string } = {}): Promise<{ info: SessionInfo; url: string }> {
@@ -109,7 +109,7 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
 /**
  * Make sure the specialist has a live session now, under its lock: a live occupant is returned untouched
  * (`spawned: false`); a vacant specialist is filled once, however many callers arrive together. `unstored` is a
- * specialist that exists only as a recipe (a `perThread` route's); it is never written to specialists.json.
+ * specialist that exists only as a recipe (a conversation's own session); it is never written to specialists.json.
  */
 export async function ensureSpecialist(name: string, initiator?: string, unstored?: Specialist): Promise<{ info: SessionInfo; spawned: boolean }> {
   if (!unstored && !getSpecialist(name)) throw new SpecialistError(`no such specialist: ${name}`, 8)

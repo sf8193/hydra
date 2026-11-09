@@ -102,13 +102,14 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'sessions.ts': {
-    why: 'the field, markDead (the one runtime writer), the boot loader, the boot history close, ranking a name\'s past threads by when it died',
+    why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader, the boot history close, ranking a name\'s past threads by when it died',
     lines: [
       "deadAt?: number",
       "delete info.deadAt",
       "info.deadAt = info.deadAt ?? Date.now()",
       "if (!session.deadAt) continue",
       "if (entry) { entry.endedAt = session.deadAt; closed++ }",
+      "const fresh = info.deadAt === undefined",
       "info.deadAt ??= at",
       "if (s.tmuxName === targetName && s.deadAt) note(s.threadId, s.deadAt)",
     ],

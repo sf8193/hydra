@@ -1,20 +1,22 @@
 /**
  * Where a message goes, and how it lands: one vocabulary for the CLI, jobs, Slack and PR watch.
  *
- * A target names an address (a specialist, `main`, a thread) or a recipe (a fresh session each time, or one per
- * Slack thread). Each resolves to a session, and every delivery lands through `deliverToSession`: occupancy decides
+ * A target names an address (a specialist, `main`, a thread, or one conversation's own session of a specialist) or
+ * a recipe (a fresh session each time). Each resolves to a session, and every delivery lands through `deliverToSession`: occupancy decides
  * dead (3), orphaned (4) and booting (5), a session stuck on a dialog is "not now" (5), and the engine's adapter
  * carries the message. Healing a dead session is the specialist's rule (specialist-deliver.ts) or, for a thread
  * id, an explicit `revive`.
  */
 import { registry, threadRegistry, type SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
-import { occupancy, ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
+import { gateway } from './config.js'
+import { occupancy, occupied, ORPHAN_GRACE_MS, bridgeWaitMs } from './session-reachability.js'
 import { confirmedStuckState } from './pane-probe.js'
 import { deliveryOutcome } from './delivery-outcome.js'
 import { checkIdempotency, clearIdempotency, registerIdempotency, DELIVER_IDEMPOTENCY_TTL_MS } from './idempotency.js'
 import { DELIVER_MAX_MESSAGE_BYTES, parseIdleTtl } from '../shared/constants.js'
-import { getSpecialist, specialistForThread, type Specialist } from './specialists.js'
+import { getSpecialist, specialistForThread, withTargetLock, type Specialist } from './specialists.js'
+import { currentHydraConfig } from './hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from './recovery.js'
 import type { DeliveryResult } from './engines/engine-adapter.js'
@@ -23,14 +25,19 @@ export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; 
 export type Target =
   | { to: string; revive?: boolean }   // a specialist name, "main", or a thread id
   | { spawn: Recipe }
-  | { perThread: Recipe; key: string } // Slack: key = `slack-<channel>-<ts>`
+  /**
+   * `sessions = "per-conversation"`: the conversation's own session, made from the specialist's recipe and never stored,
+   * at most hydra.toml's `max` at once (past that: exit 5 with `atMax`).
+   */
+  | { perConversation: string; conversation: string }
 export type DeliverOutcome =
   /** `duplicate`: this idempotency key already landed; a sender counts it as sent (the CLI's exit 2). */
   | { ok: true; sessionName: string; threadId: string; revived: boolean; sessionId: string; status: 'delivered' | 'queued'; proof?: string; duplicate?: true; specialist?: string }
   /** 3 gone/refused, 4 orphaned, 5 not now (booting, busy, or stuck), 6 backing off or failed, 7 a delivery with this key
    *  is still in flight, 8 no such specialist. `permanent`: this message can never be delivered (too large); drop it,
    *  alert, never retry. */
-  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true }
+  /** `atMax`: a per-conversation specialist already runs `max` sessions; this conversation waits its turn (exit 5). */
+  | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true; atMax?: true }
 
 /** `lowPriority`: an engine where every delivery is a priced turn (Codex) may hold it for the next turn. `wanted`: a sender
  *  that can withdraw (a PR watch ended by a kill), asked under the thread's lock just before a revive; false is exit 3. */
@@ -49,9 +56,13 @@ export function resolveTo(to: string): { kind: 'main' } | { kind: 'specialist'; 
   return { kind: 'unknown' }
 }
 
-/** A `perThread` target's specialist: never stored, named from its watch key (`slack-C0X-17.01` → `slack-c0x-17-01`). */
-export function perThreadName(key: string): string {
-  return key.toLowerCase().replace(/\./g, '-')
+/**
+ * A conversation's own session: `<specialist>_<conversation>`, lowercased (`crm` + `slack:C0X:17.01` → `crm_c0x-17-01`).
+ * The `_` is a character no specialist name may hold, so no such name is ever a specialist's, and every one of a
+ * specialist's conversation sessions starts with `<specialist>_`.
+ */
+export function conversationSessionName(specialist: string, conversation: string): string {
+  return `${specialist}_${conversation.replace(/^slack:/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
 }
 
 function parseRecipe(raw: unknown, where: string): Recipe {
@@ -68,21 +79,19 @@ function parseRecipe(raw: unknown, where: string): Recipe {
   return r as Recipe
 }
 
-/** Exactly one of `to`, `spawn`, `perThread` (with its `key`). Throws a message naming `where`. */
+/** Exactly one of `to`, `spawn`. Throws a message naming `where`. A conversation's own session is routing's to name, never a config's. */
 export function parseTarget(raw: unknown, where: string): Target {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`${where}: a target is { to } or { spawn } or { perThread, key }`)
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`${where}: a target is { to } or { spawn }`)
   const r = raw as Record<string, unknown>
-  const kinds = (['to', 'spawn', 'perThread'] as const).filter(k => r[k] !== undefined)
-  if (kinds.length !== 1) throw new Error(`${where}: give exactly one of to, spawn, perThread (got ${kinds.length ? kinds.join(', ') : 'none'})`)
+  const kinds = (['to', 'spawn'] as const).filter(k => r[k] !== undefined)
+  if (kinds.length !== 1) throw new Error(`${where}: give exactly one of to, spawn (got ${kinds.length ? kinds.join(', ') : 'none'})`)
   if (kinds[0] === 'to') {
     if (typeof r.to !== 'string' || !r.to.trim()) throw new Error(`${where}: to must be a specialist name, "main" or a thread id`)
     if (r.revive !== undefined && typeof r.revive !== 'boolean') throw new Error(`${where}: revive must be true or false`)
     return { to: r.to.trim(), ...(r.revive === true && { revive: true }) }
   }
   if (r.revive !== undefined) throw new Error(`${where}: revive goes with to`)
-  if (kinds[0] === 'spawn') return { spawn: parseRecipe(r.spawn, `${where}.spawn`) }
-  if (typeof r.key !== 'string' || !r.key) throw new Error(`${where}: perThread needs the key of the thread it is for`)
-  return { perThread: parseRecipe(r.perThread, `${where}.perThread`), key: r.key }
+  return { spawn: parseRecipe(r.spawn, `${where}.spawn`) }
 }
 
 /**
@@ -163,7 +172,7 @@ async function route(t: Target, text: string, opts: DeliverOpts): Promise<Delive
     const info = await spawnFresh(t.spawn, opts.initiator)
     return land(info, text, { ...opts, queue: true }, true)
   }
-  if ('perThread' in t) return toSpecialist(perThreadName(t.key), text, opts, recipeSpecialist(t.perThread))
+  if ('perConversation' in t) return toConversation(t.perConversation, t.conversation, text, opts)
 
   const to = resolveTo(t.to)
   switch (to.kind) {
@@ -210,6 +219,86 @@ function toMain(text: string, opts: DeliverOpts): DeliverOutcome {
   return { ok: true, status: connected ? 'delivered' : 'queued', sessionId: 'main', sessionName: 'main', threadId: '', revived: false }
 }
 
+/** A live session under this name, the live one first: a dead predecessor's record may still be listed before it. */
+const liveNamed = (name: string): SessionInfo | undefined => [...registry.values()].find(i => i.tmuxName === name && occupied(occupancy(i)))
+
+/** The names a conversation's session may run under: the specialist's current id, then its old ones (`was`). */
+function conversationNames(to: string, conversation: string): string[] {
+  return [to, ...(currentHydraConfig().specialists[to]?.was ?? [])].map(id => conversationSessionName(id, conversation))
+}
+
+/** Whether this conversation's own session is running now (under the current id or an old one). */
+export const conversationSessionRunning = (to: string, conversation: string): boolean => conversationNames(to, conversation).some(n => !!liveNamed(n))
+
+/** A conversation's running session gets the message, as a specialist's would: queued, unless it is orphaned (exit 4). */
+function landRunning(info: SessionInfo, text: string, opts: DeliverOpts): Promise<DeliverOutcome> | DeliverOutcome {
+  if (occupancy(info) === 'orphaned') return { ok: false, exit: 4, reason: `${info.tmuxName} is orphaned (running, bridge not connected) — hydra kill ${info.tmuxName} to restart it` }
+  return land(info, text, { ...opts, queue: true }, false, info.tmuxName)
+}
+
+/** How many more conversation sessions `to` may start now: `max` less those running and those starting. Infinity without a max. */
+export function placesFree(to: string): number {
+  const s = currentHydraConfig().specialists[to]
+  if (!s) return Infinity
+  const prefixes = [to, ...s.was].map(id => `${id}_`)
+  const live = new Set([...registry.values()].filter(i => prefixes.some(p => i.tmuxName.startsWith(p)) && occupied(occupancy(i))).map(i => i.tmuxName))
+  const starting = [...(reserved.get(to)?.keys() ?? [])].filter(n => !live.has(n)).length
+  return Math.max(0, s.max - live.size - starting)
+}
+
+/** Cold spawns decided but not yet settled, per specialist: they count against `max` like a running session. */
+const reserved = new Map<string, Map<string, number>>()
+const reserve = (to: string, name: string, by: 1 | -1) => {
+  const r = reserved.get(to) ?? new Map<string, number>()
+  const n = (r.get(name) ?? 0) + by
+  if (n > 0) r.set(name, n); else r.delete(name)
+  if (r.size) reserved.set(to, r); else reserved.delete(to)
+}
+
+/**
+ * A conversation's own session of a per-conversation specialist, healed by the rule under its own name: the specialist's
+ * recipe (kickoff, model, channel or its thread's channel, its idle else hydra.toml's), a fresh thread, never stored.
+ * At most `max` run at once, counted from the sessions running under the specialist's names (`<id>_…`, and an old id's
+ * through `was`) plus the cold spawns already decided. Only that decision takes the specialist's lock: a conversation
+ * whose session runs goes straight to it, and the spawn and the landing happen outside, so one slow start holds up no one else.
+ */
+async function toConversation(to: string, conversation: string, text: string, opts: DeliverOpts): Promise<DeliverOutcome> {
+  const base = getSpecialist(to)
+  if (!base) return { ok: false, exit: 8, reason: `no such specialist: ${to}` }
+  const s = currentHydraConfig().specialists[to]
+  const names = conversationNames(to, conversation)
+  const { threadId: shared, ...recipe } = base
+  // A specialist declared by its thread alone opens its conversations' threads beside it, in that thread's channel.
+  if (!recipe.channel && shared) recipe.channel = await gateway.fetchChannel(shared).then(c => c.parentId ?? undefined, () => undefined)
+  if (!recipe.idle && s?.idleMs) recipe.idle = `${Math.max(1, Math.round(s.idleMs / 60_000))}m`
+  // Running already: straight to that very session (a name lookup could find a dead predecessor's record first).
+  const live = names.map(liveNamed).find(Boolean)
+  if (live) return landRunning(live, text, opts)
+
+  const decided = await withTargetLock(`max:${to}`, async (): Promise<{ name: string } | { live: SessionInfo } | DeliverOutcome> => {
+    const now = names.map(liveNamed).find(Boolean)
+    if (now) return { live: now }
+    if (s) {
+      const prefixes = [to, ...s.was].map(id => `${id}_`)
+      const live = [...registry.values()].filter(i => prefixes.some(p => i.tmuxName.startsWith(p)) && occupied(occupancy(i))).map(i => i.tmuxName)
+      const pending = [...(reserved.get(to)?.keys() ?? [])].filter(n => n !== names[0] && !live.includes(n))
+      const n = new Set(live).size + pending.length
+      if (n >= s.max) {
+        return { ok: false, exit: 5, atMax: true, reason: `${to} already runs ${n} conversation session${n === 1 ? '' : 's'} (max ${s.max}); ${conversation} waits for one to end${s.idleMs ? '' : ', and none ends on its own: give the specialist an idle'}` }
+      }
+    }
+    reserve(to, names[0], 1)
+    return { name: names[0] }
+  })
+  if ('ok' in decided) return decided
+  if ('live' in decided) return landRunning(decided.live, text, opts)
+  try {
+    return await toSpecialist(decided.name, text, opts, recipe)
+  } finally {
+    reserve(to, decided.name, -1)
+  }
+}
+
 /** A specialist always queues: whoever is home (or is filled now, by the rule) gets it once its bridge is up. */
 async function toSpecialist(name: string, text: string, opts: DeliverOpts, unstored?: Specialist): Promise<DeliverOutcome> {
   const { info, spawned } = await ensureSpecialist(name, opts.initiator, unstored)
@@ -222,14 +311,6 @@ async function toSpecialist(name: string, text: string, opts: DeliverOpts, unsto
 function occupantOf(threadId: string): SessionInfo | undefined {
   const id = registry.getByThread(threadId)
   return id ? registry.get(id) : undefined
-}
-
-function recipeSpecialist(r: Recipe): Specialist {
-  // Its thread is wherever a session of this name last lived (ensureSpecialist looks it up under the lock).
-  return {
-    channel: r.channel, ...(r.kickoff && { kickoff: r.kickoff }), ...(r.kickoffFile && { kickoffFile: r.kickoffFile }), ...(r.model && { model: r.model }),
-    ...(r.idle && { idle: r.idle }), updatedAt: 0,
-  }
 }
 
 async function spawnFresh(r: Recipe, initiator: string): Promise<SessionInfo> {

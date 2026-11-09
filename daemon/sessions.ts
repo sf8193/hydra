@@ -4,6 +4,7 @@ import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
+import { emit } from './event-bus.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import { SESSION_CATALOG, SESSION_NAMES } from '../shared/session-catalog.js'
@@ -745,9 +746,11 @@ export const threadRegistry = new ThreadRegistry()
 
 /** The one writer of a death: `deadAt` on the record and `endedAt` on its history entry, together. Keeps the first stamp. */
 export function markDead(info: SessionInfo, at = Date.now()): void {
+  const fresh = info.deadAt === undefined
   info.deadAt ??= at
   registry.persist()
   threadRegistry.closeHistoryEntry(info.threadId, info)
+  if (fresh) emit('session:marked-dead', { sessionId: info.sessionId, tmuxName: info.tmuxName })
 }
 
 // ---------------------------------------------------------------------------

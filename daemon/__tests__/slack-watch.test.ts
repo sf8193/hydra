@@ -951,6 +951,42 @@ allow = ["anyone"]
     expect(new Set(s.sent.map(x => x.specialist))).toEqual(new Set(['food']))
   })
 
+  test('a conversation waiting for a session (its specialist at max) stays owed past a day, alerted once, until its turn', async () => {
+    let wait = true
+    const s = setup({ toml: TWO() }, to => wait ? { ok: false, error: `${to} already runs 2 conversation sessions (max 2)`, wait: true } : { ok: true })
+    s.w.handle(ev({ ts: '1000.000001', text: mention })) // 1970: far older than a day
+    s.w.handle(ev({ ts: '1001.000001', threadTs: '1000.000001', text: 'more' }))
+    await s.w.flush()
+    s.w.handle(ev({ ts: '1002.000001', threadTs: '1000.000001', text: 'more' }))
+    await s.w.flush()
+    expect(s.w.get(CH, '1000.000001')!.waitingSince).toBe(s.now())
+    s.w.sweep()
+    expect(s.w.owedHints()).toHaveLength(1)
+    expect(s.w.stats().dropped).toEqual({})
+    expect(s.alerts).toEqual(['⏳ food already runs 2 conversation sessions (max 2). Its messages stay owed until then.']) // once an hour while it lasts
+    wait = false
+    s.w.handle(ev({ ts: '1000.000001', text: mention })) // catch-up replays what is owed
+    for (const ts of ['1001.000001', '1002.000001']) s.w.handle(ev({ ts, threadTs: '1000.000001', text: 'more' }))
+    await s.w.flush()
+    expect(s.w.owedHints()).toEqual([])
+    expect(s.w.get(CH, '1000.000001')!.waitingSince).toBeUndefined()
+  })
+
+  test('a wait has an end: past three days the messages are dropped, alerted, and the queue moves on', async () => {
+    const s = setup({ toml: TWO() }, to => ({ ok: false, error: `${to} at max`, wait: true }))
+    const T = `${Math.floor(s.now() / 1000)}.000001`
+    s.w.handle(ev({ ts: T, text: mention }))
+    await s.w.flush()
+    s.tick(2 * 86_400_000)
+    s.w.sweep()
+    expect(s.w.owedHints()).toHaveLength(1) // two days: still waiting, past the usual day
+    s.tick(1.5 * 86_400_000)
+    s.w.sweep()
+    expect(s.w.owedHints()).toEqual([])
+    expect(s.alerts.join()).toContain('waited 3 days for a session of its own')
+    expect(s.w.get(CH, T)!.waitingSince).toBeUndefined()
+  })
+
   test('a binding hydra.toml has no session record for (exit 8) keeps the message owed and alerts once', async () => {
     const s = setup({}, to => ({ ok: false, error: `no such specialist: ${to}`, exit: 8 }))
     s.w.handle(ev({ ts: '1.000001', text: mention }))
