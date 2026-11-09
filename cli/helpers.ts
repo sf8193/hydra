@@ -32,7 +32,7 @@ export type HydraConfig = {
   socketTimeout: number
 }
 
-function readEnvFileValue(path: string, key: string): string | undefined {
+export function readEnvFileValue(path: string, key: string): string | undefined {
   try {
     for (const line of readFileSync(path, 'utf8').split('\n')) {
       const parsed = parseEnvLine(line)

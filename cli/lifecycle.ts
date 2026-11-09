@@ -579,6 +579,11 @@ export async function lifecyclePreflight(platform: string): Promise<void> {
 // install (generates + loads launchd plist)
 // ---------------------------------------------------------------------------
 
+/** The platform's watchdog is loaded in launchd, so it may start the daemon at its next tick. */
+export function watchdogLoaded(platform: string): boolean {
+  try { execFileSync('launchctl', ['list', plistLabel(platform)], { stdio: 'pipe' }); return true } catch { return false }
+}
+
 function plistLabel(platform: string): string {
   return `com.hydra.watchdog.${platform}`
 }
