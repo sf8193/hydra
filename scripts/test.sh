@@ -5,7 +5,8 @@
 # without it. Arguments pass through: scripts/test.sh --isolate daemon/__tests__/x.test.ts
 dir=$(mktemp -d "${TMPDIR:-/tmp}/hydra-tmux-XXXXXX") || exit 1
 unset TMUX
-TMUX_TMPDIR=$dir bun test "$@"
+# HYDRA_NO_LAUNCHD: no test, nor any CLI a test spawns, may register with the real launchd (cli/jobs.ts launchdIO).
+TMUX_TMPDIR=$dir HYDRA_NO_LAUNCHD=1 bun test "$@"
 status=$?
 tmux -S "$dir/tmux-$(id -u)/default" kill-server 2>/dev/null
 rm -rf "$dir"

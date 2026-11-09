@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { attemptIO, jobsIO, jobsLaunchdRun, jobsList, launchdIO, parseJobs, runIO, syncLaunchd } from '../jobs.js'
-import { launchdCalendar, launchdPlist, stableBun } from '../../shared/jobs-launchd.js'
+import { LAUNCH_AGENTS_DIR, launchdCalendar, launchdPlist, stableBun } from '../../shared/jobs-launchd.js'
 import { daemonFile, externalFile } from '../../shared/jobs.js'
 
 describe('a cron schedule as a launchd calendar', () => {
@@ -198,4 +198,33 @@ describe('jobs list shows the runner', () => {
       expect(lines[b + 1]).toBe('  owed: 1 launchd result, waiting for the daemon to deliver')
     } finally { console.log = log; rmSync(dir, { recursive: true }) }
   })
+})
+
+describe('the test runner never reaches the real launchd', () => {
+  // scripts/test.sh sets HYDRA_NO_LAUNCHD=1 before bun starts, so it holds here and in every CLI a test spawns.
+  test('the real launchdIO, under HYDRA_NO_LAUNCHD: no launchctl, no legacy removal, no write into LaunchAgents', async () => {
+    expect(process.env.HYDRA_NO_LAUNCHD).toBe('1')
+    expect(launchdIO.launchctl(['bootstrap', 'gui/0', '/nonexistent/com.hydra.job.test.never.plist'])).toEqual({ code: 1, err: 'launchd is off in this process (HYDRA_NO_LAUNCHD)' })
+    await expect(launchdIO.removeLegacy('hydra-job-test-never')).rejects.toThrow('HYDRA_NO_LAUNCHD')
+    const real = join(LAUNCH_AGENTS_DIR, 'com.hydra.job.test.never.plist')
+    try {
+      launchdIO.write(real, '<plist/>')
+      expect(existsSync(real)).toBe(false)
+    } finally { rmSync(real, { force: true }) }
+  })
+
+  test('a real `jobs sync` on what the CLI takes for the live state dir registers nothing, and says so', async () => {
+    // HOME is scratch, so the state dir *is* the live one and every guard above launchdIO passes.
+    const home = mkdtempSync(join(tmpdir(), 'jobs-nolaunchd-'))
+    const state = join(home, '.claude', 'channels', 'test')
+    mkdirSync(state, { recursive: true })
+    writeFileSync(join(state, 'jobs.toml'), '[a]\nschedule="0 6 * * *"\ncheck="c.sh"\nmode="none"\n')
+    try {
+      const p = Bun.spawn([process.execPath, join(import.meta.dir, '..', 'hydra.ts'), '--state-dir', state, 'jobs', 'sync', 'test'],
+        { env: { ...process.env, HOME: home }, stdout: 'pipe', stderr: 'pipe' })
+      const out = await new Response(p.stdout).text() + await new Response(p.stderr).text()
+      expect(await p.exited).toBe(1)
+      expect(out).toContain('launchd: a: registering failed: launchd is off in this process (HYDRA_NO_LAUNCHD)')
+    } finally { rmSync(home, { recursive: true }) }
+  }, 15_000)
 })

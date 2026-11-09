@@ -14,6 +14,7 @@ import { dirname, join, resolve } from 'path'
 import { MAX_DELIVER_IDEMPOTENCY_TTL_MS, platformStateDir } from '../shared/constants.js'
 import { LAUNCHD_PATH, LAUNCH_AGENTS_DIR, jobAgentLabel, plistEntry, launchdCalendar, launchdPlist, legacyTitles, parseLegacyTitle, runnerJobs, stableBun } from '../shared/jobs-launchd.js'
 import { resolveConfig, sendRequest } from './helpers.js'
+import { isUnder } from '../shared/path-containment.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
@@ -520,17 +521,25 @@ export async function jobsSync(platform: string, stateDirOverride?: string): Pro
   return code
 }
 
+// The test runner sets HYDRA_NO_LAUNCHD=1 (scripts/test.sh): then nothing here reaches the real launchd or
+// LaunchAgents, whatever guard above it a test or a mutation breaks. Read at each call, so it holds in any process.
+const LAUNCHD_OFF = 'launchd is off in this process (HYDRA_NO_LAUNCHD)'
+const launchdOff = () => process.env.HYDRA_NO_LAUNCHD === '1'
+const realAgent = (path: string) => isUnder(path, LAUNCH_AGENTS_DIR)
+
 /** Everything `jobs sync` does to launchd, so tests never touch the real LaunchAgents. */
 export const launchdIO = {
   agentsDir: LAUNCH_AGENTS_DIR,
   read: (path: string): string | null => { try { return readFileSync(path, 'utf8') } catch { return null } },
-  write: (path: string, text: string) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) },
-  remove: (path: string) => { rmSync(path, { force: true }) },
+  // Off, a real agent is never written; the bootstrap after it is refused, so sync reports the job as not registered.
+  write: (path: string, text: string) => { if (!(launchdOff() && realAgent(path))) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) } },
+  remove: (path: string) => { if (!(launchdOff() && realAgent(path))) rmSync(path, { force: true }) },
   launchctl: (args: string[]): { code: number; err: string } => {
+    if (launchdOff()) return { code: 1, err: LAUNCHD_OFF }
     const r = spawnSync('launchctl', args, { encoding: 'utf8' })
     return { code: r.status ?? 1, err: (r.stderr || r.error?.message || '').trim() }
   },
-  removeLegacy: (title: string) => Bun.cron.remove(title),
+  removeLegacy: (title: string) => launchdOff() ? Promise.reject(new Error(LAUNCHD_OFF)) : Bun.cron.remove(title),
   uid: () => process.getuid?.() ?? 0,
   bun: () => stableBun(),
 }
