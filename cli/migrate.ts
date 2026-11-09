@@ -4,6 +4,7 @@ import { connect } from 'net'
 import { homedir } from 'os'
 import { basename, join } from 'path'
 import { readEnvFileValue, resolveConfig } from './helpers.js'
+import { watchdogLoaded } from './lifecycle.js'
 import { applyMigrate, finishMigrate, MIGRATE_JOURNAL, planMigrate } from '../config/migrate.js'
 import { formatIssues, systemEnv } from '../config/load.js'
 import { SESSION_NAMES } from '../shared/session-catalog.js'
@@ -38,6 +39,12 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
 
   if (!opts.dryRun && await daemonListening(stateDir)) {
     console.error(`error: the daemon for ${stateDir} is running. Stop it first (hydra down ${platform}), run hydra migrate, then hydra up ${platform}.`)
+    console.error('nothing was written')
+    return 1
+  }
+  // A crashed daemon leaves no socket, but its watchdog would start it again mid-migration.
+  if (!opts.dryRun && stateDir === cfg.stateDir && watchdogLoaded(platform)) {
+    console.error(`error: the ${platform} watchdog is loaded and could start the daemon mid-migration. Run hydra down ${platform} first, then hydra migrate, then hydra up ${platform}.`)
     console.error('nothing was written')
     return 1
   }

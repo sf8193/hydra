@@ -39,7 +39,7 @@ export type MigrateOutput = {
 
 export type MigrateStep = {
   name: string
-  /** Old state this step would migrate is still here. Boot refuses when hydra.toml is non-empty and any step is pending. */
+  /** Old state this step would migrate is still here. (The boot check uses it: hydra.toml beside pending old state.) */
   pending(stateDir: string): boolean
   run(input: MigrateInput): MigrateOutput | undefined
 }
@@ -79,7 +79,8 @@ export const accessStep: MigrateStep = {
     })
     // Never write a hydra.toml with no operator: allowFrom would be gone and nobody would pass admin checks.
     if (!operator) throw new Error(`no allowFrom id is a ${platform} user id (${found.allowFrom.join(', ')}); is this a ${platform} state dir?`)
-    notes.unshift(`allowFrom's first id is the operator, as people.operator; rename the id if you like (and update operator =).`)
+    const chosen = (people.operator as { ids: string[] }).ids[0]
+    notes.unshift(`${chosen} is the operator, as people.operator (the first ${platform} id in allowFrom); rename the id if you like, and update operator = to match.`)
     // B1 retires only allowFrom: the rest of access.json (DM policy, groups, pending codes) stays until places replace it.
     const { allowFrom: _gone, ...rest } = found.raw
     return {
@@ -325,7 +326,10 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
   for (const f of consumed) writes[`${f}.migrated`] ??= readFileSync(join(input.stateDir, f), 'utf8')
   // A backup already here is fine when it's this same content (a rerun after an interruption); never overwrite another.
   const clash = Object.entries(writes).filter(([f, content]) => f.endsWith('.migrated') && existsSync(join(input.stateDir, f)) && readFileSync(join(input.stateDir, f), 'utf8') !== content).map(([f]) => f)
-  if (clash.length) return { ok: false, errors: [`${clash.join(', ')} already exists with other content; move it aside first`] }
+  if (clash.length) {
+    const at = (f: string) => join(input.stateDir, f)
+    return { ok: false, errors: [`${clash.join(', ')} already exists with other content (a previous run, or the originals changed since one staged). To start over: mv ${clash.map(f => `'${at(f)}' '${at(f)}.old'`).join(' && mv ')} && rm -f '${input.stateDir}'/*${STAGED}, then run hydra migrate again.`] }
+  }
   return { ok: true, text, warnings: loaded.warnings, notes: [...outputs.flatMap(o => o.notes), ...merged.notes], consumed, writes }
 }
 

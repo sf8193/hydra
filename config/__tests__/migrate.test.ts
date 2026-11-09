@@ -122,6 +122,19 @@ describe('hydra migrate: found in review', () => {
     expect(finishMigrate(dir)).toBe(false)
   })
 
+  test('the operator note names the id chosen, not allowFrom\'s first', () => {
+    const plan = planMigrate(state({ 'access.json': { allowFrom: ['U0XYZ', '222'] } }))
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    expect(plan.notes[0]).toStartWith('discord:222 is the operator')
+  })
+
+  test('a clashing backup says exactly how to start over', () => {
+    const input = state({ 'access.json': ACCESS, 'access.json.migrated': '{"older":true}' })
+    const plan = planMigrate(input)
+    expect(plan.ok).toBe(false)
+    if (!plan.ok) expect(plan.errors[0]).toContain(`mv '${join(dir, 'access.json.migrated')}' '${join(dir, 'access.json.migrated')}.old'`)
+  })
+
   test('state files are written 0600, as the daemon writes them', () => {
     const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
     applyMigrate(dir, okPlan(input))
