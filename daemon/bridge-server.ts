@@ -9,7 +9,7 @@ import { executeTool } from './bridge-dispatch.js'
 import { BRIDGE_SHUTDOWN_GRACE_MS, spawnModel } from '../shared/constants.js'
 import { pendingPermissions } from './permission.js'
 import { discoverClaudeSessionId, killSession } from './session-lifecycle.js'
-import { loadAccess } from './access.js'
+import { loadAccess, operatorIds } from './access.js'
 import { dispatchReconnect, dispatchSessionReply, dispatchDisconnect } from './protocol-registry.js'
 import { getToolsForSession, isToolAllowed } from './tool-surface.js'
 import { getProtocolContext } from './protocol-runner.js'
@@ -400,14 +400,14 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         { id: `perm:allow:${request_id}`, label: 'Allow', style: 'success', emoji: '✅' },
         { id: `perm:deny:${request_id}`, label: 'Deny', style: 'danger', emoji: '❌' },
       ]
-      // Post buttons in the session's thread (if it's a spawned session), otherwise DM allowFrom users
+      // Post buttons in the session's thread (if it's a spawned session), otherwise DM the operator
       const permInfo = sessionId !== 'main' ? registry.get(sessionId) : undefined
       if (permInfo) {
         void gateway.send(permInfo.threadId, text, { buttons }).catch(e => {
           process.stderr.write(`daemon: permission_request send to thread ${permInfo.threadId} failed: ${e}\n`)
         })
       } else {
-        for (const userId of access.allowFrom) {
+        for (const userId of operatorIds(access)) {
           void gateway.sendDM(userId, text, buttons).catch(e => {
             process.stderr.write(`daemon: permission_request send to ${userId} failed: ${e}\n`)
           })

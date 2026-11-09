@@ -208,9 +208,9 @@ export class SlackGateway implements ChatGateway {
     // Publish Home tab when user opens it
     this.app.event('app_home_opened' as any, async ({ event }: any) => {
       this.touchHeartbeat()
-      const { loadAccess } = await import('./daemon/access.js')
+      const { loadAccess, operatorIds } = await import('./daemon/access.js')
       const access = loadAccess()
-      if (!access.allowFrom.includes(event.user)) return
+      if (!operatorIds(access).includes(event.user)) return
       if (this.homeTabHandler) {
         this.homeTabHandler(event.user).catch((e: Error) =>
           process.stderr.write(`slack gateway: app_home_opened handler error: ${e}\n`),
@@ -222,8 +222,8 @@ export class SlackGateway implements ChatGateway {
       this.touchHeartbeat()
       await ack()
       if (!action?.value || !this.homeStatusHandler) return
-      const { loadAccess } = await import('./daemon/access.js')
-      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, loadAccess().allowFrom)
+      const { loadAccess, operatorIds } = await import('./daemon/access.js')
+      const click = parseHomeStatusClick(String(action.action_id), action.value, body?.user?.id, operatorIds(loadAccess()))
       if (!click) {
         process.stderr.write(`slack gateway: home status action rejected for user ${body?.user?.id ?? '(none)'}\n`)
         return
@@ -238,10 +238,10 @@ export class SlackGateway implements ChatGateway {
       await ack()
       const userId = body?.user?.id
       if (!userId) return
-      const { loadAccess } = await import('./daemon/access.js')
+      const { loadAccess, operatorIds } = await import('./daemon/access.js')
       const access = loadAccess()
-      if (!access.allowFrom.includes(userId)) {
-        process.stderr.write(`slack gateway: home:spawn rejected — user ${userId} not in allowFrom\n`)
+      if (!operatorIds(access).includes(userId)) {
+        process.stderr.write(`slack gateway: home:spawn rejected — user ${userId} is not the operator\n`)
         return
       }
       const topic = (action?.value?.trim() ?? '').slice(0, 500)

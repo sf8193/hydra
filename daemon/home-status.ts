@@ -62,8 +62,8 @@ export function homeRecoverable(sessionType: string, stuck: BlockingState | null
   return daemonWarm && !stuck && sessionType !== 'thread_guest'
 }
 
-export function parseHomeStatusClick(actionId: string, value: string | undefined, userId: string | undefined, allowFrom: string[]): { sessionId: string; shown: string } | null {
-  if (!value || !userId || !allowFrom.includes(userId) || !actionId.startsWith(HOME_STATUS_ACTION_PREFIX)) return null
+export function parseHomeStatusClick(actionId: string, value: string | undefined, userId: string | undefined, operator: string[]): { sessionId: string; shown: string } | null {
+  if (!value || !userId || !operator.includes(userId) || !actionId.startsWith(HOME_STATUS_ACTION_PREFIX)) return null
   return { sessionId: actionId.slice(HOME_STATUS_ACTION_PREFIX.length), shown: value }
 }
 

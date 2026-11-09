@@ -16,19 +16,37 @@ let watch: HydraConfigWatch | undefined
 let override: HydraConfig | undefined
 const listeners = new Set<(config: HydraConfig) => void>()
 
+type Send = (text: string) => Promise<boolean>
+let send: Send | undefined
+/** The latest alert not yet delivered. At boot the gateway isn't connected, so the first try can fail; a newer alert
+ * replaces it, and a good load clears it, so a stale "didn't load" is never sent. */
+let undelivered: string | undefined
+
+async function deliver(): Promise<void> {
+  const text = undelivered
+  if (!text || !send) return
+  if (await send(text).catch(() => false)) { if (undelivered === text) undelivered = undefined }
+}
+
+/** Sends the alert that couldn't be delivered, if any. The daemon calls it once the gateway is up. */
+export function retryHydraConfigAlert(): Promise<void> {
+  return deliver()
+}
 
 /**
- * Starts the watch once; later calls return the first result. `alert` hears each failed load (the daemon DMs the
- * operator; passed in, since access.ts reads this module). Every alert and warning is logged too.
+ * Starts the watch once; later calls return the first result. `alert` sends each failed load to the operator and
+ * says whether it was delivered (passed in, since access.ts reads this module). Every alert and warning is logged too.
  */
-export function startHydraConfig(opts: { alert?: (text: string) => void; env?: LoadEnv; intervalMs?: number } = {}): LoadResult {
+export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs?: number } = {}): LoadResult {
   if (watch) return watch.initial
+  send = opts.alert
   watch = watchHydraConfig({
     path: hydraConfigPath(),
     env: opts.env ?? systemEnv(SESSION_NAMES),
     intervalMs: opts.intervalMs,
-    onAlert: text => { process.stderr.write(`daemon: ${text}\n`); opts.alert?.(text) },
+    onAlert: text => { process.stderr.write(`daemon: ${text}\n`); undelivered = text; void deliver() },
     onLoad: (config, warnings) => {
+      undelivered = undefined
       if (warnings.length) process.stderr.write(`daemon: hydra.toml loaded with warnings:\n${formatIssues(warnings)}\n`)
       notify(config)
     },
@@ -37,6 +55,8 @@ export function startHydraConfig(opts: { alert?: (text: string) => void; env?: L
 }
 
 export function stopHydraConfig(): void {
+  undelivered = undefined
+  send = undefined
   watch?.stop()
   watch = undefined
 }

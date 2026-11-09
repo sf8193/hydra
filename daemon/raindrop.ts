@@ -4,7 +4,7 @@ import { occupancy, occupied } from './session-reachability.js'
 import { join, basename, resolve, sep } from 'path'
 import { homedir } from 'os'
 import { STATE_DIR, PLATFORM, RAINDROP_ENV, RAINDROP_DRYRUN_FILE } from './config.js'
-import { loadAccess } from './access.js'
+import { loadAccess, operatorIds } from './access.js'
 import { registry } from './sessions.js'
 import { on } from './event-bus.js'
 import { byteTmuxName, sentimentForReaction } from '../shared/constants.js'
@@ -329,7 +329,7 @@ export function defaultLiveSessionIds(): string[] {
 }
 
 export function defaultAllowedUsers(): Set<string> {
-  try { return new Set(loadAccess().allowFrom ?? []) } catch { return new Set() }
+  try { return new Set(operatorIds(loadAccess())) } catch { return new Set() }
 }
 
 export function defaultGroupChannels(): Set<string> {

@@ -6,7 +6,7 @@ import { gateway, PLATFORM } from './config.js'
 import { registry, threadRegistry, sessionEmoji, type SessionInfo } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { formatDuration } from './util.js'
-import { loadAccess } from './access.js'
+import { loadAccess, operatorIds } from './access.js'
 import { getWatchesBySession, type WatchEntry } from './pr-watch.js'
 import { assembleContextLines } from './artifacts.js'
 import { sessionLiveAsync } from './session-activity.js'
@@ -237,7 +237,7 @@ function buildHomeBlocks(sessions: SessionRow[], recent: RecentRow[] = []): any[
 
 function homeTabUser(): string | null {
   if (PLATFORM !== 'slack' || !('publishHomeTab' in gateway)) return null
-  return loadAccess().allowFrom[0] ?? null
+  return operatorIds(loadAccess())[0] ?? null
 }
 
 let publishedStatuses = ''
