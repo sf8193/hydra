@@ -1517,6 +1517,33 @@ describe('launchd-runner jobs: launchd triggers, the daemon delivers', () => {
     expect(existsSync(externalFile(w.dir, 'sweep', new Date('2026-11-04T06:05:00-08:00').toISOString()))).toBe(false)
   })
 
+  test("a waiting result delivered after a move to the daemon covers its own slot, not the ones after it", async () => {
+    const hourly = LD.replace('0 6 * * *', '0 * * * *')
+    leave('scan', '2026-11-04T10:00:00-08:00', '2026-11-04 10:00', { result: 'done', output: 'CVE-1' })
+    toml(hourly.replace('runner = "launchd"', 'runner = "daemon"'))
+    at('2026-11-04T11:30:00-08:00')
+    const c = clock(); await c.tick()
+    expect(w.spawns[0].args).toContain('--external')                               // 10:00's output, delivered
+    finish('scan', 1, 'done', undefined, 1000)
+    for (const t of ['11:31', '11:32']) { at(`2026-11-04T${t}:00-08:00`); await c.tick() }
+    expect(state('scan').covered?.slot).not.toBe('2026-11-04 11:00')
+    expect(w.spawns).toHaveLength(2)                                                // 11:00 still runs its own check
+    expect(w.spawns[1].args).not.toContain('--external')
+  })
+
+  test('a manual run that ends as a launchd result waits: its outcome stands for a tick, so `jobs run` can read it', async () => {
+    toml(LD_NONE)
+    at('2026-11-04T06:04:00-08:00')
+    const c = clock(); await c.tick()
+    expect(c.requestRun('sweep').ok).toBe(true)
+    leave('sweep', '2026-11-04T06:05:00-08:00', '2026-11-04 06:05', { result: 'failed', note: 'launchd: disk' })
+    finish('sweep', 1, 'done', 'manual', 1000)
+    at('2026-11-04T06:05:40-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ dispatch: 1, result: 'done', note: 'manual' })
+    at('2026-11-04T06:06:40-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'failed', note: 'launchd: disk' })   // applied a tick later
+  })
+
   test("a job gone from the file: its waiting result is dropped, and says so", async () => {
     toml(LD_NONE)
     leave('gone', SLOT, '2026-11-04 06:00', { result: 'done', output: 'x' })

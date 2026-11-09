@@ -64,6 +64,9 @@ type Recorded = Outcome & { at: string; dispatch?: number }
 /** The slot an outcome is for: scheduled (it serves the slot) or manual (run now; its success covers the latest slot). */
 type Target = { kind: Dispatch['kind']; slot: string; at: string }
 
+/** A dispatch covers slots up to when its work ran: a daemon run, now; a delivered launchd result, at its own slot. */
+const coveredAt = (d: Dispatch) => d.external ?? d.at
+
 export class JobsClock {
   private lockFd: number | null = null
   private cancel: (() => void) | null = null
@@ -77,6 +80,8 @@ export class JobsClock {
   private lastHealthAt: number | null = null
   private wokeAt: number
   private readonly strayLogged = new Set<string>()
+  /** Jobs whose manual run ended this tick: `jobs run` is polling for its outcome, so a waiting launchd result keeps. */
+  private readonly manualEnded = new Set<string>()
 
   constructor(private readonly d: ClockDeps) {
     this.startedAt = d.now()
@@ -422,6 +427,7 @@ export class JobsClock {
     const names = new Set<string>(cfg.jobs.map(j => j.name))
     // A job dropped from jobs.toml can still have a dispatch running: settle it too.
     try { for (const f of readdirSync(jobsDir(this.d.stateDir))) { const m = /^([a-z0-9][a-z0-9-]*)\.state\.json$/.exec(f); if (m) names.add(m[1]) } } catch {}
+    this.manualEnded.clear()
     for (const name of names) { if (this.stopped) return; await this.settle(name, jobs.get(name)) }
     // Every job in the file: one that just moved from launchd to the daemon still has its waiting result applied, so
     // its check doesn't run that slot again.
@@ -449,6 +455,7 @@ export class JobsClock {
    * a replay, and is dropped. While the daemon is down, results wait: they are owed until applied.
    */
   private applyExternal(job: Job): void {
+    if (this.manualEnded.has(job.name)) return
     for (const slotAt of externalResults(this.d.stateDir, job.name)) {
       const st = this.ensureState(job, this.d.now())
       if (!st || st.dispatch) return
@@ -537,12 +544,13 @@ export class JobsClock {
   private apply(name: string, job: Job | undefined, d: Dispatch, res: AttemptResult): void {
     const applied = this.update(name, job?.schedule, s => {
       if (res.dispatch <= (s.appliedDispatch ?? 0)) return
-      applyOutcome(s, { ...res, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: d.at })
+      applyOutcome(s, { ...res, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: coveredAt(d) })
       if (s.dispatch?.id === d.id) delete s.dispatch
       s.appliedDispatch = d.id
       if (d.external && res.result !== 'not-now') s.appliedExternal = d.external
     })
     if (!applied) return   // state went unreadable: keep the result for the tick after the reset
+    if (d.kind === 'manual') this.manualEnded.add(name)
     try { unlinkSync(resultFile(this.d.stateDir, name, d.id, d.nonce)) } catch {}
     // A delivery that was "not now" (the daemon restarting under it, a key still pending) leaves the result owed.
     if (d.external && res.result !== 'not-now') try { unlinkSync(externalFile(this.d.stateDir, name, d.external)) } catch {}
@@ -554,12 +562,13 @@ export class JobsClock {
     const at = this.d.now().toISOString()
     this.update(name, job?.schedule, s => {
       if (s.dispatch?.id !== d.id) return
-      applyOutcome(s, { at, result: 'failed', note, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: d.at })
+      applyOutcome(s, { at, result: 'failed', note, dispatch: d.id }, { kind: d.kind, slot: d.slot, at: coveredAt(d) })
       delete s.dispatch
       s.appliedDispatch = d.id
       if (d.external) s.appliedExternal = d.external   // launchd jobs aren't retried: a lost delivery is that slot's failure
     })
     if (d.external) try { unlinkSync(externalFile(this.d.stateDir, name, d.external)) } catch {}
+    if (d.kind === 'manual') this.manualEnded.add(name)
     this.d.log(`jobs: ${name}: dispatch ${d.id} ${note}`)
   }
 
