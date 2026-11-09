@@ -240,6 +240,21 @@ test('handoffSpawnOpts carries the predecessor\'s claude session id, and none fo
   }
 })
 
+test('handoffSpawnOpts: the successor starts where its predecessor launched (a specialist\'s workdir), while that folder exists', async () => {
+  const { handoffSpawnOpts } = await import('../session-lifecycle.js')
+  mk('ho-7', 'flint', 'ho-thread-7')
+  try {
+    const info = registry.get('ho-7')!
+    expect(handoffSpawnOpts(info, '/h.md').cwd).toBeUndefined()
+    info.launchCwd = STATE_DIR
+    expect(handoffSpawnOpts(info, '/h.md').cwd).toBe(STATE_DIR)
+    info.launchCwd = join(STATE_DIR, 'gone')
+    expect(handoffSpawnOpts(info, '/h.md').cwd).toBeUndefined()
+  } finally {
+    registry.delete('ho-7')
+  }
+})
+
 test('arriving {{from_session}}: the predecessor\'s claude session id, empty when there is none (Codex)', async () => {
   const { handoffArrival } = await import('../session-lifecycle.js')
   const file = join(HANDOFF_TEMPLATE_DIR, 'arriving.md')

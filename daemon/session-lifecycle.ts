@@ -2,9 +2,9 @@ import { randomUUID } from 'crypto'
 import { execSync, execFileSync, spawn } from 'child_process'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, realpathSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join, resolve as resolvePath } from 'path'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
+import { safeSend, formatSpawnLine, tmuxHasSession, atomicWriteFileSync } from './util.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from './specialists.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
@@ -316,6 +316,9 @@ export function handoffSpawnOpts(info: SessionInfo, artifact: string): SpawnOpts
     // Its predecessor is the session it replaces (`predecessorOf`, above), never that session's own predecessor.
     carryOver: { ...carryOver(info), predecessor: undefined, disallowedTools: withoutReadOnly(info.disallowedTools) },
     ...(reuseWorktree && { preserveWorktree: true, reuseWorktree }),
+    // The successor starts where its predecessor launched (a specialist's workdir, a fork's source dir), while
+    // that folder is still there; a kept worktree wins.
+    ...(info.launchCwd && existsSync(info.launchCwd) && { cwd: info.launchCwd }),
   }
 }
 
@@ -692,6 +695,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 // ---------------------------------------------------------------------------
 
 export async function doSpawnSession(topic: string, chatId?: string, messageId?: string, opts?: SpawnOpts): Promise<SpawnResult> {
+  // Before a thread is opened: a working dir that has gone away fails the spawn without leaving an empty thread.
+  if (opts?.cwd && !existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
   let threadId: string | undefined
   let anchorMessageId: string | undefined
   let anchorChannelId: string | undefined
@@ -963,11 +968,14 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     // Pre-approve Claude trust for the worktree paths (Claude-specific, not git)
     preApproveClaudeTrust([wt.worktreePath, wt.repoDir], 'worktree paths')
   } else if (opts?.cwd) {
-    // A specialist's workdir. Checked here too, not only at load: the folder can go away after hydra.toml loaded.
-    if (!existsSync(opts.cwd)) throw new Error(`working directory ${opts.cwd} does not exist`)
+    // A specialist's workdir (checked at the top too: the folder can go away after hydra.toml loaded). It is also
+    // the launch dir, recorded on the session, so a resume or fork of it starts here, where its transcript is filed.
     effectiveCwd = opts.cwd
+    launchCwd = opts.cwd
     // The operator chose this folder in hydra.toml; without this a first launch there waits on Claude's trust dialog.
-    preApproveClaudeTrust([opts.cwd], `workdir ${opts.cwd}`)
+    // Never a whole home folder or the disk: trusting those would cover everything (the loader warns about them).
+    const broad = [homedir(), '/'].map(p => resolvePath(p)).includes(resolvePath(opts.cwd))
+    if (!broad) preApproveClaudeTrust([opts.cwd], `workdir ${opts.cwd}`)
   }
 
   const promptParams = { sessionId, tmuxName, threadId: threadId!, topic, topicIsRequest: opts?.topicIsRequest }
@@ -1285,6 +1293,7 @@ export { discoverClaudeSessionId } from './engines/claude-engine.js'
  * For folders hydra chose (a worktree it made) or the operator declared (a specialist's workdir). Never fatal.
  */
 function preApproveClaudeTrust(paths: string[], what: string): void {
+  // Atomic: a running Claude reads this file too, and must never see half of it.
   const claudeJsonPath = join(CLAUDE_CONFIG, '.claude.json')
   try {
     const claudeJson = JSON.parse(readFileSync(claudeJsonPath, 'utf8'))
@@ -1310,7 +1319,7 @@ function preApproveClaudeTrust(paths: string[], what: string): void {
       }
     }
     if (changed) {
-      writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n')
+      atomicWriteFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n')
       process.stderr.write(`daemon: pre-approved trust for ${what}\n`)
     }
   } catch (err) {

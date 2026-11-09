@@ -3,7 +3,7 @@
 
 import { statSync, accessSync, constants as fsConstants } from 'fs'
 import { homedir } from 'os'
-import { isAbsolute, join } from 'path'
+import { isAbsolute, join, resolve } from 'path'
 import { parseCron } from '../shared/cron-local.js'
 import { parseIdleTtl } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
@@ -284,6 +284,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       workdir = expand(workdirRaw)
       if (!isAbsolute(workdir)) error(at('workdir'), `"${workdirRaw}" must be an absolute path or start with ~`)
       else if (!env.isDir(workdir)) error(at('workdir'), `${workdir} is not a folder`)
+      // Its sessions run there, where today's spawns run too (SPAWN_CWD), but hydra won't mark a whole home folder trusted.
+      else if (resolve(workdir) === resolve(env.home) || resolve(workdir) === '/') warn(at('workdir'), `${workdir} is ${resolve(workdir) === '/' ? 'the whole disk' : 'your whole home folder'}: its sessions can read everything there, and hydra won't pre-approve Claude's trust for it; give the specialist a folder of its own`)
     }
     const prompt = str(t, 'prompt', path)
     const promptFileRaw = str(t, 'prompt_file', path)

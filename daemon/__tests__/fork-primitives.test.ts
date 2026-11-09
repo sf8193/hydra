@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { gateway, STATE_DIR, CLAUDE_CONFIG } from '../config.js'
 import { doSpawnSession, handOff, handoffIO, predecessorOf } from '../session-lifecycle.js'
@@ -250,6 +250,32 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     } finally {
       rmSync(workdir, { recursive: true, force: true })
     }
+  })
+
+  test('a session started in a workdir records it as its launch dir, so its resume starts there too', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'fp-workdir-'))
+    try {
+      seedDead()
+      live().deadAt = Date.now()
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, cwd: workdir })
+      expect(live().launchCwd).toBe(workdir)
+      live().deadAt = Date.now()
+      const n = launches.length
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, resumeFrom: 'C-x' })
+      expect(launches[n]?.cwd).toBe(workdir)
+    } finally {
+      rmSync(workdir, { recursive: true, force: true })
+    }
+  })
+
+  test('a workdir that is the whole home folder is used but never marked trusted', async () => {
+    mkdirSync(CLAUDE_CONFIG, { recursive: true })
+    writeFileSync(join(CLAUDE_CONFIG, '.claude.json'), JSON.stringify({ projects: {} }))
+    seedDead()
+    live().deadAt = Date.now()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, cwd: homedir() })
+    expect(launches.at(-1)?.cwd).toBe(homedir())
+    expect(JSON.parse(readFileSync(join(CLAUDE_CONFIG, '.claude.json'), 'utf8')).projects[homedir()]).toBeUndefined()
   })
 
   test('recover: tier 2 (fork-from-dead) keeps the predecessor after tier 1 deleted the record', async () => {
