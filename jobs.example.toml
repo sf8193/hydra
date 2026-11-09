@@ -18,6 +18,13 @@
 # needs = ["internet"]    not now while offline (the captive-portal probe and the daemon's gateway both down)
 # `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it (runner = "daemon" only).
 #
+# cwd = "~/build"         the check's working dir (absolute, or ~/), so check = "./scripts/x.sh" works
+# env_file = "~/build/.env"  KEY=VALUE lines added to the check's environment, read at each run; not expanded.
+#                         A failing check's output is shown with these values (4+ characters) blanked out.
+#                         The check reads both with the daemon's macOS access: a path under ~/Documents, ~/Desktop
+#                         or ~/Downloads works only if the daemon's tmux server has access there
+#                         (docs/macos-permissions.md). `jobs list` warns about such paths.
+#
 # mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
 # mode = "main"   the prompt goes to the main session
 # mode = "none"   no agent: the check runs and the result is recorded
@@ -59,6 +66,14 @@ prompt = "Triage the scan output below. Report only new, reachable findings."
 schedule = "0 9 * * MON"
 mode = "main"
 prompt = "Summarize this week's security scan results for the user."
+
+[nightly-build]
+schedule = "0 2 * * *"
+check = "./scripts/nightly-check.sh"
+cwd = "~/build"
+env_file = "~/build/.env"
+mode = "main"
+prompt = "Last night's build failed. Find the cause and propose a fix."
 
 [log-cleanup]
 schedule = "0 1 * * *"

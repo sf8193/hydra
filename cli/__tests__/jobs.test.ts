@@ -1,14 +1,14 @@
 import { describe, test, expect, beforeEach, afterAll, afterEach } from 'bun:test'
 import { spawn } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, closeSync } from 'fs'
-import { tmpdir } from 'os'
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync, closeSync } from 'fs'
+import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 const real0 = { ...(await import('../jobs.js')).jobsIO }
 import {
   parseJobs, runWork, jobsIO, jobsAttempt, attemptIO, jobsRun, runIO, jobsList,
-  isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs, jobsLaunchdRun, syncLaunchd, launchdIO,
+  isPlatform, describeJob, jobsMarkDone, jobsSync, diffJobs, jobWarnings, jobsLaunchdRun, syncLaunchd, launchdIO,
 } from '../jobs.js'
-import { awakeTimeout, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
+import { awakeTimeout, parseEnvFile, tccFolder, externalFile, runnerLabel, resultFile, stateFile, writeAtomic, daemonFile, attemptArgv, parseAttemptArgs, parseAlertAfter, readJobState, runWaitMs, type AttemptArgs } from '../../shared/jobs.js'
 import { parseLegacyTitle } from '../../shared/jobs-launchd.js'
 
 const repo = join(import.meta.dir, '..', '..')
@@ -80,6 +80,10 @@ describe('parseJobs', () => {
     ['overlap, which is gone', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\noverlap="absorb"`, /overlap is gone: for one standing session that sees every run, use to = "<specialist>"/],
     ['alert_after over 30d', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"\nalert_after="31d"`, /at most 30d/],
     ['alert_after that is not a duration', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nrunner="daemon"\nalert_after="soon"`, /must be a duration/],
+    ['cwd on a job with no check', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\ncwd="/srv"`, /cwd applies to the check, and this job has none/],
+    ['env_file on a job with no check', `[a]\nschedule="0 6 * * *"\nmode="main"\nprompt="p"\nenv_file="/srv/.env"`, /env_file applies to the check/],
+    ['a relative cwd', `[a]\nschedule="0 6 * * *"\ncheck="c.sh"\nmode="none"\ncwd="build"`, /cwd must be an absolute path or start with ~\//],
+    ['a ~user env_file', `[a]\nschedule="0 6 * * *"\ncheck="c.sh"\nmode="none"\nenv_file="~bob/.env"`, /env_file must be an absolute path/],
   ]
   for (const [label, text, err] of bad) test(`rejects ${label}`, () => expect(() => parseJobs(text)).toThrow(err))
 
@@ -125,6 +129,12 @@ describe('parseJobs', () => {
     expect(ok.runner).toBe('launchd')                                                   // the rest of the file is untouched
   })
 
+  test('cwd and env_file parse to absolute paths, ~ expanded', () => {
+    const [j] = parseJobs(`[a]\nschedule="0 6 * * *"\ncheck="./c.sh"\nmode="none"\ncwd="~/build"\nenv_file="/srv/build/.env"`)
+    expect(j.cwd).toBe(join(homedir(), 'build'))
+    expect(j.envFile).toBe('/srv/build/.env')
+  })
+
   test('alert_after durations', () => {
     expect(parseAlertAfter('90m')).toBe(90 * 60_000)
     expect(parseAlertAfter('30d')).toBe(30 * 86_400_000)
@@ -156,6 +166,8 @@ describe('runWork', () => {
     Object.assign(jobsIO, {
       now: () => new Date('2026-10-25T10:00:00Z'),
       check: async () => checkResult,
+      openDir: () => {},
+      readFile: real0.readFile,
       hydra: async (a: string[]) => { expect(a.slice(0, 3)).toEqual(['--state-dir', dir, '--json']); calls.push(a.slice(3)); return { code: 0, err: '', out: reply(hydraCode) } },
     })
   })
@@ -266,6 +278,49 @@ describe('runWork', () => {
     const msg = calls[0][calls[0].length - 1]
     expect(Buffer.byteLength(msg)).toBeLessThan(9000)
     expect(msg).toContain('[truncated 507 chars; full output in ')
+  })
+
+  test('the check runs in cwd with env_file added to the environment, read at run time', async () => {
+    let seen: { cwd?: string; env?: Record<string, string | undefined> } = {}
+    jobsIO.check = async (_c: string, _t?: number, o = {}) => { seen = o; return checkResult }
+    jobsIO.readFile = (p: string) => { expect(p).toBe('/srv/b/.env'); return 'export TOKEN="abc"\n# note\n\nREGION=eu' }
+    const j = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\ncwd="/srv/b"\nenv_file="/srv/b/.env"`)[0]
+    expect(await runWork(j, dir, KEY)).toEqual({ result: 'nothing' })
+    expect(seen.cwd).toBe('/srv/b')
+    expect(seen.env).toMatchObject({ TOKEN: 'abc', REGION: 'eu', PATH: process.env.PATH })
+  })
+
+  test('a cwd or env_file macOS denies: failed, naming the folder and why (not "ended without a result")', async () => {
+    const eperm = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+    const docs = join(homedir(), 'Documents', 'b')
+    jobsIO.openDir = () => { throw eperm() }
+    const j = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\ncwd="${docs}"`)[0]
+    const w = await runWork(j, dir, KEY)
+    expect(w.result).toBe('failed')
+    expect(w.note).toContain(`cwd ${docs}: macOS denied access to ~/Documents (EPERM)`)
+    expect(w.note).toContain('docs/macos-permissions.md')
+    jobsIO.readFile = () => { throw eperm() }
+    const e = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\nenv_file="${docs}/.env"`)[0]
+    expect((await runWork(e, dir, KEY)).note).toContain('env_file')
+    expect(calls).toEqual([])
+  })
+
+  test("env_file values are kept out of a failed or not-now note; short ones aren't secrets", async () => {
+    jobsIO.readFile = () => 'TOKEN=sk-live-123456\nAPI=xyzw-9\nN=1'
+    const j = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\nenv_file="/srv/.env"`)[0]
+    checkResult = { code: 2, out: '', err: 'auth failed for sk-live-123456 (key xyzw-9), retry 1' }
+    expect((await runWork(j, dir, KEY)).note).toBe('check exited 2: auth failed for [env_file value] (key [env_file value]), retry 1')
+    checkResult = { code: 75, out: '', err: 'rate limited: sk-live-123456' }
+    expect((await runWork(j, dir, KEY)).note).toBe('check exited 75: rate limited: [env_file value]')
+  })
+
+  test('a malformed env_file: failed with the line; the check never runs', async () => {
+    let ran = false
+    jobsIO.check = async () => { ran = true; return checkResult }
+    jobsIO.readFile = () => 'GOOD=1\nnot a pair'
+    const e = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\nenv_file="/srv/.env"`)[0]
+    expect(await runWork(e, dir, KEY)).toEqual({ result: 'failed', note: 'env_file /srv/.env: line 2 is not KEY=VALUE' })
+    expect(ran).toBe(false)
   })
 
   test('model and idle_ttl pass through to spawn', async () => {
@@ -528,6 +583,29 @@ describe('awakeTimeout', () => {
   })
 })
 
+describe('cwd and env_file (real processes)', () => {
+  const real = { ...jobsIO }
+  const dir = mkdtempSync(join(tmpdir(), 'jobs-cwd-real-'))
+  afterAll(() => { Object.assign(jobsIO, real); rmSync(dir, { recursive: true }) })
+  beforeEach(() => Object.assign(jobsIO, real0))
+  const job = (extra: string) => parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="pwd; echo $JX"\nmode="none"\n${extra}`)[0]
+  test('a missing cwd, or a file given as cwd: failed, saying which', async () => {
+    writeFileSync(join(dir, 'f'), '')
+    expect(await runWork(job(`cwd="${dir}/nope"`), dir, 'k')).toEqual({ result: 'failed', note: `cwd ${dir}/nope: not found` })
+    expect(await runWork(job(`cwd="${dir}/f"`), dir, 'k')).toEqual({ result: 'failed', note: `cwd ${dir}/f: not a directory` })
+  })
+  test('an env_file too large to pass to a process (E2BIG): failed, the check could not start', async () => {
+    writeFileSync(join(dir, 'big.env'), `BIG=${'x'.repeat(2_000_000)}`)
+    expect(await runWork(job(`env_file="${dir}/big.env"`), dir, 'k')).toEqual({ result: 'failed', note: 'the check could not start: E2BIG' })
+  })
+
+  test("an env_file PATH that finds no sh still runs the check, in its cwd, with the file's values", async () => {
+    writeFileSync(join(dir, '.env'), 'PATH=$HOME/bin:$PATH\nJX=from-file')
+    const w = await runWork(job(`cwd="${dir}"\nenv_file="${dir}/.env"`), dir, 'k')
+    expect(w).toEqual({ result: 'done', note: `${realpathSync(dir)}\nfrom-file` })
+  })
+})
+
 describe('jobsIO (real subprocess)', () => {
   test('a finished check leaves no timer holding the process open', async () => {
     const start = Date.now()
@@ -546,6 +624,10 @@ describe('jobsIO (real subprocess)', () => {
     const saved = process.env.PATH
     process.env.PATH = `/opt/homebrew/bin:${saved}`
     try { expect((await check('echo $PATH')).out).toStartWith('/opt/homebrew/bin:') } finally { process.env.PATH = saved }
+  })
+  test('a real check starts in cwd and sees the env it is given', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'jobs-cwd-'))
+    try { expect((await check('pwd; echo $JOBS_X', 5000, { cwd: d, env: { ...process.env, JOBS_X: 'y' } })).out).toBe(`${realpathSync(d)}\ny\n`) } finally { rmSync(d, { recursive: true }) }
   })
   test('stdout and exit code come back', async () => {
     expect(await check('echo found; exit 0')).toMatchObject({ code: 0, out: 'found\n' })
@@ -830,6 +912,7 @@ describe('jobs sync (CLI)', () => {
     expect(diffJobs(after, after)).toEqual([])
     // Effective values: writing out the default runner is not a change in what runs.
     expect(diffJobs(parseJobs(A), parseJobs(A.replace('mode="none"', 'mode="none"\nrunner="launchd"')))).toEqual([])
+    expect(diffJobs(parseJobs(C), parseJobs(C + 'env_file="/x/.env"\n'))).toEqual(['changed: c (env_file)'])
   })
 
   test('the daemon loads it now: prints what changed against what it had, then each job', async () => {
@@ -896,6 +979,37 @@ describe('jobs sync (CLI)', () => {
       expect((await run())[0]).toBe(1)
     } finally { rmSync(dir, { recursive: true }) }
   }, 15_000)
+})
+
+describe('jobs list warnings', () => {
+  const at = (rel: string) => join(homedir(), rel)
+  test('a cwd or env_file under a folder macOS gates gets a warning naming the folder and the key; others none', () => {
+    const job = (cwd: string, env: string) => parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="c.sh"\nmode="none"\ncwd="${cwd}"\nenv_file="${env}"`)[0]
+    const w = jobWarnings(job(at('Documents/build'), at('Desktop/.env')))
+    expect(w).toHaveLength(2)
+    expect(w[0]).toStartWith('cwd is under ~/Documents:')
+    expect(w[0]).toContain('only if bun itself has access there')   // launchd (the default) runs the check as bun
+    const daemon = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="c.sh"\nmode="none"\nrunner="daemon"\ncwd="${at('Documents/build')}"`)[0]
+    expect(jobWarnings(daemon)[0]).toContain("only if the daemon's tmux server has access there")
+    expect(w[1]).toStartWith('env_file is under ~/Desktop:')
+    expect(jobWarnings(job(at('Code/build'), at('DocumentsArchive/.env')))).toEqual([])
+  })
+  test('tccFolder: only the gated folders themselves, under this home', () => {
+    expect(tccFolder(at('Downloads'))).toBe('~/Downloads')
+    expect(tccFolder(at('Documents/x/y'))).toBe('~/Documents')
+    expect(tccFolder('/Volumes/x/Documents/y')).toBeNull()
+    expect(tccFolder(at('Documentsx'))).toBeNull()
+    expect(tccFolder(at('documents/x'))).toBe('~/Documents')   // APFS is case-insensitive
+    const [raw] = parseJobs('[b]\nschedule="0 2 * * *"\ncheck="c.sh"\nmode="none"\ncwd="~/./Documents//x"')
+    expect(raw.cwd).toBe(`${homedir()}/./Documents//x`)   // stored as written: tccFolder does the normalizing
+    expect(tccFolder(raw.cwd!)).toBe('~/Documents')
+  })
+  test('parseEnvFile: export prefix, quotes removed, = in values kept, nothing expanded', () => {
+    expect(parseEnvFile(`export A='x y'\nB=a=b\nC=$HOME\n  # c\r\nD=\nE="a # b" # prod\nF=v # note`)).toEqual({ A: 'x y', B: 'a=b', C: '$HOME', D: '', E: 'a # b', F: 'v' })
+    expect(() => parseEnvFile('A=1\n2B=3')).toThrow('line 2 is not KEY=VALUE')
+    expect(() => parseEnvFile('A="x" y')).toThrow('line 1 is not KEY=VALUE (an unclosed quote')
+    expect(() => parseEnvFile("A='unterminated")).toThrow('line 1 is not KEY=VALUE')
+  })
 })
 
 describe('jobs mark-done (CLI)', () => {
