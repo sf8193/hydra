@@ -694,7 +694,7 @@ await jobsAttempt(JSON.parse(process.argv[2])); process.exit(0)\n`)
     const jobsState = join(dir, 'jobs-state')
     mkdirSync(jobsState, { recursive: true })
     const daemon = join(dir, 'daemon.ts')
-    writeFileSync(daemon, `import { spawnAttempt } from ${JSON.stringify(join(repo, 'daemon', 'jobs-clock.ts'))}
+    writeFileSync(daemon, `import { spawnAttempt } from ${JSON.stringify(join(repo, 'connectors', 'clock', 'jobs-clock.ts'))}
 import { attemptArgv } from ${JSON.stringify(join(repo, 'shared', 'jobs.ts'))}
 const args = [${JSON.stringify(join(repo, 'cli', 'hydra.ts'))}, ...attemptArgv({ platform: 'test', name: 'sweep', dispatch: 1, nonce: 'n', slot: 's', manual: false, stateDir: ${JSON.stringify(dir)} })]
 console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * * *', check: 'sleep 1; echo after-daemon-exit; echo more >&2', mode: 'none' }), ${JSON.stringify(join(jobsState, 'sweep.log'))}))\n`)
@@ -710,7 +710,7 @@ console.log(spawnAttempt(args, JSON.stringify({ name: 'sweep', schedule: '* * * 
   }, 15_000)
 
   test("an attempt gets the daemon's environment minus hydra's credentials; which bun is logged once per change", async () => {
-    const { spawnAttempt } = await import('../../daemon/jobs-clock.js')
+    const { spawnAttempt } = await import('../../connectors/clock/jobs-clock.js')
     const saved = { ...process.env }
     Object.assign(process.env, { DISCORD_BOT_TOKEN: 'secret-d', SLACK_BOT_TOKEN: 'secret-s', SLACK_APP_TOKEN: 'secret-a', SLOPBOT_SLACK_BOT_TOKEN: 'secret-w', SLOPBOT_SLACK_APP_TOKEN: 'secret-x', RAINDROP_WRITE_KEY: 'secret-r', RAINDROP_USER_ID: 'secret-u', JOBS_TEST_MARKER: 'kept' })
     const said: string[] = []

@@ -4,7 +4,7 @@
 %% DROP: logged, counted by kind, alerted once per episode (an hour from its start), per kind and target. Guard drops are not alerted.
 flowchart TD
   subgraph src["sources"]
-    live["live event<br/>slack-listener.ts onMessage"]
+    live["live event<br/>connectors/slack/listener.ts onMessage"]
     trig["catch-up triggers: boot, reconnect,<br/>every 10 min deep, retry 60s, queued"]
     c0["0. list bot DMs (im:read; a failure logs once an hour)<br/>senders whose DM would be delivered; a new DM is read back 24h,<br/>and gets its cursor at once only when found empty"]
     c1["1. owedHints: every conversation, wherever its binding<br/>DM top-level → history from just before"]
@@ -26,7 +26,7 @@ flowchart TD
   c2 --> h0
   c4 --> h0
 
-  subgraph handle["slack-watch.ts handle / classify"]
+  subgraph handle["connectors/slack/watch.ts handle / classify"]
     h0{"connected?<br/>(view = hydra.toml + what Slack taught)"}
     h1{"valid ts, plain subtype, not in flight,<br/>not another bot (unless place bots = true)?"}
     cown{"bot's own?"}

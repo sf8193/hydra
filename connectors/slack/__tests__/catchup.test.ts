@@ -2,8 +2,8 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { SlackWatcher, type SlackWatchConfig, type DeliverResult } from '../slack-watch.js'
-import { catchUp, toEvent, _resetCatchUpLogs, type SlackApi, type RawMessage, type Page } from '../slack-catchup.js'
+import { SlackWatcher, type SlackWatchConfig, type DeliverResult } from '../watch.js'
+import { catchUp, toEvent, _resetCatchUpLogs, type SlackApi, type RawMessage, type Page } from '../catchup.js'
 
 import { BASE, BOT, oneListener, view } from './slack-config.js'
 

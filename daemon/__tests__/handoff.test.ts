@@ -155,7 +155,7 @@ test('handoff command: a notice.md longer than one message is chunked, not dropp
 
 test('handOff: deliverables, PR watches and the `handoff <model>` choice reach the successor; a second concurrent handoff is refused', async () => {
   const { handOff, handoffIO } = await import('../session-lifecycle.js')
-  const { getWatchesBySession, unwatchPr } = await import('../pr-watch.js')
+  const { getWatchesBySession, unwatchPr } = await import('../../connectors/github/pr-watch.js')
   const { seedPrWatch } = await import('./test-harness.js')
   const orig = { ...handoffIO }
   mk('ho-4', 'flint', 'ho-thread-4')

@@ -12,7 +12,7 @@ import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnR
 import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
 import { tmuxHasSession, baseNameFromBranch } from './util.js'
 import { occupancy, occupied } from './session-reachability.js'
-import { parsePrUrl, retargetWatches, unwatchBySession } from './pr-watch.js'
+import { parsePrUrl, retargetWatches, unwatchBySession } from '../connectors/github/pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
 import { notifyOperator } from './access.js'
 import { deadSessionLabel, recoveryEntry, recoveryModel } from './recovery-selection.js'
@@ -20,7 +20,7 @@ import { recoveryEngine } from './engines/history.js'
 import { resolveEngine } from './engines/instances.js'
 import type { ProviderId } from './engines/engine-adapter.js'
 import { activeBackoff, clearBackoff, recordFailure, type Backoff } from './recovery-backoff.js'
-import { targetKeyForThread, withThreadLock } from './specialists.js'
+import { targetKeyForThread, withThreadLock } from '../specialists/specialists.js'
 import type { InboundMessage } from '../gateway.js'
 
 // ---------------------------------------------------------------------------

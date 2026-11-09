@@ -1,4 +1,4 @@
-// Recurring jobs, the CLI side. The daemon owns the clock (daemon/jobs-clock.ts): it decides, dispatches and records.
+// Recurring jobs, the CLI side. The daemon owns the clock (connectors/clock/jobs-clock.ts): it decides, dispatches and records.
 // This file holds what runs outside it:
 // - `jobs attempt`: one detached run of a job's work, started by the daemon, reporting one result file;
 // - `jobs run`: asks the daemon for a dispatch and waits for its outcome in the foreground;
@@ -183,7 +183,7 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
   const existing = reply?.data?.existing
   // spawn answers 2 for any key it holds (status pending, spawned or completed). deliver answers 2 for a key already
   // delivered, 7 while one is in flight, and 5 when the target can't take it yet: booting is not now, but a session
-  // stuck on a dialog (`stuck: <kind>`, daemon/targets.ts) stays stuck, so it fails, backs off and is alerted;
+  // stuck on a dialog (`stuck: <kind>`, specialists/targets.ts) stays stuck, so it fails, backs off and is alerted;
   // 3, 4, 6 and 8 (no such specialist) fail.
   if (isSpawn(target) ? code === 2 && existing?.status === 'pending' : code === 7) return { result: 'not-now', note: `duplicate key ${key} still pending` }
   if (!isSpawn(target) && code === 5 && !reply?.error?.startsWith('stuck:')) return { result: 'not-now', note: `${target.to} can't take it yet${reply?.error ? `: ${reply.error.slice(-200)}` : ''}` }

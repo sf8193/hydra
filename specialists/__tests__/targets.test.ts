@@ -3,19 +3,19 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
-import { registry, threadRegistry, type SessionInfo } from '../sessions.js'
-import { transport } from '../bridge-transport.js'
-import { gateway, STATE_DIR } from '../config.js'
-import { executeTool } from '../bridge-dispatch.js'
-import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../recovery.js'
-import { _resetBackoff, getBackoff } from '../recovery-backoff.js'
+import { handleCLIRequest, type CLIRequest } from '../../daemon/cli-handler.js'
+import { registry, threadRegistry, type SessionInfo } from '../../daemon/sessions.js'
+import { transport } from '../../daemon/bridge-transport.js'
+import { gateway, STATE_DIR } from '../../daemon/config.js'
+import { executeTool } from '../../daemon/bridge-dispatch.js'
+import { _setRecoveryDeps, _resetRecoveryDeps, reviveDeps } from '../../daemon/recovery.js'
+import { _resetBackoff, getBackoff } from '../../daemon/recovery-backoff.js'
 import { _reloadSpecialists, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withThreadLock } from '../specialists.js'
 import { deliverToTarget, parseTarget, conversationSessionName, sessionByName, targetDeps } from '../targets.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
-import { hydra } from './slack-config.js'
-import { fakeAdapter } from './test-harness.js'
-import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
+import { _setHydraConfigForTesting } from '../../daemon/hydra-config.js'
+import { hydra } from '../../connectors/slack/__tests__/slack-config.js'
+import { fakeAdapter } from '../../daemon/__tests__/test-harness.js'
+import { _setDaemonStartedAtForTesting } from '../../daemon/session-reachability.js'
 
 process.stderr.write = (() => true) as any
 
@@ -260,7 +260,7 @@ describe('max: counted under one lock per specialist, from the sessions running 
     occupy('t-live', { tmuxName: 'mx_c1-1-000001' })
     let release!: () => void
     const gate = new Promise<void>(r => { release = r })
-    const realSpawn = (await import('../recovery.js')).currentRecoveryDeps().doSpawnSession
+    const realSpawn = (await import('../../daemon/recovery.js')).currentRecoveryDeps().doSpawnSession
     _setRecoveryDeps({ doSpawnSession: (async (...a: any[]) => { await gate; return (realSpawn as any)(...a) }) as any })
     const cold = deliverToTarget({ perConversation: 'mx', conversation: 'slack:C1:2.000001' }, 'x', opts) // hangs in its start
     await Bun.sleep(10)

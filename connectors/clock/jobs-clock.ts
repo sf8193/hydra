@@ -9,13 +9,13 @@ import { dlopen, FFIType } from 'bun:ffi'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
 import { closeSync, constants as fsc, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from 'fs'
-import { latestSlot, type Slot } from '../shared/cron-local.js'
+import { latestSlot, type Slot } from '../../shared/cron-local.js'
 import {
   ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, STALE_TICK_MS, jobInitiator, attemptArgv, attemptEnv, listProcesses, lstartOf, type Proc, commandMatches, daemonFile, jobsDir, jobsToml, lockFile, logFile,
   owedSlot, backoffUntil, parseJobsConfig, type Outcome, parseResultName, parseExternalName, externalFile, externalResults, type ExternalResult, readDaemonState, readJobState, resultFile, resultsDir, stateFile,
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
-} from '../shared/jobs.js'
-import { schedulesAreSource } from '../shared/schedules.js'
+} from '../../shared/jobs.js'
+import { schedulesAreSource } from '../../shared/schedules.js'
 
 const noSuch = (cfg: JobsConfig, name: string) => cfg.fromSchedules ? `no schedule named ${name} in hydra.toml` : `no job named ${name} in jobs.toml`
 

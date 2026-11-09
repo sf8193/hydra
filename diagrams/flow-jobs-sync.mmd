@@ -1,4 +1,4 @@
-%% hydra jobs sync (cli/jobs.ts jobsSync, syncLaunchd; daemon/jobs-clock.ts requestSync).
+%% hydra jobs sync (cli/jobs.ts jobsSync, syncLaunchd; connectors/clock/jobs-clock.ts requestSync).
 flowchart TD
   S["hydra jobs sync PLATFORM"] --> P{"jobs.toml exists and parses?"}
   P -->|no| E1["exit 1; the daemon is never asked"]

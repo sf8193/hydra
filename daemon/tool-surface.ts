@@ -5,7 +5,7 @@ import { BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPAB
 import type { SessionType, Capability, DerivedCapability } from '../shared/constants.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
-import { getSpecialist, conversationSpecialistOf } from './specialists.js'
+import { getSpecialist, conversationSpecialistOf } from '../specialists/specialists.js'
 import { currentHydraConfig } from './hydra-config.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.

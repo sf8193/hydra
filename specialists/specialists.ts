@@ -1,11 +1,11 @@
 import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from './config.js'
-import { atomicWriteFileSync } from './util.js'
-import { SESSION_NAMES } from './sessions.js'
-import { clearBackoff } from './recovery-backoff.js'
+import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from '../daemon/config.js'
+import { atomicWriteFileSync } from '../daemon/util.js'
+import { SESSION_NAMES } from '../daemon/sessions.js'
+import { clearBackoff } from '../daemon/recovery-backoff.js'
 import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName } from '../shared/specialist-name.js'
-import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from './hydra-config.js'
+import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../daemon/hydra-config.js'
 import type { HydraConfig, Specialist as DeclaredSpecialist } from '../config/types.js'
 
 /**

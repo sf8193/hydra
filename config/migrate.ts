@@ -14,7 +14,7 @@ import { slackWatchStep } from './migrate-slack-watch.js'
 import { jobsStep } from './migrate-jobs.js'
 
 export const HYDRA_TOML = 'hydra.toml'
-/** The daemon's specialist pointers, as daemon/specialists.ts keeps them. */
+/** The daemon's specialist pointers, as specialists/specialists.ts keeps them. */
 export const SPECIALIST_THREADS = 'specialist-threads.json'
 
 export type MigrateInput = {

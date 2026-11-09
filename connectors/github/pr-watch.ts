@@ -2,12 +2,12 @@ import { execSync } from 'child_process'
 import { createHash } from 'crypto'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, gateway } from './config.js'
-import { registry, type SessionInfo } from './sessions.js'
-import { atomicWriteFileSync, formatDuration, safeSend } from './util.js'
-import { specialistForThread } from './specialists.js'
-import { DELIVER_MAX_MESSAGE_BYTES } from '../shared/constants.js'
-import type { DeliverOpts, DeliverOutcome } from './targets.js'
+import { STATE_DIR, gateway } from '../../daemon/config.js'
+import { registry, type SessionInfo } from '../../daemon/sessions.js'
+import { atomicWriteFileSync, formatDuration, safeSend } from '../../daemon/util.js'
+import { specialistForThread } from '../../specialists/specialists.js'
+import { DELIVER_MAX_MESSAGE_BYTES } from '../../shared/constants.js'
+import type { DeliverOpts, DeliverOutcome } from '../../specialists/targets.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,7 +71,7 @@ export type CheckStatusType = WatchEntry['lastCheckStatus']
 export const prWatchDeps = {
   api: (endpoint: string): Promise<any> => ghApiFetch(endpoint),
   deliver: async (t: { to: string; revive?: true }, text: string, opts: DeliverOpts): Promise<DeliverOutcome> =>
-    (await import('./targets.js')).deliverToTarget(t, text, opts),
+    (await import('../../specialists/targets.js')).deliverToTarget(t, text, opts),
 }
 
 /** The target a session's watches deliver to: `main`, its thread's specialist, or its thread, revived when dead. */
@@ -466,7 +466,7 @@ async function pollPr(entry: WatchEntry): Promise<void> {
         info.artifacts = info.artifacts.filter(u => u !== entry.prUrl)
         registry.persist()
       }
-      const { refreshDashboard } = await import('./dashboard.js')
+      const { refreshDashboard } = await import('../../daemon/dashboard.js')
       refreshDashboard()
       return
     }

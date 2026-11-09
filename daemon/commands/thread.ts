@@ -11,7 +11,7 @@ import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
 import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
 import { isThreadOccupied } from '../protocol-registry.js'
-import { unwatchBySession } from "../pr-watch.js"
+import { unwatchBySession } from "../../connectors/github/pr-watch.js"
 import { emit } from "../event-bus.js"
 import { getTemplate, buildTemplateSpawnOpts } from '../templates.js'
 import type { InboundMessage } from '../../gateway.js'
@@ -22,7 +22,7 @@ import { claudeEngine, resolveEngine } from '../engines/instances.js'
 import { blocksRecovery, occupancy } from '../session-reachability.js'
 import { currentRecoveryDeps, reviveThread, threadStub } from '../recovery.js'
 export { _setRecoveryDeps, _resetRecoveryDeps } from '../recovery.js'
-import { targetKeyForThread, threadLockHeld, withThreadLock } from '../specialists.js'
+import { targetKeyForThread, threadLockHeld, withThreadLock } from '../../specialists/specialists.js'
 import { isForMain, mainContext, mainStartedAt, mainSubject, mainTmux } from '../main-session.js'
 
 function adapterFor(info: { engine?: ProviderId; adapter?: any }) {

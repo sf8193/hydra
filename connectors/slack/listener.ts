@@ -1,11 +1,11 @@
 import { App, LogLevel } from '@slack/bolt'
 import { WebClient } from '@slack/web-api'
-import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../shared/socket-supervisor.js'
-import { catchUp, toEvent, type CatchUpResult, type RawMessage, type SlackApi } from './slack-catchup.js'
+import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../shared/socket-supervisor.js'
+import { catchUp, toEvent, type CatchUpResult, type RawMessage, type SlackApi } from './catchup.js'
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
-import { routedChannels, hearsDms, unresolvedPlaces, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './slack-watch.js'
-import type { HydraConfig } from '../config/types.js'
+import { routedChannels, hearsDms, unresolvedPlaces, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import type { HydraConfig } from '../../config/types.js'
 
 /**
  * The Slack connector: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass

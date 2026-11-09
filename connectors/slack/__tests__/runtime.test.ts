@@ -1,20 +1,20 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { rmSync } from 'fs'
 import { join } from 'path'
-import { STATE_DIR, gateway } from '../config.js'
-import { noteMainChannel } from '../main-session.js'
-import { registry } from '../sessions.js'
-import { setSpecialistThread, _reloadSpecialists } from '../specialists.js'
-import { _setHydraConfigForTesting } from '../hydra-config.js'
+import { STATE_DIR, gateway } from '../../../daemon/config.js'
+import { noteMainChannel } from '../../../daemon/main-session.js'
+import { registry } from '../../../daemon/sessions.js'
+import { setSpecialistThread, _reloadSpecialists } from '../../../specialists/specialists.js'
+import { _setHydraConfigForTesting } from '../../../daemon/hydra-config.js'
 import {
   getSlackWatcher, bindConversation, unbindConversation, formatConversations, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation, targetFor, startSlackWatch, stopSlackWatch,
-} from '../slack-watch-runtime.js'
-import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../tool-surface.js'
-import { emit } from '../event-bus.js'
-import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
-import { executeTool } from '../bridge-dispatch.js'
+} from '../runtime.js'
+import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../../../daemon/tool-surface.js'
+import { emit } from '../../../daemon/event-bus.js'
+import { handleCLIRequest, type CLIRequest } from '../../../daemon/cli-handler.js'
+import { executeTool } from '../../../daemon/bridge-dispatch.js'
 import { BASE, hydra, view } from './slack-config.js'
-import { fakeAdapter } from './test-harness.js'
+import { fakeAdapter } from '../../../daemon/__tests__/test-harness.js'
 
 process.stderr.write = (() => true) as any
 
