@@ -12,7 +12,7 @@ process.stderr.write = (() => true) as any
 const mk = (id: string, name: string, over: Partial<SessionInfo> = {}): SessionInfo => {
   const info = {
     sessionId: id, tmuxName: name, topic: 't', threadId: `${id}-thread`, threadUrl: `https://x/${id}`, createdAt: Date.now() - 60_000, lastActive: Date.now(),
-    listening: false, engine: 'claude', adapter: { stop: async () => {} }, sessionType: 'thread_owner', ...over,
+    listening: false, engine: 'claude', adapter: { stop: async () => {}, isAlive: (i: any) => !i.deadAt, isConnected: () => false }, sessionType: 'thread_owner', ...over,
   } as SessionInfo
   registry.set(id, info)
   return info

@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto'
 import { readFileSync } from 'fs'
+import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
 import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
@@ -549,8 +550,10 @@ export class SessionRegistry {
           continue
         }
 
+        // One name runs one session: a record a later one took the name from is not what runs under it.
+        const succeeded = data.some(o => o !== info && o.tmuxName === info.tmuxName && o.createdAt > info.createdAt)
         let tmuxAlive = false
-        try {
+        if (!succeeded) try {
           execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
           tmuxAlive = true
         } catch {}
@@ -804,7 +807,7 @@ export function resolveSendTarget(
   reg: Pick<SessionRegistry, 'values' | 'get' | 'getByThread'> = registry,
   threads: Pick<ThreadRegistry, 'threads'> = threadRegistry,
 ): { session: SessionInfo; replaced?: string } | undefined {
-  const live = [...reg.values()].find(s => s.tmuxName === targetName && !s.deadAt)
+  const live = [...reg.values()].find(s => s.tmuxName === targetName && occupied(occupancy(s, undefined, reg.values())))
   if (live) return { session: live }
 
   // Session names are recycled, so one name can appear in several threads'
@@ -827,7 +830,7 @@ export function resolveSendTarget(
   for (const [threadId] of ranked) {
     const successorId = reg.getByThread(threadId)
     const successor = successorId ? reg.get(successorId) : undefined
-    if (successor && !successor.deadAt && successor.tmuxName !== targetName) {
+    if (successor && occupied(occupancy(successor, undefined, reg.values())) && successor.tmuxName !== targetName) {
       return { session: successor, replaced: targetName }
     }
   }

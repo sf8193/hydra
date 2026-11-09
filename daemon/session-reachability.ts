@@ -11,6 +11,7 @@
  * dead whose execution is still running is orphaned.
  */
 import { transport } from './bridge-transport.js'
+import { registry } from './sessions.js'
 import { tmuxHasSession } from './util.js'
 
 /** The one grace window: how long a running session may go without a bridge before it counts as orphaned. */
@@ -38,7 +39,7 @@ export type Occupancy =
   | 'reachable'
   /** Running, no bridge past the grace window (or after it was given up on). Recoverable only after teardown. */
   | 'orphaned'
-  /** Not running. Nothing to tear down. */
+  /** Not running, or replaced: a successor holds its name (see nameHeldByAnother). Nothing of its own to tear down. */
   | 'dead'
 
 export type OccupancySubject = {
@@ -61,15 +62,29 @@ export function classifyOccupancy(input: {
 }
 
 // The execution is the adapter's call (Claude: tmux; Codex: the app-server socket,
-// since its tmux is a replaceable anchor).
-export function occupancy(info: OccupancySubject | undefined, now = Date.now()): Occupancy {
+// since its tmux is a replaceable anchor). A connected bridge answers first, with no fork.
+export function occupancy(
+  info: OccupancySubject | undefined,
+  now = Date.now(),
+  records: Iterable<OccupancySubject> = registry.values(),
+): Occupancy {
   if (!info) return 'none'
+  if (transport.has(info.sessionId)) return 'reachable'
+  if (nameHeldByAnother(info, records)) return 'dead'
   return classifyOccupancy({
     running: info.adapter ? info.adapter.isAlive(info) : tmuxHasSession(info.tmuxName),
-    connected: transport.has(info.sessionId),
+    connected: false,
     waitMs: bridgeWaitMs(info.createdAt, now),
     givenUp: !!info.deadAt,
   })
+}
+
+// One name runs one session. A record given up on, whose name a record not given up on now
+// holds, is that successor's predecessor: the execution under the name is not its own.
+export function nameHeldByAnother(info: OccupancySubject, records: Iterable<OccupancySubject> = registry.values()): boolean {
+  if (!info.deadAt) return false
+  for (const s of records) if (s.sessionId !== info.sessionId && s.tmuxName === info.tmuxName && !s.deadAt) return true
+  return false
 }
 
 /** Someone is home (booting, reachable or orphaned): a new session here would race it. */

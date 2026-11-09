@@ -92,7 +92,8 @@ describe('scratchpad worktree cleanup', () => {
 })
 
 describe('whose scratchpads a kill cleans', () => {
-  const rec = (over: Record<string, unknown>) => ({ sessionId: 'x', tmuxName: 'x', threadId: 't', sessionType: 'thread_owner', ...over }) as any
+  // A stand-in is running unless stamped dead (occupancy() asks its adapter).
+  const rec = (over: Record<string, unknown>) => ({ sessionId: 'x', tmuxName: 'x', threadId: 't', sessionType: 'thread_owner', adapter: { isAlive: (i: any) => !i.deadAt, isConnected: () => false }, ...over }) as any
   const history = [{ claudeSessionId: 'pred-1' }, {}, { claudeSessionId: 'pred-2' }, { claudeSessionId: 'me' }]
 
   test('a thread owner: itself plus its handoff predecessors', () => {
@@ -215,7 +216,7 @@ describe('killSession: forceWorktreeCleanup wiring', () => {
     const info = {
       sessionId: 'kfc-me', tmuxName: 'kfc', threadId, createdAt: Date.now(), lastActive: Date.now(),
       listening: false, engine: 'claude', sessionType: 'thread_owner', ephemeral: true,
-      adapter: { stop: async () => {} }, claudeSessionId: 'me-2',
+      adapter: { stop: async () => {}, isAlive: (i: any) => !i.deadAt, isConnected: () => false }, claudeSessionId: 'me-2',
       worktreeRepo: '/fake/repo', worktreePath: '/fake/repo/../.worktrees/kfc', worktreeBranch: 'wt/kfc',
       forceWorktreeCleanup: true,
     } as unknown as SessionInfo

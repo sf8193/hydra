@@ -25,7 +25,7 @@ process.stderr.write = (() => true) as any
 const mk = (id: string, name: string, over: Partial<SessionInfo> = {}): SessionInfo => {
   const info = {
     sessionId: id, tmuxName: name, topic: 't', threadId: `${id}-thread`, createdAt: Date.now(), lastActive: Date.now(),
-    listening: false, engine: 'claude', adapter: { stop: async () => {} }, sessionType: 'thread_owner', ...over,
+    listening: false, engine: 'claude', adapter: { stop: async () => {}, isAlive: (i: any) => !i.deadAt, isConnected: () => false }, sessionType: 'thread_owner', ...over,
   } as any as SessionInfo
   registry.set(id, info)
   return info
@@ -428,6 +428,37 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
       expect(registry.getByThread('fp-l2-thread')).toBeUndefined()
       expect(registry.findByName('opsl2')?.sessionId).toBe(r.sessionId)
     } finally { registry.delete('fp-l2-old'); registry.deleteThread('fp-l2-thread') }
+  })
+
+  test('L2: a claimed name stamps an unstamped dead record of that name before it runs again, so it is retired too', async () => {
+    seedDead()
+    // Liveness by name, as tmux answers it: the name runs once the new session launches under it.
+    const byName = { ...fakeClaude, isAlive: () => launches.some(l => l.tmuxName === 'opsl3') }
+    registry.set('fp-l3-old', { sessionId: 'fp-l3-old', topic: 't', threadId: 'fp-l3-thread', createdAt: 1, lastActive: 1, tmuxName: 'opsl3',
+      listening: false, engine: 'claude', sessionType: 'thread_owner', adapter: byName } as any)
+    registry.setThread('fp-l3-thread', 'fp-l3-old')
+    try {
+      const r = await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, name: 'opsl3' })
+      expect(registry.get('fp-l3-old')).toBeUndefined()
+      expect(registry.findByName('opsl3')?.sessionId).toBe(r.sessionId)
+    } finally { registry.delete('fp-l3-old'); registry.deleteThread('fp-l3-thread') }
+  })
+
+  test('L2: a claimed name stops the clocks of the records it replaces, so a reaper armed while they ran cannot end the new session', async () => {
+    const { resumeIdleLimit, _idleTimersForTesting } = await import('../idle-limit.js')
+    seedDead()
+    let alive = true
+    const byName = { ...fakeClaude, isAlive: () => alive || launches.some(l => l.tmuxName === 'opsl4') }
+    registry.set('fp-l4-old', { sessionId: 'fp-l4-old', topic: 't', threadId: 'fp-l4-thread', createdAt: 1, lastActive: 1, tmuxName: 'opsl4',
+      listening: false, engine: 'claude', sessionType: 'thread_owner', ephemeral: true, idleDeadline: Date.now() + 3_600_000, adapter: byName } as any)
+    registry.setThread('fp-l4-thread', 'fp-l4-old')
+    try {
+      resumeIdleLimit('fp-l4-old')
+      expect(_idleTimersForTesting().has('fp-l4-old')).toBe(true)
+      alive = false
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, name: 'opsl4' })
+      expect(_idleTimersForTesting().has('fp-l4-old')).toBe(false)
+    } finally { registry.delete('fp-l4-old'); registry.deleteThread('fp-l4-thread') }
   })
 
   test('prompts: a fork keeps buildForkPrompt', async () => {

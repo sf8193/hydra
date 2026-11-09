@@ -36,6 +36,11 @@ import {
   type PaneProbeIO,
   type BlockingState,
 } from '../pane-probe.js'
+import type { Occupancy } from '../session-reachability.js'
+// Liveness is occupancy()'s answer, set per record; a stand-in's stamp (`deadAt`) is not consulted: a stamped record may still run.
+const occupancies = new Map<string, Occupancy>()
+const occupancyOf = (s: { sessionId: string }): Occupancy => occupancies.get(s.sessionId) ?? 'reachable'
+
 
 // ---------------------------------------------------------------------------
 // Fixtures: real pane captures from live sessions
@@ -238,6 +243,7 @@ function makeTestIO(): PaneProbeIO {
     },
     getSessions: () => registryEntries.values(),
     transportHas: (sessionId: string) => connectedSessions.has(sessionId),
+    occupancy: occupancyOf,
     transportSendOrQueue: (sessionId: string, msg: any) => { transportMessages.push({ sessionId, msg }) },
     loadAccess: () => ({ allowFrom: ['user-123'] }),
     platform: 'discord',
@@ -396,6 +402,7 @@ describe('probeAllSessions', () => {
     firstTurns.clear()
     pasted.length = 0
     registryEntries.clear()
+    occupancies.clear()
     sentMessages.length = 0
     reactions.length = 0
     paneTails.clear()
@@ -706,8 +713,9 @@ describe('probeAllSessions', () => {
     expect(getThreadIntercept('thread-1')).toBeUndefined()
   })
 
-  it('skips dead sessions', async () => {
-    addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1', deadAt: T0 - 1000 })
+  it('skips dead sessions, stamped or not', async () => {
+    addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1' })
+    occupancies.set('s1', 'dead')
     paneTails.set('cedar', PLAN_MODE_TAIL)
     windowActivity.set('cedar', Math.floor(T0 / 1000) - 60)
     windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
@@ -715,6 +723,19 @@ describe('probeAllSessions', () => {
     await probeAllSessions(T0)
     await probeAllSessions(T0 + 60_000)
     expect(getThreadIntercept('thread-1')).toBeUndefined()
+  })
+
+  it('probes a session stamped dead that still runs (orphaned)', async () => {
+    addSession('s1', { tmuxName: 'cedar', threadId: 'thread-1', deadAt: T0 - 1000 })
+    occupancies.set('s1', 'orphaned')
+    paneTails.set('cedar', PLAN_MODE_TAIL)
+    windowActivity.set('cedar', Math.floor(T0 / 1000) - 60)
+    windowActivity.set('discord-byte', Math.floor(T0 / 1000) - 5)
+
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    await flush()
+    expect(getThreadIntercept('thread-1')?.tmuxName).toBe('cedar')
   })
 
   it('auto-triggers /login with re-confirmation when HYDRA_AUTO_LOGIN=1', async () => {
@@ -1364,6 +1385,7 @@ describe('intercept handler', () => {
   beforeEach(() => {
     _resetForTesting()
     registryEntries.clear()
+    occupancies.clear()
     sentMessages.length = 0
     reactions.length = 0
     paneTails.clear()
@@ -1476,6 +1498,7 @@ describe('resolveStuckFromHome', () => {
   beforeEach(() => {
     _resetForTesting()
     registryEntries.clear()
+    occupancies.clear()
     sentMessages.length = 0
     transportMessages.length = 0
     paneTails.clear()

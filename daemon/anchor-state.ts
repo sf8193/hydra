@@ -1,5 +1,6 @@
 import { gateway, DEFAULT_SESSION_CHANNEL } from './config.js'
 import { registry, sessionEmoji } from './sessions.js'
+import { occupancy } from './session-reachability.js'
 import { COUNT_EMOJI, SUPERSCRIPT, SUBSCRIPT } from '../gateway.js'
 
 export type AnchorState = 'live' | 'crashed' | 'killed' | 'zombie'
@@ -71,7 +72,7 @@ export function refreshSessionVisual(threadId: string, opts?: { state?: AnchorSt
 
   const emoji = info.contentEmoji || sessionEmoji(info.tmuxName)
   const badge = opts?.badge ?? getActiveProtocolBadge(threadId)
-  const state = opts?.state ?? (info.deadAt ? 'crashed' : info.respawnCount ? 'zombie' : 'live')
+  const state = opts?.state ?? (occupancy(info) === 'dead' ? 'crashed' : info.respawnCount ? 'zombie' : 'live')
   const anchor = gateway.getThreadAnchor(threadId)
 
   void gateway.updateSessionVisual(threadId, {

@@ -25,6 +25,7 @@
 // The daemon polls tmux's window_activity timestamp every 20s to detect
 // idle sessions. No monitor-silence/activity options needed.
 import { execSync } from 'child_process'
+import { occupancy, type Occupancy } from './session-reachability.js'
 import { writeFileSync, unlinkSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -43,6 +44,7 @@ export type ReplyGuardDeps = {
   registryGet: (sessionId: string) => SessionInfo | undefined
   registryValues: () => Iterable<SessionInfo>
   transportHas: (sessionId: string) => boolean
+  occupancy: (info: SessionInfo) => Occupancy
   transportSendOrQueue: (sessionId: string, msg: any) => void
   gatewaySend: (channelId: string, text: string, opts?: any) => Promise<any>
   // Chunks over-length text into multiple messages instead of Discord rejecting
@@ -66,6 +68,7 @@ const defaultDeps: ReplyGuardDeps = {
   registryGet: (id) => registry.get(id),
   registryValues: () => registry.values(),
   transportHas: (id) => transport.has(id),
+  occupancy: (info) => occupancy(info),
   transportSendOrQueue: (id, msg) => transport.sendOrQueue(id, msg),
   gatewaySend: (ch, text, opts) => gateway.send(ch, text, opts),
   safeSend: (ch, text, opts) => safeSend(ch, text, opts),
@@ -181,7 +184,7 @@ export function handleSilenceEvent(tmuxName: string, now: number = Date.now(), o
     // Session gone (killed/crashed) — nobody left to check on.
     const info = p.sessionId === 'main' ? undefined : deps.registryGet(p.sessionId)
     if (p.sessionId !== 'main') {
-      if (!info || info.deadAt) {
+      if (!info || deps.occupancy(info) === 'dead') {
         pending.delete(key)
         continue
       }
@@ -289,7 +292,7 @@ export function sessionsWithPendingReplies(): Set<string> {
       names.add('main')
     } else {
       const info = deps.registryGet(p.sessionId)
-      if (info && !info.deadAt) names.add(info.tmuxName)
+      if (info && deps.occupancy(info) !== 'dead') names.add(info.tmuxName)
     }
   }
   return names

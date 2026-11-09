@@ -15,7 +15,7 @@ function sess(sessionId: string, extra: Record<string, unknown> = {}) {
   registry.set(sessionId, {
     sessionId, tmuxName: sessionId, topic: '', threadId: `thread-${sessionId}`,
     createdAt: Date.now(), lastActive: Date.now(), listening: false,
-    engine: 'claude', sessionType: 'thread_owner', ...extra,
+    engine: 'claude', sessionType: 'thread_owner', adapter: { isAlive: (i: any) => !i.deadAt, isConnected: () => false }, ...extra,
   } as any)
 }
 

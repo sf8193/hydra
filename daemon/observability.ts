@@ -3,6 +3,7 @@
 // stderr, and no link to its transcript.
 
 import { readFileSync, statSync, fstatSync, openSync, readSync, closeSync, writeFileSync } from 'fs'
+import { occupancy } from './session-reachability.js'
 import { execFileSync } from 'child_process'
 import { markDead, registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
@@ -337,7 +338,7 @@ export function startVitalsSnapshots(isConnected: (id: string) => boolean): void
     for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
     for (const prune of vitalsPruners) prune(goneOrDead)
     for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
-    const live = [...registry.values()].filter(s => !s.deadAt)
+    const live = [...registry.values()].filter(s => occupancy(s) !== 'dead')
     for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
     for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
     // Ahead of the empty-fleet return: a runaway can outlive every session.

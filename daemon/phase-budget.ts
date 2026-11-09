@@ -10,6 +10,7 @@
 // budgets on spawn — importing back would be a cycle, the class PR #88
 // removed from this layer). daemon.ts, outside the cycle, does the wiring.
 import { registry, type SessionInfo } from './sessions.js'
+import { occupancy } from './session-reachability.js'
 import { transport } from './bridge-transport.js'
 import { safeSend } from './util.js'
 
@@ -25,7 +26,7 @@ export function startPhaseBudget(sessionId: string): void {
   // Never arm for a dead record: there's no running agent to reap, so arming would only
   // schedule a killSession that destroys the (recovery-preserved) worktree branch. At boot,
   // initPhaseBudgets re-arms every persisted budgetDeadline — a dead worker's must be skipped.
-  if (!info?.budgetDeadline || info.deadAt) return
+  if (!info?.budgetDeadline || occupancy(info) === 'dead') return
   clearPhaseBudget(sessionId)
 
   const untilNudge = Math.max(0, info.budgetDeadline - Date.now())
@@ -33,7 +34,7 @@ export function startPhaseBudget(sessionId: string): void {
 
   entry.nudge = setTimeout(() => {
     const live = registry.get(sessionId)
-    if (!live?.budgetDeadline || live.deadAt) return
+    if (!live?.budgetDeadline || occupancy(live) === 'dead') return
     process.stderr.write(`daemon: phase-budget: ${live.tmuxName} hit its budget, nudging (reap in ${PHASE_BUDGET_GRACE_MS / 60000}m)\n`)
     transport.sendOrQueue(sessionId, {
       type: 'notification',
@@ -51,7 +52,7 @@ export function startPhaseBudget(sessionId: string): void {
       // Skip a target that died after the timer was armed: a dead session is already ended,
       // and reaping it here would run killSession without skipWorktreeDestroy, deleting a
       // worktree branch that recovery is preserving. Its lifecycle is handled elsewhere.
-      if (!target || target.deadAt) return
+      if (!target || occupancy(target) === 'dead') return
       if (!reaper) {
         process.stderr.write(`daemon: phase-budget: no reaper installed, cannot reap ${target.tmuxName}\n`)
         return

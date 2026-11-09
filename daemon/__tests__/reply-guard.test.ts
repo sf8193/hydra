@@ -14,6 +14,7 @@ import {
   _setDeps,
   _resetDeps,
   pollActivityOnce,
+  sessionsWithPendingReplies,
 } from '../reply-guard.js'
 import { probeByteTmuxName } from '../pane-probe.js'
 import { fakeAdapter } from './test-harness.js'
@@ -23,6 +24,11 @@ import type { SessionInfo } from '../sessions.js'
 import type { ConversationForensics } from '../observability.js'
 import { claudeTurnOutcome } from '../engines/claude-transcript.js'
 import { codexTurnOutcome, type TurnSources } from '../engines/codex-observation.js'
+import type { Occupancy } from '../session-reachability.js'
+// Liveness is occupancy()'s answer, set per record; a stand-in's stamp (`deadAt`) is not consulted: a stamped record may still run.
+const occupancies = new Map<string, Occupancy>()
+const occupancyOf = (s: { sessionId: string }): Occupancy => occupancies.get(s.sessionId) ?? 'reachable'
+
 
 // deps.turnOutcome over fake sources; the engine switch mirrors resolveEngine.
 function turnOutcomeOver(src: TurnSources) {
@@ -99,6 +105,7 @@ function codexSession(sessionId: string, tmuxName: string, claudeSessionId?: str
 
 beforeEach(() => {
   _resetReplyGuardForTesting()
+  occupancies.clear()
   testSessions.clear()
   connectedBridges.clear()
   escalations.length = 0
@@ -108,6 +115,7 @@ beforeEach(() => {
     registryGet: (id) => testSessions.get(id),
     registryValues: () => testSessions.values(),
     transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
     transportSendOrQueue: (id, msg) => {
       const sent = connectedBridges.get(id)
       if (sent) sent.push(JSON.stringify(msg))
@@ -345,13 +353,24 @@ describe('handleSilenceEvent — no nudge message, but a real grace window befor
     expect(escalations[0].text).toContain('kevin')
   })
 
-  test('prunes entries for dead sessions without escalating', () => {
-    liveSession('sess-1', { tmuxName: 'cedar', deadAt: T0 + 1 })
+  test('prunes entries for dead sessions without escalating, stamped or not', () => {
+    liveSession('sess-1', { tmuxName: 'cedar' })
+    occupancies.set('sess-1', 'dead')
     fakeBridge('sess-1')
     notePendingReply('sess-1', meta(), T0)
     noteActivityForSession('cedar', T0 + 1000)
     expect(armThenAdvance('cedar', T0 + 60_000)).toBe(0)
     expect(_pendingForTesting().size).toBe(0)
+  })
+
+  test('keeps an entry for a session stamped dead that still runs (orphaned)', () => {
+    liveSession('sess-1', { tmuxName: 'cedar', deadAt: T0 + 1 })
+    occupancies.set('sess-1', 'orphaned')
+    fakeBridge('sess-1')
+    notePendingReply('sess-1', meta(), T0)
+    noteActivityForSession('cedar', T0 + 1000)
+    expect(sessionsWithPendingReplies().has('cedar')).toBe(true)
+    expect(armThenAdvance('cedar', T0 + 60_000)).toBe(1)
   })
 
   test('tracks chats independently per session', () => {
@@ -389,6 +408,7 @@ describe('handleSilenceEvent — no nudge message, but a real grace window befor
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -466,6 +486,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id: string) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id: string) => connectedBridges.has(id),
+      occupancy: occupancyOf,
       transportSendOrQueue: (id: string, msg: unknown) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -499,6 +520,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id: string) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id: string) => connectedBridges.has(id),
+      occupancy: occupancyOf,
       transportSendOrQueue: () => {},
       gatewaySend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId: string, text: string) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -522,6 +544,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -551,6 +574,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -582,6 +606,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -615,6 +640,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -641,6 +667,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -668,6 +695,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -701,6 +729,7 @@ describe('escalateWithCapture', () => {
       registryGet: (id) => testSessions.get(id),
       registryValues: () => testSessions.values(),
       transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
       transportSendOrQueue: (id, msg) => connectedBridges.get(id)?.push(JSON.stringify(msg)),
       gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
       safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },
@@ -780,6 +809,7 @@ describe('pollActivityOnce', () => {
         registryGet: (id) => testSessions.get(id),
         registryValues: () => testSessions.values(),
         transportHas: (id) => connectedBridges.has(id),
+    occupancy: occupancyOf,
         transportSendOrQueue: () => {},
         gatewaySend: async (channelId, text) => { escalations.push({ channelId, text }); return { id: 'msg-1' } },
         safeSend: async (channelId, text) => { escalations.push({ channelId, text }); return ['msg-1'] },

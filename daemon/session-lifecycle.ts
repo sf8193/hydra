@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve as resolvePath } from 'path'
 import { tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
 import { safeSend, formatSpawnLine, tmuxHasSession } from './util.js'
-import { occupancy, occupied } from './session-reachability.js'
+import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from './specialists.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { Predecessor, SessionInfo, SessionMetadata, SpawnOpts, SpawnResult } from './sessions.js'
@@ -525,7 +525,7 @@ export function scratchSessionIds(info: SessionInfo, sessions: Iterable<SessionI
   const ids = new Set<string>()
   if (info.claudeSessionId) ids.add(info.claudeSessionId)
   if (info.sessionType !== 'thread_guest') for (const h of history) if (h.claudeSessionId) ids.add(h.claudeSessionId)
-  for (const s of sessions) if (s !== info && !s.deadAt && s.claudeSessionId) ids.delete(s.claudeSessionId)
+  for (const s of sessions) if (s !== info && occupancy(s) !== 'dead' && s.claudeSessionId) ids.delete(s.claudeSessionId)
   return [...ids]
 }
 
@@ -588,15 +588,17 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
     }
 
     const tmuxName = info.tmuxName
+    // A successor holding this record's name owns what runs under it, and what it carried over: stop and destroy nothing.
+    const replaced = nameHeldByAnother(info)
     // Stop learns a missing native id first where the provider can (Claude: pane discovery).
-    await info.adapter.stop(info)
+    if (!replaced) await info.adapter.stop(info)
 
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
     clearIdleLimit(info.sessionId)
-    clearInterceptsForSession(info.tmuxName)
+    if (!replaced) clearInterceptsForSession(info.tmuxName)
 
-    const keepWorktree = opts?.skipWorktreeDestroy || opts?.keepRecord
+    const keepWorktree = replaced || opts?.skipWorktreeDestroy || opts?.keepRecord
     if (info.worktreePath && info.worktreeRepo && !keepWorktree) {
       const branch = info.worktreeBranch ?? `wt/${info.tmuxName}`
 
@@ -1033,6 +1035,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Private protocol children use this hook to install their fail-closed policy
   // before the process receives its prompt or can connect to bridge tools.
   opts?.beforeInitialTurn?.(sessionId)
+  // The records a claimed name replaces are dead: stamp them, and stop their clocks, before the name runs again, or its
+  // new execution reads as theirs and a reaper of theirs ends it.
+  if (opts?.name && !opts.handedOffFrom) {
+    for (const s of registry.values()) {
+      if (s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
+      markDead(s)
+      clearIdleLimit(s.sessionId)
+      clearPhaseBudget(s.sessionId)
+    }
+  }
   const adapter = resolveEngine(engine)
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,

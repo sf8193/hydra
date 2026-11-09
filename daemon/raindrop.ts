@@ -1,5 +1,6 @@
 import { appendFileSync } from 'fs'
 import { execFileSync } from 'child_process'
+import { occupancy, occupied } from './session-reachability.js'
 import { join, basename, resolve, sep } from 'path'
 import { homedir } from 'os'
 import { STATE_DIR, PLATFORM, RAINDROP_ENV, RAINDROP_DRYRUN_FILE } from './config.js'
@@ -324,7 +325,7 @@ export async function post(endpoint: string, body: WireBody): Promise<void> {
 }
 
 export function defaultLiveSessionIds(): string[] {
-  return [...registry.values()].filter(s => !s.deadAt).map(s => s.sessionId)
+  return [...registry.values()].filter(s => occupied(occupancy(s))).map(s => s.sessionId)
 }
 
 export function defaultAllowedUsers(): Set<string> {

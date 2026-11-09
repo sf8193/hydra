@@ -17,6 +17,7 @@
 // Like phase-budget, the reaper is injected at boot: this module must never import
 // session-lifecycle (which imports us).
 import { registry, parentSessionOf, type SessionInfo } from './sessions.js'
+import { occupancy } from './session-reachability.js'
 import { transport } from './bridge-transport.js'
 import { safeSend, formatDuration } from './util.js'
 import { idleReapMs } from './config.js'
@@ -43,7 +44,7 @@ const timers = new Map<string, Timers>()
 type Kind = 'ephemeral' | 'idle-reap'
 
 function kindOf(info: SessionInfo | undefined): Kind | undefined {
-  if (!info || info.deadAt) return undefined
+  if (!info || occupancy(info) === 'dead') return undefined
   if (info.ephemeral) return 'ephemeral'
   if (idleReapMs() === undefined || info.sessionType !== 'thread_owner') return undefined
   if (listSpecialists().some(([, s]) => s.threadId === info.threadId)) return undefined
@@ -85,7 +86,7 @@ export function resumeIdleLimit(sessionId: string): void {
 
 /** A live session it spawned: the child may still report back to it (`send_to_thread target="parent"`). */
 function hasLiveChild(info: SessionInfo): boolean {
-  for (const s of registry.values()) if (!s.deadAt && s !== info && parentSessionOf(s)?.sessionId === info.sessionId) return true
+  for (const s of registry.values()) if (s !== info && occupancy(s) !== 'dead' && parentSessionOf(s)?.sessionId === info.sessionId) return true
   return false
 }
 
