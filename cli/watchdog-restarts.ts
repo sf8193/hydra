@@ -2,9 +2,10 @@
 // when RESTART_ALERT_COUNT of them land within RESTART_ALERT_WINDOW_S, it leaves an alert for the
 // operator in WATCHDOG_ALERT_FILE. The watchdog holds no chat connection, so the daemon posts it
 // once its gateway is up (daemon/watchdog-alert.ts) — the next daemon of the loop, typically.
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { WATCHDOG_ALERT_FILE } from '../shared/constants.js'
+import { atomicWriteFileSync } from '../shared/atomic-write.js'
 
 export const RESTART_ALERT_COUNT = 3
 export const RESTART_ALERT_WINDOW_S = 3600
@@ -48,8 +49,8 @@ export function noteRestart(stateDir: string, now: number, reason: string, logFi
   const alertedAt = alert ? now : log.alertedAt
   const next: Log = { restarts, ...(alertedAt !== undefined && { alertedAt }) }
   try {
-    writeFileSync(logPath(stateDir), JSON.stringify(next) + '\n')
-    if (alert) writeFileSync(join(stateDir, WATCHDOG_ALERT_FILE), JSON.stringify({ text: alert, at: now }) + '\n')
+    atomicWriteFileSync(logPath(stateDir), JSON.stringify(next) + '\n')
+    if (alert) atomicWriteFileSync(join(stateDir, WATCHDOG_ALERT_FILE), JSON.stringify({ text: alert, at: now }) + '\n')
   } catch (err) {
     process.stderr.write(`watchdog: could not record the restart: ${err}\n`)
   }

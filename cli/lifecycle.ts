@@ -374,10 +374,7 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
   const daemonRestartedThisTick = reason !== null
   if (reason) {
     appendLog(cfg.watchdogLog, reason)
-    if (await restartDaemonForWatchdog(cfg)) {
-      const alert = noteRestart(cfg.stateDir, now, reason, cfg.watchdogLog)
-      if (alert) appendLog(cfg.watchdogLog, `Crash loop: ${alert.split('\n')[0]} — alert left for the daemon to post`)
-    }
+    await restartDaemonForWatchdog(cfg, { reason, now })
   }
 
   // Skip byte revival if daemon was just restarted — socket won't be ready yet.
@@ -435,13 +432,19 @@ function networkUp(platform: string): boolean {
   }
 }
 
-/** False when the compile check refused the restart. */
-async function restartDaemonForWatchdog(cfg: HydraConfig): Promise<boolean> {
+/**
+ * Restart the daemon unless the compile check refuses. A restart is recorded, and any crash-loop
+ * alert written, before the new daemon starts, so that daemon finds the alert when its gateway is up.
+ */
+async function restartDaemonForWatchdog(cfg: HydraConfig, why: { reason: string; now: number }): Promise<void> {
   const check = await compileCheck(cfg.hydraDir)
   if (!check.ok) {
     appendLog(cfg.watchdogLog, 'COMPILE FAILED — refusing to restart daemon')
-    return false
+    return
   }
+
+  const alert = noteRestart(cfg.stateDir, why.now, why.reason, cfg.watchdogLog)
+  if (alert) appendLog(cfg.watchdogLog, `Crash loop: ${alert.split('\n')[0]} — alert left for the daemon to post`)
 
   if (cfg.spawnCwdBlank) {
     appendLog(cfg.watchdogLog, `SPAWN_CWD is set but empty — restarting daemon with it unset so auto-recovery bails and alerts instead of resolving worktrees against ${homedir()}; check ${join(cfg.stateDir, '.env')} and the launchd plist`)
@@ -451,7 +454,6 @@ async function restartDaemonForWatchdog(cfg: HydraConfig): Promise<boolean> {
   try { unlinkSync(cfg.sockPath) } catch {}
   tmuxSpawn(cfg.daemonTmux,
     `cd ${shq(cfg.hydraDir)} && ${buildDaemonEnvs(cfg)} bun run daemon.ts 2>&1 | tee -a ${cfg.daemonLog}`)
-  return true
 }
 
 // ---------------------------------------------------------------------------

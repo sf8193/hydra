@@ -5,15 +5,26 @@
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from './config.js'
+import { formatDuration } from './util.js'
 import { notifyOperator } from './access.js'
 import { WATCHDOG_ALERT_FILE } from '../shared/constants.js'
 
-export async function deliverWatchdogAlert(notify: (text: string) => Promise<boolean> = notifyOperator, stateDir = STATE_DIR): Promise<void> {
+// The alert says "in the last hour"; one that waited longer than that for a daemon to post it says how long.
+const STALE_AFTER_S = 3600
+
+/** The alert as posted: prefixed with its age when it waited more than an hour. `at` and `now` are epoch seconds. */
+export function alertText(text: string, at: number | undefined, now: number): string {
+  if (at === undefined || now - at <= STALE_AFTER_S) return text
+  return `_This alert is from ${formatDuration((now - at) * 1000)} ago; no daemon could post it until now._\n${text}`
+}
+
+export async function deliverWatchdogAlert(notify: (text: string) => Promise<boolean> = notifyOperator, stateDir = STATE_DIR, now = Math.floor(Date.now() / 1000)): Promise<void> {
   const path = join(stateDir, WATCHDOG_ALERT_FILE)
   if (!existsSync(path)) return
   let text: string | undefined
   try {
-    text = (JSON.parse(readFileSync(path, 'utf8')) as { text?: string }).text
+    const alert = JSON.parse(readFileSync(path, 'utf8')) as { text?: string; at?: number }
+    text = alert.text && alertText(alert.text, alert.at, now)
   } catch (err) {
     process.stderr.write(`daemon: watchdog alert unreadable, dropping it: ${err}\n`)
   }

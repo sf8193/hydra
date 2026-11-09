@@ -1,15 +1,11 @@
-import { realpathSync, writeFileSync, renameSync } from 'fs'
+import { realpathSync } from 'fs'
 import { join, sep } from 'path'
 import { execSync, execFileSync, execFile } from 'child_process'
 import { gateway, STATE_DIR } from './config.js'
 import { formatDiscordTables } from '../discord-table-format.js'
 import { parseSessionLabel, type SessionLabel } from '../shared/constants.js'
 
-export function atomicWriteFileSync(filePath: string, data: string, mode?: number): void {
-  const tmp = filePath + '.tmp'
-  writeFileSync(tmp, data, { mode: mode ?? 0o600 })
-  renameSync(tmp, filePath)
-}
+export { atomicWriteFileSync } from '../shared/atomic-write.js'
 
 // Base session name embedded in a worktree branch: `wt/<name>` or `wt/<name>-<suffix>` → `<name>`.
 // Load-bearing: pickSessionName reserves this token and createWorktree's stale
