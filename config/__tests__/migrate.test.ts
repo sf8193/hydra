@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { accessStep, applyMigrate, finishMigrate, mergeDocs, planMigrate, specialistsStep, toToml, type MigrateInput } from '../migrate.js'
+import { accessStep, applyMigrate, bootRefusal, finishMigrate, mergeDocs, planMigrate, specialistsStep, toToml, type MigrateInput } from '../migrate.js'
 import { loadHydraConfig } from '../load.js'
 import type { LoadEnv } from '../types.js'
 
@@ -202,5 +202,38 @@ describe('toToml', () => {
       guard: { command: '/bin/g', timeout: '2s' },
     }
     expect(Bun.TOML.parse(toToml(doc))).toEqual(doc)
+  })
+})
+
+describe('bootRefusal: hydra.toml beside the old state it replaces', () => {
+  const TOML = 'operator = "op"\n[people.op]\nids = ["discord:1"]\n'
+  test('refuses, naming each old state, only while hydra.toml has content', () => {
+    expect(bootRefusal(state({ 'specialists.json': SPECIALISTS, 'access.json': ACCESS }).stateDir)).toBeUndefined()
+    expect(bootRefusal(state({ 'hydra.toml': '\n', 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
+    // The daemon's test for "in use": a comment-only file isn't; one that doesn't parse is.
+    expect(bootRefusal(state({ 'hydra.toml': '# nothing yet\n', 'specialists.json': SPECIALISTS }).stateDir)).toBeUndefined()
+    expect(bootRefusal(state({ 'hydra.toml': 'operator = \n', 'specialists.json': SPECIALISTS }).stateDir)).toContain('specialists.json')
+    expect(bootRefusal(state({ 'hydra.toml': TOML, 'access.json': { allowFrom: [] } }).stateDir)).toBeUndefined()
+    const r = bootRefusal(state({ 'hydra.toml': TOML, 'specialists.json': SPECIALISTS, 'access.json': ACCESS, 'slack-watch.json': '{}' }).stateDir)
+    expect(r).toContain('old state it replaces is still in')
+    expect(r).toContain('access.json allowFrom, specialists.json, slack-watch.json')
+    expect(r).toContain("run 'hydra migrate'")
+  })
+  test('refuses while a migration is half committed, until hydra migrate finishes it', () => {
+    const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
+    const plan = planMigrate(input)
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    applyMigrate(dir, plan, { stopAfter: 'journal' })
+    expect(bootRefusal(dir)).toContain("was interrupted after it committed; run 'hydra migrate' to finish it")
+    finishMigrate(dir)
+    expect(bootRefusal(dir)).toBeUndefined()
+  })
+
+  test('after hydra migrate, nothing is pending', () => {
+    const input = state({ 'access.json': ACCESS, 'specialists.json': SPECIALISTS })
+    const plan = planMigrate(input)
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    applyMigrate(dir, plan)
+    expect(bootRefusal(dir)).toBeUndefined()
   })
 })

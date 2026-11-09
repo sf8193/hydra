@@ -11,6 +11,7 @@
 import { join } from 'path'
 import { copyFileSync, readFileSync, writeFileSync, readdirSync, unlinkSync, mkdirSync, existsSync } from 'fs'
 import { connect } from 'net'
+import { bootRefusal, BOOT_REFUSED_FILE } from './config/migrate.js'
 
 // ---------------------------------------------------------------------------
 // Singleton enforcement — exactly one daemon per state dir.
@@ -32,6 +33,22 @@ try {
     }
   }
 } catch {}
+
+// ---------------------------------------------------------------------------
+// hydra.toml beside the old state it replaces: refuse before anything connects, and say why where the watchdog,
+// `hydra health` and the daemon log will show it (a daemon that never connects can't reach chat).
+// ---------------------------------------------------------------------------
+
+{
+  const refused = bootRefusal(STATE_DIR_EARLY)
+  const marker = join(STATE_DIR_EARLY, BOOT_REFUSED_FILE)
+  if (refused) {
+    process.stderr.write(`daemon: ${refused}\n`)
+    try { writeFileSync(marker, JSON.stringify({ reason: refused, at: Math.floor(Date.now() / 1000) }) + '\n') } catch {}
+    process.exit(78) // EX_CONFIG
+  }
+  try { unlinkSync(marker) } catch {}
+}
 
 // DEFAULT_SESSION_CHANNEL is a live binding: resolveDefaultChannel fills it after boot.
 import { gateway, TOKEN, PLATFORM, STATE_DIR, CLAUDE_CONFIG, SOCK_PATH, heartbeatPath, DEFAULT_SESSION_CHANNEL } from './daemon/config.js'
