@@ -6,6 +6,7 @@ import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR } from './config.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
+import { SESSION_CATALOG, SESSION_NAMES } from '../shared/session-catalog.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
 import { recordPendingRetirement } from './retirement-journal.js'
 import { classifyPersisted } from './engines/boot.js'
@@ -271,42 +272,8 @@ export type SpawnOpts = {
 // Session catalog
 // ---------------------------------------------------------------------------
 
-const SESSION_CATALOG: Array<{ name: string; emoji: string }> = [
-  { name: 'spark', emoji: '⚡' },
-  { name: 'pixel', emoji: '🟦' },
-  { name: 'nova',  emoji: '💥' },
-  { name: 'drift', emoji: '🌊' },
-  { name: 'flint', emoji: '🪨' },
-  { name: 'ember', emoji: '🔥' },
-  { name: 'bloom', emoji: '🌸' },
-  { name: 'atlas', emoji: '🗺️' },
-  { name: 'qubit', emoji: '⚛️' },
-  { name: 'prism', emoji: '🌈' },
-  { name: 'orbit', emoji: '🪐' },
-  { name: 'comet', emoji: '☄️' },
-  { name: 'patch', emoji: '🩹' },
-  { name: 'glyph', emoji: '🔣' },
-  { name: 'pulse', emoji: '💓' },
-  { name: 'scout', emoji: '🔭' },
-  { name: 'cedar', emoji: '🪵' },
-  { name: 'dusk',  emoji: '🌇' },
-  { name: 'fern',  emoji: '🌿' },
-  { name: 'haze',  emoji: '🌫️' },
-  { name: 'jade',  emoji: '🐉' },
-  { name: 'lark',  emoji: '🪶' },
-  { name: 'moss',  emoji: '🪴' },
-  { name: 'pine',  emoji: '🌲' },
-  { name: 'reef',  emoji: '🪸' },
-  { name: 'sage',  emoji: '🦉' },
-  { name: 'tide',  emoji: '🌙' },
-  { name: 'vale',  emoji: '🏞️' },
-  { name: 'wren',  emoji: '🐦' },
-  { name: 'zinc',  emoji: '🔧' },
-  { name: 'bolt',  emoji: '🔩' },
-  { name: 'crisp', emoji: '❄️' },
-]
-
-export const SESSION_NAMES = SESSION_CATALOG.map(s => s.name)
+// The catalog is in shared/ so the CLI (hydra migrate) can check names without importing the daemon.
+export { SESSION_NAMES }
 
 export function sessionEmoji(name: string): string {
   return SESSION_CATALOG.find(s => s.name === name)?.emoji ?? '🔹'

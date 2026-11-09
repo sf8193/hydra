@@ -10,6 +10,7 @@ import {
   type InstallOpts,
 } from './lifecycle.js'
 import { peek } from './peek.js'
+import { migrateCommand } from './migrate.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
 import { parseAttemptArgs } from '../shared/jobs.js'
 import { MODEL_ALIASES, parseIdempotencyTtl } from '../shared/constants.js'
@@ -77,6 +78,10 @@ Deliver (whisper channel — message to session context, not thread):
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
   Exit codes: 2 already delivered with this key · 3 gone or refused · 4 running but unreachable · 5 not now (booting,
   busy, or stuck on a dialog) · 6 starting failed or backing off · 7 a delivery with this key is in flight · 8 no such specialist
+
+Config:
+  hydra migrate [<platform>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom and specialists.json,
+                                       keeping each retired file as *.migrated; --dry-run prints it and writes nothing
 
 Specialists (named addresses that refill themselves):
   hydra specialist set <name> [--channel <id>] [--thread <id>] [--kickoff <text> | --kickoff-file <path>] [--model <id>] [--idle <30m|4h|1d>]
@@ -185,6 +190,12 @@ async function main(): Promise<void> {
       process.exit(1)
     }
     process.exit(0)
+  }
+
+  if (command === 'migrate') {
+    if (daemonName) { console.error('error: migrate takes --state-dir <dir> or a platform, not --daemon'); process.exit(1) }
+    const platform = filtered.slice(1).find(a => !a.startsWith('-'))
+    process.exit(migrateCommand({ platform, stateDir: stateDirOpt, dryRun: filtered.includes('--dry-run') }))
   }
 
   // Lifecycle commands
