@@ -1,0 +1,83 @@
+%% A Slack message's path from event to delivery, with every refusal and drop.
+%% REFUSED: never watched, owed or counted; logged once, counted by sender.
+%% DROP: logged, counted by kind, alerted once per episode in the route's target thread.
+%% The route (and so the target) is looked up from the current config at delivery,
+%% by the same routeFor(channel) the alerts and the watch-tool gate use.
+flowchart TD
+  ev["message event<br/>slack-listener.ts"]
+  cu["catch-up replay<br/>slack-catchup.ts"]
+  ev --> handle
+  cu --> handle
+
+  subgraph watch["slack-watch.ts · handle()"]
+    handle{"plain message?<br/>valid ts?"}
+    route{"routeFor(channel)<br/>current config"}
+    own{"the bot's own post?"}
+    otherbot(["ignored: another bot"])
+    rel{"tags the bot, or replies<br/>in a watched thread?"}
+    seen{"already delivered<br/>or in flight?"}
+    gate{"route.from admits<br/>the sender?"}
+    refused[["REFUSED<br/>logged once, counted by sender"]]
+    watched{"thread already watched?"}
+    cap{"tag cap<br/>maxMentionsPer10Min"}
+    capdrop[["DROP tag-cap"]]
+    table{"watch table<br/>has room?"}
+    fulldrop[["DROP table-full"]]
+    owe["owed += ts, persisted<br/>before anything is sent"]
+    owedfull[["DROP owed-full<br/>oldest past 200"]]
+    co["coalesce window"]
+  end
+
+  handle -->|no| ignored(["ignored"])
+  handle -->|yes| route
+  route -->|"channel in no route"| ignored
+  route --> own
+  own -->|"top-level"| sub["watch opens, nothing owed"]
+  own -->|"its own reply"| ignored
+  own -->|"other bot"| otherbot
+  own -->|"a person"| rel
+  rel -->|no| ignored
+  rel -->|yes| seen
+  seen -->|yes| ignored
+  seen -->|no| gate
+  gate -->|no| refused
+  gate -->|yes| watched
+  watched -->|yes| owe
+  watched -->|"no: a tag opens one"| cap
+  cap -->|over| capdrop
+  cap -->|ok| table
+  table -->|full| fulldrop
+  table -->|ok| owe
+  owe -.-> owedfull
+  owe --> co
+
+  subgraph deliver["delivery (slack-watch.ts → slack-watch-runtime.ts)"]
+    resolve{"routeFor(entry.channel)<br/>at delivery, current config"}
+    unrouted(["no route now:<br/>stays owed"])
+    guard{"beforeDeliver (PR 7)<br/>per message"}
+    g10[["DROP guard (exit 10)"]]
+    g75(["exit 75: stays owed,<br/>retried"])
+    target["route target<br/>deliverToTarget(to)"]
+    ok(["delivered:<br/>ts moves owed → delivered"])
+    fail(["failed: stays owed,<br/>catch-up retries"])
+    large[["DROP too-large"]]
+  end
+
+  co --> resolve
+  resolve -->|none| unrouted
+  resolve --> guard
+  guard -->|"exit 0<br/>(stdout {to} redirects)"| target
+  guard -->|"other exit or timeout:<br/>fail open, logged"| target
+  guard -->|10| g10
+  guard -->|75| g75
+  target -->|ok| ok
+  target -->|"error"| fail
+  target -->|"permanent"| large
+
+  sweep["hourly sweep"] --> expired[["DROP expired<br/>owed past 24h"]]
+  unrouted -.-> expired
+  g75 -.-> expired
+  fail -.-> expired
+  unrouted -.->|"owedHints"| cu
+  g75 -.->|"owedHints"| cu
+  fail -.->|"owedHints"| cu

@@ -9,7 +9,7 @@ import type { SocketEmitter } from '../../shared/socket-supervisor.js'
 
 const BOT = 'UBOT'
 const CH = 'C_FOOD'
-const cfg: SlackWatchConfig = { botUserId: BOT, channels: [CH], specialist: 'slopbot', people: {}, from: 'anyone', idleExpiryMs: 7 * 86_400_000, coalesceMs: 5, maxWatches: 50, maxMentionsPer10Min: 10 }
+const cfg: SlackWatchConfig = { botUserId: BOT, people: {}, routes: [{ channels: [CH], to: 'slopbot', from: 'anyone' }], idleExpiryMs: 7 * 86_400_000, coalesceMs: 5, maxWatches: 50, maxMentionsPer10Min: 10 }
 const mention = `<@${BOT}> a cart please`
 const TOKENS = { app: 'xapp-SECRET-APP', bot: 'xoxb-SECRET-BOT' }
 

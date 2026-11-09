@@ -7,7 +7,7 @@ import { catchUp, toEvent, type SlackApi, type RawMessage, type Page } from '../
 
 const BOT = 'UBOT'
 const CH = 'C_FOOD'
-const cfg: SlackWatchConfig = { botUserId: BOT, channels: [CH], specialist: 'slopbot', people: {}, from: 'anyone', idleExpiryMs: 7 * 86_400_000, coalesceMs: 5, maxWatches: 50, maxMentionsPer10Min: 10 }
+const cfg: SlackWatchConfig = { botUserId: BOT, people: {}, routes: [{ channels: [CH], to: 'slopbot', from: 'anyone' }], idleExpiryMs: 7 * 86_400_000, coalesceMs: 5, maxWatches: 50, maxMentionsPer10Min: 10 }
 const mention = `<@${BOT}> a cart please`
 
 const dirs: string[] = []
@@ -52,7 +52,7 @@ describe('toEvent', () => {
 
 describe('catchUp', () => {
   test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
-    const closed: SlackWatchConfig = { ...cfg, people: { UOWNER: { name: 'Owner', role: 'owner' } }, from: 'people' }
+    const closed: SlackWatchConfig = { ...cfg, people: { UOWNER: { name: 'Owner', role: 'owner' } }, routes: [{ channels: [CH], to: 'slopbot', from: 'people' }] }
     const { w, sent } = setup(undefined, closed)
     w.handle({ channel: CH, ts: '1000.000001', user: 'UOWNER', text: 'old chat' }) // sets the cursor
     const { api } = fakeApi({ [CH]: [
@@ -206,4 +206,34 @@ describe('catchUp', () => {
     expect(sent).toHaveLength(1)
     expect(w.channelCursor(CH)).toBe('1010.000001')
   })
+})
+
+describe('catch-up across routes', () => {
+  test('every routed channel is scanned, and each recovered tag goes to its own route', async () => {
+    const routed: SlackWatchConfig = { ...cfg, routes: [{ channels: [CH], to: 'food', from: 'anyone' }, { channels: ['C_OPS'], to: 'ops', from: 'anyone' }] }
+    const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
+    dirs.push(dir)
+    const sent: string[] = []
+    const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async t => { sent.push(t.to); return { ok: true } } })
+    w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
+    w.handle({ channel: 'C_OPS', ts: '1000.000001', user: 'UA', text: 'chat' })
+    const { api } = fakeApi({ [CH]: [{ ts: '1005.000001', user: 'UA', text: mention }], C_OPS: [{ ts: '1006.000001', user: 'UB', text: mention }] })
+    expect(await catchUp(w, api, routed, opts())).toMatchObject({ complete: true, accepted: 2 })
+    await w.flush()
+    expect(sent.sort()).toEqual(['food', 'ops'])
+    expect(w.channelCursor('C_OPS')).toBe('1006.000001')
+  })
+})
+
+test('owed threads in a channel no route covers are not fetched: nothing would take them', async () => {
+  let routed: SlackWatchConfig = cfg
+  const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
+  dirs.push(dir)
+  const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async () => ({ ok: false, error: 'down' }) })
+  w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
+  await w.flush()
+  routed = { ...cfg, routes: [{ channels: ['C_ELSE'], to: 'x', from: 'anyone' }] }
+  const { api, calls } = fakeApi({ C_ELSE: [] })
+  await catchUp(w, api, routed, opts())
+  expect(calls.filter(c => c.kind === 'replies')).toHaveLength(0)
 })

@@ -9,7 +9,7 @@ import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionI
 import { deliveryOutcome } from './delivery-outcome.js'
 import { deliverToSpecialist, spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
 import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, specialistForThread, type Specialist } from './specialists.js'
-import { getSlackWatcher, slackWatchHealth, slackWatchChannels, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
+import { getSlackWatcher, slackWatchHealth, addSlackWatch, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { ORPHAN_GRACE_MS, bridgeWaitMs, occupancy } from './session-reachability.js'
 import { reviveThreadForDelivery } from './recovery.js'
 import { gateway } from './config.js'
@@ -461,11 +461,7 @@ function handleSlackWatch(req: CLIRequest): CLIResponse {
     }
     case 'add': {
       if (!p.channel || !p.threadTs) return respond(req, false, 'channel and thread are required')
-      if (!/^\d{1,12}\.\d{1,6}$/.test(p.threadTs)) return respond(req, false, 'thread must look like 1793732224.093059')
-      const specialist = slackWatchHealth()?.specialist
-      if (!specialist) return respond(req, false, 'Slack watching is not configured: <state>/slack-watch.json is missing or invalid')
-      if (!slackWatchChannels().includes(p.channel)) return respond(req, false, `${p.channel} is not one of the channels in slack-watch.json, so nothing in it would ever reach the specialist`)
-      return w.watch(p.channel, p.threadTs, specialist, 'cli') ? respond(req, true, { watching: `${p.channel}:${p.threadTs}` }) : respond(req, false, 'the watch table is full')
+      try { return respond(req, true, { watching: addSlackWatch(p.channel, p.threadTs) }) } catch (err) { return respond(req, false, err instanceof Error ? err.message : String(err)) }
     }
     default: return respond(req, false, 'slack-watch action must be list, add or rm')
   }

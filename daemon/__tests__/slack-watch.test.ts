@@ -1,37 +1,40 @@
 import { describe, test, expect, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync, utimesSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   SlackWatcher, parseSlackWatchConfig, fileConfig, formatDelivery, renderItem, packItems, cmpTs,
   ITEM_TEXT_MAX_CHARS, BATCH_MAX_BYTES,
-  type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item,
+  type SlackWatchConfig, type SlackMessageEvent, type DeliverResult, type Item, type From,
 } from '../slack-watch.js'
 
 const BOT = 'UBOT'
 const CH = 'C_FOOD'
-const cfg = (over: Partial<SlackWatchConfig> = {}): SlackWatchConfig => ({
-  botUserId: BOT, channels: [CH], specialist: 'slopbot', people: {}, from: 'anyone', idleExpiryMs: 7 * 86_400_000, coalesceMs: 5,
+// `from` is sugar for the one route's from.
+type Over = Partial<SlackWatchConfig> & { from?: From }
+const cfg = ({ from = 'anyone', ...over }: Over = {}): SlackWatchConfig => ({
+  botUserId: BOT, people: {}, routes: [{ channels: [CH], to: 'slopbot', from }], idleExpiryMs: 7 * 86_400_000, coalesceMs: 5,
   maxWatches: 50, maxMentionsPer10Min: 10, workspaceUrl: 'https://x.slack.com', ...over,
 })
 
 const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
-function setup(over: Partial<SlackWatchConfig> = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>) {
+function setup(over: Over = {}, deliver?: (specialist: string, msg: string, key: string) => DeliverResult, resolveName?: (id: string) => Promise<string | undefined>) {
   const alerts: string[] = []
+  const alertChannels: (string | undefined)[] = []
   const dir = mkdtempSync(join(tmpdir(), 'slack-watch-'))
   dirs.push(dir)
   const file = join(dir, 'slack-watches.json')
   let now = 1_000_000_000_000
   const sent: { specialist: string; msg: string; key: string }[] = []
   const logs: string[] = []
-  const config = cfg(over)
+  let config = cfg(over)
   const make = () => new SlackWatcher({
-    now: () => now, file, log: l => logs.push(l), config: () => config, resolveName, alert: t => alerts.push(t),
-    deliver: async (specialist, msg, key) => { sent.push({ specialist, msg, key }); return deliver ? deliver(specialist, msg, key) : { ok: true } },
+    now: () => now, file, log: l => logs.push(l), config: () => config, resolveName, alert: (t, ch) => { alerts.push(t); alertChannels.push(ch) },
+    deliver: async ({ to: specialist }, msg, key) => { sent.push({ specialist, msg, key }); return deliver ? deliver(specialist, msg, key) : { ok: true } },
   })
-  return { w: make(), make, sent, logs, alerts, file, tick: (ms: number) => { now += ms }, config, now: () => now }
+  return { w: make(), make, sent, logs, alerts, alertChannels, file, tick: (ms: number) => { now += ms }, config, setConfig: (c: SlackWatchConfig) => { config = c }, now: () => now }
 }
 const ev = (over: Partial<SlackMessageEvent>): SlackMessageEvent => ({ channel: CH, ts: '1000.000001', user: 'UALICE', text: 'hi', ...over })
 const mention = `<@${BOT}> can you spin up a cart?`
@@ -41,7 +44,7 @@ describe('what starts and continues a watch', () => {
     const { w, sent } = setup()
     expect(w.handle(ev({ ts: '1000.000001', text: mention }))).toBe('mention')
     await w.flush()
-    expect(w.get(CH, '1000.000001')).toMatchObject({ specialist: 'slopbot', mentionedBy: 'UALICE', delivered: ['1000.000001'] })
+    expect(w.get(CH, '1000.000001')).toMatchObject({ mentionedBy: 'UALICE', delivered: ['1000.000001'] })
     expect(w.get(CH, '1000.000001')!.owed).toBeUndefined()
     expect(sent).toHaveLength(1)
     expect(sent[0].specialist).toBe('slopbot')
@@ -301,10 +304,10 @@ describe('what the specialist reads', () => {
 describe('expiry, cursors and persistence', () => {
   test('idle watches expire after the idle window; activity keeps them', () => {
     const { w, tick } = setup({ idleExpiryMs: 1000 })
-    w.watch(CH, 'a', 'slopbot')
-    w.watch(CH, 'b', 'slopbot')
+    w.watch(CH, 'a')
+    w.watch(CH, 'b')
     tick(800)
-    w.watch(CH, 'b', 'slopbot') // touched
+    w.watch(CH, 'b') // touched
     tick(400)
     expect(w.sweep()).toBe(1)
     expect(w.get(CH, 'a')).toBeUndefined()
@@ -339,7 +342,7 @@ describe('expiry, cursors and persistence', () => {
     w.handle(ev({ ts: '1000.000001', text: mention }))
     await w.flush()
     const reborn = make()
-    expect(reborn.get(CH, '1000.000001')).toMatchObject({ specialist: 'slopbot', delivered: ['1000.000001'] })
+    expect(reborn.get(CH, '1000.000001')).toMatchObject({ delivered: ['1000.000001'] })
     expect(reborn.channelCursor(CH)).toBe('1000.000001')
   })
 })
@@ -385,10 +388,10 @@ describe('who may reach the specialist (people / from)', () => {
 
   test("today's form, with no roster, stays open to anyone; declaring a roster closes it to everyone else", () => {
     const legacy = parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's' })
-    expect(legacy).toMatchObject({ from: 'anyone', people: {} })
-    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people })).toMatchObject({ from: 'people', people })
-    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people, from: 'anyone' }).from).toBe('anyone')
-    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people, from: ['owner', 'U0OTHER00', 'UGUEST'] }).from).toEqual(['owner', 'U0OTHER00', 'UGUEST'])
+    expect(legacy).toMatchObject({ people: {}, routes: [{ channels: ['C'], to: 's', from: 'anyone' }] })
+    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people })).toMatchObject({ people, routes: [{ from: 'people' }] })
+    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people, from: 'anyone' }).routes[0].from).toBe('anyone')
+    expect(parseSlackWatchConfig({ botUserId: 'U', channels: ['C'], specialist: 's', people, from: ['owner', 'U0OTHER00', 'UGUEST'] }).routes[0].from).toEqual(['owner', 'U0OTHER00', 'UGUEST'])
   })
 
   test('a from entry that is neither a role nor a user id is a parse error, not a silently closed door', () => {
@@ -405,10 +408,10 @@ describe('who may reach the specialist (people / from)', () => {
   test('a hand-edited file: blank means unset; an empty roster with the default from is an error, not a door closed to all', () => {
     const base = { botUserId: 'U', channels: ['C'], specialist: 's' }
     expect(parseSlackWatchConfig({ ...base, people: { UAB: { name: ' ', role: '' } } }).people).toEqual({ UAB: {} })
-    expect(parseSlackWatchConfig({ ...base, people: null, from: null })).toMatchObject({ people: {}, from: 'anyone' })
-    expect(parseSlackWatchConfig({ ...base, people, from: '' }).from).toBe('people')
+    expect(parseSlackWatchConfig({ ...base, people: null, from: null })).toMatchObject({ people: {}, routes: [{ from: 'anyone' }] })
+    expect(parseSlackWatchConfig({ ...base, people, from: '' }).routes[0].from).toBe('people')
     expect(() => parseSlackWatchConfig({ ...base, people: {} })).toThrow('admits no one')
-    expect(parseSlackWatchConfig({ ...base, people: {}, from: 'anyone' }).from).toBe('anyone')
+    expect(parseSlackWatchConfig({ ...base, people: {}, from: 'anyone' }).routes[0].from).toBe('anyone')
   })
 
   test('a message owed before from was tightened is settled by its refusal, so catch-up stops chasing it', async () => {
@@ -572,6 +575,22 @@ describe('no silent drops', () => {
     expect(alerts.join()).toContain("the bot's own post opens no watch")
   })
 
+  test('an episode is named by when it began: a steady trickle of drops is still alerted once an hour', () => {
+    const { w, alerts, tick } = setup({ maxWatches: 1 })
+    w.handle(ev({ ts: '1.000001', text: mention }))
+    for (let i = 0; i < 7; i++) { w.handle(ev({ ts: `${10 + i}.000001`, text: mention })); tick(20 * 60_000) } // a drop every 20 minutes for 2h20m
+    expect(alerts).toHaveLength(3) // at 0, 60 and 120 minutes
+  })
+
+  test("one route's drops do not silence another route's alert", () => {
+    const s = setup({ maxWatches: 1 })
+    s.setConfig(cfg({ maxWatches: 1, routes: [{ channels: [CH], to: 'food', from: 'anyone' }, { channels: ['C_OPS'], to: 'ops', from: 'anyone' }] }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    s.w.handle(ev({ ts: '2.000001', text: mention }))
+    s.w.handle(ev({ channel: 'C_OPS', ts: '3.000001', text: mention }))
+    expect(s.alertChannels).toEqual([CH, 'C_OPS'])
+  })
+
   test('alerted once per episode: a second drop within the hour is logged only, one after a quiet hour alerts again', () => {
     const { w, alerts, logs, tick } = setup({ maxWatches: 1 })
     w.handle(ev({ ts: '1.000001', text: mention }))
@@ -585,5 +604,125 @@ describe('no silent drops', () => {
     w.handle(ev({ ts: '4.000001', text: mention }))
     expect(alerts).toHaveLength(2)
     expect(w.stats().dropped).toEqual({ 'table-full': 3 })
+  })
+})
+
+describe('routes', () => {
+  const CH2 = 'C_OPS'
+  const two = (over: Partial<SlackWatchConfig> = {}): SlackWatchConfig => cfg({
+    people: { UOWNER: { role: 'owner' } },
+    routes: [{ channels: [CH], to: 'food', from: 'anyone' }, { channels: [CH2], to: 'ops', from: ['owner'] }],
+    ...over,
+  })
+
+  test('parse: routes, a channel in two routes is an error, and a route defaults to anyone in people', () => {
+    const base = { botUserId: 'U', people: { UA1: { role: 'owner' } } }
+    expect(parseSlackWatchConfig({ ...base, routes: [{ channels: ['C1'], to: 'a' }, { channels: ['C2', 'C3'], to: 'b', from: 'anyone' }] }).routes)
+      .toEqual([{ channels: ['C1'], to: 'a', from: 'people' }, { channels: ['C2', 'C3'], to: 'b', from: 'anyone' }])
+    expect(() => parseSlackWatchConfig({ ...base, routes: [{ channels: ['C1'], to: 'a' }, { channels: ['C1'], to: 'b' }] }))
+      .toThrow('channel C1 is in routes[0] and routes[1]; a channel belongs to one route')
+    expect(() => parseSlackWatchConfig({ ...base, channels: ['C1'], specialist: 'a', routes: [] })).toThrow('not both')
+    expect(() => parseSlackWatchConfig({ ...base, routes: [] })).toThrow('routes must be a non-empty array')
+    expect(() => parseSlackWatchConfig({ ...base, from: 'anyone', routes: [{ channels: ['C1'], to: 'a' }] })).toThrow('from belongs inside each route')
+    expect(() => parseSlackWatchConfig({ ...base, routes: [{ channels: ['C1', 'C1'], to: 'a' }] })).toThrow('listed twice in routes[0]')
+    expect(() => parseSlackWatchConfig({ ...base, routes: [{ channels: ['C1'] }] })).toThrow('routes[0].to must be a non-empty string')
+    expect(() => parseSlackWatchConfig({ botUserId: 'U', routes: [{ channels: ['C1'], to: 'a' }] })).toThrow('routes[0].from defaults to anyone in people')
+    expect(() => parseSlackWatchConfig({ ...base, routes: [{ channels: ['C1'], to: 'a', from: ['owenr'] }] })).toThrow('routes[0].from: "owenr"')
+  })
+
+  test("each channel's messages go to its route's target, gated by its route's from", async () => {
+    const s2 = setup()
+    s2.setConfig(two())
+    expect(s2.w.handle(ev({ ts: '1.000001', text: mention }))).toBe('mention')
+    expect(s2.w.handle(ev({ channel: CH2, ts: '2.000001', user: 'UOWNER', text: mention }))).toBe('mention')
+    expect(s2.w.handle(ev({ channel: CH2, ts: '3.000001', user: 'UALICE', text: mention }))).toBe('refused')
+    expect(s2.w.handle(ev({ channel: 'C_ELSE', ts: '4.000001', text: mention }))).toBe('ignored')
+    await s2.w.flush()
+    expect(s2.sent.map(x => [x.specialist, x.msg.includes(CH2)])).toEqual([['food', false], ['ops', true]])
+  })
+
+  test('H: a re-route applies to messages already owed', async () => {
+    let up = false
+    const s = setup({}, (to) => up ? { ok: true } : { ok: false, error: `${to} is down` })
+    s.setConfig(two())
+    s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention }))
+    await s.w.flush()
+    expect(s.w.owedHints()).toHaveLength(1)
+    s.setConfig(two({ routes: [{ channels: [CH], to: 'food', from: 'anyone' }, { channels: [CH2], to: 'integrator', from: ['owner'] }] }))
+    up = true
+    s.w.handle(ev({ channel: CH2, ts: '10.000001', user: 'UOWNER', text: mention })) // the catch-up replay of what is owed
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['ops', 'integrator'])
+    expect(s.w.owedHints()).toEqual([])
+  })
+
+  test('a burst resolves its target once: a re-route while it is being sent cannot split it across targets', async () => {
+    const s = setup({ coalesceMs: 20 })
+    s.setConfig(two())
+    s.w.handle(ev({ ts: '1000.000001', text: mention }))
+    for (let i = 0; i < 8; i++) s.w.handle(ev({ ts: `${1001 + i}.000001`, threadTs: '1000.000001', text: 'z'.repeat(ITEM_TEXT_MAX_CHARS) }))
+    const orig = s.sent.push.bind(s.sent)
+    s.sent.push = (...xs) => { s.setConfig(two({ routes: [{ channels: [CH], to: 'elsewhere', from: 'anyone' }] })); return orig(...xs) }
+    await s.w.flush()
+    expect(s.sent.length).toBeGreaterThan(1)
+    expect(new Set(s.sent.map(x => x.specialist))).toEqual(new Set(['food']))
+  })
+
+  test("a re-route carries the new route's gate: a message pending when its channel moves is judged by where it goes", async () => {
+    const s = setup({ coalesceMs: 60_000 })
+    s.setConfig(two())
+    s.w.handle(ev({ ts: '1.000001', user: 'UALICE', text: mention })) // admitted by the open route
+    s.setConfig(two({ routes: [{ channels: [CH], to: 'ops', from: ['owner'] }] }))
+    await s.w.flush()
+    expect(s.sent).toHaveLength(0)
+    expect(s.w.owedHints()).toEqual([])
+    expect(s.w.stats().refused).toBe(1)
+  })
+
+  test('a channel no route covers any more: its owed messages wait, and go out when a route covers it again', async () => {
+    const s = setup({ coalesceMs: 5 })
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    s.setConfig(cfg({ routes: [{ channels: ['C_OTHER'], to: 'x', from: 'anyone' }] }))
+    await s.w.flush()
+    expect(s.sent).toHaveLength(0)
+    expect(s.w.owedHints()).toHaveLength(1)
+    expect(s.logs.join()).toContain('is in no route now')
+    s.setConfig(two())
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['food'])
+  })
+
+  test('a route to no such specialist (exit 8) keeps the message owed and alerts once', async () => {
+    const s = setup({}, (to) => ({ ok: false, error: `no such specialist: ${to}`, exit: 8 }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent).toHaveLength(2)
+    expect(s.w.owedHints()).toHaveLength(1)
+    expect(s.alerts).toHaveLength(1)
+    expect(s.alerts[0]).toContain('no such specialist: slopbot')
+    expect(s.alertChannels).toEqual([undefined]) // not to the missing target's thread: to every other route's
+
+  })
+
+  test("a drop's alert names its channel, for the route's target to hear", () => {
+    const s = setup({ maxWatches: 1 })
+    s.setConfig(two({ maxWatches: 1 }))
+    s.w.handle(ev({ ts: '1.000001', text: mention }))
+    s.w.handle(ev({ channel: CH2, ts: '2.000001', user: 'UOWNER', text: mention }))
+    expect(s.alertChannels).toEqual([CH2])
+  })
+
+  test('a store from before routes loads, and the pinned specialist is dropped from it', async () => {
+    const s = setup()
+    writeFileSync(s.file, JSON.stringify({ entries: [{ channel: CH, threadTs: '1.000001', specialist: 'old', createdAt: 0, lastEventAt: 0 }], channelCursors: {} }))
+    const w = s.make()
+    expect(w.get(CH, '1.000001')).toEqual({ channel: CH, threadTs: '1.000001', createdAt: 0, lastEventAt: 0 })
+    w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'hi' }))
+    await w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot'])
+    expect(readFileSync(s.file, 'utf8')).not.toContain('"old"')
   })
 })
