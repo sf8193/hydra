@@ -70,7 +70,7 @@ Deliver (whisper channel — message to session context, not thread):
     --specialist <name>                      Target a specialist: its occupant, spawned from the specialist's kickoff if vacant (always queues)
     --message <text>                   Message to deliver (required)
     --initiator <who>                  Who sent this (default: $USER)
-    --idempotency-key <key>            Prevent duplicate delivery (optional, 15min TTL)
+    --idempotency-key <key>            Prevent duplicate delivery (optional; remembered 15m)
     --idempotency-ttl <dur>            How long the key is remembered: 1m to 7d, e.g. 24h (default 15m)
     --queue                            Queue if bridge disconnected (default: fail)
     --revive                           With --to <thread id> or --thread: a dead session is revived in its thread first
@@ -422,8 +422,8 @@ async function main(): Promise<void> {
           initiator = filtered[++i]
         } else if (filtered[i] === '--idempotency-key' && i + 1 < filtered.length) {
           idempotencyKey = filtered[++i]
-        } else if (filtered[i] === '--idempotency-ttl' && i + 1 < filtered.length) {
-          idempotencyTtl = filtered[++i]
+        } else if (filtered[i] === '--idempotency-ttl') {
+          idempotencyTtl = filtered[++i] ?? ''   // given with no value: refused below, never silently dropped
         } else if (filtered[i] === '--queue') {
           queue = true
         } else if (filtered[i] === '--revive') {

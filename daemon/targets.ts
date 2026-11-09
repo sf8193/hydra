@@ -142,8 +142,9 @@ export async function deliverVia(land: () => Promise<DeliverOutcome>, text: stri
       const s = registry.get(check.entry.sessionId)
       return { ok: true, duplicate: true, status: 'delivered', revived: false, sessionId: check.entry.sessionId, sessionName: s?.tmuxName ?? check.entry.sessionId, threadId: s?.threadId ?? '' }
     }
-    // Reserved without a session id, so a death's bookkeeping can't claim an in-flight key.
-    registerIdempotency(key, '', ttl, 'pending')
+    // Reserved without a session id, so a death's bookkeeping can't claim an in-flight key. Never shorter than the
+    // default: a short TTL that lapsed mid-delivery would let a retry deliver a second time.
+    registerIdempotency(key, '', Math.max(ttl, DELIVER_IDEMPOTENCY_TTL_MS), 'pending')
   }
   const r = await land().catch((err): DeliverOutcome => ({
     ok: false, exit: err instanceof SpecialistError && isExit(err.exitCode) ? err.exitCode : 6, reason: err instanceof Error ? err.message : String(err),

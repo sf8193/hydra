@@ -66,5 +66,7 @@ describe('hydra deliver --idempotency-ttl', () => {
     const tooLong = await cliRequest('deliver', [...base, '--idempotency-key', 'k', '--idempotency-ttl', '8d'])
     expect(tooLong).toMatchObject({ code: 1, req: undefined })
     expect(tooLong.err).toContain('at most 7d')
+    const noValue = await cliRequest('deliver', [...base, '--idempotency-key', 'k', '--idempotency-ttl'])
+    expect(noValue).toMatchObject({ code: 1, req: undefined })
   }, 20_000)
 })

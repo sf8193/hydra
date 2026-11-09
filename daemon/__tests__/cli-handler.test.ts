@@ -248,6 +248,18 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(await deliver(info.sessionId, { idempotencyTtl: '24h' })).toMatchObject({ ok: false, error: '--idempotency-ttl needs --idempotency-key' })
   })
 
+  test('--idempotency-ttl shorter than a slow delivery: the in-flight key outlives it, so a retry is 7, not a second send', async () => {
+    let settle!: (r: unknown) => void
+    const info = codex(() => new Promise(r => { settle = r }))
+    const k = key()
+    const before = Date.now()
+    const pending = deliver(info.sessionId, { idempotencyKey: k, idempotencyTtl: '1m' })
+    expect(getIdempotencyEntry(k)!.expiresAt).toBeGreaterThanOrEqual(before + 15 * 60_000)
+    settle({ status: 'accepted', via: 'steer' })
+    expect(await pending).toMatchObject({ ok: true })
+    expect(getIdempotencyEntry(k)!.expiresAt).toBeLessThan(before + 2 * 60_000)   // landed: the caller's 1m
+  })
+
   // The in-flight reservation carries no sessionId, so the death handler's
   // getBySessionId can't mistake it for a spawn key and complete it.
   test('session dies mid-delivery → pending key untouched by the death handler, then cleared', async () => {
