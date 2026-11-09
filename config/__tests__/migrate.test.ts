@@ -271,6 +271,42 @@ describe('incremental migrate: what\'s pending is appended to an existing hydra.
     expect(loadHydraConfig(plan.text, env).ok).toBe(true)
   })
 
+  test('the existing text is an exact prefix: CRLF and trailing blank lines kept, new lines in the file\'s style', () => {
+    const CRLF = '# c\r\noperator = "dan"\r\n\r\n[people.dan]\r\nids = ["discord:100000000000000001"]  \r\n\r\n\r\n'
+    const plan = planMigrate(state({ 'hydra.toml': CRLF, 'specialists.json': { ops: { kickoff: 'k' } }, 'access.json': { allowFrom: ['100000000000000001'] } }))
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    expect(plan.text.startsWith(CRLF)).toBe(true)
+    expect(/[^\r]\n/.test(plan.text)).toBe(false)
+    expect(loadHydraConfig(plan.text, env).ok).toBe(true)
+  })
+
+  test('nothing to add: hydra.toml is left exactly as it is, with no header, and the old state is still retired', () => {
+    const MINE = 'operator = "dan"\n[people.dan]\nids = ["discord:100000000000000001"]\n'
+    const plan = planMigrate(state({ 'hydra.toml': MINE, 'access.json': { allowFrom: ['100000000000000001'], dmPolicy: 'pairing' } }))
+    if (!plan.ok) throw new Error(plan.errors.join('\n'))
+    expect(plan.text).toBe(MINE)
+    expect(plan.notes[0]).toBe('nothing to add to hydra.toml; it is left as it is')
+    expect(JSON.parse(plan.writes['access.json'])).toEqual({ dmPolicy: 'pairing' })
+  })
+
+  test('a table set inline at the top is refused by name, not by a parse error', () => {
+    const INLINE = 'operator = "dan"\npeople = { dan = { ids = ["discord:100000000000000001"] } }\n'
+    expect(planMigrate(state({ 'hydra.toml': INLINE, 'access.json': { allowFrom: ['100000000000000001', '100000000000000002'] } })))
+      .toMatchObject({ ok: false, errors: [expect.stringContaining('hydra.toml sets people inline or with dotted keys at the top of the file')] })
+  })
+
+  test('a change to an existing table lists the exact edits to make by hand', () => {
+    const MINE = 'operator = "dan"\n[people.dan]\nids = ["discord:100000000000000001"]\n[specialists.ops]\nworkdir = "/w"\n'
+    const input = state({ 'hydra.toml': MINE, 'specialists.json': { ops: { kickoff: 'be ops', channel: '555' } } })
+    const plan = planMigrate({ ...input, spawnCwd: '/w' })
+    expect(plan.ok).toBe(false)
+    if (!plan.ok) {
+      expect(plan.errors[0]).toContain('Make these edits by hand, then run hydra migrate again:')
+      expect(plan.errors[0]).toContain('- under [specialists.ops]: add prompt = "be ops"')
+      expect(plan.errors[0]).toContain('- under [specialists.ops]: add home = "555"')
+    }
+  })
+
   test('nothing pending beside an existing hydra.toml: migrated', () => {
     expect(planMigrate(state({ 'hydra.toml': HAND }))).toMatchObject({ ok: false, errors: [expect.stringContaining('nothing is left to migrate')] })
   })
