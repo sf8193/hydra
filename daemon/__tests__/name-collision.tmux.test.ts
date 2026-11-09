@@ -4,17 +4,17 @@
 // answers per record, which hides the collision.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'child_process'
-import { mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { occupancy, _setDaemonStartedAtForTesting } from '../session-reachability.js'
-import { registry, resolveSendTarget, type SessionInfo } from '../sessions.js'
+import { registry, resolveSendTarget, SessionRegistry, type SessionInfo } from '../sessions.js'
 import { resumeIdleLimit, _resetIdleLimitsForTesting, _idleTimersForTesting } from '../idle-limit.js'
 import { initPhaseBudgets, _resetPhaseBudgetsForTesting } from '../phase-budget.js'
 import { transport } from '../bridge-transport.js'
 import { tmuxNewSession } from '../../shared/spawn-env.js'
 import { killSession } from '../session-lifecycle.js'
 import { engines } from '../engines/instances.js'
-import { gateway } from '../config.js'
+import { gateway, STATE_DIR } from '../config.js'
 import { tmuxHasSession } from '../util.js'
 
 const available = Bun.spawnSync(['tmux', '-V']).exitCode === 0
@@ -112,6 +112,22 @@ describe.skipIf(!available)('a name taken by a successor', () => {
     await Bun.sleep(40)
     expect(sent).toEqual([])
     expect(reaped).toEqual([])
+  })
+
+  test('a restart keeps the predecessor stamped: the name\'s execution is the later record\'s', () => {
+    const file = join(STATE_DIR, 'sessions.json')
+    const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
+    const base = { topic: 't', lastActive: 1, tmuxName: NAME, listening: false, sessionType: 'thread_owner', engine: 'claude' }
+    try {
+      writeFileSync(file, JSON.stringify([
+        { ...base, sessionId: 'old', threadId: 'thread-old', createdAt: 1, deadAt: 2 },
+        { ...base, sessionId: 'new', threadId: 'thread-new', createdAt: 3 },
+      ]))
+      const reg = new SessionRegistry()
+      expect(reg.get('old')!.deadAt).toBe(2)
+      expect(reg.get('new')!.deadAt).toBeUndefined()
+      expect(occupancy(reg.get('old'), undefined, reg.values())).toBe('dead')
+    } finally { if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved) }
   })
 
   // Last: without the guard it kills the shared tmux session the tests above need.

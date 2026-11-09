@@ -550,8 +550,10 @@ export class SessionRegistry {
           continue
         }
 
+        // One name runs one session: a record a later one took the name from is not what runs under it.
+        const succeeded = data.some(o => o !== info && o.tmuxName === info.tmuxName && o.createdAt > info.createdAt)
         let tmuxAlive = false
-        try {
+        if (!succeeded) try {
           execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
           tmuxAlive = true
         } catch {}

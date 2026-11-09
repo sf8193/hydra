@@ -444,6 +444,23 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     } finally { registry.delete('fp-l3-old'); registry.deleteThread('fp-l3-thread') }
   })
 
+  test('L2: a claimed name stops the clocks of the records it replaces, so a reaper armed while they ran cannot end the new session', async () => {
+    const { resumeIdleLimit, _idleTimersForTesting } = await import('../idle-limit.js')
+    seedDead()
+    let alive = true
+    const byName = { ...fakeClaude, isAlive: () => alive || launches.some(l => l.tmuxName === 'opsl4') }
+    registry.set('fp-l4-old', { sessionId: 'fp-l4-old', topic: 't', threadId: 'fp-l4-thread', createdAt: 1, lastActive: 1, tmuxName: 'opsl4',
+      listening: false, engine: 'claude', sessionType: 'thread_owner', ephemeral: true, idleDeadline: Date.now() + 3_600_000, adapter: byName } as any)
+    registry.setThread('fp-l4-thread', 'fp-l4-old')
+    try {
+      resumeIdleLimit('fp-l4-old')
+      expect(_idleTimersForTesting().has('fp-l4-old')).toBe(true)
+      alive = false
+      await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, name: 'opsl4' })
+      expect(_idleTimersForTesting().has('fp-l4-old')).toBe(false)
+    } finally { registry.delete('fp-l4-old'); registry.deleteThread('fp-l4-thread') }
+  })
+
   test('prompts: a fork keeps buildForkPrompt', async () => {
     seedDead()
     await doSpawnSession('q2', undefined, undefined, { existingThreadId: THREAD, forkFrom: { claudeSessionId: 'cl-f', parentName: 'elder' } })

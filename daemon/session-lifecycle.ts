@@ -1035,8 +1035,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
   // Private protocol children use this hook to install their fail-closed policy
   // before the process receives its prompt or can connect to bridge tools.
   opts?.beforeInitialTurn?.(sessionId)
-  // The records a claimed name replaces are dead: stamp them before the name runs again, or its new execution reads as theirs.
-  if (opts?.name && !opts.handedOffFrom) for (const s of registry.values()) if (s.tmuxName === tmuxName && occupancy(s) === 'dead') markDead(s)
+  // The records a claimed name replaces are dead: stamp them, and stop their clocks, before the name runs again, or its
+  // new execution reads as theirs and a reaper of theirs ends it.
+  if (opts?.name && !opts.handedOffFrom) {
+    for (const s of registry.values()) {
+      if (s.tmuxName !== tmuxName || occupancy(s) !== 'dead') continue
+      markDead(s)
+      clearIdleLimit(s.sessionId)
+      clearPhaseBudget(s.sessionId)
+    }
+  }
   const adapter = resolveEngine(engine)
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
