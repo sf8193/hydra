@@ -4,7 +4,7 @@ import type { HydraConfig, LoadEnv, LoadResult } from '../types.js'
 
 const env: LoadEnv = {
   home: '/home/op',
-  isDir: p => ['/home/op/agents/ops', '/home/op/agents/crm', '/home/op/agents/desk', '/srv/review'].includes(p),
+  isDir: p => ['/home/op', '/home/op/agents/ops', '/home/op/agents/crm', '/home/op/agents/desk', '/srv/review'].includes(p),
   isCommand: c => c === '/home/op/bin/guard' || c === 'bun',
   sessionNames: ['spark', 'glyph'],
 }
@@ -411,6 +411,11 @@ to = "desk"
     expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nmax = 5\n`).warnings)
       .toEqual(['specialists.ops: conversations past max (5) will wait until a session is ended by hand; set idle'])
     expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nidle = "2h"\n`).warnings).toEqual([])
+  })
+
+  test('a workdir that is the whole home folder warns: hydra won\'t mark it trusted', () => {
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~"\nlistens = ["cli"]\n`).warnings)
+      .toEqual(['specialists.ops.workdir: /home/op is your whole home folder: its sessions can read everything there, and hydra won\'t pre-approve Claude\'s trust for it; give the specialist a folder of its own'])
   })
 
   test('a place on a platform that isn\'t connected', () => {

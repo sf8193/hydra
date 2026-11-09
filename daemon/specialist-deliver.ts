@@ -78,7 +78,7 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
       if (!kickoff) throw new Error('the specialist has no kickoff')
       return kickoff
     },
-    name, model: specialist.model,
+    name, model: specialist.model, ...(specialist.workdir && { cwd: specialist.workdir }),
     initiator: initiator ?? `specialist:${name}`, trigger: `specialist:${name}`,
     backoffKey: key, ignoreBackoff: opts.ignoreBackoff,
   })
