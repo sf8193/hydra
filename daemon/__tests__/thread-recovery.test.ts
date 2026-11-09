@@ -16,7 +16,8 @@ import type { InboundMessage } from '../../gateway.js'
 import { withFakeTmux, type FakeTmux } from './fake-tmux.js'
 import { pollSessionsOnce } from '../session-health.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
-import { getWatchesBySession, restoreWatches, unwatchBySession } from '../pr-watch.js'
+import { getWatchesBySession, listWatches, unwatchPr } from '../pr-watch.js'
+import { seedPrWatch } from './test-harness.js'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 
@@ -304,12 +305,12 @@ describe('resume stamps a gone live record dead (Z5)', () => {
     expect(calls.some(c => c.fn === 'tryResume')).toBe(true)
   })
 
-  test('H1: an orphan torn down for a resume still hands over its worktree, PR watches and children', async () => {
+  test('H1: an orphan torn down for a resume still hands over its worktree and children, and keeps its thread\'s PR watches', async () => {
     _setDaemonStartedAtForTesting(0)
     const wt = mkdtempSync(join(tmpdir(), 'orphan-wt-'))
     const info = goneLive('claude', { claudeSessionId: 'C-h1', worktreeRepo: '/repo', worktreePath: wt, worktreeBranch: 'wt/orph' })
     tmux.alive(info.tmuxName)
-    restoreWatches([{ prUrl: 'https://github.com/o/r/pull/11', sessionId: 'x', threadId: 'x', createdAt: 1 } as any], info.sessionId, THREAD)
+    seedPrWatch('https://github.com/o/r/pull/11', THREAD)
     registry.set('h1-child', { sessionId: 'h1-child', tmuxName: 'h1c', topic: 't', threadId: 'h1-child-t', createdAt: 2, lastActive: 2, listening: false,
       parentId: info.sessionId, sessionType: 'thread_owner', adapter: engines.claude } as any)
     seeded.add('h1-child')
@@ -317,9 +318,9 @@ describe('resume stamps a gone live record dead (Z5)', () => {
     try {
       await handleResumeIntercept(msg())
       expect(calls[0].args[0]).toMatchObject({ preserveWorktree: true, worktree: { path: wt, branch: 'wt/orph' } })
-      expect(getWatchesBySession('s-h1').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/11'])
+      expect(listWatches().find(w => w.prUrl === 'https://github.com/o/r/pull/11')?.to).toBe(THREAD)
       expect(registry.get('h1-child')!.parentId).toBe('s-h1')
-    } finally { unwatchBySession('s-h1'); rmSync(wt, { recursive: true, force: true }) }
+    } finally { unwatchPr('https://github.com/o/r/pull/11'); rmSync(wt, { recursive: true, force: true }) }
   })
 
   test('Claude: an old record with no bridge right after a daemon restart is left alone, not torn down', async () => {
@@ -627,14 +628,14 @@ describe('handleForkIntercept', () => {
 // ---------------------------------------------------------------------------
 
 describe('resume through the one cascade', () => {
-  test('a resumed session takes over the dead session\'s PR watches', async () => {
-    const e = seedHistory({ claudeSessionId: 'C-1' }, { claudeSessionId: 'C-1' })
-    restoreWatches([{ prUrl: 'https://github.com/o/r/pull/7', sessionId: 'x', threadId: 'x', createdAt: 1 } as any], e.sessionId, THREAD)
+  test('a resume leaves the thread\'s PR watches where they are: they deliver to the thread, whoever holds it', async () => {
+    seedHistory({ claudeSessionId: 'C-1' }, { claudeSessionId: 'C-1' })
+    seedPrWatch('https://github.com/o/r/pull/7', THREAD)
     _setRecoveryDeps({ tryResume: async () => ({ name: 'resumed-name', sessionId: 's-watch', threadId: THREAD }) as any })
     try {
       await handleResumeIntercept(msg())
-      expect(getWatchesBySession('s-watch').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/7'])
-    } finally { unwatchBySession('s-watch'); unwatchBySession(e.sessionId) }
+      expect(listWatches().find(w => w.prUrl === 'https://github.com/o/r/pull/7')?.to).toBe(THREAD)
+    } finally { unwatchPr('https://github.com/o/r/pull/7') }
   })
 
   test('a session reaped for idleness (killSession keepRecord) resumes with its worktree, PR watches and launch settings', async () => {
@@ -646,11 +647,11 @@ describe('resume through the one cascade', () => {
         launchCwd: '/tmp/fork-cwd', disallowedTools: ['Edit'],
       })
       registry.setThread(THREAD, e.sessionId)
-      restoreWatches([{ prUrl: 'https://github.com/o/r/pull/9', sessionId: 'x', threadId: 'x', createdAt: 1 } as any], e.sessionId, THREAD)
+      seedPrWatch('https://github.com/o/r/pull/9', THREAD)
       await killSession(registry.get(e.sessionId)!, 'idle 7d, ended', { keepRecord: true })
       expect(getWatchesBySession(e.sessionId).map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/9'])
       await handleResumeIntercept(msg())
-      expect(getWatchesBySession('s-new').map(w => w.prUrl)).toEqual(['https://github.com/o/r/pull/9'])
+      expect(listWatches().find(w => w.prUrl === 'https://github.com/o/r/pull/9')?.to).toBe(THREAD)
       expect(calls[0].fn).toBe('tryResume')
       expect(calls[0].args[0]).toMatchObject({
         claudeSessionId: 'C-reap', preserveWorktree: true, worktree: { repo: '/repo', path: wt, branch: 'wt/reaped' },
@@ -659,7 +660,7 @@ describe('resume through the one cascade', () => {
       expect(JSON.stringify(calls[0].args[0])).toContain('"Edit"')
     } finally {
       tmux.restore()
-      unwatchBySession('s-new')
+      unwatchPr('https://github.com/o/r/pull/9')
       rmSync(wt, { recursive: true, force: true })
     }
   })

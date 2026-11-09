@@ -884,11 +884,11 @@
     ],
     [
       "daemon_pr-watch",
-      "daemon_bridge-transport"
+      "daemon_util"
     ],
     [
       "daemon_pr-watch",
-      "daemon_util"
+      "shared_constants"
     ],
     [
       "daemon_dashboard",

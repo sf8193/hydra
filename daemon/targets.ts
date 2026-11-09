@@ -32,7 +32,9 @@ export type DeliverOutcome =
    *  alert, never retry. */
   | { ok: false; exit: 3 | 4 | 5 | 6 | 7 | 8; reason: string; permanent?: true }
 
-export type DeliverOpts = { initiator: string; idempotencyKey?: string; queue?: boolean; source?: string }
+/** `lowPriority`: an engine where every delivery is a priced turn (Codex) may hold it for the next turn. `wanted`: a sender
+ *  that can withdraw (a PR watch ended by a kill), asked under the thread's lock just before a revive; false is exit 3. */
+export type DeliverOpts = { initiator: string; idempotencyKey?: string; queue?: boolean; source?: string; lowPriority?: boolean; wanted?: () => boolean }
 
 /** Test seam: pane-probe's verdict that a session sits on a dialog or prompt. */
 export const targetDeps = { stuckState: confirmedStuckState }
@@ -87,7 +89,7 @@ export function parseTarget(raw: unknown, where: string): Target {
  * Land one message on a session. The occupancy exits apply unless `queue` (a revived or booting session's bridge
  * flushes the queue when it connects); a session stuck on a dialog or prompt is never a landing.
  */
-export async function deliverToSession(info: SessionInfo, text: string, opts: { initiator?: string; queue?: boolean; source?: string; meta?: Record<string, string> }): Promise<
+export async function deliverToSession(info: SessionInfo, text: string, opts: { initiator?: string; queue?: boolean; source?: string; meta?: Record<string, string>; lowPriority?: boolean }): Promise<
   | { ok: true; status: 'delivered' | 'queued'; proof?: string }
   | { ok: false; exit: 3 | 4 | 5 | 6; reason: string }
 > {
@@ -103,6 +105,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   const notification = {
     type: 'notification' as const, content: text,
     meta: { source: opts.source ?? 'cli-deliver', ...(opts.initiator && { initiator: opts.initiator }), ...opts.meta },
+    ...(opts.lowPriority && { lowPriority: true }),
   }
   let result: DeliveryResult
   try {
@@ -110,7 +113,7 @@ export async function deliverToSession(info: SessionInfo, text: string, opts: { 
   } catch (err) {
     result = { status: 'unknown', reason: String(err) }
   }
-  const outcome = deliveryOutcome(result, !!opts.queue && occ !== 'reachable')
+  const outcome = deliveryOutcome(result, !!opts.queue)
   if (!outcome.ok) return { ok: false, exit: outcome.exitCode === 6 ? 6 : 3, reason: outcome.error }
   // Queued behind a session that died after it was chosen: nobody will drain that queue.
   if (outcome.status === 'queued' && occupancy(info) === 'dead') return { ok: false, exit: 6, reason: `${info.tmuxName} died during delivery` }
@@ -176,7 +179,7 @@ export async function toThread(threadId: string, text: string, opts: DeliverOpts
   if (owner) return toSpecialist(owner, text, opts)
   let revived = false
   if (revive) {
-    const r = await reviveThreadForDelivery(threadId, opts.initiator)
+    const r = await reviveThreadForDelivery(threadId, opts.initiator, opts.wanted)
     if (!r.ok) return { ok: false, exit: r.exitCode, reason: r.reason }
     revived = r.revived
   }

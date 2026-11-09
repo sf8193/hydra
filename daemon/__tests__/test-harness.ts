@@ -12,6 +12,7 @@ import { withoutIntents, type EngineAdapter } from '../engines/engine-adapter.js
 import type { SessionLabel } from '../../shared/constants.js'
 import { resolveSpawnLabel, tmuxHasSession } from '../util.js'
 import { CodexEngineAdapter } from '../engines/codex-engine-adapter.js'
+import { _setWatchForTesting, type WatchEntry } from '../pr-watch.js'
 import type { CodexPiggyback } from '../engines/codex-piggyback.js'
 
 if (!__test) throw new Error('TestHarness requires NODE_ENV=test')
@@ -497,4 +498,13 @@ export function fakeCodexProc() {
 /** A real CodexEngineAdapter over fakeCodexEngine and (by default) fakeCodexProc. */
 export function fakeCodexAdapter(engineOverrides: Record<string, unknown> = {}, proc?: unknown, piggyback?: CodexPiggyback): CodexEngineAdapter {
   return new CodexEngineAdapter(fakeCodexEngine(engineOverrides) as any, (proc ?? fakeCodexProc()) as any, piggyback)
+}
+
+/** A PR watch that delivers to `threadId` (revived when its session is dead), seeded without the network. */
+export function seedPrWatch(prUrl: string, threadId: string, extra: Partial<WatchEntry> = {}): void {
+  const prNumber = Number(prUrl.split('/').pop())
+  _setWatchForTesting({
+    prUrl, owner: 'o', repo: 'r', prNumber, to: threadId, revive: true, threadId, lastCheckedAt: '', lastReviewCommentId: 0,
+    lastIssueCommentId: 0, lastReviewId: 0, lastHeadSha: '', lastCheckStatus: 'unknown', createdAt: 1, ...extra,
+  })
 }
