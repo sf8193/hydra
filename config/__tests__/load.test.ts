@@ -384,7 +384,13 @@ to = "desk"
       .toEqual(['specialists.ops: one shared session hears everyone\'s DMs (allow = ["people"]), so one person\'s DM is remembered in another\'s; use sessions = "per-conversation" or allow = []'])
     // Only the operator's DMs, or one session per conversation: one audience each.
     expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\nallow = []\n`).warnings).toEqual([])
-    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\nsessions = "per-conversation"\n`).warnings).toEqual([])
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\nsessions = "per-conversation"\nidle = "1h"\n`).warnings).toEqual([])
+  })
+
+  test('per-conversation sessions with no idle: past max, conversations wait for a session ended by hand', () => {
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nmax = 5\n`).warnings)
+      .toEqual(['specialists.ops: conversations past max (5) will wait until a session is ended by hand; set idle'])
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\nsessions = "per-conversation"\nidle = "2h"\n`).warnings).toEqual([])
   })
 
   test('a place on a platform that isn\'t connected', () => {
