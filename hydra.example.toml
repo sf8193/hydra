@@ -1,0 +1,114 @@
+# hydra.toml: whom hydra serves. Lives at <state dir>/hydra.toml (e.g. ~/.claude/channels/discord/hydra.toml).
+# hydra re-reads it within a second of a change; a file that fails to load keeps the last good config and tells the
+# operator why. An empty file is valid: the operator's DMs go to main and nothing else is heard.
+# Start from your old files with `hydra migrate` rather than writing it by hand (see README › Configuration).
+# Every key below is optional unless it says required. Unknown keys are errors, so a typo never passes silently.
+
+# The one person whose DMs reach main and who passes every admin check and every specialist's `allow`.
+# Required once anything else is declared.
+operator = "op"
+
+# --- connectors: the platforms hydra connects to. A platform with no table isn't connected. Tokens stay in .env. ---
+
+[connectors.discord]
+bot_token_env = "DISCORD_BOT_TOKEN"   # required: the .env variable holding the bot token
+
+[connectors.slack]
+bot_token_env = "SLACK_BOT_TOKEN"     # required
+app_token_env = "SLACK_APP_TOKEN"     # Socket Mode's app-level token
+
+[connectors.github]
+repos = ["acme/widget"]               # required: the repos whose PR comments hydra hears, as owner/repo
+poll = "3m"                           # how often it looks (default 3m)
+
+# --- people: whom hydra recognizes. Anyone not here is a stranger. ---
+
+[people.op]
+ids = ["discord:100000000000000001", "slack:U0OP", "github:op"]  # required: one address per platform; one address, one person
+name = "Op"                           # shown to specialists (default: the id)
+
+[people.alice]
+ids = ["slack:U0ALICE"]
+roles = ["staff"]                     # labels for `allow` and a rule's `from`. Built in: `people` (everyone here), `anyone`
+
+[people.bob]
+ids = ["slack:U0BOB", "github:bob"]
+roles = ["staff", "finance"]
+
+# --- defaults: any specialist key, with {id} filled in, for every specialist that doesn't set it ---
+
+[defaults.specialist]
+prompt = "/orient {id}"               # what a fresh session is told first (a revive resumes instead)
+idle = "8h"
+
+# --- specialists: standing agents. hydra keeps each one alive; what it knows lives in its workdir, never here. ---
+
+# One shared session that the operator reaches from the CLI and a schedule.
+[specialists.ops]
+workdir = "~/agents/ops"              # required: the folder it runs in (must exist). Its CLAUDE.md, skills and files live there
+home = "discord:200000000000000001"   # where its threads open and replies with no conversation go (default: the operator's channel)
+model = "claude-opus-5-5"
+was = ["operations"]                  # old ids, so a rename keeps its thread, session and owed messages
+
+# One session per conversation: staff questions in a channel, each thread on its own.
+[specialists.crm]
+workdir = "~/agents/crm"
+prompt_file = "kickoff.md"            # instead of prompt; relative to workdir, read at each fresh start
+listens = ["slack:#help"]             # places it answers: slack:#name, slack:C0ID, slack:dm, discord:#name, discord:<id>, discord:dm, github:owner/repo, cli
+allow = ["staff"]                     # roles that may reach it (default ["people"]; [] = only the operator)
+sessions = "per-conversation"         # "shared" (default): one session for everything; "per-conversation": one per thread
+max = 5                               # per-conversation cap; extra messages stay owed, never dropped (default 20)
+idle = "2h"                           # end a quiet session and resume it on the next message (without it, per-conversation slots never free)
+
+# PR reviews on one repo.
+[specialists.reviewer]
+workdir = "~/code/widget"
+listens = ["github:acme/widget"]
+engine = "claude"                     # claude | codex | omp
+env_file = ".env.reviewer"            # extra environment for its sessions; relative to workdir
+
+# --- places: optional platform options for one place ---
+
+[places."slack:#help"]
+listen = "all"                        # "mentions" (default): only a tag opens a conversation; "all": any top-level message
+ack = "eyes"                          # a reaction added once a message is delivered
+files = true                          # download attachments (default false)
+bots = false                          # hear other bots (default false; hydra's own bot is never heard)
+
+# --- schedules: clocks that send a message to a specialist. A schedule's message carries the operator's authority. ---
+
+[schedules.nightly-review]
+cron = "0 3 * * *"                    # required: 5 fields, local time
+to = "ops"                            # a specialist, or "main" (required unless it's a sensor, below)
+prompt = "Nightly run: look over yesterday's work."
+
+# A check first: empty output sends nothing; anything it prints is appended to the prompt.
+[schedules.disk-watch]
+cron = "*/30 * * * *"
+to = "ops"
+prompt = "The disk check found something:"
+check = "./scripts/disk-check.sh"
+cwd = "~/agents/ops"                  # the check's working dir (absolute or ~/); a relative env_file is under it
+
+# A sensor: no `to`, so it sends nothing and takes no prompt; only its check runs, and a failure alerts the operator.
+[schedules.backup-watch]
+cron = "0 * * * *"
+check = "~/bin/backup-fresh.sh"
+runner = "daemon"                     # "launchd" (default) tries once; "daemon" keeps trying while hydra runs
+needs = ["internet"]                  # daemon runner only: not now while offline
+alert_after = "2d"                    # daemon runner only: how long a failure run lasts before it is alerted (default 1d)
+
+# --- rules: overrides for when the place isn't enough. Each names a place; first match in file order wins. ---
+
+[[rules]]
+at = "slack:#help"
+from = "finance"                      # a person or a role (absent: anyone at that place)
+to = "ops"
+
+# --- guard: the operator's hook, run after routing and the allow check for anyone but the operator ---
+
+[guard]
+command = "~/bin/hydra-guard"         # required: stdin {person, roles, place, conversation, to}; exit 0 delivers, 10 drops, 75 "not now"
+timeout = "5s"                        # past this, the message is delivered and the timeout logged (at most 30s)
+include_text = false
+owed_max = "1h"                       # how long "not now" may keep a message owed before it fails visibly
