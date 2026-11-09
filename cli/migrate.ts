@@ -25,6 +25,8 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
     console.error(`error: platform must be discord or slack, not "${opts.platform}"`)
     return 1
   }
+  // Read before resolveConfig, which fills a blank SPAWN_CWD from the default state dir's .env.
+  const ambientSpawnCwd = process.env.SPAWN_CWD?.trim()
   const cfg = resolveConfig(opts.platform)
   const stateDir = opts.stateDir ?? cfg.stateDir
   // The ids in allowFrom are this state dir's platform's: a state dir named for one says which.
@@ -34,8 +36,8 @@ export async function migrateCommand(opts: { platform?: string; stateDir?: strin
     return 1
   }
   const platform = (opts.platform ?? dirPlatform ?? cfg.platform) === 'slack' ? 'slack' : 'discord'
-  // Its own .env says where its sessions start; another state dir's doesn't.
-  const spawnCwd = readEnvFileValue(join(stateDir, '.env'), 'SPAWN_CWD')?.trim() || (stateDir === cfg.stateDir ? cfg.spawnCwd : homedir())
+  // Its own .env says where its sessions start, then a SPAWN_CWD the caller set; another state dir's .env doesn't.
+  const spawnCwd = readEnvFileValue(join(stateDir, '.env'), 'SPAWN_CWD')?.trim() || ambientSpawnCwd || (stateDir === cfg.stateDir ? cfg.spawnCwd : homedir())
 
   if (!opts.dryRun && await daemonListening(stateDir)) {
     console.error(`error: the daemon for ${stateDir} is running. Stop it first (hydra down ${platform}), run hydra migrate, then hydra up ${platform}.`)

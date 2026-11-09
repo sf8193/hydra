@@ -190,12 +190,14 @@ export function bootRefusal(stateDir: string, steps: MigrateStep[] = STEPS): str
   const old = [...steps.filter(s => s.pending(stateDir)).map(s => s.name), ...UNHANDLED.filter(f => existsSync(join(stateDir, f)))]
   if (!old.length) return undefined
   return `refusing to start: hydra.toml is in use, but old state it replaces is still in ${stateDir}: ${old.join(', ')}. `
-    + `Move hydra.toml aside and run 'hydra migrate' (it writes hydra.toml from the old state), or retire the old state by hand.`
+    + `Run 'hydra migrate' (it adds that state to hydra.toml and retires it), or retire it by hand.`
 }
 
 // --- merging the steps --------------------------------------------------------------------------------------------
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+/** Deep equality that ignores key order (a table written by hand may list its keys in any order). */
+const canonical = (v: unknown): unknown => Array.isArray(v) ? v.map(canonical) : isTable(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v
+const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b))
 
 /** Merges tables key by key; the same key with different values is a conflict. */
 function mergeTable(into: Doc, from: Doc, path: string, conflicts: string[]): void {
@@ -213,14 +215,17 @@ type PersonDoc = { ids: string[]; roles?: string[]; name?: string }
  * are unioned), and a merged-away id is rewritten where the step referred to it (operator, a rule's from).
  * Everything else merges key by key, a conflict being the same key with different values.
  */
-export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: string[] } {
+export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: string[]; renames: Map<string, string>[] } {
   const out: Doc = {}
   const people: Record<string, PersonDoc> = {}
   const owner = new Map<string, string>()
   const conflicts: string[] = []
   const notes: string[] = []
-  for (const doc of docs) {
+  const renames: Map<string, string>[] = []
+  // Merging writes into the output's tables; copy each input so none is changed underneath its caller.
+  for (const doc of docs.map(d => structuredClone(d))) {
     const rename = new Map<string, string>()
+    renames.push(rename)
     for (const [id, raw] of Object.entries(isTable(doc.people) ? doc.people : {})) {
       const p = raw as PersonDoc
       const target = p.ids.map(a => owner.get(a)).find(x => x !== undefined)
@@ -253,7 +258,7 @@ export function mergeDocs(docs: Doc[]): { doc: Doc; conflicts: string[]; notes: 
   }
   if (Object.keys(people).length) out.people = people
   notes.push(...lookAlikes(people))
-  return { doc: out, conflicts: conflicts.map(c => c.replace(/^\./, '')), notes }
+  return { doc: out, conflicts: conflicts.map(c => c.replace(/^\./, '')), notes, renames }
 }
 
 /** People whose names read the same: perhaps one human under two ids, for the operator to merge. */
@@ -280,7 +285,7 @@ const value = (v: unknown): string => {
 }
 
 /** A hydra.toml doc as TOML: top-level values, then each table, in the schema's order. */
-export function toToml(doc: Doc): string {
+export function toToml(doc: Doc, header = true): string {
   const lines: string[] = []
   const table = (path: string, t: Doc) => {
     const scalars = Object.entries(t).filter(([, v]) => !isTable(v))
@@ -302,7 +307,7 @@ export function toToml(doc: Doc): string {
       top.push(`${key(k)} = ${value(v)}`)
     }
   }
-  const head = ['# Written by `hydra migrate`. Edit freely: hydra re-reads this file when it changes.', '', ...top, ...(top.length ? [''] : [])]
+  const head = [...(header ? ['# Written by `hydra migrate`. Edit freely: hydra re-reads this file when it changes.', ''] : []), ...top, ...(top.length ? [''] : [])]
   return [...head, ...lines].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
 }
 
@@ -316,11 +321,16 @@ export type MigratePlan =
 export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): MigratePlan {
   if (existsSync(join(input.stateDir, MIGRATE_JOURNAL))) return { ok: false, errors: ['a migration was interrupted after it committed: run hydra migrate again to finish it'] }
   const toml = join(input.stateDir, HYDRA_TOML)
-  if (existsSync(toml) && readFileSync(toml, 'utf8').trim()) {
-    const pending = steps.filter(s => s.pending(input.stateDir)).map(s => s.name)
-    return { ok: false, errors: [pending.length
-      ? `${toml} already has content, and ${pending.join(', ')} is still here (hydra.toml written by hand?). Move hydra.toml aside and run hydra migrate again.`
-      : `${toml} already has content and nothing is left to migrate: this state dir is migrated.`] }
+  const existingText = existsSync(toml) ? readFileSync(toml, 'utf8') : ''
+  // A hydra.toml already here (an earlier migration, or written by hand) is kept: what's still pending is added to it.
+  let existing: Doc | undefined
+  if (hydraTomlInUse(input.stateDir)) {
+    if (!steps.some(s => s.pending(input.stateDir)) && !UNHANDLED.some(f => existsSync(join(input.stateDir, f)))) {
+      return { ok: false, errors: [`${toml} already has content and nothing is left to migrate: this state dir is migrated.`] }
+    }
+    try { existing = Bun.TOML.parse(existingText) as Doc } catch (e) {
+      return { ok: false, errors: [`${toml} isn't valid TOML (${(e as Error).message}); fix it, then run hydra migrate again.`] }
+    }
   }
   const unhandled = UNHANDLED.filter(f => existsSync(join(input.stateDir, f)))
   if (unhandled.length) {
@@ -338,11 +348,27 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
   }
   if (errors.length) return { ok: false, errors }
   if (!outputs.length) return { ok: false, errors: ['nothing to migrate: no allowFrom in access.json and no specialists.json'] }
-  const merged = mergeDocs(outputs.map(o => o.doc))
+  const merged = mergeDocs([...(existing ? [existing] : []), ...outputs.map(o => o.doc)])
   if (merged.conflicts.length) return { ok: false, errors: merged.conflicts.map(c => `two sources disagree on ${c}`) }
   // A hydra.toml governs only once it names an operator; one without would retire allowFrom and leave nobody in charge.
   if (typeof merged.doc.operator !== 'string') return { ok: false, errors: ['no operator: access.json has no allowFrom to take one from. Add an allowFrom id (or write hydra.toml by hand).'] }
-  const text = toToml(merged.doc)
+  // A hydra.toml with only comments in it is kept above the new content.
+  // What's already in hydra.toml is kept exactly, line endings included; new text follows in the file's own style.
+  const eol = existingText.includes('\r\n') ? '\r\n' : '\n'
+  const after = (body: string) => existingText + (existingText === '' || existingText.endsWith('\n') ? '' : eol) + eol + body.replace(/\n/g, eol)
+  let text = existingText.trim() && !existing ? after(toToml(merged.doc)) : toToml(merged.doc)
+  const appendNotes: string[] = []
+  if (existing) {
+    const added = appendOnly(existing, merged.doc, existingText)
+    if ('refusal' in added) return { ok: false, errors: [added.refusal] }
+    if (added.tables.length) {
+      text = after(`# Added by \`hydra migrate\`.\n${toToml(added.doc, false)}`)
+      appendNotes.push(`appends to the existing hydra.toml, leaving what's there as it is: ${added.tables.join(', ')}`)
+    } else {
+      text = existingText
+      appendNotes.push('nothing to add to hydra.toml; it is left as it is')
+    }
+  }
   const loaded = loadHydraConfig(text, input.env)
   if (!loaded.ok) return { ok: false, errors: [`the migrated hydra.toml doesn't load:\n${formatIssues(loaded.errors)}\n\n${text}`] }
   const writes: Record<string, string> = {}
@@ -358,7 +384,63 @@ export function planMigrate(input: MigrateInput, steps: MigrateStep[] = STEPS): 
     const at = (f: string) => join(input.stateDir, f)
     return { ok: false, errors: [`${clash.join(', ')} already exists with other content (a previous run, or the originals changed since one staged). To start over: mv ${clash.map(f => `'${at(f)}' '${at(f)}.old'`).join(' && mv ')} && rm -f '${input.stateDir}'/*${STAGED}, then run hydra migrate again.`] }
   }
-  return { ok: true, text, warnings: loaded.warnings, notes: [...outputs.flatMap(o => o.notes), ...merged.notes], consumed, writes }
+  // A step's notes name its own person ids; follow the merge's renames (e.g. into a person hydra.toml already has).
+  const offset = existing ? 1 : 0
+  const stepNotes = outputs.flatMap((o, i) => o.notes.map(n => n.replace(/people\.([a-z0-9-]+)/g, (m, id: string) => `people.${merged.renames[i + offset].get(id) ?? id}`)))
+  return { ok: true, text, warnings: loaded.warnings, notes: [...appendNotes, ...stepNotes, ...merged.notes], consumed, writes }
+}
+
+/**
+ * What a merge adds to an existing hydra.toml, as tables to append; or why it can't be appended. Appending keeps the
+ * operator's file (edits, comments) as it is, so a merge may only add: new tables, new [[rules]] after the existing
+ * ones. TOML can't extend a table from the end of the file, so a change to an existing table or value is refused,
+ * with the exact edits to make by hand. A table written inline or with dotted keys at the top of the file can't take
+ * appended sub-tables either, and is refused by name.
+ */
+export function appendOnly(existing: Doc, merged: Doc, existingText = ''): { doc: Doc; tables: string[] } | { refusal: string } {
+  const doc: Doc = {}
+  const tables: string[] = []
+  const edits: string[] = []
+  const lines = (where: string, was: Doc, now: Doc) => {
+    for (const [k, v] of Object.entries(now)) {
+      if (k in was && same(was[k], v)) continue
+      let written: string
+      try { written = value(v) } catch { written = JSON.stringify(v) }
+      edits.push(`under ${where}: ${k in was ? 'set' : 'add'} ${key(k)} = ${written}`)
+    }
+  }
+  const keys = [...ORDER.filter(k => k in merged), ...Object.keys(merged).filter(k => !ORDER.includes(k))]
+  for (const k of keys) {
+    const v = merged[k]
+    const before = existing[k]
+    if (k === 'rules' && Array.isArray(v)) {
+      const old = Array.isArray(before) ? before : []
+      if (!same(v.slice(0, old.length), old)) { edits.push('[[rules]]: the existing rules would change; compare them with hydra migrate --dry-run from a copy without hydra.toml'); continue }
+      if (v.length > old.length) { doc.rules = v.slice(old.length); tables.push(`[[rules]] ×${v.length - old.length}`) }
+    } else if (isTable(v) && Object.values(v).every(isTable) && (before === undefined || isTable(before))) {
+      // A table of tables ([people.*], [specialists.*], …): each sub-table is new, or unchanged.
+      for (const [sub, t] of Object.entries(v)) {
+        const was = isTable(before) ? before[sub] : undefined
+        if (was === undefined) { ((doc[k] ??= {}) as Doc)[sub] = t; tables.push(`[${k}.${key(sub)}]`) }
+        else if (!same(was, t)) lines(`[${k}.${key(sub)}]`, was as Doc, t as Doc)
+      }
+    } else if (before === undefined) {
+      if (!isTable(v)) { let w: string; try { w = value(v) } catch { w = JSON.stringify(v) } edits.push(`at the top, before any table: add ${key(k)} = ${w}`); continue }
+      doc[k] = v
+      tables.push(`[${k}]`)
+    } else if (!same(before, v)) {
+      if (isTable(v) && isTable(before)) lines(`[${k}]`, before, v)
+      else { let w: string; try { w = value(v) } catch { w = JSON.stringify(v) } edits.push(`at the top: set ${key(k)} = ${w}`) }
+    }
+  }
+  if (edits.length) return { refusal: `hydra migrate would change what hydra.toml already says, and TOML can't extend a table from the end of the file. Make these edits by hand, then run hydra migrate again:\n${edits.map(e => `- ${e}`).join('\n')}` }
+  // Keys set at the top of the file (`people = { … }`, `people.dan.ids = …`) can't take appended [people.x] tables.
+  const firstTable = existingText.search(/^\s*\[/m)
+  const top = firstTable < 0 ? existingText : existingText.slice(0, firstTable)
+  const inline = new Set([...top.matchAll(/^\s*([A-Za-z0-9_-]+)\s*[.=]/gm)].map(m => m[1]))
+  const blocked = Object.keys(doc).filter(k => inline.has(k))
+  if (blocked.length) return { refusal: `hydra.toml sets ${blocked.join(', ')} inline or with dotted keys at the top of the file (e.g. ${blocked[0]} = { … }), and hydra migrate can only append [${blocked[0]}.<id>] tables after it. Rewrite ${blocked.length > 1 ? 'them' : 'it'} as tables, then run hydra migrate again.` }
+  return { doc, tables }
 }
 
 const STAGED = '.migrating'
