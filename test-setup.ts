@@ -160,6 +160,11 @@ for (const k of Object.keys(process.env)) if (k.startsWith('AUTO_')) delete proc
 // before bun starts; refuse to run without it.
 const tmuxRefusal = tmuxIsolationRefusal(childTmuxEnv())
 if (tmuxRefusal) throw new Error(tmuxRefusal)
+// The same for launchd: a CLI a test spawns runs a real `jobs sync`, and only HYDRA_NO_LAUNCHD, set before bun
+// starts, keeps it off the real LaunchAgents. A broken guard once let one register in the live launchd (Nov 8, 2026).
+if (execFileSync('sh', ['-c', 'printf "%s" "$HYDRA_NO_LAUNCHD"']).toString() !== '1') {
+  throw new Error('tests could register jobs with the real launchd. Run them with `bun run test` (scripts/test.sh), which sets HYDRA_NO_LAUNCHD=1.')
+}
 process.env.HYDRA_CODEX_ROOT = join(dir, 'codex')
 
 applyHermeticGit(process.env)
