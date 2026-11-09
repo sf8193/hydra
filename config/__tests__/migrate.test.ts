@@ -55,9 +55,9 @@ describe('hydra migrate', () => {
     expect(again.ok).toBe(false)
   })
 
-  test('refuses, writing nothing, when hydra.toml has content, slack-watch.json has no step yet, or there is nothing to do', () => {
+  test('refuses, writing nothing, when hydra.toml has content, a step refuses (slack-watch.json unreadable), or there is nothing to do', () => {
     expect(planMigrate(state({ 'hydra.toml': 'operator = "x"\n', 'specialists.json': SPECIALISTS }))).toMatchObject({ ok: false, errors: [expect.stringContaining('already has content')] })
-    expect(planMigrate(state({ 'slack-watch.json': '{}', 'specialists.json': SPECIALISTS }))).toMatchObject({ ok: false, errors: [expect.stringContaining('slack-watch.json')] })
+    expect(planMigrate(state({ 'slack-watch.json': '{ nope', 'specialists.json': SPECIALISTS }))).toMatchObject({ ok: false, errors: [expect.stringContaining('slack-watch.json')] })
     expect(planMigrate(state({ 'access.json': { allowFrom: [] } }))).toMatchObject({ ok: false, errors: [expect.stringContaining('nothing to migrate')] })
     expect(planMigrate(state({ 'specialists.json': SPECIALISTS, 'specialists.json.migrated': '{}', 'access.json': ACCESS }))).toMatchObject({ ok: false, errors: [expect.stringContaining('already exists')] })
   })

@@ -1,27 +1,26 @@
 import { spawn } from 'child_process'
+import type { Guard } from '../config/types.js'
 
 /**
- * `beforeDeliver`: the operator's own command, run for each Slack message just before it is delivered.
+ * `[guard]`: the operator's own command, run for each message after routing and the allow check, for anyone but the operator.
  * It judges; it never produces the content. Its exit code decides the message's fate:
- *   0   deliver (stdout `{"to": "<specialist>"}` redirects it)
+ *   0   deliver (stdout `{"to": "<specialist>"}` redirects it, and that specialist's `allow` is checked again)
  *   10  drop it: logged, counted, never delivered
- *   75  not now: it stays owed, and the next catch-up pass offers it again
+ *   75  not now: it stays owed, for at most `owed_max`, and the next catch-up pass offers it again
  *   anything else, a timeout, too much output, or a command that will not start: deliver anyway,
- *   and log why, so a broken guard never silences Slack.
+ *   and log why, so a broken guard never silences anyone.
  *
  * A guard is untrusted in the ways that matter to the daemon: its run is bounded by one deadline, its
  * output by a few KB, and it runs in its own process group so a timeout kills everything it started.
  */
 
-export type Guard = { command: string; includeText: boolean; timeoutMs: number }
-
-/** What the guard reads on stdin. `text` only with `includeText`. */
+/** What the guard reads on stdin: who, where, and where routing sent it. `text` only with `include_text`. */
 export type GuardInput = {
-  from: { id?: string; name?: string; role?: string }
-  channel: string
-  /** The thread's ts; empty for a DM's top-level conversation. */
-  thread: string
-  dm?: true
+  /** The sender's person id; null for a stranger. */
+  person: string | null
+  roles: string[]
+  place: string
+  conversation: string
   to: string
   text?: string
 }
@@ -51,7 +50,7 @@ export function guardEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
   return env
 }
 
-export function runGuard(g: Guard, input: GuardInput): Promise<GuardVerdict> {
+export function runGuard(g: Pick<Guard, 'command' | 'timeoutMs'>, input: GuardInput): Promise<GuardVerdict> {
   return new Promise(resolve => {
     let settled = false
     let out = ''
@@ -107,12 +106,3 @@ function judge(code: number | null, out: string): GuardVerdict {
   if (typeof to !== 'string' || !TARGET_RE.test(to)) return { fate: 'open', why: `printed an unusable "to": ${JSON.stringify(to).slice(0, 80)}` }
   return { fate: 'deliver', to }
 }
-
-/** `"5s"`, `"1500ms"`; at most 30 seconds, since deliveries for a thread wait on it. */
-export function parseGuardTimeout(s: string): number | null {
-  const m = s.trim().match(/^(\d+)(ms|s)$/)
-  if (!m) return null
-  const ms = parseInt(m[1], 10) * (m[2] === 's' ? 1000 : 1)
-  return ms > 0 && ms <= GUARD_TIMEOUT_MAX_MS ? ms : null
-}
-export const GUARD_TIMEOUT_MAX_MS = 30_000

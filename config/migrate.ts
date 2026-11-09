@@ -10,6 +10,7 @@ import { parseIdleTtl } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import { loadHydraConfig, normalizeAddress, normalizePlace, formatIssues } from './load.js'
 import type { ConfigIssue, LoadEnv } from './types.js'
+import { slackWatchStep } from './migrate-slack-watch.js'
 
 export const HYDRA_TOML = 'hydra.toml'
 /** The daemon's specialist pointers, as daemon/specialists.ts keeps them. */
@@ -159,11 +160,11 @@ export const specialistsStep: MigrateStep = {
   },
 }
 
-/** Every step, in merge order. A step added later (slack-watch.json, jobs.toml) appends itself here. */
-export const STEPS: MigrateStep[] = [accessStep, specialistsStep]
+/** Every step, in merge order. A step added later (jobs.toml) appends itself here. */
+export const STEPS: MigrateStep[] = [accessStep, specialistsStep, slackWatchStep]
 
 /** Old files no step migrates yet: migrate refuses while one is here, so nothing goes quiet on upgrade. */
-export const UNHANDLED = ['slack-watch.json']
+export const UNHANDLED: string[] = []
 
 // --- merging the steps --------------------------------------------------------------------------------------------
 

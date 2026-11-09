@@ -6,7 +6,7 @@ import type { SessionType, Capability, DerivedCapability } from '../shared/const
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
 import { getSpecialist } from './specialists.js'
-import { currentSlackWatchConfig, routeTargets } from './slack-watch.js'
+import { currentHydraConfig } from './hydra-config.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
 const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<string>>> = TYPED_BASE_TOOLS
@@ -25,16 +25,16 @@ export function predecessorAsker(info: Pick<SessionInfo, 'engine' | 'predecessor
 export const canAskPredecessor = (info: Pick<SessionInfo, 'engine' | 'predecessor'>): boolean => !!predecessorAsker(info)
 
 
-/** Whether this session sits in the thread of a specialist a Slack route delivers to: the sessions that steer which threads are watched. */
-export function isSlackSpecialistOccupant(info: Partial<Pick<SessionInfo, 'threadId'>>): boolean {
-  return !!info.threadId && routeTargets(currentSlackWatchConfig()).some(to => getSpecialist(to)?.threadId === info.threadId)
+/** Whether this session sits in the thread of a specialist declared in hydra.toml: the sessions that bind conversations to themselves. */
+export function isSpecialistOccupant(info: Partial<Pick<SessionInfo, 'threadId'>>): boolean {
+  return !!info.threadId && Object.keys(currentHydraConfig().specialists).some(id => getSpecialist(id)?.threadId === info.threadId)
 }
 
-/** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that sits in the Slack-watch specialist, gets those tools. */
+/** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that sits in a specialist, gets those tools. */
 export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId'>>): Set<Capability | DerivedCapability> {
   const caps = new Set<Capability | DerivedCapability>(info.capabilities ?? [])
   if (canAskPredecessor(info)) caps.add('predecessor')
-  if (isSlackSpecialistOccupant(info)) caps.add('slack_specialist')
+  if (isSpecialistOccupant(info)) caps.add('specialist')
   return caps
 }
 

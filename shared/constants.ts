@@ -228,7 +228,7 @@ export const BASE_TOOLS: Readonly<Record<SessionType, ReadonlySet<ToolName>>> = 
 
 export type Capability = 'protocol_context' | 'protocol_spawn' | 'main_handoff'
 // Derived by tool-surface from session state, never stored: not a Capability, so addCapability, a protocol phase and the loader all refuse it.
-export type DerivedCapability = 'predecessor' | 'slack_specialist'
+export type DerivedCapability = 'predecessor' | 'specialist'
 
 export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>>> = {
   protocol_context: new Set<ToolName>(['advance', 'extend_phase']),
@@ -239,8 +239,8 @@ export const CAPABILITY_TOOLS: Readonly<Record<Capability, ReadonlySet<ToolName>
 
 export const DERIVED_CAPABILITY_TOOLS: Readonly<Record<DerivedCapability, ReadonlySet<ToolName>>> = {
   predecessor: new Set<ToolName>(['ask_predecessor']),
-  // The session sitting in the Slack-watch specialist: only it steers which Slack threads are watched.
-  slack_specialist: new Set<ToolName>(['watch_slack_thread', 'unwatch_slack_thread']),
+  // The session sitting in a specialist declared in hydra.toml: it binds the conversations it hears to itself.
+  specialist: new Set<ToolName>(['bind_conversation', 'unbind_conversation']),
 }
 
 export const ALL_CAPABILITY_TOOLS: Readonly<Record<Capability | DerivedCapability, ReadonlySet<ToolName>>> = { ...CAPABILITY_TOOLS, ...DERIVED_CAPABILITY_TOOLS }

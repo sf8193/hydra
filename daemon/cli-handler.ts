@@ -9,7 +9,11 @@ import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
 import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, withTargetLock, type Specialist } from './specialists.js'
-import { getSlackWatcher, slackWatchHealth, addSlackWatch, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
+import { slackWatchHealth, refreshSlackSpecialistSurface, formatConversations, operatorBind, operatorUnbind, placeAliases } from './slack-watch-runtime.js'
+import { currentHydraConfig } from './hydra-config.js'
+import { route, explain } from '../routing/route.js'
+import { normalizeAddress } from '../config/load.js'
+import type { Address } from '../config/types.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from './targets.js'
 import { gateway } from './config.js'
 import { loadAccess, operatorIds } from './access.js'
@@ -240,7 +244,7 @@ function handleHealth(req: CLIRequest): CLIResponse {
     tmux: tmuxRunning ? 'running' : 'not running',
     idempotency: { active: listIdempotencyEntries().length },
     ...(raindropLine ? { raindrop: raindropLine } : {}),
-    ...(slackWatchHealth() ? { slackWatch: slackWatchHealth() } : {}),
+    ...(slackWatchHealth() ? { slack: slackWatchHealth() } : {}),
     ...(jobsClock() ? { jobs: jobsClock()!.health() } : {}),
   })
 }
@@ -372,7 +376,7 @@ async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
       // Under the specialist's lock: a removal never lands in the middle of its refill.
       if (name && declaredInToml()) return respond(req, false, `specialists are declared in hydra.toml: remove [specialists.${name}] there`)
       if (!name || !(await withTargetLock(name, async () => removeSpecialist(name)))) return respond(req, false, `specialist "${name ?? ''}" not found`)
-      refreshSlackSpecialistSurface() // its occupant loses the Slack-watch tools
+      refreshSlackSpecialistSurface() // its occupant loses the conversation tools
       return respond(req, true, { removed: name })
     }
     case 'set': {
@@ -425,7 +429,7 @@ function setSpecialistUnderLock(
       ...(p.model && { model: p.model }),
       ...(p.idle && { idle: p.idle }),
     })
-    refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the Slack-watch tools
+    refreshSlackSpecialistSurface() // the specialist's occupant may have just gained or lost the conversation tools
     return respond(req, true, view(name, specialist))
   } catch (err) {
     return respond(req, false, err instanceof Error ? err.message : String(err))
@@ -433,24 +437,41 @@ function setSpecialistUnderLock(
 }
 
 // ---------------------------------------------------------------------------
-// Slack watches — operator view (the specialist's own session uses the bridge tools)
+// Conversations and routing: the operator's view
 // ---------------------------------------------------------------------------
 
-function handleSlackWatch(req: CLIRequest): CLIResponse {
-  const p = req.params as { action?: string; channel?: string; threadTs?: string }
-  const w = getSlackWatcher()
-  switch (p.action) {
-    case 'list': return respond(req, true, { watches: formatSlackWatches(), health: slackWatchHealth() })
-    case 'rm': {
-      if (!p.channel || !p.threadTs) return respond(req, false, 'channel and thread are required')
-      return w.unwatch(p.channel, p.threadTs) ? respond(req, true, { removed: `${p.channel}:${p.threadTs}` }) : respond(req, false, `${p.channel}:${p.threadTs} is not watched`)
+function handleConversations(req: CLIRequest): CLIResponse {
+  const p = req.params as { action?: string; conversation?: string; to?: string }
+  try {
+    switch (p.action ?? 'list') {
+      case 'list': return respond(req, true, { conversations: formatConversations(), health: slackWatchHealth() })
+      case 'bind':
+        if (!p.conversation || !p.to) return respond(req, false, 'a conversation and a specialist are required')
+        return respond(req, true, { bound: operatorBind(p.conversation, p.to) })
+      case 'unbind':
+        if (!p.conversation) return respond(req, false, 'a conversation is required')
+        return respond(req, true, { unbound: operatorUnbind(p.conversation) })
+      default: return respond(req, false, 'conversations action must be list, bind or unbind')
     }
-    case 'add': {
-      if (!p.channel || !p.threadTs) return respond(req, false, 'channel and thread are required')
-      try { return respond(req, true, { watching: addSlackWatch(p.channel, p.threadTs) }) } catch (err) { return respond(req, false, err instanceof Error ? err.message : String(err)) }
-    }
-    default: return respond(req, false, 'slack-watch action must be list, add or rm')
+  } catch (err) { return respond(req, false, err instanceof Error ? err.message : String(err)) }
+}
+
+/**
+ * `hydra route --as <person|address|stranger> --at <place>`: what routing would do with a new message there, every
+ * candidate and why the winner won. It reads the live hydra.toml and binds nothing.
+ */
+function handleRoute(req: CLIRequest): CLIResponse {
+  const p = req.params as { as?: string; at?: string; bound?: string }
+  if (!p.as || !p.at) return respond(req, false, 'usage: hydra route --as <person|address|stranger> --at <place> [--bound <specialist>]')
+  const h = currentHydraConfig()
+  let from: Address | undefined
+  if (p.as !== 'stranger') {
+    const person = h.people[p.as]
+    from = person ? person.ids[0] : normalizeAddress(p.as)
+    if (!from) return respond(req, false, `"${p.as}" is neither a person in hydra.toml nor an address like slack:U0ABC`)
   }
+  const d = route(h, { ...(from && { from }), at: placeAliases(p.at), addressed: true, ...(p.bound && { bound: p.bound }) })
+  return respond(req, true, { fate: d.fate, ...('to' in d && { to: d.to }), report: explain(d, h.guard?.command) })
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +495,8 @@ export async function handleCLIRequest(req: CLIRequest): Promise<CLIResponse> {
       case 'check-key': response = handleCheckKey(req); break
       case 'deliver': response = await handleDeliver(req); break
       case 'specialist': response = await handleSpecialist(req); break
-      case 'slack-watch': response = handleSlackWatch(req); break
+      case 'conversations': response = handleConversations(req); break
+      case 'route': response = handleRoute(req); break
       case 'jobs-run': response = handleJobsRun(req); break
       case 'jobs-mark-done': response = handleJobsMarkDone(req); break
       case 'jobs-sync': response = await handleJobsSync(req); break
