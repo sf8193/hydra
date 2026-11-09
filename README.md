@@ -120,6 +120,17 @@ hydra clear-key <key>          # Clear a stuck idempotency key
 
 ## Configuration
 
+Four homes, each for one kind of fact. A fact lives in exactly one of them.
+
+| Where | Holds | Who writes it |
+|---|---|---|
+| `<state dir>/.env` | **how the daemon runs**: `SPAWN_CWD`, `HYDRA_MODEL`, bot tokens | you |
+| `<state dir>/hydra.toml` | **whom it serves**: the operator, people and roles, connectors, specialists and where they listen, schedules, rules, the guard | you; hydra re-reads it within a second of a change |
+| `<state dir>/` state files (`sessions.json`, `threads.json`, `specialist-threads.json`, `jobs-state/`, `idempotency.json`, …) | **what it remembers** | hydra only; never edit by hand |
+| a specialist's `workdir` | **what the agent knows**: its `CLAUDE.md`, `AGENTS.md`, skills and files | you and the agent; hydra never reads it |
+
+The state dir is `~/.claude/channels/<platform>/` by default. Every `hydra.toml` key, with a one-line comment each, is in [`hydra.example.toml`](hydra.example.toml); a test loads it, so it stays current. To start from an existing install (`access.json`'s `allowFrom`, `specialists.json`, `slack-watch.json`), stop the daemon and run `hydra migrate <platform>` (`--dry-run` first shows what it would write). It keeps every file it changes as `*.migrated`, and an interrupted run is finished by running it again. A daemon refuses to start while `hydra.toml` sits beside old state it replaces, and says why in its log and in `hydra health`.
+
 ### Bot tokens
 
 Set in `~/.claude/channels/<platform>/.env`:
@@ -323,7 +334,7 @@ change, and turning Raindrop off does not revert it.
 
 ### Access control
 
-`access.json` controls who can message the bot. Lives in the state dir (`~/.claude/channels/discord/` by default).
+`access.json` controls who can message the bot. Lives in the state dir (`~/.claude/channels/discord/` by default). Once `hydra.toml` exists, its `operator` replaces `allowFrom` (admin checks, DMs to main) and pairing is off; the rest of `access.json` (DM policy, groups) still applies.
 
 ```jsonc
 {
@@ -456,6 +467,8 @@ Add `+green` (`watch <pr-url> +green`, or `watch_pr` with `notify_green: true`) 
 
 ### Specialists
 
+Once `hydra.toml` exists, it declares the specialists (`[specialists.<name>]`, see [`hydra.example.toml`](hydra.example.toml)) and `hydra specialist set` only moves `--thread`; the commands below describe an install that hasn't migrated.
+
 A specialist is a standing job with a stable name, filled by one long-lived session. It stores the thread its session lives in (or the channel to open one in) and the prompt to start it with, and it is the only pointer to that thread: the session is named after the specialist, and only the specialist claims that name, under its own lock. Its name needs a letter (an all-digit one reads as a thread id) and must not be one of the default session names (spark, comet, …); a name stored before that rule is reported at boot and ignored, never renamed.
 
 | Step | Command | What happens |
@@ -473,26 +486,7 @@ A handoff successor keeps its predecessor's name and thread, so it keeps filling
 
 ### Slack: routing from hydra.toml
 
-Slack is one connector of [routing](diagrams/flow-route.mmd): who sent a message and where decide which specialist hears it, all from `<state>/hydra.toml`. `[connectors.slack]` names the token variables (`bot_token_env`, `app_token_env`); a specialist's `listens` names the places it answers (`slack:#help` by name, `slack:C0ABC` by id, `slack:dm`); `allow` names the roles that may reach it. Routing is content-blind: it never reads what a message says.
-
-```toml
-operator = "op"
-[connectors.slack]
-bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"
-app_token_env = "SLOPBOT_SLACK_APP_TOKEN"
-[people.op]
-ids = ["slack:U0OP"]
-[people.alice]
-ids = ["slack:U0ALICE"]
-roles = ["staff"]
-[specialists.crm]
-workdir = "~/agents/crm"
-listens = ["slack:#help"]
-allow = ["staff"]
-[places."slack:#help"]
-ack = "eyes"
-files = true
-```
+Slack is one connector of [routing](diagrams/flow-route.mmd): who sent a message and where decide which specialist hears it, all from `<state>/hydra.toml` ([Configuration](#configuration); every key in [`hydra.example.toml`](hydra.example.toml)): `[connectors.slack]` for the tokens, a specialist's `listens` for the places it answers, `allow` for the roles that may reach it. Routing is content-blind: it never reads what a message says.
 
 **Where a message goes.** A conversation is a Slack thread, or a DM's top level. It is bound to a specialist when its first message arrives: by the first `[[rules]]` entry at that place that matches the sender, else by the specialist that `listens` there (a channel's id outranks its name), else, for the operator's DM, `main`. Everything later in it, owed messages included, follows the binding: a config change re-routes only new conversations, a rename through `was` keeps them, and a conversation whose specialist is no longer declared is routed anew. `hydra conversations bind <conversation> <specialist>` moves one; `hydra route --as <person> --at <place>` prints every candidate and why the winner won. A message that tags the bot, or a DM, opens a conversation; every later reply in it reaches the specialist, tagged or not, until it has been idle a week. Where `[places]` says `listen = "all"`, an untagged top-level message opens a conversation too: its own thread, bound to wherever that message routed (so one person's message never captures the place, and replies under it follow its binding). Conversations opened by untagged chatter go after a day idle rather than a week; while still owed or answered (a reply under them) they may take only half the conversation table, and once delivered and unanswered they hold no slot at all, so a busy place keeps being heard.
 

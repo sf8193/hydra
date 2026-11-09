@@ -308,7 +308,7 @@ export function toToml(doc: Doc, header = true): string {
       top.push(`${key(k)} = ${value(v)}`)
     }
   }
-  const head = [...(header ? ['# Written by `hydra migrate`. Edit freely: hydra re-reads this file when it changes.', ''] : []), ...top, ...(top.length ? [''] : [])]
+  const head = [...(header ? ['# Written by `hydra migrate`. Edit freely: hydra re-reads this file when it changes.', '# Every key, explained: hydra.example.toml in the hydra repo; where each kind of setting lives: README › Configuration.', ''] : []), ...top, ...(top.length ? [''] : [])]
   return [...head, ...lines].join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
 }
 
