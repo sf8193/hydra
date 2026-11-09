@@ -12,8 +12,11 @@
 //   to = "<thread id>"             → refused: a specialist is the only pointer to a thread
 // Dropped, with a note when set: revive (a specialist always revives), channel (alerts go to the operator), durable.
 
+import { existsSync, readFileSync } from 'fs'
+import { join } from 'path'
 import { parseJobsConfig, type Job } from '../shared/jobs.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
+import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
   cron: string
@@ -121,4 +124,27 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
     out.schedules[j.name] = s
   }
   return out
+}
+
+/**
+ * The jobs.toml step for `hydra migrate`. Pending while jobs.toml is here: until migrate retires it, the clock runs it
+ * exactly as before (shared/schedules.ts). A job that can't be carried over refuses the whole migrate, naming it.
+ */
+export const jobsStep: MigrateStep = {
+  name: 'jobs.toml',
+  pending: stateDir => existsSync(join(stateDir, 'jobs.toml')),
+  run({ stateDir, env, spawnCwd }) {
+    const path = join(stateDir, 'jobs.toml')
+    if (!existsSync(path)) return undefined
+    const m = migrateJobs(readFileSync(path, 'utf8'), { sessionNames: env.sessionNames, defaultWorkdir: spawnCwd })
+    if (m.refusals.length) throw new Error(m.refusals.join('; '))
+    return {
+      doc: {
+        ...(Object.keys(m.schedules).length > 0 && { schedules: m.schedules }),
+        ...(Object.keys(m.specialists).length > 0 && { specialists: m.specialists }),
+      },
+      consumed: ['jobs.toml'],
+      notes: m.notes,
+    }
+  },
 }
