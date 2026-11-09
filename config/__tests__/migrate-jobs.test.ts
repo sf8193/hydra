@@ -1,13 +1,18 @@
 import { describe, expect, test } from 'bun:test'
-import { migrateJobs } from '../migrate-jobs.js'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { jobsStep, migrateJobs } from '../migrate-jobs.js'
+import { applyMigrate, planMigrate } from '../migrate.js'
+import { loadHydraConfig } from '../load.js'
 
 const opts = { sessionNames: ['byte'], defaultWorkdir: '/home/u/work' }
-
-describe('migrate jobs.toml → [schedules]', () => {
-  test('the five shapes a real file has: spawn, two sensors, main, a fine schedule', () => {
-    const m = migrateJobs(`
+// The live discord/jobs.toml's shapes, with its paths and prompts shortened.
+const LIVE = `
 [review]
-schedule = "0 * * * *"
+schedule = "0 11 * * FRI"
+runner = "daemon"
+needs = ["internet"]
 check = "~/ledger/review-check.sh"
 mode = "spawn"
 idle_ttl = "4d"
@@ -24,17 +29,30 @@ schedule = "*/5 * * * *"
 check = "~/bridge/ensure.sh"
 mode = "none"
 
+[pull]
+schedule = "23 * * * *"
+runner = "daemon"
+needs = ["internet"]
+alert_after = "2d"
+check = "~/ledger/pull.sh"
+mode = "none"
+
 [health]
 schedule = "*/5 * * * *"
 check = "~/health/check.sh"
 mode = "main"
 prompt = "Health check found something."
-`, opts)
+`
+
+describe('migrate jobs.toml → [schedules]', () => {
+  test("the live file's five shapes: a daemon spawn review, two sensors (one daemon, owed until done), main", () => {
+    const m = migrateJobs(LIVE, opts)
     expect(m.refusals).toEqual([])
     expect(m.schedules).toEqual({
-      review: { cron: '0 * * * *', check: '~/ledger/review-check.sh', runner: 'launchd', to: 'review' },
+      review: { cron: '0 11 * * FRI', check: '~/ledger/review-check.sh', runner: 'daemon', needs: ['internet'], to: 'review' },
       nudge: { cron: '0 11,19 * * 0-4,6', check: '~/ledger/nudge.sh', runner: 'launchd' },
       keepalive: { cron: '*/5 * * * *', check: '~/bridge/ensure.sh', runner: 'launchd' },
+      pull: { cron: '23 * * * *', check: '~/ledger/pull.sh', runner: 'daemon', needs: ['internet'], alert_after: '2d' },
       health: { cron: '*/5 * * * *', check: '~/health/check.sh', prompt: 'Health check found something.', runner: 'launchd', to: 'main' },
     })
     // The fresh session's first words are today's message: the prompt, with the check output after it.
@@ -43,6 +61,40 @@ prompt = "Health check found something."
       'review: a per-conversation specialist; each run is a fresh session in a new thread, as before',
       'review: workdir /home/u/work is where spawned sessions ran (SPAWN_CWD); to run it elsewhere, set cwd on the job before migrating, or workdir after',
     ])
+  })
+
+  test('hydra migrate with access.json and jobs.toml: one hydra.toml that loads, jobs.toml retired', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), LIVE)
+      writeFileSync(join(dir, 'access.json'), JSON.stringify({ allowFrom: ['100000000000000001'] }))   // the operator
+      const env = { home: '/home/u', isDir: () => true, isCommand: () => true, sessionNames: ['byte'] }
+      const input = { stateDir: dir, env, spawnCwd: '/home/u/work', platform: 'discord' as const }
+      expect(jobsStep.pending(dir)).toBe(true)
+      const plan = planMigrate(input)
+      if (!plan.ok) throw new Error(plan.errors.join('\n'))
+      const loaded = loadHydraConfig(plan.text, env)
+      if (!loaded.ok) throw new Error('migrated text must load')
+      expect(loaded.config.schedules.pull).toMatchObject({ runner: 'daemon', needs: ['internet'], alertAfterMs: 2 * 86_400_000 })
+      expect(loaded.config.schedules.keepalive.to).toBeUndefined()
+      expect(loaded.config.specialists.review).toMatchObject({ sessions: 'per-conversation', home: '1551794455227404370', idleMs: 4 * 86_400_000 })
+      expect(plan.consumed).toEqual(['jobs.toml'])
+      expect(loaded.config.operator).toBe('operator')
+      applyMigrate(dir, plan)
+      expect(existsSync(join(dir, 'jobs.toml'))).toBe(false)
+      expect(readFileSync(join(dir, 'jobs.toml.migrated'), 'utf8')).toBe(LIVE)
+      expect(jobsStep.pending(dir)).toBe(false)
+    } finally { rmSync(dir, { recursive: true }) }
+  })
+
+  test('a job that cannot be carried over refuses the whole migrate, naming it, and writes nothing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'migrate-jobs-'))
+    try {
+      writeFileSync(join(dir, 'jobs.toml'), '[t]\nschedule="0 6 * * *"\nprompt="p"\nto="1234567890"\n')
+      const plan = planMigrate({ stateDir: dir, env: { home: '/h', isDir: () => true, isCommand: () => true, sessionNames: [] }, spawnCwd: '/h', platform: 'discord' }, [jobsStep])
+      expect(plan).toEqual({ ok: false, errors: ['jobs.toml: t: to = "1234567890" is a thread; declare a specialist for it and send to that'] })
+      expect(existsSync(join(dir, 'hydra.toml'))).toBe(false)
+    } finally { rmSync(dir, { recursive: true }) }
   })
 
   test('a spawn table carries its kickoff, model and cwd; the prompt stays on the schedule; with no idle, 4d, so it frees', () => {
