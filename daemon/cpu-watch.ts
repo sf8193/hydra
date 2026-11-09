@@ -102,7 +102,8 @@ function psAll(): Map<number, ProcStat> {
 
 function swapUsedMB(): number | undefined {
   if (process.platform === 'darwin') {
-    const r = spawnSync('sysctl', ['vm.swapusage'], { encoding: 'utf8' })
+    // By path: sysctl lives in /usr/sbin, which a launchd-started daemon's PATH leaves out.
+    const r = spawnSync('/usr/sbin/sysctl', ['vm.swapusage'], { encoding: 'utf8' })
     return parseSwapUsage(r.stdout ?? '')
   }
   try { return parseMeminfoSwap(readFileSync('/proc/meminfo', 'utf8')) } catch { return undefined }
