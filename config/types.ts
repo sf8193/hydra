@@ -84,7 +84,8 @@ export type Schedule = {
   id: string
   /** 5 fields, local time. */
   cron: string
-  to: string
+  /** A specialist or `main`. Absent: a sensor. Its check runs and its result is recorded; a failure alerts the operator. */
+  to?: string
   prompt: string
   /** A script run first: empty output sends nothing; its output is appended. */
   check?: string
@@ -92,6 +93,10 @@ export type Schedule = {
   cwd?: string
   envFile?: string
   runner: 'launchd' | 'daemon'
+  /** Daemon runner only: preconditions checked before a run; unmet is "not now", and the slot stays owed. */
+  needs?: 'internet'[]
+  /** Daemon runner only: how long a failure run lasts before the operator is alerted, once. Default 1 day. */
+  alertAfterMs?: number
 }
 
 /** An override for when the place isn't enough. Loaded and checked now; applied by B2. First match in file order. */
