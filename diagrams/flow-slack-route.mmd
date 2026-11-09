@@ -1,83 +1,144 @@
-%% A Slack message's path from event to delivery, with every refusal and drop.
-%% REFUSED: never watched, owed or counted; logged once, counted by sender.
-%% DROP: logged, counted by kind, alerted once per episode in the route's target thread.
-%% The route (and so the target) is looked up from the current config at delivery,
-%% by the same routeFor(channel) the alerts and the watch-tool gate use.
+%% A Slack message's path from event to delivery, derived from the code, with every refusal and drop.
+%% REFUSED: logged once, counted by sender, removed from owed. Never alerted.
+%% DROP: logged, counted by kind, alerted once per episode (an hour from its start), per kind and target. Guard drops are not alerted.
 flowchart TD
-  ev["message event<br/>slack-listener.ts"]
-  cu["catch-up replay<br/>slack-catchup.ts"]
-  ev --> handle
-  cu --> handle
-
-  subgraph watch["slack-watch.ts · handle()"]
-    handle{"plain message?<br/>valid ts?"}
-    route{"routeFor(channel)<br/>current config"}
-    own{"the bot's own post?"}
-    otherbot(["ignored: another bot"])
-    rel{"tags the bot, or replies<br/>in a watched thread?"}
-    seen{"already delivered<br/>or in flight?"}
-    gate{"route.from admits<br/>the sender?"}
-    refused[["REFUSED<br/>logged once, counted by sender"]]
-    watched{"thread already watched?"}
-    cap{"tag cap<br/>maxMentionsPer10Min"}
-    capdrop[["DROP tag-cap"]]
-    table{"watch table<br/>has room?"}
-    fulldrop[["DROP table-full"]]
-    owe["owed += ts, persisted<br/>before anything is sent"]
-    owedfull[["DROP owed-full<br/>oldest past 200"]]
-    co["coalesce window"]
+  subgraph src["sources"]
+    live["live event<br/>slack-listener.ts onMessage"]
+    trig["catch-up triggers: boot, reconnect,<br/>every 10 min deep, retry 60s, queued"]
+    c0["0. list bot DMs (im:read; a failure logs once an hour)<br/>admitted senders only; a new DM is read back 24h,<br/>and gets its cursor at once only when found empty"]
+    c1["1. owedHints: routed only<br/>DM top-level → history from just before"]
+    c2["3. history: routed channels, then known DMs<br/>least recently read first, in what the budget leaves<br/>after the threads' calls; empty DM → cursor now<br/>a DM not reached stays held: live events cannot move its cursor"]
+    c3["2. deep: list every watched thread<br/>(their calls are kept back)"]
+    hold["on connect, before the socket opens:<br/>hold every routed channel and known DM"]
+    c4["4. replies per thread<br/>(a reply never moves the channel cursor)"]
+    cbud{"budget spent?"}
+    gap[["DROP catch-up-gap: a channel past 5 pages<br/>moves to its newest read; the rest is surfaced"]]
+    cinc(["incomplete: cursors held,<br/>catchingUp stays on, retry 60s"])
+    cok(["complete: cursors advance"])
+    hold --> trig
+    trig --> c0 --> c1 --> c3 --> c2 --> c4 --> cbud
+    c2 -.->|">5 pages"| gap
+    cbud -->|spent| cinc
+    cbud -->|ok| cok
   end
+  live --> h0
+  c2 --> h0
+  c4 --> h0
 
-  handle -->|no| ignored(["ignored"])
-  handle -->|yes| route
-  route -->|"channel in no route"| ignored
-  route --> own
-  own -->|"top-level"| sub["watch opens, nothing owed"]
-  own -->|"its own reply"| ignored
-  own -->|"other bot"| otherbot
-  own -->|"a person"| rel
-  rel -->|no| ignored
-  rel -->|yes| seen
-  seen -->|yes| ignored
-  seen -->|no| gate
-  gate -->|no| refused
-  gate -->|yes| watched
-  watched -->|yes| owe
-  watched -->|"no: a tag opens one"| cap
-  cap -->|over| capdrop
-  cap -->|ok| table
-  table -->|full| fulldrop
-  table -->|ok| owe
-  owe -.-> owedfull
+  subgraph handle["slack-watch.ts handle / classify"]
+    h0{"config and routeFor(channel)?<br/>D… → the dms route"}
+    h1{"valid ts, plain subtype,<br/>not another bot, not in flight?"}
+    hdm{"DM?"}
+    down{"bot's own?"}
+    dseen{"already delivered?"}
+    dgate{"route.from admits?"}
+    dtab{"table room?"}
+    cown{"bot's own?"}
+    csub["top-level: watch opens,<br/>ts marked delivered"]
+    crel{"tag, or reply<br/>in a watched thread?"}
+    cseen{"already delivered?"}
+    cgate{"route.from admits?"}
+    cw{"watched?"}
+    cap{"tag cap"}
+    ctab{"table room?"}
+    owe["owed += ts, persisted"]
+    co["coalesce window → flushKey<br/>inflight, per-thread run"]
+    cur["cursor advances unless a pass holds it<br/>DM only when admitted"]
+  end
+  ign(["ignored"])
+  ref[["REFUSED"]]
+  h0 -->|no| ign
+  h0 --> h1
+  h1 -->|no| ign
+  h1 --> hdm
+  hdm -->|yes| down
+  down -->|yes| ign
+  down -->|no| dseen
+  dseen -->|yes| ign
+  dseen -->|no| dgate
+  dgate -->|no| ref
+  dgate -->|yes| dtab
+  dtab -->|full| dfull[["DROP table-full"]]
+  dtab -->|ok| owe
+  hdm -->|no| cown
+  cown -->|own reply| ign
+  cown -->|own top-level| csub
+  csub -.->|full| dfull
+  cown -->|person| crel
+  crel -->|no| ign
+  crel -->|yes| cseen
+  cseen -->|yes| ign
+  cseen -->|no| cgate
+  cgate -->|no| ref
+  cgate -->|yes| cw
+  cw -->|yes| owe
+  cw -->|"no: tag opens one"| cap
+  cap -->|over| dcap[["DROP tag-cap"]]
+  cap -->|ok| ctab
+  ctab -->|full| dfull
+  ctab -->|ok| owe
+  owe -.->|">200"| dofull[["DROP owed-full"]]
   owe --> co
+  h0 -.-> cur
 
-  subgraph deliver["delivery (slack-watch.ts → slack-watch-runtime.ts)"]
-    resolve{"routeFor(entry.channel)<br/>at delivery, current config"}
-    unrouted(["no route now:<br/>stays owed"])
-    guard{"route.guard: beforeDeliver<br/>per message, slack-guard.ts"}
-    g10[["DROP guard (exit 10)<br/>logged, counted, not alerted"]]
-    g75(["exit 75: stays owed,<br/>retried"])
-    target["route target, or the redirect<br/>deliverToTarget(to)"]
-    ok(["delivered:<br/>ts moves owed → delivered"])
-    fail(["failed: stays owed,<br/>catch-up retries"])
-    large[["DROP too-large"]]
+  subgraph deliver["deliverBatches, once per burst"]
+    r0{"routeFor(entry.channel)<br/>current config"}
+    unr(["no route: stays owed<br/>catch-up skips it"])
+    r1{"route.from re-judged"}
+    nm["names: roster name and role,<br/>else Slack name without parens or mentions"]
+    g{"route.guard, per message, ≤4"}
+    gopen["other exit, timeout, >4 KB,<br/>no start, throw: logged"]
+    g10[["DROP guard, settled, not alerted"]]
+    g75(["75: stays owed"])
+    grp["group by target, order kept<br/>a redirect to a target some route has, whose from<br/>refuses the sender → route.to"]
+    fl["files ≤2 at once: route.files, link, ≤20 MB,<br/>connected → .part 0600 → rename,<br/>one download per file however many ask<br/>else listed with why"]
+    snd["global send chain → packItems ≤8 KB<br/>deliverToTarget(to, key incl. target)"]
+    ok["ok or exit 2 → ack reaction → settle<br/>delivered never trimmed past the oldest owed, nor the parent"]
+    big[["DROP too-large, settled"]]
+    e8r["exit 8 on a redirect"]
+    e8["exit 8 on route.to:<br/>alert, stays owed"]
+    err(["other error: stays owed"])
   end
+  co --> r0
+  r0 -->|none| unr
+  r0 --> r1
+  r1 -->|no| ref
+  r1 -->|yes| nm --> g
+  g -->|"none, or 0"| grp
+  g -->|"0 + {to}"| grp
+  g --> gopen --> grp
+  g -->|10| g10
+  g -->|75| g75
+  g75 -.->|cut| dofull
+  grp --> fl --> snd
+  snd --> ok
+  snd -->|permanent| big
+  snd --> e8r
+  e8r -->|"alert, resend to route.to"| snd
+  snd --> e8
+  snd --> err
+  err -.->|cut| dofull
 
-  co --> resolve
-  resolve -->|none| unrouted
-  resolve --> guard
-  guard -->|"exit 0<br/>(stdout {to} redirects)"| target
-  guard -->|"other exit or timeout:<br/>fail open, logged"| target
-  guard -->|10| g10
-  guard -->|75| g75
-  target -->|ok| ok
-  target -->|"error"| fail
-  target -->|"permanent"| large
+  sweep["hourly sweep"] --> exp[["DROP expired: owed >24h"]]
+  sweep --> idle["idle, nothing owed: watch removed<br/>quiet DM cursors pruned<br/>slack-files older than 7d removed"]
+  unr -.-> exp
+  g75 -.-> exp
+  e8 -.-> exp
+  err -.-> exp
+  g75 -.->|owedHints| c1
+  e8 -.->|owedHints| c1
+  err -.->|owedHints| c1
 
-  sweep["hourly sweep"] --> expired[["DROP expired<br/>owed past 24h"]]
-  unrouted -.-> expired
-  g75 -.-> expired
-  fail -.-> expired
-  unrouted -.->|"owedHints"| cu
-  g75 -.->|"owedHints"| cu
-  fail -.->|"owedHints"| cu
+  al["alert(text, channel)<br/>route.to, or every route target"]
+  al --> th{"where does it post?"}
+  th -->|"a specialist"| post(["its thread"])
+  th -->|main| mainch(["main's channel"])
+  th -->|"neither yet"| se(["stderr"])
+  la["listener: down ≥5 min, back up,<br/>catch-up stale ≥25 min,<br/>permanent Slack error, missed live events"] --> al
+  dfull -.-> al
+  dcap -.-> al
+  dofull -.-> al
+  big -.-> al
+  exp -.-> al
+  e8r -.-> al
+  e8 -.-> al
