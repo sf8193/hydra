@@ -83,6 +83,8 @@ export function startHydraConfig(opts: { alert?: Send; env?: LoadEnv; intervalMs
         undelivered = text
         void deliver()
       }
+      const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+      process.stderr.write(`daemon: hydra.toml loaded: ${config.operator ? `operator ${config.operator}` : 'no operator'}, ${count(Object.keys(config.people).length, 'person', 'people')}, ${count(Object.keys(config.specialists).length, 'specialist', 'specialists')}, ${count(Object.keys(config.schedules).length, 'schedule', 'schedules')}\n`)
       if (warnings.length) process.stderr.write(`daemon: hydra.toml loaded with warnings:\n${formatIssues(warnings)}\n`)
       notify(config)
     },

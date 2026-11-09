@@ -221,6 +221,29 @@ describe('specialists', () => {
     }
   })
 
+  test('specialist list shows each hydra.toml specialist\'s sessions mode, and max when it is per-conversation', async () => {
+    const [a, b] = [`t-specialist-${++n}`, `t-specialist-${++n}`]
+    const base = { workdir: '/srv/x', prompt: 'k', home: '555', listens: [], allow: ['people'], was: [] }
+    _setHydraConfigForTesting({
+      operator: 'op', connectors: {}, places: {}, schedules: {}, rules: [],
+      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      specialists: {
+        [a]: { id: a, ...base, sessions: 'shared', max: 20 },
+        [b]: { id: b, ...base, sessions: 'per-conversation', max: 3 },
+      },
+    })
+    try {
+      const list = (await cli('list', undefined)).data as Record<string, unknown>[]
+      const [sa, sb] = [list.find(s => s.name === a)!, list.find(s => s.name === b)!]
+      expect(sa.sessions).toBe('shared')
+      expect(sa).not.toHaveProperty('max')
+      expect(sb).toMatchObject({ sessions: 'per-conversation', max: 3 })
+      expect((await cli('show', b)).data).toMatchObject({ sessions: 'per-conversation', max: 3 })
+    } finally {
+      _setHydraConfigForTesting(undefined)
+    }
+  })
+
   test('a hydra.toml specialist\'s fresh session starts in its workdir, on a new thread and on the respawn tier alike', async () => {
     const calls = fakeSpawn()
     const name = `t-specialist-${++n}`
