@@ -34,7 +34,7 @@ export type DeliverOutcome =
 
 /** `lowPriority`: an engine where every delivery is a priced turn (Codex) may hold it for the next turn. `wanted`: a sender
  *  that can withdraw (a PR watch ended by a kill), asked under the thread's lock just before a revive; false is exit 3. */
-export type DeliverOpts = { initiator: string; idempotencyKey?: string; queue?: boolean; source?: string; lowPriority?: boolean; wanted?: () => boolean }
+export type DeliverOpts = { initiator: string; idempotencyKey?: string; idempotencyTtlMs?: number; queue?: boolean; source?: string; lowPriority?: boolean; wanted?: () => boolean }
 
 /** Test seam: pane-probe's verdict that a session sits on a dialog or prompt. */
 export const targetDeps = { stuckState: confirmedStuckState }
@@ -134,6 +134,7 @@ export async function deliverVia(land: () => Promise<DeliverOutcome>, text: stri
   if (bytes > DELIVER_MAX_MESSAGE_BYTES) return { ok: false, exit: 3, reason: `message too large (${bytes} bytes, max ${DELIVER_MAX_MESSAGE_BYTES})`, permanent: true }
 
   const key = opts.idempotencyKey
+  const ttl = opts.idempotencyTtlMs ?? DELIVER_IDEMPOTENCY_TTL_MS
   if (key) {
     const check = checkIdempotency(key)
     if (check.blocked && check.entry.status === 'pending') return { ok: false, exit: 7, reason: `delivery with key "${key}" still in flight — retry shortly` }
@@ -142,13 +143,13 @@ export async function deliverVia(land: () => Promise<DeliverOutcome>, text: stri
       return { ok: true, duplicate: true, status: 'delivered', revived: false, sessionId: check.entry.sessionId, sessionName: s?.tmuxName ?? check.entry.sessionId, threadId: s?.threadId ?? '' }
     }
     // Reserved without a session id, so a death's bookkeeping can't claim an in-flight key.
-    registerIdempotency(key, '', DELIVER_IDEMPOTENCY_TTL_MS, 'pending')
+    registerIdempotency(key, '', ttl, 'pending')
   }
   const r = await land().catch((err): DeliverOutcome => ({
     ok: false, exit: err instanceof SpecialistError && isExit(err.exitCode) ? err.exitCode : 6, reason: err instanceof Error ? err.message : String(err),
   }))
   if (key) {
-    if (r.ok) registerIdempotency(key, r.sessionId, DELIVER_IDEMPOTENCY_TTL_MS, 'completed')
+    if (r.ok) registerIdempotency(key, r.sessionId, ttl, 'completed')
     else clearIdempotency(key)
   }
   return r

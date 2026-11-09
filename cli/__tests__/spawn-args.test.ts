@@ -5,7 +5,7 @@ import { join } from 'path'
 const hydra = join(import.meta.dir, '..', 'hydra.ts')
 
 /** Runs the real CLI against a fake daemon under a scratch HOME, and returns the request it sent (or its error). */
-async function spawnRequest(argv: string[]): Promise<{ code: number; err: string; req?: Record<string, unknown> }> {
+async function cliRequest(command: string, argv: string[]): Promise<{ code: number; err: string; req?: Record<string, unknown> }> {
   const home = mkdtempSync('/tmp/hd-')   // short: a Unix socket path is capped near 104 bytes
   const dir = join(home, '.claude', 'channels', 'test')
   mkdirSync(dir, { recursive: true })
@@ -21,11 +21,13 @@ async function spawnRequest(argv: string[]): Promise<{ code: number; err: string
     },
   })
   try {
-    const p = Bun.spawn([process.execPath, hydra, '--daemon', 'test', 'spawn', ...argv], { env: { ...process.env, HOME: home }, stdout: 'pipe', stderr: 'pipe' })
+    const p = Bun.spawn([process.execPath, hydra, '--daemon', 'test', command, ...argv], { env: { ...process.env, HOME: home }, stdout: 'pipe', stderr: 'pipe' })
     const code = await p.exited
     return { code, err: await new Response(p.stderr).text(), req }
   } finally { server.stop(true); rmSync(home, { recursive: true }) }
 }
+
+const spawnRequest = (argv: string[]) => cliRequest('spawn', argv)
 
 describe('hydra spawn: -- ends the options', () => {
   const opts = ['--initiator', 't', '--idempotency-key', 'k']
@@ -50,4 +52,19 @@ describe('hydra spawn: -- ends the options', () => {
     expect(r.code).toBe(1)
     expect(r.err).toContain('unknown flag')
   }, 15_000)
+})
+
+describe('hydra deliver --idempotency-ttl', () => {
+  const base = ['--session', 's', '--message', 'm']
+  test('sent with the key; refused without one, or when it is not 1m to 7d', async () => {
+    const ok = await cliRequest('deliver', [...base, '--idempotency-key', 'k', '--idempotency-ttl', '24h'])
+    expect(ok.code).toBe(0)
+    expect(ok.req?.params).toMatchObject({ idempotencyKey: 'k', idempotencyTtl: '24h' })
+    const noKey = await cliRequest('deliver', [...base, '--idempotency-ttl', '24h'])
+    expect(noKey).toMatchObject({ code: 1, req: undefined })
+    expect(noKey.err).toContain('--idempotency-ttl needs --idempotency-key')
+    const tooLong = await cliRequest('deliver', [...base, '--idempotency-key', 'k', '--idempotency-ttl', '8d'])
+    expect(tooLong).toMatchObject({ code: 1, req: undefined })
+    expect(tooLong.err).toContain('at most 7d')
+  }, 20_000)
 })

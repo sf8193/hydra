@@ -233,6 +233,21 @@ describe('cli-handler: deliver (Z2)', () => {
     expect(getIdempotencyEntry(k)!.sessionId).toBe(info.sessionId)
   })
 
+  test('--idempotency-ttl: the key is remembered that long; a bad duration, or one without a key, is refused', async () => {
+    const info = codex(async () => ({ status: 'accepted', via: 'steer' }))
+    const k = key()
+    const before = Date.now()
+    expect(await deliver(info.sessionId, { idempotencyKey: k, idempotencyTtl: '24h' })).toMatchObject({ ok: true })
+    expect(getIdempotencyEntry(k)!.expiresAt).toBeGreaterThanOrEqual(before + 24 * 3_600_000)
+    const k2 = key()
+    expect(await deliver(info.sessionId, { idempotencyKey: k2 })).toMatchObject({ ok: true })
+    expect(getIdempotencyEntry(k2)!.expiresAt).toBeLessThan(before + 16 * 60_000)   // the 15m default
+    for (const bad of ['8d', '0m', '1y']) {
+      expect(await deliver(info.sessionId, { idempotencyKey: key(), idempotencyTtl: bad })).toMatchObject({ ok: false, error: expect.stringContaining('at most 7d') })
+    }
+    expect(await deliver(info.sessionId, { idempotencyTtl: '24h' })).toMatchObject({ ok: false, error: '--idempotency-ttl needs --idempotency-key' })
+  })
+
   // The in-flight reservation carries no sessionId, so the death handler's
   // getBySessionId can't mistake it for a spawn key and complete it.
   test('session dies mid-delivery → pending key untouched by the death handler, then cleared', async () => {

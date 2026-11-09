@@ -26,6 +26,10 @@ export function parseDuration(s: string, maxMs: number): number | null {
 /** An idle limit: a duration up to MAX_IDLE_TTL_MS. */
 export const parseIdleTtl = (s: string): number | null => parseDuration(s, MAX_IDLE_TTL_MS)
 
+/** How long a `hydra deliver` key may be remembered (`--idempotency-ttl`): a retry that late is still a duplicate. */
+export const MAX_DELIVER_IDEMPOTENCY_TTL_MS = 7 * 86_400_000
+export const parseIdempotencyTtl = (s: string): number | null => parseDuration(s, MAX_DELIVER_IDEMPOTENCY_TTL_MS)
+
 /** Largest message `hydra deliver` accepts, to any target. */
 export const DELIVER_MAX_MESSAGE_BYTES = 10_000
 
