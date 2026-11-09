@@ -1,0 +1,373 @@
+import { describe, test, expect } from 'bun:test'
+import { loadHydraConfig } from '../load.js'
+import type { HydraConfig, LoadEnv, LoadResult } from '../types.js'
+
+const env: LoadEnv = {
+  home: '/home/op',
+  isDir: p => ['/home/op/agents/ops', '/home/op/agents/crm', '/home/op/agents/desk', '/srv/review'].includes(p),
+  isCommand: c => c === '/home/op/bin/guard' || c === 'bun',
+  sessionNames: ['spark', 'glyph'],
+}
+
+const ok = (text: string): { config: HydraConfig; warnings: string[] } => {
+  const r = loadHydraConfig(text, env)
+  if (!r.ok) throw new Error(`expected a load, got:\n${r.errors.map(e => `${e.path}: ${e.message}`).join('\n')}`)
+  return { config: r.config, warnings: r.warnings.map(w => `${w.path}: ${w.message}`) }
+}
+const errorsOf = (text: string): string[] => {
+  const r: LoadResult = loadHydraConfig(text, env)
+  if (r.ok) throw new Error('expected the load to fail')
+  return r.errors.map(e => `${e.path}: ${e.message}`)
+}
+
+// The smallest file with an operator, to build cases on.
+const BASE = `
+operator = "op"
+[people.op]
+ids = ["slack:U0OP"]
+`
+
+describe('an empty file', () => {
+  test('is valid: no operator, nothing heard', () => {
+    expect(ok('').config).toEqual({ connectors: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] })
+    expect(ok('# just a comment\n').warnings).toEqual([])
+  })
+})
+
+describe('a full file', () => {
+  const text = `
+operator = "op"
+[connectors.slack]
+bot_token_env = "SLACK_BOT_TOKEN"
+app_token_env = "SLACK_APP_TOKEN"
+[connectors.github]
+repos = ["Acme/Widget"]
+[people.op]
+ids = ["slack:U0OP", "github:Op-Login"]
+[people.alice]
+ids = ["slack:U0ALICE"]
+roles = ["staff"]
+name = "Alice"
+[defaults.specialist]
+prompt = "/orient {id}"
+idle = "4h"
+[specialists.crm]
+workdir = "~/agents/crm"
+listens = ["slack:#help"]
+allow = ["staff"]
+sessions = "per-conversation"
+max = 5
+[specialists.ops]
+workdir = "~/agents/ops"
+prompt_file = "kickoff.md"
+listens = ["slack:dm"]
+allow = []
+engine = "codex"
+was = ["old-ops"]
+[specialists.review]
+workdir = "/srv/review"
+listens = ["github:acme/widget"]
+[places."slack:#help"]
+listen = "all"
+ack = "eyes"
+[schedules.nightly]
+cron = "0 3 * * *"
+to = "ops"
+prompt = "Nightly run."
+[[rules]]
+at = "slack:#help"
+from = "alice"
+to = "ops"
+[guard]
+command = "~/bin/guard --strict"
+timeout = "2s"
+`
+  test('loads with every default filled in', () => {
+    const { config, warnings } = ok(text)
+    expect(warnings).toEqual([])
+    expect(config.operator).toBe('op')
+    expect(config.connectors).toEqual({
+      slack: { botTokenEnv: 'SLACK_BOT_TOKEN', appTokenEnv: 'SLACK_APP_TOKEN' },
+      github: { repos: ['acme/widget'], pollMs: 180_000 },
+    })
+    expect(config.people.op).toEqual({ id: 'op', ids: ['slack:U0OP', 'github:op-login'], roles: [], name: 'op' })
+    expect(config.people.alice.name).toBe('Alice')
+    expect(config.specialists.crm).toEqual({
+      id: 'crm', workdir: '/home/op/agents/crm', prompt: '/orient crm', listens: ['slack:#help'], allow: ['staff'],
+      sessions: 'per-conversation', max: 5, idleMs: 4 * 3_600_000, was: [],
+    })
+    // Its own prompt_file replaces the default prompt; a relative prompt_file is under the workdir.
+    expect(config.specialists.ops).toMatchObject({ promptFile: '/home/op/agents/ops/kickoff.md', allow: [], engine: 'codex', was: ['old-ops'], sessions: 'shared', max: 20 })
+    expect(config.specialists.ops.prompt).toBeUndefined()
+    expect(config.specialists.review.allow).toEqual(['people'])
+    expect(config.places['slack:#help']).toEqual({ ack: 'eyes', files: false, listen: 'all', bots: false })
+    expect(config.schedules.nightly).toEqual({ id: 'nightly', cron: '0 3 * * *', to: 'ops', prompt: 'Nightly run.', runner: 'launchd' })
+    expect(config.rules).toEqual([{ at: 'slack:#help', from: 'alice', to: 'ops' }])
+    expect(config.guard).toEqual({ command: '~/bin/guard --strict', timeoutMs: 2000, includeText: false, owedMaxMs: 3_600_000 })
+  })
+})
+
+describe('places', () => {
+  test('a channel by name or by platform id', () => {
+    const { config } = ok(`${BASE}
+[connectors.slack]
+bot_token_env = "T"
+[connectors.discord]
+bot_token_env = "D"
+[specialists.ops]
+workdir = "~/agents/ops"
+listens = ["slack:C0TEST", "discord:100000000000000001"]
+sessions = "per-conversation"
+[places."slack:G0PRIV"]
+files = true
+`)
+    expect(config.specialists.ops.listens).toEqual(['slack:C0TEST', 'discord:100000000000000001'])
+    expect(config.places['slack:G0PRIV'].files).toBe(true)
+  })
+})
+
+describe('[defaults.specialist]', () => {
+  test('fills {id} into any key, lists included, and a specialist\'s own key wins', () => {
+    const { config } = ok(`${BASE}
+[defaults.specialist]
+workdir = "~/agents/{id}"
+listens = ["slack:#{id}"]
+model = "default-model"
+[specialists.ops]
+[specialists.crm]
+model = "own-model"
+`)
+    expect(config.specialists.ops).toMatchObject({ workdir: '/home/op/agents/ops', listens: ['slack:#ops'], model: 'default-model' })
+    expect(config.specialists.crm).toMatchObject({ workdir: '/home/op/agents/crm', listens: ['slack:#crm'], model: 'own-model' })
+  })
+  test('a bad default is reported once, at the default', () => {
+    expect(errorsOf(`${BASE}
+[defaults.specialist]
+max = 0
+[specialists.ops]
+workdir = "~/agents/ops"
+listens = ["slack:#a"]
+[specialists.crm]
+workdir = "~/agents/crm"
+listens = ["slack:#b"]
+`)).toEqual(['defaults.specialist.max: must be a whole number above 0'])
+  })
+})
+
+describe('load errors', () => {
+  const spec = (body: string, id = 'ops') => `${BASE}\n[specialists.${id}]\nworkdir = "~/agents/ops"\nlistens = ["slack:#ops"]\n${body}`
+
+  test('an unknown specialist, person or role reference', () => {
+    expect(errorsOf(`${spec('allow = ["staff"]')}
+[schedules.nightly]
+cron = "0 3 * * *"
+to = "nobody"
+[[rules]]
+at = "slack:#ops"
+from = "bob"
+to = "ghost"
+`)).toEqual([
+      'specialists.ops.allow[0]: no one holds the role "staff"',
+      'schedules.nightly.to: no specialist "nobody"',
+      'rules[0].from: "bob" is neither a person nor a role anyone holds',
+      'rules[0].to: no specialist "ghost"',
+    ])
+    expect(errorsOf('operator = "ghost"\n')).toEqual(['operator: "ghost" is not a person: declare [people.ghost]'])
+    expect(errorsOf(`${spec('allow = ["alice"]')}\n[people.alice]\nids = ["slack:U0A"]\n`))
+      .toEqual(['specialists.ops.allow[0]: "alice" is a person, not a role: give them a role and allow that'])
+  })
+
+  test('two specialists listening on the same place', () => {
+    expect(errorsOf(`${spec('')}
+[specialists.crm]
+workdir = "~/agents/crm"
+listens = ["slack:#ops"]
+`)).toEqual(['specialists.crm.listens[0]: ops already listens on slack:#ops: one place, one specialist'])
+  })
+
+  test('one address under two people (GitHub logins compare without case)', () => {
+    expect(errorsOf(`${BASE}
+[people.alice]
+ids = ["github:Alice"]
+[people.al]
+ids = ["github:alice"]
+`)).toEqual(['people.al.ids[0]: github:alice already belongs to alice: one address, one person'])
+  })
+
+  test('a missing workdir key, or a workdir that isn\'t a folder', () => {
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.ops.workdir: is required: the folder it runs in'])
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/gone"\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.ops.workdir: /home/op/agents/gone is not a folder'])
+    expect(errorsOf(`${BASE}\n[defaults.specialist]\nworkdir = "~/agents/{id}"\n[specialists.gone]\nlistens = ["slack:#ops"]\n`))
+      .toEqual(['specialists.gone.workdir (from defaults.specialist): /home/op/agents/gone is not a folder'])
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "agents/ops"\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.ops.workdir: "agents/ops" must be an absolute path or start with ~'])
+  })
+
+  test('main is a target for a schedule or a rule, though never declared', () => {
+    const { config } = ok(`${BASE}\n[schedules.digest]\ncron = "@daily"\nto = "main"\n[[rules]]\nat = "slack:#ops"\nto = "main"\n`)
+    expect(config.schedules.digest.to).toBe('main')
+    expect(config.rules).toEqual([{ at: 'slack:#ops', to: 'main' }])
+  })
+
+  test('a bad cron', () => {
+    expect(errorsOf(`${spec('')}\n[schedules.nightly]\ncron = "0 25 * * *"\nto = "ops"\n`)).toEqual(['schedules.nightly.cron: invalid cron expression "0 25 * * *": 25 is out of range 0-23'])
+  })
+
+  test('a guard command that doesn\'t exist', () => {
+    expect(errorsOf(`${BASE}\n[guard]\ncommand = "~/bin/missing --x"\n`)).toEqual(['guard.command: /home/op/bin/missing is not an executable file or a command on PATH'])
+    expect(ok(`${BASE}\n[guard]\ncommand = "bun ~/hook.ts"\n`).config.guard?.command).toBe('bun ~/hook.ts')
+  })
+
+  test('specialist ids follow the daemon\'s name rule, old ids too', () => {
+    expect(errorsOf(`${BASE}\n[specialists.123]\nworkdir = "~/agents/ops"\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.123: specialist name "123" needs a letter: an all-digit name reads as a thread id'])
+    expect(errorsOf(`${BASE}\n[specialists.spark]\nworkdir = "~/agents/ops"\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.spark: "spark" is a default session name; a specialist needs its own name'])
+    expect(errorsOf(`${BASE}\n[specialists.main]\nworkdir = "~/agents/ops"\nlistens = ["slack:#ops"]\n`)).toEqual(['specialists.main: "main" is a reserved address (to = "main", send_to_thread target "parent")'])
+    expect(errorsOf(spec('was = ["Ops_Old"]'))).toEqual(['specialists.ops.was[0]: specialist name must be lowercase letters, digits and dashes'])
+    expect(errorsOf(`${spec('was = ["crm"]')}\n[specialists.crm]\nworkdir = "~/agents/crm"\nlistens = ["slack:#crm"]\n`)).toEqual(['specialists.ops.was[0]: "crm" is a current specialist; an old id can\'t be in use'])
+  })
+
+  test('strict: unknown keys, malformed places and addresses', () => {
+    expect(errorsOf(`colour = "red"\n${BASE}`)).toEqual(['colour: unknown key "colour"'])
+    expect(errorsOf(spec('listen = ["slack:#x"]'))).toEqual(['specialists.ops.listen: unknown key "listen"'])
+    expect(errorsOf(`${BASE}\n[connectors.irc]\nx = 1\n`)).toEqual(['connectors.irc: unknown platform "irc": use discord, slack or github'])
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:help", "discord:#Feed"]\n`)).toEqual([
+      'specialists.ops.listens[0]: "slack:help" is not a place: use slack:#channel, slack:<channel id>, slack:dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
+      'specialists.ops.listens[1]: "discord:#Feed" is not a place: use slack:#channel, slack:<channel id>, slack:dm, discord:#channel, discord:<channel id>, discord:dm, github:owner/repo or cli',
+    ])
+    expect(errorsOf(`operator = "op"\n[people.op]\nids = ["U0OP", "discord:abc", "slack:u0op"]\n`)).toEqual([
+      'people.op.ids[0]: "U0OP" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+      'people.op.ids[1]: "discord:abc" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+      'people.op.ids[2]: "slack:u0op" is not an address: use discord:<user id>, slack:<user id> or github:<login>',
+    ])
+    expect(errorsOf(`${BASE}\n[places."slack:#ops"]\nlisten = "everything"\n`)).toEqual(['places."slack:#ops".listen: must be one of "mentions", "all"'])
+  })
+
+  test('operator is required once anything is declared, and roles can\'t shadow people or built-ins', () => {
+    expect(errorsOf('[people.op]\nids = ["slack:U0OP"]\n')).toEqual(['operator: is required: name the person whose DMs reach main and who may reach every specialist'])
+    expect(errorsOf(`${BASE}\n[people.alice]\nids = ["slack:U0A"]\nroles = ["op", "anyone"]\n`)).toEqual([
+      'people.alice.roles[1]: "anyone" is built in: anyone at all holds it already',
+      'people.op: "op" is both a person and a role; rename one',
+    ])
+  })
+
+  test('not valid TOML', () => {
+    expect(errorsOf('operator = \n')[0]).toStartWith(': not valid TOML:')
+  })
+})
+
+describe('found in review', () => {
+  test('names an object inherits (constructor, toString) are not declarations', () => {
+    expect(errorsOf(`${BASE}\n[schedules.s]\ncron = "@daily"\nto = "constructor"\n[[rules]]\nat = "slack:#x"\nfrom = "hasOwnProperty"\nto = "toString"\n`)).toEqual([
+      'schedules.s.to: no specialist "constructor"',
+      'rules[0].from: "hasOwnProperty" is neither a person nor a role anyone holds',
+      'rules[0].to: no specialist "toString"',
+    ])
+    expect(errorsOf('operator = "constructor"\n')).toEqual(['operator: "constructor" is not a person: declare [people.constructor]'])
+  })
+  test('a person can\'t take a built-in role\'s name', () => {
+    expect(errorsOf(`${BASE}\n[people.anyone]\nids = ["slack:U0X"]\n`)).toEqual(['people.anyone: "anyone" is a built-in role; a person needs another id'])
+  })
+  test('a place listed twice by one specialist is one place, not a collision', () => {
+    expect(ok(`${BASE}\n[connectors.github]\nrepos = ["me/r"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["github:Me/R", "github:me/r"]\n`).config.specialists.ops.listens).toEqual(['github:me/r'])
+  })
+  test('operator is required beside any other table', () => {
+    expect(errorsOf('[connectors.discord]\nbot_token_env = "T"\n')).toEqual(['operator: is required: name the person whose DMs reach main and who may reach every specialist'])
+  })
+  test('the same GitHub place twice, differing in case', () => {
+    expect(errorsOf(`${BASE}\n[places."github:Me/R"]\nfiles = true\n[places."github:me/r"]\nfiles = false\n`)).toEqual(['places."github:me/r": github:me/r is already set: places compare without case on GitHub'])
+  })
+  test('a guard command\'s program is found past env assignments and quotes', () => {
+    expect(ok(`${BASE}\n[guard]\ncommand = "FOO=1 '~/bin/guard' --x"\n`).config.guard?.command).toBe("FOO=1 '~/bin/guard' --x")
+  })
+  test('a bad default is reported once, and a default allow is checked with no specialists', () => {
+    expect(errorsOf(`${BASE}\n[defaults.specialist]\nidle = "banana"\nallow = ["ghost"]\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a"]\n[specialists.crm]\nworkdir = "~/agents/crm"\nlistens = ["slack:#b"]\n`)).toEqual([
+      'defaults.specialist.idle: "banana" must be a duration like 90m, 12h or 4d, at most 7d',
+      'defaults.specialist.allow[0]: no one holds the role "ghost"',
+    ])
+    expect(errorsOf(`${BASE}\n[defaults.specialist]\nallow = ["ghost"]\n`)).toEqual(['defaults.specialist.allow[0]: no one holds the role "ghost"'])
+  })
+})
+
+describe('load warnings', () => {
+  test('a rule for everyone at a place takes it from its listener', () => {
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n[specialists.crm]\nworkdir = "~/agents/crm"\n[[rules]]\nat = "slack:#y"\nto = "crm"\n`).warnings)
+      .toEqual(['rules[0]: takes every message at slack:#y, so ops, which listens there, never hears it'])
+  })
+  test('a rule for a role whose holders all hold an earlier rule\'s role is shadowed', () => {
+    const { warnings } = ok(`${BASE}
+[people.alice]
+ids = ["slack:U0A"]
+roles = ["staff", "lead"]
+[people.bob]
+ids = ["slack:U0B"]
+roles = ["staff"]
+[specialists.crm]
+workdir = "~/agents/crm"
+[specialists.desk]
+workdir = "~/agents/desk"
+[[rules]]
+at = "slack:#help"
+from = "staff"
+to = "crm"
+[[rules]]
+at = "slack:#help"
+from = "lead"
+to = "desk"
+[[rules]]
+at = "slack:#help"
+from = "people"
+to = "desk"
+`)
+    expect(warnings).toEqual(["rules[1]: never matches: rules[0] already takes lead's messages at slack:#help"])
+  })
+
+  test('a rule that an earlier rule shadows', () => {
+    const { warnings } = ok(`${BASE}
+[connectors.slack]
+bot_token_env = "T"
+[people.alice]
+ids = ["slack:U0A"]
+roles = ["staff"]
+[specialists.ops]
+workdir = "~/agents/ops"
+listens = ["slack:#help"]
+[specialists.crm]
+workdir = "~/agents/crm"
+[specialists.desk]
+workdir = "~/agents/desk"
+[[rules]]
+at = "slack:#help"
+from = "staff"
+to = "crm"
+[[rules]]
+at = "slack:#help"
+from = "alice"
+to = "desk"
+[[rules]]
+at = "slack:#other"
+to = "desk"
+`)
+    expect(warnings).toEqual(["rules[1]: never matches: rules[0] already takes alice's messages at slack:#help"])
+  })
+
+  test('a specialist nobody can reach', () => {
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n`).warnings)
+      .toEqual(['specialists.ops: nobody can reach it: it listens nowhere, and no rule or schedule sends to it'])
+    // A schedule's `to` is a way in.
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\n[schedules.daily]\ncron = "@daily"\nto = "ops"\n`).warnings).toEqual([])
+  })
+
+  test('a shared session with different audiences: two places, or DMs open beyond the operator', () => {
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\n`).warnings)
+      .toEqual(['specialists.ops: one shared session hears slack:#a, slack:#b, so what\'s said in one place is remembered in the others; use sessions = "per-conversation" or one specialist per place'])
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\n`).warnings)
+      .toEqual(['specialists.ops: one shared session hears everyone\'s DMs (allow = ["people"]), so one person\'s DM is remembered in another\'s; use sessions = "per-conversation" or allow = []'])
+    // Only the operator's DMs, or one session per conversation: one audience each.
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:dm"]\nallow = []\n`).warnings).toEqual([])
+    expect(ok(`${BASE}\n[connectors.slack]\nbot_token_env = "T"\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#a", "slack:#b"]\nsessions = "per-conversation"\n`).warnings).toEqual([])
+  })
+
+  test('a place on a platform that isn\'t connected', () => {
+    expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["discord:#feed"]\n`).warnings)
+      .toEqual(["specialists.ops: listens on discord:#feed, but [connectors.discord] isn't set, so it won't hear it"])
+  })
+})
