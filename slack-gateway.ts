@@ -157,6 +157,10 @@ export class SlackGateway implements ChatGateway {
     return this._botUserId
   }
 
+  isConnected(): boolean {
+    return this.sup.state.connected
+  }
+
   async start(token: string): Promise<void> {
     this.token = token
     if (this.app) {

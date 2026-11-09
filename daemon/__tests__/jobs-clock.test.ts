@@ -2,9 +2,9 @@ import { describe, test, expect, beforeEach, afterEach, afterAll } from 'bun:tes
 import { closeSync, constants as fsc, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { JobsClock, openClockLock, ADOPT_GRACE_MS, type ClockDeps } from '../jobs-clock.js'
+import { JobsClock, openClockLock, ADOPT_GRACE_MS, applyOutcome, type ClockDeps } from '../jobs-clock.js'
 import {
-  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, commandMatches, legacyTitles, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
+  ATTEMPT_DEADLINE_MS, KILL_GRACE_MS, v0File, backoffUntil, commandMatches, legacyTitles, listProcesses, lstartOf, normalizeLstart, daemonFile, owedSlot, readJobState, resultFile, stateFile, writeAtomic,
   type AttemptResult, type JobState,
 } from '../../shared/jobs.js'
 
@@ -29,6 +29,10 @@ type World = {
   legacy: string[]
   legacyFail: number
   events: string[]
+  gateway: boolean
+  probe: boolean | 'throw'
+  probes: number
+  probeGate?: Promise<void>
 }
 
 let w: World
@@ -53,7 +57,10 @@ function deps(over: Partial<ClockDeps> = {}): ClockDeps {
     lstartOf: pid => w.procs.get(pid)?.lstart ?? null,
     listProcesses: () => [...w.procs].map(([pid, p]) => ({ pid, ...p })),
     killGroup: (pid, sig) => { w.kills.push([pid, sig]); w.procs.delete(pid) },
+    kill: (pid, sig) => { w.kills.push([pid, sig]) },
     defaultStateDir: w.dir,
+    gatewayConnected: () => w.gateway,
+    captiveProbe: async () => { w.probes++; await w.probeGate; if (w.probe === 'throw') throw new Error('ENOTFOUND'); return w.probe },
     removeLegacyEntries: async () => {
       w.events.push('legacy')
       if (w.legacyFail-- > 0) throw new Error('launchctl busy')
@@ -84,13 +91,22 @@ const state = (name: string): JobState => {
   if (r.kind !== 'ok') throw new Error(`state ${name}: ${r.kind}`)
   return r.state
 }
-const setState = (name: string, s: object) => writeAtomic(stateFile(w.dir, name), JSON.stringify(s))
+/** A v0 record (`outcome`) goes where the old runner wrote it; anything else is the daemon's own record. */
+const setState = (name: string, s: object) => writeAtomic(('outcome' in s ? v0File : stateFile)(w.dir, name), JSON.stringify(s))
 /** What an attempt does when it finishes: one result file, then the process is gone. */
 function finish(name: string, id: number, result: AttemptResult['result'], note?: string, pid?: number) {
-  writeAtomic(resultFile(w.dir, name, id), JSON.stringify({ dispatch: id, at: w.t.toISOString(), result, ...(note && { note }) }))
+  writeAtomic(rfile(name, id), JSON.stringify({ dispatch: id, at: w.t.toISOString(), result, ...(note && { note }) }))
   if (pid) w.procs.delete(pid)
 }
 const argOf = (args: string[], flag: string) => args[args.indexOf(flag) + 1]
+/** A dispatch's nonce: from its live record, else from the argv it was spawned with; 'x' for one that never existed. */
+function nonceOf(name: string, id: number): string {
+  const r = readJobState(w.dir, name)
+  if (r.kind === 'ok' && r.state.dispatch?.id === id) return r.state.dispatch.nonce
+  const s = w.spawns.find(x => x.args[6] === name && argOf(x.args, '--dispatch') === String(id))
+  return s ? argOf(s.args, '--nonce') : 'x'
+}
+const rfile = (name: string, id: number) => resultFile(w.dir, name, id, nonceOf(name, id))
 
 const FIVE = `[sweep]\nschedule = "*/5 * * * *"\ncheck = "sweep.sh"\nmode = "none"\n`
 const HOURLY = `[sync]\nschedule = "0 * * * *"\ncheck = "sync.sh"\nmode = "none"\n`
@@ -110,7 +126,7 @@ beforeEach(() => {
     dir: mkdtempSync(join(tmpdir(), 'jobs-clock-')), t: new Date('2026-11-04T10:00:30-08:00'),
     procs: new Map(), spawns: [], kills: [], main: [], direct: [], logs: [],
     mainOk: true, directOk: true, directCalls: 0, nextPid: 1000, spawnMode: 'ok', zone: null, tz: undefined,
-    legacy: [], legacyFail: 0, events: [],
+    legacy: [], legacyFail: 0, events: [], gateway: true, probe: true, probes: 0,
   }
 })
 afterEach(() => {
@@ -171,6 +187,23 @@ describe('clock owner lock', () => {
 })
 
 describe('cutover heals itself', () => {
+  test('jobs sync: loads jobs.toml now, answers with the jobs before and after and the legacy entries removed, then ticks', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    toml(FIVE + HOURLY)
+    w.legacy = ['bun.cron.hydra-job-test-sweep']
+    at('2026-11-04T10:00:30-08:00')
+    const r = await c.requestSync()
+    if (!r.ok) throw new Error(r.error)
+    expect(r.before.map(j => j.name)).toEqual(['sweep'])
+    expect(r.after.map(j => j.name)).toEqual(['sweep', 'sync'])
+    expect(r.legacyRemoved).toEqual(['bun.cron.hydra-job-test-sweep'])
+    expect(JSON.parse(readFileSync(daemonFile(w.dir), "utf8")).lastGoodConfig).toBe(FIVE + HOURLY)
+    expect(JSON.parse(readFileSync(daemonFile(w.dir), "utf8")).lastTick).toBe(w.t.toISOString())   // the tick ran, not waiting a minute
+    toml('[broken')
+    expect(await c.requestSync()).toMatchObject({ ok: false })
+  })
+
   test('the clock owner removes its legacy launchd entries before dispatching, logging each', async () => {
     toml(FIVE)
     setState('sweep', { at: '2026-11-04T17:55:10.000Z', outcome: 'nothing' })   // a v0 record that owes a run now
@@ -261,9 +294,10 @@ describe('the tick', () => {
     expect(s.args.slice(0, 7)).toEqual(['/hydra/cli/hydra.ts', '--state-dir', w.dir, 'jobs', 'attempt', 'test', 'sweep'])
     expect(argOf(s.args, '--dispatch')).toBe('1')
     expect(argOf(s.args, '--slot')).toBe('2026-11-04 10:05')
+    expect(argOf(s.args, '--slot-at')).toBe(new Date('2026-11-04T10:05:00-08:00').toISOString())
     expect(argOf(s.args, '--state-dir')).toBe(w.dir)
     expect(s.args).not.toContain('--manual')
-    expect(JSON.parse(s.stdin)).toEqual({ name: 'sweep', schedule: '*/5 * * * *', check: 'sweep.sh', mode: 'none' })
+    expect(JSON.parse(s.stdin)).toEqual({ name: 'sweep', schedule: '*/5 * * * *', check: 'sweep.sh', mode: 'none', alertAfterMs: 86_400_000 })
     expect(s.log).toBe(join(w.dir, 'jobs-state', 'sweep.log'))
     expect(state('sweep').dispatch).toMatchObject({ id: 1, kind: 'scheduled', slot: '2026-11-04 10:05', pid: 1000, lstart: 'L1000', nonce: argOf(s.args, '--nonce') })
     expect(new Date(state('sweep').dispatch!.deadline).getTime() - w.t.getTime()).toBe(ATTEMPT_DEADLINE_MS)
@@ -320,7 +354,7 @@ describe('applying results', () => {
     expect(s.dispatch).toBeUndefined()
     expect(s.appliedDispatch).toBe(1)
     expect(s).toMatchObject({ covered: { slot: '2026-11-04 10:05', at: new Date('2026-11-04T10:05:01-08:00').toISOString() }, failures: 0, last: { result: 'done', dispatch: 1, note: 'pruned 3' } })
-    expect(existsSync(resultFile(w.dir, 'sweep', 1))).toBe(false)
+    expect(existsSync(rfile('sweep', 1))).toBe(false)
   })
 
   test('failed: failures count up and the run keeps its start; a success ends it', async () => {
@@ -357,14 +391,15 @@ describe('applying results', () => {
     finish('sweep', 1, 'failed', 'x')          // the file the crash left behind
     at('2026-11-04T10:07:00-08:00'); await c.tick()
     expect(state('sweep')).toEqual(applied)
-    expect(existsSync(resultFile(w.dir, 'sweep', 1))).toBe(false)
+    expect(existsSync(rfile('sweep', 1))).toBe(false)
   })
 
   test('process gone, no result: "ended without a result", a failure', async () => {
     const c = await dispatched()
     w.procs.delete(1000)
     at('2026-11-04T10:06:00-08:00'); await c.tick()
-    expect(state('sweep')).toMatchObject({ failures: 1, appliedDispatch: 1, covered: { slot: '2026-11-04 10:05' }, last: { result: 'failed', note: 'ended without a result', dispatch: 1 } })
+    expect(state('sweep')).toMatchObject({ failures: 1, appliedDispatch: 1, last: { result: 'failed', note: 'ended without a result', dispatch: 1 } })
+    expect(state('sweep').covered?.slot).not.toBe('2026-11-04 10:05')   // a failure leaves the slot owed
     expect(state('sweep').dispatch).toBeUndefined()
   })
 
@@ -376,7 +411,7 @@ describe('applying results', () => {
     finish('sweep', 1, 'done', 'late')
     at('2026-11-04T10:07:00-08:00'); await c.tick()
     expect(state('sweep')).toEqual(lost)
-    expect(existsSync(resultFile(w.dir, 'sweep', 1))).toBe(false)
+    expect(existsSync(rfile('sweep', 1))).toBe(false)
   })
 
   test('a result landing in the final-write grace is applied, not lost', async () => {
@@ -397,23 +432,54 @@ describe('applying results', () => {
     expect(w.kills).toEqual([])
   })
 
-  test('wedged past its deadline: the group is killed, then the next tick records the loss', async () => {
+  /** Ticks once a minute until `until`, as an awake daemon does. */
+  const walk = async (c: JobsClock, until: number) => { while (w.t.getTime() + 60_000 <= until) { w.t = new Date(w.t.getTime() + 60_000); await c.tick() } }
+
+  test('wedged past its deadline: SIGTERM to the attempt first, the group SIGKILLed only a grace later, then the loss', async () => {
     const c = await dispatched()
     const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
-    w.t = new Date(deadline + KILL_GRACE_MS - 1000); await c.tick()
+    await walk(c, deadline + KILL_GRACE_MS)
     expect(w.kills).toEqual([])
-    w.t = new Date(deadline + KILL_GRACE_MS + 1000); await c.tick()
-    expect(w.kills).toEqual([[1000, 'SIGKILL']])
+    await walk(c, deadline + KILL_GRACE_MS + 60_000)
+    expect(w.kills).toEqual([[1000, 'SIGTERM']])   // the attempt alone: its handler writes, then kills its own group
+    await walk(c, deadline + 2 * KILL_GRACE_MS + 60_000)
+    expect(w.kills.at(-1)).toEqual([1000, 'SIGKILL'])
     expect(state('sweep').dispatch).toBeDefined()
     w.t = new Date(w.t.getTime() + 60_000); await c.tick()
     expect(state('sweep').last).toMatchObject({ note: 'ended without a result' })
   })
 
+  test('SIGTERM at the deadline lets the attempt report: its not-now result is applied, nothing is killed', async () => {
+    const c = await dispatched()
+    const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
+    await walk(c, deadline + KILL_GRACE_MS + 60_000)
+    expect(w.kills).toEqual([[1000, 'SIGTERM']])
+    finish('sweep', 1, 'not-now', 'cancelled', 1000)
+    w.t = new Date(w.t.getTime() + 60_000); await c.tick()
+    expect(w.kills).toEqual([[1000, 'SIGTERM']])
+    expect(state('sweep').notNow).toMatchObject({ reason: 'cancelled' })
+    expect(state('sweep').last?.result).not.toBe('failed')
+  })
+
+  test('the machine sleeps through an attempt: no kill on wake, the deadline moves by the gap, and its result lands', async () => {
+    const c = await dispatched()
+    const before = new Date(state('sweep').dispatch!.deadline).getTime()
+    w.t = new Date(w.t.getTime() + 3 * 3_600_000); await c.tick()   // 3h asleep: far past the old deadline
+    expect(w.kills).toEqual([])
+    expect(new Date(state('sweep').dispatch!.deadline).getTime()).toBeGreaterThanOrEqual(before + 3 * 3_600_000 - 60_000)
+    await walk(c, w.t.getTime() + 10 * 60_000)   // awake again, still running
+    expect(w.kills).toEqual([])
+    finish('sweep', 1, 'done', undefined, 1000)
+    w.t = new Date(w.t.getTime() + 60_000); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'done' })
+  })
+
   test('a reused pid at the kill check: past the deadline, a different process with that pid is never killed', async () => {
     const c = await dispatched()
     const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
+    await walk(c, deadline)
     w.procs.set(1000, { lstart: 'reused', command: 'Safari' })
-    w.t = new Date(deadline + KILL_GRACE_MS + 1000); await c.tick()
+    await walk(c, deadline + 2 * KILL_GRACE_MS + 60_000)
     expect(w.kills).toEqual([])
     expect(w.procs.get(1000)?.command).toBe('Safari')
   })
@@ -421,7 +487,7 @@ describe('applying results', () => {
   test('a deadline group kill leaves the job free to dispatch on its next slot', async () => {
     const c = await dispatched()
     const deadline = new Date(state('sweep').dispatch!.deadline).getTime()
-    w.t = new Date(deadline + KILL_GRACE_MS + 1000); await c.tick()
+    await walk(c, deadline + 2 * KILL_GRACE_MS + 60_000)
     w.t = new Date(w.t.getTime() + 60_000); await c.tick()   // loss recorded; the latest slot is owed again
     w.t = new Date(w.t.getTime() + 5 * 60_000); await c.tick()
     expect(w.spawns.length).toBeGreaterThanOrEqual(2)
@@ -446,13 +512,28 @@ describe('applying results', () => {
     expect(w.logs.filter(l => l.includes('dispatch 1 -> done'))).toHaveLength(1)
   })
 
+  test('ids restart after a state reset: a stale result with the new dispatch\'s id but another nonce never settles it', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    writeAtomic(resultFile(w.dir, 'sweep', 1, 'oldnonce'), JSON.stringify({ dispatch: 1, at: '2026-11-01T00:00:00Z', result: 'failed', note: 'from a past life' }))
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    expect(state('sweep').dispatch?.id).toBe(1)
+    at('2026-11-04T10:06:00-08:00'); await c.tick()
+    expect(state('sweep').dispatch?.id).toBe(1)   // still running: the stale file is not its result
+    expect(state('sweep').last?.note).not.toBe('from a past life')
+    finish('sweep', 1, 'done', 'this life', 1000)
+    at('2026-11-04T10:07:00-08:00'); await c.tick()
+    expect(state('sweep').last).toMatchObject({ result: 'done', note: 'this life' })
+    expect(existsSync(resultFile(w.dir, 'sweep', 1, 'oldnonce'))).toBe(false)   // swept once id 1 is applied
+  })
+
   test('a stray result above appliedDispatch that is not the live dispatch is logged and left alone', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     finish('sweep', 9, 'done')
     await c.tick(); await c.tick()
-    expect(existsSync(resultFile(w.dir, 'sweep', 9))).toBe(true)
-    expect(w.logs.filter(l => l.includes('stray result sweep.9.json'))).toHaveLength(1)
+    expect(existsSync(rfile('sweep', 9))).toBe(true)
+    expect(w.logs.filter(l => l.includes('stray result sweep.9.x.json'))).toHaveLength(1)
   })
 })
 
@@ -499,7 +580,8 @@ describe('adoption: a daemon crash between spawning and recording the pid', () =
     at('2026-11-04T10:05:01-08:00'); await c.tick()
     const s = state('sweep')
     expect(s.dispatch).toBeUndefined()
-    expect(s).toMatchObject({ appliedDispatch: 1, failures: 1, covered: { slot: '2026-11-04 10:05' } })
+    expect(s).toMatchObject({ appliedDispatch: 1, failures: 1 })
+    expect(s.covered?.slot).not.toBe('2026-11-04 10:05')
     expect(s.last).toMatchObject({ result: 'failed', dispatch: 1 })
     expect(s.last?.note).toStartWith('spawn failed:')
   })
@@ -540,17 +622,6 @@ describe('jobs run', () => {
     expect(c.requestRun('ghost')).toEqual({ ok: false, error: 'no job named ghost in jobs.toml' })
   })
 
-  test('a manual run of the slot that is owed right now still leaves that slot to the schedule', async () => {
-    toml(FIVE)
-    const c = clock(); await c.tick()
-    at('2026-11-04T10:05:00.500-08:00'); c.requestRun('sweep')            // 10:05 has passed; no tick has seen it yet
-    expect(state('sweep').dispatch?.slot).toBe('2026-11-04 10:05')
-    finish('sweep', 1, 'done', undefined, 1000)
-    at('2026-11-04T10:05:30-08:00'); await c.tick()                       // applies the manual result
-    at('2026-11-04T10:06:30-08:00'); await c.tick()
-    expect(w.spawns).toHaveLength(2)
-    expect(w.spawns[1].args).not.toContain('--manual')
-  })
 
   test('a manual run never covers a slot, so the scheduled slot is still attempted', async () => {
     toml(FIVE)
@@ -600,15 +671,25 @@ describe('jobs run', () => {
 })
 
 describe('migration from v0 records', () => {
-  test('a v0 record does not fire at cutover, and is translated in place keeping v0', async () => {
+  test('a v0 record does not fire at cutover, and is migrated to the daemon\'s own file', async () => {
     toml(FIVE)
     setState('sweep', { at: '2026-11-04T18:00:40.000Z', outcome: 'findings', note: 'pruned' })
     at('2026-11-04T10:03:00-08:00'); await clock().tick()
     expect(w.spawns).toHaveLength(0)
     expect(JSON.parse(readFileSync(stateFile(w.dir, 'sweep'), 'utf8'))).toEqual({
       covered: { slot: '2026-11-04 10:00', at: '2026-11-04T18:00:40.000Z' },
-      last: { at: '2026-11-04T18:00:40.000Z', result: 'done', note: 'pruned', v0: 'findings' },
+      last: { at: '2026-11-04T18:00:40.000Z', result: 'done', note: 'pruned' },
     })
+  })
+
+  test('after migration the old runner\'s file is never read again: a late v0 write changes nothing', async () => {
+    toml(FIVE)
+    setState('sweep', { at: '2026-11-04T18:00:40.000Z', outcome: 'findings', note: 'pruned' })
+    at('2026-11-04T10:03:00-08:00'); const c = clock(); await c.tick()
+    const migrated = state('sweep')
+    writeAtomic(v0File(w.dir, 'sweep'), JSON.stringify({ at: '2026-11-04T18:03:30.000Z', outcome: 'failed', note: 'old runner' }))
+    at('2026-11-04T10:04:00-08:00'); await c.tick()
+    expect(state('sweep')).toEqual(migrated)
   })
 
   test('a v0 record from before the latest slot runs that slot, as launchd would have', async () => {
@@ -618,29 +699,18 @@ describe('migration from v0 records', () => {
     expect(w.spawns).toHaveLength(1)
   })
 
-  test('a v0 failure already reported today is not reported again at cutover', async () => {
-    toml(FIVE)
-    setState('sweep', { at: '2026-11-04T17:58:00.000Z', outcome: 'failed', note: 'check exited 1: x' })
-    at('2026-11-04T10:03:00-08:00'); await clock().tick()
-    expect(w.main).toEqual([])
-    expect(state('sweep').reportedDay).toBe('2026-11-04')
-  })
 
-  test('a v0 failure whose message failed is reported now', async () => {
-    toml(FIVE)
-    setState('sweep', { at: '2026-11-04T17:58:00.000Z', outcome: 'failed', note: 'x (the failure message also failed: boom)' })
-    at('2026-11-04T10:03:00-08:00'); await clock().tick()
-    expect(w.main).toHaveLength(1)
-  })
 })
 
 describe('unreadable state: a failure, reset', () => {
-  test('mode none: the failure is recorded and the slot runs', async () => {
+  test('mode none: the failure is recorded, and the slot runs once its back-off has passed', async () => {
     toml(FIVE)
     mkdirSync(join(w.dir, 'jobs-state'), { recursive: true })
     writeFileSync(stateFile(w.dir, 'sweep'), '{not json')
     finish('sweep', 7, 'done')                         // an old result file: new ids start above it
-    await clock().tick()
+    const c = clock(); await c.tick()
+    expect(w.spawns).toHaveLength(0)                   // the reset is a failure: 2 minutes of back-off first
+    at('2026-11-04T10:02:30-08:00'); await c.tick()
     expect(w.spawns).toHaveLength(1)
     expect(argOf(w.spawns[0].args, '--dispatch')).toBe('8')
     expect(state('sweep').last).toMatchObject({ result: 'failed', note: 'state unreadable, reset' })
@@ -654,6 +724,7 @@ describe('unreadable state: a failure, reset', () => {
     writeFileSync(stateFile(w.dir, 'sweep'), '{torn')
     at('2026-11-04T10:06:00-08:00'); await c.tick()
     expect(state('sweep')).toMatchObject({ appliedDispatch: 1, last: { note: 'state unreadable, reset' } })
+    at('2026-11-04T10:08:30-08:00'); await c.tick()   // past the reset's back-off
     expect(argOf(w.spawns.at(-1)!.args, '--dispatch')).toBe('2')
   })
 
@@ -664,83 +735,12 @@ describe('unreadable state: a failure, reset', () => {
     at('2026-11-04T06:30:00-08:00'); await clock().tick()
     expect(w.spawns).toHaveLength(0)
     expect(state('scan')).toMatchObject({ covered: { slot: '2026-11-04 06:00' }, failures: 1, last: { note: 'state unreadable, reset' } })
-    expect(w.main).toEqual(['Job scan failed: state unreadable, reset. Tell the user about it now.'])
-  })
-})
-
-describe('plain-job failure messages', () => {
-  async function failing(text = SPAWN) {
-    toml(text)
-    const c = clock()
-    at('2026-11-04T05:00:00-08:00'); await c.tick()
-    at('2026-11-04T06:00:10-08:00'); await c.tick()
-    finish(text === SPAWN ? 'scan' : 'retro', 1, 'failed', 'check exited 2: ssh timeout', 1000)
-    return c
-  }
-
-  test('sent to main once per local day, by the daemon', async () => {
-    const c = await failing()
-    await c.tick()
-    expect(w.main).toEqual(['Job scan failed: check exited 2: ssh timeout. Tell the user about it now.'])
-    at('2026-11-04T23:59:00-08:00'); await c.tick()
-    expect(w.main).toHaveLength(1)
-    at('2026-11-05T00:01:00-08:00'); await c.tick()     // a new local day (UTC rolled over hours ago)
-    expect(w.main).toHaveLength(2)
-  })
-
-  test('"ended without a result" is reported like any failure', async () => {
-    toml(SPAWN)
-    const c = clock()
-    at('2026-11-04T05:00:00-08:00'); await c.tick()
-    at('2026-11-04T06:00:10-08:00'); await c.tick()
-    w.procs.delete(1000)
-    at('2026-11-04T06:01:00-08:00'); await c.tick()
-    expect(w.main).toEqual(['Job scan failed: ended without a result. Tell the user about it now.'])
-  })
-
-  test('main refuses: straight to the job channel, then the top-level one, then home', async () => {
-    w.mainOk = false
-    const c = await failing()
-    await c.tick()
-    expect(w.direct).toEqual([['Job scan failed: check exited 2: ssh timeout', 'jobch']])
-    rmSync(w.dir, { recursive: true }); mkdirSync(w.dir)
-    w.direct.length = 0
-    const c2 = await failing(MAIN.replace('0 9', '0 6'))
-    await c2.tick()
-    expect(w.direct[0][1]).toBe('top')
-  })
-
-  test("a none job's own channel is where its direct alert goes", async () => {
-    w.mainOk = false
-    toml(`channel = "top"\n[clean]\nschedule = "0 6 * * *"\ncheck = "c.sh"\nmode = "none"\nchannel = "own"\n`)
-    const c = clock()
-    at('2026-11-04T05:00:00-08:00'); await c.tick()
-    at('2026-11-04T06:00:10-08:00'); await c.tick()
-    finish('clean', 1, 'failed', 'disk full', 1000); await c.tick()
-    expect(w.direct).toEqual([['Job clean failed: disk full', 'own']])
-  })
-
-  test('both paths fail: not marked reported, so the next tick tries again', async () => {
-    w.mainOk = false; w.directOk = false
-    const c = await failing()
-    await c.tick()
-    expect(state('scan').reportedDay).toBeUndefined()
-    w.directOk = true
-    at('2026-11-04T06:05:00-08:00'); await c.tick()
-    expect(state('scan').reportedDay).toBe('2026-11-04')
-  })
-
-  test('a success silences it', async () => {
-    const c = await failing()
-    await c.tick()
-    c.requestRun('scan'); finish('scan', 2, 'done', undefined, 1001)
-    at('2026-11-05T09:00:00-08:00'); await c.tick()
-    expect(w.main).toHaveLength(1)
+    expect(w.main).toEqual([])                         // alerted only if the failure run outlasts alert_after
   })
 })
 
 describe('config', () => {
-  test('a broken jobs.toml: the last good config keeps running, alerted once a local day on the direct path', async () => {
+  test('a broken jobs.toml: the last good config keeps running, alerted once per episode on the direct path', async () => {
     toml(FIVE)
     const c = clock(); await c.tick()
     toml('[broken')
@@ -752,6 +752,9 @@ describe('config', () => {
     at('2026-11-04T18:00:00-08:00'); await c.tick()
     expect(w.direct).toHaveLength(1)
     at('2026-11-05T08:00:00-08:00'); await c.tick()
+    expect(w.direct).toHaveLength(1)                   // a new day is not a new episode
+    toml(FIVE); at('2026-11-05T08:01:00-08:00'); await c.tick()   // fixed: the episode ends
+    toml('[broken'); at('2026-11-05T08:02:00-08:00'); await c.tick()
     expect(w.direct).toHaveLength(2)
   })
 
@@ -810,6 +813,17 @@ describe('health', () => {
     await minutes(c, '2026-11-04T10:09:00-08:00', '2026-11-04T10:10:00-08:00', true)
     await minutes(c, '2026-11-04T10:11:00-08:00', '2026-11-04T10:17:00-08:00', false)
     expect(w.direct).toHaveLength(2)
+  })
+
+  test('a restart in a stale episode already alerted does not alert it again', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    await minutes(c, '2026-11-04T10:01:00-08:00', '2026-11-04T10:08:00-08:00', false)
+    expect(w.direct).toHaveLength(1)
+    c.stop()
+    const again = clock()                              // the daemon restarts; the clock still has no new tick
+    await minutes(again, '2026-11-04T10:09:00-08:00', '2026-11-04T10:14:00-08:00', false)
+    expect(w.direct).toHaveLength(1)
   })
 
   test('waking from sleep: no false alarm, whichever timer fires first', async () => {
@@ -1032,6 +1046,416 @@ describe('the owed rule', () => {
       expect(owedSlot('*/5 * * * *', s, new Date('2026-11-01T09:31:00Z'))).toBeNull()
       expect(owedSlot('*/5 * * * *', s, new Date('2026-11-01T09:59:00Z'))).toBeNull()
       expect(owedSlot('*/5 * * * *', s, new Date('2026-11-01T10:01:00Z'))?.label).toBe('2026-11-01 02:00')
+    })
+  })
+})
+
+// ===========================================================================
+// Durable jobs (PR 3)
+// ===========================================================================
+
+const DUR5 = `[pull]\nschedule = "*/5 * * * *"\ncheck = "pull.sh"\nmode = "none"\n`
+const DURH = `[sync]\nschedule = "0 * * * *"\ncheck = "sync.sh"\nmode = "none"\nneeds = ["internet"]\nalert_after = "2d"\n`
+
+/** The live dispatch finishes with this result; the next tick applies it. */
+async function run(c: JobsClock, name: string, result: AttemptResult['result'], note?: string) {
+  const d = state(name).dispatch!
+  finish(name, d.id, result, note, d.pid)
+  await c.tick()
+}
+
+describe('a failed attempt does not use up the slot', () => {
+  test('failed, then retried after backoff, until done; then not owed', async () => {
+    toml(DUR5)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    at('2026-11-04T10:05:30-08:00'); await run(c, 'pull', 'failed', 'ssh timeout')
+    expect(state('pull')).toMatchObject({ failures: 1, covered: { slot: '2026-11-04 10:00' } })
+    expect(state('pull').covered?.slot).toBe('2026-11-04 10:00')    // a failure doesn't cover the slot
+    at('2026-11-04T10:07:00-08:00'); await c.tick()                // 1m30s after the failure: backoff (2m) holds
+    expect(w.spawns).toHaveLength(1)
+    at('2026-11-04T10:07:31-08:00'); await c.tick()                // 2m after: retried, same slot
+    expect(w.spawns).toHaveLength(2)
+    expect(argOf(w.spawns[1].args, '--slot')).toBe('2026-11-04 10:05')
+    at('2026-11-04T10:08:00-08:00'); await run(c, 'pull', 'done')
+    expect(state('pull')).toMatchObject({ covered: { slot: '2026-11-04 10:05' }, failures: 0 })
+    expect(state('pull').failingSince).toBeUndefined()
+    at('2026-11-04T10:09:00-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(2)
+  })
+
+
+  test('"ended without a result" counts like any failure for backoff', async () => {
+    toml(DUR5)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    w.procs.delete(1000)
+    at('2026-11-04T10:05:30-08:00'); await c.tick()
+    expect(state('pull')).toMatchObject({ failures: 1, last: { note: 'ended without a result' } })
+    at('2026-11-04T10:07:00-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+  })
+})
+
+describe('backoff: min(2^n minutes, 1h, the period), from the last failure', () => {
+  const owed = (expr: string, iso: string) => owedSlot(expr, {}, new Date(iso))!
+  const st = (n: number, lastAt: string): JobState => ({ failures: n, last: { at: lastAt, result: 'failed' } })
+  test('doubles per failure', () => {
+    const o = owed('0 11 * * FRI', '2026-11-13T19:30:00Z')
+    for (const [n, min] of [[1, 2], [2, 4], [3, 8], [5, 32]] as const)
+      expect(backoffUntil('0 11 * * FRI', st(n, '2026-11-13T20:00:00Z'), o)! - Date.parse('2026-11-13T20:00:00Z')).toBe(min * 60_000)
+  })
+  test('capped at 1 hour', () => {
+    const o = owed('0 11 * * FRI', '2026-11-13T19:30:00Z')
+    expect(backoffUntil('0 11 * * FRI', st(9, '2026-11-13T20:00:00Z'), o)! - Date.parse('2026-11-13T20:00:00Z')).toBe(3_600_000)
+  })
+  test("capped at the schedule's period", () => {
+    const o = owed('*/5 * * * *', '2026-11-04T18:06:00Z')
+    expect(backoffUntil('*/5 * * * *', st(4, '2026-11-04T18:06:00Z'), o)! - Date.parse('2026-11-04T18:06:00Z')).toBe(5 * 60_000)
+  })
+  test('no failures, no wait', () => {
+    expect(backoffUntil('*/5 * * * *', { failures: 0 }, owed('*/5 * * * *', '2026-11-04T18:06:00Z'))).toBeNull()
+  })
+})
+
+describe('needs = ["internet"]: two witnesses, decided by the daemon', () => {
+  async function owing(text = DURH) {
+    toml(text)
+    const c = clock(); await c.tick()
+    at('2026-11-04T11:00:30-08:00')
+    return c
+  }
+
+  test('offline (gateway down, probe fails): not now, no attempt, the slot stays owed; online again: it runs', async () => {
+    const c = await owing()
+    w.gateway = false; w.probe = false
+    await c.tick()
+    expect(w.spawns).toHaveLength(0)
+    expect(state('sync').notNow).toEqual({ since: w.t.toISOString(), reason: 'offline' })
+    expect(state('sync').last?.note).toBe('baseline: no work ran')     // not-now never touches last
+    expect(state('sync').failures).toBe(0)
+    at('2026-11-04T11:01:30-08:00'); await c.tick()
+    expect(state('sync').notNow!.since).toBe(new Date('2026-11-04T11:00:30-08:00').toISOString())   // since holds
+    w.probe = true
+    at('2026-11-04T11:02:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+  })
+
+  test('the gateway alone is enough (a VPN blocks the probe), and then the probe is not even called', async () => {
+    const c = await owing()
+    w.gateway = true; w.probe = false
+    await c.tick()
+    expect(w.spawns).toHaveLength(1)
+    expect(w.probes).toBe(0)
+  })
+
+  test('the probe alone is enough; a probe that throws reads offline', async () => {
+    const c = await owing()
+    w.gateway = false; w.probe = 'throw'
+    await c.tick()
+    expect(w.spawns).toHaveLength(0)
+    w.probe = true
+    at('2026-11-04T11:01:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+  })
+
+  test('at most one probe per tick, however many jobs need it', async () => {
+    const c = await owing(DURH + DURH.replace('[sync]', '[sync2]'))
+    w.gateway = false; w.probe = false
+    await c.tick()
+    expect(w.probes).toBe(1)
+  })
+
+  test('a job without needs runs offline', async () => {
+    toml(DUR5)
+    w.gateway = false; w.probe = false
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+    expect(w.probes).toBe(0)
+  })
+
+  test('jobs run ignores needs', async () => {
+    const c = await owing()
+    w.gateway = false; w.probe = false
+    expect(c.requestRun('sync').ok).toBe(true)
+  })
+
+  test('a mark-done landing while the tick awaits the probe: the slot is not dispatched after all', async () => {
+    const c = await owing()
+    w.gateway = false
+    let release!: () => void
+    w.probeGate = new Promise(r => { release = r })
+    const ticking = c.tick()
+    while (!w.probes) await Bun.sleep(0)             // the tick decided 11:00 is owed and is now in the probe
+    expect(c.requestMarkDone('sync')).toEqual({ ok: true, slot: '2026-11-04 11:00' })
+    release()
+    await ticking
+    expect(w.spawns).toHaveLength(0)
+    expect(state('sync').last?.note).toBe('marked done: no work ran')
+  })
+
+  test('stop() while the tick awaits the probe: nothing is recorded or dispatched after it', async () => {
+    const c = await owing()
+    w.gateway = false; w.probe = false
+    let release!: () => void
+    w.probeGate = new Promise(r => { release = r })
+    const ticking = c.tick()
+    while (!w.probes) await Bun.sleep(0)
+    const before = state('sync')
+    c.stop()
+    release()
+    await ticking
+    expect(state('sync')).toEqual(before)                // no "not now: offline" written by a stopped clock
+    expect(w.spawns).toHaveLength(0)
+  })
+
+  test('a jobs run racing a tick that is awaiting the probe: exactly one dispatch', async () => {
+    const c = await owing()
+    w.gateway = false
+    let release!: () => void
+    w.probeGate = new Promise(r => { release = r })
+    const ticking = c.tick()
+    await Bun.sleep(0)
+    expect(w.probes).toBe(1)                        // the tick is suspended in the probe
+    const r = c.requestRun('sync')
+    release()
+    await ticking
+    expect(r.ok).toBe(true)
+    expect(w.spawns).toHaveLength(1)
+    expect(state('sync').dispatch).toMatchObject({ kind: 'manual' })
+  })
+})
+
+describe('exit 75 and other not-now results', () => {
+  test('plain job, exit 75: not an attempt, no slot used, no failure, no message; retried next tick', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    at('2026-11-04T10:05:30-08:00'); await run(c, 'sweep', 'not-now', 'check exited 75')
+    const s = state('sweep')
+    expect(s.notNow).toEqual({ since: w.t.toISOString(), reason: 'check exited 75', dispatch: 1 })
+    expect(s.covered?.slot).toBe('2026-11-04 10:00')
+    expect(s.failures).toBe(0)
+    expect(w.main).toEqual([])
+    at('2026-11-04T10:06:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(2)
+    expect(argOf(w.spawns[1].args, '--slot')).toBe('2026-11-04 10:05')
+  })
+
+  test('tick order: results are applied before deciding, so an exit-75 job is retried on the very next tick', async () => {
+    toml(FIVE)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    finish('sweep', 1, 'not-now', 'check exited 75', 1000)
+    at('2026-11-04T10:06:01-08:00'); await c.tick()     // one tick: applied, then dispatched again
+    expect(state('sweep').notNow?.dispatch).toBe(1)
+    expect(w.spawns).toHaveLength(2)
+  })
+
+  test('a duplicate-key "pending" result is not now; "served" is done, absorbed by the session', async () => {
+    toml(DUR5)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00'); await c.tick()
+    at('2026-11-04T10:05:30-08:00'); await run(c, 'pull', 'not-now', 'duplicate key jobs-pull-2026-11-04 10:05 still pending')
+    expect(state('pull').notNow?.dispatch).toBe(1)
+    at('2026-11-04T10:06:30-08:00'); await c.tick()
+    const d = state('pull').dispatch!
+    writeAtomic(rfile('pull', d.id), JSON.stringify({ dispatch: d.id, at: w.t.toISOString(), result: 'done', note: 'duplicate key: already served', absorbedBy: 'sess-9' }))
+    w.procs.delete(d.pid!)
+    await c.tick()
+    expect(state('pull').last).toMatchObject({ result: 'done', absorbedBy: 'sess-9', dispatch: 2 })
+    expect(state('pull').covered?.slot).toBe('2026-11-04 10:05')
+  })
+
+  test('the notNow since resets on a new reason, and after a result has landed', () => {
+    const s: JobState = {}
+    applyOutcome(s, { at: 'T1', result: 'not-now', note: 'offline' }, null)
+    applyOutcome(s, { at: 'T2', result: 'not-now', note: 'offline' }, null)
+    expect(s.notNow!.since).toBe('T1')
+    applyOutcome(s, { at: 'T3', result: 'not-now', note: 'check exited 75' }, null)
+    expect(s.notNow!.since).toBe('T3')
+    applyOutcome(s, { at: 'T4', result: 'failed' }, null)
+    applyOutcome(s, { at: 'T5', result: 'not-now', note: 'check exited 75' }, null)
+    expect(s.notNow!.since).toBe('T5')
+  })
+})
+
+describe('the outcome table', () => {
+  const t = { kind: 'scheduled' as const, slot: 'S', at: 'A' }
+  test('success: the slot is covered, failures 0, run cleared', () => {
+    const st: JobState = { failures: 3, failingSince: 'F' }
+    applyOutcome(st, { at: 'X', result: 'nothing' }, t)
+    expect(st).toEqual({ failures: 0, covered: { slot: 'S', at: 'A' }, last: { at: 'X', result: 'nothing' } })
+  })
+  test('failure: +1, the run keeps its start, and the slot stays owed', () => {
+    const st: JobState = { failures: 1, failingSince: 'F', covered: { slot: 'P', at: 'Q' } }
+    applyOutcome(st, { at: 'X', result: 'failed', note: 'n' }, t)
+    expect(st).toEqual({ failures: 2, failingSince: 'F', covered: { slot: 'P', at: 'Q' }, last: { at: 'X', result: 'failed', note: 'n' } })
+  })
+  test('a manual success covers the latest slot', () => {
+    const st: JobState = {}
+    applyOutcome(st, { at: 'X', result: 'done' }, { kind: 'manual', slot: 'L', at: 'A' })
+    expect(st.covered?.slot).toBe('L')
+  })
+})
+
+describe('jobs run and mark-done', () => {
+  test('a manual success marks the latest slot done, so the scheduled run does not happen', async () => {
+    toml(DUR5)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:00-08:00')
+    expect(c.requestRun('pull').ok).toBe(true)        // a dispatch that serves 10:05 even though the tick hasn't
+    at('2026-11-04T10:05:30-08:00'); await run(c, 'pull', 'done')
+    expect(state('pull').covered?.slot).toBe('2026-11-04 10:05')
+    at('2026-11-04T10:06:30-08:00'); await c.tick()
+    expect(w.spawns).toHaveLength(1)
+  })
+
+  test('a manual failure joins the failure run but leaves the slot alone', async () => {
+    toml(DUR5)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:02:00-08:00'); c.requestRun('pull')
+    await run(c, 'pull', 'failed', 'x')
+    expect(state('pull')).toMatchObject({ failures: 1, covered: { slot: '2026-11-04 10:00' } })
+  })
+
+  test("mark-done covers the latest slot without running, noted as the operator's act", async () => {
+    toml(DUR5 + FIVE)
+    const c = clock(); await c.tick()
+    at('2026-11-04T10:05:01-08:00')
+    setState('pull', { ...state('pull'), failures: 2, failingSince: 'x', last: { at: 'x', result: 'failed' } })
+    expect(c.requestMarkDone('pull')).toEqual({ ok: true, slot: '2026-11-04 10:05' })
+    expect(c.requestMarkDone('sweep')).toEqual({ ok: true, slot: '2026-11-04 10:05' })
+    expect(state('pull')).toMatchObject({ covered: { slot: '2026-11-04 10:05' }, failures: 0, last: { note: 'marked done: no work ran' } })
+    expect(state('pull').failingSince).toBeUndefined()
+    expect(state('sweep').covered?.slot).toBe('2026-11-04 10:05')
+    await c.tick()
+    expect(w.spawns).toHaveLength(0)
+  })
+
+  test('mark-done refuses while a dispatch is live, and without the lock', async () => {
+    toml(DUR5)
+    const c = clock(); await c.tick()
+    c.requestRun('pull')
+    expect(c.requestMarkDone('pull')).toEqual({ ok: false, error: 'pull is already running' })
+    expect(clock().requestMarkDone('pull')).toEqual({ ok: false, error: expect.stringContaining('clock not owned') })
+  })
+})
+
+describe('alerts: one per failure run, after alert_after', () => {
+  async function failingHourly() {
+    toml(DURH)
+    const c = clock()
+    at('2026-11-04T09:30:00-08:00'); await c.tick()
+    return c
+  }
+  /** The hourly tick; if backoff (capped at the hour) still holds the slot, the next minute's tick. */
+  async function failAt(c: JobsClock, iso: string) {
+    at(iso); await c.tick()
+    if (!state('sync').dispatch && !state('sync').notNow?.since?.startsWith(w.t.toISOString().slice(0, 16))) { at(new Date(w.t.getTime() + 60_000).toISOString()); await c.tick() }
+    if (state('sync').dispatch) { at(new Date(w.t.getTime() + 10_000).toISOString()); await run(c, 'sync', 'failed', 'server unreachable') }
+  }
+
+  test('an hourly sync failing for two days alerts once, measured from the run start', async () => {
+    const c = await failingHourly()
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    expect(state('sync').failingSince).toBe(new Date('2026-11-04T10:00:15-08:00').toISOString())
+    expect(w.main.filter(m => m.includes('has been failing since'))).toHaveLength(1)
+    expect(w.main[0]).toContain('Job sync has been failing since')
+    expect(w.main[0]).toContain('server unreachable')
+    expect(state('sync').alertedFor).toBe(state('sync').failingSince)
+    expect(w.main.filter(m => m.includes(' failed: '))).toEqual([])    // never the plain daily message
+  })
+
+  test('not before alert_after', async () => {
+    const c = await failingHourly()
+    for (let h = 0; h < 47; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    expect(w.main).toEqual([])
+  })
+
+  test('a success ends the run; the next run alerts again on its own clock', async () => {
+    const c = await failingHourly()
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    at('2026-11-06T11:02:05-08:00'); await c.tick(); at('2026-11-06T11:02:15-08:00'); await run(c, 'sync', 'done')
+    expect(state('sync').alertedFor).toBeDefined()                     // stale, harmless: it no longer equals failingSince
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-06T12:00:05-08:00') + h * 3_600_000).toISOString())
+    expect(w.main.filter(m => m.includes('has been failing since'))).toHaveLength(2)
+  })
+
+  test('fails whenever it is online, offline in between: alerts once the failures themselves span alert_after', async () => {
+    const c = await failingHourly()
+    await failAt(c, '2026-11-04T10:00:05-08:00')
+    w.gateway = false; w.probe = false
+    for (let h = 1; h < 60; h++) { at(new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString()); await c.tick() }
+    expect(w.main).toEqual([])                                         // offline: the run is only one failure long
+    w.gateway = true
+    await failAt(c, '2026-11-06T22:30:05-08:00')                      // online again, and it fails again, 60h later
+    expect(w.main.filter(m => m.includes('has been failing since'))).toHaveLength(1)
+  })
+
+  test('one failure, then offline past alert_after, then a success: never alerted', async () => {
+    const c = await failingHourly()
+    await failAt(c, '2026-11-04T10:00:05-08:00')
+    w.gateway = false; w.probe = false
+    for (let h = 1; h < 60; h++) { at(new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString()); await c.tick() }
+    expect(w.main).toEqual([]); expect(w.direct).toEqual([])
+    w.gateway = true
+    at('2026-11-06T22:30:05-08:00'); await c.tick(); at('2026-11-06T22:30:15-08:00'); await run(c, 'sync', 'done')
+    expect(w.main).toEqual([]); expect(w.direct).toEqual([])
+  })
+
+  test('offline is never alerted, and not-now neither starts nor ends a run', async () => {
+    const c = await failingHourly()
+    w.gateway = false; w.probe = false
+    for (let h = 0; h < 72; h++) { at(new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString()); await c.tick() }
+    expect(w.main).toEqual([]); expect(w.direct).toEqual([])
+    expect(state('sync').failingSince).toBeUndefined()
+  })
+
+  test('a job alternating between failure and not-now keeps one run, and still alerts', async () => {
+    const c = await failingHourly()
+    for (let h = 0; h < 50; h++) {
+      const iso = new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString()
+      w.gateway = h % 2 === 0; w.probe = false
+      await failAt(c, iso)
+    }
+    expect(state('sync').failingSince).toBe(new Date('2026-11-04T10:00:15-08:00').toISOString())
+    expect(w.main.filter(m => m.includes('has been failing since'))).toHaveLength(1)
+  })
+
+  test('a broken import (ended without a result) for days, then an ordinary failure: one run, its original start', async () => {
+    const c = await failingHourly()
+    for (let h = 0; h < 30; h++) {
+      at(new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString()); await c.tick()
+      const d = state('sync').dispatch
+      if (d) { w.procs.delete(d.pid!); at(new Date(w.t.getTime() + 30_000).toISOString()); await c.tick() }
+    }
+    const start = state('sync').failingSince
+    expect(state('sync').last?.note).toBe('ended without a result')
+    await failAt(c, '2026-11-05T17:00:05-08:00')
+    expect(state('sync').last?.note).toBe('server unreachable')
+    expect(state('sync').failingSince).toBe(start)
+  })
+
+  test('main refuses: the alert goes straight to the channel', async () => {
+    w.mainOk = false
+    const c = await failingHourly()
+    for (let h = 0; h < 49; h++) await failAt(c, new Date(Date.parse('2026-11-04T10:00:05-08:00') + h * 3_600_000).toISOString())
+    expect(w.direct.filter(d => d[0].includes('has been failing since'))).toEqual([[expect.any(String), 'home']])
+  })
+})
+
+describe('flights and DST', () => {
+  const withTZ = (tz: string, fn: () => void) => { const s = process.env.TZ ?? savedTZ.zone; process.env.TZ = tz; try { fn() } finally { process.env.TZ = s } }
+  test('flight east, weekly: done 11:00 Berlin, not owed again in California the same day', () => {
+    let s: JobState = {}
+    withTZ('Europe/Berlin', () => { s = { covered: { slot: owedSlot('0 11 * * FRI', {}, new Date('2026-11-13T10:30:00Z'))!.label, at: '2026-11-13T10:00:20Z' } } })
+    withTZ('America/Los_Angeles', () => { expect(owedSlot('0 11 * * FRI', s, new Date('2026-11-13T19:30:00Z'))).toBeNull() })
+  })
+  test('flight west, hourly: done 15:00 Berlin, owed at 08:00 California', () => {
+    withTZ('America/Los_Angeles', () => {
+      expect(owedSlot('0 * * * *', { covered: { slot: '2026-11-13 15:00', at: '2026-11-13T14:00:20Z' } }, new Date('2026-11-13T16:10:00Z'))?.label).toBe('2026-11-13 08:00')
     })
   })
 })

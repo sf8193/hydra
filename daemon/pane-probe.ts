@@ -327,6 +327,33 @@ export async function pasteTypedInput(info: SessionInfo, text: string): Promise<
 
 const probeEntries = new Map<string, ProbeEntry>()
 
+// Each session's health verdict, from the latest probe: active (in use), clean (idle, nothing blocking), stuck on a
+// named prompt, or unprobeable (not a pane this probe can read). Never persisted, so "no verdict" is the honest
+// answer after a daemon start; a verdict older than VERDICT_MAX_AGE_MS reads as none (a probe loop that stopped).
+export type SessionVerdict = { verdict: 'clean' | 'active' | 'unprobeable' } | { verdict: 'stuck'; kind: BlockingKind }
+export type VerdictReading = { verdict: SessionVerdict | null; since: number }
+const verdicts = new Map<string, { v: SessionVerdict; at: number }>()
+const VERDICT_MAX_AGE_MS = 3 * 60_000
+// When each session last had a verdict, kept when a verdict is dropped: how long it has been silent is this record,
+// not whenever someone happened to ask.
+const lastVerdictAt = new Map<string, number>()
+let probingSince: number | null = null
+
+/**
+ * A session's verdict and since when it holds. With no verdict, `since` is when the silence began: its last verdict,
+ * else when probing started (or when the session was created, if later).
+ */
+export function sessionVerdict(tmuxName: string, createdAt: number, now: number = io.now()): VerdictReading {
+  const e = verdicts.get(tmuxName)
+  if (e && now - e.at <= VERDICT_MAX_AGE_MS) return { verdict: e.v, since: e.at }
+  return { verdict: null, since: lastVerdictAt.get(tmuxName) ?? Math.max(createdAt, probingSince ?? now) }
+}
+
+function setVerdict(key: string, v: SessionVerdict, at: number): void {
+  verdicts.set(key, { v, at })
+  lastVerdictAt.set(key, at)
+}
+
 // Sessions whose login just succeeded while their spawn prompt is still unanswered.
 const resendAfterLogin = new Set<string>()
 const findSession = (tmuxName: string) => [...io.getSessions()].find(s => s.tmuxName === tmuxName && io.occupancy(s) !== 'dead')
@@ -804,6 +831,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
   probeRunning = true
   try {
   const t = now ?? io.now()
+  probingSince ??= t
   const nowSec = Math.floor(t / 1000)
   _probeCount++
 
@@ -824,10 +852,11 @@ export async function probeAllSessions(now?: number): Promise<void> {
     // notification and its abort notice is about a lost bridge. A provider on its
     // own engine channel (Codex) is never a target, so it spends no tmux reads
     // and no nudge budget. Checked before the target is added.
-    if (info.adapter.channel !== 'bridge') continue
+    if (info.adapter.channel !== 'bridge') { setVerdict(info.tmuxName, { verdict: 'unprobeable' }, t); continue }
     targets.push({ tmuxName: info.tmuxName, threadId: info.threadId, isMain: false })
   }
 
+  const detectedKeys: { key: string; detected: BlockingState; onScreen: boolean }[] = []
   for (const target of targets) {
     const key = target.tmuxName
 
@@ -837,11 +866,13 @@ export async function probeAllSessions(now?: number): Promise<void> {
     const lastActivitySec = await io.getWindowActivity(target.tmuxName)
     if (lastActivitySec === null) {
       clearState(key, 0, 'gone') // tmux gone — force-clear, no grace
+      verdicts.delete(key)
       continue
     }
     const idleSec = nowSec - lastActivitySec
     if (idleSec < MIN_IDLE_BEFORE_PROBE_S) {
       clearState(key, t, 'active') // active — pane not captured; preserve latch
+      setVerdict(key, { verdict: 'active' }, t)
       continue
     }
 
@@ -849,6 +880,7 @@ export async function probeAllSessions(now?: number): Promise<void> {
     const tailText = await io.capturePaneTail(target.tmuxName, PANE_TAIL_LINES)
     if (!tailText) {
       clearState(key, 0, 'gone') // capture failed — force-clear
+      verdicts.delete(key)
       continue
     }
 
@@ -876,9 +908,11 @@ export async function probeAllSessions(now?: number): Promise<void> {
 
     if (!detected) {
       clearState(key, t, 'cleared') // no detection — genuine leave; reset latch
+      setVerdict(key, { verdict: 'clean' }, t)
       continue
     }
     _detectCount++
+    detectedKeys.push({ key, detected, onScreen })
 
     const existing = probeEntries.get(key)
     if (existing && existing.state.kind === detected.kind) {
@@ -943,6 +977,16 @@ export async function probeAllSessions(now?: number): Promise<void> {
       })
     }
   }
+  // A detection is stuck once confirmed. Two never confirm, by design, and must still read as something:
+  // a transcript "Login expired" (not on screen) is stuck on login; an on-screen login notice (expiring, success)
+  // doesn't block the session, so it is clean. Anything else unconfirmed has no verdict until the next probe.
+  for (const { key, detected, onScreen } of detectedKeys) {
+    const stuck = confirmedStuckState(key)
+    if (stuck) setVerdict(key, { verdict: 'stuck', kind: stuck.kind }, t)
+    else if (!onScreen && detected.kind === 'login_required') setVerdict(key, { verdict: 'stuck', kind: 'login_required' }, t)
+    else if (onScreen && isLoginNotice(detected)) setVerdict(key, { verdict: 'clean' }, t)
+    else verdicts.delete(key)
+  }
   } finally {
     probeRunning = false
   }
@@ -985,6 +1029,9 @@ function clearState(key: string, now: number, reason: ClearReason = 'cleared'): 
 
 export function _resetForTesting(): void {
   probeEntries.clear()
+  verdicts.clear()
+  lastVerdictAt.clear()
+  probingSince = null
   threadIntercepts.clear()
   resendAfterLogin.clear()
 }

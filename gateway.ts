@@ -152,6 +152,8 @@ export interface ChatGateway {
   // Lifecycle
   start(token: string): Promise<void>
   stop(): Promise<void>
+  /** The transport is connected now. */
+  isConnected(): boolean
 
   // Resilience (optional — gateways implement if their transport needs it)
   forceReconnect?(): Promise<{ ok: boolean; message: string }>

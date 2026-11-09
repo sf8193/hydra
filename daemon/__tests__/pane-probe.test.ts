@@ -33,6 +33,7 @@ import {
   _PANE_TAIL_LINES,
   _INTERCEPT_GRACE_MS,
   probeByteTmuxName,
+  sessionVerdict,
   type PaneProbeIO,
   type BlockingState,
 } from '../pane-probe.js'
@@ -1628,5 +1629,105 @@ describe('resolveStuckFromHome', () => {
   it('isBlockingKind accepts every blocking kind and nothing else', () => {
     for (const k of ['plan_mode', 'login_required', 'resume_prompt', 'usage_limit', 'unknown_dialog']) expect(isBlockingKind(k)).toBe(true)
     for (const k of ['disconnected', 'working', 'toString', '']) expect(isBlockingKind(k)).toBe(false)
+  })
+})
+
+describe('sessionVerdict: what the jobs clock reads for overlap', () => {
+  beforeEach(() => {
+    _resetForTesting()
+    registryEntries.clear()
+    paneTails.clear()
+    windowActivity.clear()
+    sentMessages.length = 0
+    _setIO(makeTestIO())
+  })
+  afterEach(() => { _resetIO() })
+  const idle = (name: string) => windowActivity.set(name, Math.floor(T0 / 1000) - 120)
+
+  it('no verdict before the first probe since the daemon started', () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    expect(sessionVerdict('job-a', 0, T0).verdict).toBeNull()
+  })
+
+  it('active: input or output in the last 30 seconds', async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    windowActivity.set('job-a', Math.floor(T0 / 1000) - 5)
+    await probeAllSessions(T0)
+    expect(sessionVerdict('job-a', 0, T0).verdict).toEqual({ verdict: 'active' })
+  })
+
+  it('clean: idle, probed, nothing blocking (a review waiting on a human)', async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    idle('job-a'); paneTails.set('job-a', NORMAL_SESSION_TAIL)
+    await probeAllSessions(T0)
+    expect(sessionVerdict('job-a', 0, T0).verdict).toEqual({ verdict: 'clean' })
+  })
+
+  it('unprobeable: a session on its own engine channel (Codex)', async () => {
+    addSession('s1', { tmuxName: 'job-c', threadId: 't1', engine: 'codex' })
+    await probeAllSessions(T0)
+    expect(sessionVerdict('job-c', 0, T0).verdict).toEqual({ verdict: 'unprobeable' })
+  })
+
+  it('stuck only once confirmed; a first detection is no verdict, not clean', async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    idle('job-a'); paneTails.set('job-a', NORMAL_SESSION_TAIL)
+    await probeAllSessions(T0)
+    paneTails.set('job-a', PLAN_MODE_TAIL)
+    await probeAllSessions(T0 + 60_000)
+    expect(sessionVerdict('job-a', 0, T0 + 60_000).verdict).toBeNull()
+    for (let i = 2; i <= _CONFIRM_PROBES; i++) await probeAllSessions(T0 + i * 60_000)
+    expect(sessionVerdict('job-a', 0, T0 + _CONFIRM_PROBES * 60_000).verdict).toEqual({ verdict: 'stuck', kind: 'plan_mode' })
+  })
+
+  it('a verdict older than 3 minutes reads as none (a probe loop that died)', async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    idle('job-a'); paneTails.set('job-a', NORMAL_SESSION_TAIL)
+    await probeAllSessions(T0)
+    expect(sessionVerdict('job-a', 0, T0 + 3 * 60_000).verdict).toEqual({ verdict: 'clean' })
+    expect(sessionVerdict('job-a', 0, T0 + 3 * 60_000 + 1).verdict).toBeNull()
+  })
+
+  it('a transcript "Login expired" (never on screen, never confirmed) is stuck on login, not silent', async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    registryEntries.get('s1').spawnPrompt = 'Weekly review.'
+    firstTurns.set('s1', 'Login expired · Please run /login')
+    idle('job-a'); paneTails.set('job-a', STALE_EXPIRED_ABOVE_PROMPT)
+    for (let i = 0; i < 3; i++) {
+      await probeAllSessions(T0 + i * 60_000)
+      expect(sessionVerdict('job-a', 0, T0 + i * 60_000).verdict).toEqual({ verdict: 'stuck', kind: 'login_required' })
+    }
+  })
+
+  it('an on-screen login notice (expiring), which pane-probe never confirms as stuck, reads clean', async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    idle('job-a'); paneTails.set('job-a', LOGIN_EXPIRING_TAIL)
+    for (let i = 0; i < 3; i++) {
+      await probeAllSessions(T0 + i * 60_000)
+      expect(sessionVerdict('job-a', 0, T0 + i * 60_000).verdict).toEqual({ verdict: 'clean' })
+    }
+  })
+
+  it("silent since: pane-probe's last verdict, kept when the verdict is dropped; else when probing began or the session was created", async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    idle('job-a'); paneTails.set('job-a', NORMAL_SESSION_TAIL)
+    await probeAllSessions(T0)
+    await probeAllSessions(T0 + 60_000)
+    expect(sessionVerdict('job-a', 0).since).toBe(T0 + 60_000)
+    paneTails.set('job-a', PLAN_MODE_TAIL)              // first detection: verdict dropped, silence starts after the last one
+    await probeAllSessions(T0 + 120_000)
+    expect(sessionVerdict('job-a', 0, T0 + 120_000).verdict).toBeNull()
+    expect(sessionVerdict('job-a', 0).since).toBe(T0 + 60_000)
+    expect(sessionVerdict('never-probed', 0).since).toBe(T0)                    // probing began at T0
+    expect(sessionVerdict('never-probed', T0 + 500_000).since).toBe(T0 + 500_000) // created later
+  })
+
+  it('a session whose tmux is gone loses its verdict', async () => {
+    addSession('s1', { tmuxName: 'job-a', threadId: 't1' })
+    idle('job-a'); paneTails.set('job-a', NORMAL_SESSION_TAIL)
+    await probeAllSessions(T0)
+    windowActivity.delete('job-a')
+    await probeAllSessions(T0 + 60_000)
+    expect(sessionVerdict('job-a', 0, T0 + 60_000).verdict).toBeNull()
   })
 })

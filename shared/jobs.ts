@@ -1,13 +1,13 @@
 // Recurring jobs, the part both sides read: jobs.toml, the state files the daemon writes, and the owed rule.
 // The daemon's clock (daemon/jobs-clock.ts) is the only writer of job state; attempts (cli/jobs.ts) write one
-// result file each; the CLI only reads. Design: proposals/durable-jobs.md.
+// result file each; the CLI only reads.
 
 import { spawnSync } from 'child_process'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { latestSlot, parseCron, type Slot } from './cron-local.js'
-import { parseIdleTtl } from './constants.js'
+import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
+import { parseDuration, parseIdleTtl } from './constants.js'
 
 // ---------------------------------------------------------------------------
 // jobs.toml
@@ -24,7 +24,18 @@ export type Job = {
   channel?: string   // spawn: where the session opens; any mode: where a direct alert goes. Falls back to the top-level channel
   model?: string     // spawn only: model id or alias passed to `hydra spawn --model`
   idleTtl?: string   // spawn only: passed to `hydra spawn --idle-ttl` (validated here with the daemon's parser)
+  needs?: Need[]     // preconditions the daemon checks before dispatch; unmet = not now
+  alertAfterMs: number // how long a failure run lasts before it is alerted, once (alert_after, default 1d)
+  notes?: string[]   // what jobs list says about keys that are kept only for old files
 }
+
+export type Need = 'internet'
+const NEEDS: readonly Need[] = ['internet']
+const DEFAULT_ALERT_AFTER_MS = 24 * 60 * 60_000
+const MAX_ALERT_AFTER_MS = 30 * 24 * 60 * 60_000
+
+/** alert_after: a duration up to 30d. */
+export const parseAlertAfter = (s: string): number | null => parseDuration(s, MAX_ALERT_AFTER_MS)
 
 export type JobsConfig = { channel?: string; jobs: Job[] }
 
@@ -49,7 +60,7 @@ export function parseJobsConfig(text: string): JobsConfig {
       return t[k] as string
     }
     for (const k of Object.keys(t)) {
-      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl'].includes(k)) fail(`unknown key ${k}`)
+      if (!['schedule', 'check', 'mode', 'prompt', 'channel', 'model', 'idle_ttl', 'durable', 'needs', 'overlap', 'alert_after'].includes(k)) fail(`unknown key ${k}`)
     }
     const schedule = str('schedule') ?? fail('schedule is required')
     // parseCron is the only reader of a schedule, so it is the only validator.
@@ -71,7 +82,23 @@ export function parseJobsConfig(text: string): JobsConfig {
     if (idleTtl && parseIdleTtl(idleTtl) === null) fail(`idle_ttl "${idleTtl}" must be a duration like 90m, 12h or 4d, at most 7d`)
     const check = str('check')
     if (mode === 'none' && !check) fail('mode none needs a check script, or the job does nothing')
-    jobs.push({ name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }) })
+    // A slot is owed until it is done: every job is retried with back-off. durable = true is that; false is ignored.
+    if (t.durable !== undefined && typeof t.durable !== 'boolean') fail('durable must be true or false')
+    const notes = t.durable === false ? ['durable = false is ignored: a job is retried until its slot is done; remove the key'] : []
+    let needs: Need[] = []
+    if (t.needs !== undefined) {
+      if (!Array.isArray(t.needs) || t.needs.some(n => typeof n !== 'string')) fail('needs must be a list of names')
+      for (const n of t.needs as string[]) if (!NEEDS.includes(n as Need)) fail(`needs: unknown precondition "${n}" (known: ${NEEDS.join(', ')})`)
+      needs = [...new Set(t.needs as Need[])]
+    }
+    if (t.overlap !== undefined) fail('overlap is gone: for one standing session that sees every run, use to = "<specialist>"')
+    const alertAfter = str('alert_after')
+    const alertAfterMs = alertAfter === undefined ? DEFAULT_ALERT_AFTER_MS : parseAlertAfter(alertAfter)
+    if (alertAfterMs === null) fail(`alert_after "${alertAfter}" must be a duration like 90m, 12h or 2d, at most 30d`)
+    jobs.push({
+      name, schedule, mode, ...(check && { check }), ...(prompt && { prompt }), ...(channel && { channel }), ...(model && { model }), ...(idleTtl && { idleTtl }),
+      alertAfterMs: alertAfterMs!, ...(needs.length && { needs }), ...(notes.length && { notes }),
+    })
   }
   return { ...(defaultChannel && { channel: defaultChannel }), jobs }
 }
@@ -99,6 +126,10 @@ export const ATTEMPT_DEADLINE_MS = CHECK_TIMEOUT_MS + ACTION_TIMEOUT_MS + 2 * 60
 // ---------------------------------------------------------------------------
 
 export type Result = 'done' | 'nothing' | 'failed' | 'not-now'
+/** What happened: the one result vocabulary for attempts, the daemon's own decisions and the outcome table. */
+export type Outcome = { result: Result; note?: string; absorbedBy?: string }
+/** `check` exit code for "not now" (EX_TEMPFAIL): not an attempt, uses no slot. `jobs run` exits with it too. */
+export const EX_TEMPFAIL = 75
 export type V0Outcome = 'nothing' | 'findings' | 'failed'
 
 export type Dispatch = {
@@ -107,7 +138,8 @@ export type Dispatch = {
   at: string
   kind: 'scheduled' | 'manual'
   slot: string        // scheduled: the slot it serves; manual: the latest slot label, for display only
-  deadline: string
+  deadline: string    // moved later by any gap in the daemon's watch (sleep): the attempt's own timers count only awake time
+  seenAt?: string     // when the daemon last saw the attempt running
   pid?: number        // added after the spawn
   lstart?: string
 }
@@ -121,33 +153,38 @@ export type JobState = {
   appliedDispatch?: number        // the last dispatch id whose result (or loss) was applied
   failures?: number
   failingSince?: string
-  last?: { at: string; dispatch?: number; result: 'done' | 'nothing' | 'failed'; note?: string; v0?: V0Outcome }
+  last?: { at: string; dispatch?: number; result: Exclude<Result, 'not-now'>; note?: string; absorbedBy?: string }
   notNow?: { since: string; reason: string; dispatch?: number }
-  reportedDay?: string            // local date a failure was last reported
+  alertedFor?: string             // the failingSince already alerted for (alerted iff equal)
 }
 
 export type DaemonState = {
   lastGoodConfig?: string
-  configAlertDay?: string         // local date
+  configAlertedFor?: string       // the config problem already alerted: once per episode, cleared when it parses
+  staleAlertedFor?: string        // the stale-clock episode already alerted (its last tick, or "never"), so a restart doesn't repeat it
   lastTick?: string
 }
 
 /** What an attempt reports, once, in results/<name>.<id>.json. */
-export type AttemptResult = { dispatch: number; at: string; result: Result; note?: string }
+export type AttemptResult = Outcome & { dispatch: number; at: string }
 
 export const jobsDir = (stateDir: string) => join(stateDir, 'jobs-state')
 export const resultsDir = (stateDir: string) => join(jobsDir(stateDir), 'results')
-export const stateFile = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.json`)
+/** The daemon's record of a job. A name the old launchd runner never wrote, so it can't overwrite it. */
+export const stateFile = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.state.json`)
+/** The old runner's record (v0), read only to migrate it. */
+export const v0File = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.json`)
 export const logFile = (stateDir: string, name: string) => join(jobsDir(stateDir), `${name}.log`)
-export const resultFile = (stateDir: string, name: string, id: number) => join(resultsDir(stateDir), `${name}.${id}.json`)
+/** Named by id and nonce: ids can restart (a state reset), and a stale result must never settle a new dispatch. */
+export const resultFile = (stateDir: string, name: string, id: number, nonce: string) => join(resultsDir(stateDir), `${name}.${id}.${nonce}.json`)
 export const daemonFile = (stateDir: string) => join(jobsDir(stateDir), '_daemon.json')
 export const lockFile = (stateDir: string) => join(jobsDir(stateDir), '_daemon.lock')
 export const jobsToml = (stateDir: string) => join(stateDir, 'jobs.toml')
 
-/** `<name>.<id>.json` → its parts, or null for anything else in the results dir (a tmp file, say). */
-export function parseResultName(file: string): { name: string; id: number } | null {
-  const m = /^([a-z0-9][a-z0-9-]*)\.(\d+)\.json$/.exec(file)
-  return m ? { name: m[1], id: Number(m[2]) } : null
+/** `<name>.<id>.<nonce>.json` → its parts, or null for anything else in the results dir (a tmp file, say). */
+export function parseResultName(file: string): { name: string; id: number; nonce: string } | null {
+  const m = /^([a-z0-9][a-z0-9-]*)\.(\d+)\.([a-z0-9]+)\.json$/.exec(file)
+  return m ? { name: m[1], id: Number(m[2]), nonce: m[3] } : null
 }
 
 /** tmp + fsync + rename: a reader sees the old file or the new one, never half of one. */
@@ -165,21 +202,17 @@ export function localDay(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-const V0_RESULT: Record<V0Outcome, 'done' | 'nothing' | 'failed'> = { findings: 'done', nothing: 'nothing', failed: 'failed' }
+const V0_RESULT: Record<V0Outcome, Exclude<Result, 'not-now'>> = { findings: 'done', nothing: 'nothing', failed: 'failed' }
 
 /**
- * Today's runner wrote `{at, outcome, note}`. Translate it rather than treat it as missing: the job then doesn't fire
- * at cutover, because its last run already covers the latest slot it saw. A failure whose daily message went out
- * keeps that day as reported, so the cutover doesn't send it a second time.
+ * The old runner wrote `{at, outcome, note}`. Translate it rather than treat it as missing: the job then doesn't fire
+ * at cutover, because its last run already covers the latest slot it saw.
  */
 export function translateV0(rec: { at: string; outcome: V0Outcome; note?: string }, schedule: string | undefined): JobState {
-  const at = new Date(rec.at)
-  const slot = schedule ? latestSlot(schedule, at) : null
-  const reported = rec.outcome === 'failed' && !rec.note?.includes('also failed')
+  const slot = schedule ? latestSlot(schedule, new Date(rec.at)) : null
   return {
     ...(slot && { covered: { slot: slot.label, at: rec.at } }),
-    last: { at: rec.at, result: V0_RESULT[rec.outcome], ...(rec.note !== undefined && { note: rec.note }), v0: rec.outcome },
-    ...(reported && { reportedDay: localDay(at) }),
+    last: { at: rec.at, result: V0_RESULT[rec.outcome], ...(rec.note !== undefined && { note: rec.note }) },
   }
 }
 
@@ -188,10 +221,22 @@ const isV0 = (o: Record<string, unknown>) =>
 
 export type ReadState = { kind: 'missing' } | { kind: 'unreadable'; error: string } | { kind: 'ok'; state: JobState; translated: boolean }
 
-/** A job's state: missing (never ran here), unreadable (corrupt or foreign), or the state, translated from v0 if needed. */
+/**
+ * A job's state: missing (never ran here), unreadable (corrupt or foreign), or the state. With no daemon record yet,
+ * the old runner's `<name>.json` is migrated (`translated`), and only then: once the daemon has written its own
+ * record, a later v0 write can't touch it.
+ */
 export function readJobState(stateDir: string, name: string, schedule?: string): ReadState {
-  const f = stateFile(stateDir, name)
-  if (!existsSync(f)) return { kind: 'missing' }
+  if (existsSync(stateFile(stateDir, name))) {
+    const r = readRecord(stateFile(stateDir, name), schedule)
+    return r.kind === 'ok' && r.translated ? { kind: 'unreadable', error: 'a v0 record in the daemon state file' } : r
+  }
+  if (!existsSync(v0File(stateDir, name))) return { kind: 'missing' }
+  const r = readRecord(v0File(stateDir, name), schedule)
+  return r.kind === 'ok' ? { ...r, translated: true } : r
+}
+
+function readRecord(f: string, schedule: string | undefined): ReadState {
   let o: unknown
   try { o = JSON.parse(readFileSync(f, 'utf8')) } catch (err) { return { kind: 'unreadable', error: err instanceof Error ? err.message : String(err) } }
   if (typeof o !== 'object' || o === null || Array.isArray(o)) return { kind: 'unreadable', error: 'not an object' }
@@ -234,6 +279,21 @@ export function owedSlot(schedule: string, state: JobState, now: Date): Slot | n
   return slot
 }
 
+
+/**
+ * Back-off: after n consecutive failures the next attempt waits min(2^n minutes, 1 hour, the schedule's
+ * period), measured from the last failure (`last.at`: with failures > 0 it is always a failure). The period is the
+ * gap from the owed slot to the next one. Returns the earliest instant (ms) the slot may be tried, or null for no wait.
+ */
+export function backoffUntil(schedule: string, state: JobState, owed: Slot): number | null {
+  const n = state.failures ?? 0
+  if (n <= 0 || !state.last) return null
+  const next = nextSlot(schedule, owed.at)
+  const period = next ? next.at.getTime() - owed.at.getTime() : Infinity
+  const wait = Math.min(2 ** Math.min(n, 20) * 60_000, 3_600_000, period)
+  return new Date(state.last.at).getTime() + wait
+}
+
 // ---------------------------------------------------------------------------
 // Clock constants and names shared by the daemon and the CLI
 // ---------------------------------------------------------------------------
@@ -241,20 +301,47 @@ export function owedSlot(schedule: string, state: JobState, now: Date): Slot | n
 /** A last tick older than this is stale: the health loop flags it, and `jobs list` says so. */
 export const STALE_TICK_MS = 5 * 60_000
 
+/**
+ * Like setTimeout, but counts only time awake. On macOS a timer counts sleep (CLOCK_MONOTONIC runs on), so a laptop
+ * that sleeps through an attempt would wake into its deadline. A gap between beats longer than two beats is sleep
+ * and counts as one beat. Returns a cancel.
+ */
+export function awakeTimeout(fn: () => void, ms: number, clock: { now: () => number; every: (f: () => void, ms: number) => () => void } = {
+  now: Date.now,
+  every: (f, beat) => { const t = setInterval(f, beat); return () => clearInterval(t) },
+}): () => void {
+  const beat = Math.min(30_000, Math.max(10, ms / 4))
+  let awake = 0
+  let last = clock.now()
+  const cancel = clock.every(() => {
+    const now = clock.now()
+    const step = now - last
+    last = now
+    awake += step > 2 * beat ? beat : step
+    if (awake >= ms) { cancel(); fn() }
+  }, beat)
+  return cancel
+}
+
 /** The initiator every session and message a job causes carries. */
 export const jobInitiator = (name: string) => `jobs:${name}`
+
 
 // ---------------------------------------------------------------------------
 // The attempt's command line
 // ---------------------------------------------------------------------------
 
 /** The `jobs attempt` contract. attemptArgv writes it (the daemon), parseAttemptArgs reads it (the attempt). */
-export type AttemptArgs = { platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string }
+export type AttemptArgs = {
+  platform: string; name: string; dispatch: number; nonce: string; slot: string; manual: boolean; stateDir: string
+  /** The slot's instant (ISO). A label repeats after a westward zone change; the instant never does. */
+  slotAt?: string
+}
 
 /** `--state-dir` is the CLI's global daemon address, so it comes first: the attempt's own spawn or deliver uses it too. */
 export function attemptArgv(a: AttemptArgs): string[] {
   return ['--state-dir', a.stateDir, 'jobs', 'attempt', a.platform, a.name, '--dispatch', String(a.dispatch), '--nonce', a.nonce,
-    '--slot', a.slot, ...(a.manual ? ['--manual'] : [])]
+    '--slot', a.slot, ...(a.slotAt ? ['--slot-at', a.slotAt] : []), ...(a.manual ? ['--manual'] : [])]
 }
 
 /** The whole CLI argv of an attempt, or null if any part is missing or malformed. */
@@ -266,7 +353,8 @@ export function parseAttemptArgs(argv: string[]): AttemptArgs | null {
   const dispatch = Number(val('--dispatch'))
   const nonce = val('--nonce'), slot = val('--slot'), stateDir = val('--state-dir')
   if (!platform || !name || !isJobName(name) || !Number.isInteger(dispatch) || dispatch < 1 || !nonce || slot === undefined || !stateDir) return null
-  return { platform, name, dispatch, nonce, slot, manual: argv.includes('--manual'), stateDir }
+  const slotAt = val('--slot-at')
+  return { platform, name, dispatch, nonce, slot, ...(slotAt && { slotAt }), manual: argv.includes('--manual'), stateDir }
 }
 
 /** Whole-token match on `--dispatch <id>` and `--nonce <nonce>`, so dispatch 1 never matches 12 and another install's id never matches. */

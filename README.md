@@ -495,6 +495,17 @@ Nothing is dropped silently: a message dropped because it stayed owed past a day
 
 **Runbook.** Silent in the channel: `hydra health`; `state: up` with `catchUp.accepted > 0` pass after pass means a second connection holds the app. `exhausted`: check both tokens and the app's Socket Mode setting. Catch-up `reason` mentions a budget or rate limit: the next pass resumes from the held cursor. A start-up log line `slack listener off (…)` names what is missing. A first connection that fails is retried with backoff (10 s doubling to 5 min) until it connects, then a catch-up pass runs.
 
+### Jobs
+
+`<state>/jobs.toml` declares recurring jobs (start from [`jobs.example.toml`](jobs.example.toml)). Each one has a 5-field cron `schedule` in local time, an optional `check` script whose output becomes the agent's message, and what to do with that message. The daemon's clock reads the file every minute and runs each owed slot as a detached attempt. A slot missed while the machine slept runs once on wake. A slot is owed until it is done: a failed one is retried with back-off, and a failure that lasts past `alert_after` (default 1d) is alerted once. `hydra jobs list <platform>` shows each job's next run and last result; `jobs sync` loads the file now; `jobs run <platform> <name>` runs a job in the foreground; `jobs mark-done` covers a slot without running it. Flows: [`flow-jobs-dispatch.mmd`](diagrams/flow-jobs-dispatch.mmd), [`flow-jobs-sync.mmd`](diagrams/flow-jobs-sync.mmd).
+
+**What changed from the launchd runner:**
+- **Jobs run only while the daemon runs.** The watchdog restarts it, and slots owed in the meantime run then, collapsed into one run per job.
+- **Per-job launchd entries are removed automatically,** from the platform's live state dir only. A stale entry that still fires only prints a message.
+- **`jobs sync` validates jobs.toml and has the daemon load it at once,** printing what changed. It registers nothing with launchd, and with the daemon down it still exits 0.
+- **A sleep, or a daemon restart, during a run is not a failure.**
+- **Known and accepted:** in the hour the clocks fall back, a frequent job (`*/5`) pauses for about an hour, once a year.
+
 ### Usage alerts
 
 The daemon posts account-wide Claude rate-limit alerts to the default channel: the 5-hour window at 80% and 95%, the weekly window at 80%, 90% and 95%, once per threshold. They re-arm when the window resets, or when usage falls well below the last alert. The figures come from Claude Code itself: the hydra mod (`mod/`) in byte reports each change through the main-only `report_usage` tool. Byte's footer ("You've used N% of your weekly limit") is a fallback for the weekly window while the mod is not reporting; both feed one dedupe (`daemon/usage-alerts.ts`), persisted in the state dir so a restart does not re-alert.

@@ -510,6 +510,8 @@ startJobsClock(realDeps({
     return (await safeSend(channel, text)).length > 0
   },
   homeChannel: () => DEFAULT_SESSION_CHANNEL || undefined,
+  gatewayConnected: () => gateway.isConnected(),
+  // Overlap: every live session the job spawned, connected or not, with pane-probe's verdict on each.
 }))
 
 let shuttingDown = false

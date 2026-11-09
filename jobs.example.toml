@@ -3,7 +3,13 @@
 # each job's state.
 #
 # A job's check script prints nothing when all is well. Anything it prints is passed to the agent.
-# A nonzero exit is a failure: the daemon posts one "job failed" message per local day while it keeps failing.
+# Exit 75 means "not now": not an attempt, no slot used, no message; it is tried again on the next tick.
+# Any other nonzero exit is a failure. A slot is owed until it is done: a failed attempt is retried with back-off
+# (min(2^n minutes, 1h, the schedule's period)), and a failure run is alerted once, after alert_after.
+#
+# alert_after = "2d"      how long a failure run lasts before it is alerted, 1m to 30d (default 1d)
+# needs = ["internet"]    not now while offline (the captive-portal probe and the daemon's gateway both down)
+# `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it.
 #
 # mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
 # mode = "main"   the prompt goes to the main session
@@ -49,3 +55,10 @@ prompt = "Summarize this week's security scan results for the user."
 schedule = "0 1 * * *"
 check = "~/scripts/cleanup_logs.sh"
 mode = "none"
+
+# A weekly obligation: no script at all. Runs once per Friday slot, retried while offline or failing.
+[weekly-review]
+schedule = "0 11 * * FRI"
+mode = "spawn"
+prompt = "Run the weekly review."
+needs = ["internet"]
