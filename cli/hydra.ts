@@ -33,7 +33,7 @@ Jobs (recurring, from <state dir>/jobs.toml):
   hydra jobs list <platform>           Each job's runner, next run and last result (validates jobs.toml)
   hydra jobs sync <platform>           Register runner = "launchd" jobs with launchd and have the daemon load the file now
   hydra jobs run <platform> <name>     Run one job now, through the daemon; Ctrl-C cancels it
-  hydra jobs mark-done <platform> <name>  Mark the latest slot done without running it (a cutover, an unconfirmed slot)
+  hydra jobs mark-done <platform> <name>  Mark a daemon job's latest slot done without running it
   A job's runner is launchd unless it (or the file) says runner = "daemon"; delivery is always the daemon's.
 
 Lifecycle:

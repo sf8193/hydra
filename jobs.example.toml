@@ -16,7 +16,7 @@
 # A daemon-runner job can add:
 # alert_after = "2d"      how long a failure run lasts before it is alerted, 1m to 30d (default 1d)
 # needs = ["internet"]    not now while offline (the captive-portal probe and the daemon's gateway both down)
-# `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it.
+# `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it (runner = "daemon" only).
 #
 # mode = "spawn"  a fresh agent session in `channel`, closed when it finishes
 # mode = "main"   the prompt goes to the main session
