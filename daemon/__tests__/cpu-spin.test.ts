@@ -187,3 +187,10 @@ test('formatSpinAlert: one message, every entry, combined cores, advice per kind
   expect(lines[2]).not.toContain('kill')
   expect(lines[3]).toBe('• `session 0523124d` · orphan bridge pid 333 at 100%, its launcher gone: `kill 333`; if it\'s still there, `kill -9 333`')
 })
+
+// A launchd-started daemon's PATH has no /usr/sbin, where sysctl lives: swap must still be read.
+test.if(process.platform === 'darwin')('swap is read with a PATH that leaves out /usr/sbin', () => {
+  const r = Bun.spawnSync([process.execPath, '-e', "import { systemPressure } from './daemon/cpu-watch.ts'; console.log(JSON.stringify(systemPressure()))"],
+    { env: { ...process.env, PATH: '/usr/bin:/bin' }, cwd: `${import.meta.dir}/../..` })
+  expect(JSON.parse(r.stdout.toString().trim().split('\n').pop()!).swapUsedMB).toBeNumber()
+})
