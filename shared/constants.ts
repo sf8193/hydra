@@ -28,11 +28,21 @@ export const DELIVER_MAX_MESSAGE_BYTES = 10_000
 
 export const BRIDGE_SHUTDOWN_GRACE_MS = 1_000
 
-// Spin detection on the vitals tick (once a minute). A process at or above SPIN_CPU_PERCENT
-// of one core is hot; an idle session whose bridge or Claude is hot for SPIN_CONSECUTIVE_SAMPLES
-// samples in a row is spinning. The 2026-11-08 Bun busy-spin held bridges at ~100% for days.
+// Spinning, for every process Hydra watches. A process is hot when the CPU it used since the
+// previous sample, over the wall time since then, is at least SPIN_CPU_PERCENT of one core; it
+// is spinning when hot for SPIN_CONSECUTIVE_SAMPLES samples in a row. The daemon's vitals tick
+// samples every session's bridge and Claude, byte's included (once a minute; only an idle
+// session counts as spinning); the watchdog samples the daemon itself (every 120s). The 2026-11-08 Bun busy-spin held the daemon and bridges at ~100%.
 export const SPIN_CPU_PERCENT = 90
 export const SPIN_CONSECUTIVE_SAMPLES = 2
+
+/** A `ps` cputime field in seconds. macOS prints `mmm:ss.cc`, Linux `[[dd-]hh:]mm:ss`: read right to left. */
+export function parseCpuTime(raw: string): number | undefined {
+  const m = raw.trim().match(/^(?:(\d+)-)?(\d+(?:\.\d+)?(?::\d+(?:\.\d+)?){0,2})$/)
+  if (!m) return undefined
+  const [s = 0, min = 0, h = 0] = m[2].split(':').map(Number).reverse()
+  return (Number(m[1] ?? 0) * 24 + h) * 3600 + min * 60 + s
+}
 
 export const KNOWN_MODELS = new Set([
   'claude-opus-5-5',

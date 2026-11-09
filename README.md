@@ -89,6 +89,8 @@ hydra uninstall <platform>     # Remove launchd watchdog
 hydra preflight <platform>     # Verify deployment is ready
 ```
 
+The watchdog runs every 120s. It restarts the daemon when its tmux session is gone, when its heartbeat is more than 300s stale, or when it is spinning: 90% or more of a CPU core over the interval since the previous tick, two ticks in a row, the same definition the vitals tick uses for bridges and Claude (an event loop spinning in place starves its own timers, so the daemon can't catch this itself). The stale-heartbeat and CPU restarts wait while the platform's API is unreachable. Each restart is logged in `~/hydra-watchdog.log`.
+
 ### Lifecycle
 
 ```bash

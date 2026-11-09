@@ -1,8 +1,9 @@
 import { describe, test, expect } from 'bun:test'
 import {
-  parseCpuTime, parsePs, createCpuMeter, createSpinTracker, hotProcess, parseSwapUsage, parseMeminfoSwap,
+  parsePs, createCpuMeter, createSpinTracker, hotProcess, parseSwapUsage, parseMeminfoSwap,
   formatPressure, formatSpinAlert, formatCpuSummary, claudeAncestor, startedAt,
 } from '../cpu-spin.js'
+import { parseCpuTime } from '../../shared/constants.js'
 
 describe('parseCpuTime', () => {
   test('macOS mmm:ss.cc — minutes are not capped at 59', () => {

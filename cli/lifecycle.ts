@@ -9,8 +9,9 @@ import {
   compileCheck, killOrphanBytes, hasOrphanBytes, appendLog, shq,
   waitForSocket, buildDaemonEnvs, requireSpawnCwd, pluginVersionDir, probeDaemonHealth,
 } from './helpers.js'
-import { isKnownModel } from '../shared/constants.js'
+import { isKnownModel, SPIN_CPU_PERCENT } from '../shared/constants.js'
 import { modsExport, syncMods } from '../shared/mods.js'
+import { checkDaemonCpu } from './watchdog-cpu.js'
 
 // ---------------------------------------------------------------------------
 // Start byte (replaces start-byte.sh)
@@ -359,44 +360,20 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
     }
   }
 
-  let daemonRestartedThisTick = false
-
-  if (!tmuxExists(cfg.daemonTmux)) {
-    appendLog(cfg.watchdogLog, 'Daemon tmux session missing, starting')
+  const reason = daemonRestartReason({
+    tmuxExists: () => tmuxExists(cfg.daemonTmux),
+    heartbeatAgeS: () => {
+      const heartbeat = join(cfg.stateDir, 'daemon.alive')
+      return existsSync(heartbeat) ? now - Math.floor(statSync(heartbeat).mtimeMs / 1000) : null
+    },
+    tmuxAgeS: () => tmuxSessionAge(cfg.daemonTmux),
+    networkUp: () => networkUp(platform),
+    cpu: () => checkDaemonCpu(cfg.stateDir, now, msg => appendLog(cfg.watchdogLog, msg)),
+  }, staleSeconds)
+  const daemonRestartedThisTick = reason !== null
+  if (reason) {
+    appendLog(cfg.watchdogLog, reason)
     await restartDaemonForWatchdog(cfg)
-    daemonRestartedThisTick = true
-  }
-
-  if (!daemonRestartedThisTick) {
-    const heartbeat = join(cfg.stateDir, 'daemon.alive')
-    if (!existsSync(heartbeat)) {
-      const age = tmuxSessionAge(cfg.daemonTmux)
-      if (age !== null && age > staleSeconds) {
-        appendLog(cfg.watchdogLog, `No heartbeat after ${age}s, restarting daemon`)
-        await restartDaemonForWatchdog(cfg)
-        daemonRestartedThisTick = true
-      }
-    } else {
-      const mtime = Math.floor(statSync(heartbeat).mtimeMs / 1000)
-      const elapsed = now - mtime
-
-      if (elapsed > staleSeconds) {
-        const healthUrl = platform === 'slack'
-          ? 'https://slack.com/api/api.test'
-          : 'https://discord.com/api/v10/gateway'
-        let networkUp = true
-        try {
-          execFileSync('curl', ['-sS', '--max-time', '5', healthUrl], { stdio: 'pipe', env: process.env as Record<string, string> })
-        } catch {
-          networkUp = false
-        }
-        if (networkUp) {
-          appendLog(cfg.watchdogLog, `Heartbeat stale (${elapsed}s > ${staleSeconds}s), restarting daemon`)
-          await restartDaemonForWatchdog(cfg)
-          daemonRestartedThisTick = true
-        }
-      }
-    }
   }
 
   // Skip byte revival if daemon was just restarted — socket won't be ready yet.
@@ -409,6 +386,48 @@ export async function lifecycleWatchdog(platform: string): Promise<void> {
   if (!tmuxExists(cfg.transcribeTmux)) {
     const transcribeMsg = startTranscribeAuto(cfg)
     if (transcribeMsg) appendLog(cfg.watchdogLog, transcribeMsg)
+  }
+}
+
+export type DaemonProbe = {
+  tmuxExists(): boolean
+  /** Seconds since the heartbeat file was written; null when there is none. */
+  heartbeatAgeS(): number | null
+  tmuxAgeS(): number | null
+  networkUp(): boolean
+  /** Samples the daemon's CPU (and keeps the sample): the reading when it is spinning, else null. */
+  cpu(): { pct: number; samples: number } | null
+}
+
+/**
+ * Why the watchdog restarts the daemon this tick, as its log line; null to leave it alone. Checks
+ * run in order and stop at the first restart, so the CPU sample is taken only when nothing
+ * earlier restarted the daemon (a new daemon would be measured as a fresh baseline anyway).
+ */
+export function daemonRestartReason(p: DaemonProbe, staleSeconds: number): string | null {
+  if (!p.tmuxExists()) return 'Daemon tmux session missing, starting'
+  const heartbeat = p.heartbeatAgeS()
+  if (heartbeat === null) {
+    const age = p.tmuxAgeS()
+    if (age !== null && age > staleSeconds) return `No heartbeat after ${age}s, restarting daemon`
+  } else if (heartbeat > staleSeconds && p.networkUp()) {
+    return `Heartbeat stale (${heartbeat}s > ${staleSeconds}s), restarting daemon`
+  }
+  const pinned = p.cpu()
+  if (pinned && p.networkUp()) return `Daemon CPU pinned (${pinned.pct}% >= ${SPIN_CPU_PERCENT}% for ${pinned.samples} ticks), restarting daemon`
+  return null
+}
+
+/** The platform's API answers. While it doesn't, a stale heartbeat or a busy reconnecting daemon is the network's doing, and a restart wouldn't help. */
+function networkUp(platform: string): boolean {
+  const healthUrl = platform === 'slack'
+    ? 'https://slack.com/api/api.test'
+    : 'https://discord.com/api/v10/gateway'
+  try {
+    execFileSync('curl', ['-sS', '--max-time', '5', healthUrl], { stdio: 'pipe', env: process.env as Record<string, string> })
+    return true
+  } catch {
+    return false
   }
 }
 

@@ -2,17 +2,9 @@
 // pass `now` and the parsed `ps` output), so the meter and the episode rules are unit-testable.
 // The sampling itself (one `ps` per tick, bridge pids from bridge-life) is in cpu-watch.ts.
 
-import { SPIN_CPU_PERCENT, SPIN_CONSECUTIVE_SAMPLES } from '../shared/constants.js'
+import { SPIN_CPU_PERCENT, SPIN_CONSECUTIVE_SAMPLES, parseCpuTime } from '../shared/constants.js'
 
 export type ProcStat = { ppid: number; cpuSec: number; elapsedSec: number; comm?: string }
-
-/** A `ps` cputime field in seconds. macOS prints `mmm:ss.cc`, Linux `[[dd-]hh:]mm:ss`: read right to left. */
-export function parseCpuTime(raw: string): number | undefined {
-  const m = raw.trim().match(/^(?:(\d+)-)?(\d+(?:\.\d+)?(?::\d+(?:\.\d+)?){0,2})$/)
-  if (!m) return undefined
-  const [s = 0, min = 0, h = 0] = m[2].split(':').map(Number).reverse()
-  return (Number(m[1] ?? 0) * 24 + h) * 3600 + min * 60 + s
-}
 
 /** Lines of `ps -o pid=,ppid=,etime=,time=,comm=` (comm last: it can hold spaces). Unparseable lines are skipped. */
 export function parsePs(out: string): Map<number, ProcStat> {
