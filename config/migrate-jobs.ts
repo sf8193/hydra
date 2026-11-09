@@ -13,8 +13,8 @@
 // Dropped, with a note when set: revive (a specialist always revives), channel (alerts go to the operator), durable.
 
 import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
-import { jobInitiator, owedSlot, parseJobsConfig, readJobState, type Job } from '../shared/jobs.js'
+import { join, relative } from 'path'
+import { daemonFile, jobInitiator, owedSlot, parseJobsConfig, readDaemonState, readJobState, type Job } from '../shared/jobs.js'
 import { nextSlot } from '../shared/cron-local.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
@@ -152,6 +152,8 @@ export const jobsStep: MigrateStep = {
         ...(Object.keys(m.specialists).length > 0 && { specialists: m.specialists }),
       },
       consumed: ['jobs.toml'],
+      // Recorded here, with the daemon stopped, so deleting jobs.toml.migrated before its first tick changes nothing.
+      writes: { [relative(stateDir, daemonFile(stateDir))]: JSON.stringify({ ...readDaemonState(stateDir).state, jobsMigrated: now.toISOString() }, null, 2) },
       notes: [...m.notes, ...Object.entries(m.schedules).map(([id, s]) => equivalence(stateDir, id, s, m.specialists[id], now))],
     }
   },

@@ -18,12 +18,13 @@ export const migratedJobsToml = (stateDir: string) => `${jobsToml(stateDir)}.mig
 
 /**
  * Whether the clock runs hydra.toml's [schedules] rather than jobs.toml. jobs.toml wins while it exists (its migrate
- * step is pending). Without it, schedules run once migrate has moved it, or if this state dir never had one; a jobs.toml
- * that just went missing is still today's case: alerted, and its last good copy runs.
+ * step is pending). Without it, schedules run once migrate has moved it (jobs.toml.migrated, or the clock's record that it
+ * saw that file, so deleting it as a backup changes nothing), or if this state dir never had one; a jobs.toml that just
+ * went missing is still today's case: alerted, and its last good copy runs.
  */
 export function schedulesAreSource(stateDir: string, state: DaemonState): boolean {
   if (existsSync(jobsToml(stateDir))) return false
-  return state.lastGoodConfig === undefined || existsSync(migratedJobsToml(stateDir))
+  return state.lastGoodConfig === undefined || state.jobsMigrated !== undefined || existsSync(migratedJobsToml(stateDir))
 }
 
 export function jobsFromSchedules(cfg: Pick<HydraConfig, 'schedules' | 'specialists'>): Job[] {

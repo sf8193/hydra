@@ -1638,6 +1638,34 @@ describe("hydra.toml [schedules]: run once migrate has moved jobs.toml; until th
     expect(w.logs.some(l => l.includes('missing'))).toBe(false)
   })
 
+  test('migrated, then jobs.toml.migrated deleted as a backup: the schedules keep running, and nothing is alerted', async () => {
+    toml(FIVE)
+    const c = clock({ schedules: () => jobsFromSchedules(sweep) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()
+    renameSync(join(w.dir, 'jobs.toml'), join(w.dir, 'jobs.toml.migrated'))
+    at('2026-11-04T10:00:30-08:00'); await c.tick()                              // sees the marker and records it
+    expect(readDaemonState(w.dir).state.jobsMigrated).toBeDefined()
+    rmSync(join(w.dir, 'jobs.toml.migrated'))
+    finish('sweep', 1, 'done', undefined, 1000)
+    at('2026-11-04T10:05:30-08:00'); await c.tick()
+    expect(w.spawns.map(s => argOf(s.args, '--slot'))).toEqual(['2026-11-04 10:00', '2026-11-04 10:05'])
+    expect(w.direct).toEqual([])
+    expect(w.logs.some(l => l.includes('missing'))).toBe(false)
+  })
+
+  test('a jobs.toml put back after migrate wins again, and its migrate record is cleared', async () => {
+    toml(FIVE)
+    const c = clock({ schedules: () => jobsFromSchedules(sweep) })
+    at('2026-11-04T09:59:00-08:00'); await c.tick()
+    renameSync(join(w.dir, 'jobs.toml'), join(w.dir, 'jobs.toml.migrated'))
+    at('2026-11-04T10:00:30-08:00'); await c.tick()
+    expect(readDaemonState(w.dir).state.jobsMigrated).toBeDefined()
+    rmSync(join(w.dir, 'jobs.toml.migrated'))
+    toml(FIVE)
+    at('2026-11-04T10:01:30-08:00'); await c.tick()
+    expect(readDaemonState(w.dir).state.jobsMigrated).toBeUndefined()
+  })
+
   test('after migrate, schedules run and mark-done act on the [schedules] definition, never the saved jobs.toml', async () => {
     toml(`[sweep]\nschedule = "*/5 * * * *"\ncheck = "old.sh"\nmode = "none"\n`)
     const c = clock({ schedules: () => jobsFromSchedules(cfg(schedule({ id: 'sweep', check: 'new.sh' }), schedule({ id: 'fresh', check: 'f.sh' }))) })
