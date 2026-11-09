@@ -1,7 +1,7 @@
 // Keeps `<state>/hydra.toml` loaded: re-read on change, and a failed load keeps the last good config and alerts the operator.
 // A missing file reads as an empty one, which is valid.
 
-import { readFileSync, unwatchFile, watchFile } from 'fs'
+import { readFileSync } from 'fs'
 import { EMPTY_CONFIG, formatIssues, loadHydraConfig } from './load.js'
 import type { ConfigIssue, HydraConfig, LoadEnv, LoadResult } from './types.js'
 
@@ -24,7 +24,7 @@ export type WatchOpts = {
   onLoad?(config: HydraConfig, warnings: ConfigIssue[]): void
   /** A load failed and the last good config stays. Called once per distinct failure, not on every save of the same bad file. */
   onAlert(text: string): void
-  /** How often the file's stat is checked. Default 1s. */
+  /** How often the file is re-read. Default 1s. */
   intervalMs?: number
 }
 
@@ -78,16 +78,17 @@ export function watchHydraConfig(opts: WatchOpts): HydraConfigWatch {
   // The first read always has a result: lastText starts undefined, and an empty first read is applied at once.
   const initial = reload()!
 
-  // Polls the file's stat rather than subscribing to events: on macOS an fs.watch subscription can miss the first events
-  // after it starts (seen under load), and a missed edit would leave the old config live with no sign. A stat a second is cheap.
-  // It follows the path, so an editor's or an atomic write's replace is seen too.
-  const onStat = () => { reload() }
-  watchFile(opts.path, { interval: opts.intervalMs ?? 1000 }, onStat)
+  // Re-reads the file on an interval; reload() skips text that hasn't changed. Neither fs.watch nor fs.watchFile is
+  // used: under load on macOS, fs.watch missed the first events after subscribing, and watchFile's first stat is
+  // taken asynchronously, so a write that lands before it is never seen. One small read a second is cheap, and it
+  // follows the path, so a replace by an editor or an atomic write is seen too.
+  const timer = setInterval(() => { reload() }, opts.intervalMs ?? 1000)
+  ;(timer as { unref?: () => void }).unref?.()
 
   return {
     current: () => config,
     initial,
     reload,
-    stop: () => { clearTimeout(confirmEmpty); unwatchFile(opts.path, onStat) },
+    stop: () => { clearTimeout(confirmEmpty); clearInterval(timer) },
   }
 }
