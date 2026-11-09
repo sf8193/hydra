@@ -318,8 +318,8 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
 
     const envFile = str(t, 'env_file', path)
     const home = str(t, 'home', path)
-    // A place, or a thread or channel by its platform id.
-    if (home !== undefined && !normalizePlace(home) && !/^\d+$/.test(home)) error(at('home'), `"${home}" must be a place (slack:#channel, discord:#channel, …) or a thread id`)
+    // A place, or a channel by its platform id: where its threads open.
+    if (home !== undefined && !normalizePlace(home) && !/^\d+$/.test(home)) error(at('home'), `"${home}" must be a place (slack:#channel, discord:#channel, …) or a channel id`)
     const model = str(t, 'model', path)
     const engine = oneOf(t, 'engine', path, ENGINES)
     specialists[id] = {

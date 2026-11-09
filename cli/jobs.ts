@@ -607,8 +607,12 @@ export function jobWarnings(j: Job, specialists: ReadonlySet<string> = new Set()
   return out
 }
 
-/** The names in the daemon's specialists.json. Missing or unreadable: none declared. */
+/** The declared specialists' names: hydra.toml's once it has content, else specialists.json's. Unreadable: none. */
 function readSpecialistNames(stateDir: string): Set<string> {
+  try {
+    const toml = readFileSync(join(stateDir, 'hydra.toml'), 'utf8')
+    if (toml.trim()) return new Set(Object.keys((Bun.TOML.parse(toml) as { specialists?: object }).specialists ?? {}))
+  } catch {}
   try { return new Set(Object.keys(JSON.parse(readFileSync(join(stateDir, 'specialists.json'), 'utf8')) ?? {})) } catch { return new Set() }
 }
 

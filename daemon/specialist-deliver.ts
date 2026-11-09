@@ -7,7 +7,7 @@ import { occupancy, occupied } from './session-reachability.js'
 import { pushToolSurface } from './tool-surface.js'
 import { resumeIdleLimit } from './idle-limit.js'
 import { parseIdleTtl } from '../shared/constants.js'
-import { getSpecialist, setSpecialist, readKickoff, withTargetLock, type Specialist } from './specialists.js'
+import { getSpecialist, setSpecialistThread, readKickoff, withTargetLock, type Specialist } from './specialists.js'
 import { deliverToTarget } from './targets.js'
 
 export type SpecialistDeliverResult =
@@ -86,9 +86,8 @@ async function fill(name: string, specialist: Specialist, initiator: string | un
   const result = outcome.result
 
   if (!opts.unstored && result.threadId !== specialist.threadId) {
-    const { updatedAt: _t, ...rest } = specialist
     // The session is already running in the new thread; a failed write must not fail this delivery.
-    try { setSpecialist(name, { ...rest, threadId: result.threadId }) } catch (err) {
+    try { setSpecialistThread(name, result.threadId) } catch (err) {
       process.stderr.write(`daemon: specialist ${name}: could not record its new thread ${result.threadId}: ${err}\n`)
     }
   }

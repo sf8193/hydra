@@ -13,6 +13,7 @@ import { handleResumeIntercept } from '../commands/thread.js'
 import { fakeAdapter } from './test-harness.js'
 import { getIdempotencyEntry } from '../idempotency.js'
 import { _setDaemonStartedAtForTesting } from '../session-reachability.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
 
 process.stderr.write = (() => true) as any
 
@@ -191,6 +192,33 @@ describe('specialists', () => {
     expect((calls[0][3] as any).existingThreadId).toBeUndefined()
     expect((calls[0][3] as any).name).toBe(name)
     expect(getSpecialist(name)!.threadId).toMatch(/^fresh-thread-/)
+  })
+
+  test('a hydra.toml specialist opens its thread in its home on the first delivery; only its pointer is written, and only --thread moves it', async () => {
+    const calls = fakeSpawn()
+    const name = `t-specialist-${++n}`
+    _setHydraConfigForTesting({
+      operator: 'op', connectors: {}, places: {}, schedules: {}, rules: [],
+      people: { op: { id: 'op', ids: ['discord:100000000000000001'], roles: [], name: 'op' } },
+      specialists: { [name]: { id: name, workdir: '/srv/x', prompt: 'be the slopbot', home: '555', listens: [], allow: ['people'], sessions: 'shared', max: 20, was: [] } },
+    })
+    try {
+      expect((await deliver(name)).ok).toBe(true)
+      expect(calls).toHaveLength(1)
+      expect(calls[0][0]).toBe('be the slopbot')
+      expect(calls[0][1]).toBe('555')
+      const first = getSpecialist(name)!.threadId
+      expect(first).toMatch(/^fresh-thread-/)
+      expect(await cli('set', name, { kickoff: 'something else' })).toMatchObject({ ok: false, error: expect.stringContaining('declared in hydra.toml') })
+      expect(await cli('rm', name)).toMatchObject({ ok: false, error: expect.stringContaining('declared in hydra.toml') })
+      // A live specialist doesn't move (G); once its session is gone, the pointer does.
+      expect(await cli('set', name, { thread: 'thread-moved' })).toMatchObject({ ok: false, exitCode: 3 })
+      registry.delete(registry.threadToSession.get(first!)!)
+      expect(await cli('set', name, { thread: 'thread-moved' })).toMatchObject({ ok: true })
+      expect(getSpecialist(name)).toMatchObject({ threadId: 'thread-moved', kickoff: 'be the slopbot', workdir: '/srv/x' })
+    } finally {
+      _setHydraConfigForTesting(undefined)
+    }
   })
 
   test('a new specialist needs a channel or a thread', async () => {

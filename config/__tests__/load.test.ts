@@ -301,10 +301,10 @@ describe('found in the second review', () => {
       'schedules.b.env_file: "b.env" is relative, so it needs an absolute cwd',
     ])
   })
-  test('home is a place or a thread id', () => {
+  test('home is a place or a channel id', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["cli"]\nhome = "discord:#ops"\n`).config.specialists.ops.home).toBe('discord:#ops')
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["cli"]\nhome = "1234567890"\n`).config.specialists.ops.home).toBe('1234567890')
-    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["cli"]\nhome = "my channel"\n`)).toEqual(['specialists.ops.home: "my channel" must be a place (slack:#channel, discord:#channel, …) or a thread id'])
+    expect(errorsOf(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["cli"]\nhome = "my channel"\n`)).toEqual(['specialists.ops.home: "my channel" must be a place (slack:#channel, discord:#channel, …) or a channel id'])
   })
 })
 

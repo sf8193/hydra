@@ -8,7 +8,7 @@ import { formatContextPercent } from './engines/engine-adapter.js'
 import { existsSync } from 'fs'
 import { checkIdempotency, registerIdempotency, updateIdempotency, getBySessionId, clearIdempotency, listIdempotencyEntries } from './idempotency.js'
 import { spawnSpecialist, specialistStatus, SpecialistError } from './specialist-deliver.js'
-import { getSpecialist, listSpecialists, removeSpecialist, setSpecialist, withTargetLock, type Specialist } from './specialists.js'
+import { declaredInToml, getSpecialist, listSpecialists, removeSpecialist, setSpecialist, setSpecialistThread, withTargetLock, type Specialist } from './specialists.js'
 import { getSlackWatcher, slackWatchHealth, addSlackWatch, refreshSlackSpecialistSurface, formatSlackWatches } from './slack-watch-runtime.js'
 import { deliverToTarget, deliverVia, sessionByName, toSession, toThread, type DeliverOutcome } from './targets.js'
 import { gateway } from './config.js'
@@ -370,6 +370,7 @@ async function handleSpecialist(req: CLIRequest): Promise<CLIResponse> {
     case 'rm': {
       const name = p.name
       // Under the specialist's lock: a removal never lands in the middle of its refill.
+      if (name && declaredInToml()) return respond(req, false, `specialists are declared in hydra.toml: remove [specialists.${name}] there`)
       if (!name || !(await withTargetLock(name, async () => removeSpecialist(name)))) return respond(req, false, `specialist "${name ?? ''}" not found`)
       refreshSlackSpecialistSurface() // its occupant loses the Slack-watch tools
       return respond(req, true, { removed: name })
@@ -394,6 +395,20 @@ function setSpecialistUnderLock(
   const fromId = existing?.threadId && p.thread && p.thread !== existing.threadId ? registry.getByThread(existing.threadId) : undefined
   const from = fromId ? registry.get(fromId) : undefined
   if (from && occupied(occupancy(from))) return respond(req, false, `${name}: is live in ${existing!.threadId}; hydra kill ${name} first`, undefined, 3)
+  if (declaredInToml()) {
+    // hydra.toml holds the recipe; here only the pointer moves.
+    const recipe = (['channel', 'kickoff', 'kickoffFile', 'model', 'idle'] as const).filter(k => p[k] !== undefined)
+    if (recipe.length) return respond(req, false, `specialists are declared in hydra.toml: set ${recipe.join(', ')} under [specialists.${name}] there (only --thread is set here)`)
+    if (!existing) return respond(req, false, `no such specialist: ${name}; declare [specialists.${name}] in hydra.toml`, undefined, 8)
+    if (!p.thread) return respond(req, false, '--thread is required')
+    try {
+      const specialist = setSpecialistThread(name, p.thread)
+      refreshSlackSpecialistSurface()
+      return respond(req, true, view(name, specialist))
+    } catch (err) {
+      return respond(req, false, err instanceof Error ? err.message : String(err))
+    }
+  }
   const threadId = p.thread ?? existing?.threadId
   if (!threadId && !(p.channel ?? existing?.channel)) return respond(req, false, '--channel (where to open its thread) or --thread is required for a new specialist')
   if (p.kickoffFile && !existsSync(p.kickoffFile)) return respond(req, false, `kickoff file not found: ${p.kickoffFile}`)

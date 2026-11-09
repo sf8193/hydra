@@ -50,7 +50,7 @@ export type Specialist = {
   max: number
   /** End a session after this long without activity, and resume on the next message. Absent: never. */
   idleMs?: number
-  /** Where you watch it, and where replies with no conversation go: a place or a thread id. Absent: a new thread in the operator's channel. */
+  /** Where you watch it (its threads open there), and where replies with no conversation go: a place or a channel id. Absent: the operator's channel. */
   home?: string
   model?: string
   engine?: 'claude' | 'codex' | 'omp'
