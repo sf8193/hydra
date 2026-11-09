@@ -2,7 +2,7 @@ import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration } from './util.js'
-import { parseIdleTtl } from '../shared/constants.js'
+import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
 import { existsSync } from 'fs'
@@ -296,7 +296,7 @@ function handleCheckKey(req: CLIRequest): CLIResponse {
 
 
 async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
-  const { to, thread, session, specialist, message, initiator, idempotencyKey, queue, revive } = req.params as {
+  const { to, thread, session, specialist, message, initiator, idempotencyKey, idempotencyTtl, queue, revive } = req.params as {
     to?: string
     thread?: string
     session?: string
@@ -304,11 +304,15 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     message?: string
     initiator?: string
     idempotencyKey?: string
+    idempotencyTtl?: string
     queue?: boolean
     revive?: boolean
   }
 
   if (!message) return respond(req, false, 'message is required')
+  const idempotencyTtlMs = idempotencyTtl === undefined ? undefined : parseIdempotencyTtl(idempotencyTtl)
+  if (idempotencyTtlMs === null) return respond(req, false, `--idempotency-ttl "${idempotencyTtl}" must be a duration like 90m, 12h or 2d, at most 7d`)
+  if (idempotencyTtl !== undefined && !idempotencyKey) return respond(req, false, '--idempotency-ttl needs --idempotency-key')
   const addresses = [to, thread, session, specialist].filter(Boolean).length
   if (addresses === 0) return respond(req, false, '--to, --thread, --session or --specialist is required')
   if (to && addresses > 1) return respond(req, false, '--to is the whole address: drop --thread/--session/--specialist')
@@ -327,7 +331,7 @@ async function handleDeliver(req: CLIRequest): Promise<CLIResponse> {
     }
   }
 
-  const opts = { initiator: initiator ?? 'unknown', ...(idempotencyKey && { idempotencyKey }), ...(queue && { queue }) }
+  const opts = { initiator: initiator ?? 'unknown', ...(idempotencyKey && { idempotencyKey }), ...(idempotencyTtlMs && { idempotencyTtlMs }), ...(queue && { queue }) }
   let r: DeliverOutcome
   if (to) r = await deliverToTarget({ to, ...(revive && { revive }) }, message, opts)
   else if (specialist) r = await deliverToTarget({ to: specialist }, message, opts)

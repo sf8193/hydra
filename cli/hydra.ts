@@ -12,7 +12,7 @@ import {
 import { peek } from './peek.js'
 import { isPlatform, jobsAttempt, jobsLaunchdRun, jobsList, jobsMarkDone, jobsRun, jobsSync } from './jobs.js'
 import { parseAttemptArgs } from '../shared/jobs.js'
-import { MODEL_ALIASES } from '../shared/constants.js'
+import { MODEL_ALIASES, parseIdempotencyTtl } from '../shared/constants.js'
 
 // ---------------------------------------------------------------------------
 // CLI entry point
@@ -70,7 +70,8 @@ Deliver (whisper channel — message to session context, not thread):
     --specialist <name>                      Target a specialist: its occupant, spawned from the specialist's kickoff if vacant (always queues)
     --message <text>                   Message to deliver (required)
     --initiator <who>                  Who sent this (default: $USER)
-    --idempotency-key <key>            Prevent duplicate delivery (optional, 15min TTL)
+    --idempotency-key <key>            Prevent duplicate delivery (optional; remembered 15m)
+    --idempotency-ttl <dur>            How long the key is remembered: 1m to 7d, e.g. 24h (default 15m)
     --queue                            Queue if bridge disconnected (default: fail)
     --revive                           With --to <thread id> or --thread: a dead session is revived in its thread first
                                        (resume, else fork, else a fresh one that reads the thread); the message queues for it.
@@ -402,6 +403,7 @@ async function main(): Promise<void> {
       let message: string | undefined
       let initiator: string | undefined
       let idempotencyKey: string | undefined
+      let idempotencyTtl: string | undefined
       let queue = false
       let revive = false
 
@@ -420,6 +422,8 @@ async function main(): Promise<void> {
           initiator = filtered[++i]
         } else if (filtered[i] === '--idempotency-key' && i + 1 < filtered.length) {
           idempotencyKey = filtered[++i]
+        } else if (filtered[i] === '--idempotency-ttl') {
+          idempotencyTtl = filtered[++i] ?? ''   // given with no value: refused below, never silently dropped
         } else if (filtered[i] === '--queue') {
           queue = true
         } else if (filtered[i] === '--revive') {
@@ -435,6 +439,10 @@ async function main(): Promise<void> {
         console.error('error: --to, --session, --thread or --specialist is required')
         process.exit(1)
       }
+      if (idempotencyTtl !== undefined && (!idempotencyKey || parseIdempotencyTtl(idempotencyTtl) === null)) {
+        console.error(idempotencyKey ? `error: --idempotency-ttl "${idempotencyTtl}" must be a duration like 90m, 12h or 2d, at most 7d` : 'error: --idempotency-ttl needs --idempotency-key')
+        process.exit(1)
+      }
 
       if (!initiator) initiator = process.env.USER ?? 'unknown'
 
@@ -448,6 +456,7 @@ async function main(): Promise<void> {
           message,
           initiator,
           ...(idempotencyKey && { idempotencyKey }),
+          ...(idempotencyTtl !== undefined && { idempotencyTtl }),
           ...(queue && { queue }),
           ...(revive && { revive }),
         },
