@@ -94,8 +94,15 @@ export async function runWork(job: Job, stateDir: string, key: string, onActionS
 export async function runCheck(job: Job): Promise<{ output: string } | { outcome: Work }> {
   if (!job.check) return { output: '' }
   let env: Record<string, string | undefined> = process.env
+  // A note lands in job state, jobs list and alerts; an env_file holds secrets a failing check may echo.
+  let redact = (s: string) => s
   if (job.envFile) {
-    try { env = { ...process.env, ...parseEnvFile(jobsIO.readFile(job.envFile)) } } catch (e) {
+    try {
+      const added = parseEnvFile(jobsIO.readFile(job.envFile))
+      env = { ...process.env, ...added }
+      const secrets = Object.values(added).filter(v => v.length >= 4).sort((a, b) => b.length - a.length)
+      redact = s => secrets.reduce((acc, v) => acc.replaceAll(v, '[env_file value]'), s)
+    } catch (e) {
       return { outcome: { result: 'failed', note: `env_file ${job.envFile}: ${pathProblem(job.envFile, e, job.runner)}` } }
     }
   }
@@ -107,8 +114,8 @@ export async function runCheck(job: Job): Promise<{ output: string } | { outcome
     const { code, message } = e as NodeJS.ErrnoException
     return { outcome: { result: 'failed', note: `the check could not start: ${code ?? message}` } }
   }
-  if (r.code === EX_TEMPFAIL) return { outcome: { result: 'not-now', note: `check exited ${EX_TEMPFAIL}${r.err.trim() ? `: ${r.err.trim().slice(-200)}` : ''}` } }   // stdout dropped
-  if (r.code !== 0) return { outcome: { result: 'failed', note: `check exited ${r.code}: ${(r.err || r.out).trim().slice(-300)}` } }
+  if (r.code === EX_TEMPFAIL) return { outcome: { result: 'not-now', note: `check exited ${EX_TEMPFAIL}${r.err.trim() ? `: ${redact(r.err.trim()).slice(-200)}` : ''}` } }   // stdout dropped
+  if (r.code !== 0) return { outcome: { result: 'failed', note: `check exited ${r.code}: ${redact((r.err || r.out).trim()).slice(-300)}` } }
   const output = r.out.trim()
   return output ? { output } : { outcome: { result: 'nothing' } }
 }

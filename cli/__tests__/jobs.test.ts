@@ -167,6 +167,7 @@ describe('runWork', () => {
       now: () => new Date('2026-10-25T10:00:00Z'),
       check: async () => checkResult,
       openDir: () => {},
+      readFile: real0.readFile,
       hydra: async (a: string[]) => { expect(a.slice(0, 3)).toEqual(['--state-dir', dir, '--json']); calls.push(a.slice(3)); return { code: 0, err: '', out: reply(hydraCode) } },
     })
   })
@@ -302,6 +303,15 @@ describe('runWork', () => {
     const e = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\nenv_file="${docs}/.env"`)[0]
     expect((await runWork(e, dir, KEY)).note).toContain('env_file')
     expect(calls).toEqual([])
+  })
+
+  test("env_file values are kept out of a failed or not-now note; short ones aren't secrets", async () => {
+    jobsIO.readFile = () => 'TOKEN=sk-live-123456\nAPI=xyzw-9\nN=1'
+    const j = parseJobs(`[b]\nschedule="0 2 * * *"\ncheck="./c.sh"\nmode="none"\nenv_file="/srv/.env"`)[0]
+    checkResult = { code: 2, out: '', err: 'auth failed for sk-live-123456 (key xyzw-9), retry 1' }
+    expect((await runWork(j, dir, KEY)).note).toBe('check exited 2: auth failed for [env_file value] (key [env_file value]), retry 1')
+    checkResult = { code: 75, out: '', err: 'rate limited: sk-live-123456' }
+    expect((await runWork(j, dir, KEY)).note).toBe('check exited 75: rate limited: [env_file value]')
   })
 
   test('a malformed env_file: failed with the line; the check never runs', async () => {

@@ -19,7 +19,8 @@
 # `hydra jobs mark-done <platform> <name>` marks the latest slot done without running it (runner = "daemon" only).
 #
 # cwd = "~/build"         the check's working dir (absolute, or ~/), so check = "./scripts/x.sh" works
-# env_file = "~/build/.env"  KEY=VALUE lines added to the check's environment, read at each run; not expanded
+# env_file = "~/build/.env"  KEY=VALUE lines added to the check's environment, read at each run; not expanded.
+#                         A failing check's output is shown with these values (4+ characters) blanked out.
 #                         The check reads both with the daemon's macOS access: a path under ~/Documents, ~/Desktop
 #                         or ~/Downloads works only if the daemon's tmux server has access there
 #                         (docs/macos-permissions.md). `jobs list` warns about such paths.
