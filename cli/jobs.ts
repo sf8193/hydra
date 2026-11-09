@@ -152,7 +152,9 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
   const args = isSpawn(target)
     ? ['spawn', '--initiator', initiator, '--idempotency-key', key, '--channel', target.spawn.channel, '--ephemeral',
       ...(target.spawn.idle ? ['--idle-ttl', target.spawn.idle] : []), ...(target.spawn.model ? ['--model', target.spawn.model] : []), '--', message]
-    : ['deliver', '--to', target.to, ...(target.revive ? ['--revive'] : []), '--queue', '--initiator', initiator, '--idempotency-key', key, '--message', message]
+    // --queue for main only: a specialist and a revive queue anyway, and a plain thread's orphaned session must
+    // answer 4, not take a message nobody will read until someone resumes it.
+    : ['deliver', '--to', target.to, ...(target.revive ? ['--revive'] : []), ...(target.to === 'main' ? ['--queue'] : []), '--initiator', initiator, '--idempotency-key', key, '--message', message]
   // The dispatching daemon, by its state dir: a scratch or worktree daemon's jobs never reach the live one.
   // --json: the reply carries the duplicate-key status, so a key the daemon already holds is an outcome, not an error.
   const r = await jobsIO.hydra(['--state-dir', stateDir, '--json', ...args])
@@ -164,10 +166,11 @@ export async function runAction(job: Job, stateDir: string, key: string, output:
   const code = reply ? (reply.exitCode ?? 1) : (r.code || 1)
   const existing = reply?.data?.existing
   // spawn answers 2 for any key it holds (status pending, spawned or completed). deliver answers 2 for a key already
-  // delivered, 7 while one is in flight, and 5 when the target can't take it yet (booting, or stuck on a prompt);
+  // delivered, 7 while one is in flight, and 5 when the target can't take it yet: booting is not now, but a session
+  // stuck on a dialog (`stuck: <kind>`, daemon/targets.ts) stays stuck, so it fails, backs off and is alerted;
   // 3, 4, 6 and 8 (no such specialist) fail.
   if (isSpawn(target) ? code === 2 && existing?.status === 'pending' : code === 7) return { result: 'not-now', note: `duplicate key ${key} still pending` }
-  if (!isSpawn(target) && code === 5) return { result: 'not-now', note: `${target.to} can't take it yet${reply?.error ? `: ${reply.error.slice(-200)}` : ''}` }
+  if (!isSpawn(target) && code === 5 && !reply?.error?.startsWith('stuck:')) return { result: 'not-now', note: `${target.to} can't take it yet${reply?.error ? `: ${reply.error.slice(-200)}` : ''}` }
   if (code === 2) {
     const w: Work = { result: 'done', note: `duplicate key ${key}: already served`, ...(existing?.sessionId && { servedBy: existing.sessionId }) }
     onActionSent(w)

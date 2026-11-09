@@ -26,11 +26,11 @@ flowchart TD
   CK -->|empty stdout| RN[nothing]
   CK -->|"output, or no check"| TG{"target?"}
   TG -->|"none (mode = none)"| RD
-  TG -->|"to = specialist / main / thread id"| DV["hydra deliver --to T [--revive] --queue<br/>with --idempotency-key"]
+  TG -->|"to = specialist / main / thread id"| DV["hydra deliver --to T [--revive]<br/>(--queue for main only) with --idempotency-key"]
   TG -->|"spawn = { channel, kickoff, model, idle }"| SPW["hydra spawn --ephemeral --channel C<br/>with --idempotency-key -- message"]
   DV -->|"0, or 2 already delivered"| RD[done]
-  DV -->|"daemon away; 5 can't take it yet; 7 in flight"| RNN
-  DV -->|"3, 4, 6, 8 no such specialist; timeout"| RF
+  DV -->|"daemon away; 5 booting; 7 in flight"| RNN
+  DV -->|"3, 4 orphaned, 5 stuck on a dialog, 6, 8 no such specialist; timeout"| RF
   SPW -->|"ok, or 2 already served"| RD
   SPW -->|"daemon away; 2 pending"| RNN
   SPW -->|"other exit, timeout"| RF

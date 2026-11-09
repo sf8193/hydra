@@ -330,7 +330,6 @@ describe('runWork', () => {
   test('the real CLI with no daemon on the state dir: not now', async () => {
     jobsIO.hydra = real0.hydra
     const empty = mkdtempSync(join(tmpdir(), 'jobs-nodaemon-'))
-    // A spawn: `deliver --to` arrives with lane A's PR 4, and until then the CLI refuses it before reaching the socket.
     const job = parseJobs(`[s]\nschedule="0 6 * * *"\nprompt="p"\nspawn={ channel="c" }`)[0]
     try { expect((await runWork(job, empty, KEY)).result).toBe('not-now') } finally { rmSync(empty, { recursive: true }) }
   })
@@ -402,10 +401,13 @@ describe('runWork', () => {
 
   const toJob = (extra = '') => parseJobs(`[nb]\nschedule="0 2 * * *"\ncheck="n.sh"\nto="integrator"\n${extra}`)[0]
 
-  test('to: delivers the check output to the named target, queued; no prompt means the output alone', async () => {
+  test('to: delivers the check output to the named target; no prompt means the output alone; only main is --queue', async () => {
     checkResult = { code: 0, out: '3 failures\n', err: '' }
     expect((await runWork(toJob(), dir, 'k')).result).toBe('done')
-    expect(calls).toEqual([['deliver', '--to', 'integrator', '--queue', '--initiator', 'jobs:nb', '--idempotency-key', 'k', '--message', 'Check output:\n3 failures']])
+    expect(calls).toEqual([['deliver', '--to', 'integrator', '--initiator', 'jobs:nb', '--idempotency-key', 'k', '--message', 'Check output:\n3 failures']])
+    calls.length = 0
+    await runWork(parseJobs(`[t]\nschedule="0 2 * * *"\ncheck="n.sh"\nto="1234567890"`)[0], dir, 'k')   // an orphaned thread answers 4
+    expect(calls[0]).not.toContain('--queue')
     calls.length = 0
     await runWork(toJob('revive=true\nprompt="Fix it."'), dir, 'k')
     expect(calls[0].slice(0, 4)).toEqual(['deliver', '--to', 'integrator', '--revive'])
@@ -423,7 +425,11 @@ describe('runWork', () => {
     expect(await outcome(0)).toEqual(['done', true])
     expect(await outcome(2)).toEqual(['done', true])      // the key was already delivered
     expect(await outcome(7)).toEqual(['not-now', false])  // in flight
-    expect(await outcome(5)).toEqual(['not-now', false])  // the target can't take it yet: booting, or stuck on a prompt
+    expect(await outcome(5)).toEqual(['not-now', false])  // the target can't take it yet: booting
+    const fake = jobsIO.hydra
+    jobsIO.hydra = async () => ({ code: 0, err: '', out: JSON.stringify({ ok: false, exitCode: 5, error: 'stuck: unknown_dialog' }) })
+    expect(await runWork(toJob(), dir, 'k')).toEqual({ result: 'failed', note: 'hydra deliver exited 5: stuck: unknown_dialog' })   // stays stuck: alerted
+    jobsIO.hydra = fake
     for (const code of [3, 4, 6, 8]) expect(await outcome(code)).toEqual(['failed', false])
     hydraCode = 8
     expect((await runWork(toJob(), dir, 'k')).note).toBe('hydra deliver exited 8: boom')
