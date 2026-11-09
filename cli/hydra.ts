@@ -80,7 +80,7 @@ Deliver (whisper channel — message to session context, not thread):
   busy, or stuck on a dialog) · 6 starting failed or backing off · 7 a delivery with this key is in flight · 8 no such specialist
 
 Config:
-  hydra migrate [<platform>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom and specialists.json,
+  hydra migrate [<platform>] [--dry-run]   write <state>/hydra.toml once from access.json's allowFrom, specialists.json and slack-watch.json,
                                        keeping each file it changes or retires as *.migrated; --dry-run prints it and writes
                                        nothing. Stop the daemon first; an interrupted run is finished by running it again
 
@@ -91,10 +91,13 @@ Specialists (named addresses that refill themselves):
                                        once hydra.toml declares specialists, recipes live there and set takes only --thread
   hydra specialist show <name> | list | rm <name>   (rm: without hydra.toml only)
 
-Slack watches (threads whose replies reach a specialist):
-  hydra slack-watch list               Watched threads and health
-  hydra slack-watch add <channel> <thread-ts>
-  hydra slack-watch rm <channel> <thread-ts>
+Routing (hydra.toml):
+  hydra route --as <person|address|stranger> --at <place> [--bound <specialist>]
+                                       What a new message there would do: every candidate, and why the winner won
+  hydra conversations [list]           Conversations, the specialist each is bound to, and health
+  hydra conversations bind <conversation> <specialist>
+                                       Bind or move a conversation (as list prints it: slack:C0ABC:1793732224.093059)
+  hydra conversations unbind <conversation>
 
 Platform: slack | discord (required for lifecycle commands)
 
@@ -511,16 +514,29 @@ async function main(): Promise<void> {
       break
     }
 
-    case 'slack-watch': {
-      const [action, channel, threadTs] = [filtered[1], filtered[2], filtered[3]]
-      if (!['list', 'add', 'rm'].includes(action ?? '') || (action !== 'list' && (!channel || !threadTs))) {
-        console.error('error: usage: hydra slack-watch list | add <channel> <thread-ts> | rm <channel> <thread-ts>')
+    case 'conversations': {
+      const [action = 'list', conversation, to] = [filtered[1], filtered[2], filtered[3]]
+      if (!['list', 'bind', 'unbind'].includes(action) || (action === 'bind' && (!conversation || !to)) || (action === 'unbind' && !conversation)) {
+        console.error('error: usage: hydra conversations [list] | bind <conversation> <specialist> | unbind <conversation>')
         process.exit(1)
       }
       const response = await sendRequest(socketPath(), {
-        type: 'cli', command: 'slack-watch', id: randomUUID(),
-        params: { action, ...(channel && { channel }), ...(threadTs && { threadTs }) },
+        type: 'cli', command: 'conversations', id: randomUUID(),
+        params: { action, ...(conversation && { conversation }), ...(to && { to }) },
       })
+      printResponse(response, json)
+      break
+    }
+
+    case 'route': {
+      const flag = (name: string) => { const i = filtered.indexOf(name); return i > 0 ? filtered[i + 1] : undefined }
+      const [as, at, bound] = [flag('--as'), flag('--at'), flag('--bound')]
+      if (!as || !at) {
+        console.error('error: usage: hydra route --as <person|address|stranger> --at <place> [--bound <specialist>]')
+        process.exit(1)
+      }
+      const response = await sendRequest(socketPath(), { type: 'cli', command: 'route', id: randomUUID(), params: { as, at, ...(bound && { bound }) } })
+      if (!json && response.ok) { console.log((response.data as { report: string }).report); break }
       printResponse(response, json)
       break
     }

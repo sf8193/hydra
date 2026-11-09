@@ -2,15 +2,15 @@ import { describe, test, expect, afterAll } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, chmodSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { runGuard, parseGuardTimeout, guardEnv, type GuardInput } from '../slack-guard.js'
+import { runGuard, guardEnv, type GuardInput } from '../guard.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'slack-guard-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 const script = (name: string, body: string) => { const p = join(dir, name); writeFileSync(p, `#!/bin/sh\n${body}\n`); chmodSync(p, 0o755); return p }
-const input: GuardInput = { from: { id: 'UA', name: 'Alice', role: 'ops' }, channel: 'C1', thread: '1.000001', to: 'ops' }
-const run = (command: string, timeoutMs = 2000) => runGuard({ command, includeText: false, timeoutMs }, input)
+const input: GuardInput = { person: 'alice', roles: ['ops', 'people', 'anyone'], place: 'slack:#ops', conversation: 'slack:C1:1.000001', to: 'ops' }
+const run = (command: string, timeoutMs = 2000) => runGuard({ command, timeoutMs }, input)
 
-describe('beforeDeliver: the exit code is the verdict', () => {
+describe('the guard: the exit code is the verdict', () => {
   test('0 delivers; printed {"to"} redirects', async () => {
     expect(await run(script('ok.sh', 'exit 0'))).toEqual({ fate: 'deliver' })
     expect(await run(script('redir.sh', 'echo \'{"to": "billing"}\''))).toEqual({ fate: 'deliver', to: 'billing' })
@@ -58,7 +58,7 @@ describe('beforeDeliver: the exit code is the verdict', () => {
     try {
       await run(guard)
       expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual(input)
-      await runGuard({ command: guard, includeText: true, timeoutMs: 2000 }, { ...input, text: 'hello' })
+      await runGuard({ command: guard, timeoutMs: 2000 }, { ...input, text: 'hello' })
       expect(JSON.parse(readFileSync(out, 'utf8')).text).toBe('hello')
       expect(readFileSync(env, 'utf8')).not.toContain('xoxb-secret')
       expect(readFileSync(env, 'utf8')).not.toContain('xoxb-platform')
@@ -69,30 +69,5 @@ describe('beforeDeliver: the exit code is the verdict', () => {
   test('the environment is an allowlist: a secret added to the daemon later never reaches a guard', () => {
     const env = guardEnv({ PATH: '/bin', HOME: '/h', LC_ALL: 'C', HYDRA_STATE_DIR: '/s', HYDRA_API_KEY: 'k', MY_NEW_SECRET: 's', OPENAI_API_KEY: 'o', DISCORD_BOT_TOKEN: 'd' })
     expect(env).toEqual({ PATH: '/bin', HOME: '/h', LC_ALL: 'C', HYDRA_STATE_DIR: '/s' })
-  })
-
-  test('timeouts parse as seconds or milliseconds, up to a minute', () => {
-    expect(parseGuardTimeout('5s')).toBe(5000)
-    expect(parseGuardTimeout('1500ms')).toBe(1500)
-    expect(parseGuardTimeout('2m')).toBeNull()
-    expect(parseGuardTimeout('31s')).toBeNull()
-  })
-})
-
-describe('the real guard, end to end through the watcher', () => {
-  test('a guard script that exits 10 keeps the message from the specialist; one that exits 0 lets it through', async () => {
-    const { SlackWatcher } = await import('../slack-watch.js')
-    const sent: string[] = []
-    let command = script('e2e-drop.sh', 'cat > /dev/null; exit 10')
-    const config = () => ({ botUserId: 'UBOT', people: {}, idleExpiryMs: 86_400_000, coalesceMs: 1, maxWatches: 50, maxMentionsPer10Min: 10,
-      routes: [{ channels: ['C1'], to: 'ops', from: 'anyone' as const, guard: { command, includeText: false, timeoutMs: 2000 } }] })
-    const w = new SlackWatcher({ now: () => 1e12, file: join(dir, 'w.json'), log: () => {}, config, deliver: async t => { sent.push(t.to); return { ok: true } } })
-    w.handle({ channel: 'C1', ts: '1.000001', user: 'UA', text: '<@UBOT> hi' })
-    await w.flush()
-    expect(sent).toEqual([])
-    command = script('e2e-ok.sh', 'exit 0')
-    w.handle({ channel: 'C1', ts: '2.000001', threadTs: '1.000001', user: 'UA', text: 'again' })
-    await w.flush()
-    expect(sent).toEqual(['ops'])
   })
 })

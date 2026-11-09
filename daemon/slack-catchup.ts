@@ -1,4 +1,5 @@
-import { cmpTs, routedChannels, routeFor, admits, DM_THREAD, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './slack-watch.js'
+import { route } from '../routing/route.js'
+import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './slack-watch.js'
 
 /**
  * The catch-up pass: replays into the watcher what Slack did not push while the listener
@@ -86,6 +87,9 @@ export function _resetCatchUpLogs(): void { dmListFailLoggedAt = -Infinity }
 
 const nowTs = (now: number) => `${Math.floor(now / 1000)}.000000`
 
+/** Slack's answers for a thread that doesn't exist. Anything else (a rate limit, auth) still fails the pass. */
+const GONE_THREAD = /thread_not_found|message_not_found/
+
 export const MIN_CALLS = 60
 /** On top of one call per wanted thread, what DM scans leave for threads the channel scans turn up. */
 const THREAD_SLACK = 10
@@ -124,14 +128,14 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
     if (cmpTs(from, cur.from) < 0) { cur.from = from; cur.inclusive = inclusive } else if (cmpTs(from, cur.from) === 0) cur.inclusive ||= inclusive
   }
 
-  const dmRoute = cfg.routes.find(r => r.dms)
-  const scanned = [...routedChannels(cfg), ...(dmRoute ? watcher.dmChannels() : [])]
+  const dms = hearsDms(cfg)
+  const scanned = [...routedChannels(cfg), ...(dms ? watcher.dmChannels() : [])]
   watcher.beginCatchUp(scanned)
   const skipped = new Set<string>()
   const readTs: string[] = []
   try {
-    // 0. DM conversations this daemon has not seen yet (one opened while it was down), with someone the dms route admits.
-    if (dmRoute && api.dms) {
+    // 0. DM conversations this daemon has not seen yet (one opened while it was down), with someone whose DMs are heard.
+    if (dms && api.dms) {
       spend()
       const known = new Set(scanned)
       // Without im:read this fails; the DMs already seen are still scanned, so it costs a log line, not the pass.
@@ -144,7 +148,7 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
         return []
       })
       for (const d of listed) {
-        if (known.has(d.channel) || !admits(dmRoute.from, cfg.people, d.user)) continue
+        if (known.has(d.channel) || route(cfg.hydra, { from: addressOf(d.user), at: ['slack:dm'], addressed: true }).fate !== 'deliver') continue
         // A new conversation has no cursor: read it back a day, the furthest an owed message is chased.
         scanned.push(d.channel)
         watcher.beginCatchUp([d.channel])
@@ -156,19 +160,18 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
     }
 
     // 1. Owed messages first: they are known to be missing.
-    // Owed in a channel no route covers now: nothing would take them, so they are not fetched (they wait, then expire).
+    // Owed messages follow their conversation's binding, so they are fetched wherever they are.
     // A DM conversation is one watch with no thread of its own to read: its owed messages are refetched by its history scan.
     const dmFrom = new Map<string, string>()
     for (const h of watcher.owedHints()) {
-      if (!routeFor(cfg, h.channel)) continue
-      if (h.threadTs === DM_THREAD) { dmFrom.set(h.channel, justBefore(h.fromTs)); continue }
+      if (h.threadTs === TOP_LEVEL) { dmFrom.set(h.channel, justBefore(h.fromTs)); continue }
       want(h.channel, h.threadTs, h.fromTs, true)
     }
 
     // 2. A deep pass rereads every watched thread, most recently active first. Listed before the scans so the calls
     // they need are known, and kept back from the DM scans below.
     if (opts.deep) {
-      for (const e of [...watcher.list()].filter(e => e.threadTs !== DM_THREAD).sort((a, b) => b.lastEventAt - a.lastEventAt)) {
+      for (const e of [...watcher.list()].filter(e => e.threadTs !== TOP_LEVEL).sort((a, b) => b.lastEventAt - a.lastEventAt)) {
         const cursor = watcher.channelCursor(e.channel)
         if (cursor) want(e.channel, e.threadTs, cursor)
       }
@@ -227,7 +230,15 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
       let page: string | undefined
       for (let i = 0; i < maxPages; i++) {
         spend()
-        const res = await api.replies({ channel: t.channel, ts: t.threadTs, oldest: t.from, inclusive: t.inclusive, ...(page && { cursor: page }) })
+        let res: Page
+        try {
+          res = await api.replies({ channel: t.channel, ts: t.threadTs, oldest: t.from, inclusive: t.inclusive, ...(page && { cursor: page }) })
+        } catch (err) {
+          // One thread Slack says isn't there (a made-up or deleted ts) must not cost every other thread its pass.
+          if (!GONE_THREAD.test(err instanceof Error ? err.message : String(err))) throw err
+          opts.log(`daemon: slack catch-up: thread ${t.channel}:${t.threadTs} is not there (${err instanceof Error ? err.message : err}); skipped\n`)
+          break
+        }
         // A reply's ts never moves the channel cursor: only history does. A top-level message posted after the
         // history read, and missed live, would otherwise be passed over for good.
         feed(t.channel, res.messages)

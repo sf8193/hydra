@@ -1,28 +1,46 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { writeFileSync, rmSync, utimesSync } from 'fs'
+import { rmSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, gateway } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
 import { registry } from '../sessions.js'
-import { setSpecialist, removeSpecialist } from '../specialists.js'
-import { slackWatchConfigPath } from '../slack-watch.js'
-import { getSlackWatcher, watchSlackThread, unwatchSlackThread, formatSlackWatches, slackWatchHealth } from '../slack-watch-runtime.js'
-import { sessionCapabilities, isSlackSpecialistOccupant, isToolAllowed } from '../tool-surface.js'
+import { setSpecialistThread, _reloadSpecialists } from '../specialists.js'
+import { _setHydraConfigForTesting } from '../hydra-config.js'
+import {
+  getSlackWatcher, bindConversation, unbindConversation, formatConversations, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation,
+} from '../slack-watch-runtime.js'
+import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../tool-surface.js'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
 import { executeTool } from '../bridge-dispatch.js'
+import { BASE, hydra, view } from './slack-config.js'
 
 process.stderr.write = (() => true) as any
 
-const SPECIALIST = 'slopbot-t'
-const SPECIALIST_THREAD = 'specialist-thread-1'
-let bump = 0
-function configure(over: Record<string, unknown> = {}) {
-  const path = slackWatchConfigPath()
-  writeFileSync(path, JSON.stringify({ botUserId: 'UBOT', channels: ['C1'], specialist: SPECIALIST, coalesceMs: 5, maxWatches: 3, ...over }))
-  // fileConfig caches on mtime: make every write look newer
-  utimesSync(path, new Date(), new Date(Date.now() + 1000 * ++bump))
+const FOOD = 'food-t'
+const FOOD_THREAD = 'food-thread-1'
+const OPS = 'ops-t'
+const OPS_THREAD = 'ops-thread-1'
+const TOML = `${BASE}
+[people.olive]
+ids = ["slack:UOWNER"]
+roles = ["owner"]
+[specialists.${FOOD}]
+workdir = "/w/food"
+listens = ["slack:C1"]
+allow = ["anyone"]
+[specialists.${OPS}]
+workdir = "/w/ops"
+listens = ["slack:C2"]
+allow = ["owner"]
+`
+let current = TOML
+function configure(toml = TOML, over: Parameters<typeof view>[1] = {}) {
+  current = toml
+  _setHydraConfigForTesting(hydra(toml))
+  const v = view(toml, { maxWatches: 3, ...over })
+  slackRuntimeDeps.view = () => v
 }
-const occupant = { threadId: SPECIALIST_THREAD }
+const food = { threadId: FOOD_THREAD }
 const stranger = { threadId: 'some-other-thread' }
 let n = 0
 const req = (command: string, params: Record<string, unknown>): CLIRequest => ({ type: 'cli', command, id: `sw-${++n}`, params })
@@ -30,181 +48,215 @@ const req = (command: string, params: Record<string, unknown>): CLIRequest => ({
 const sessionIds: string[] = []
 beforeEach(() => {
   configure()
-  setSpecialist(SPECIALIST, { threadId: SPECIALIST_THREAD, kickoff: 'k' })
+  // hydra.toml declares the recipes; the daemon keeps only where each one lives
+  setSpecialistThread(FOOD, FOOD_THREAD)
+  setSpecialistThread(OPS, OPS_THREAD)
 })
 afterEach(() => {
   for (const e of getSlackWatcher().list()) getSlackWatcher().unwatch(e.channel, e.threadTs)
   for (const s of sessionIds.splice(0)) registry.delete(s)
-  removeSpecialist(SPECIALIST)
-  rmSync(slackWatchConfigPath(), { force: true })
+  _setHydraConfigForTesting(undefined)
+  rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true })
+  _reloadSpecialists()
+  slackRuntimeDeps.view = () => null
   rmSync(join(STATE_DIR, 'slack-watches.json'), { force: true })
 })
 
-describe('the slack_specialist capability', () => {
-  test('only a session in the specialist\'s thread has the watch tools', () => {
-    expect(isSlackSpecialistOccupant(occupant)).toBe(true)
-    expect(isSlackSpecialistOccupant(stranger)).toBe(false)
-    expect(sessionCapabilities({ ...occupant, capabilities: [], engine: 'claude' } as any).has('slack_specialist')).toBe(true)
-    expect(sessionCapabilities({ ...stranger, capabilities: [], engine: 'claude' } as any).has('slack_specialist')).toBe(false)
+describe('the specialist capability', () => {
+  test("only a session in a hydra.toml specialist's thread has the conversation tools", () => {
+    expect(isSpecialistOccupant(food)).toBe(true)
+    expect(isSpecialistOccupant(stranger)).toBe(false)
+    expect(sessionCapabilities({ ...food, capabilities: [], engine: 'claude' } as any).has('specialist')).toBe(true)
+    expect(sessionCapabilities({ ...stranger, capabilities: [], engine: 'claude' } as any).has('specialist')).toBe(false)
 
     const add = (id: string, threadId: string) => {
       sessionIds.push(id)
       registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
     }
-    add('sw-in-specialist', SPECIALIST_THREAD)
+    add('sw-in-specialist', FOOD_THREAD)
     add('sw-elsewhere', 'some-other-thread')
-    expect(isToolAllowed('sw-in-specialist', 'watch_slack_thread')).toBe(true)
-    expect(isToolAllowed('sw-in-specialist', 'unwatch_slack_thread')).toBe(true)
-    expect(isToolAllowed('sw-elsewhere', 'watch_slack_thread')).toBe(false)
-    expect(isToolAllowed('main', 'watch_slack_thread')).toBe(false)
+    expect(isToolAllowed('sw-in-specialist', 'bind_conversation')).toBe(true)
+    expect(isToolAllowed('sw-in-specialist', 'unbind_conversation')).toBe(true)
+    expect(isToolAllowed('sw-elsewhere', 'bind_conversation')).toBe(false)
+    expect(isToolAllowed('main', 'bind_conversation')).toBe(false)
   })
 
-  test('nothing is granted while Slack watching is unconfigured', () => {
-    rmSync(slackWatchConfigPath())
-    expect(isSlackSpecialistOccupant(occupant)).toBe(false)
-  })
-})
-
-describe('watch_slack_thread / unwatch_slack_thread', () => {
-  test('the specialist session watches and unwatches; the specialist is always the configured one', () => {
-    expect(watchSlackThread(occupant, 'C1', '1793732224.093059')).toBe('watching C1:1793732224.093059')
-    expect(getSlackWatcher().get('C1', '1793732224.093059')).toMatchObject({ mentionedBy: 'tool' })
-    expect(formatSlackWatches()[0]).toContain(`C1:1793732224.093059 → ${SPECIALIST}`)
-    expect(unwatchSlackThread(occupant, 'C1', '1793732224.093059')).toBe('stopped watching C1:1793732224.093059')
-    expect(unwatchSlackThread(occupant, 'C1', '1793732224.093059')).toContain('was not being watched')
-  })
-
-  test('another session, an unlisted channel, a malformed ts, and a full table are all refused', () => {
-    expect(() => watchSlackThread(stranger, 'C1', '1.000001')).toThrow('only the session in the')
-    expect(() => watchSlackThread(undefined, 'C1', '1.000001')).toThrow('only the session in the')
-    expect(() => watchSlackThread(occupant, 'C_OTHER', '1.000001')).toThrow('channel must be one of')
-    expect(() => watchSlackThread(occupant, 'C1', 'yesterday')).toThrow('thread_ts must look like')
-    for (const ts of ['1.000001', '2.000001', '3.000001']) watchSlackThread(occupant, 'C1', ts)
-    expect(() => watchSlackThread(occupant, 'C1', '4.000001')).toThrow('watch table is full')
-    expect(() => unwatchSlackThread(stranger, 'C1', '1.000001')).toThrow('only the session in the')
-  })
-
-  test('without a config the tools say so instead of watching', () => {
-    rmSync(slackWatchConfigPath())
-    expect(() => watchSlackThread(occupant, 'C1', '1.000001')).toThrow('not configured')
+  test('a specialist with a session record but not in hydra.toml is granted nothing', () => {
+    configure(BASE)
+    expect(isSpecialistOccupant(food)).toBe(false)
   })
 })
 
-describe('routes in the runtime', () => {
-  const OPS = 'ops-t'
-  const OPS_THREAD = 'ops-thread-1'
-  beforeEach(() => setSpecialist(OPS, { threadId: OPS_THREAD, kickoff: 'k' }))
-  afterEach(() => removeSpecialist(OPS))
-  const routed = () => configure({ channels: undefined, specialist: undefined, routes: [{ channels: ['C1'], to: SPECIALIST, from: 'anyone' }, { channels: ['C2'], to: OPS, from: 'anyone' }] })
-
-  test("each route's session gets the watch tools, for its own route's channels only", () => {
-    routed()
-    expect(isSlackSpecialistOccupant({ threadId: OPS_THREAD })).toBe(true)
-    expect(isSlackSpecialistOccupant(occupant)).toBe(true)
-    expect(watchSlackThread({ threadId: OPS_THREAD }, 'C2', '1.000001')).toBe('watching C2:1.000001')
-    expect(() => watchSlackThread({ threadId: OPS_THREAD }, 'C1', '1.000001')).toThrow(`only the session in the "${SPECIALIST}" specialist may watch Slack threads in C1`)
-    expect(formatSlackWatches().find(l => l.startsWith('C2:'))).toContain(`→ ${OPS}`)
+describe('bind_conversation / unbind_conversation', () => {
+  test('a specialist binds a conversation where it listens, and lets go of it', () => {
+    expect(bindConversation(food, 'slack:C1:1793732224.093059')).toBe(`slack:C1:1793732224.093059 is bound to ${FOOD}`)
+    expect(getSlackWatcher().get('C1', '1793732224.093059')).toMatchObject({ specialist: FOOD, mentionedBy: 'tool' })
+    expect(formatConversations()[0]).toContain(`slack:C1:1793732224.093059 (slack:C1) → ${FOOD}`)
+    expect(unbindConversation(food, 'slack:C1:1793732224.093059')).toBe('slack:C1:1793732224.093059 is unbound')
+    expect(unbindConversation(food, 'slack:C1:1793732224.093059')).toContain('was not bound')
   })
 
-  test("list_watches: a route's session sees its own route's Slack threads, never another route's", async () => {
-    routed()
-    for (const [id, threadId] of [['sw-food', SPECIALIST_THREAD], ['sw-ops', OPS_THREAD], ['sw-none', 'some-other-thread']] as const) {
+  test("another session, a place it doesn't hear, another specialist's conversation, a malformed id, and a full table are all refused", () => {
+    expect(() => bindConversation(stranger, 'slack:C1:1.000001')).toThrow('only a session in a specialist declared in hydra.toml')
+    expect(() => bindConversation(undefined, 'slack:C1:1.000001')).toThrow('only a session in a specialist')
+    expect(() => bindConversation(food, 'slack:C2:1.000001')).toThrow(`${FOOD} doesn't listen on slack:C2`)
+    expect(() => bindConversation(food, 'C1:yesterday')).toThrow('conversation must look like')
+    getSlackWatcher().bind('C1', '9.000001', OPS)
+    expect(() => bindConversation(food, 'slack:C1:9.000001')).toThrow(`is bound to ${OPS}; only the operator moves it`)
+    for (const ts of ['1.000001', '2.000001']) bindConversation(food, `slack:C1:${ts}`)
+    expect(() => bindConversation(food, 'slack:C1:4.000001')).toThrow('conversation table is full')
+    expect(() => unbindConversation({ threadId: OPS_THREAD }, 'slack:C1:1.000001')).toThrow(`is bound to ${FOOD}, not ${OPS}`)
+  })
+
+  test("a rule there doesn't count: it takes chosen people's messages, not the place", () => {
+    configure(`${TOML}[[rules]]\nat = "slack:C2"\nfrom = "olive"\nto = "${FOOD}"\n`)
+    expect(() => bindConversation(food, 'slack:C2:1.000001')).toThrow(`${FOOD} doesn't listen on slack:C2`)
+  })
+
+  test("a DM or a place's top level is never bound by hand: the operator's DM stays main's", () => {
+    configure(`${TOML.replace('listens = ["slack:C1"]', 'listens = ["slack:C1", "slack:dm"]')}`)
+    getSlackWatcher().bind('D0OP', '0.000000', 'main')
+    expect(() => bindConversation(food, 'slack:D0OP')).toThrow('only a thread can be bound by hand')
+    expect(() => bindConversation(food, 'slack:C1')).toThrow('only a thread can be bound by hand')
+    expect(getSlackWatcher().get('D0OP', '0.000000')!.specialist).toBe('main')
+  })
+
+  test('a specialist holds at most TOOL_BIND_MAX conversations it bound itself', () => {
+    configure(TOML, { maxWatches: 50 })
+    for (let i = 1; i <= 10; i++) bindConversation(food, `slack:C1:${i}.000001`)
+    expect(() => bindConversation(food, 'slack:C1:11.000001')).toThrow(`${FOOD} already holds 10 conversations it bound itself`)
+    expect(bindConversation(food, 'slack:C1:3.000001')).toContain('is bound to') // one it holds already is fine
+  })
+
+  test('a rename through `was` keeps a specialist\'s hold on its conversations', async () => {
+    getSlackWatcher().bind('C1', '7.000001', 'old-food')
+    configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nwas = ["old-food"]`))
+    expect(bindConversation(food, 'slack:C1:7.000001')).toContain(`is bound to ${FOOD}`)
+    sessionIds.push('sw-rn')
+    registry.set('sw-rn', { sessionId: 'sw-rn', tmuxName: 'sw-rn', threadId: FOOD_THREAD, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
+    getSlackWatcher().bind('C1', '8.000001', 'old-food')
+    expect(((await executeTool('list_watches', {}, 'sw-rn')).content[0] as { text: string }).text).toContain('slack:C1:8.000001')
+    expect(unbindConversation(food, 'slack:C1:8.000001')).toContain('is unbound')
+  })
+
+  test('conversation ids: a thread, or a DM', () => {
+    expect(parseConversation('slack:C1:1.000001')).toEqual({ channel: 'C1', threadTs: '1.000001' })
+    expect(parseConversation('slack:D0ABC')).toEqual({ channel: 'D0ABC', threadTs: '0.000000' })
+    expect(parseConversation('slack:C1')).toEqual({ channel: 'C1', threadTs: '0.000000' }) // a listen = "all" place's top level
+  })
+
+  test("list_watches: a specialist's session sees the conversations bound to it, never another's", async () => {
+    for (const [id, threadId] of [['sw-food', FOOD_THREAD], ['sw-ops', OPS_THREAD], ['sw-none', 'some-other-thread']] as const) {
       sessionIds.push(id)
       registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
     }
-    getSlackWatcher().watch('C1', '11.000001')
-    getSlackWatcher().watch('C2', '22.000001')
+    getSlackWatcher().watch('C1', '11.000001', FOOD)
+    getSlackWatcher().watch('C2', '22.000001', OPS)
     const seen = async (id: string) => ((await executeTool('list_watches', {}, id)).content[0] as { text: string }).text
-    expect(await seen('sw-food')).toContain('C1:11.000001')
+    expect(await seen('sw-food')).toContain('slack:C1:11.000001')
     expect(await seen('sw-food')).not.toContain('C2:')
-    expect(await seen('sw-ops')).toContain('C2:22.000001')
+    expect(await seen('sw-ops')).toContain('slack:C2:22.000001')
     expect(await seen('sw-ops')).not.toContain('C1:')
     expect(await seen('sw-none')).not.toContain('slack')
   })
 
-  test('a route to main is flagged in slack-watch list: never revived, its queue not durable', async () => {
-    configure({ channels: undefined, specialist: undefined, routes: [{ channels: ['C1'], to: 'main', from: 'anyone' }] })
-    const listed = await handleCLIRequest(req('slack-watch', { action: 'list' }))
-    expect((listed.data as any).health.routes).toEqual([{ channels: ['C1'], to: 'main', note: expect.stringContaining('never revived') }])
+  test('the bridge tools reach the same code', async () => {
+    sessionIds.push('sw-tool')
+    registry.set('sw-tool', { sessionId: 'sw-tool', tmuxName: 'sw-tool', threadId: FOOD_THREAD, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
+    const out = await executeTool('bind_conversation', { conversation: 'slack:C1:5.000001' }, 'sw-tool')
+    expect((out.content[0] as { text: string }).text).toContain(`is bound to ${FOOD}`)
+  })
+})
+
+describe('the operator: hydra conversations and hydra route', () => {
+  test('conversations bind, list, unbind; bind moves one from any specialist to any other', async () => {
+    getSlackWatcher().watch('C1', '9.000001', FOOD)
+    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1:9.000001', to: OPS }))).toMatchObject({ ok: true, data: { bound: `slack:C1:9.000001 → ${OPS}` } })
+    expect(getSlackWatcher().get('C1', '9.000001')!.specialist).toBe(OPS)
+    const listed = await handleCLIRequest(req('conversations', { action: 'list' }))
+    expect((listed.data as any).conversations).toEqual([expect.stringContaining(`slack:C1:9.000001 (slack:C1) → ${OPS} · idle 0h`)])
+    expect((listed.data as any).health).toMatchObject({ places: [{ place: 'slack:C1', to: FOOD }, { place: 'slack:C2', to: OPS }], conversations: 1, owed: 0, oldestOwedAgeMin: null })
+    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1:9.000001', to: 'nobody' }))).toMatchObject({ ok: false, error: 'no specialist "nobody" in hydra.toml' })
+    expect(await handleCLIRequest(req('conversations', { action: 'bind', conversation: 'slack:C1', to: OPS }))).toMatchObject({ ok: false, error: expect.stringContaining('names a channel, not a conversation') })
+    expect(await handleCLIRequest(req('conversations', { action: 'unbind', conversation: 'slack:C1:9.000001' }))).toMatchObject({ ok: true })
+    expect(await handleCLIRequest(req('conversations', { action: 'unbind', conversation: 'slack:C1:9.000001' }))).toMatchObject({ ok: true, data: { unbound: expect.stringContaining('was not bound') } })
+    const health = await handleCLIRequest(req('health', {}))
+    expect((health.data as any).slack).toMatchObject({ conversations: 0 })
   })
 
-  test('a route to main delivers only while main is connected; otherwise its messages stay owed', async () => {
-    configure({ channels: undefined, specialist: undefined, routes: [{ channels: ['C1'], to: 'main', from: 'anyone' }] })
+  test('hydra route prints every candidate and why the winner won, and binds nothing', async () => {
+    configure(`${TOML}[[rules]]\nat = "slack:C2"\nfrom = "owner"\nto = "${FOOD}"\n`)
+    const r = await handleCLIRequest(req('route', { as: 'olive', at: 'slack:C2' }))
+    expect(r).toMatchObject({ ok: true, data: { fate: 'deliver', to: FOOD } })
+    expect((r.data as any).report).toContain(`→ rule ${FOOD}: rules[0]: first rule that matches`)
+    expect((r.data as any).report).toContain(`listens ${OPS}: listens on slack:C2, but a rule won`)
+    expect(await handleCLIRequest(req('route', { as: 'stranger', at: 'slack:C2' }))).toMatchObject({ ok: true, data: { fate: 'refused', to: OPS } })
+    expect(await handleCLIRequest(req('route', { as: 'slack:UNEW', at: 'slack:C9' }))).toMatchObject({ ok: true, data: { fate: 'unrouted' } })
+    expect(await handleCLIRequest(req('route', { as: 'nobody', at: 'slack:C2' }))).toMatchObject({ ok: false })
+    expect(getSlackWatcher().list()).toEqual([])
+  })
+
+  test('refusals by sender, unrouted mentions, and drops by kind are counted', async () => {
+    configure(TOML, { maxWatches: 1 })
+    const before = slackWatchHealth()!
     const w = getSlackWatcher()
-    w.handle({ channel: 'C1', ts: '71.000001', user: 'UA', text: '<@UBOT> hi' })
-    await w.flush()
-    expect(w.get('C1', '71.000001')?.owed).toEqual(['71.000001'])
+    expect(w.handle({ channel: 'C2', ts: '50.000001', user: 'USTRANGER', text: '<@UBOT> hi' })).toBe('refused')
+    expect(w.handle({ channel: 'C9', ts: '50.000002', user: 'USTRANGER', text: '<@UBOT> hi' })).toBe('unrouted')
+    w.handle({ channel: 'C1', ts: '51.000001', user: 'UOWNER', text: '<@UBOT> one' })
+    w.handle({ channel: 'C1', ts: '52.000001', user: 'UOWNER', text: '<@UBOT> two' }) // the table holds one
+    const after = slackWatchHealth()!
+    expect(after.refused - before.refused).toBe(1)
+    expect(after.refusedBy.USTRANGER - (before.refusedBy.USTRANGER ?? 0)).toBe(1)
+    expect(after.unrouted - before.unrouted).toBe(1)
+    expect(after.dropped['table-full']! - (before.dropped['table-full'] ?? 0)).toBe(1)
+    w.close()
   })
 
-  test("a drop in a route to main is alerted in main's channel, not lost to stderr", async () => {
+  test('health flags a #name place no channel answers to, and omits the line without [connectors.slack]', async () => {
+    configure(TOML.replace('listens = ["slack:C2"]', 'listens = ["slack:#ops-room"]'))
+    expect(slackWatchHealth()!.places.find(p => p.to === OPS)!.note).toContain('no channel answers to this name')
+    configure('')
+    expect(slackWatchHealth()).toBeNull()
+    expect(((await handleCLIRequest(req('health', {}))).data as any).slack).toBeUndefined()
+    void current
+  })
+})
+
+describe('main and alerts', () => {
+  test("the operator's DM reaches main only while main is connected; otherwise it stays owed", async () => {
+    const w = getSlackWatcher()
+    w.handle({ channel: 'D0OP', ts: '71.000001', user: 'UOP', text: 'hi' })
+    await w.flush()
+    expect(w.get('D0OP', '0.000000')?.owed).toEqual(['71.000001'])
+  })
+
+  test("a drop is alerted in its specialist's thread", async () => {
     noteMainChannel('C0MAINCH')
     const posted: { channel: string; text: string }[] = []
     const realSend = gateway.send
     ;(gateway as any).send = async (channel: string, text: string) => { posted.push({ channel, text }); return 'id' }
     try {
-      configure({ channels: undefined, specialist: undefined, maxWatches: 1, routes: [{ channels: ['C1'], to: 'main', from: 'anyone' }] })
+      configure(TOML, { maxWatches: 1 })
       const w = getSlackWatcher()
-      w.handle({ channel: 'C1', ts: '80.000001', user: 'UA', text: '<@UBOT> one' })
-      w.handle({ channel: 'C1', ts: '81.000001', user: 'UA', text: '<@UBOT> two' }) // table-full
+      // ops, not food: the watcher is the daemon's one, and an earlier test began food's table-full episode
+      w.handle({ channel: 'C2', ts: '80.000001', user: 'UOWNER', text: '<@UBOT> one' })
+      w.handle({ channel: 'C2', ts: '81.000001', user: 'UOWNER', text: '<@UBOT> two' }) // table-full
       await Bun.sleep(10)
-      expect(posted.some(p => p.channel === 'C0MAINCH' && p.text.includes('table-full'))).toBe(true)
+      expect(posted.some(p => p.channel === OPS_THREAD && p.text.includes('table-full'))).toBe(true)
       w.close()
     } finally { (gateway as any).send = realSend }
   })
-
-  test('slack-watch list flags a route to an undeclared specialist before anything is owed to it', async () => {
-    configure({ channels: undefined, specialist: undefined, routes: [{ channels: ['C1'], to: 'nobody-here', from: 'anyone' }] })
-    const listed = await handleCLIRequest(req('slack-watch', { action: 'list' }))
-    expect((listed.data as any).health.routes[0].note).toContain('no such specialist: nobody-here')
-  })
-
-  test('slack-watch add with a DM id says DMs are watched as they arrive', async () => {
-    configure({ channels: undefined, specialist: undefined, people: { UA0000000: { role: 'owner' } }, routes: [{ channels: ['C1'], to: SPECIALIST, from: 'anyone' }, { dms: true, to: SPECIALIST, from: ['owner'] }] })
-    expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'D0ALICE01', threadTs: '9.000001' }))).toMatchObject({ ok: false, error: expect.stringContaining('is a DM: the dms route watches DMs as they arrive') })
-  })
-
-  test('a route naming no such specialist keeps its messages owed', async () => {
-    configure({ channels: undefined, specialist: undefined, routes: [{ channels: ['C1'], to: 'nobody-here', from: 'anyone' }] })
-    const w = getSlackWatcher()
-    w.handle({ channel: 'C1', ts: '70.000001', user: 'UA', text: '<@UBOT> hi' })
-    await w.flush()
-    expect(w.get('C1', '70.000001')?.owed).toEqual(['70.000001'])
-  })
 })
 
-describe('operator view', () => {
-  test('hydra slack-watch add / list / rm, and the health line', async () => {
-    expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'C1', threadTs: '9.000001' }))).toMatchObject({ ok: true })
-    const listed = await handleCLIRequest(req('slack-watch', { action: 'list' }))
-    expect((listed.data as any).watches).toHaveLength(1)
-    expect((listed.data as any).health).toMatchObject({ routes: [{ channels: ['C1'], to: SPECIALIST }], watches: 1, owed: 0, oldestOwedAgeMin: null })
-    const health = await handleCLIRequest(req('health', {}))
-    expect((health.data as any).slackWatch).toMatchObject({ routes: [{ to: SPECIALIST }], watches: 1 })
-    expect(await handleCLIRequest(req('slack-watch', { action: 'rm', channel: 'C1', threadTs: '9.000001' }))).toMatchObject({ ok: true })
-    expect(await handleCLIRequest(req('slack-watch', { action: 'rm', channel: 'C1', threadTs: '9.000001' }))).toMatchObject({ ok: false })
-    expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'C1', threadTs: 'nope' }))).toMatchObject({ ok: false })
-    expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'C_ELSEWHERE', threadTs: '9.000002' }))).toMatchObject({ ok: false, error: expect.stringContaining('is in no route') })
-  })
-
-  test('slack-watch list counts refusals by sender, and drops by kind', async () => {
-    configure({ people: { UOWNER: { role: 'owner' } }, maxWatches: 1 })
-    const before = (await handleCLIRequest(req('slack-watch', { action: 'list' }))).data as any
-    const w = getSlackWatcher()
-    expect(w.handle({ channel: 'C1', ts: '50.000001', user: 'USTRANGER', text: '<@UBOT> hi' })).toBe('refused')
-    w.handle({ channel: 'C1', ts: '51.000001', user: 'UOWNER', text: '<@UBOT> one' })
-    w.handle({ channel: 'C1', ts: '52.000001', user: 'UOWNER', text: '<@UBOT> two' }) // the table holds one
-    const after = (await handleCLIRequest(req('slack-watch', { action: 'list' }))).data as any
-    expect(after.health.refused - before.health.refused).toBe(1)
-    expect(after.health.refusedBy.USTRANGER - (before.health.refusedBy.USTRANGER ?? 0)).toBe(1)
-    expect(after.health.dropped['table-full'] - (before.health.dropped['table-full'] ?? 0)).toBe(1)
-    w.close()
-  })
-
-  test('health omits the line when nothing is configured', async () => {
-    rmSync(slackWatchConfigPath())
-    expect(slackWatchHealth()).toBeNull()
-    const health = await handleCLIRequest(req('health', {}))
-    expect((health.data as any).slackWatch).toBeUndefined()
-    expect(await handleCLIRequest(req('slack-watch', { action: 'add', channel: 'C1', threadTs: '9.000001' }))).toMatchObject({ ok: false, error: expect.stringContaining('not configured') })
+describe('tokens', () => {
+  test('a token is read only from a variable every session is kept from; any other name is refused, with why', () => {
+    const env = { SLOPBOT_SLACK_BOT_TOKEN: 'xoxb-1', SLOPBOT_SLACK_APP_TOKEN: 'xapp-1' }
+    expect(slackTokens(hydra(TOML), env)).toEqual({ bot: 'xoxb-1', app: 'xapp-1' })
+    const warned: string[] = []
+    const leaky = hydra(TOML.replace('bot_token_env = "SLOPBOT_SLACK_BOT_TOKEN"', 'bot_token_env = "SLACK_BOT_TOKEN"'))
+    expect(slackTokens(leaky, { ...env, SLACK_BOT_TOKEN: 'xoxb-leak' }, l => warned.push(l))).toEqual({ bot: undefined, app: 'xapp-1' })
+    expect(warned[0]).toContain('refusing to read the token in SLACK_BOT_TOKEN')
+    expect(warned[0]).not.toContain('xoxb')
+    expect(slackTokens(hydra(''), env)).toEqual({})
   })
 })

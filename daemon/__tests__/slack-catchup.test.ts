@@ -5,9 +5,10 @@ import { join } from 'path'
 import { SlackWatcher, type SlackWatchConfig, type DeliverResult } from '../slack-watch.js'
 import { catchUp, toEvent, _resetCatchUpLogs, type SlackApi, type RawMessage, type Page } from '../slack-catchup.js'
 
-const BOT = 'UBOT'
-const CH = 'C_FOOD'
-const cfg: SlackWatchConfig = { botUserId: BOT, people: {}, routes: [{ channels: [CH], to: 'slopbot', from: 'anyone' }], idleExpiryMs: 7 * 86_400_000, coalesceMs: 5, maxWatches: 50, maxMentionsPer10Min: 10 }
+import { BASE, BOT, oneListener, view } from './slack-config.js'
+
+const CH = 'C0FOOD'
+const cfg: SlackWatchConfig = view(oneListener(CH))
 const mention = `<@${BOT}> a cart please`
 
 const dirs: string[] = []
@@ -52,7 +53,7 @@ describe('toEvent', () => {
 
 describe('catchUp', () => {
   test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
-    const closed: SlackWatchConfig = { ...cfg, people: { UOWNER: { name: 'Owner', role: 'owner' } }, routes: [{ channels: [CH], to: 'slopbot', from: 'people' }] }
+    const closed: SlackWatchConfig = view(oneListener(CH, 'slopbot', '["people"]') + '[people.owner]\nids = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')
     const { w, sent } = setup(undefined, closed)
     w.handle({ channel: CH, ts: '1000.000001', user: 'UOWNER', text: 'old chat' }) // sets the cursor
     const { api } = fakeApi({ [CH]: [
@@ -64,7 +65,7 @@ describe('catchUp', () => {
     await w.flush()
     expect(r).toMatchObject({ complete: true, handled: 2, accepted: 1 })
     expect(sent).toHaveLength(1)
-    expect(sent[0]).toContain('Owner (owner) <@UOWNER>')
+    expect(sent[0]).toContain('person="owner" roles="boss,people,anyone"')
     expect(w.get(CH, '1005.000001')).toBeUndefined()
     expect(w.stats()).toMatchObject({ refused: 1, refusedBy: { USTRANGER: 1 } })
   })
@@ -90,7 +91,7 @@ describe('catchUp', () => {
     expect(r).toMatchObject({ complete: true, handled: 2, accepted: 1 })
     expect(calls[0].args.oldest).toBe('1000.000001')
     expect(sent).toHaveLength(1)
-    expect(sent[0]).toContain('[mention] <@UB>')
+    expect(sent[0]).toContain('address="slack:UB"]')
     expect(w.channelCursor(CH)).toBe('1010.000001')
   })
 
@@ -172,7 +173,7 @@ describe('catchUp', () => {
     await w.flush()
     expect(r.complete).toBe(true)
     expect(calls.filter(c => c.kind === 'history')).toHaveLength(2)
-    expect(sent.join()).toContain('<@U3>')
+    expect(sent.join()).toContain('address="slack:U3"')
   })
 
   test('the call budget grows with the watch table, so a deep pass over many watches still completes', async () => {
@@ -208,49 +209,76 @@ describe('catchUp', () => {
   })
 })
 
+test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the pass still reads the rest", async () => {
+  const { w, sent } = setup(() => ({ ok: true }))
+  const logs: string[] = []
+  w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
+  w.bind(CH, '1.000001', 'slopbot', 'tool') // made up
+  w.bind(CH, '1001.000001', 'slopbot')
+  const api: SlackApi = {
+    history: async () => ({ messages: [] }),
+    replies: async a => { if (a.ts === '1.000001') throw new Error('An API error occurred: thread_not_found'); return { messages: [{ ts: '1002.000001', thread_ts: '1001.000001', user: 'UA', text: 'missed reply' }] } },
+  }
+  const r = await catchUp(w, api, cfg, opts({ deep: true, log: (l: string) => logs.push(l) }))
+  await w.flush()
+  expect(r).toMatchObject({ complete: true, accepted: 1 })
+  expect(sent.join()).toContain('missed reply')
+  expect(logs.join()).toContain(`thread ${CH}:1.000001 is not there`)
+})
+
 describe('catch-up across routes', () => {
   test('every routed channel is scanned, and each recovered tag goes to its own route', async () => {
-    const routed: SlackWatchConfig = { ...cfg, routes: [{ channels: [CH], to: 'food', from: 'anyone' }, { channels: ['C_OPS'], to: 'ops', from: 'anyone' }] }
+    const routed: SlackWatchConfig = view(`${BASE}
+[specialists.food]
+workdir = "/w/food"
+listens = ["slack:${CH}"]
+allow = ["anyone"]
+[specialists.ops]
+workdir = "/w/ops"
+listens = ["slack:C0OPS"]
+allow = ["anyone"]
+`)
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
     const sent: string[] = []
     const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async t => { sent.push(t.to); return { ok: true } } })
     w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
-    w.handle({ channel: 'C_OPS', ts: '1000.000001', user: 'UA', text: 'chat' })
-    const { api } = fakeApi({ [CH]: [{ ts: '1005.000001', user: 'UA', text: mention }], C_OPS: [{ ts: '1006.000001', user: 'UB', text: mention }] })
+    w.handle({ channel: 'C0OPS', ts: '1000.000001', user: 'UA', text: 'chat' })
+    const { api } = fakeApi({ [CH]: [{ ts: '1005.000001', user: 'UA', text: mention }], C0OPS: [{ ts: '1006.000001', user: 'UB', text: mention }] })
     expect(await catchUp(w, api, routed, opts())).toMatchObject({ complete: true, accepted: 2 })
     await w.flush()
     expect(sent.sort()).toEqual(['food', 'ops'])
-    expect(w.channelCursor('C_OPS')).toBe('1006.000001')
+    expect(w.channelCursor('C0OPS')).toBe('1006.000001')
   })
 })
 
-test('owed threads in a channel no route covers are not fetched: nothing would take them', async () => {
+test('owed threads follow their binding: refetched even once no specialist listens in that channel', async () => {
   let routed: SlackWatchConfig = cfg
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
   const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => routed, deliver: async () => ({ ok: false, error: 'down' }) })
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
   await w.flush()
-  routed = { ...cfg, routes: [{ channels: ['C_ELSE'], to: 'x', from: 'anyone' }] }
-  const { api, calls } = fakeApi({ C_ELSE: [] })
+  routed = view(oneListener('C0ELSE', 'slopbot'))
+  const { api, calls } = fakeApi({ C0ELSE: [] })
   await catchUp(w, api, routed, opts())
-  expect(calls.filter(c => c.kind === 'replies')).toHaveLength(0)
+  expect(calls.filter(c => c.kind === 'replies').map(c => `${c.args.channel}:${c.args.ts}`)).toEqual([`${CH}:1000.000001`])
 })
 
 test('a message the guard put off (exit 75) is refetched by catch-up and judged again, like any owed message', async () => {
-  const guarded: SlackWatchConfig = { ...cfg, routes: [{ channels: [CH], to: 'slopbot', from: 'anyone', guard: { command: 'g', includeText: false, timeoutMs: 1000 } }] }
+  const guarded: SlackWatchConfig = view(oneListener(CH, 'slopbot', '["anyone"]', '[guard]\ncommand = "g"\n'))
+  const T = '1792999990.000001' // within owed_max of now: a "not now" holds it rather than failing it
   const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
   dirs.push(dir)
   let fate: 'later' | 'deliver' = 'later'
   const sent: string[] = []
   const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => guarded,
     guard: async () => ({ fate }), deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
-  w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
+  w.handle({ channel: CH, ts: T, user: 'UA', text: mention })
   await w.flush()
   expect(sent).toHaveLength(0)
   fate = 'deliver'
-  const thread = { [`${CH}:1000.000001`]: [{ ts: '1000.000001', user: 'UA', text: mention }] }
+  const thread = { [`${CH}:${T}`]: [{ ts: T, user: 'UA', text: mention }] }
   const r = await catchUp(w, fakeApi({ [CH]: [] }, thread).api, guarded, opts())
   await w.flush()
   expect(r.accepted).toBe(1)
@@ -260,7 +288,8 @@ test('a message the guard put off (exit 75) is refetched by catch-up and judged 
 
 describe('catch-up for DMs and files', () => {
   const DM = 'D0ALICE01'
-  const dmCfg: SlackWatchConfig = { ...cfg, people: { UA: { role: 'owner' } }, routes: [{ channels: [CH], to: 'slopbot', from: 'anyone' }, { channels: [], dms: true, to: 'assistant', from: ['owner'] }] }
+  const DMS = (allow: string) => oneListener(CH) + `[people.a]\nids = ["slack:UA"]\nroles = ["owner"]\n[specialists.assistant]\nworkdir = "/w/assistant"\nlistens = ["slack:dm"]\nallow = ${allow}\n`
+  const dmCfg: SlackWatchConfig = view(DMS('["owner"]'))
   const mk = (deliver: () => DeliverResult = () => ({ ok: true })) => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
@@ -277,7 +306,7 @@ describe('catch-up for DMs and files', () => {
     expect(await catchUp(w, api, dmCfg, opts({ deep: true }))).toMatchObject({ complete: true, accepted: 1 })
     await w.flush()
     expect(sent.map(x => x.to)).toEqual(['assistant', 'assistant'])
-    expect(sent[1].msg).toContain('[dm]')
+    expect(sent[1].msg).toContain('[dm ')
     expect(calls.some(c => c.kind === 'replies')).toBe(false) // a DM has no thread of its own to read
     expect(w.channelCursor(DM)).toBe('1005.000001')
   })
@@ -293,7 +322,7 @@ describe('catch-up for DMs and files', () => {
     await catchUp(w, api, dmCfg, opts())
     await w.flush()
     expect(calls.find(c => c.kind === 'history' && c.args.channel === DM)?.args.oldest).toBe('1000.000000')
-    expect(sent.at(-1)!.msg).toContain('ts 1000.000001')
+    expect(sent.at(-1)!.msg).toContain('ts="1000.000001"')
     expect(w.owedHints()).toEqual([])
   })
 
@@ -365,7 +394,7 @@ describe('catch-up for DMs and files', () => {
     const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
     dirs.push(dir)
     const sent: string[] = []
-    const openDms: SlackWatchConfig = { ...dmCfg, maxWatches: 1000, routes: [{ channels: [CH], to: 'slopbot', from: 'anyone' }, { channels: [], dms: true, to: 'assistant', from: 'anyone' }] }
+    const openDms: SlackWatchConfig = view(DMS('["anyone"]'), { maxWatches: 1000 })
     const w = new SlackWatcher({ now: () => now, file: join(dir, 'w.json'), log: () => {}, config: () => openDms, deliver: async (_t, msg) => { sent.push(msg); return { ok: true } } })
     w.handle({ channel: CH, ts: '1792999000.000001', user: 'UA', text: 'chat' })
     const dms = Array.from({ length: 600 }, (_, i) => ({ channel: `D0GAP${String(i).padStart(4, '0')}`, user: 'UA' }))
@@ -422,7 +451,7 @@ describe('catch-up for DMs and files', () => {
     const { api } = fakeApi({ [CH]: [{ ts: '1005.000001', user: 'UA', text: mention, files: [{ id: 'F1', name: 'a.pdf', size: 10, url_private_download: 'https://files.slack.com/F1' }] }] })
     await catchUp(w, api, dmCfg, opts())
     await w.flush()
-    expect(sent[0].msg).toContain('  file: a.pdf (10 B): not downloaded (files is off for this route)')
+    expect(sent[0].msg).toContain('  file: a.pdf (10 B): not downloaded (files is off for this place)')
   })
 })
 
@@ -468,6 +497,6 @@ describe('catch-up never passes over a gap', () => {
     }
     expect(w.channelCursor(CH)).toBe('5003.000001')
     expect(w.stats().dropped['catch-up-gap']).toBe(1)
-    expect(alerts.join()).toContain('catch-up read the newest 1000 messages in C_FOOD since 1000.000001')
+    expect(alerts.join()).toContain('catch-up read the newest 1000 messages in C0FOOD since 1000.000001')
   })
 })
