@@ -73,6 +73,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
         authTest: async () => ({ botId: 'BBOT', userId: BOT, url: 'https://x.slack.com/', ...(over.scopes && { scopes: over.scopes }) }),
         userName: async id => { state.nameLookups.push(id); return id === 'UB' ? 'Bea B' : undefined },
         react: async (c, ts, name) => { rec.apiCalls.push(`react:${c}:${ts}:${name}`) },
+        post: async (c, thread, text) => { rec.apiCalls.push(`post:${c}:${thread ?? '-'}:${text}`); return '9999.000001' },
         download: async (url, dest) => { rec.apiCalls.push(`download:${url}`); mkdirSync(dirname(dest), { recursive: true }); writeFileSync(dest, 'bytes', { mode: 0o600 }) },
         api,
       } as SlackAppLike
@@ -85,9 +86,9 @@ const message = (over: Partial<RawEvent>): RawEvent => ({ channel: CH, ts: '1100
 
 describe('diagnosing a refused token', () => {
   test('the scopes the token has are logged, and a token that can read no history is called out', async () => {
-    const ok = setup({ scopes: ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write'] })
+    const ok = setup({ scopes: ['channels:history', 'users:read', 'im:history', 'im:read', 'reactions:write', 'chat:write'] })
     await ok.listener.start()
-    expect(ok.logs.join()).toContain('bot token scopes: channels:history, users:read, im:history, im:read, reactions:write')
+    expect(ok.logs.join()).toContain('bot token scopes: channels:history, users:read, im:history, im:read, reactions:write, chat:write')
     expect(ok.logs.join()).not.toContain('WARN')
     const bad = setup({ scopes: ['chat:write', 'reactions:write'] })
     await bad.listener.start()
@@ -124,7 +125,7 @@ describe('diagnosing a refused token', () => {
     const t = setup({ toml: oneListener('#food', 'slopbot', '["anyone"]', `[places."slack:#food"]\nfiles = true\nack = "eyes"\n`), scopes: ['channels:history', 'users:read', 'im:history'] })
     await t.listener.start()
     const log = t.logs.join()
-    expect(log).toContain('enabled options need: channels → channels:history or groups:history; channel names (slack:#name) → channels:read or groups:read; sender names → users:read; dms → im:history; catching up DMs opened while disconnected → im:read; files → files:read; ack and 🚫 reactions → reactions:write')
+    expect(log).toContain('enabled options need: channels → channels:history or groups:history; channel names (slack:#name) → channels:read or groups:read; sender names → users:read; dms → im:history; catching up DMs opened while disconnected → im:read; files → files:read; ack and 🚫 reactions → reactions:write; replies → chat:write')
     expect(log).toContain('WARN files needs files:read')
     expect(log).toContain('WARN ack and 🚫 reactions needs reactions:write')
     expect(log).not.toContain('WARN dms')
@@ -225,6 +226,17 @@ describe('starting', () => {
     const warns = t.logs.filter(l => l.includes("channel names can't be read"))
     expect(warns).toHaveLength(1)
     expect(warns[0]).toContain('add channels:read and groups:read and reinstall the app, or name channels by id (slack:C…); slack:#food hears nothing until then')
+  })
+})
+
+describe('posting', () => {
+  test('a reply posts into the thread, or the top level; it waits for a connection', async () => {
+    const t = setup()
+    await expect(t.listener.post(CH, '1.000001', 'x')).rejects.toThrow('Slack is not connected')
+    await t.listener.start()
+    expect(await t.listener.post(CH, '1.000001', 'in the thread')).toBe('9999.000001')
+    await t.listener.post('D0A', undefined, 'top level')
+    expect(t.apps[0].apiCalls.filter(c => c.startsWith('post:'))).toEqual([`post:${CH}:1.000001:in the thread`, 'post:D0A:-:top level'])
   })
 })
 

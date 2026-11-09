@@ -4,7 +4,7 @@ import { registry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { pushToolSurface } from './tool-surface.js'
 import { deliverToTarget } from './targets.js'
-import { SlackListener, boltApp, type ListenerHealth } from './slack-listener.js'
+import { SlackListener, boltApp, POST_TIMEOUT_MS, type ListenerHealth } from './slack-listener.js'
 import { SCRUBBED_ENV, STATE_DIR } from './config.js'
 import { SCRUBBED_SPAWN_VARS } from '../shared/spawn-env.js'
 import { join } from 'path'
@@ -13,13 +13,18 @@ import { safeSend } from './util.js'
 import { mainChannel } from './main-session.js'
 import { currentHydraConfig, onHydraConfigLoad } from './hydra-config.js'
 import { MAIN, currentId } from '../routing/route.js'
+import { chunk } from './util.js'
 import type { HydraConfig } from '../config/types.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 
-/** Test seam: the watcher's view of hydra.toml (the listener's, once Slack has connected). */
+/** Test seams: the watcher's view of hydra.toml (the listener's, once Slack has connected), and posting to Slack. */
 export const slackRuntimeDeps = {
   view: (): SlackWatchConfig | null => listener?.view() ?? null,
+  post: (channel: string, threadTs: string | undefined, text: string): Promise<string> => {
+    if (!listener) return Promise.reject(new Error('Slack is not connected (hydra.toml has no [connectors.slack], or its tokens are not set)'))
+    return listener.post(channel, threadTs, text)
+  },
 }
 const hydraConfig = () => currentHydraConfig()
 
@@ -230,8 +235,8 @@ export function bindConversation(caller: Pick<SessionInfo, 'threadId'> | undefin
   const w = getSlackWatcher()
   const bound = w.get(c.channel, c.threadTs)?.specialist
   if (bound && currentId(v.hydra, bound) !== me) throw new Error(`${conversationId(c)} is bound to ${bound}; only the operator moves it (hydra conversations bind)`)
-  if (!bound && w.list().filter(e => e.mentionedBy === 'tool' && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
-    throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it bound itself; unbind one first`)
+  if (!bound && w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
+    throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it opened itself; unbind one first`)
   }
   if (!w.bind(c.channel, c.threadTs, me, 'tool')) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxWatches}); unbind one first`)
   return `${conversationId(c)} is bound to ${me}`
@@ -248,6 +253,87 @@ export function unbindConversation(caller: Pick<SessionInfo, 'threadId'> | undef
   const owed = e.owed?.length ?? 0
   getSlackWatcher().unwatch(c.channel, c.threadTs)
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped (and alerted)` : ''}`
+}
+
+/** Slack's own advice is to keep a message under 4,000 characters; longer ones are split. */
+const SLACK_CHUNK = 3900
+/** A backstop past the posting client's own deadline (it neither retries nor waits longer). */
+const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
+
+/**
+ * `reply` with a conversation id as its chat_id: the specialist answers a Slack conversation. Hydra posts the text
+ * as given, and only into a conversation bound to the caller's specialist: a reply goes back where its question came from.
+ */
+export async function replyInConversation(callerSessionId: string | undefined, conversation: unknown, text: string, files: string[] = []): Promise<string> {
+  if (files.length) throw new Error('attachments are not posted to Slack yet; reply with text (a link works)')
+  if (!text.trim()) throw new Error('nothing to post: the text is empty')
+  const h = hydraConfig()
+  const me = callerSessionId === 'main' ? MAIN : specialistOf(callerSessionId ? registry.get(callerSessionId) : undefined, h)
+  // Its own `home` (a schedule's reply has no conversation): a new thread there, bound to it, so answers come back to it.
+  const home = me ? homeChannel(h, me) : undefined
+  if (home && (conversation === h.specialists[me!]?.home || conversation === `slack:${home}`)) {
+    const where = `${me}'s home (${h.specialists[me!]!.home})`
+    const { first: ts } = await postParts(home, undefined, text, where, true, () => homeChannel(hydraConfig(), me!) === home)
+    // Its thread is a conversation bound to it, counted with the ones it binds by hand: a loop can't fill the table.
+    const w = getSlackWatcher()
+    const held = w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(h, e.specialist) === me).length
+    if (held >= TOOL_BIND_MAX || !w.bind(home, ts, me!, 'home')) {
+      const why = held >= TOOL_BIND_MAX ? `${me} already holds ${TOOL_BIND_MAX} conversations it opened itself` : 'the conversation table is full'
+      alert(`⚠️ ${me}'s post to its home opened no conversation (${why}): replies under it go to whoever listens there, not back to ${me}.`, me)
+      return `posted to ${where}, but its thread is not bound to ${me}: ${why}`
+    }
+    return `posted to ${where}; replies in its thread come back to ${me}`
+  }
+  const c = parseConversation(conversation)
+  const id = conversationId(c)
+  const e = getSlackWatcher().get(c.channel, c.threadTs)
+  if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to answer`)
+  const bound = e.specialist ? currentId(h, e.specialist) : undefined
+  if (!me || bound !== me) throw new Error(`${id} is bound to ${bound ?? 'no one yet'}${me ? `, not ${me}` : ''}: a reply goes only to a conversation bound to your specialist (or its home)`)
+  // Checked again before every part: a conversation moved away mid-reply gets no more of it.
+  const stillMine = () => { const now = getSlackWatcher().get(c.channel, c.threadTs)?.specialist; return !!now && currentId(hydraConfig(), now) === me }
+  const { posted } = await postParts(c.channel, c.threadTs === TOP_LEVEL ? undefined : c.threadTs, text, id, false, stillMine)
+  return `posted ${posted} message${posted === 1 ? '' : 's'} to ${id}`
+}
+
+/** A specialist's `home`, when it names a Slack place: that channel's id (a `#name` resolved once names are read). */
+function homeChannel(h: HydraConfig, id: string): string | undefined {
+  const home = h.specialists[id]?.home
+  if (!home?.startsWith('slack:') || home === 'slack:dm') return undefined
+  const rest = home.slice('slack:'.length)
+  return rest.startsWith('#') ? offlineView().directory.idOf(rest.slice(1)) : rest
+}
+
+/**
+ * The text as written, split under Slack's limit, posted part by part while `allowed()` still holds. `thread` undefined:
+ * the first part at the top level, and with `threadRest` the others in its thread. Posting never retries on its own, so
+ * a part either landed, failed, or (past the deadline) is unknown: said as such, so a resend is the caller's choice.
+ */
+async function postParts(channel: string, thread: string | undefined, text: string, where: string, threadRest: boolean, allowed: () => boolean): Promise<{ first: string; posted: number }> {
+  const parts = chunk(text, SLACK_CHUNK, 'markdown')
+  let posted = 0
+  let first: string | undefined
+  for (const part of parts) {
+    if (!allowed()) throw new Error(`stopped after ${posted} of ${parts.length} message(s) to ${where}: it is no longer yours to answer`)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let ts: string
+    try {
+      ts = await Promise.race([
+        slackRuntimeDeps.post(channel, thread, part),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), POST_BACKSTOP_MS) }),
+      ]).finally(() => clearTimeout(timer))
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err)
+      const unknown = /timeout|timed out|ETIMEDOUT|ECONNRESET|socket hang up/i.test(why)
+      throw new Error(unknown
+        ? `${posted} of ${parts.length} message(s) posted to ${where}; part ${posted + 1}'s outcome is unknown (no answer from Slack: it may have posted). Check ${where} before sending the rest.`
+        : `reply failed after ${posted} of ${parts.length} message(s) posted to ${where}: ${why}. Part ${posted + 1} did not post; send from there.`)
+    }
+    first ??= ts
+    if (threadRest) thread ??= ts
+    posted++
+  }
+  return { first: first!, posted }
 }
 
 /** `hydra conversations bind`: the operator binds or moves a conversation to any declared specialist. */

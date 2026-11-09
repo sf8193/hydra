@@ -361,8 +361,6 @@ export function formatDelivery(
   const link = where.workspaceUrl ? `${where.workspaceUrl}/archives/${entry.channel}${dm || entry.threadTs === TOP_LEVEL ? '' : `/p${entry.threadTs.replace('.', '')}`}` : undefined
   const attrs = [`place=${attr(where.place)}`, `conversation=${attr(conversationId(entry))}`, ...(link ? [`link=${attr(link)}`] : [])]
   return [
-    // Until replies post back to their conversation, the specialist has nowhere to say anything but its own thread.
-    'Stage any reply for approval; post nothing to Slack on your own.',
     `<<<SLACK-UNTRUSTED-${nonce} ${attrs.join(' ')}`,
     items.map(renderItem).join('\n\n'),
     `SLACK-UNTRUSTED-${nonce}>>>`,

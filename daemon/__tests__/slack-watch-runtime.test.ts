@@ -7,7 +7,7 @@ import { registry } from '../sessions.js'
 import { setSpecialistThread, _reloadSpecialists } from '../specialists.js'
 import { _setHydraConfigForTesting } from '../hydra-config.js'
 import {
-  getSlackWatcher, bindConversation, unbindConversation, formatConversations, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation,
+  getSlackWatcher, bindConversation, unbindConversation, formatConversations, slackWatchHealth, slackTokens, slackRuntimeDeps, parseConversation, replyInConversation,
 } from '../slack-watch-runtime.js'
 import { sessionCapabilities, isSpecialistOccupant, isToolAllowed } from '../tool-surface.js'
 import { handleCLIRequest, type CLIRequest } from '../cli-handler.js'
@@ -46,6 +46,13 @@ let n = 0
 const req = (command: string, params: Record<string, unknown>): CLIRequest => ({ type: 'cli', command, id: `sw-${++n}`, params })
 
 const sessionIds: string[] = []
+const realPost = slackRuntimeDeps.post
+const posts: string[] = []
+const fakePost = (fail?: number) => { posts.length = 0; let n = 0; slackRuntimeDeps.post = async (c, t, text) => { if (++n === fail) throw new Error('ratelimited'); posts.push(`${c}|${t ?? '-'}|${text}`); return `${n}.000001` } }
+const session = (id: string, threadId: string) => {
+  sessionIds.push(id)
+  registry.set(id, { sessionId: id, tmuxName: id, threadId, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
+}
 beforeEach(() => {
   configure()
   // hydra.toml declares the recipes; the daemon keeps only where each one lives
@@ -59,6 +66,7 @@ afterEach(() => {
   rmSync(join(STATE_DIR, 'specialist-threads.json'), { force: true })
   _reloadSpecialists()
   slackRuntimeDeps.view = () => null
+  slackRuntimeDeps.post = realPost
   rmSync(join(STATE_DIR, 'slack-watches.json'), { force: true })
 })
 
@@ -124,7 +132,7 @@ describe('bind_conversation / unbind_conversation', () => {
   test('a specialist holds at most TOOL_BIND_MAX conversations it bound itself', () => {
     configure(TOML, { maxWatches: 50 })
     for (let i = 1; i <= 10; i++) bindConversation(food, `slack:C1:${i}.000001`)
-    expect(() => bindConversation(food, 'slack:C1:11.000001')).toThrow(`${FOOD} already holds 10 conversations it bound itself`)
+    expect(() => bindConversation(food, 'slack:C1:11.000001')).toThrow(`${FOOD} already holds 10 conversations it opened itself`)
     expect(bindConversation(food, 'slack:C1:3.000001')).toContain('is bound to') // one it holds already is fine
   })
 
@@ -165,6 +173,118 @@ describe('bind_conversation / unbind_conversation', () => {
     registry.set('sw-tool', { sessionId: 'sw-tool', tmuxName: 'sw-tool', threadId: FOOD_THREAD, sessionType: 'thread_owner', engine: 'claude', createdAt: Date.now() } as any)
     const out = await executeTool('bind_conversation', { conversation: 'slack:C1:5.000001' }, 'sw-tool')
     expect((out.content[0] as { text: string }).text).toContain(`is bound to ${FOOD}`)
+  })
+})
+
+describe('replies: posted only into the conversation they answer', () => {
+  test("a specialist's reply goes into its own conversation's thread, as written", async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    getSlackWatcher().bind('C1', '5.000001', FOOD)
+    expect(await replyInConversation('r-food', 'slack:C1:5.000001', 'Void it from *Invoices* → ⋯')).toBe('posted 1 message to slack:C1:5.000001')
+    expect(posts).toEqual(['C1|5.000001|Void it from *Invoices* → ⋯'])
+  })
+
+  test('a top-level conversation (a DM) is answered at its top level; main answers the operator\'s DM', async () => {
+    fakePost()
+    getSlackWatcher().bind('D0OP', '0.000000', 'main')
+    expect(await replyInConversation('main', 'slack:D0OP', 'hi')).toContain('posted 1')
+    expect(posts).toEqual(['D0OP|-|hi'])
+  })
+
+  test("never into another specialist's conversation, one not open, or for a session in no specialist", async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    session('r-none', 'some-other-thread')
+    getSlackWatcher().bind('C2', '6.000001', OPS)
+    await expect(replyInConversation('r-food', 'slack:C2:6.000001', 'x')).rejects.toThrow(`is bound to ${OPS}, not ${FOOD}: a reply goes only to a conversation bound to your specialist`)
+    await expect(replyInConversation('r-food', 'slack:C1:7.000001', 'x')).rejects.toThrow('is not an open conversation')
+    await expect(replyInConversation('r-none', 'slack:C2:6.000001', 'x')).rejects.toThrow(`is bound to ${OPS}: a reply goes only`)
+    await expect(replyInConversation(undefined, 'slack:C2:6.000001', 'x')).rejects.toThrow('a reply goes only')
+    expect(posts).toEqual([])
+  })
+
+  test("a specialist posts to its own home (a schedule's reply has no conversation): a new thread there, bound to it", async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    session('r-ops', OPS_THREAD)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:#food-home"`), { names: { C7: 'food-home' } })
+    expect(await replyInConversation('r-food', 'slack:#food-home', 'nightly summary')).toBe(`posted to ${FOOD}'s home (slack:#food-home); replies in its thread come back to ${FOOD}`)
+    expect(posts).toEqual(['C7|-|nightly summary'])
+    expect(getSlackWatcher().get('C7', '1.000001')).toMatchObject({ specialist: FOOD })
+    expect(await replyInConversation('r-food', 'slack:C7', 'by id too')).toContain('home')
+    await expect(replyInConversation('r-ops', 'slack:#food-home', 'not mine')).rejects.toThrow('conversation must look like')
+    await expect(replyInConversation('r-ops', 'slack:C7', 'not mine')).rejects.toThrow('is not an open conversation')
+  })
+
+  test("a home answer in several parts keeps the rest in the first part's thread", async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:C7"`))
+    await replyInConversation('r-food', 'slack:C7', 'para one\n\n'.repeat(800))
+    expect(posts.map(p => p.split('|').slice(0, 2).join('|'))).toEqual(['C7|-', 'C7|1.000001', 'C7|1.000001'])
+  })
+
+  test("a part with no answer from Slack is reported as unknown (it may have posted), not as failed", async () => {
+    session('r-food', FOOD_THREAD)
+    getSlackWatcher().bind('C1', '11.000001', FOOD)
+    slackRuntimeDeps.post = async () => { throw new Error('A request error occurred: timeout of 30000ms exceeded') }
+    await expect(replyInConversation('r-food', 'slack:C1:11.000001', 'hi')).rejects.toThrow("0 of 1 message(s) posted to slack:C1:11.000001; part 1's outcome is unknown (no answer from Slack: it may have posted)")
+  })
+
+  test('a conversation moved away mid-reply gets no more of it', async () => {
+    session('r-food', FOOD_THREAD)
+    getSlackWatcher().bind('C1', '12.000001', FOOD)
+    posts.length = 0
+    slackRuntimeDeps.post = async (c, t, text) => { posts.push(text.slice(0, 8)); getSlackWatcher().bind('C1', '12.000001', OPS); return '1.000001' }
+    await expect(replyInConversation('r-food', 'slack:C1:12.000001', 'para one\n\n'.repeat(800))).rejects.toThrow('stopped after 1 of 3 message(s) to slack:C1:12.000001: it is no longer yours to answer')
+    expect(posts).toHaveLength(1)
+  })
+
+  test('home threads count against what a specialist may open itself; past that the post goes, unbound, and the operator hears why', async () => {
+    session('r-food', FOOD_THREAD)
+    configure(TOML.replace(`workdir = "/w/food"`, `workdir = "/w/food"\nhome = "slack:C7"`), { maxWatches: 50 })
+    let n = 0
+    slackRuntimeDeps.post = async () => `${100 + ++n}.000001`
+    const posted: string[] = []
+    const realSend = gateway.send
+    ;(gateway as any).send = async (_c: string, text: string) => { posted.push(text); return 'id' }
+    try {
+      for (let i = 0; i < 10; i++) expect(await replyInConversation('r-food', 'slack:C7', `report ${i}`)).toContain('replies in its thread come back')
+      expect(await replyInConversation('r-food', 'slack:C7', 'one too many')).toContain(`its thread is not bound to ${FOOD}: ${FOOD} already holds 10 conversations it opened itself`)
+      await Bun.sleep(5)
+      expect(posted.some(p => p.includes("post to its home opened no conversation"))).toBe(true)
+      expect(() => bindConversation(food, 'slack:C1:99.000001')).toThrow('already holds 10 conversations it opened itself')
+    } finally { (gateway as any).send = realSend }
+  })
+
+  test('a rename through `was` keeps the right to answer', async () => {
+    fakePost()
+    session('r-food', FOOD_THREAD)
+    getSlackWatcher().bind('C1', '8.000001', 'old-food')
+    configure(TOML.replace(`[specialists.${FOOD}]`, `[specialists.${FOOD}]\nwas = ["old-food"]`))
+    expect(await replyInConversation('r-food', 'slack:C1:8.000001', 'still mine')).toContain('posted 1')
+  })
+
+  test('long text is split under Slack\'s limit; a failure says how far it got; attachments and empty text are refused', async () => {
+    session('r-food', FOOD_THREAD)
+    getSlackWatcher().bind('C1', '9.000001', FOOD)
+    fakePost()
+    expect(await replyInConversation('r-food', 'slack:C1:9.000001', 'para one\n\n'.repeat(800))).toBe('posted 3 messages to slack:C1:9.000001')
+    expect(posts.every(p => p.length < 4000)).toBe(true)
+    fakePost(2)
+    await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'para one\n\n'.repeat(800))).rejects.toThrow('reply failed after 1 of 3 message(s) posted to slack:C1:9.000001: ratelimited. Part 2 did not post; send from there.')
+    await expect(replyInConversation('r-food', 'slack:C1:9.000001', 'see file', ['/tmp/x.pdf'])).rejects.toThrow('attachments are not posted to Slack yet')
+    await expect(replyInConversation('r-food', 'slack:C1:9.000001', '  ')).rejects.toThrow('the text is empty')
+  })
+
+  test('the reply tool routes a slack: chat_id here, without Discord\'s allowlist', async () => {
+    fakePost()
+    session('r-tool', FOOD_THREAD)
+    getSlackWatcher().bind('C1', '10.000001', FOOD)
+    const out = await executeTool('reply', { chat_id: 'slack:C1:10.000001', text: 'done' }, 'r-tool')
+    expect((out.content[0] as { text: string }).text).toBe('posted 1 message to slack:C1:10.000001')
+    expect(posts).toEqual(['C1|10.000001|done'])
   })
 })
 

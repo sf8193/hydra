@@ -16,7 +16,7 @@ import { formatContextPercent } from './engines/engine-adapter.js'
 import { resolveEngine } from './engines/instances.js'
 import { dispatchAdvance, finishPrivateProtocolChildLaunch, isProtocolParticipant, markPrivateProtocolChildLaunching, protocolChildRequiresPrivate, protocolSpawnRequiresPrivate, registerProtocolChild, registerProtocolChildResult } from './protocol-registry.js'
 import { watchPr, unwatchPr, listWatches, getWatchesBySession, formatWatchEntry, detectPrUrl, WATCH_ERRORS } from './pr-watch.js'
-import { bindConversation, unbindConversation, formatConversationsFor } from './slack-watch-runtime.js'
+import { bindConversation, unbindConversation, formatConversationsFor, replyInConversation } from './slack-watch-runtime.js'
 import { refreshSessionVisual } from './anchor-state.js'
 import { refreshDashboard } from './dashboard.js'
 import { extractArtifactLinks, mergeArtifacts, sanitizeArtifacts, cachePrTitle } from './artifacts.js'
@@ -166,6 +166,10 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
         const text = args.text as string
         const reply_to = args.reply_to as string | undefined
         const files = (args.files as string[] | undefined) ?? []
+        // A conversation id from a Slack delivery: the answer goes back into that conversation, and only there.
+        if (typeof chat_id === 'string' && chat_id.startsWith('slack:')) {
+          return { content: [{ type: 'text', text: await replyInConversation(callerSessionId, chat_id, text ?? '', files) }] }
+        }
 
         const ch = await gateway.fetchChannel(chat_id)
         const access = loadAccess()
