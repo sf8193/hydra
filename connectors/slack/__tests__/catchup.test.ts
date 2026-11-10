@@ -51,6 +51,21 @@ describe('toEvent', () => {
   })
 })
 
+describe('catchUp: a thread a session listens to, where no specialist listens', () => {
+  test('the deep pass rereads it from its own last delivery, though its channel has no cursor; nothing older is replayed', async () => {
+    const { w, sent } = setup()
+    w.bind('C0ELSE', '1792999000.000001', '1552619225032425525', 'tool')    // bound at now (1_793_000_000 s)
+    const thread = { 'C0ELSE:1792999000.000001': [
+      { ts: '1792999500.000001', thread_ts: '1792999000.000001', user: 'UOLD', text: 'before the bind' },
+      { ts: '1793000100.000001', thread_ts: '1792999000.000001', user: 'UNEW', text: 'missed while down' },
+    ] }
+    await catchUp(w, fakeApi({ [CH]: [] }, thread).api, cfg, opts({ deep: true }))
+    await w.flush()
+    expect(sent.join()).toContain('missed while down')
+    expect(sent.join()).not.toContain('before the bind')
+  })
+})
+
 describe('catchUp', () => {
   test('a refused sender found in the gap is refused once, like live, and is not counted as recovered', async () => {
     const closed: SlackWatchConfig = view(oneListener(CH, 'slopbot', '["people"]') + '[people.owner]\nids = ["slack:UOWNER"]\nname = "Owner"\nroles = ["boss"]\n')

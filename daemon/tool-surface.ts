@@ -5,7 +5,7 @@ import { BASE_TOOLS as TYPED_BASE_TOOLS, ALL_CAPABILITY_TOOLS as TYPED_ALL_CAPAB
 import type { SessionType, Capability, DerivedCapability } from '../shared/constants.js'
 import type { SessionInfo } from './sessions.js'
 import { resolveEngine } from './engines/instances.js'
-import { getSpecialist, conversationSpecialistOf } from '../specialists/specialists.js'
+import { specialistOf, boundAs } from '../specialists/specialists.js'
 import { currentHydraConfig } from './hydra-config.js'
 
 // Widened views: isToolAllowed checks arbitrary wire names, not just known ToolNames.
@@ -25,17 +25,18 @@ export function predecessorAsker(info: Pick<SessionInfo, 'engine' | 'predecessor
 export const canAskPredecessor = (info: Pick<SessionInfo, 'engine' | 'predecessor'>): boolean => !!predecessorAsker(info)
 
 
-/** Whether this session sits in the thread of a specialist declared in hydra.toml: the sessions that bind conversations to themselves. */
-export function isSpecialistOccupant(info: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>>): boolean {
-  if (conversationSpecialistOf(info.tmuxName)) return true // a per-conversation specialist's session, by its name
-  return !!info.threadId && Object.keys(currentHydraConfig().specialists).some(id => getSpecialist(id)?.threadId === info.threadId)
-}
+/** Whether this session acts for a specialist declared in hydra.toml (its thread, or one of its conversation sessions). */
+export const isSpecialistOccupant = (info: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>>): boolean => !!specialistOf(info)
 
-/** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that sits in a specialist, gets those tools. */
-export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>>): Set<Capability | DerivedCapability> {
+/** Whether this session holds Slack conversations of its own (specialists.ts boundAs), once hydra.toml configures Slack. */
+export const holdsConversations = (info: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>>): boolean =>
+  !!currentHydraConfig().connectors.slack && !!boundAs(info)
+
+/** Stored capabilities plus the derived ones: a session that can ask its predecessor, or that holds Slack conversations, gets those tools. */
+export function sessionCapabilities(info: Pick<SessionInfo, 'capabilities' | 'engine' | 'predecessor'> & Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>>): Set<Capability | DerivedCapability> {
   const caps = new Set<Capability | DerivedCapability>(info.capabilities ?? [])
   if (canAskPredecessor(info)) caps.add('predecessor')
-  if (isSpecialistOccupant(info)) caps.add('specialist')
+  if (holdsConversations(info)) caps.add('conversations')
   return caps
 }
 

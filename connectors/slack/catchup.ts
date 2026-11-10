@@ -1,6 +1,13 @@
 import { route } from '../../routing/route.js'
 import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 
+/** Where a watched thread is reread from when no specialist's channel cursor covers it (a session listening): its newest delivered message, else when it was bound. */
+function ownCursor(e: { delivered?: string[]; createdAt: number }): string {
+  const bound = `${Math.floor(e.createdAt / 1000)}.000000`
+  const last = e.delivered?.[e.delivered.length - 1]
+  return last && cmpTs(last, bound) > 0 ? last : bound
+}
+
 /**
  * The catch-up pass: replays into the watcher what Slack did not push while the listener
  * was down, because Socket Mode never replays. It needs only two read calls, injected as
@@ -172,7 +179,7 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
     // they need are known, and kept back from the DM scans below.
     if (opts.deep) {
       for (const e of [...watcher.list()].filter(e => e.threadTs !== TOP_LEVEL).sort((a, b) => b.lastEventAt - a.lastEventAt)) {
-        const cursor = watcher.channelCursor(e.channel)
+        const cursor = watcher.channelCursor(e.channel) ?? ownCursor(e)
         if (cursor) want(e.channel, e.threadTs, cursor)
       }
     }

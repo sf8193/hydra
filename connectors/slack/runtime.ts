@@ -1,5 +1,5 @@
 import { SlackWatcher, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
-import { getSpecialist, conversationSpecialistOf } from '../../specialists/specialists.js'
+import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
 import { registry } from '../../daemon/sessions.js'
 import type { SessionInfo } from '../../daemon/sessions.js'
 import { pushToolSurface } from '../../daemon/tool-surface.js'
@@ -13,7 +13,7 @@ import { existsSync } from 'fs'
 import { safeSend } from '../../daemon/util.js'
 import { mainChannel } from '../../daemon/main-session.js'
 import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config.js'
-import { MAIN, currentId } from '../../routing/route.js'
+import { MAIN, currentId, isSessionThread } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
 import type { HydraConfig } from '../../config/types.js'
 
@@ -28,6 +28,8 @@ export const slackRuntimeDeps = {
     if (!listener) return Promise.reject(new Error('Slack is not connected (hydra.toml has no [connectors.slack], or its tokens are not set)'))
     return listener.post(channel, threadTs, text)
   },
+  /** How long a listening session's thread may stand empty (a handoff, a respawn) before its threads are let go. */
+  releaseGraceMs: 60_000,
 }
 const hydraConfig = () => currentHydraConfig()
 
@@ -67,9 +69,9 @@ function alert(text: string, to?: string): void {
   if (!sent) log(`daemon: slack alert with no specialist thread to send it to: ${text}\n`)
 }
 
-/** Where a specialist's alerts are posted: main's channel for `main`, the specialist's thread otherwise. */
+/** Where a binding's alerts are posted: main's channel for `main`, a session's own thread, else the specialist's thread. */
 function alertChannel(to: string): string | undefined {
-  return to === MAIN ? mainChannel() || undefined : getSpecialist(to)?.threadId
+  return to === MAIN ? mainChannel() || undefined : isSessionThread(to) ? to : getSpecialist(to)?.threadId
 }
 
 let watcher: SlackWatcher | undefined
@@ -169,8 +171,15 @@ export function stopSlackListener(): void {
 }
 
 let lastSpecialists: string[] = []
-/** Tell each Slack specialist's session which tools it now has: a hydra.toml edit can add or remove one. */
+let lastConnected: boolean | undefined
+/**
+ * Tell each session whose tools changed: a hydra.toml edit can add or remove a Slack specialist, and connecting or
+ * disconnecting Slack gives or takes every thread session's conversation tools.
+ */
 export function refreshSlackSpecialistSurface(): void {
+  const connected = !!hydraConfig().connectors.slack
+  if (lastConnected !== undefined && connected !== lastConnected) for (const s of registry.values()) pushToolSurface(s.sessionId)
+  lastConnected = connected
   const now = slackSpecialists(hydraConfig())
   const all = [...new Set([...now, ...lastSpecialists])]
   lastSpecialists = now
@@ -201,10 +210,30 @@ export function startSlackWatch(): void {
     const h = hydraConfig()
     if (to && getSlackWatcher().waiters(id => currentId(h, id) === to).length) slackRuntimeDeps.wake()
   }
-  // Killed, reaped, [done], or found dead by the health poll or a lost bridge: either way a place is free.
+  // A session that listened ends (killed, reaped, or found dead) and nobody is home in its thread within the grace (a
+  // handoff successor or a respawn would be): its threads are let go, said once there, not owed to a thread nobody answers.
+  const offRelease = on('session:death', ({ threadId }) => releaseIfVacant(threadId), 'slack-watch: let go of the threads a session listened to')
+  const offReleaseDead = on('session:marked-dead', ({ sessionId }) => releaseIfVacant(registry.get(sessionId)?.threadId), 'slack-watch: let go of the threads a session listened to (found dead)')
+  // A timer pending at the last shutdown is gone: every listened thread is checked once at boot.
+  for (const t of new Set(getSlackWatcher().list().map(e => e.specialist).filter((id): id is string => !!id && isSessionThread(id)))) releaseIfVacant(t)
   const offDeath = on('session:death', freed, 'slack-watch: wake conversations waiting at max')
   const offDead = on('session:marked-dead', freed, 'slack-watch: wake conversations waiting at max (found dead)')
-  unsubscribe = () => { offConfig(); offDeath(); offDead() }
+  unsubscribe = () => { offConfig(); offRelease(); offReleaseDead(); offDeath(); offDead() }
+}
+
+/** Whether a live session is home in this thread. A reaped session's kept record (deadAt) is nobody. */
+const homeIn = (threadId: string): boolean => [...registry.values()].some(s => s.threadId === threadId && s.deadAt === undefined)
+
+/** After the grace, let go of a vacant session thread's conversations, said once in that thread. */
+function releaseIfVacant(threadId: string | undefined): void {
+  if (!threadId || !isSessionThread(threadId) || !getSlackWatcher().list().some(e => e.specialist === threadId)) return
+  const t = setTimeout(() => {
+    if (homeIn(threadId)) return
+    const gone = getSlackWatcher().list().filter(e => e.specialist === threadId)
+    for (const e of gone) getSlackWatcher().unwatch(e.channel, e.threadTs)
+    if (gone.length) alert(`ℹ️ The session here ended, so it stopped listening to ${gone.map(conversationId).join(', ')}.`, threadId)
+  }, slackRuntimeDeps.releaseGraceMs)
+  ;(t as { unref?: () => void }).unref?.()
 }
 
 /**
@@ -234,19 +263,6 @@ export function parseConversation(raw: unknown): { channel: string; threadTs: st
   return { channel, threadTs: ts ?? TOP_LEVEL }
 }
 
-/** The specialist whose thread this session sits in, if it is one in hydra.toml. */
-/**
- * The specialist this session acts for: it sits in the specialist's thread, or it is one of a per-conversation
- * specialist's conversation sessions (named `<id>_…`). A conversation session answers only its own conversation
- * (replyInConversation checks that), but it may post to its specialist's home and bind and unbind for it.
- */
-export function specialistOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>> | undefined, h: HydraConfig = hydraConfig()): string | undefined {
-  const own = conversationSpecialistOf(caller?.tmuxName)
-  if (own) return own
-  if (!caller?.threadId) return undefined
-  return Object.keys(h.specialists).find(id => getSpecialist(id)?.threadId === caller.threadId)
-}
-
 /** Whether this session is one conversation's own session, rather than a specialist's shared one. */
 const isConversationSession = (caller: Partial<Pick<SessionInfo, 'tmuxName'>> | undefined): boolean => !!conversationSpecialistOf(caller?.tmuxName)
 
@@ -261,31 +277,37 @@ function listensOn(v: Pick<SlackWatchConfig, 'hydra' | 'directory'>, to: string,
 export const TOOL_BIND_MAX = 10
 
 /**
- * `bind_conversation`: the session in a specialist binds a conversation to that specialist. It may bind one that is
- * unbound or already its own, at a place it hears. Moving another specialist's conversation is the operator's (`hydra conversations bind`).
+ * `bind_conversation`: a session binds a Slack thread to itself (boundAs): a specialist's session to the specialist,
+ * at a place it hears; any other session to its own thread, wherever the bot can read. It may bind one that is unbound
+ * or already its own. Moving another's conversation is the operator's (`hydra conversations bind`).
  */
-export function bindConversation(caller: Pick<SessionInfo, 'threadId'> | undefined, conversation: unknown): string {
+export function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown): string {
   const v = offlineView()
-  const me = specialistOf(caller, v.hydra)
-  if (!me) throw new Error('only a session in a specialist declared in hydra.toml may bind conversations')
+  if (!v.hydra.connectors.slack) throw new Error('Slack is not connected: hydra.toml has no [connectors.slack]')
+  const me = boundAs(caller, v.hydra)
+  if (!me) throw new Error('this session has no thread to bind a conversation to')
   const c = parseConversation(conversation)
   // A DM, or a place's top level, is routing's to hand out: a tool never takes one, least of all the operator's DM from main.
   if (isDm(c.channel) || c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} is not a thread in a channel: only a thread can be bound by hand`)
-  if (!listensOn(v, me, c.channel)) throw new Error(`${me} doesn't listen on ${placeName(v, c.channel)}: it binds only threads where it listens`)
+  if (!isSessionThread(me) && !listensOn(v, me, c.channel)) throw new Error(`${me} doesn't listen on ${placeName(v, c.channel)}: it binds only threads where it listens`)
   const w = getSlackWatcher()
   const bound = w.get(c.channel, c.threadTs)?.specialist
-  if (bound && currentId(v.hydra, bound) !== me) throw new Error(`${conversationId(c)} is bound to ${bound}; only the operator moves it (hydra conversations bind)`)
+  // A specialist answers where it listens: a session only listening there gives the thread way, and is told.
+  const takeover = !!bound && isSessionThread(bound) && !isSessionThread(me)
+  if (bound && currentId(v.hydra, bound) !== me && !takeover) throw new Error(`${conversationId(c)} is bound to ${bound}; only the operator moves it (hydra conversations bind)`)
   if (!bound && w.list().filter(e => (e.mentionedBy === 'tool' || e.mentionedBy === 'home') && e.specialist && currentId(v.hydra, e.specialist) === me).length >= TOOL_BIND_MAX) {
     throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it opened itself; unbind one first`)
   }
   if (!w.bind(c.channel, c.threadTs, me, 'tool')) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxWatches}); unbind one first`)
+  if (takeover) alert(`ℹ️ ${conversationId(c)} was bound to this session to listen; ${me} took it, since it answers there. This session no longer hears it.`, bound!)
+  if (isSessionThread(me)) return `${conversationId(c)} is bound to this session, listen-only: each new message in it is delivered here until it has been idle a week (the bot must be in ${placeName(v, c.channel)})`
   return `${conversationId(c)} is bound to ${me}`
 }
 
-/** `unbind_conversation`: the session in a specialist lets go of one of its own conversations. */
-export function unbindConversation(caller: Pick<SessionInfo, 'threadId'> | undefined, conversation: unknown): string {
-  const me = specialistOf(caller)
-  if (!me) throw new Error('only a session in a specialist declared in hydra.toml may unbind conversations')
+/** `unbind_conversation`: a session lets go of one of its own conversations. */
+export function unbindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown): string {
+  const me = boundAs(caller)
+  if (!me) throw new Error('this session has no thread, so it holds no conversations')
   const c = parseConversation(conversation)
   const e = getSlackWatcher().get(c.channel, c.threadTs)
   if (!e) return `${conversationId(c)} was not bound`
@@ -304,13 +326,14 @@ const POST_BACKSTOP_MS = POST_TIMEOUT_MS + 5_000
 
 /**
  * `reply` with a conversation id as its chat_id: the specialist answers a Slack conversation. Hydra posts the text
- * as given, and only into a conversation bound to the caller's specialist: a reply goes back where its question came from.
+ * as given, and only into a conversation bound to the caller's specialist: a reply goes back where its question came from. A thread
+ * bound to a session's own thread is listen-only.
  */
 export async function replyInConversation(callerSessionId: string | undefined, conversation: unknown, text: string, files: string[] = []): Promise<string> {
   if (files.length) throw new Error('attachments are not posted to Slack yet; reply with text (a link works)')
   if (!text.trim()) throw new Error('nothing to post: the text is empty')
   const h = hydraConfig()
-  const me = callerSessionId === 'main' ? MAIN : specialistOf(callerSessionId ? registry.get(callerSessionId) : undefined, h)
+  const me = callerSessionId === 'main' ? MAIN : boundAs(callerSessionId ? registry.get(callerSessionId) : undefined, h)
   // Its own `home` (a schedule's reply has no conversation): a new thread there, bound to it, so answers come back to it.
   const home = me ? homeChannel(h, me) : undefined
   if (home && (conversation === h.specialists[me!]?.home || conversation === `slack:${home}`)) {
@@ -333,6 +356,8 @@ export async function replyInConversation(callerSessionId: string | undefined, c
   const e = getSlackWatcher().get(c.channel, c.threadTs)
   if (!e) throw new Error(`${id} is not an open conversation, so there is nothing there to answer`)
   const bound = e.specialist ? currentId(h, e.specialist) : undefined
+  // A thread a session bound to itself is listen-only: only a specialist (or main) speaks in Slack.
+  if (bound && isSessionThread(bound)) throw new Error(`${id} is bound to a session to listen to: hydra posts to Slack only for a specialist (or main), so reply to the operator instead`)
   // A per-conversation session answers its own conversation, and no other.
   const caller = callerSessionId ? registry.get(callerSessionId) : undefined
   const ownSession = !!caller && !!bound && [bound, ...(h.specialists[bound]?.was ?? [])].some(sid => caller.tmuxName === conversationSessionName(sid, id))
@@ -386,10 +411,10 @@ async function postParts(channel: string, thread: string | undefined, text: stri
   return { first: first!, posted }
 }
 
-/** `hydra conversations bind`: the operator binds or moves a conversation to any declared specialist. */
+/** `hydra conversations bind`: the operator binds or moves a conversation to any declared specialist, main, or a session's thread (listen-only there). */
 export function operatorBind(conversation: string, to: string): string {
   const h = hydraConfig()
-  if (to !== MAIN && !h.specialists[to]) throw new Error(`no specialist "${to}" in hydra.toml`)
+  if (to !== MAIN && !h.specialists[to] && !isSessionThread(to)) throw new Error(`no specialist "${to}" in hydra.toml (or a session's thread id)`)
   const c = parseConversation(conversation)
   // A channel has no top-level conversation: every one is a thread (a DM's top level is one, and may be moved).
   if (!isDm(c.channel) && c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} names a channel, not a conversation: add the thread's ts`)
@@ -404,10 +429,14 @@ export function operatorUnbind(conversation: string): string {
   return `${conversationId(c)} is unbound${owed ? `; ${owed} message${owed === 1 ? '' : 's'} it still owed were dropped (and alerted)` : ''}`
 }
 
+/** The live session in a thread, by name. */
+const sessionNameIn = (threadId: string): string | undefined => [...registry.values()].find(s => s.threadId === threadId && s.deadAt === undefined)?.tmuxName
+
 const line = (v: Pick<SlackWatchConfig, 'directory'>, e: SlackWatchEntry, now: number): string => {
   const idle = Math.max(0, Math.round((now - e.lastEventAt) / 3_600_000))
   const owed = e.owed?.length ? ` · ${e.owed.length} owed` : ''
-  return `${conversationId(e)} (${placeName(v, e.channel)}) → ${e.specialist ?? '(unbound: its next message binds it)'} · idle ${idle}h${owed}`
+  const to = e.specialist && isSessionThread(e.specialist) ? `${sessionNameIn(e.specialist) ?? 'no session'} (listening, thread ${e.specialist})` : e.specialist
+  return `${conversationId(e)} (${placeName(v, e.channel)}) → ${to ?? '(unbound: its next message binds it)'} · idle ${idle}h${owed}`
 }
 
 /** The operator's view: every conversation. */
@@ -416,9 +445,9 @@ export function formatConversations(now = Date.now(), only?: (e: SlackWatchEntry
   return getSlackWatcher().list().filter(e => !only || only(e)).map(e => line(v, e, now))
 }
 
-/** The conversations a session may see: those bound to the specialist it sits in. One specialist never reads another's. */
-export function formatConversationsFor(caller: Pick<SessionInfo, 'threadId'>, now = Date.now()): string[] {
-  const me = specialistOf(caller)
+/** The conversations a session may see: those bound to it (boundAs). One session never reads another's. */
+export function formatConversationsFor(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>>, now = Date.now()): string[] {
+  const me = boundAs(caller)
   const h = hydraConfig()
   return me ? formatConversations(now, e => !!e.specialist && currentId(h, e.specialist) === me) : []
 }

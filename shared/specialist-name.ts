@@ -3,6 +3,12 @@
 
 export const SPECIALIST_NAME_RE = /^[a-z0-9][a-z0-9-]*$/
 
+/**
+ * A session's own thread, as an address: an all-digit thread id. A specialist's name needs a letter (below), so the two
+ * never collide. targets.ts delivers to whoever lives in that thread, so a handoff successor keeps what was bound to it.
+ */
+export const isSessionThread = (id: string): boolean => /^\d+$/.test(id)
+
 /** Why a name can't be a specialist's, or undefined. It needs a letter: an all-digit `to` is a thread id. */
 export function invalidSpecialistName(name: string, sessionNames: readonly string[]): string | undefined {
   if (!SPECIALIST_NAME_RE.test(name)) return 'specialist name must be lowercase letters, digits and dashes'

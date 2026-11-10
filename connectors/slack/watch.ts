@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto'
 import { STATE_DIR } from '../../daemon/config.js'
 import { atomicWriteFileSync } from '../../daemon/util.js'
 import type { Address, HydraConfig, Place, PlaceOptions } from '../../config/types.js'
-import { route, refusal, identify, currentId, MAIN } from '../../routing/route.js'
+import { route, refusal, identify, currentId, isLive, isSessionThread, MAIN } from '../../routing/route.js'
 
 /** Where a delivery goes: a specialist (or `main`), and the conversation it is for, so a per-conversation specialist can give it its own session. */
 export type RouteTarget = { to: string; conversation?: string }
@@ -80,7 +80,7 @@ export const SLACK_LIMITS = { idleExpiryMs: 7 * 86_400_000, coalesceMs: 4000, ma
 export type SlackWatchEntry = {
   channel: string
   threadTs: string
-  /** The specialist this conversation is bound to. Absent only in a store written before bindings: its next message binds it. */
+  /** Where this conversation is bound: a specialist, main, or a session's own thread id. Absent only in a store written before bindings: its next message binds it. */
   specialist?: string
   mentionedBy?: string
   createdAt: number
@@ -245,8 +245,6 @@ const WAIT_MAX_MS = 3 * 86_400_000
  * It holds no slot in the table (it stays a day only so a late reply follows its binding and a replay is not delivered twice).
  */
 const oneOff = (e: SlackWatchEntry): boolean => !!e.ambient && !e.owed?.length && (e.delivered?.length ?? 0) <= 1
-/** Whether `id` (after `was` renames) is a specialist hydra.toml declares, or main. */
-const declaredIn = (h: HydraConfig, id: string): boolean => { const to = currentId(h, id); return to === MAIN || !!h.specialists[to] }
 const OWED_KEEP = 200
 const OWED_MAX_AGE_S = 24 * 3600
 const MENTION_WINDOW_MS = 10 * 60_000
@@ -532,7 +530,7 @@ export class SlackWatcher {
       // Owed to a specialist hydra.toml no longer declares, at a place catch-up no longer reads: no replay will come to
       // route it anew, so it is lost now, not a day from now. (Where catch-up still reads, the replay routes it as its
       // sender: delivered anew, or dropped then.) Not while a batch for it waits in the window: that delivery decides.
-      if (e.owed?.length && cfg && e.specialist && !declaredIn(cfg.hydra, e.specialist) && !this.pending.has(key)
+      if (e.owed?.length && cfg && e.specialist && !isLive(cfg.hydra, e.specialist) && !this.pending.has(key)
         && (isDm(e.channel) ? !hearsDms(cfg) : !routedChannels(cfg).includes(e.channel))) {
         this.drop('unrouted', e, e.owed, 'it was accepted, but its specialist is gone and no specialist hears this place now')
         delete e.owed
@@ -670,6 +668,17 @@ export class SlackWatcher {
     // A DM is addressed to the bot by being one, and so is every message in a conversation already open.
     const addressed = dm || tagged || !!existing
     if (existing?.delivered?.includes(ev.ts)) return 'ignored'
+    // A tag in a thread a session only listens to is for whoever answers a fresh one here: they take the thread, and the session is told.
+    if (tagged && existing?.specialist && isSessionThread(existing.specialist)) {
+      const fresh = route(cfg.hydra, { from: addressOf(ev.user), at, addressed: true })
+      if (fresh.fate === 'deliver') {
+        const from = existing.specialist
+        existing.specialist = fresh.to
+        this.persist()
+        this.deps.log(`daemon: slack-watch: ${conversationId(existing)} was tagged; ${fresh.to} answers here, so it takes the thread from the session listening in ${from}\n`)
+        this.deps.alert?.(`ℹ️ Someone tagged the bot in ${conversationId(existing)}, so ${fresh.to} took it, since it answers there. This session no longer hears it.`, from)
+      }
+    }
     const d = route(cfg.hydra, { from: addressOf(ev.user), at, addressed, ...(existing?.specialist && { bound: existing.specialist }) })
     if (d.fate === 'ignored') return 'ignored'
     // Refused or unrouted before anything is counted, watched or owed: a sender `allow` does not admit costs nothing.
@@ -888,14 +897,13 @@ export class SlackWatcher {
     // the whole burst, so a split burst lands in one place.
     const cfg = this.deps.config() ?? enqueuedCfg
     const h = cfg.hydra
-    const declared = (to: string) => to === MAIN || !!h.specialists[to]
     const homes = new Map(items.map(i => {
       const raw = entry.specialist
       return [i.ts, raw ? currentId(h, raw) : undefined] as const
     }))
     // A specialist hydra.toml no longer declares (removed since this arrived): routed anew, now. If nothing hears the
     // place any more, it is lost: a drop, surfaced. Otherwise it stays owed, and its replay binds to whoever hears it now.
-    const homeless = items.filter(i => { const to = homes.get(i.ts); return !to || !declared(to) })
+    const homeless = items.filter(i => { const to = homes.get(i.ts); return !to || !isLive(h, to) })
     if (homeless.length) {
       // Routed anew as its sender would be now: their rules, and the operator's DM to main, count.
       const lost = homeless.filter(i => route(h, { from: addressOf(i.user), at: placesOf(cfg, entry.channel), addressed: true }).fate !== 'deliver')
@@ -956,13 +964,19 @@ export class SlackWatcher {
       }
       if (v.fate === 'open') this.deps.log(`daemon: slack-watch: the guard ${v.why} for ${key} ts ${item.ts}; delivering anyway\n`)
       let to = v.fate === 'deliver' && v.to ? currentId(h, v.to) : home
+      if (to !== home && isSessionThread(to)) {
+        // A session's thread is held only by that session's own bind: a guard can't send a conversation's message there.
+        this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} to the session thread ${to}, which only that session's bind may hold; delivering to ${home}\n`)
+        this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to the session thread ${to}, so it went to ${home} instead: a guard redirects only to a specialist (or main).`)
+        to = home
+      }
       if (to !== home) {
         // A redirect does not get around `allow`: the specialist it names must admit the sender too.
         const why = refusal(h, to, senders.get(item.ts)!)
         if (why) {
           this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} to ${to}, but ${why}; delivering to ${home}\n`)
           // A redirect to a specialist that doesn't exist is the guard misconfigured: said once per episode, or a typo would quietly send everything to the default forever.
-          if (!declared(to)) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", which is no specialist in hydra.toml, so it went to ${home} instead. Fix the guard, or declare [specialists.${to}].`)
+          if (!isLive(h, to)) this.alertOnce(`guard-redirect:${to}`, home, `⚠️ The guard redirected a Slack message in ${place} to "${to}", which is no specialist in hydra.toml, so it went to ${home} instead. Fix the guard, or declare [specialists.${to}].`)
           to = home
         } else {
           this.deps.log(`daemon: slack-watch: the guard redirected ${key} ts ${item.ts} from ${home} to ${to}\n`)

@@ -2,9 +2,9 @@ import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR, PLATFORM, DEFAULT_SESSION_CHANNEL } from '../daemon/config.js'
 import { atomicWriteFileSync } from '../daemon/util.js'
-import { SESSION_NAMES } from '../daemon/sessions.js'
+import { SESSION_NAMES, type SessionInfo } from '../daemon/sessions.js'
 import { clearBackoff } from '../daemon/recovery-backoff.js'
-import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName } from '../shared/specialist-name.js'
+import { SPECIALIST_NAME_RE, invalidSpecialistName as invalidName, isSessionThread } from '../shared/specialist-name.js'
 import { currentHydraConfig, hydraConfigInUse, onHydraConfigLoad } from '../daemon/hydra-config.js'
 import type { HydraConfig, Specialist as DeclaredSpecialist } from '../config/types.js'
 
@@ -267,4 +267,24 @@ export function conversationSpecialistOf(tmuxName: string | undefined): string |
   const declared = currentHydraConfig().specialists
   const s = declared[id] ?? Object.values(declared).find(d => d.was.includes(id))
   return s?.sessions === 'per-conversation' ? s.id : undefined
+}
+
+/**
+ * The specialist this session acts for: it sits in the specialist's thread, or it is one of a per-conversation
+ * specialist's conversation sessions (named `<id>_…`). A conversation session answers only its own conversation
+ * (replyInConversation checks that), but it may post to its specialist's home and bind and unbind for it.
+ */
+export function specialistOf(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName'>> | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
+  const own = conversationSpecialistOf(caller?.tmuxName)
+  if (own) return own
+  if (!caller?.threadId) return undefined
+  return Object.keys(h.specialists).find(id => getSpecialist(id)?.threadId === caller.threadId)
+}
+
+/**
+ * Where a session's Slack conversations are bound: the specialist it acts for, else its own thread (not a protocol
+ * guest's: it sits in another's). The one notion behind the conversation tools, bind, unbind, list and reply.
+ */
+export function boundAs(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, h: HydraConfig = currentHydraConfig()): string | undefined {
+  return specialistOf(caller, h) ?? (caller?.threadId && isSessionThread(caller.threadId) && caller.sessionType !== 'thread_guest' ? caller.threadId : undefined)
 }

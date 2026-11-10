@@ -17,6 +17,7 @@ import { resolveConfig, sendRequest } from './helpers.js'
 import { isUnder } from '../shared/path-containment.js'
 import { cliSchedules, schedulesAreSource } from '../shared/schedules.js'
 import { latestSlot, nextSlot } from '../shared/cron-local.js'
+import { isSessionThread } from '../shared/specialist-name.js'
 import {
   ACTION_TIMEOUT_MS, ATTEMPT_DEADLINE_MS, runWaitMs, CHECK_TIMEOUT_MS, STALE_TICK_MS, backoffUntil, jobInitiator, jobsDir, jobsToml, lstartOf, owedSlot, parseJobsConfig,
   attemptEnv, awakeTimeout, isSpawn, jobFromWire, targetLabel, parseEnvFile, tccFolder, externalFile, externalResults, logFile, runnerLabel, readDaemonState, readJobState, resultFile, resultsDir, writeAtomic, EX_TEMPFAIL, type AttemptArgs, type AttemptResult,
@@ -629,7 +630,7 @@ export function jobWarnings(j: Job, specialists: ReadonlySet<string> = new Set()
     return folder ? [`${k} is under ${folder}: macOS lets the check in only if ${TCC_ACCESS[j.runner]} (docs/macos-permissions.md)`] : []
   })
   const to = j.target && 'to' in j.target ? j.target.to : undefined
-  if (to && to !== 'main' && !specialists.has(to) && !/^\d+$/.test(to)) out.push(`no such specialist "${to}" (hydra specialist list)`)
+  if (to && to !== 'main' && !specialists.has(to) && !isSessionThread(to)) out.push(`no such specialist "${to}" (hydra specialist list)`)
   return out
 }
 
