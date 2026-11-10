@@ -653,6 +653,8 @@ export class SlackWatcher {
     if (own) {
       // The bot's own top-level post opens a conversation, bound to whoever listens there. Its replies are not echoed back.
       if (isReply) return 'ignored'
+      // Already recorded: a deep pass rereads the thread and Slack always returns its parent. Seen before, so not missed.
+      if (existing?.delivered?.includes(ev.ts)) return 'ignored'
       const to = listenerOf(cfg, ev.channel)
       if (!to) return 'ignored'
       const entry = this.watch(ev.channel, threadTs, to)
