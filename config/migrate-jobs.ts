@@ -17,7 +17,7 @@ import { join, relative } from 'path'
 import { daemonFile, jobInitiator, owedSlot, parseJobsConfig, readDaemonState, readJobState, type Job } from '../shared/jobs.js'
 import { nextSlot } from '../shared/cron-local.js'
 import { DEFAULT_IDLE_TTL_MS } from '../shared/constants.js'
-import { invalidSpecialistName } from '../shared/specialist-name.js'
+import { invalidSpecialistName, isSessionThread } from '../shared/specialist-name.js'
 import type { MigrateStep } from './migrate.js'
 
 export type ScheduleTable = {
@@ -121,7 +121,7 @@ export function migrateJobs(text: string, opts: JobsMigrationOpts): JobsMigratio
       if (!kickoff && j.check === undefined) note(`${j.name}: no check, so the schedule sends the prompt each run, and a fresh session also starts with it`)
       note(`${j.name}: workdir ${workdir} is where its spawned sessions ran (SPAWN_CWD)${j.cwd ? `; its check still runs in ${j.cwd}` : ''}; set workdir to run them elsewhere`)
       if (r.idle === undefined) note(`${j.name}: idle ${SPAWN_IDLE}, the default its spawned sessions had`)
-    } else if (target.to === 'main' || !/^\d+$/.test(target.to)) {
+    } else if (target.to === 'main' || !isSessionThread(target.to)) {
       s.to = target.to
       if (target.revive) note(`${j.name}: revive dropped; a specialist always revives`)
     } else {

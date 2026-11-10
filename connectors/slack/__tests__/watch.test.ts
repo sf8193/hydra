@@ -44,6 +44,43 @@ const actions = (opts: { fail?: string } = {}) => {
   return { a, downloads, reactions }
 }
 
+describe("a thread bound to a session's own thread (any session listening)", () => {
+  const SESSION = '1552619225032425525'
+  test('every reply is delivered to the session, from anyone, in a channel no specialist hears, and the binding stays put', async () => {
+    const { w, sent } = setup({ toml: oneListener(CH, 'slopbot', '[]') })     // the only specialist admits only the operator
+    w.bind('C0OTHER', '2000.000001', SESSION, 'tool')
+    expect(w.handle(ev({ channel: 'C0OTHER', ts: '2001.000001', threadTs: '2000.000001', user: 'USTRANGER', text: 'ship it?' }))).toBe('follow-up')
+    await w.flush()
+    expect(sent.map(x => x.specialist)).toEqual([SESSION])
+    expect(sent[0].msg).toContain('ship it?')
+    expect(w.get('C0OTHER', '2000.000001')).toMatchObject({ specialist: SESSION, delivered: ['2001.000001'] })
+    expect(w.get('C0OTHER', '2000.000001')!.owed).toBeUndefined()
+  })
+
+  test('a tag in a thread a session listens to, where a specialist listens, goes to the specialist, which takes the thread; the session is told', async () => {
+    const s = setup()
+    s.w.bind(CH, '4000.000001', SESSION, 'tool')
+    expect(s.w.handle(ev({ ts: '4001.000001', threadTs: '4000.000001', text: mention }))).toBe('mention')
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot'])
+    expect(s.w.get(CH, '4000.000001')?.specialist).toBe('slopbot')
+    expect(s.alertTo).toContain(SESSION)
+    // untagged chatter in a thread a session listens to stays with the session
+    s.w.bind(CH, '5000.000001', SESSION, 'tool')
+    s.w.handle(ev({ ts: '5001.000001', threadTs: '5000.000001', text: 'just chatting' }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot', SESSION])
+  })
+
+  test("a guard can't send a conversation's message to a session thread: it goes to the binding, alerted", async () => {
+    const s = setup({ toml: oneListener(CH, 'slopbot', '["anyone"]', '[guard]\ncommand = "guard"') }, undefined, undefined, async () => ({ fate: 'deliver', to: SESSION }))
+    s.w.handle(ev({ ts: '3000.000001', text: mention }))
+    await s.w.flush()
+    expect(s.sent.map(x => x.specialist)).toEqual(['slopbot'])
+    expect(s.alerts.join()).toContain('a guard redirects only to a specialist')
+  })
+})
+
 describe('what opens and continues a conversation', () => {
   test('a tagged top-level message opens a conversation bound to the listener, delivered as a mention', async () => {
     const { w, sent } = setup()

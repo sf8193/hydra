@@ -20,6 +20,7 @@ import { currentHydraConfig } from '../daemon/hydra-config.js'
 import { ensureSpecialist, SpecialistError } from './specialist-deliver.js'
 import { currentRecoveryDeps, reviveThreadForDelivery } from '../daemon/recovery.js'
 import type { DeliveryResult } from '../daemon/engines/engine-adapter.js'
+import { isSessionThread } from '../shared/specialist-name.js'
 
 export type Recipe = { channel: string; kickoff?: string; kickoffFile?: string; model?: string; idle?: string }
 export type Target =
@@ -46,13 +47,11 @@ export type DeliverOpts = { initiator: string; idempotencyKey?: string; idempote
 /** Test seam: pane-probe's verdict that a session sits on a dialog or prompt. */
 export const targetDeps = { stuckState: confirmedStuckState }
 
-const ALL_DIGITS = /^\d+$/
-
 /** `to` resolves in this order: `main`, a declared specialist, an all-digit thread id; anything else is no such specialist. */
 export function resolveTo(to: string): { kind: 'main' } | { kind: 'specialist'; name: string } | { kind: 'thread'; threadId: string } | { kind: 'unknown' } {
   if (to === 'main') return { kind: 'main' }
   if (getSpecialist(to)) return { kind: 'specialist', name: to }
-  if (ALL_DIGITS.test(to)) return { kind: 'thread', threadId: to }
+  if (isSessionThread(to)) return { kind: 'thread', threadId: to }
   return { kind: 'unknown' }
 }
 

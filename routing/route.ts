@@ -8,6 +8,8 @@
 // Then `allow`: the operator is always allowed, `anyone` admits strangers, `people` admits the roster, a role admits who holds it.
 
 import type { Address, HydraConfig, Person, Place } from '../config/types.js'
+import { isSessionThread } from '../shared/specialist-name.js'
+export { isSessionThread }
 
 /** Who sent a message, as hydra knows them. `roles` includes the built-in ones they hold. */
 export type Sender = {
@@ -58,11 +60,19 @@ export function identify(cfg: HydraConfig, from: Address | undefined): Sender {
 export function refusal(cfg: HydraConfig, to: string, sender: Sender): string | undefined {
   if (sender.operator) return undefined
   if (to === MAIN) return 'main hears only the operator'
+  // A session bound this thread to itself by hand: whoever posts in it reaches that session, as other people's words.
+  if (isSessionThread(to)) return undefined
   const s = cfg.specialists[to]
   if (!s) return `no specialist "${to}"`
   if (s.allow.some(r => sender.roles.includes(r))) return undefined
   const who = sender.person ? sender.person.id : `a stranger${sender.address ? ` (${sender.address})` : ''}`
   return s.allow.length ? `${to} allows ${s.allow.join(', ')}; ${who} holds ${sender.roles.join(', ')}` : `${to} allows only the operator`
+}
+
+/** Whether a binding still has somewhere to go: main, a specialist hydra.toml declares (after `was` renames), or a session's own thread. */
+export function isLive(cfg: HydraConfig, id: string): boolean {
+  const to = currentId(cfg, id)
+  return to === MAIN || !!cfg.specialists[to] || isSessionThread(to)
 }
 
 /** A binding names the specialist as it was called then; a rename lists the old id in `was`. */
@@ -88,9 +98,9 @@ export function route(cfg: HydraConfig, msg: Inbound): Decision {
 
   if (msg.bound) {
     const to = currentId(cfg, msg.bound)
-    const declared = to === MAIN || !!cfg.specialists[to]
-    trace.push({ via: 'binding', to, matched: declared, why: !declared ? `this conversation was bound to ${msg.bound}, which hydra.toml no longer declares; routed anew` : to === msg.bound ? 'this conversation is bound to it' : `this conversation is bound to ${msg.bound}, now called ${to}` })
-    if (declared) return decide(to, 'binding', false)
+    const live = isLive(cfg, to)
+    trace.push({ via: 'binding', to, matched: live, why: !live ? `this conversation was bound to ${msg.bound}, which hydra.toml no longer declares; routed anew` : to === msg.bound ? 'this conversation is bound to it' : `this conversation is bound to ${msg.bound}, now called ${to}` })
+    if (live) return decide(to, 'binding', false)
   }
 
   if (!msg.addressed && !msg.bound && !listensToAll(cfg, msg.at)) {
