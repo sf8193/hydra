@@ -151,6 +151,23 @@ describe('catchUp', () => {
     expect(sent[1]).not.toContain('chatter, no tag')
   })
 
+  test("a deep pass over a thread under the bot's own post does not count that post as missed", async () => {
+    const { w, sent } = setup()
+    expect(w.handle({ channel: CH, ts: '1000.000001', user: BOT, text: 'proposal' })).toBe('subscribed')
+    w.handle({ channel: CH, ts: '1100.000001', threadTs: '1000.000001', user: 'UA', text: 'sounds good' })
+    await w.flush()
+    expect(sent).toHaveLength(1)
+    // Slack returns the parent with every replies call, whatever `oldest` is
+    const thread = { [`${CH}:1000.000001`]: [
+      { ts: '1000.000001', thread_ts: '1000.000001', reply_count: 1, user: BOT, text: 'proposal' },
+      { ts: '1100.000001', thread_ts: '1000.000001', user: 'UA', text: 'sounds good' },
+    ] }
+    const parentAlways: SlackApi = { ...fakeApi({ [CH]: [] }, thread).api, async replies() { return { messages: thread[`${CH}:1000.000001`] } } }
+    for (let i = 0; i < 2; i++) expect((await catchUp(w, parentAlways, cfg, opts({ deep: true }))).accepted).toBe(0)
+    await w.flush()
+    expect(sent).toHaveLength(1)
+  })
+
   test('an old watched thread that got replies during the gap is only reachable by a deep pass', async () => {
     const { w, sent } = setup()
     w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: mention })
