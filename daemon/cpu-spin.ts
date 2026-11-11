@@ -1,22 +1,22 @@
 // CPU readings for the vitals tick and the spin classifier. Pure and clock-injected (callers
 // pass `now` and the parsed `ps` output), so the meter and the episode rules are unit-testable.
-// The sampling itself (one `ps` per tick, bridge pids from bridge-life) is in cpu-watch.ts.
+// The `ps` itself is read in vitals-snapshot.ts; bridge pids come from bridge-life in cpu-watch.ts.
 
 import { SPIN_CPU_PERCENT, SPIN_CONSECUTIVE_SAMPLES, parseCpuTime } from '../shared/constants.js'
 
-export type ProcStat = { ppid: number; cpuSec: number; elapsedSec: number; comm?: string }
+export type ProcStat = { ppid: number; rssKb?: number; cpuSec: number; elapsedSec: number; comm?: string }
 
-/** Lines of `ps -o pid=,ppid=,etime=,time=,comm=` (comm last: it can hold spaces). Unparseable lines are skipped. */
+/** Lines of `ps -o pid=,ppid=,rss=,etime=,time=,comm=` (comm last: it can hold spaces). Unparseable lines are skipped. */
 export function parsePs(out: string): Map<number, ProcStat> {
   const stats = new Map<number, ProcStat>()
   for (const line of out.split('\n')) {
     const parts = line.trim().split(/\s+/)
-    const [pid, ppid, etime, time] = parts
-    const comm = parts.slice(4).join(' ') || undefined
+    const [pid, ppid, rss, etime, time] = parts
+    const comm = parts.slice(5).join(' ') || undefined
     const elapsedSec = etime ? parseCpuTime(etime) : undefined
     const cpuSec = time ? parseCpuTime(time) : undefined
-    if (cpuSec === undefined || elapsedSec === undefined || !/^\d+$/.test(pid) || !/^\d+$/.test(ppid)) continue
-    stats.set(Number(pid), { ppid: Number(ppid), cpuSec, elapsedSec, ...(comm && { comm }) })
+    if (cpuSec === undefined || elapsedSec === undefined || !/^\d+$/.test(pid) || !/^\d+$/.test(ppid) || !/^\d+$/.test(rss)) continue
+    stats.set(Number(pid), { ppid: Number(ppid), rssKb: Number(rss), cpuSec, elapsedSec, ...(comm && { comm }) })
   }
   return stats
 }

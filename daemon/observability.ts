@@ -10,8 +10,9 @@ import type { SessionInfo } from './sessions.js'
 import { formatDuration } from './util.js'
 import { PLATFORM, RAINDROP_DRYRUN_FILE } from './config.js'
 import { transcriptPathFor } from './usage.js'
-import { sampleCpu, systemPressure, type CpuSample, type CpuVitals } from './cpu-watch.js'
+import { sampleCpu, type CpuSample, type CpuVitals } from './cpu-watch.js'
 import { formatPct, formatPressure } from './cpu-spin.js'
+import { vitalsSnapshot, type PaneVitals } from './vitals-snapshot.js'
 import { byteTmuxName } from '../shared/constants.js'
 
 const VITALS_INTERVAL_MS = 60_000
@@ -229,45 +230,7 @@ export function logCorrelation(info: SessionInfo): void {
   )
 }
 
-// Direct children of a pid (empty if none — pgrep exits non-zero, which throws).
-function childPids(pid: string): string[] {
-  try {
-    return execFileSync('pgrep', ['-P', pid], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
-  } catch { return [] }
-}
-
-// The pane's whole process subtree. Claude's tree is shell → node → claude, so a
-// direct-children-only walk undercounts RSS — descend the full tree.
-function descendantPids(rootPid: string): string[] {
-  const all: string[] = []
-  const queue = [rootPid]
-  while (queue.length) {
-    for (const kid of childPids(queue.shift()!)) { all.push(kid); queue.push(kid) }
-  }
-  return all
-}
-
-// pid + summed RSS (MB) of the pane's process subtree.
-// execFileSync (array form, no shell) throughout — removes the quoting question
-// even though tmuxName is daemon-controlled.
-// TODO: async — this sync-spawns several subprocesses per session each tick.
-function paneVitals(tmuxName: string): { pid?: number; rssMB?: number; panePid?: number } {
-  try {
-    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim().split('\n')[0]
-    if (!panePid) return {}
-    const subtree = descendantPids(panePid)
-    let rssKb = 0
-    for (const pid of [panePid, ...subtree]) {
-      try { rssKb += parseInt(execFileSync('ps', ['-o', 'rss=', '-p', pid], { encoding: 'utf8' }).trim() || '0', 10) } catch { /* pid gone */ }
-    }
-    const pid = subtree[0] ? parseInt(subtree[0], 10) : parseInt(panePid, 10)
-    return { pid, rssMB: Math.round(rssKb / 1024), panePid: parseInt(panePid, 10) }
-  } catch {
-    return {}
-  }
-}
-
-export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (id: string) => boolean, v: { pid?: number; rssMB?: number } = paneVitals(info.tmuxName), cpu?: CpuVitals): string {
+export function sessionVitalsLine(info: SessionInfo, now: number, isConnected: (id: string) => boolean, v: PaneVitals, cpu?: CpuVitals): string {
   if (v.rssMB != null) vitalsSamples.set(info.sessionId, { rssMB: v.rssMB, at: now })
   const conn = isConnected(info.sessionId) ? '' : ' [disconnected]'
   const cpuPart = cpu ? ` cpu=${formatPct(cpu.claudePct)} bridge=${cpu.bridgePid ?? '?'}/${formatPct(cpu.bridgePct)}${cpu.spinning ? ` [spinning: ${cpu.spinning}]` : ''}` : ''
@@ -327,38 +290,50 @@ function frontTrim(path: string, maxBytes: number, keepBytes: number, label: str
 }
 
 export function startVitalsSnapshots(isConnected: (id: string) => boolean): void {
+  // A tick that outlives the interval (a slow ps or tmux) is not stacked under the next.
+  let ticking = false
   setInterval(() => {
-    const now = Date.now()
-    // Prune diagnostic state for gone-or-dead sessions. Each map/set is pruned by
-    // liveness independently: a session that registered (→ correlatedSessions) but
-    // never yielded an RSS sample (→ absent from vitalsSamples) must still be
-    // reclaimed. buildAutopsy reads its sample before deadAt is set
-    // (checkSessionDeath), so this never races the autopsy.
-    const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }
-    for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
-    for (const prune of vitalsPruners) prune(goneOrDead)
-    for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
-    const live = [...registry.values()].filter(s => occupancy(s) !== 'dead')
-    for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
-    for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
-    // Ahead of the empty-fleet return: a runaway can outlive every session.
-    trimDaemonLog()
-    trimRaindropDryrun()
-    const panes = new Map(live.map(s => [s.sessionId, paneVitals(s.tmuxName)]))
-    const pressure = systemPressure()
-    let cpu: CpuSample = { sessions: new Map(), orphans: [] }
-    // CPU is an addition to the line: a sampling failure must not cost the RSS line.
-    // Also ahead of the empty-fleet return: an orphaned bridge can outlive every session.
-    // Main has no registry record; byte's pane pid is its Claude, the fallback when its bridge has no record.
-    const mainTmux = byteTmuxName(PLATFORM)
-    const main = { tmuxName: mainTmux, pid: paneVitals(mainTmux).panePid }
-    try { cpu = sampleCpu(live, id => panes.get(id), pressure, main) } catch (err) { process.stderr.write(`daemon: cpu sample failed: ${err}\n`) }
-    if (live.length === 0 && cpu.orphans.length === 0 && !cpu.main) return
-    const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected, panes.get(s.sessionId), cpu.sessions.get(s.sessionId)))
-    if (cpu.main) lines.push(`  ${mainTmux} (main) cpu=${formatPct(cpu.main.claudePct)} bridge=${cpu.main.bridgePid ?? '?'}/${formatPct(cpu.main.bridgePct)}${cpu.main.spinning ? ` [spinning: ${cpu.main.spinning}]` : ''}`)
-    for (const o of cpu.orphans) lines.push(`  orphan bridge pid=${o.pid} session=${o.key} cpu=${formatPct(o.pct)}${o.spinning ? ' [spinning]' : ''}`)
-    process.stderr.write(`daemon: vitals (${live.length} live, ${formatPressure(pressure)}):\n${lines.join('\n')}\n`)
+    if (ticking) return
+    ticking = true
+    void vitalsTick(isConnected)
+      .catch(err => process.stderr.write(`daemon: vitals failed: ${err}\n`))
+      .finally(() => { ticking = false })
   }, VITALS_INTERVAL_MS).unref()
+}
+
+async function vitalsTick(isConnected: (id: string) => boolean): Promise<void> {
+  const now = Date.now()
+  // Prune diagnostic state for gone-or-dead sessions. Each map/set is pruned by
+  // liveness independently: a session that registered (→ correlatedSessions) but
+  // never yielded an RSS sample (→ absent from vitalsSamples) must still be
+  // reclaimed. buildAutopsy reads its sample before deadAt is set
+  // (checkSessionDeath). A session that dies during this tick's awaits
+  // gets one sample written after its autopsy, pruned on the next tick.
+  const goneOrDead = (id: string) => { const s = registry.get(id); return !s || !!s.deadAt }
+  for (const id of vitalsSamples.keys()) if (goneOrDead(id)) vitalsSamples.delete(id)
+  for (const prune of vitalsPruners) prune(goneOrDead)
+  for (const id of correlatedSessions) if (goneOrDead(id)) correlatedSessions.delete(id)
+  const live = [...registry.values()].filter(s => occupancy(s) !== 'dead')
+  for (const s of live) if (s.spawnLogPath) trimSpawnLog(s.spawnLogPath)
+  for (const s of live) if (s.debugLogPath) trimSpawnLog(s.debugLogPath)
+  // Ahead of the empty-fleet return: a runaway can outlive every session.
+  trimDaemonLog()
+  trimRaindropDryrun()
+  const snap = await vitalsSnapshot()
+  const { pressure } = snap
+  const panes = new Map(live.map(s => [s.sessionId, snap.pane(s.tmuxName)]))
+  let cpu: CpuSample = { sessions: new Map(), orphans: [] }
+  // CPU is an addition to the line: a sampling failure must not cost the RSS line.
+  // Also ahead of the empty-fleet return: an orphaned bridge can outlive every session.
+  // Main has no registry record; byte's pane pid is its Claude, the fallback when its bridge has no record.
+  const mainTmux = byteTmuxName(PLATFORM)
+  const main = { tmuxName: mainTmux, pid: snap.root(mainTmux) }
+  try { cpu = await sampleCpu(snap.procs, live, id => panes.get(id), pressure, main) } catch (err) { process.stderr.write(`daemon: cpu sample failed: ${err}\n`) }
+  if (live.length === 0 && cpu.orphans.length === 0 && !cpu.main) return
+  const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected, panes.get(s.sessionId)!, cpu.sessions.get(s.sessionId)))
+  if (cpu.main) lines.push(`  ${mainTmux} (main) cpu=${formatPct(cpu.main.claudePct)} bridge=${cpu.main.bridgePid ?? '?'}/${formatPct(cpu.main.bridgePct)}${cpu.main.spinning ? ` [spinning: ${cpu.main.spinning}]` : ''}`)
+  for (const o of cpu.orphans) lines.push(`  orphan bridge pid=${o.pid} session=${o.key} cpu=${formatPct(o.pct)}${o.spinning ? ' [spinning]' : ''}`)
+  process.stderr.write(`daemon: vitals (${live.length} live, ${formatPressure(pressure)}):\n${lines.join('\n')}\n`)
 }
 
 // Pure: `now` and `sample` are injected (not read from the wall clock / global
