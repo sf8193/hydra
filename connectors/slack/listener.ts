@@ -4,7 +4,7 @@ import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../sh
 import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
-import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import type { HydraConfig } from '../../config/types.js'
 
 /**
@@ -40,14 +40,16 @@ export function explainSlackError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
 
-/** The operator's token cannot read a thread either: settled, as gone. Anything else (a rate limit, a 5xx) is passing. */
-const OPERATOR_CANT = /not_in_channel|channel_not_found|thread_not_found|message_not_found|missing_scope|invalid_auth|not_authed|token_revoked|token_expired|account_inactive/
+/** The operator can't read the thread either: settled, as gone. */
+const OPERATOR_CANT = /not_in_channel|channel_not_found|thread_not_found|message_not_found/
+/** The operator's token itself is refused: no thread is at fault, and none is let go for it. */
+const OPERATOR_TOKEN_BAD = /missing_scope|invalid_auth|not_authed|token_revoked|token_expired|account_inactive/
 
 /**
  * A thread is read by the bot; where the bot is not a member and a user token is set, as the operator: reading only,
  * never posting. The bot is always asked first, so an invite moves the thread back. When the operator can't read it
- * either, the bot's "not a member" is kept in the error, so catch-up lets go of that one thread; a passing failure is
- * thrown as itself, and the next pass retries.
+ * either, the bot's "not a member" is kept in the error, so catch-up lets go of that one thread. A refused operator
+ * token is said as such, so catch-up skips the thread and keeps it; a passing failure is thrown as itself.
  */
 export async function readReplies(read: (token: string) => Promise<Page>, tokens: { bot: string; user?: string }): Promise<Page> {
   try { return await read(tokens.bot) } catch (e) {
@@ -55,6 +57,7 @@ export async function readReplies(read: (token: string) => Promise<Page>, tokens
     if (!tokens.user || !NOT_A_MEMBER.test(botErr.message)) throw botErr
     try { return { ...await read(tokens.user), via: 'user' } } catch (e2) {
       const why = e2 instanceof Error ? e2.message : String(e2)
+      if (OPERATOR_TOKEN_BAD.test(why)) throw new Error(`${OPERATOR_TOKEN_REFUSED} (${why})`)
       if (!OPERATOR_CANT.test(why)) throw e2 instanceof Error ? e2 : new Error(why)
       throw new Error(`${botErr.message}; as the operator: ${why}`)
     }

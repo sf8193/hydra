@@ -258,7 +258,7 @@ test("a thread Slack says isn't there (a made-up ts) is skipped and logged; the 
   expect(logs.join()).toContain(`thread ${CH}:1.000001 can't be read`)
 })
 
-test("a thread whose channel the bot can no longer read is dropped like a gone one: the pass goes on, the queue isn't pinned", async () => {
+test("a thread whose channel the bot can no longer read is let go like a gone one: the pass goes on, the queue isn't pinned", async () => {
   const { w } = setup(() => ({ ok: false, error: 'down' }))
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
   w.bind(CH, '1500.000001', 'slopbot')
@@ -266,11 +266,11 @@ test("a thread whose channel the bot can no longer read is dropped like a gone o
   e.owed = ['1500.000002']; e.waitingSince = 1
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: not_in_channel') } }
   expect(await catchUp(w, api, cfg, opts())).toMatchObject({ complete: true })
-  expect(w.get(CH, '1500.000001')!.waitingSince).toBeUndefined()
+  expect(w.get(CH, '1500.000001')).toBeUndefined()   // let go: no pass rereads it again
   expect(w.stats().dropped).toEqual({ expired: 1 })
 })
 
-test('a gone thread that still owed messages drops them (and stops waiting): they can never be fetched', async () => {
+test('a gone thread that still owed messages drops them and is let go: they can never be fetched', async () => {
   const { w } = setup(() => ({ ok: false, error: 'down' }))
   w.handle({ channel: CH, ts: '1000.000001', user: 'UA', text: 'chat' })
   w.bind(CH, '1500.000001', 'slopbot')
@@ -278,8 +278,7 @@ test('a gone thread that still owed messages drops them (and stops waiting): the
   e.owed = ['1500.000002']; e.waitingSince = 1
   const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: thread_not_found') } }
   await catchUp(w, api, cfg, opts())
-  expect(w.get(CH, '1500.000001')!.owed).toBeUndefined()
-  expect(w.get(CH, '1500.000001')!.waitingSince).toBeUndefined()
+  expect(w.get(CH, '1500.000001')).toBeUndefined()
   expect(w.stats().dropped).toEqual({ expired: 1 })
 })
 
@@ -601,8 +600,55 @@ describe("a thread read with the operator's user token (the bot isn't in its cha
     await catchUp(w, api, cfg, opts({ deep: true }))
     expect(w.get('C0ELSE', '1792999000.000001')).toBeUndefined()
     expect(w.stats().dropped).toEqual({ expired: 1 })   // counted under the real reason, not a second "unbound" alert
-    expect(alerts).toEqual([{ text: expect.stringContaining("Stopped listening to slack:C0ELSE:1792999000.000001: the bot (<@UBOT>) isn't in slack:C0ELSE"), to: SESSION }])
+    expect(alerts).toEqual([{ text: expect.stringContaining("Let go of slack:C0ELSE:1792999000.000001; 1 undelivered message is lost: the bot (<@UBOT>) isn't in slack:C0ELSE"), to: SESSION }])
     await catchUp(w, api, cfg, opts({ deep: true }))
     expect(alerts.length).toBe(1)
   })
+})
+
+test("a specialist's conversations in a channel no token can read are all let go, said once in its thread, not reread every pass", async () => {
+  const alerts: { text: string; to?: string }[] = []
+  const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
+  dirs.push(dir)
+  const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: (text, to) => alerts.push({ text, to }) })
+  // A channel no specialist listens on (catch-up reads no history there): bound by the operator, or a home post.
+  w.bind('C0LEFT', '1500.000001', 'slopbot', 'cli')
+  w.bind('C0LEFT', '1600.000001', 'slopbot', 'cli')
+  const calls: string[] = []
+  const api: SlackApi = { history: async () => ({ messages: [] }), replies: async a => { calls.push(a.ts); throw new Error('An API error occurred: not_in_channel') } }
+  await catchUp(w, api, cfg, opts({ deep: true }))
+  expect(w.list()).toEqual([])
+  expect(alerts).toEqual([{ text: expect.stringContaining('Let go of slack:C0LEFT:'), to: 'slopbot' }])
+  expect(alerts[0].text).toContain(`and any other conversations of yours in slack:C0LEFT: the bot (<@${BOT}>) isn't in slack:C0LEFT`)
+  expect(alerts[0].text).toContain('then a tag in the thread opens it again')
+  calls.length = 0
+  await catchUp(w, api, cfg, opts({ deep: true }))
+  expect(calls).toEqual([])
+})
+
+test("a deleted thread a specialist only followed, with nothing lost, is let go quietly", async () => {
+  const alerts: string[] = []
+  const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
+  dirs.push(dir)
+  const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: t => alerts.push(t) })
+  w.bind('C0LEFT', '1500.000001', 'slopbot', 'cli')
+  const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: thread_not_found') } }
+  await catchUp(w, api, cfg, opts({ deep: true }))
+  expect(w.list()).toEqual([])
+  expect(alerts).toEqual([])
+})
+
+test("a refused operator token skips the thread and keeps it: the token is at fault, not the thread; said once", async () => {
+  const alerts: string[] = []
+  const logs: string[] = []
+  const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
+  dirs.push(dir)
+  const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: t => alerts.push(t) })
+  w.bind('C0ELSE', '1500.000001', '1552619225032425525', 'tool')
+  w.bind('C0ELSE', '1600.000001', '1552619225032425525', 'tool')
+  const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error("the operator's Slack token was refused (An API error occurred: token_revoked)") } }
+  expect(await catchUp(w, api, cfg, opts({ deep: true, log: (l: string) => logs.push(l) }))).toMatchObject({ complete: true })
+  expect(w.list()).toHaveLength(2)
+  expect(alerts).toEqual([expect.stringContaining("The operator's Slack token was refused (An API error occurred: token_revoked): threads read as the operator are not being read")])
+  expect(logs.join()).toContain('skipped (the operator')
 })
