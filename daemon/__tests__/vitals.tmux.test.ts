@@ -1,6 +1,7 @@
 // Vitals against a real tmux server and real processes: the pane root tmux reports for a session,
-// and the RSS summed over a three-level tree, each checked against the per-process reads
-// (`list-panes -t`, `pgrep -P`, `ps -o rss= -p`) the snapshot replaced.
+// and the RSS summed over a three-level tree, each checked against the per-process reads the
+// snapshot replaced (`list-panes -t`, `pgrep -P`); the RSS as the snapshot's own readings summed
+// over that walked tree.
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync } from 'fs'
@@ -45,7 +46,7 @@ test.if(available)('the pane root is what `list-panes -t <session>` lists first:
   expect(roots.get('multi')).toBe(Number(tmux('display-message', '-p', '-t', first, '#{pane_pid}')))
 })
 
-test.if(available)('RSS sums a three-level pane tree, as the per-process walk did', async () => {
+test.if(available)('RSS sums the snapshot over the whole three-level tree the per-process walk finds', async () => {
   // pane shell → sh → bun holding 64 MB, so a sum that stopped at the root or its children would be far off.
   const hold = `"${process.execPath}" -e "globalThis.b = Buffer.alloc(64 << 20, 1); setInterval(() => {}, 1e6)"`
   tmuxNewSession(['-d', '-s', 'vit-rss', `sh -c '${hold} & wait' & wait`])
@@ -64,9 +65,14 @@ test.if(available)('RSS sums a three-level pane tree, as the per-process walk di
   expect(before.subtree.length).toBe(2)
   expect(before.rssMB).toBeGreaterThanOrEqual(64)
 
-  const v = (await vitalsSnapshot()).pane('vit-rss')
+  const snap = await vitalsSnapshot()
+  const v = snap.pane('vit-rss')
   expect(v.panePid).toBe(root)
   expect(v.pid).toBe(before.pid)
-  // Separate reads a moment apart: allow a little drift, far less than the 64 MB leaf.
-  expect(Math.abs(v.rssMB! - before.rssMB)).toBeLessThanOrEqual(2)
+  // RSS against the snapshot's own readings of the walk's three levels, not the walk's: a live
+  // process's RSS moves between two reads (18 MB once, on CI), its tree does not.
+  const rssKbByPid = [root, ...before.subtree].map(pid => snap.procs!.get(pid)?.rssKb)
+  expect(rssKbByPid).not.toContain(undefined)
+  expect(v.rssMB).toBe(Math.round(rssKbByPid.reduce<number>((n, kb) => n + kb!, 0) / 1024))
+  expect(v.rssMB!).toBeGreaterThanOrEqual(64)
 }, 20_000)
