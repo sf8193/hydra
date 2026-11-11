@@ -7,6 +7,12 @@ const execFileAsync = promisify(execFile)
 const inFlight = new Map<string, Promise<void>>()
 // Tests shorten this; production uses the default.
 export const keyTiming = { settleMs: 250 }
+// Every tmux call this queue makes, the pane checks included. Async, so a slow server holds only
+// this target's queue, never the daemon's loop: longer than TMUX_TIMEOUT_MS (tmux.ts), which bounds
+// sync calls on it. A pane check stricter than the send-keys it guards would, on a slow server,
+// abandon text the Enter would have submitted. SIGKILL: a child that ignored SIGTERM would leave the
+// promise, and this target's queue behind it, pending for good.
+const KEY_EXEC = { timeout: 3_000, killSignal: 'SIGKILL' } as const
 
 export type { TmuxKeyAction } from './engines/engine-adapter.js'
 
@@ -27,7 +33,7 @@ export function sendTmuxKeys(action: TmuxKeyAction, beforeSend?: (target: string
 
 async function paneIdentity(target: string): Promise<{ id: string; pid: string }> {
   const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', target,
-    '#{pane_id} #{pane_pid} #{pane_dead}'], { timeout: 1000 })
+    '#{pane_id} #{pane_pid} #{pane_dead}'], KEY_EXEC)
   const match = /^(%\d+) (\d+) 0$/.exec(stdout.trim())
   if (!match) throw new Error(`Codex key target is unavailable: ${target}`)
   return { id: match[1], pid: match[2] }
@@ -42,7 +48,7 @@ async function assertSamePane(pane: { id: string; pid: string }): Promise<void> 
 
 async function sendAction(action: TmuxKeyAction, beforeSend?: (target: string) => Promise<void>): Promise<void> {
   if (action.mode === 'raw') {
-    await execFileAsync('tmux', ['send-keys', '-t', action.target, ...action.keys], { timeout: 3000 })
+    await execFileAsync('tmux', ['send-keys', '-t', action.target, ...action.keys], KEY_EXEC)
     return
   }
   // Window names can be reused during surface repair. Pin both the pane and its
@@ -50,10 +56,10 @@ async function sendAction(action: TmuxKeyAction, beforeSend?: (target: string) =
   const pane = await paneIdentity(action.target)
   await beforeSend?.(pane.id)
   await assertSamePane(pane)
-  await execFileAsync('tmux', ['send-keys', '-t', pane.id, '-l', action.text], { timeout: 3000 })
+  await execFileAsync('tmux', ['send-keys', '-t', pane.id, '-l', action.text], KEY_EXEC)
   // In the installed Codex TUI, immediate Enter can leave text in the composer.
   // A settling interval submitted reliably in the isolated /status probe.
   await Bun.sleep(keyTiming.settleMs)
   await assertSamePane(pane)
-  await execFileAsync('tmux', ['send-keys', '-t', pane.id, action.trailingKey ?? 'Enter'], { timeout: 3000 })
+  await execFileAsync('tmux', ['send-keys', '-t', pane.id, action.trailingKey ?? 'Enter'], KEY_EXEC)
 }

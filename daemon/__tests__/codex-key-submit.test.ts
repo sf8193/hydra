@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { execFileSync } from 'child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -24,6 +25,8 @@ if ($ARGV[0] eq 'display-message') {
 exit 1 if grep { $_ eq 'FAIL' } @ARGV;
 `)
 chmodSync(join(dir, 'tmux'), 0o755)
+// Pay the first exec here, not inside the first test's timed calls.
+execFileSync(join(dir, 'tmux'), ['-V'])
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 async function withTmux(fn: (calls: (all?: boolean) => Array<{ args: string[]; at: number }>, pane: (text: string) => void) => Promise<void>) {
