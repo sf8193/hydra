@@ -140,7 +140,10 @@ export class SlackListener {
   private startedAt = 0
   private generation = 0
   private everConnected = false
-  private reconnectedSincePass = false
+  /** The latest moment the live stream was known not to be delivering: a drop, or the reconnect that ended one. */
+  private lastGapAt = 0
+  /** When the last complete catch-up pass started: everything before it has been read. Null until one completes. */
+  private lastOkCatchUpStartedAt: number | null = null
   private catching = false
   private rerun: boolean | null = null
   private lastCatchUp: { at: number; result: CatchUpResult } | null = null
@@ -277,7 +280,7 @@ export class SlackListener {
       const was = this.everConnected
       this.everConnected = true
       // Every connection after the first follows a gap, however short: Slack replays nothing.
-      if (was) { this.reconnectedSincePass = true; void this.runCatchUp(true, 'reconnected') }
+      if (was) { this.noteGap(); void this.runCatchUp(true, 'reconnected') }
     })
     // Who the bot is and what the channels are called, before the socket opens: routing needs both for the first event.
     const auth = await app.authTest().catch(err => { this.d.log(`daemon: slack listener: auth.test failed: ${err}\n`); return {} as { botId?: string; userId?: string; url?: string; scopes?: string[] } })
@@ -318,27 +321,44 @@ export class SlackListener {
     }
   }
 
+  /** The live stream may have missed something now. The one place a gap is recorded, whatever its source. */
+  private noteGap(): void {
+    this.lastGapAt = this.now()
+  }
+
+  /**
+   * Whether the live stream has held since `t`: the socket is up now (the supervisor's view, so an unhooked emitter
+   * never counts as up and the alert stays off), and no gap fell after `t`. A gap at `t` itself is covered: a pass
+   * that starts at a reconnect reads what the gap missed.
+   */
+  private streamHeldSince(t: number | null): boolean {
+    return t !== null && this.sup?.state.connected === true && this.lastGapAt <= t
+  }
+
   /** One catch-up pass at a time; a request that arrives during one runs once more when it ends. */
   async runCatchUp(deep: boolean, why: string): Promise<CatchUpResult | null> {
     if (!this.view() || !this.app) return null
     if (this.catching) { this.rerun = (this.rerun ?? false) || deep; return null }
     this.catching = true
-    const afterReconnect = this.reconnectedSincePass
-    if (why !== 'periodic') this.reconnectedSincePass = false
+    const startedAt = this.now()
     let result: CatchUpResult | null = null
     try {
       // Names first: a channel renamed or joined since the last pass is scanned under its current name.
       await this.refreshDirectory(this.app)
       result = await catchUp(this.d.watcher, this.app.api, this.view()!, { deep, now: this.now, log: this.d.log })
       this.lastCatchUp = { at: this.now(), result }
-      if (result.complete) { this.lastOkCatchUpAt = this.now(); this.alerted.catchUp = false; this.alerted.permanent = null }
+      // What this pass found was posted after the last complete pass started. Only a complete pass moves that mark:
+      // an incomplete one may have left a channel unread.
+      const windowStart = this.lastOkCatchUpStartedAt
+      if (result.complete) { this.lastOkCatchUpAt = this.now(); this.lastOkCatchUpStartedAt = startedAt; this.alerted.catchUp = false; this.alerted.permanent = null }
       else this.alertIfPermanent(result.reason)
       this.d.log(`daemon: slack catch-up (${why}${deep ? ', deep' : ''}): ${result.complete ? 'done' : 'incomplete'}, ${result.calls} call(s), ${result.accepted} message(s) the live stream had not delivered\n`)
-      // A quiet pass should find nothing. Finding messages with no reconnect since the last pass means the live
-      // stream is losing events, e.g. another process holds a connection on this Slack app.
-      if (why === 'periodic' && !afterReconnect && result.accepted > 0 && this.now() - this.lastMissedLiveAlertAt > MISSED_LIVE_ALERT_EVERY_MS) {
+      // A quiet pass should find nothing. Finding messages while the stream held from the last complete pass's start to
+      // this pass's end means it is losing events, e.g. another process holds a connection on this Slack app. Judged
+      // now, at the end, so a gap that lands while this pass runs counts.
+      if (why === 'periodic' && this.streamHeldSince(windowStart) && result.accepted > 0 && this.now() - this.lastMissedLiveAlertAt > MISSED_LIVE_ALERT_EVERY_MS) {
         this.lastMissedLiveAlertAt = this.now()
-        this.d.alert(`⚠️ The Slack catch-up pass found ${result.accepted} message(s) the live stream never delivered, with no reconnect in between. Is another process connected to this Slack app (for example sir-not-slop's Bolt server)? Slack splits events across connections; nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
+        this.d.alert(`⚠️ The Slack catch-up pass found ${result.accepted} message(s) the live stream never delivered, though the connection stayed up since the previous complete pass began. Is another process connected to this Slack app (for example sir-not-slop's Bolt server)? Slack splits events across connections; nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
       }
     } catch (err) {
       this.d.log(`daemon: slack catch-up crashed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)

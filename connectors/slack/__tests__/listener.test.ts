@@ -36,7 +36,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   const logs: string[] = []
   const alerts: string[] = []
   const apps: { handler: (e: RawEvent) => void; client: FakeClient; stopped: boolean; started: number; apiCalls: string[] }[] = []
-  const state = { failStart: !!over.failStart, historyError: over.historyError as string | undefined, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[] }
+  const state = { failStart: !!over.failStart, historyError: over.historyError as string | undefined, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[], duringHistory: undefined as (() => void) | undefined }
   // Before it has connected, the watcher sees the same file through a stand-in view, so setup can lay down a cursor.
   let listener: SlackListener | undefined
   const before = toml === null ? null : view(toml, { names: Object.fromEntries((over.channels ?? []).map(c => [c.id, c.name])) })
@@ -60,7 +60,7 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
       const rec = { handler: (_: RawEvent) => {}, client: new FakeClient(), stopped: false, started: 0, apiCalls: [] as string[] }
       apps.push(rec)
       const api: SlackApi = {
-        async history(a) { rec.apiCalls.push(`history:${a.oldest}`); if (state.historyError) throw new Error(state.historyError); return { messages: state.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
+        async history(a) { rec.apiCalls.push(`history:${a.oldest}`); state.duringHistory?.(); if (state.historyError) throw new Error(state.historyError); return { messages: state.history.filter(m => parseFloat(m.ts!) > parseFloat(a.oldest)) } },
         async replies(a) { rec.apiCalls.push(`replies:${a.ts}`); return { messages: (state.threads[`${a.channel}:${a.ts}`] ?? []).filter(m => a.inclusive ? parseFloat(m.ts!) >= parseFloat(a.oldest) : parseFloat(m.ts!) > parseFloat(a.oldest)) } },
       }
       return {
@@ -290,6 +290,62 @@ describe('catch-up', () => {
     t.apps[0].client.emit('connected')
     await Bun.sleep(20)
     await t.listener.runCatchUp(true, 'periodic') // the first periodic pass after a reconnect
+    expect(t.alerts).toHaveLength(0)
+  })
+
+  test('a reconnect while a periodic pass runs is a gap in its window, not another process', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.tick(60_000)
+    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }]
+    t.state.duringHistory = () => { t.state.duringHistory = undefined; t.tick(1_000); t.apps[0].client.emit('connected'); t.tick(1_000) }
+    await t.listener.runCatchUp(true, 'periodic') // the wake: the pass starts before the dead socket is replaced
+    expect(t.alerts).toHaveLength(0)
+    await Bun.sleep(20) // the reconnect's catch-up, queued behind it, closes the window
+    expect(t.logs.some(l => l.includes('slack catch-up (queued'))).toBe(true)
+    t.tick(10 * 60_000)
+    t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }]
+    await t.listener.runCatchUp(true, 'periodic') // no gap since that pass started
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toContain('never delivered')
+  })
+
+  test('the pass that starts at a reconnect covers its gap: a message missed after it, with the socket up, alerts', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.tick(60_000)
+    t.apps[0].client.emit('reconnecting')
+    t.tick(10_000)
+    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }] // posted during the gap
+    t.apps[0].client.emit('connected') // the gap and the reconnect's catch-up start in the same moment
+    await Bun.sleep(20)
+    expect(t.logs.some(l => l.includes('slack catch-up (reconnected') && l.includes('1 message(s)'))).toBe(true)
+    t.tick(10 * 60_000)
+    t.state.history = [...t.state.history, { ts: '2100.000001', user: 'UB', text: mention }] // after that pass read, socket up
+    await t.listener.runCatchUp(true, 'periodic')
+    expect(t.alerts).toHaveLength(1)
+    expect(t.alerts[0]).toContain('the connection stayed up since the previous complete pass began')
+  })
+
+  test('a socket closed mid-pass, before the SDK starts reconnecting, is down at pass end: no alert', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.tick(60_000)
+    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }]
+    t.state.duringHistory = () => { t.state.duringHistory = undefined; t.tick(1_000); t.apps[0].client.emit('close') }
+    await t.listener.runCatchUp(true, 'periodic') // the ping monitor closed the dead socket mid-pass; reconnecting is 5s away
+    expect(t.alerts).toHaveLength(0)
+  })
+
+  test('a socket down since before the window is down at pass end: no alert, though no gap lands in the window', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.apps[0].client.emit('close') // down before the last pass started, and never back
+    t.tick(60_000)
+    await t.listener.runCatchUp(true, 'periodic') // a pass completes while down: the window now starts after the drop
+    t.tick(10 * 60_000)
+    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }]
+    await t.listener.runCatchUp(true, 'periodic')
     expect(t.alerts).toHaveLength(0)
   })
 
