@@ -54,7 +54,9 @@ describe('ClaudeEngine.usage', () => {
     appendFileSync(join(projectsRoot(), projectDirName('/tmp/hydra-t3-project'), `${sid}.jsonl`), body)
   }
   const seed = (body: string, pane?: string) => { transcript(SID, body); if (pane !== undefined) tmux.pane(name, pane) }
-  const paneWith = (pct: number) => `text\n${'─'.repeat(20)}\n❯ \n${'─'.repeat(20)}\n  cedar ctx:${pct}%\n`
+  const footer = (line: string) => `text\n${'─'.repeat(20)}\n❯ \n${'─'.repeat(20)}\n  ${line}\n`
+  const paneWith = (pct: number) => footer(`cedar ctx:${pct}%`)
+  const gsdPaneWith = (pct: number) => footer(`Opus 5.5 │ hydra ${'█'.repeat(Math.floor(pct / 10)).padEnd(10, '░')} ${pct}%`)
   const captures = () => tmux.calls().filter(c => c.startsWith('capture-pane')).length
 
   test('transcript tokens over the [1m] window; usedTokens and window are reported', () => {
@@ -94,6 +96,17 @@ describe('ClaudeEngine.usage', () => {
       name = `ctx-${++seq}`; seed(turn({ input_tokens: 100_000 }), paneWith(30))
       engines.claude.usage(info('claude-sonnet-5[1m]'))
       expect(logs.join('')).toContain(`context %: ${name} transcript says 10% (100000/1000000), pane says 30%`)
+    } finally { process.stderr.write = orig }
+  })
+  test('a bar footer is never compared (it may be rescaled, as GSD\'s is) but still serves as the fallback', () => {
+    const logs: string[] = []
+    const orig = process.stderr.write
+    process.stderr.write = ((c: any) => { logs.push(String(c)); return true }) as any
+    try {
+      seed(turn({ input_tokens: 500_000 }), gsdPaneWith(60))   // raw 50% reads ~60% on GSD
+      expect(engines.claude.usage(info('claude-sonnet-5[1m]'))?.percent).toBe(50)
+      expect(logs.filter(l => l.includes('context %'))).toEqual([])
+      expect(engines.claude.usage(info(undefined))?.percent).toBe(60)
     } finally { process.stderr.write = orig }
   })
   test('steady state reads the pane once per check window, not once per call', () => {
