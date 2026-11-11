@@ -15,7 +15,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4 # --isolate semantics are load-bearing; bump deliberately. 1.4.3 fixed spawnSync spinning forever after a GC (oven-sh/bun#34069)
+          bun-version-file: .bun-version # the suite's bun; scripts/test.sh refuses any other. Bump deliberately: --isolate semantics are load-bearing, and 1.4.3 fixed spawnSync spinning forever after a GC (oven-sh/bun#34069)
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -43,9 +43,6 @@ jobs:
         run: sudo apt-get install -y tmux
 
       - name: Run tests
-        env:
-          DISCORD_BOT_TOKEN: test-token
-          DEFAULT_SESSION_CHANNEL: '000000000000000000'
         run: |
           mkdir -p ~/.claude/channels/discord
-          bun run test --isolate
+          bun run test
