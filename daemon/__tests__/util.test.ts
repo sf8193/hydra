@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, parseSpawnTopic, safeEdit, resolveSpawnLabel, parseContextPercent } from '../util.js'
+import { chunk, formatDuration, fallbackDescription, transformProtocolTag, formatSpawnLine, parseDuration, extractPhaseBudget, extractWorktreeTarget, parseSpawnTopic, safeEdit, resolveSpawnLabel, parseContextPercent, parseContextFooter } from '../util.js'
 import { parseSessionLabel } from '../../shared/constants.js'
 import { gateway } from '../config.js'
 
@@ -624,5 +624,11 @@ describe('parseContextPercent', () => {
 
   test('empty pane → null', () => {
     expect(parseContextPercent('')).toBeNull()
+  })
+
+  test('parseContextFooter names the shape it read; ctx wins over bar', () => {
+    expect(parseContextFooter(pane('⏺ done', '  ctx: 88%'))).toEqual({ percent: 88, shape: 'ctx' })
+    expect(parseContextFooter(pane('⏺ done', '  hydra █░░░░░░░░░ 11%'))).toEqual({ percent: 11, shape: 'bar' })
+    expect(parseContextFooter(pane('⏺ done', '  ctx: 42% │ █████░░░░░ 50%'))).toEqual({ percent: 42, shape: 'ctx' })
   })
 })

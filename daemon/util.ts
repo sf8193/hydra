@@ -125,7 +125,10 @@ const INPUT_RULE_RE = /^\s*─{8,}\s*$/
 const CTX_LABEL_RE = /\bctx:\s*(\d+)%/
 const CTX_BAR_RE = /[█░]+\s*(\d+)%/
 
-export function parseContextPercent(pane: string): number | null {
+// Which footer form matched: 'ctx' (a `ctx: N%` label) or 'bar' (a progress bar then N%); 'ctx' wins when both render.
+export type ContextFooter = { percent: number; shape: 'ctx' | 'bar' }
+
+export function parseContextFooter(pane: string): ContextFooter | null {
   const lines = pane.trimEnd().split('\n')
   let rule = -1
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -133,9 +136,13 @@ export function parseContextPercent(pane: string): number | null {
   }
   if (rule === -1) return null
   const footer = lines.slice(rule + 1).join('\n')
-  const match = footer.match(CTX_LABEL_RE) ?? footer.match(CTX_BAR_RE)
-  return match ? parseInt(match[1], 10) : null
+  const label = footer.match(CTX_LABEL_RE)
+  if (label) return { percent: parseInt(label[1], 10), shape: 'ctx' }
+  const bar = footer.match(CTX_BAR_RE)
+  return bar ? { percent: parseInt(bar[1], 10), shape: 'bar' } : null
 }
+
+export const parseContextPercent = (pane: string): number | null => parseContextFooter(pane)?.percent ?? null
 
 // Strip protocol routing tags from displayed text. The machine tag
 // ([critic→owner]) is consumed by dispatchReply for routing; the human
