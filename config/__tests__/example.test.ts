@@ -17,5 +17,6 @@ describe('hydra.example.toml', () => {
     expect(r.config.schedules['backup-watch']).toMatchObject({ runner: 'daemon', needs: ['internet'] })
     expect(r.config.rules).toHaveLength(1)
     expect(r.config.guard).toBeDefined()
+    expect(r.config.vitals).toBeDefined()
   })
 })

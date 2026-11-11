@@ -115,3 +115,18 @@ command = "~/bin/hydra-guard"         # required: stdin {person, roles, place, c
 timeout = "5s"                        # past this, the message is delivered and the timeout logged (at most 30s)
 include_text = false
 owed_max = "1h"                       # how long "not now" may keep a message owed before it fails visibly
+
+# --- vitals: when the once-a-minute vitals tick tells the operator the host is in trouble (every key optional) ---
+
+[vitals]
+overload_load_per_core = 1.5          # overload: 15-minute load at least this × cores...
+overload_idle_pct = 15                # ...while CPU idle is under this % (macOS load counts waiting threads, not busy cores)
+swap_used_pct = 85                    # memory off macOS (Linux): swap used at least this % of swap total, for `ticks` in a row.
+                                      # Not used on macOS: its swap total grows by whole swap files on demand, so used/total moves with
+                                      # allocation, not pressure. There the OS's pressure level is judged: warn or critical for `ticks` in a
+                                      # row alerts; critical alerts at once, even after a warn alert. The alert lists the largest processes
+ticks = 3                             # vitals ticks in a row a condition must hold; one alert per episode (an undelivered one is retried, at most every 15m)
+resume_settle = "20m"                 # overload is not judged this long after the machine wakes from sleep; a loop stall doesn't count
+                                      # as a wake where the OS can tell them apart (macOS), elsewhere a stall of 60s or more does
+memory_cooldown = "24h"               # at most one memory alert this often while the daemon runs (a restart starts afresh); on macOS
+                                      # the warn and critical alerts each have their own

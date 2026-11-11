@@ -3234,7 +3234,7 @@ describe('raindrop: dry-run file is capped', () => {
     const realSetInterval = globalThis.setInterval
     let onTick: (() => void) | undefined
     globalThis.setInterval = ((fn: () => void) => { onTick = fn; return { unref() {} } }) as unknown as typeof setInterval
-    try { startVitalsSnapshots(() => true) } finally { globalThis.setInterval = realSetInterval }
+    try { startVitalsSnapshots(() => true, { alert: async () => true }) } finally { globalThis.setInterval = realSetInterval }
 
     // The registry is shared across the run; an empty fleet is the case under test.
     const saved = [...registry.values()]

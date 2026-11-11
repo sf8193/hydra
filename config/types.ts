@@ -118,6 +118,30 @@ export type Guard = {
   owedMaxMs: number
 }
 
+/** When the vitals tick tells the operator the host is in trouble. Every key has a default (config/load.ts `VITALS_DEFAULTS`). */
+export type Vitals = {
+  /** Overload: the 15-minute load at least this many times the core count... */
+  overloadLoadPerCore: number
+  /** ...while host CPU idle is under this %. macOS load counts waiting threads, so load alone is no overload. */
+  overloadIdlePct: number
+  /**
+   * Memory off macOS (Linux): swap used at least this % of the swap total, for `ticks` in a row. Not used on macOS, whose
+   * swap total grows by whole swap files on demand, so used/total moves with allocation, not with pressure. There the
+   * OS's pressure level is judged: warn or critical for `ticks` in a row alerts; critical alerts at once, even after a
+   * warn alert; each has its own `memory_cooldown`. A missing level there is no reading.
+   */
+  swapUsedPct: number
+  /** Consecutive vitals ticks (one a minute) a condition must hold before it alerts. */
+  ticks: number
+  /**
+   * Overload is not judged for this long after the machine wakes from sleep: every due job fires at once on wake. A loop
+   * stall does not count as a wake where the OS can tell them apart (macOS); elsewhere a stall of 60 s or more does.
+   */
+  resumeSettleMs: number
+  /** At most one memory alert this often while the daemon runs, even across episodes (a restart starts afresh). */
+  memoryCooldownMs: number
+}
+
 export type HydraConfig = {
   /** The one person whose DMs reach `main` and who may reach every specialist. Required once anything else is declared. */
   operator?: string
@@ -128,6 +152,8 @@ export type HydraConfig = {
   schedules: Record<string, Schedule>
   rules: Rule[]
   guard?: Guard
+  /** Absent: `VITALS_DEFAULTS`. */
+  vitals?: Vitals
 }
 
 /** One finding, located by its path in the file (`specialists.zoho.listens[1]`). */

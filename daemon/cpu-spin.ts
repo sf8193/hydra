@@ -116,26 +116,78 @@ export function createSpinTracker(threshold = SPIN_CPU_PERCENT, needed = SPIN_CO
   }
 }
 
-export type SystemPressure = { load1: number; cores: number; swapUsedMB?: number }
+/** macOS's own memory pressure level (`kern.memorystatus_vm_pressure_level`). */
+export type MemoryPressure = 'normal' | 'warn' | 'critical'
 
-/** `sysctl vm.swapusage` (macOS): `total = 6144.00M  used = 4836.00M  free = …`. */
-export function parseSwapUsage(out: string): number | undefined {
-  const m = out.match(/used\s*=\s*([\d.]+)([KMG])/)
-  if (!m) return undefined
-  const scale = m[2] === 'G' ? 1024 : m[2] === 'K' ? 1 / 1024 : 1
-  return Math.round(Number(m[1]) * scale)
+/**
+ * The machine as the vitals tick reads it. `load15` and `idlePct` are what host health judges overload by: macOS load
+ * counts waiting threads, not busy cores, so load alone overstates. `idlePct` is unrounded, and undefined on the first tick
+ * (no baseline), after a change in core count, or when the CPU clock did not move. `memoryPressure` is macOS only, and
+ * undefined there when the read failed or the OS lacks it.
+ */
+export type SystemPressure = {
+  load1: number; load15?: number; cores: number; idlePct?: number
+  memoryPressure?: MemoryPressure; swapUsedMB?: number; swapTotalMB?: number
+  /** Where it was read: on darwin memory is judged by `memoryPressure` alone. Absent is not darwin. */
+  platform?: NodeJS.Platform
 }
 
-/** `/proc/meminfo` (Linux): SwapTotal − SwapFree, in MB. */
-export function parseMeminfoSwap(out: string): number | undefined {
+const PRESSURE_LEVELS: Record<string, MemoryPressure> = { '1': 'normal', '2': 'warn', '4': 'critical' }
+
+/** `kern.memorystatus_vm_pressure_level: 1` (macOS): 1 normal, 2 warn, 4 critical; anything else is unknown. */
+export function parseMemoryPressure(out: string): MemoryPressure | undefined {
+  const level = out.match(/kern\.memorystatus_vm_pressure_level:\s*(\d+)/)?.[1]
+  return level === undefined ? undefined : PRESSURE_LEVELS[level]
+}
+
+export type SwapUsage = { usedMB: number; totalMB: number }
+
+const toMB = (n: string, unit: string) => Math.round(Number(n) * (unit === 'G' ? 1024 : unit === 'K' ? 1 / 1024 : 1))
+
+/** `sysctl vm.swapusage` (macOS): `total = 6144.00M  used = 4836.00M  free = …`. */
+export function parseSwapUsage(out: string): SwapUsage | undefined {
+  const used = out.match(/used\s*=\s*([\d.]+)([KMG])/)
+  const total = out.match(/total\s*=\s*([\d.]+)([KMG])/)
+  if (!used || !total) return undefined
+  return { usedMB: toMB(used[1], used[2]), totalMB: toMB(total[1], total[2]) }
+}
+
+/** `/proc/meminfo` (Linux): SwapTotal − SwapFree, and SwapTotal, in MB. */
+export function parseMeminfoSwap(out: string): SwapUsage | undefined {
   const kb = (key: string) => Number(out.match(new RegExp(`^${key}:\\s+(\\d+) kB`, 'm'))?.[1])
-  const used = kb('SwapTotal') - kb('SwapFree')
-  return Number.isFinite(used) ? Math.round(used / 1024) : undefined
+  const total = kb('SwapTotal')
+  const used = total - kb('SwapFree')
+  return Number.isFinite(used) ? { usedMB: Math.round(used / 1024), totalMB: Math.round(total / 1024) } : undefined
+}
+
+/** One core's cumulative CPU times (ms), as `os.cpus()[i].times` gives them. */
+export type CpuTimes = { user: number; nice: number; sys: number; idle: number; irq: number }
+
+/**
+ * Host CPU idle % between two readings of every core's times: no spawn, `os.cpus()` is a syscall. The first reading,
+ * a change in core count or a clock that did not move has no answer.
+ */
+export function createHostIdleMeter() {
+  let last: CpuTimes[] | undefined
+  const sum = (ts: CpuTimes[], pick: (t: CpuTimes) => number) => ts.reduce((n, t) => n + pick(t), 0)
+  const total = (t: CpuTimes) => t.user + t.nice + t.sys + t.idle + t.irq
+  return (now: CpuTimes[]): number | undefined => {
+    const prev = last
+    last = now
+    if (!prev || prev.length !== now.length) return undefined
+    const elapsed = sum(now, total) - sum(prev, total)
+    const idle = sum(now, t => t.idle) - sum(prev, t => t.idle)
+    return elapsed > 0 && idle >= 0 ? idle / elapsed * 100 : undefined
+  }
 }
 
 export function formatPressure(p: SystemPressure): string {
-  const swap = p.swapUsedMB === undefined ? '' : ` swap=${p.swapUsedMB}MB`
-  return `load=${p.load1.toFixed(1)}/${p.cores}cores${swap}`
+  const load15 = p.load15 === undefined ? '' : ` load15=${p.load15.toFixed(1)}`
+  // Floored, as host health shows it: an idle under a threshold never reads as the threshold.
+  const idle = p.idlePct === undefined ? '' : ` idle=${Math.floor(p.idlePct)}%`
+  const memory = p.memoryPressure === undefined ? '' : ` memory=${p.memoryPressure}`
+  const swap = p.swapUsedMB === undefined ? '' : ` swap=${p.swapUsedMB}${p.swapTotalMB === undefined ? '' : `/${p.swapTotalMB}`}MB`
+  return `load=${p.load1.toFixed(1)}/${p.cores}cores${load15}${idle}${memory}${swap}`
 }
 
 export function formatPct(pct: number | undefined): string {

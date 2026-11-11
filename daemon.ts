@@ -134,7 +134,7 @@ installResumeDetector(resumes)
 startLoopWatch({ alert: notifyOperator, onResume: (gapMs, at, servedAt) => { resumes.noteResume(gapMs, at, servedAt); emit('clock:resumed', { at, gapMs }) } })
 
 import { startVitalsSnapshots } from './daemon/observability.js'
-startVitalsSnapshots((id) => transport.has(id))
+startVitalsSnapshots((id) => transport.has(id), { alert: notifyOperator })
 
 import { refreshDashboard, refreshDashboardNow } from './daemon/dashboard.js'
 import { debouncedRefreshListDisplay } from './daemon/commands/status.js'

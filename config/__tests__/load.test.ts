@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { loadHydraConfig } from '../load.js'
+import { loadHydraConfig, VITALS_DEFAULTS } from '../load.js'
 import type { HydraConfig, LoadEnv, LoadResult } from '../types.js'
 
 const env: LoadEnv = {
@@ -230,6 +230,24 @@ ids = ["github:alice"]
 
   test('a bad cron', () => {
     expect(errorsOf(`${spec('')}\n[schedules.nightly]\ncron = "0 25 * * *"\nto = "ops"\n`)).toEqual(['schedules.nightly.cron: invalid cron expression "0 25 * * *": 25 is out of range 0-23'])
+  })
+
+  test('[vitals]: absent is the defaults; an empty table fills them in; keys override', () => {
+    expect(ok(BASE).config.vitals).toBeUndefined()
+    expect(VITALS_DEFAULTS).toEqual({ overloadLoadPerCore: 1.5, overloadIdlePct: 15, swapUsedPct: 85, ticks: 3, resumeSettleMs: 20 * 60_000, memoryCooldownMs: 24 * 3_600_000 })
+    expect(ok(`${BASE}\n[vitals]\n`).config.vitals).toEqual(VITALS_DEFAULTS)
+    expect(ok(`${BASE}\n[vitals]\noverload_load_per_core = 2\noverload_idle_pct = 10\nswap_used_pct = 90.5\nticks = 5\nresume_settle = "30m"\nmemory_cooldown = "12h"\n`).config.vitals)
+      .toEqual({ overloadLoadPerCore: 2, overloadIdlePct: 10, swapUsedPct: 90.5, ticks: 5, resumeSettleMs: 30 * 60_000, memoryCooldownMs: 12 * 3_600_000 })
+  })
+
+  test('[vitals]: a bad value or unknown key is reported at its path', () => {
+    expect(errorsOf(`${BASE}\n[vitals]\nswap_used_pct = 120\nticks = 0\nresume_settle = "soon"\nidle = 3\n`)).toEqual([
+      'vitals.idle: unknown key "idle"',
+      'vitals.swap_used_pct: must be a number above 0, at most 100',
+      'vitals.ticks: must be a whole number above 0',
+      'vitals.resume_settle: "soon" must be a duration like 90s, 5m or 2h, at most 1d',
+    ])
+    expect(errorsOf(`${BASE}\n[vitals]\noverload_idle_pct = "15%"\n`)).toEqual(['vitals.overload_idle_pct: must be a number above 0, at most 100'])
   })
 
   test('a guard command that doesn\'t exist', () => {

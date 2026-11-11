@@ -9,8 +9,12 @@ import { parseIdleTtl } from '../shared/constants.js'
 import { invalidSpecialistName } from '../shared/specialist-name.js'
 import {
   BUILTIN_ROLES, type Address, type ConfigIssue, type Connectors, type Guard, type HydraConfig, type LoadEnv, type LoadResult,
-  type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type Specialist,
+  type Person, type Place, type PlaceOptions, type Platform, type Rule, type Schedule, type SessionsMode, type Specialist, type Vitals,
 } from './types.js'
+
+export const VITALS_DEFAULTS: Vitals = Object.freeze({
+  overloadLoadPerCore: 1.5, overloadIdlePct: 15, swapUsedPct: 85, ticks: 3, resumeSettleMs: 20 * 60_000, memoryCooldownMs: 24 * 3_600_000,
+})
 
 export const EMPTY_CONFIG: HydraConfig = Object.freeze({ connectors: {}, people: {}, specialists: {}, places: {}, schedules: {}, rules: [] }) as HydraConfig
 
@@ -32,7 +36,7 @@ const GUARD_TIMEOUT_MAX_MS = 30_000 // deliveries for a conversation wait on the
 const MAX_ALERT_AFTER_MS = 30 * MAX_DAY_MS
 const BUILTIN: readonly string[] = BUILTIN_ROLES
 
-const TOP_KEYS = ['operator', 'connectors', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard']
+const TOP_KEYS = ['operator', 'connectors', 'people', 'specialists', 'defaults', 'places', 'schedules', 'rules', 'guard', 'vitals']
 const SPECIALIST_KEYS = ['workdir', 'prompt', 'prompt_file', 'listens', 'allow', 'sessions', 'max', 'idle', 'home', 'model', 'engine', 'env_file', 'was']
 
 type Table = Record<string, unknown>
@@ -465,6 +469,31 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
     if (command !== undefined) guard = { command: command.trim(), timeoutMs, includeText: bool(g, 'include_text', 'guard') ?? false, owedMaxMs }
   }
 
+  // --- vitals: when host health alerts ------------------------------------------------------------------------------
+
+  let vitals: Vitals | undefined
+  const vt = table(doc.vitals, 'vitals')
+  if (vt) {
+    unknownKeys(vt, ['overload_load_per_core', 'overload_idle_pct', 'swap_used_pct', 'ticks', 'resume_settle', 'memory_cooldown'], 'vitals')
+    const d = VITALS_DEFAULTS
+    vitals = {
+      overloadLoadPerCore: positiveUpTo100(vt, 'overload_load_per_core', 'vitals') ?? d.overloadLoadPerCore,
+      overloadIdlePct: positiveUpTo100(vt, 'overload_idle_pct', 'vitals') ?? d.overloadIdlePct,
+      swapUsedPct: positiveUpTo100(vt, 'swap_used_pct', 'vitals') ?? d.swapUsedPct,
+      ticks: positiveInt(vt, 'ticks', 'vitals') ?? d.ticks,
+      resumeSettleMs: duration(vt, 'resume_settle', 'vitals', MAX_DAY_MS) ?? d.resumeSettleMs,
+      memoryCooldownMs: duration(vt, 'memory_cooldown', 'vitals', 7 * MAX_DAY_MS) ?? d.memoryCooldownMs,
+    }
+  }
+  // A percentage, or a load per core (past 100 is no threshold at all).
+  function positiveUpTo100(t: Table, k: string, path: string): number | undefined {
+    const v = t[k]
+    if (v === undefined) return undefined
+    if (typeof v === 'number' && v > 0 && v <= 100) return v
+    error(join2(path, k), 'must be a number above 0, at most 100')
+    return undefined
+  }
+
   // --- warnings that need the whole file -----------------------------------------------------------------------------
 
   // The operator passes admin checks only through an address on the platform a daemon runs: on a connected platform
@@ -497,7 +526,7 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
   }
 
   if (errors.length) return { ok: false, errors, warnings }
-  return { ok: true, config: { ...(operator && { operator }), connectors, people, specialists, places, schedules, rules, ...(guard && { guard }) }, warnings }
+  return { ok: true, config: { ...(operator && { operator }), connectors, people, specialists, places, schedules, rules, ...(guard && { guard }), ...(vitals && { vitals }) }, warnings }
 }
 
 /** The program a `sh -c` command runs: past any leading VAR=value, with one level of quotes removed. */
