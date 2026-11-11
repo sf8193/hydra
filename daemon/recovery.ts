@@ -10,7 +10,8 @@ import { gateway } from './config.js'
 import { markDead, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
 import type { ThreadMetadata, ThreadSessionEntry, SessionInfo, SpawnOpts, SpawnResult } from './sessions.js'
 import { carryOver, doSpawnSession, killSession, tryResume, tryRespawn, RECOVERY_REVERIFY_GUARD } from './session-lifecycle.js'
-import { tmuxHasSession, baseNameFromBranch } from './util.js'
+import { baseNameFromBranch } from './util.js'
+import { tmuxSessionState, TMUX_HOLD_MS } from './tmux.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { parsePrUrl, retargetWatches, unwatchBySession } from '../connectors/github/pr-watch.js'
 import { checkUnpushedCommits, reattachWorktree } from './worktree-manager.js'
@@ -27,9 +28,9 @@ import type { InboundMessage } from '../gateway.js'
 // reviveThread — the one cascade: resume → fork → respawn
 // ---------------------------------------------------------------------------
 
-// Recovery executors, swappable in tests (same pattern as reply-guard's deps).
-type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn }
-const defaultRecoveryDeps: RecoveryDeps = { tryResume, doSpawnSession, tryRespawn }
+// Recovery executors, swappable in tests (same pattern as reply-guard's deps). `later`: auto-recovery's one retry.
+type RecoveryDeps = { tryResume: typeof tryResume; doSpawnSession: typeof doSpawnSession; tryRespawn: typeof tryRespawn; later: (fn: () => Promise<void>, ms: number) => void }
+const defaultRecoveryDeps: RecoveryDeps = { tryResume, doSpawnSession, tryRespawn, later: (fn, ms) => { setTimeout(() => void fn(), ms).unref() } }
 let recoveryDeps: RecoveryDeps = defaultRecoveryDeps
 export function _setRecoveryDeps(custom: Partial<RecoveryDeps>): void { recoveryDeps = { ...defaultRecoveryDeps, ...custom } }
 export function _resetRecoveryDeps(): void { recoveryDeps = defaultRecoveryDeps }
@@ -652,10 +653,14 @@ async function postAutoRecoverySummary(
 // Opt-in via HYDRA_AUTO_RECOVER=1. Runs once at daemon startup: reads persisted
 // dead workers (loadPersisted keeps them with deadAt set) and revives each via
 // the resume→fork→respawn cascade. Idempotent — a session whose tmux is already
-// live is skipped.
-export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
+// live is skipped. A record tmux doesn't answer for waits for one more pass, after the hold, over
+// just those records (`only`), read again from the registry so a kill in between still counts.
+export async function autoRecoverAfterBoot(gapMs?: number, only?: ReadonlySet<string>): Promise<void> {
   if ((process.env.HYDRA_AUTO_RECOVER || '') !== '1') return
-  if (recoveryInProgress) return
+  if (recoveryInProgress) {
+    if (only) process.stderr.write('daemon: auto-recover: deferred pass skipped, a recovery is in progress; its records wait for `recover` or the next boot\n')
+    return
+  }
 
   // Precondition: a systemic boot glitch (e.g. SPAWN_CWD unset) would fail every tier
   // for every session, and each doSpawnSession deletes the dead record before it fails.
@@ -668,7 +673,7 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
     return
   }
 
-  const deadInfos = [...registry.values()].filter(info =>
+  const candidates = [...registry.values()].filter(info =>
     // deadAt reliably catches hard-reboot survivors: loadPersisted (sessions.ts, in the registry
     // constructor — runs before this) stamps deadAt on EVERY tmux-gone non-guest session at boot,
     // so a session that was alive at crash time (never gracefully stamped) is already deadAt here.
@@ -677,9 +682,27 @@ export async function autoRecoverAfterBoot(gapMs?: number): Promise<void> {
     && !info.suppressAutoRecover
     && !info.ephemeral
     && info.adapter.recoveryPlan(info).generic  // Codex: no — its runtime's start() reconnects it at boot; recoverOne would relaunch it as Claude
-    && !tmuxHasSession(info.tmuxName)
-    && threadRegistry.has(info.threadId),
+    && threadRegistry.has(info.threadId)
+    && (!only || only.has(info.sessionId)),
   )
+  const state = new Map(candidates.map(info => [info, tmuxSessionState(info.tmuxName)]))
+  const deferred = candidates.filter(info => state.get(info) === 'not responding')
+  try {
+    await revive(candidates.filter(info => state.get(info) === 'dead'), gapMs)
+  } finally {
+    if (deferred.length > 0 && only) {
+      process.stderr.write(`daemon: auto-recover: tmux still not responding; ${deferred.length} dead record(s) left dead; \`recover\` or the next boot retries them\n`)
+    } else if (deferred.length > 0) {
+      process.stderr.write(`daemon: auto-recover: tmux not responding; ${deferred.length} dead record(s) deferred to one more pass in ${TMUX_HOLD_MS / 1000}s\n`)
+      const ids = new Set(deferred.map(info => info.sessionId))
+      recoveryDeps.later(() => autoRecoverAfterBoot(gapMs, ids).catch(err => {
+        process.stderr.write(`daemon: auto-recovery failed: ${err instanceof Error ? err.message : err}\n`)
+      }), TMUX_HOLD_MS)
+    }
+  }
+}
+
+async function revive(deadInfos: SessionInfo[], gapMs: number | undefined): Promise<void> {
   if (deadInfos.length === 0) return
 
   const gapLabel = gapMs ? ` (${formatGap(gapMs)} gap)` : ''

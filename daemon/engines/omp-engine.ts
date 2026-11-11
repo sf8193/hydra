@@ -14,10 +14,10 @@ import type {
 import type { BlockingState } from '../pane-probe.js'
 import type { ClaudeEngine } from './claude-engine.js'
 import { SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
-import { tmuxWindowActivity } from '../util.js'
+import { tmuxCreateSession, tmuxWindowActivity } from '../tmux.js'
 import { ompContextTokens, ompSessionDir, ompTurn, ompUsageTotals, type OmpUsageCursor } from './omp-session.js'
 import { contextWindowOf, ompProvider } from '../../shared/constants.js'
-import { tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { withRaisedFdLimit } from '../../shared/spawn-env.js'
 
 const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 const EXTENSION = join(import.meta.dir, '..', '..', 'omp', 'hydra-bridge.ts')
@@ -58,7 +58,7 @@ export class OmpEngine implements EngineAdapter {
       `${args.join(' ')} 2>>${shq(stderrLog)}`,
     ].join(' && ')
     mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
-    tmuxNewSession(['-d', '-s', tmuxName, withRaisedFdLimit(inner)])
+    tmuxCreateSession(tmuxName, [withRaisedFdLimit(inner)])
     return { provider: 'omp', model, identity: {}, stderrLogPath: stderrLog }
   }
 

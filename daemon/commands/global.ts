@@ -204,6 +204,7 @@ export async function handleRestartIntercept(msg: InboundMessage): Promise<void>
     execSync(`nohup bun "${hydraTs}" restart ${PLATFORM}${fastFlag} > /dev/null 2>&1 &`, {
       stdio: 'pipe',
       timeout: 10_000,
+      killSignal: 'SIGKILL',
       shell: '/bin/bash',
       env: { ...process.env, PATH: `${homedir()}/.asdf/shims:${homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` },
     })

@@ -1,6 +1,5 @@
 import { realpathSync } from 'fs'
 import { join, sep } from 'path'
-import { execSync, execFileSync, execFile } from 'child_process'
 import { gateway, STATE_DIR, STATE_WRITABLE } from './config.js'
 import { isUnder } from '../shared/path-containment.js'
 import { formatDiscordTables } from '../discord-table-format.js'
@@ -51,69 +50,6 @@ export function formatDuration(ms: number): string {
   const days = Math.floor(hrs / 24)
   const remHrs = hrs % 24
   return remHrs > 0 ? `${days}d ${remHrs}h` : `${days}d`
-}
-
-export function tmuxHasSession(name: string): boolean {
-  try {
-    execFileSync('tmux', ['has-session', '-t', name], { stdio: 'pipe' })
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** tmux window_activity (epoch seconds) of a target; 0 if unparsable. Throws if tmux fails. */
-export function tmuxWindowActivity(target: string): number {
-  return parseInt(
-    execSync(`tmux display -t '${target}' -p '#{window_activity}'`, { stdio: 'pipe', timeout: 2000 }).toString().trim(),
-  ) || 0
-}
-
-// window_activity epoch (seconds) of a tmux target, or null when tmux could not answer (error,
-// timeout, unparsable). Callers decide what "unknown" means.
-function windowActivitySync(name: string): number | null {
-  try {
-    const ts = execFileSync('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString().trim()
-    const epoch = parseInt(ts, 10)
-    return isNaN(epoch) ? null : epoch
-  } catch { return null }
-}
-
-async function windowActivity(name: string): Promise<number | null> {
-  try {
-    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
-      // SIGKILL: a child that ignored the default SIGTERM would leave this pending past its timeout.
-      execFile('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
-        { encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL' }, (err, stdout) => err ? reject(err) : resolve({ stdout }))
-    })
-    const epoch = parseInt(stdout.trim(), 10)
-    return isNaN(epoch) ? null : epoch
-  } catch { return null }
-}
-
-const ageS = (epoch: number) => Date.now() / 1000 - epoch
-
-/** Active within the last `thresholdSeconds`; a failed lookup reads as not active. */
-export function isTmuxRecentlyActiveSync(name: string, thresholdSeconds = 60): boolean {
-  const epoch = windowActivitySync(name)
-  return epoch !== null && ageS(epoch) < thresholdSeconds
-}
-
-export async function isTmuxRecentlyActive(name: string, thresholdSeconds = 60): Promise<boolean> {
-  const epoch = await windowActivity(name)
-  return epoch !== null && ageS(epoch) < thresholdSeconds
-}
-
-/** Silent for MORE than `seconds`: true only when tmux answered. A failed lookup is unknown, not silence. */
-export function tmuxSilentLongerThanSync(name: string, seconds: number): boolean {
-  const epoch = windowActivitySync(name)
-  return epoch !== null && ageS(epoch) > seconds
-}
-
-export async function tmuxSilentLongerThan(name: string, seconds: number): Promise<boolean> {
-  const epoch = await windowActivity(name)
-  return epoch !== null && ageS(epoch) > seconds
 }
 
 // The statusLine renders below the input box's bottom rule, so only the lines

@@ -549,9 +549,14 @@ export const normalizeLstart = (s: string) => s.trim().replace(/\s+/g, ' ')
 // one process always has one lstart, whatever the zone is now or was when it was recorded.
 const psEnv = () => ({ ...process.env, TZ: 'UTC' })
 
+// These run on the daemon's loop (the clock's settle). A ps that hangs is killed and reads as ps failing, which
+// settle already takes as "decide next tick": a slow answer costs a tick, never a verdict.
+const PS_TIMEOUT_MS = 2_000
+const psOpts = { encoding: 'utf8', timeout: PS_TIMEOUT_MS, killSignal: 'SIGKILL' } as const
+
 /** The process's start time, or null if no such process. Throws if ps itself failed: that says nothing about the pid. */
 export function lstartOf(pid: number): string | null {
-  const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: psEnv() })
+  const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { ...psOpts, env: psEnv() })
   if (r.error) throw r.error
   const out = r.stdout ? normalizeLstart(r.stdout) : ''
   if (r.status === 0 && out) return out
@@ -560,7 +565,7 @@ export function lstartOf(pid: number): string | null {
 }
 
 export function listProcesses(): Proc[] {
-  const r = spawnSync('ps', ['-ax', '-o', 'pid=,lstart=,command='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: psEnv() })
+  const r = spawnSync('ps', ['-ax', '-o', 'pid=,lstart=,command='], { ...psOpts, env: psEnv(), maxBuffer: 16 * 1024 * 1024 })
   if (r.error) throw r.error
   if (r.status !== 0) throw new Error(`ps exited ${r.status}: ${(r.stderr ?? '').trim()}`)
   const out: Proc[] = []

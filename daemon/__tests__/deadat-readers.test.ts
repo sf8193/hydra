@@ -8,6 +8,12 @@ import { join } from 'path'
 import { Glob } from 'bun'
 
 const ALLOWED: Record<string, { why: string; lines: string[] }> = {
+  'bridge-server.ts': {
+    why: 'history, not liveness: a death check retried after the hold stops once another path has already given its verdict',
+    lines: [
+      "if (!info || info.deadAt) { deathCheckLogged.delete(sessionId); return }",
+    ],
+  },
   'bridge-dispatch.ts': {
     why: 'of a name\'s dead records, the latest death',
     lines: [
@@ -102,9 +108,10 @@ const ALLOWED: Record<string, { why: string; lines: string[] }> = {
     ],
   },
   'sessions.ts': {
-    why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader, the boot history close, ranking a name\'s past threads by when it died',
+    why: 'the field, markDead (the one runtime writer, which says so once, the first time it writes), the boot loader (a tmux that does not answer keeps the saved state), the boot history close, ranking a name\'s past threads by when it died',
     lines: [
       "deadAt?: number",
+      "const tmuxAlive = state === 'alive' || (state === 'not responding' && !info.deadAt)",
       "delete info.deadAt",
       "info.deadAt = info.deadAt ?? Date.now()",
       "if (!session.deadAt) continue",

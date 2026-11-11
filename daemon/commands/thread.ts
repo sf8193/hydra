@@ -1,4 +1,3 @@
-import { execSync } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { unlinkSync } from 'fs'
@@ -9,7 +8,8 @@ import { killSession, emitSessionDeath, requestHandoff } from '../session-lifecy
 import type { SessionInfo } from '../sessions.js'
 import { COUNT_EMOJI } from '../anchor-state.js'
 import { debouncedRefreshListDisplay } from './status.js'
-import { fallbackDescription, formatDuration, tmuxHasSession, reportError, safeSend } from '../util.js'
+import { fallbackDescription, formatDuration, reportError, safeSend } from '../util.js'
+import { hasFreeze, paneScreenshot, tmuxHasSession, tmuxSync } from '../tmux.js'
 import { isThreadOccupied } from '../protocol-registry.js'
 import { unwatchBySession } from "../../connectors/github/pr-watch.js"
 import { emit } from "../event-bus.js"
@@ -502,14 +502,6 @@ export async function handleDestroyIntercept(msg: InboundMessage): Promise<void>
 // Peek — screenshot the tmux pane and post it to the thread
 // ---------------------------------------------------------------------------
 
-let hasFreezeCache: boolean | null = null
-function hasFreeze(): boolean {
-  if (hasFreezeCache === null) {
-    try { execSync('which freeze', { stdio: 'pipe' }); hasFreezeCache = true } catch { hasFreezeCache = false }
-  }
-  return hasFreezeCache
-}
-
 export async function handlePeekIntercept(msg: InboundMessage, targetName?: string): Promise<void> {
   let info
   let name: string
@@ -561,11 +553,7 @@ async function sendPeek(msg: InboundMessage, name: string, target: string | null
   if (hasFreeze()) {
     const outPath = join(tmpdir(), `hydra-peek-${name}-${Date.now()}.png`)
     try {
-      const safeName = target.replace(/'/g, "'\\''")
-      execSync(
-        `tmux capture-pane -t '${safeName}' -e -p | freeze -o '${outPath}' --language bash`,
-        { stdio: 'pipe', timeout: 10000 },
-      )
+      paneScreenshot(target, outPath)
       await gateway.send(msg.channelId, head, { files: [outPath], replyTo: msg.id })
       try { unlinkSync(outPath) } catch {}
       return
@@ -577,11 +565,7 @@ async function sendPeek(msg: InboundMessage, name: string, target: string | null
 
   // Fallback: text capture
   try {
-    const safeName = target.replace(/'/g, "'\\''")
-    const text = execSync(
-      `tmux capture-pane -t '${safeName}' -p -S -60`,
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
-    ).trimEnd()
+    const text = tmuxSync(['capture-pane', '-t', target, '-p', '-S', '-60']).trimEnd()
     await safeSend(msg.channelId, `${head}\n\`\`\`\n${(text || '(empty)').slice(-1800)}\n\`\`\``, { replyTo: msg.id })
   } catch (err) {
     await reportError(msg.channelId, msg.id, 'peek', `capture failed: ${err}`)

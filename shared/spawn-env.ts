@@ -22,6 +22,9 @@ export function withRaisedFdLimit(command: string): string {
 }
 
 const SWEEP_TIMEOUT_MS = 500
+// new-session is killed at this unless the caller names its own bound: the daemon creates sessions on its one
+// event loop, and a hung tmux server would otherwise hold it for good. Longer than a read: it forks a shell.
+export const NEW_SESSION_TIMEOUT_MS = 5_000
 
 // tmux exits 1 for a cold start and for a real error alike; only the text differs.
 const NO_SERVER = /no server running|error connecting to/
@@ -68,7 +71,7 @@ export function tmuxNewSession(
   opts: TmuxOpts = {},
   exec: ExecFn = childProcess.execFileSync,
 ): void {
-  const run = { stdio: 'pipe' as const, ...opts, env: scrubbedSpawnEnv(opts.env) }
+  const run = { stdio: 'pipe' as const, timeout: NEW_SESSION_TIMEOUT_MS, killSignal: 'SIGKILL' as const, ...opts, env: scrubbedSpawnEnv(opts.env) }
   try {
     exec('tmux', [...SWEEP_ARGV], {
       ...run,

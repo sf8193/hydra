@@ -35,6 +35,7 @@ const LAYER_CONFIG: Record<string, { layer: string; desc: string }> = {
   'daemon/sessions.ts':       { layer: 'core',      desc: 'SessionRegistry, ThreadRegistry, session catalog' },
   'daemon/bridge-transport.ts': { layer: 'core',    desc: 'BridgeConn map, message queuing, flush' },
   'daemon/util.ts':           { layer: 'core',      desc: 'safeSend, chunk, parseContextPercent, formatDuration, baseNameFromBranch' },
+  'daemon/tmux.ts':           { layer: 'core',      desc: 'Sync tmux, bounded with a hold: tmuxSync, session and server state, window activity' },
   'daemon/worktree-manager.ts': { layer: 'core',    desc: 'Git worktree create/reattach/destroy, unpushed-commit check' },
   'daemon/bridge-tools.ts':   { layer: 'tools',     desc: 'UNIVERSAL_TOOLS, computeToolsForSession — zero daemon imports (cycle guard)' },
   'daemon/tool-surface.ts':   { layer: 'tools',     desc: 'getToolsForSession, pushToolSurface — reads SessionInfo, bridges to bridge-tools' },

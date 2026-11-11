@@ -1,6 +1,6 @@
-import { execFileSync } from 'child_process'
 import { PLATFORM } from './config.js'
 import { byteTmuxName } from '../shared/constants.js'
+import { tmuxSync } from './tmux.js'
 import { claudeEngine } from './engines/instances.js'
 import type { InboundMessage } from '../gateway.js'
 
@@ -21,7 +21,7 @@ export function mainContext(): string | null {
 /** When the byte's tmux session started, in ms; now if tmux won't say. */
 export function mainStartedAt(): number {
   try {
-    const sec = Number(execFileSync('tmux', ['display-message', '-p', '-t', mainTmux(), '#{session_created}'], { stdio: 'pipe', timeout: 2000 }).toString())
+    const sec = Number(tmuxSync(['display-message', '-p', '-t', mainTmux(), '#{session_created}']))
     if (sec > 0) return sec * 1000
   } catch {}
   return Date.now()

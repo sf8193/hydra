@@ -224,7 +224,7 @@ export async function fetchPrTitle(url: string): Promise<string | null> {
 function loadGhToken(): string | null {
   if (ghToken) return ghToken
   try {
-    ghToken = execSync('gh auth token 2>/dev/null', { encoding: 'utf8', timeout: 5000 }).trim()
+    ghToken = execSync('gh auth token 2>/dev/null', { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' }).trim()
     return ghToken
   } catch {
     process.stderr.write('daemon: pr-watch: failed to get gh auth token\n')

@@ -434,7 +434,7 @@ export function buildAutopsy(info: SessionInfo, reason: string, blackBoxTail: st
  *  `pipe-pane` capture). Uses `tail`, which seeks from the end, so a multi-hundred-MB
  *  pane log isn't read into memory. Throws if the file is missing/unreadable. */
 export function tailSpawnLog(path: string, maxLines: number = CRASH_LOG_TAIL_LINES): string[] {
-  const out = execFileSync('tail', ['-n', String(maxLines), path], { encoding: 'utf8' })
+  const out = execFileSync('tail', ['-n', String(maxLines), path], { encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL' })
   const lines = out.split('\n')
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
   return lines

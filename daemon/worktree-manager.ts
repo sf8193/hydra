@@ -1,7 +1,7 @@
 // Unified worktree create/destroy — extracted from session-lifecycle.ts and build.ts.
 // All git operations use async execFile to avoid blocking the event loop.
 
-import { execFile, execFileSync } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { dirname, join, resolve } from 'path'
 import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'fs'
@@ -56,7 +56,7 @@ export type WorktreeResult = {
  * git repo. Single source of truth so a caller's early check and
  * createWorktree's actual creation can never disagree on resolution.
  */
-export function resolveAndValidateRepo(repoName: string, spawnCwd: string): string {
+export async function resolveAndValidateRepo(repoName: string, spawnCwd: string): Promise<string> {
   const base = resolve(spawnCwd)
   const repoDir = resolve(base, repoName)
   // Mirror validateWorktreeTarget's bounds check: the target must be strictly
@@ -67,8 +67,10 @@ export function resolveAndValidateRepo(repoName: string, spawnCwd: string): stri
     throw new Error(`worktree target "${repoName}" resolves to ${repoDir}, not a repo nested under SPAWN_CWD (${base}) — the root repo cannot be isolated and out-of-bounds paths are refused`)
   }
   try {
-    execFileSync('git', ['-C', repoDir, 'rev-parse', '--git-dir'], { stdio: 'pipe' })
-  } catch {
+    // Async, off the daemon's loop; 15 s, since a loaded machine has been seen taking 5 s over a rev-parse.
+    await execAsync('git', ['-C', repoDir, 'rev-parse', '--git-dir'], { timeout: 15_000, killSignal: 'SIGKILL' })
+  } catch (err) {
+    if ((err as { killed?: boolean }).killed) throw new Error(`worktree target "${repoName}": git did not answer within 15s at ${repoDir}`)
     throw new Error(`worktree target "${repoName}" is not a git repo at ${repoDir}`)
   }
   return repoDir
@@ -115,7 +117,7 @@ export async function workAtRisk(repoDir: string, worktreePath: string, branch?:
  */
 export async function createWorktree(config: WorktreeConfig): Promise<WorktreeResult> {
   const { repoName, spawnCwd, branchName, dirSuffix } = config
-  const repoDir = resolveAndValidateRepo(repoName, spawnCwd)
+  const repoDir = await resolveAndValidateRepo(repoName, spawnCwd)
 
   // Serialize per-repo so concurrent spawns/recoveries on the same repo don't race the
   // worktree admin lock.

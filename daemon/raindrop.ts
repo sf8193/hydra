@@ -1,6 +1,6 @@
 import { appendFileSync } from 'fs'
-import { execFileSync } from 'child_process'
 import { occupancy, occupied } from './session-reachability.js'
+import { tmuxSync } from './tmux.js'
 import { join, basename, resolve, sep } from 'path'
 import { homedir } from 'os'
 import { STATE_DIR, PLATFORM, RAINDROP_ENV, RAINDROP_DRYRUN_FILE } from './config.js'
@@ -220,7 +220,7 @@ export function defaultProjectFor(repoPath: string): string | undefined {
     const proc = Bun.spawnSync(
       ['git', '-C', repoPath, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
       // ponytail: fixed timeout; a loaded CI runner has hit this and read "not a repo" for a git that just hadn't answered yet (seen Sep 2026).
-      { stdout: 'pipe', stderr: 'ignore', timeout: 5000, env: gitProbeEnv() },
+      { stdout: 'pipe', stderr: 'ignore', timeout: 5000, killSignal: 'SIGKILL', env: gitProbeEnv() },
     )
     if (proc.exitCode !== 0) return undefined
     const common = proc.stdout.toString().trim()
@@ -230,7 +230,7 @@ export function defaultProjectFor(repoPath: string): string | undefined {
 
 function readBytePaneCommand(): string {
   try {
-    return execFileSync('tmux', bytePaneArgv(), { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
+    return tmuxSync(bytePaneArgv())
   } catch { return '' }
 }
 

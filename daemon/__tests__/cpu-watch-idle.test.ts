@@ -4,10 +4,10 @@
 import { afterAll, expect, mock, test } from 'bun:test'
 import type { SessionInfo } from '../sessions.js'
 
-const real = await import('../util.js')
+const real = await import('../tmux.js')
 let answered = 0
 const later = <T>(v: T) => new Promise<T>(r => setTimeout(() => { answered++; r(v) }, 30))
-mock.module('../util.js', () => ({
+mock.module('../tmux.js', () => ({
   ...real,
   isTmuxRecentlyActiveSync: () => { throw new Error('sync tmux on the vitals tick') },
   tmuxSilentLongerThanSync: () => { throw new Error('sync tmux on the vitals tick') },

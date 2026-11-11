@@ -2,10 +2,10 @@ import { randomBytes } from 'crypto'
 import { readFileSync } from 'fs'
 import { occupancy, occupied } from './session-reachability.js'
 import { join } from 'path'
-import { execSync, execFileSync } from 'child_process'
 import { STATE_DIR, STATE_WRITABLE } from './config.js'
 import { emit } from './event-bus.js'
 import { atomicWriteFileSync, baseNameFromBranch } from './util.js'
+import { tmuxSessionState, tmuxSync } from './tmux.js'
 import { CAPABILITY_TOOLS } from '../shared/constants.js'
 import { SESSION_CATALOG, SESSION_NAMES } from '../shared/session-catalog.js'
 import type { SessionType, Capability, ToolName, SessionLabel } from '../shared/constants.js'
@@ -401,8 +401,9 @@ export class SessionRegistry {
     // persisting its replacement, when the record-based reservation above doesn't yet apply.
     // The reuse name is reserved by recovery for this very spawn.
     for (const n of this.reservedNames) if (n !== keep) used.add(n)
+    // During a hold tmux isn't asked and its names are missed: new-session on a taken name then fails cleanly, and the caller sees the error.
     try {
-      const tmuxOut = execSync('tmux ls -F "#{session_name}" 2>/dev/null', { encoding: 'utf8' })
+      const tmuxOut = tmuxSync(['ls', '-F', '#{session_name}'])
       for (const line of tmuxOut.split('\n')) {
         if (line.trim()) used.add(line.trim())
       }
@@ -515,18 +516,16 @@ export class SessionRegistry {
         // after restart — kill them and discard
         if (info.sessionType === 'thread_guest') {
           // Only the state's owner kills: a one-off script importing this module must not touch live sessions.
-          if (STATE_WRITABLE) try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+          if (STATE_WRITABLE) try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch {}
           pruned++
           continue
         }
 
         // One name runs one session: a record a later one took the name from is not what runs under it.
         const succeeded = data.some(o => o !== info && o.tmuxName === info.tmuxName && o.createdAt > info.createdAt)
-        let tmuxAlive = false
-        if (!succeeded) try {
-          execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' })
-          tmuxAlive = true
-        } catch {}
+        // A tmux that doesn't answer says nothing about the record: it keeps the state it was saved with.
+        const state = succeeded ? 'dead' : tmuxSessionState(info.tmuxName)
+        const tmuxAlive = state === 'alive' || (state === 'not responding' && !info.deadAt)
 
         if (classifyPersisted(info, tmuxAlive) === 'live') {
           delete info.deadAt

@@ -3,11 +3,11 @@
 // Codex engine adapter — wraps the CodexEngine (app-server + unix socket)
 // and the disposable tmux TUI.
 
-import { execFile, execFileSync, execSync } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
-import { codexSpawnEnv, tmuxNewSession } from '../../shared/spawn-env.js'
+import { codexSpawnEnv } from '../../shared/spawn-env.js'
 import { registry, type SessionInfo } from '../sessions.js'
 import type { BlockingState } from '../pane-probe.js'
 import type {
@@ -19,7 +19,8 @@ import type {
 import { codexUsageTotals } from '../codex-rollout.js'
 import { codexSocketPath, type CodexEngine } from '../codex-engine.js'
 import { codexHomeDir as codexHomeDirFn, codexRoot, startCodexAppServer, stopCodexAppServer } from '../codex-process.js'
-import { parseContextPercent, safeSend, tmuxHasSession, tmuxWindowActivity } from '../util.js'
+import { parseContextPercent, safeSend } from '../util.js'
+import { tmuxCreateSession, tmuxHasSession, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../tmux.js'
 import { sendTmuxKeys, type TmuxKeyAction } from '../codex-key-queue.js'
 import { SOCK_PATH, STATE_DIR } from '../config.js'
 import { codexTurnOutcome, defaultTurnSources, isCodexWorking } from './codex-observation.js'
@@ -38,9 +39,11 @@ function registerCodexMcp(homeDir: string, sessionId: string, tmuxName: string):
       `mkdir -p ${shq(homeDir)}`,
       `ln -sf ${shq(join(codexRoot(), 'auth.json'))} ${shq(homeDir)}/auth.json`,
       `CODEX_HOME=${shq(homeDir)} codex mcp remove hydra 2>/dev/null; CODEX_HOME=${shq(homeDir)} codex mcp add hydra --env DAEMON_SOCK=${shq(SOCK_PATH)} --env HYDRA_SESSION_ID=${shq(sessionId)} -- bun ${shq(mcpServerPath)}`,
-    ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv() })
+    ].join(' && ')], { stdio: 'pipe', env: codexSpawnEnv(), timeout: 15_000, killSignal: 'SIGKILL' })   // two codex CLI starts
   } catch (err) {
-    process.stderr.write(`daemon: codex MCP registration failed for ${tmuxName}: ${err}\n`)
+    process.stderr.write((err as { code?: string }).code === 'ETIMEDOUT'
+      ? `daemon: codex MCP registration for ${tmuxName} timed out; codex may still be finishing it\n`
+      : `daemon: codex MCP registration failed for ${tmuxName}: ${err}\n`)
   }
 }
 
@@ -255,7 +258,10 @@ export class CodexEngineAdapter implements EngineAdapter {
     const home = info.codexHomeName ?? info.tmuxName
     const claimed = [...registry.values()].some(s => s !== info && !s.deadAt && s.engine === 'codex' && (s.codexHomeName ?? s.tmuxName) === home)
     if (!claimed) this.proc.stop(home)
-    try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+    try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch (err) {
+      // Any other failure is a session already gone; a timeout says nothing.
+      if (tmuxTimedOut(err)) return { status: 'uncertain', reason: 'tmux not responding' }
+    }
     return { status: 'stopped' }
   }
 
@@ -267,17 +273,11 @@ export class CodexEngineAdapter implements EngineAdapter {
 
   peek(info: SessionInfo, lines: number = 50): string {
     try {
-      return execSync(
-        `tmux capture-pane -t ${shq(`${info.tmuxName}:hydra-chat`)} -p -S -${lines}`,
-        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000 },
-      ).trimEnd()
+      return tmuxSync(['capture-pane', '-t', `${info.tmuxName}:hydra-chat`, '-p', '-S', `-${lines}`]).trimEnd()
     } catch {
       // Fall back to main pane if hydra-chat window doesn't exist
       try {
-        return execSync(
-          `tmux capture-pane -t ${shq(info.tmuxName)} -p -S -${lines}`,
-          { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000 },
-        ).trimEnd()
+        return tmuxSync(['capture-pane', '-t', info.tmuxName, '-p', '-S', `-${lines}`]).trimEnd()
       } catch { return '' }
     }
   }
@@ -289,8 +289,7 @@ export class CodexEngineAdapter implements EngineAdapter {
     }
     // Fall back to pane-capture approach
     try {
-      const pane = execFileSync('tmux', ['capture-pane', '-t', `${info.tmuxName}:hydra-chat`, '-p'],
-        { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
+      const pane = tmuxSync(['capture-pane', '-t', `${info.tmuxName}:hydra-chat`, '-p'])
       const percent = parseContextPercent(pane)
       if (percent === null) return null
       return { usedTokens: 0, contextWindow: 0, percent }
@@ -310,16 +309,10 @@ export class CodexEngineAdapter implements EngineAdapter {
       // Recreate a durable container around that live engine.
       if (!tmuxHasSession(info.tmuxName)) {
         if (!this.engine.isConnected(info.sessionId)) return null
-        try {
-          tmuxNewSession(['-d', '-s', info.tmuxName, '-n', 'hydra-anchor', 'while :; do sleep 3600; done'],
-            { encoding: 'utf8', timeout: 2000 })
-          process.stderr.write(`daemon: codex adapter recreated tmux container for ${info.tmuxName}\n`)
-        } catch (err) {
-          if (!tmuxHasSession(info.tmuxName)) throw err
-        }
+        tmuxCreateSession(info.tmuxName, ['-n', 'hydra-anchor', 'while :; do sleep 3600; done'], { encoding: 'utf8', timeout: 2000 })
+        process.stderr.write(`daemon: codex adapter recreated tmux container for ${info.tmuxName}\n`)
       }
-      const windows = execFileSync('tmux', ['list-windows', '-t', info.tmuxName, '-F', '#{window_name}'],
-        { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
+      const windows = tmuxSync(['list-windows', '-t', info.tmuxName, '-F', '#{window_name}'])
       if (windows.split('\n').includes('hydra-chat')) return target
       // Never start a TUI against a dead server; the anchor alone would let this through.
       if (!this.engine.isConnected(info.sessionId)) return null
@@ -327,8 +320,7 @@ export class CodexEngineAdapter implements EngineAdapter {
       const codexHome = codexHomeDirFn(homeName)
       const socket = codexSocketPath(homeName)
       const command = `export CODEX_HOME=${shq(codexHome)} && codex resume ${shq(info.codexThreadId)} --remote ${shq(`unix://${socket}`)}`
-      execFileSync('tmux', ['new-window', '-n', 'hydra-chat', '-t', info.tmuxName, command],
-        { encoding: 'utf8', timeout: 2000, stdio: 'pipe' })
+      tmuxSync(['new-window', '-n', 'hydra-chat', '-t', info.tmuxName, command])
       process.stderr.write(`daemon: codex adapter recreated TUI for ${info.tmuxName}\n`)
       return target
     } catch (err) {
