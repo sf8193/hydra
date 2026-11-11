@@ -56,7 +56,7 @@ export function pollSessionsOnce(now: number): void {
       }
       if (!orphanAlerted.has(info.sessionId)) {
         orphanAlerted.set(info.sessionId, now)
-        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, bridge disconnected for ${Math.round(bridgeWaitMs(info.createdAt, now) / 1000)}s)${channelNoteSentence(info)}\n`)
+        process.stderr.write(`daemon: orphan detected: ${info.tmuxName} (tmux alive, no bridge for ${Math.round(bridgeWaitMs(info.createdAt, now) / 1000)}s awake)${channelNoteSentence(info)}\n`)
         newOrphans.push(info)
       }
     } else {

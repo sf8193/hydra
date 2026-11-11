@@ -11,6 +11,8 @@
  * keeps trying, because a dead Slack token must not take the Discord daemon with it.
  */
 
+import { awakeSince } from './resume.js'
+
 export const HEALTH_CHECK_MS = 60_000
 export const HEALTH_CHECK_FAST_MS = 10_000
 export const STALE_THRESHOLD_MS = 3 * 60_000
@@ -44,6 +46,8 @@ export type SocketSupervisorOpts = {
   staleThresholdMs?: number
   // Injected for tests.
   now?: () => number
+  /** How long the socket has been down, in time awake (shared/resume.ts): a sleep is not an outage. */
+  awakeSince?: (t: number, now: number) => number
   fetch?: (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boolean }>
   log?: (line: string) => void
 }
@@ -63,6 +67,7 @@ export type SocketState = {
 export class SocketSupervisor {
   private readonly o: SocketSupervisorOpts
   private readonly now: () => number
+  private readonly awakeSince: (t: number, now: number) => number
   private readonly log: (line: string) => void
   private readonly staleMs: number
   private connected = false
@@ -80,6 +85,7 @@ export class SocketSupervisor {
   constructor(opts: SocketSupervisorOpts) {
     this.o = opts
     this.now = opts.now ?? Date.now
+    this.awakeSince = opts.awakeSince ?? awakeSince
     this.log = opts.log ?? (line => { process.stderr.write(line) })
     this.staleMs = opts.staleThresholdMs ?? STALE_THRESHOLD_MS
     this.lastActivityAt = this.now()
@@ -173,17 +179,18 @@ export class SocketSupervisor {
    * clientPingTimeout/3 (1.67s at the default 5s), starts closing the socket once no pong has come
    * for over 5s and terminates it one ping later, times the server out at 30s, and auto-reconnects
    * faster than this watchdog. Intervene only once it has been *continuously* disconnected past the
-   * threshold, so a self-healing blip never trips it. Without the lifecycle hook, fall back to
-   * event-time staleness.
+   * threshold, so a self-healing blip never trips it. Down time counts only while awake: a socket that
+   * went down as the machine slept gets the client's own reconnect, on wake, before this steps in. Without
+   * the lifecycle hook, fall back to event-time staleness, by wall time: after a sleep it is time to look.
    */
   async tick(): Promise<void> {
     const now = this.now()
+    const downFor = this.downSince !== null ? this.awakeSince(this.downSince, now) : null
     const stale = this.hooked
-      ? (!this.connected && this.downSince !== null && (now - this.downSince) > this.staleMs)
+      ? (!this.connected && downFor !== null && downFor > this.staleMs)
       : ((now - this.lastActivityAt) > this.staleMs)
     if (stale) {
-      const downFor = this.downSince !== null ? now - this.downSince : now - this.lastActivityAt
-      this.log(`${this.o.name}: socket down ${Math.round(downFor / 1000)}s (connected=${this.connected}), attempting reconnect\n`)
+      this.log(`${this.o.name}: socket down ${Math.round((downFor ?? now - this.lastActivityAt) / 1000)}s (connected=${this.connected}), attempting reconnect\n`)
       await this.reconnect()
     }
     // While hooked, withhold the heartbeat once the socket has been down past the threshold, so a

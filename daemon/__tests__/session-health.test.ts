@@ -16,7 +16,8 @@ import type { SessionInfo } from '../sessions.js'
 import { transport } from '../bridge-transport.js'
 import { gateway, ACCESS_FILE, envPercent } from '../config.js'
 import { noteMainChannel } from '../main-session.js'
-import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting } from '../session-reachability.js'
+import { ORPHAN_GRACE_MS, _setDaemonStartedAtForTesting, occupancy } from '../session-reachability.js'
+import { createResumeDetector, installResumeDetector } from '../../shared/resume.js'
 import { requestHandoff } from '../session-lifecycle.js'
 import { pendingPermissions } from '../permission.js'
 import { HANDOFF_TEMPLATE_DIR } from '../handoff-templates.js'
@@ -126,6 +127,21 @@ describe('crash detection', () => {
 })
 
 describe('orphan detection', () => {
+  test('a session spawned a minute before a 99-min sleep is starting on wake, not orphaned: only awake time counts', () => {
+    const detector = createResumeDetector({ lastSleep: async () => null, log: () => {} })
+    installResumeDetector(detector)
+    try {
+      const info = seed({ ageMs: 100 * 60_000 })
+      tmux.alive(info.tmuxName)
+      detector.noteResume(99 * 60_000, NOW, NOW - 99 * 60_000)
+      expect(occupancy(info, NOW)).toBe('starting')
+      pollSessionsOnce(NOW)
+      expect(stderr.join('')).not.toContain(`orphan detected: ${info.tmuxName}`)
+      expect(to(info, '⚠️')).toHaveLength(0)
+      expect(occupancy(info, NOW + ORPHAN_GRACE_MS)).toBe('orphaned') // its grace runs on, awake
+    } finally { installResumeDetector(undefined) }
+  })
+
   test('a record stamped dead whose tmux is still alive is alerted as an orphan, not left silent', () => {
     const info = seed({ ageMs: OLD, claudeSessionId: 'known', deadAt: NOW - 1000 })
     tmux.alive(info.tmuxName)

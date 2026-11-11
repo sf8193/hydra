@@ -80,10 +80,10 @@ describe('loop watch: worst lag', () => {
 })
 
 describe('loop watch: a gap is not a stall', () => {
-  test('a gap of RESUME_GAP_MS or more with no slow callback logs one gap line, goes to onResume, and is not counted or alerted', () => {
+  test('a gap of RESUME_GAP_MS or more with no slow callback goes to onResume, which names it, and is not counted or alerted', () => {
     const t = setup()
     t.advance(99 * 60_000); t.idle(0)
-    expect(t.logs).toEqual([`daemon: event loop gap ${99 * 60_000 - LOOP_BEAT_MS}ms that no timed callback explains (a sleep, or an untimed block)\n`])
+    expect(t.logs).toEqual([])
     expect(t.resumes).toEqual([[99 * 60_000 - LOOP_BEAT_MS, t.now()]])
     t.advance(RESUME_GAP_MS + LOOP_BEAT_MS); t.idle(0)
     expect(t.resumes).toHaveLength(2)
@@ -92,13 +92,18 @@ describe('loop watch: a gap is not a stall', () => {
     expect(t.alerts).toEqual([])
   })
 
+  test('with no onResume, the watch logs the gap itself', () => {
+    const t = setup({ onResume: undefined })
+    t.advance(99 * 60_000); t.idle(0)
+    expect(t.logs).toEqual([`daemon: event loop gap ${99 * 60_000 - LOOP_BEAT_MS}ms that no timed callback explains (a sleep, or an untimed block)\n`])
+  })
+
   test('a callback that runs on wake does not turn the sleep into a stall', () => {
     const t = setup()
     t.advance(99 * 60_000)
     t.block('x', 300)
-    const gap = 99 * 60_000 + 100 + 300 - LOOP_BEAT_MS
-    expect(t.logs).toEqual([`daemon: event loop gap ${gap}ms that no timed callback explains (a sleep, or an untimed block)\n`])
-    expect(t.resumes).toHaveLength(1)
+    expect(t.resumes).toEqual([[99 * 60_000 + 100 - LOOP_BEAT_MS, t.now()]]) // the gap is what the callback does not explain
+    expect(t.logs).toEqual([])
     expect(t.watch.takeWorstLagMs()).toBe(0)
     expect(t.alerts).toEqual([])
   })

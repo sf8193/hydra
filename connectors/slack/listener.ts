@@ -7,6 +7,7 @@ import { dirname } from 'path'
 import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import type { HydraConfig } from '../../config/types.js'
 import { timed } from '../../shared/loop-watch.js'
+import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
 
 /**
  * The Slack connector: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
@@ -151,6 +152,8 @@ export type ListenerDeps = {
   alert: (text: string) => void
   log: (line: string) => void
   now?: () => number
+  /** Time the daemon was suspended (shared/resume.ts): the catch-up alarm and the supervisor age by awake time. */
+  resumes?: Pick<ResumeDetector, 'awakeSince' | 'suspendedSince'>
   healthUrl?: string
   /** First delay before retrying a failed first connection; doubles up to 5 minutes. */
   firstRetryBaseMs?: number
@@ -159,6 +162,7 @@ export type ListenerDeps = {
 
 export class SlackListener {
   private readonly now: () => number
+  private readonly resumes: Pick<ResumeDetector, 'awakeSince' | 'suspendedSince'>
   private app: SlackAppLike | null = null
   private sup: SocketSupervisor | null = null
   private started = false
@@ -167,6 +171,8 @@ export class SlackListener {
   private everConnected = false
   /** The latest moment the live stream was known not to be delivering: a drop, or the reconnect that ended one. */
   private lastGapAt = 0
+  /** A resume asked for a fresh socket: the catch-up pass that follows is the resume's, whether a socket came up or not. */
+  private resumePassOwed = false
   /** When the last complete catch-up pass started: everything before it has been read. Null until one completes. */
   private lastOkCatchUpStartedAt: number | null = null
   private catching = false
@@ -186,6 +192,7 @@ export class SlackListener {
 
   constructor(private readonly d: ListenerDeps) {
     this.now = d.now ?? Date.now
+    this.resumes = d.resumes ?? { awakeSince, suspendedSince }
   }
 
   /** What the watcher routes with: hydra.toml joined with what this connection learned. Null until connected once. */
@@ -236,6 +243,7 @@ export class SlackListener {
       // Degrade, never exit: the supervisor keeps trying at its capped backoff, and health and the alert say so.
       onExhausted: n => this.d.log(`daemon: slack listener: ${n} reconnect attempts failed; still trying, see health\n`),
       now: this.now,
+      awakeSince: (t, now) => this.resumes.awakeSince(t, now),
       fetch: this.d.fetch,
       log: this.d.log,
     })
@@ -308,7 +316,7 @@ export class SlackListener {
       const was = this.everConnected
       this.everConnected = true
       // Every connection after the first follows a gap, however short: Slack replays nothing.
-      if (was) { this.noteGap(); void this.runCatchUp(true, 'reconnected') }
+      if (was) { this.noteGap(); void this.runCatchUp(true, this.takeResumePass() ? 'resumed' : 'reconnected') }
     })
     // Who the bot is and what the channels are called, before the socket opens: routing needs both for the first event.
     const auth = await app.authTest().catch(err => { this.d.log(`daemon: slack listener: auth.test failed: ${err}\n`); return {} as { botId?: string; userId?: string; url?: string; scopes?: string[] } })
@@ -352,6 +360,26 @@ export class SlackListener {
   /** The live stream may have missed something now. The one place a gap is recorded, whatever its source. */
   private noteGap(): void {
     this.lastGapAt = this.now()
+  }
+
+  /**
+   * The daemon ran again after a sleep (or a minute or more held). The socket is likely dead though nothing has said so
+   * yet, and Slack replays nothing: record the gap, ask the supervisor to replace the socket (it waits for the network),
+   * and catch up. The new socket's `connected` runs that pass; if none came up, it runs anyway, and retries until one
+   * completes. A reconnect already in flight is not replaced: its own `connected` may then run a second pass
+   * (`reconnected`) after this one, which is harmless: a pass reads only what the cursors have not.
+   */
+  onResume(): void {
+    if (!this.started || !this.sup) return
+    this.noteGap()
+    this.resumePassOwed = true
+    void this.sup.reconnect().finally(() => { if (this.takeResumePass()) void this.runCatchUp(true, 'resumed') })
+  }
+
+  private takeResumePass(): boolean {
+    const owed = this.resumePassOwed
+    this.resumePassOwed = false
+    return owed
   }
 
   /**
@@ -418,7 +446,8 @@ export class SlackListener {
     const downSince = s?.downSince ?? (state === 'connecting' ? this.startedAt : null)
     return {
       state,
-      downMin: state === 'up' || state === 'off' || downSince === null ? null : min(now - downSince),
+      // Awake time: a socket that closed before the lid did has not been down while the machine slept.
+      downMin: state === 'up' || state === 'off' || downSince === null ? null : min(this.resumes.awakeSince(downSince, now)),
       lastActivityAgeMin: s ? min(now - s.lastActivityAt) : null,
       catchUp: this.lastCatchUp ? { ageMin: min(now - this.lastCatchUp.at), ok: this.lastCatchUp.result.complete, accepted: this.lastCatchUp.result.accepted, ...(this.lastCatchUp.result.reason && { reason: this.lastCatchUp.result.reason }) } : null,
       lastOkCatchUpAgeMin: this.lastOkCatchUpAt === null ? null : min(now - this.lastOkCatchUpAt),
@@ -432,15 +461,19 @@ export class SlackListener {
     const now = this.now()
     if (h.state !== 'up' && h.downMin !== null && h.downMin * 60_000 >= DOWN_ALERT_AFTER_MS && !this.alerted.down) {
       this.alerted.down = true
-      this.d.alert(`⚠️ The Slack listener has been ${h.state} for ${h.downMin} min. Mentions are not arriving live; the catch-up pass replays them once it reconnects.`)
+      this.d.alert(`⚠️ The Slack listener has been ${h.state} for ${h.downMin} min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects.`)
     } else if (h.state === 'up' && this.alerted.down) {
       this.alerted.down = false
       this.d.alert('✅ The Slack listener is connected again.')
     }
-    const sinceOk = this.lastOkCatchUpAt === null ? now - this.startedAt : now - this.lastOkCatchUpAt
-    if (sinceOk >= CATCH_UP_STALE_AFTER_MS && !this.alerted.catchUp) {
+    // Overdue by awake time: no pass can complete while the machine sleeps, so a sleep is named, not counted.
+    const since = this.lastOkCatchUpAt ?? this.startedAt
+    const overdue = this.resumes.awakeSince(since, now)
+    if (overdue >= CATCH_UP_STALE_AFTER_MS && !this.alerted.catchUp) {
       this.alerted.catchUp = true
-      this.d.alert(`⚠️ The Slack catch-up pass has not completed for ${Math.round(sinceOk / 60_000)} min${h.catchUp?.reason ? ` (${h.catchUp.reason})` : ''}. Live delivery is unaffected, but a gap would not be filled.`)
+      const away = this.resumes.suspendedSince(since, now)
+      const notes = [...(away ? [`${describeCause(away.cause)} for ${Math.round(away.ms / 60_000)} min`] : []), ...(h.catchUp?.reason ? [h.catchUp.reason] : [])]
+      this.d.alert(`⚠️ The Slack catch-up pass has not completed for ${Math.round(overdue / 60_000)} min${away ? ' awake' : ''}${notes.length ? ` (${notes.join('; ')})` : ''}. Live delivery is unaffected, but a gap would not be filled.`)
     }
   }
 }

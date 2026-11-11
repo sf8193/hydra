@@ -112,7 +112,7 @@ for (const adapter of Object.values(engines)) {
 import { register as registerRaindrop } from './daemon/raindrop.js'
 registerRaindrop()
 
-import { logSubscriptions } from './daemon/event-bus.js'
+import { logSubscriptions, emit } from './daemon/event-bus.js'
 queueMicrotask(logSubscriptions)
 
 import { initPhaseBudgets } from './daemon/phase-budget.js'
@@ -125,8 +125,13 @@ backfillAnchorChannelIds().catch(err => {
   process.stderr.write(`daemon: anchorChannelId backfill failed: ${err}\n`)
 })
 
-import { startLoopWatch, timed } from './shared/loop-watch.js'
-startLoopWatch({ alert: notifyOperator })
+import { startLoopWatch, timed, pendingGap, heldNotAsleep } from './shared/loop-watch.js'
+import { createResumeDetector, installResumeDetector } from './shared/resume.js'
+// The loop watch hands each unexplained gap to the resume detector, which every age-based alarm reads; a gap the OS
+// says was no sleep comes back to the watch as a stall, alerted under its limit.
+const resumes = createResumeDetector({ pendingGap, onStalled: heldNotAsleep })
+installResumeDetector(resumes)
+startLoopWatch({ alert: notifyOperator, onResume: (gapMs, at, servedAt) => { resumes.noteResume(gapMs, at, servedAt); emit('clock:resumed', { at, gapMs }) } })
 
 import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
