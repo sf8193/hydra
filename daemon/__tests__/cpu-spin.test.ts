@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import {
-  parsePs, createCpuMeter, createSpinTracker, hotProcess, parseSwapUsage, parseMeminfoSwap,
+  parsePs, createCpuMeter, createSpinTracker, hotProcess, parseSwapUsage, parseMeminfoSwap, parseMemoryPressure, createHostIdleMeter,
   formatPressure, formatSpinAlert, formatCpuSummary, claudeAncestor, startedAt,
 } from '../cpu-spin.js'
 import { parseCpuTime } from '../../shared/constants.js'
@@ -152,17 +152,45 @@ describe('spin classifier', () => {
 
 describe('system pressure', () => {
   test('macOS sysctl vm.swapusage', () => {
-    expect(parseSwapUsage('vm.swapusage: total = 6144.00M  used = 4836.00M  free = 1308.00M  (encrypted)')).toBe(4836)
-    expect(parseSwapUsage('total = 2.00G  used = 1.50G  free = 0.50G')).toBe(1536)
+    expect(parseSwapUsage('vm.swapusage: total = 6144.00M  used = 4836.00M  free = 1308.00M  (encrypted)')).toEqual({ usedMB: 4836, totalMB: 6144 })
+    expect(parseSwapUsage('total = 2.00G  used = 1.50G  free = 0.50G')).toEqual({ usedMB: 1536, totalMB: 2048 })
     expect(parseSwapUsage('nonsense')).toBeUndefined()
   })
+  test('macOS pressure level and swap, from the one sysctl read', () => {
+    const out = 'kern.memorystatus_vm_pressure_level: 1\nvm.swapusage: total = 5120.00M  used = 3387.31M  free = 1732.69M  (encrypted)\n'
+    expect(parseMemoryPressure(out)).toBe('normal')
+    expect(parseSwapUsage(out)).toEqual({ usedMB: 3387, totalMB: 5120 })
+    expect(parseMemoryPressure('kern.memorystatus_vm_pressure_level: 2')).toBe('warn')
+    expect(parseMemoryPressure('kern.memorystatus_vm_pressure_level: 4')).toBe('critical')
+    // An unknown level, or none (an OID this macOS lacks), is no reading.
+    expect(parseMemoryPressure('kern.memorystatus_vm_pressure_level: 3')).toBeUndefined()
+    expect(parseMemoryPressure(out.split('\n')[1])).toBeUndefined()
+  })
   test('Linux /proc/meminfo', () => {
-    expect(parseMeminfoSwap('MemTotal:  1 kB\nSwapTotal:     2097152 kB\nSwapFree:      1048576 kB\n')).toBe(1024)
+    expect(parseMeminfoSwap('MemTotal:  1 kB\nSwapTotal:     2097152 kB\nSwapFree:      1048576 kB\n')).toEqual({ usedMB: 1024, totalMB: 2048 })
     expect(parseMeminfoSwap('MemTotal: 1 kB\n')).toBeUndefined()
   })
   test('formatPressure', () => {
     expect(formatPressure({ load1: 7.234, cores: 10, swapUsedMB: 4836 })).toBe('load=7.2/10cores swap=4836MB')
     expect(formatPressure({ load1: 0.5, cores: 4 })).toBe('load=0.5/4cores')
+    // Everything host health judges by, so the log explains each verdict.
+    expect(formatPressure({ load1: 40.2, load15: 31.04, cores: 16, idlePct: 44, swapUsedMB: 15100, swapTotalMB: 16384 }))
+      .toBe('load=40.2/16cores load15=31.0 idle=44% swap=15100/16384MB')
+    expect(formatPressure({ load1: 1, cores: 4, memoryPressure: 'warn', swapUsedMB: 3387, swapTotalMB: 5120 })).toBe('load=1.0/4cores memory=warn swap=3387/5120MB')
+    // Idle floored: 14.6% under a 15% limit never reads as 15%.
+    expect(formatPressure({ load1: 1, cores: 4, idlePct: 14.6 })).toBe('load=1.0/4cores idle=14%')
+  })
+  test('host idle: from the change in every core\'s times, none on the first reading', () => {
+    const meter = createHostIdleMeter()
+    const core = (busy: number, idle: number) => ({ user: busy, nice: 0, sys: 0, idle, irq: 0 })
+    expect(meter([core(100, 100), core(100, 100)])).toBeUndefined()
+    // 400 ms elapsed across both cores, 60 of it idle.
+    expect(meter([core(270, 130), core(270, 130)])).toBe(15)
+    // Unrounded: 400 ms elapsed, 58.4 of it idle.
+    expect(meter([core(440.8, 159.2), core(440.8, 159.2)])).toBeCloseTo(14.6, 5)
+    // A clock that did not move has no answer, nor does a change in core count.
+    expect(meter([core(440.8, 159.2), core(440.8, 159.2)])).toBeUndefined()
+    expect(meter([core(300, 200)])).toBeUndefined()
   })
 })
 
@@ -193,5 +221,5 @@ test('formatSpinAlert: one message, every entry, combined cores, advice per kind
 test.if(process.platform === 'darwin')('swap is read with a PATH that leaves out /usr/sbin', async () => {
   const path = process.env.PATH
   process.env.PATH = '/usr/bin:/bin'
-  try { expect((await systemPressure()).swapUsedMB).toBeNumber() } finally { process.env.PATH = path }
+  try { const p = await systemPressure(); expect(p.swapUsedMB).toBeNumber(); expect(p.swapTotalMB).toBeNumber(); expect(['normal', 'warn', 'critical']).toContain(p.memoryPressure!) } finally { process.env.PATH = path }
 })

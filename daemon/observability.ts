@@ -13,6 +13,7 @@ import { transcriptPathFor } from './usage.js'
 import { sampleCpu, type CpuSample, type CpuVitals } from './cpu-watch.js'
 import { formatPct, formatPressure, type SystemPressure } from './cpu-spin.js'
 import { vitalsSnapshot, type PaneVitals } from './vitals-snapshot.js'
+import { createHostHealth, type HostHealth } from './host-health.js'
 import { byteTmuxName } from '../shared/constants.js'
 import { takeWorstLagMs, timed } from '../shared/loop-watch.js'
 
@@ -290,19 +291,21 @@ function frontTrim(path: string, maxBytes: number, keepBytes: number, label: str
   }
 }
 
-export function startVitalsSnapshots(isConnected: (id: string) => boolean): void {
+/** `alert` reaches the operator (the daemon passes `notifyOperator`): host health speaks through it. */
+export function startVitalsSnapshots(isConnected: (id: string) => boolean, { alert }: { alert: (text: string) => Promise<boolean> }): void {
+  const host = createHostHealth({ alert })
   // A tick that outlives the interval (a slow ps or tmux) is not stacked under the next.
   let ticking = false
   setInterval(() => timed('vitals', () => {
     if (ticking) return
     ticking = true
-    void vitalsTick(isConnected)
+    void vitalsTick(isConnected, host)
       .catch(err => process.stderr.write(`daemon: vitals failed: ${err}\n`))
       .finally(() => { ticking = false })
   }), VITALS_INTERVAL_MS).unref()
 }
 
-async function vitalsTick(isConnected: (id: string) => boolean): Promise<void> {
+async function vitalsTick(isConnected: (id: string) => boolean, host: HostHealth): Promise<void> {
   const now = Date.now()
   // Prune diagnostic state for gone-or-dead sessions. Each map/set is pruned by
   // liveness independently: a session that registered (→ correlatedSessions) but
@@ -322,6 +325,9 @@ async function vitalsTick(isConnected: (id: string) => boolean): Promise<void> {
   trimRaindropDryrun()
   const snap = await vitalsSnapshot()
   const { pressure } = snap
+  // Ahead of the empty-fleet return: the host can be in trouble with no session running.
+  // Like CPU sampling: a failure here must not cost the RSS line.
+  try { host.tick(snap, now) } catch (err) { process.stderr.write(`daemon: host health failed: ${err}\n`) }
   const panes = new Map(live.map(s => [s.sessionId, snap.pane(s.tmuxName)]))
   let cpu: CpuSample = { sessions: new Map(), orphans: [] }
   // CPU is an addition to the line: a sampling failure must not cost the RSS line.
