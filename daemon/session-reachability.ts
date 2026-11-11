@@ -12,7 +12,7 @@
  */
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
-import { tmuxHasSession } from './util.js'
+import { tmuxHasSession } from './tmux.js'
 import { awakeSince } from '../shared/resume.js'
 
 /** The one grace window: how long a running session may go without a bridge before it counts as orphaned. */

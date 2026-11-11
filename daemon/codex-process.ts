@@ -69,7 +69,7 @@ export function stopCodexAppServer(homeName: string): boolean {
     try { unlinkSync(pidPath) } catch {}
     if (Number.isSafeInteger(pid) && pid > 1) {
       try {
-        const command = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' })
+        const command = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL' })
         if (command.includes('codex') && command.includes('app-server')) {
           process.kill(pid, 'SIGTERM')
           killed = true
@@ -80,7 +80,7 @@ export function stopCodexAppServer(homeName: string): boolean {
 
   // 2. Scan for orphans with matching CODEX_HOME (catches double-spawn races)
   try {
-    const lines = execFileSync('ps', ['eww', '-A', '-o', 'pid=,command='], { encoding: 'utf8', timeout: 5000 })
+    const lines = execFileSync('ps', ['eww', '-A', '-o', 'pid=,command='], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' })
     for (const line of lines.split('\n')) {
       if (!line.includes('codex') || !line.includes('app-server') || !line.includes(`CODEX_HOME=${home}`)) continue
       const orphanPid = Number.parseInt(line.trim(), 10)

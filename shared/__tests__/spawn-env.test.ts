@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 import { join } from 'path'
 import { parseEnvLine } from '../env-parse.js'
 import {
-  SCRUBBED_SPAWN_VARS, SWEEP_ARGV, TMUX_PANE_FD_LIMIT,
+  NEW_SESSION_TIMEOUT_MS, SCRUBBED_SPAWN_VARS, SWEEP_ARGV, TMUX_PANE_FD_LIMIT,
   captureSpawnVars, codexSpawnEnv, scrubbedSpawnEnv, tmuxNewSession, withRaisedFdLimit,
 } from '../spawn-env.js'
 
@@ -118,6 +118,13 @@ test('the sweep is bounded well under the spawn budget it shares', () => {
   expect(sweep.opts.timeout).toBeLessThanOrEqual(500)
   expect(sweep.opts.encoding).toBe('utf8')
   expect(spawn.opts.timeout).toBe(2000)
+})
+
+test('new-session is killed at NEW_SESSION_TIMEOUT_MS when the caller names no bound', () => {
+  const { calls, exec } = capture()
+  tmuxNewSession(['-d', '-s', 'probe'], {}, exec)
+  expect(calls[1].opts).toMatchObject({ timeout: NEW_SESSION_TIMEOUT_MS, killSignal: 'SIGKILL' })
+  expect(calls[0].opts.timeout).toBe(500)
 })
 
 test('a caller asking for less than the sweep bound still gets its own bound', () => {

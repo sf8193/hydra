@@ -940,7 +940,7 @@ describe('adapter activityAt', () => {
         const info = { sessionId: 's1', tmuxName: 'cedar' } as SessionInfo
         fake.activity('cedar', 1234)
         expect(engines[provider].turn(info, 0).activityAt).toBe(1234)
-        expect(fake.calls()).toContain('display -t cedar -p #{window_activity}')
+        expect(fake.calls()).toContain('display-message -t cedar -p #{window_activity}')
         expect(engines[provider].turn({ ...info, tmuxName: 'gone' }, 0).activityAt).toBeNull()
       } finally { fake.restore() }
     })

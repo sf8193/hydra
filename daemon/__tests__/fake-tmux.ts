@@ -3,10 +3,10 @@
 // and without touching the developer's tmux server or ~/.claude.
 //
 // The shim's state lives in files in its directory:
-//   alive-<name>  → `has-session -t <name>` succeeds
+//   alive-<name>  → `has-session -t <name>` (or `=<name>`) succeeds
 //   pid-<name>    → `list-panes -t <name>` prints this pane pid
 //   pane-<name>   → `capture-pane -t <name>` prints this text
-//   activity-<name> → `display -t <name>` prints this (window_activity); absent → exit 1
+//   activity-<name> → `display`/`display-message -t <name>` prints this (window_activity); absent → exit 1
 //   calls         → one line per tmux invocation (its argv)
 // pgrep always finds nothing, so discovery's child-env fallback stays inert.
 
@@ -20,7 +20,7 @@ D=$(dirname "$0")
 echo "$*" >> "$D/calls"
 case "$1" in
   list-panes) cat "$D/pid-$3" 2>/dev/null ;;
-  has-session) [ -f "$D/alive-$3" ] ;;
+  has-session) [ -f "$D/alive-\${3#=}" ] ;;
   capture-pane) cat "$D/pane-$3" 2>/dev/null ;;
   display|display-message) cat "$D/activity-$3" 2>/dev/null ;;
   *) : ;;

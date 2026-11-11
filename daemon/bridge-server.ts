@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, unlinkSync, mkdirSync, chmodSync } from 'fs'
-import { execSync, execFileSync } from 'child_process'
 import { createServer, type Socket } from 'net'
 import { dirname } from 'path'
 import { gateway, SOCK_PATH, STATE_DIR, PLATFORM } from './config.js'
@@ -22,6 +21,7 @@ import { sessionFlapAction, shouldHoldIncumbentMain } from './main-guard.js'
 import { buildAutopsy, logCorrelation, tailSpawnLog, buildCrashNotice, getVitalsSample } from './observability.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { safeSend } from './util.js'
+import { tmuxSessionState, tmuxSync, TMUX_HOLD_MS } from './tmux.js'
 import { clearIdleLimit, resumeIdleLimit } from './idle-limit.js'
 import { createMainBridgeCycle, formatReconnectLine, mainCloseRecordsReason } from './main-bridge-cycle.js'
 import { emit } from './event-bus.js'
@@ -163,7 +163,7 @@ function handleBridgeMessage(conn: BridgeConn, raw: string): void {
         if (action === 'kill') {
           if (info) {
             process.stderr.write(`daemon: circuit breaker: ${info.tmuxName} flapping (${FLAP_THRESHOLD}+ registrations in ${FLAP_WINDOW_MS / 1000}s) — killing session\n`)
-            try { execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' }) } catch {}
+            try { tmuxSync(['kill-session', '-t', info.tmuxName]) } catch {}
             markDead(info)
             void gateway.send(info.threadId, `⚠️ **${info.tmuxName}** killed by circuit breaker — bridge was flapping (${FLAP_THRESHOLD}+ reconnects in ${FLAP_WINDOW_MS / 1000}s). Use \`respawn\` to start fresh.`).catch(() => {})
           } else {
@@ -470,16 +470,31 @@ function reportBridgeExit(sessionId: string, pid: number): void {
   }, BRIDGE_LIFE_READ_DELAY_MS)
 }
 
-async function checkSessionDeath(sessionId: string): Promise<void> {
-  if (transport.has(sessionId)) return
+// A death check tmux didn't answer is asked again after the hold: one retry armed at a time per session, and
+// one log line per episode however many retries it takes. `later` is the test seam.
+export const deathCheckIO = { later: (fn: () => void, ms: number): void => { setTimeout(fn, ms).unref() } }
+const deathCheckArmed = new Set<string>()
+const deathCheckLogged = new Set<string>()
 
-  const info = registry.get(sessionId)
-  if (!info) return
+function deferDeathCheck(sessionId: string, tmuxName: string): void {
+  if (!deathCheckLogged.has(sessionId)) {
+    deathCheckLogged.add(sessionId)
+    process.stderr.write(`daemon: death check for ${tmuxName}: tmux not responding; checking again every ${TMUX_HOLD_MS / 1000}s until it answers\n`)
+  }
+  if (deathCheckArmed.has(sessionId)) return
+  deathCheckArmed.add(sessionId)
+  deathCheckIO.later(() => { deathCheckArmed.delete(sessionId); void checkSessionDeath(sessionId) }, TMUX_HOLD_MS)
+}
 
-  let tmuxAlive = false
-  try { execFileSync('tmux', ['has-session', '-t', info.tmuxName], { stdio: 'pipe' }); tmuxAlive = true } catch {}
-
-  if (!tmuxAlive) {
+export async function checkSessionDeath(sessionId: string): Promise<void> {
+  const info = transport.has(sessionId) ? undefined : registry.get(sessionId)
+  // Reconnected, gone, or already dead (a retry outlived another verdict): nothing left to decide.
+  if (!info || info.deadAt) { deathCheckLogged.delete(sessionId); return }
+  const tmux = tmuxSessionState(info.tmuxName)
+  // A tmux that doesn't answer says nothing about the session.
+  if (tmux === 'not responding') return deferDeathCheck(sessionId, info.tmuxName)
+  deathCheckLogged.delete(sessionId)
+  if (tmux === 'dead') {
     // Read the pane tail once, for the autopsy — which goes to the daemon log
     // (PRESERVE, hardware-only). The channel gets a LINK to the log, never the bytes.
     let tail: string[] = []

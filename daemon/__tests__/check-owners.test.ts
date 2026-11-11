@@ -5,6 +5,8 @@ const file = (path: string, ...lines: string[]) => ({ path, text: lines.join('\n
 const hits = (path: string, ...lines: string[]) => violations([file(path, ...lines)])
 
 describe('check-owners: kill-server needs -S (no exemption, tests included)', () => {
+  // This rule's hits only: these fixtures' raw sync execs are the raw-sync rule's to catch.
+  const hits = (path: string, ...lines: string[]) => violations([file(path, ...lines)]).filter(v => v.includes('kill-server without -S'))
   test("the line that killed every live session (Sep 28), in the real file it was in", () => {
     const v = hits('test-setup.ts', "  try { execFileSync('tmux', ['kill-server'], { env: { ...process.env, TMUX_TMPDIR: join(stateDir, 'tmux'), TMUX: '' } }) } catch {}")
     expect(v).toHaveLength(1)
@@ -68,19 +70,41 @@ describe('check-owners: deleting work only in worktree-manager', () => {
 })
 
 describe('check-owners: raw tmux liveness and exec only in owners', () => {
-  test('a new raw tmuxHasSession gate is caught (with or without a space); owners, imports and the definition pass', () => {
+  test('a new raw tmux liveness gate is caught (with or without a space); owners, imports and the definition pass', () => {
+    expect(hits('connectors/github/pr-watch.ts', "if (tmuxSessionState(n) === 'dead') continue")).toHaveLength(1)
     expect(hits('connectors/github/pr-watch.ts', 'if (owner && tmuxHasSession(owner.tmuxName)) continue')).toHaveLength(1)
     expect(hits('connectors/github/pr-watch.ts', 'if (tmuxHasSession (n)) continue')).toHaveLength(1)
-    expect(hits('connectors/github/pr-watch.ts', "import { tmuxHasSession as t } from './util.js'")).toEqual([])
-    expect(hits('daemon/util.ts', 'return tmuxHasSession(info.tmuxName)')).toEqual([])
+    expect(hits('connectors/github/pr-watch.ts', "import { tmuxHasSession as t } from './tmux.js'")).toEqual([])
+    expect(hits('daemon/tmux.ts', 'return tmuxHasSession(info.tmuxName)')).toEqual([])
     expect(hits('daemon/x.ts', 'export function tmuxHasSession(name: string): boolean {')).toEqual([])
   })
 
-  test('a new raw tmux has-session/kill-* exec is caught, in any quoting; owners pass', () => {
-    expect(hits('daemon/router.ts', "execFileSync('tmux', ['has-session', '-t', n])")).toHaveLength(1)
-    expect(hits('daemon/router.ts', 'execSync(`tmux has-session -t ${n}`)')).toHaveLength(1)
-    expect(hits('daemon/router.ts', 'execFileSync("tmux", ["kill-window", "-t", n])')).toHaveLength(1)
-    expect(hits('daemon/sessions.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toEqual([])
+  test('has-session is asked only in daemon/tmux.ts: any form, anywhere else, is caught', () => {
+    const asked = (path: string, line: string) => hits(path, line).filter(v => v.includes('tmux has-session outside daemon/tmux.ts'))
+    expect(asked('daemon/router.ts', "execFileSync('tmux', ['has-session', '-t', n])")).toHaveLength(1)
+    expect(asked('daemon/router.ts', 'execSync(`tmux has-session -t ${n}`)')).toHaveLength(1)
+    expect(asked('daemon/engines/claude-engine.ts', "tmuxSync(['has-session', '-t', n], { ignoreHold: true })")).toHaveLength(1)
+    expect(asked('daemon/tmux.ts', "tmuxSync(['has-session', '-t', name], opts)")).toEqual([])
+    expect(asked('daemon/util.ts', "tmuxSync(['has-session', '-t', name], opts)")).toHaveLength(1)
+    expect(asked('cli/helpers.ts', "execFileSync('tmux', ['has-session', '-t', name])")).toEqual([])
+  })
+
+  test('a raw kill-session/window/pane exec is caught, in any quoting; daemon/tmux.ts and tmuxSync pass', () => {
+    const kills = (path: string, line: string) => hits(path, line).filter(v => v.includes('raw tmux kill-session'))
+    expect(kills('daemon/router.ts', 'execFileSync("tmux", ["kill-window", "-t", n])')).toHaveLength(1)
+    expect(kills('daemon/sessions.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toHaveLength(1)
+    expect(kills('daemon/sessions.ts', "tmuxSync(['kill-session', '-t', n])")).toEqual([])
+    expect(kills('daemon/tmux.ts', "execFileSync('tmux', ['kill-session', '-t', n])")).toEqual([])
+  })
+
+  test('a raw sync tmux exec is caught in the daemon, wrapped or in a shell string; daemon/tmux.ts, the CLI and tmuxSync pass', () => {
+    const raw = (path: string, ...lines: string[]) => hits(path, ...lines).filter(v => v.includes('raw sync tmux exec'))
+    expect(raw('daemon/raindrop.ts', "execFileSync('tmux', ['list-panes'], { timeout: 2000 })")).toHaveLength(1)
+    expect(raw('daemon/reply-guard.ts', 'return execSync(', '  `tmux capture-pane -t ${t} -p`,', ')')).toHaveLength(1)
+    expect(raw('daemon/cli-handler.ts', "Bun.spawnSync(['tmux', 'list-sessions'])")).toHaveLength(1)
+    expect(raw('daemon/raindrop.ts', "tmuxSync(['list-panes'])")).toEqual([])
+    expect(raw('daemon/tmux.ts', "execFileSync('tmux', args)")).toEqual([])
+    expect(raw('cli/lifecycle.ts', "execFileSync('tmux', ['capture-pane'])")).toEqual([])
   })
 
   test('tests are exempt from the liveness/exec rules (both test-file shapes)', () => {

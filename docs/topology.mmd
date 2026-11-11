@@ -21,6 +21,7 @@ graph TD
     daemon_sessions["sessions.ts"]
     daemon_bridge-transport["bridge-transport.ts"]
     daemon_util["util.ts"]
+    daemon_tmux["tmux.ts"]
     daemon_worktree-manager["worktree-manager.ts"]
     daemon_usage["usage.ts"]
   end
@@ -99,6 +100,7 @@ graph TD
   daemon --> connectors_github_pr-watch
   daemon --> daemon_reply-guard
   daemon --> daemon_util
+  daemon --> daemon_tmux
   daemon --> daemon_session-health
   bridge --> shared_constants
   cli_hydra --> shared_constants
@@ -106,6 +108,7 @@ graph TD
   daemon_config --> shared_constants
   daemon_sessions --> daemon_config
   daemon_sessions --> daemon_util
+  daemon_sessions --> daemon_tmux
   daemon_sessions --> shared_constants
   daemon_bridge-transport --> daemon_config
   daemon_bridge-transport --> daemon_sessions
@@ -124,6 +127,7 @@ graph TD
   daemon_bridge-dispatch --> daemon_access
   daemon_bridge-dispatch --> daemon_session-lifecycle
   daemon_bridge-dispatch --> daemon_util
+  daemon_bridge-dispatch --> daemon_tmux
   daemon_bridge-dispatch --> daemon_protocol-registry
   daemon_bridge-dispatch --> connectors_github_pr-watch
   daemon_bridge-dispatch --> daemon_anchor-state
@@ -148,6 +152,7 @@ graph TD
   daemon_bridge-server --> connectors_github_pr-watch
   daemon_bridge-server --> daemon_main-guard
   daemon_bridge-server --> daemon_util
+  daemon_bridge-server --> daemon_tmux
   daemon_bridge-server --> daemon_idle-limit
   daemon_protocol-registry --> daemon_sessions
   daemon_permission --> daemon_bridge-transport
@@ -156,6 +161,7 @@ graph TD
   daemon_cli-handler --> daemon_bridge-transport
   daemon_cli-handler --> daemon_session-lifecycle
   daemon_cli-handler --> daemon_util
+  daemon_cli-handler --> daemon_tmux
   daemon_cli-handler --> shared_constants
   daemon_cli-handler --> daemon_idempotency
   daemon_cli-handler --> daemon_config
@@ -164,6 +170,7 @@ graph TD
   daemon_cli-handler --> connectors_clock_jobs-clock
   daemon_session-lifecycle --> daemon_config
   daemon_session-lifecycle --> daemon_util
+  daemon_session-lifecycle --> daemon_tmux
   daemon_session-lifecycle --> daemon_sessions
   daemon_session-lifecycle --> daemon_reply-guard
   daemon_session-lifecycle --> daemon_bridge-transport
@@ -181,6 +188,7 @@ graph TD
   daemon_recovery --> daemon_sessions
   daemon_recovery --> daemon_session-lifecycle
   daemon_recovery --> daemon_util
+  daemon_recovery --> daemon_tmux
   daemon_recovery --> connectors_github_pr-watch
   daemon_recovery --> daemon_worktree-manager
   daemon_recovery --> daemon_access
@@ -230,6 +238,7 @@ graph TD
   daemon_reply-guard --> daemon_sessions
   daemon_reply-guard --> daemon_config
   daemon_reply-guard --> daemon_util
+  daemon_reply-guard --> daemon_tmux
   daemon_phase-budget --> daemon_sessions
   daemon_phase-budget --> daemon_bridge-transport
   daemon_phase-budget --> daemon_util
@@ -250,6 +259,7 @@ graph TD
   daemon_auto-handoff --> daemon_bridge-transport
   daemon_auto-handoff --> daemon_permission
   daemon_auto-handoff --> daemon_session-lifecycle
+  daemon_raindrop --> daemon_tmux
   daemon_raindrop --> daemon_config
   daemon_raindrop --> daemon_access
   daemon_raindrop --> daemon_sessions
@@ -284,6 +294,7 @@ graph TD
   daemon_commands_thread --> daemon_anchor-state
   daemon_commands_thread --> daemon_commands_status
   daemon_commands_thread --> daemon_util
+  daemon_commands_thread --> daemon_tmux
   daemon_commands_thread --> daemon_protocol-registry
   daemon_commands_thread --> connectors_github_pr-watch
   daemon_commands_thread --> daemon_templates

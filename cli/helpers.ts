@@ -172,7 +172,8 @@ export function tmuxKill(name: string): void {
 }
 
 export function tmuxSpawn(name: string, command: string): void {
-  tmuxNewSession(['-d', '-s', name, withRaisedFdLimit(command)])
+  // Its own, longer bound: the CLI has no event loop to protect, only an operator waiting on `hydra start`.
+  tmuxNewSession(['-d', '-s', name, withRaisedFdLimit(command)], { timeout: 30_000, killSignal: 'SIGKILL' })
 }
 
 export function tmuxSessionAge(name: string): number | null {

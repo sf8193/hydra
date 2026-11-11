@@ -111,6 +111,12 @@
       "desc": "safeSend, chunk, parseContextPercent, formatDuration, baseNameFromBranch"
     },
     {
+      "id": "daemon_tmux",
+      "label": "daemon/tmux.ts",
+      "layer": "core",
+      "desc": "Sync tmux, bounded with a hold: tmuxSync, session and server state, window activity"
+    },
+    {
       "id": "daemon_worktree-manager",
       "label": "daemon/worktree-manager.ts",
       "layer": "core",
@@ -436,6 +442,10 @@
     ],
     [
       "daemon",
+      "daemon_tmux"
+    ],
+    [
+      "daemon",
       "daemon_session-health"
     ],
     [
@@ -461,6 +471,10 @@
     [
       "daemon_sessions",
       "daemon_util"
+    ],
+    [
+      "daemon_sessions",
+      "daemon_tmux"
     ],
     [
       "daemon_sessions",
@@ -533,6 +547,10 @@
     [
       "daemon_bridge-dispatch",
       "daemon_util"
+    ],
+    [
+      "daemon_bridge-dispatch",
+      "daemon_tmux"
     ],
     [
       "daemon_bridge-dispatch",
@@ -632,6 +650,10 @@
     ],
     [
       "daemon_bridge-server",
+      "daemon_tmux"
+    ],
+    [
+      "daemon_bridge-server",
       "daemon_idle-limit"
     ],
     [
@@ -664,6 +686,10 @@
     ],
     [
       "daemon_cli-handler",
+      "daemon_tmux"
+    ],
+    [
+      "daemon_cli-handler",
       "shared_constants"
     ],
     [
@@ -693,6 +719,10 @@
     [
       "daemon_session-lifecycle",
       "daemon_util"
+    ],
+    [
+      "daemon_session-lifecycle",
+      "daemon_tmux"
     ],
     [
       "daemon_session-lifecycle",
@@ -761,6 +791,10 @@
     [
       "daemon_recovery",
       "daemon_util"
+    ],
+    [
+      "daemon_recovery",
+      "daemon_tmux"
     ],
     [
       "daemon_recovery",
@@ -959,6 +993,10 @@
       "daemon_util"
     ],
     [
+      "daemon_reply-guard",
+      "daemon_tmux"
+    ],
+    [
       "daemon_phase-budget",
       "daemon_sessions"
     ],
@@ -1037,6 +1075,10 @@
     [
       "daemon_auto-handoff",
       "daemon_session-lifecycle"
+    ],
+    [
+      "daemon_raindrop",
+      "daemon_tmux"
     ],
     [
       "daemon_raindrop",
@@ -1173,6 +1215,10 @@
     [
       "daemon_commands_thread",
       "daemon_util"
+    ],
+    [
+      "daemon_commands_thread",
+      "daemon_tmux"
     ],
     [
       "daemon_commands_thread",

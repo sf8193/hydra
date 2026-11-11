@@ -24,7 +24,6 @@
 //
 // The daemon polls tmux's window_activity timestamp every 20s to detect
 // idle sessions. No monitor-silence/activity options needed.
-import { execSync } from 'child_process'
 import { occupancy, type Occupancy } from './session-reachability.js'
 import { writeFileSync, unlinkSync } from 'fs'
 import { tmpdir } from 'os'
@@ -35,7 +34,8 @@ import type { SessionInfo } from './sessions.js'
 import { gateway } from './config.js'
 import { on } from './event-bus.js'
 import type { TurnOutcome } from './engines/engine-adapter.js'
-import { safeSend, tmuxWindowActivity } from './util.js'
+import { safeSend } from './util.js'
+import { hasFreeze, paneScreenshot, tmuxSync, tmuxWindowActivity } from './tmux.js'
 import { probeByteTmuxName } from './pane-probe.js'
 import { blockedReason, readClaudeStatus } from './engines/claude-status.js'
 import { markYourTurn } from './home-status.js'
@@ -303,20 +303,9 @@ export function sessionsWithPendingReplies(): Set<string> {
 // Tries `freeze` for a styled screenshot, falls back to a text code block.
 // ---------------------------------------------------------------------------
 
-let hasFreezeCache = false
-function hasFreeze(): boolean {
-  if (!hasFreezeCache) {
-    try { execSync('which freeze', { stdio: 'pipe' }); hasFreezeCache = true } catch {}
-  }
-  return hasFreezeCache
-}
-
 function capturePaneText(tmuxName: string, lines = 80): string | null {
   try {
-    return execSync(
-      `tmux capture-pane -t '${tmuxName.replace(/'/g, "'\\''")}' -p -S -${lines}`,
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 },
-    ).trimEnd()
+    return tmuxSync(['capture-pane', '-t', tmuxName, '-p', '-S', `-${lines}`]).trimEnd()
   } catch { return null }
 }
 
@@ -324,10 +313,7 @@ function capturePaneScreenshot(tmuxName: string): string | null {
   if (!hasFreeze()) return null
   const outPath = join(tmpdir(), `hydra-pane-${tmuxName}-${Date.now()}.png`)
   try {
-    execSync(
-      `tmux capture-pane -t '${tmuxName.replace(/'/g, "'\\''")}' -e -p | freeze -o '${outPath}' --language bash`,
-      { stdio: 'pipe', timeout: 10000 },
-    )
+    paneScreenshot(tmuxName, outPath)
     return outPath
   } catch {
     return null

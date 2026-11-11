@@ -15,7 +15,7 @@ import { tmuxNewSession } from '../../shared/spawn-env.js'
 import { killSession } from '../session-lifecycle.js'
 import { engines } from '../engines/instances.js'
 import { gateway, STATE_DIR } from '../config.js'
-import { tmuxHasSession } from '../util.js'
+import { tmuxHasSession } from '../tmux.js'
 
 const available = Bun.spawnSync(['tmux', '-V']).exitCode === 0
 const NAME = 'collide'

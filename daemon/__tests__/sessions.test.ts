@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { STATE_DIR } from '../config.js'
 import { SessionRegistry, ThreadRegistry, sessionEmoji, ensureSessionType, type SessionInfo, type ThreadMetadata } from '../sessions.js'
+import { _setTmuxForTesting } from '../tmux.js'
 
 // Suppress stderr
 process.stderr.write = (() => true) as any
@@ -46,6 +47,27 @@ describe('SessionRegistry', () => {
       expect((reg.get('test-retired-turnstate') as any).turnState).toBeUndefined()
       expect(readFileSync(file, 'utf8')).not.toContain('turnState')
     } finally { if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved) }
+  })
+
+  test('a tmux that does not answer at load leaves each record as it was saved: a dead one stays dead', () => {
+    const file = join(STATE_DIR, 'sessions.json')
+    const saved = existsSync(file) ? readFileSync(file, 'utf8') : null
+    const deadAt = Date.now() - 60_000
+    // Every tmux call times out: no tmux is touched.
+    _setTmuxForTesting({ exec: (() => { throw Object.assign(new Error('tmux ETIMEDOUT'), { code: 'ETIMEDOUT' }) }) as any })
+    try {
+      writeFileSync(file, JSON.stringify([
+        makeInfo({ sessionId: 'test-hold-dead', tmuxName: 'test-hold-dead', threadId: 'thread-hold-dead', deadAt }),
+        makeInfo({ sessionId: 'test-hold-live', tmuxName: 'test-hold-live', threadId: 'thread-hold-live' }),
+      ]))
+      const reg = new SessionRegistry()
+      expect(reg.get('test-hold-dead')!.deadAt).toBe(deadAt)
+      expect(reg.get('test-hold-live')!.deadAt).toBeUndefined()
+      expect(JSON.parse(readFileSync(file, 'utf8')).find((r: SessionInfo) => r.sessionId === 'test-hold-dead').deadAt).toBe(deadAt)
+    } finally {
+      _setTmuxForTesting()
+      if (saved === null) rmSync(file, { force: true }); else writeFileSync(file, saved)
+    }
   })
 
   test('set and get', () => {

@@ -1,10 +1,11 @@
 import { randomUUID } from 'crypto'
-import { execSync, execFileSync, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, openSync, readSync, closeSync, accessSync, realpathSync, constants as fsConstants } from 'fs'
 import { basename, dirname, join, resolve as resolvePath } from 'path'
 import { homedir, tmpdir } from 'os'
 import { gateway, PLATFORM, DEFAULT_SESSION_CHANNEL, CLAUDE_CONFIG, STATE_DIR } from './config.js'
-import { safeSend, formatSpawnLine, tmuxHasSession, atomicWriteFileSync } from './util.js'
+import { safeSend, formatSpawnLine, atomicWriteFileSync } from './util.js'
+import { tmuxHasSession, tmuxSync, tmuxTimedOut } from './tmux.js'
 import { nameHeldByAnother, occupancy, occupied } from './session-reachability.js'
 import { withThreadLock } from '../specialists/specialists.js'
 import { authorityId, markDead, parentSessionOf, registry, repointChildren, sessionEmoji, threadRegistry } from './sessions.js'
@@ -32,8 +33,6 @@ import { emit } from './event-bus.js'
 import { clearInterceptsForSession } from './pane-probe.js'
 import { classifyResumeFailure } from './resume-health.js'
 import { createWorktree, destroyWorktree, cleanScratchWorktrees, sessionScratchpads } from './worktree-manager.js'
-
-const shq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
 
 // ---------------------------------------------------------------------------
 // Channel resolution — determines where to create a new thread
@@ -600,7 +599,8 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
 
     const tmuxName = info.tmuxName
     // Stop learns a missing native id first where the provider can (Claude: pane discovery).
-    if (!replaced) await info.adapter.stop(info)
+    const stopped = replaced ? undefined : await info.adapter.stop(info)
+    if (stopped?.status === 'uncertain') process.stderr.write(`daemon: stop ${tmuxName}: uncertain (${stopped.reason}); the deferred kill will try again\n`)
 
     transport.disconnect(info.sessionId)
     clearPhaseBudget(info.sessionId)
@@ -667,12 +667,13 @@ export async function killSession(info: SessionInfo, reason: string, opts?: { sk
       try {
         // Only kill if the tmux session isn't owned by a new session (name recycling)
         const currentOwner = [...registry.values()].find(s => s !== info && s.tmuxName === tmuxName)
-        if (!currentOwner) {
-          execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
-          execSync(`tmux kill-session -t ${shq(tmuxName)}`, { stdio: 'pipe' })
+        if (!currentOwner && tmuxHasSession(tmuxName)) {
+          tmuxSync(['kill-session', '-t', tmuxName])
           process.stderr.write(`daemon: deferred kill caught lingering tmux session "${tmuxName}"\n`)
         }
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`daemon: deferred kill of "${tmuxName}" ${tmuxTimedOut(err) ? 'timed out: tmux not responding' : `failed: ${err instanceof Error ? err.message : err}`}; the session may linger\n`)
+      }
       killsInProgress.delete(info.sessionId)
     }, 3000)
   } catch (err) {

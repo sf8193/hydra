@@ -3,7 +3,7 @@
 // Claude engine adapter — wraps tmux + bridge socket communication.
 
 import { randomUUID } from 'crypto'
-import { execFileSync, execSync, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import type { SessionInfo } from '../sessions.js'
@@ -17,7 +17,8 @@ import type {
 } from './engine-adapter.js'
 import { withoutIntents } from './engine-adapter.js'
 import type { BridgeTransport } from '../bridge-transport.js'
-import { parseContextFooter, tmuxHasSession, tmuxWindowActivity, type ContextFooter } from '../util.js'
+import { parseContextFooter, type ContextFooter } from '../util.js'
+import { tmuxCreateSession, tmuxHasSession, tmuxSessionState, tmuxSync, tmuxTimedOut, tmuxWindowActivity } from '../tmux.js'
 import { claudeConfigDir, contextWindowOf, isKnownModel } from '../../shared/constants.js'
 import { drainSession, lastContextTokens, newSessionCursor, projectDirName, projectsRoot, transcriptPathFor, type SessionCursor } from '../usage.js'
 import { claudeTurnOutcome } from './claude-transcript.js'
@@ -25,7 +26,7 @@ import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
-import { SESSION_IDENTITY_VARS, scrubbedSpawnEnv, tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { SESSION_IDENTITY_VARS, scrubbedSpawnEnv, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
@@ -75,7 +76,7 @@ export function buildWorktreePromptAppend(isFork: boolean, worktreePath: string 
 
 export function discoverClaudeSessionId(tmuxName: string): string | null {
   try {
-    const panePid = execFileSync('tmux', ['list-panes', '-t', tmuxName, '-F', '#{pane_pid}'], { encoding: 'utf8', timeout: 2000 }).toString().trim()
+    const panePid = tmuxSync(['list-panes', '-t', tmuxName, '-F', '#{pane_pid}']).trim()
     if (!panePid) return null
 
     // Primary: read Claude's session file at $CLAUDE_CONFIG_DIR/sessions/<pid>.json
@@ -305,29 +306,27 @@ export class ClaudeEngine implements EngineAdapter {
     process.stderr.write(`daemon: spawn ${tmuxName}: inner cmd = ${inner.slice(0, 300)}...\n`)
 
     mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
+    let created: ReturnType<typeof tmuxCreateSession>
     try {
-      tmuxNewSession(['-d', '-s', tmuxName, withRaisedFdLimit(inner)])
+      created = tmuxCreateSession(tmuxName, [withRaisedFdLimit(inner)])
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       process.stderr.write(`daemon: spawn ${tmuxName}: tmuxNewSession FAILED: ${msg}\n`)
       throw new Error(`failed to spawn tmux session: ${msg}`)
     }
 
-    let tmuxConfirmedAlive = false
-    try {
-      execFileSync('tmux', ['has-session', '-t', tmuxName], { stdio: 'pipe' })
-      process.stderr.write(`daemon: spawn ${tmuxName}: tmux session confirmed alive\n`)
-      tmuxConfirmedAlive = true
-    } catch {
-      process.stderr.write(`daemon: spawn ${tmuxName}: WARNING -- tmux session died immediately after creation\n`)
-    }
+    const tmuxConfirmedAlive = created === 'alive'
+    process.stderr.write(`daemon: spawn ${tmuxName}: ${
+      created === 'alive' ? 'tmux session confirmed alive'
+      : created === 'dead' ? 'WARNING -- tmux session died immediately after creation'
+      : 'WARNING -- tmux not responding; session unconfirmed, pane capture skipped'}\n`)
 
     let spawnLogPath: string | undefined
     if (tmuxConfirmedAlive) {
       try {
         mkdirSync(SPAWN_LOGS_DIR, { recursive: true, mode: 0o700 })
         const logPath = join(SPAWN_LOGS_DIR, `${tmuxName}-${sessionId}.log`)
-        execFileSync('tmux', ['pipe-pane', '-o', '-t', tmuxName, `cat >> ${shq(logPath)}`], { stdio: 'pipe' })
+        tmuxSync(['pipe-pane', '-o', '-t', tmuxName, `cat >> ${shq(logPath)}`])
         spawnLogPath = logPath
         process.stderr.write(`daemon: spawn ${tmuxName}: pane capture -> ${logPath}\n`)
       } catch (err) {
@@ -362,9 +361,10 @@ export class ClaudeEngine implements EngineAdapter {
     const discovered = this.discover(info)
     if (discovered) process.stderr.write(`daemon: kill ${info.tmuxName}: late-discovered claudeSessionId=${discovered}\n`)
     try {
-      execFileSync('tmux', ['kill-session', '-t', info.tmuxName], { stdio: 'pipe' })
+      tmuxSync(['kill-session', '-t', info.tmuxName])
       return { status: 'stopped' }
-    } catch {
+    } catch (err) {
+      if (tmuxTimedOut(err)) return { status: 'uncertain', reason: 'tmux not responding' }
       if (!tmuxHasSession(info.tmuxName)) return { status: 'stopped' }
       return { status: 'uncertain', reason: `tmux session ${info.tmuxName} is still running` }
     }
@@ -376,10 +376,7 @@ export class ClaudeEngine implements EngineAdapter {
 
   peek(info: ClaudeSubject, lines: number = 50): string {
     try {
-      return execSync(
-        `tmux capture-pane -t ${shq(info.tmuxName)} -p -S -${lines}`,
-        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000 },
-      ).trimEnd()
+      return tmuxSync(['capture-pane', '-t', info.tmuxName, '-p', '-S', `-${lines}`]).trimEnd()
     } catch { return '' }
   }
 
@@ -410,8 +407,7 @@ export class ClaudeEngine implements EngineAdapter {
 
   private paneFooter(info: ClaudeSubject): ContextFooter | null {
     try {
-      const pane = execFileSync('tmux', ['capture-pane', '-t', info.tmuxName, '-p'],
-        { stdio: ['pipe', 'pipe', 'pipe'], timeout: 2000 }).toString()
+      const pane = tmuxSync(['capture-pane', '-t', info.tmuxName, '-p'])
       return parseContextFooter(pane)
     } catch { return null }
   }
@@ -433,12 +429,10 @@ export class ClaudeEngine implements EngineAdapter {
   surface(info: ClaudeSubject): string | null { return tmuxHasSession(info.tmuxName) ? info.tmuxName : null }
 
   async sendKeys(info: ClaudeSubject, keys: string, opts?: { raw?: boolean; trailingKey?: string }): Promise<{ queued: boolean }> {
-    if (opts?.raw) {
-      execFileSync('tmux', ['send-keys', '-t', info.tmuxName, ...keys.split(/\s+/)], { timeout: 3000 })
-    } else {
-      execFileSync('tmux', ['send-keys', '-t', info.tmuxName, '-l', keys], { timeout: 3000 })
-      execFileSync('tmux', ['send-keys', '-t', info.tmuxName, opts?.trailingKey ?? 'Enter'], { timeout: 3000 })
-    }
+    // Its own 3 s, as before: typing a long message into a busy pane can outlast a read.
+    const send = (args: string[]) => tmuxSync(['send-keys', '-t', info.tmuxName, ...args], { timeout: 3_000 })
+    if (opts?.raw) send(keys.split(/\s+/))
+    else { send(['-l', keys]); send([opts?.trailingKey ?? 'Enter']) }
     return { queued: false }
   }
 

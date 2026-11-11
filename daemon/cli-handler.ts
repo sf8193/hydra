@@ -2,6 +2,7 @@ import { registry } from './sessions.js'
 import { transport } from './bridge-transport.js'
 import { doSpawnSession, killSession } from './session-lifecycle.js'
 import { fallbackDescription, formatDuration } from './util.js'
+import { tmuxServerState, tmuxSessionState } from './tmux.js'
 import { parseIdempotencyTtl, parseIdleTtl } from '../shared/constants.js'
 import { occupancy, occupied } from './session-reachability.js'
 import { formatContextPercent } from './engines/engine-adapter.js'
@@ -182,13 +183,6 @@ function handleStatus(req: CLIRequest): CLIResponse {
   const info = sessionByName(name)
   if (!info) return respond(req, false, `session "${name}" not found`)
 
-  const tmuxAlive = (() => {
-    try {
-      const result = Bun.spawnSync(['tmux', 'has-session', '-t', info.tmuxName], { stdio: ['pipe', 'pipe', 'pipe'] })
-      return result.exitCode === 0
-    } catch { return false }
-  })()
-
   return respond(req, true, {
     name: info.tmuxName,
     sessionId: info.sessionId,
@@ -199,7 +193,7 @@ function handleStatus(req: CLIRequest): CLIResponse {
     context: formatContextPercent(info.adapter, info),
     running_for: formatDuration(Date.now() - info.createdAt),
     bridge: transport.has(info.sessionId) ? 'connected' : 'disconnected',
-    tmux: tmuxAlive ? 'alive' : 'dead',
+    tmux: tmuxSessionState(info.tmuxName),
     ...cpuField(info.sessionId),
     origin: info.originType,
     // Only `hydra attach` asks: surface() may recreate tmux and relaunch the Codex TUI.
@@ -233,16 +227,10 @@ function handleHealth(req: CLIRequest): CLIResponse {
   const connected = sessions.filter(s => transport.has(s.sessionId)).length
   const disconnected = sessions.length - connected
 
-  let tmuxRunning = false
-  try {
-    const result = Bun.spawnSync(['tmux', 'list-sessions'], { stdio: ['pipe', 'pipe', 'pipe'] })
-    tmuxRunning = result.exitCode === 0
-  } catch {}
-
   const raindropLine = raindropStatusLine('cli')
   return respond(req, true, {
     sessions: { total: sessions.length, connected, disconnected },
-    tmux: tmuxRunning ? 'running' : 'not running',
+    tmux: tmuxServerState(),
     idempotency: { active: listIdempotencyEntries().length },
     ...loopHealth(),
     ...(raindropLine ? { raindrop: raindropLine } : {}),

@@ -253,7 +253,8 @@ import { readDaemonState } from './shared/jobs.js'
 import { pollActivityOnce } from './daemon/reply-guard.js'
 import { flushAllHeld } from './daemon/typed-delivery.js'
 import { probeAllSessions } from './daemon/pane-probe.js'
-import { tmuxHasSession, safeSend } from './daemon/util.js'
+import { safeSend } from './daemon/util.js'
+import { tmuxHasSession } from './daemon/tmux.js'
 
 // ---------------------------------------------------------------------------
 // Recovery report on reconnect
