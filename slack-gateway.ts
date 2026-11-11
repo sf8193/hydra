@@ -6,12 +6,12 @@
  * similar to Discord's gateway model.
  */
 
-import { App, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
+import { App, LogLevel, SocketModeReceiver, webApi, type MessageEvent, type GenericMessageEvent, type BotMessageEvent } from '@slack/bolt'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { sanitizeFilename } from './gateway.js'
 import { SocketSupervisor } from './shared/socket-supervisor.js'
 import { ThrottledQueue } from './throttled-queue.js'
-import { HOME_STATUS_ACTION_PREFIX } from './shared/constants.js'
+import { HOME_STATUS_ACTION_PREFIX, SLACK_CLIENT_PING_TIMEOUT_MS } from './shared/constants.js'
 import { parseHomeStatusClick } from './daemon/home-status.js'
 import type {
   ChatGateway,
@@ -168,13 +168,10 @@ export class SlackGateway implements ChatGateway {
       this.app = null
     }
 
-    this.app = new App({
-      token,
-      appToken: this.appToken,
-      socketMode: true,
-      // Don't log to stdout — we write to stderr like the Discord gateway
-      logLevel: 'ERROR' as any,
-    })
+    // Built here, not by Bolt: Bolt's own receiver leaves out clientPingTimeout, and the headroom is the point.
+    // Don't log to stdout — we write to stderr like the Discord gateway
+    const receiver = new SocketModeReceiver({ appToken: this.appToken, clientPingTimeout: SLACK_CLIENT_PING_TIMEOUT_MS, logLevel: LogLevel.ERROR })
+    this.app = new App({ token, receiver, socketMode: true, logLevel: LogLevel.ERROR })
     this.visualApi = new webApi.WebClient(token, {
       logLevel: webApi.LogLevel.ERROR,
       retryConfig: { retries: 0 },
