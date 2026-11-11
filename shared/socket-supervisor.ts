@@ -4,14 +4,17 @@
  * events were missed.
  *
  * Lifted out of slack-gateway.ts so a second Socket Mode consumer (the Slack-watch
- * listener) uses the same supervision instead of growing its own. It knows nothing
- * about Slack's SDK: the owner supplies how to (re)start the connection and an event
- * emitter for the current connection's lifecycle, and decides what "give up" means.
+ * listener) uses the same supervision instead of growing its own. It is Slack's: it
+ * listens for the Socket Mode client's lifecycle events by name, and its timings are set
+ * against that client's ping timeout (SLACK_CLIENT_PING_TIMEOUT_MS). It does not import
+ * the SDK: the owner supplies how to (re)start the connection and an event emitter for
+ * the current connection's lifecycle, and decides what "give up" means.
  * The gateway exits the process (a supervisor restarts it); the listener degrades and
  * keeps trying, because a dead Slack token must not take the Discord daemon with it.
  */
 
-import { awakeSince } from './resume.js'
+import { awakeSince, suspendedSince, describeCause, span, type ResumeDetector } from './resume.js'
+import { LOOP_RECENT_MS, recentWorstLagMs } from './loop-watch.js'
 
 export const HEALTH_CHECK_MS = 60_000
 export const HEALTH_CHECK_FAST_MS = 10_000
@@ -24,6 +27,8 @@ export const NETWORK_CHECK_TIMEOUT_MS = 5_000
 export const START_TIMEOUT_MS = 30_000
 /** A gap this long means events were missed (Slack does not replay them). */
 export const OUTAGE_GAP_MS = 10 * 60_000
+/** Drop lines are at least this far apart; the drops between are counted into the next line. */
+export const DROP_LOG_SPACING_MS = 60_000
 
 /** The slice of a Socket Mode client's emitter the supervisor listens to. */
 export type SocketEmitter = { on(event: string, listener: () => void): unknown }
@@ -46,10 +51,12 @@ export type SocketSupervisorOpts = {
   staleThresholdMs?: number
   // Injected for tests.
   now?: () => number
-  /** How long the socket has been down, in time awake (shared/resume.ts): a sleep is not an outage. */
-  awakeSince?: (t: number, now: number) => number
+  /** Time the daemon was suspended (shared/resume.ts): a sleep is not an outage, and is said as the cause of a drop. */
+  resumes?: Pick<ResumeDetector, 'awakeSince' | 'suspendedSince'>
   fetch?: (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boolean }>
   log?: (line: string) => void
+  /** The event loop's worst lateness over the last LOOP_RECENT_MS, null when unmeasured. Defaults to the daemon's loop watch. */
+  loopLag?: () => number | null
 }
 
 export type SocketState = {
@@ -67,7 +74,7 @@ export type SocketState = {
 export class SocketSupervisor {
   private readonly o: SocketSupervisorOpts
   private readonly now: () => number
-  private readonly awakeSince: (t: number, now: number) => number
+  private readonly resumes: Pick<ResumeDetector, 'awakeSince' | 'suspendedSince'>
   private readonly log: (line: string) => void
   private readonly staleMs: number
   private connected = false
@@ -81,11 +88,13 @@ export class SocketSupervisor {
   private exhausted = false
   private timer: ReturnType<typeof setInterval> | null = null
   private intervalMs = HEALTH_CHECK_MS
+  private lastDropLineAt = -Infinity
+  private unloggedDrops = 0
 
   constructor(opts: SocketSupervisorOpts) {
     this.o = opts
     this.now = opts.now ?? Date.now
-    this.awakeSince = opts.awakeSince ?? awakeSince
+    this.resumes = opts.resumes ?? { awakeSince, suspendedSince }
     this.log = opts.log ?? (line => { process.stderr.write(line) })
     this.staleMs = opts.staleThresholdMs ?? STALE_THRESHOLD_MS
     this.lastActivityAt = this.now()
@@ -128,11 +137,13 @@ export class SocketSupervisor {
         if (gen !== this.generation) return
         this.touch()
       })
-      // `close` ends every socket. After a ping timeout it comes one ping (~1.7s) later, since the first disconnect()
-      // only sends a close frame; the SDK's own `reconnecting` follows at least 5s after that.
+      // `close` ends every socket. After a ping timeout it comes within one ping (SLACK_CLIENT_PING_TIMEOUT_MS/3, 5s),
+      // since the first disconnect() only sends a close frame; the SDK's own `reconnecting` follows at least
+      // SLACK_CLIENT_PING_TIMEOUT_MS (15s) after that. `disconnecting` comes only from a disconnect we asked for.
       for (const down of ['close', 'connecting', 'reconnecting', 'disconnecting', 'disconnected']) {
         client.on(down, () => {
           if (gen !== this.generation) return
+          if (this.connected && down !== 'disconnecting') this.logDrop()
           this.connected = false
           if (this.downSince === null) this.downSince = this.now()
         })
@@ -142,6 +153,36 @@ export class SocketSupervisor {
       this.hooked = false
       this.log(`${this.o.name}: WARN failed to hook Socket Mode client: ${err}\n`)
     }
+  }
+
+  /**
+   * One line per drop of a socket that was up: when its last data frame came (pings and pongs are not frames
+   * here), and the loop since. Three readings:
+   * - a loop stall near the ping timeout: the daemon's own loop dropped the socket;
+   * - a calm loop and a last frame just before: Slack closed it (its `disconnect` notice is a frame);
+   * - a calm loop and a long quiet: the network, or Slack's own ping timeout.
+   * If the daemon was suspended since that frame (a sleep, as the resume detector names it), that is said instead
+   * of the loop, which a sleep leaves calm. The SDK keeps the close code to itself, so the line cannot give it.
+   */
+  private logDrop(): void {
+    const now = this.now()
+    if (now - this.lastDropLineAt < DROP_LOG_SPACING_MS) { this.unloggedDrops++; return }
+    const away = this.resumes.suspendedSince(this.lastActivityAt, now)
+    const lag = away ? null : (this.o.loopLag ?? recentWorstLagMs)()
+    const why = away ? ` (${describeCause(away.cause)} for ${span(away.ms)} of it)`
+      : lag === null ? '' : ` (loop worst ${lag}ms in the last ${LOOP_RECENT_MS / 1000}s)`
+    const more = this.unloggedDrops ? `; ${this.unloggedDrops} more since the last line` : ''
+    this.log(`${this.o.name}: socket dropped, last frame ${+((now - this.lastActivityAt) / 1000).toFixed(1)}s before${why}${more}\n`)
+    this.lastDropLineAt = now
+    this.unloggedDrops = 0
+  }
+
+  /** Drops held back by the spacing are still said once it has passed, though no drop follows. */
+  private flushDrops(now: number): void {
+    if (!this.unloggedDrops || now - this.lastDropLineAt < DROP_LOG_SPACING_MS) return
+    this.log(`${this.o.name}: ${this.unloggedDrops} more socket drop${this.unloggedDrops === 1 ? '' : 's'} since the last line\n`)
+    this.lastDropLineAt = now
+    this.unloggedDrops = 0
   }
 
   /** A sign of life (an event handled, a frame received). Writes the owner's heartbeat, throttled. */
@@ -176,16 +217,17 @@ export class SocketSupervisor {
 
   /**
    * One health check. Health is the socket's own connection state: the client pings every
-   * clientPingTimeout/3 (1.67s at the default 5s), starts closing the socket once no pong has come
-   * for over 5s and terminates it one ping later, times the server out at 30s, and auto-reconnects
-   * faster than this watchdog. Intervene only once it has been *continuously* disconnected past the
+   * SLACK_CLIENT_PING_TIMEOUT_MS/3 (5s), starts closing the socket once no pong has come for over
+   * SLACK_CLIENT_PING_TIMEOUT_MS (15s) and terminates it within one ping, times the server out at 30s,
+   * and auto-reconnects faster than this watchdog. Intervene only once it has been *continuously* disconnected past the
    * threshold, so a self-healing blip never trips it. Down time counts only while awake: a socket that
    * went down as the machine slept gets the client's own reconnect, on wake, before this steps in. Without
    * the lifecycle hook, fall back to event-time staleness, by wall time: after a sleep it is time to look.
    */
   async tick(): Promise<void> {
     const now = this.now()
-    const downFor = this.downSince !== null ? this.awakeSince(this.downSince, now) : null
+    this.flushDrops(now)
+    const downFor = this.downSince !== null ? this.resumes.awakeSince(this.downSince, now) : null
     const stale = this.hooked
       ? (!this.connected && downFor !== null && downFor > this.staleMs)
       : ((now - this.lastActivityAt) > this.staleMs)

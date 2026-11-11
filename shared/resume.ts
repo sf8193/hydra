@@ -63,7 +63,7 @@ export type ResumeDetectorDeps = {
 }
 
 /** `75s` under two minutes, `99m` beyond. */
-const span = (ms: number) => ms < 120_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`
+export const span = (ms: number) => ms < 120_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`
 
 /**
  * macOS's last sleep and wake. Async, absolute path, killed outright at its deadline, so a slow machine on wake can

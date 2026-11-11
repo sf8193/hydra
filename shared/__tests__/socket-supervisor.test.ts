@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test'
 import {
   SocketSupervisor, type SocketEmitter, type SocketSupervisorOpts,
-  STALE_THRESHOLD_MS, HEALTH_CHECK_MS, HEALTH_CHECK_FAST_MS, MAX_RECONNECT_ATTEMPTS, RECONNECT_BACKOFF_BASE_MS, RECONNECT_BACKOFF_CAP_MS, OUTAGE_GAP_MS, HEARTBEAT_WRITE_THROTTLE_MS,
+  STALE_THRESHOLD_MS, HEALTH_CHECK_MS, HEALTH_CHECK_FAST_MS, MAX_RECONNECT_ATTEMPTS, RECONNECT_BACKOFF_BASE_MS, RECONNECT_BACKOFF_CAP_MS, OUTAGE_GAP_MS, HEARTBEAT_WRITE_THROTTLE_MS, DROP_LOG_SPACING_MS,
 } from '../socket-supervisor.js'
 import { createResumeDetector } from '../resume.js'
 
@@ -94,7 +94,7 @@ describe('SocketSupervisor: noticing a dead socket', () => {
 
   test('a socket down across a sleep is not stale on the first tick after wake: only awake time counts', async () => {
     const resumes = createResumeDetector({ lastSleep: async () => null, log: () => {} })
-    const t = setup({ awakeSince: (at, now) => resumes.awakeSince(at, now) })
+    const t = setup({ resumes })
     t.sup.attach()
     t.client.current!.emit('connected')
     t.client.current!.emit('close') // the lid closes a moment later
@@ -105,7 +105,7 @@ describe('SocketSupervisor: noticing a dead socket', () => {
     t.tick(STALE_THRESHOLD_MS)
     await t.sup.tick()
     expect(t.calls.start).toBe(1)
-    expect(t.logs[0]).toContain('socket down 181s')
+    expect(t.logs.find(l => l.includes('socket down'))).toContain('socket down 181s')
   })
 
   test("a replaced connection's late events do nothing", async () => {
@@ -118,6 +118,78 @@ describe('SocketSupervisor: noticing a dead socket', () => {
     old.emit('disconnected') // the dead socket's teardown, arriving late
     expect(t.sup.state.connected).toBe(true)
     expect(t.sup.state.downSince).toBeNull()
+  })
+})
+
+describe('SocketSupervisor: saying why the socket dropped', () => {
+  test('a drop logs one line: when its last frame came, and the loop just before', () => {
+    let lag: number | null = 11_600
+    const t = setup({ loopLag: () => lag })
+    t.sup.attach()
+    t.client.current!.emit('connecting') // the first connection is not a drop
+    t.client.current!.emit('connected')
+    t.tick(1_000)
+    t.client.current!.emit('ws_message')
+    t.tick(12_400)
+    // what the SDK emits for one ping-timeout drop
+    for (const e of ['close', 'reconnecting', 'connecting']) t.client.current!.emit(e)
+    expect(t.logs).toEqual(['test: socket dropped, last frame 12.4s before (loop worst 11600ms in the last 30s)\n'])
+    // unmeasured (no loop watch running): the loop clause is left out, not given as 0
+    lag = null
+    t.client.current!.emit('connected')
+    t.tick(DROP_LOG_SPACING_MS)
+    t.client.current!.emit('close')
+    expect(t.logs.at(-1)).toBe(`test: socket dropped, last frame ${DROP_LOG_SPACING_MS / 1000}s before\n`)
+  })
+
+  test('a drop across a sleep says so, as the resume detector names it, not that the loop was calm', () => {
+    const resumes = createResumeDetector({ lastSleep: async () => null, log: () => {} })
+    const t = setup({ resumes, loopLag: () => 0 })
+    t.sup.attach()
+    t.client.current!.emit('connected')
+    t.tick(99 * 60_000)
+    resumes.noteResume(99 * 60_000 - 1_000, t.now(), t.now() - 99 * 60_000 + 500)
+    t.tick(6_000)
+    t.client.current!.emit('close')
+    expect(t.logs).toEqual(['test: socket dropped, last frame 5946s before (the machine was asleep or the daemon stalled for 99m of it)\n'])
+  })
+
+  test('drop lines are spaced; the drops between are counted into the next line', () => {
+    const t = setup({ loopLag: () => 0 })
+    t.sup.attach()
+    const drop = () => { t.client.current!.emit('connected'); t.tick(15_000); t.client.current!.emit('close') }
+    drop(); drop(); drop()
+    expect(t.logs).toHaveLength(1)
+    t.tick(DROP_LOG_SPACING_MS)
+    drop()
+    expect(t.logs).toEqual([
+      'test: socket dropped, last frame 15s before (loop worst 0ms in the last 30s)\n',
+      'test: socket dropped, last frame 15s before (loop worst 0ms in the last 30s); 2 more since the last line\n',
+    ])
+  })
+
+  test('drops held back by the spacing are still said once it has passed, though no drop follows', async () => {
+    const t = setup({ loopLag: () => 0 })
+    t.sup.attach()
+    const drop = () => { t.client.current!.emit('connected'); t.tick(15_000); t.client.current!.emit('close') }
+    drop(); drop(); drop()
+    t.client.current!.emit('connected')
+    await t.sup.tick()
+    expect(t.logs).toHaveLength(1) // inside the spacing: still held
+    t.tick(DROP_LOG_SPACING_MS)
+    await t.sup.tick()
+    expect(t.logs.at(-1)).toBe('test: 2 more socket drops since the last line\n')
+    await t.sup.tick()
+    expect(t.logs).toHaveLength(2)
+  })
+
+  test('a disconnect the owner asked for is not a drop', () => {
+    const t = setup({ loopLag: () => 0 })
+    t.sup.attach()
+    t.client.current!.emit('connected')
+    for (const e of ['disconnecting', 'close', 'disconnected']) t.client.current!.emit(e)
+    expect(t.logs).toEqual([])
+    expect(t.sup.state.connected).toBe(false)
   })
 })
 

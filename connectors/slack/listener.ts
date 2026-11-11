@@ -1,4 +1,4 @@
-import { App, LogLevel } from '@slack/bolt'
+import { App, LogLevel, SocketModeReceiver } from '@slack/bolt'
 import { WebClient } from '@slack/web-api'
 import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../shared/socket-supervisor.js'
 import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
@@ -8,6 +8,7 @@ import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, OPERATOR_TOKE
 import type { HydraConfig } from '../../config/types.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
+import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
 
 /**
  * The Slack connector: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
@@ -243,7 +244,7 @@ export class SlackListener {
       // Degrade, never exit: the supervisor keeps trying at its capped backoff, and health and the alert say so.
       onExhausted: n => this.d.log(`daemon: slack listener: ${n} reconnect attempts failed; still trying, see health\n`),
       now: this.now,
-      awakeSince: (t, now) => this.resumes.awakeSince(t, now),
+      resumes: this.resumes,
       fetch: this.d.fetch,
       log: this.d.log,
     })
@@ -483,7 +484,9 @@ export class SlackListener {
 // ---------------------------------------------------------------------------
 
 export function boltApp(tokens: { app: string; bot: string; user?: string }): SlackAppLike {
-  const app = new App({ token: tokens.bot, appToken: tokens.app, socketMode: true, logLevel: LogLevel.ERROR })
+  // Built here, not by Bolt: Bolt's own receiver leaves out clientPingTimeout, and the headroom is the point.
+  const receiver = new SocketModeReceiver({ appToken: tokens.app, clientPingTimeout: SLACK_CLIENT_PING_TIMEOUT_MS, logLevel: LogLevel.ERROR })
+  const app = new App({ token: tokens.bot, receiver, socketMode: true, logLevel: LogLevel.ERROR })
   let handler: (event: RawEvent) => void = () => {}
   app.message(async ({ message }) => { handler(message as RawEvent) })
   // Posting never retries behind the caller's back, and gives up at a hard deadline: a retry landing after the caller

@@ -1,6 +1,6 @@
 // The event loop probe, on an injected clock: a beat is fired by hand, and time moves only when a test moves it.
 import { describe, expect, test } from 'bun:test'
-import { createLoopWatch, LOOP_BEAT_MS, RESUME_GAP_MS, STALL_ALERT_EVERY_MS, STALL_LOG_SPACING_MS, type LoopWatchOutlets } from '../loop-watch.js'
+import { createLoopWatch, LOOP_BEAT_MS, LOOP_RECENT_MS, RESUME_GAP_MS, STALL_ALERT_EVERY_MS, STALL_LOG_SPACING_MS, type LoopWatchOutlets } from '../loop-watch.js'
 
 function setup(outlets: Partial<LoopWatchOutlets> = {}) {
   let now = 1_000_000
@@ -77,6 +77,21 @@ describe('loop watch: worst lag', () => {
     t.block('vitals', 6_000)
     expect(t.watch.health().loopLastStall).toEqual({ ms: 5_600, at: new Date(1_006_100).toISOString(), callback: 'vitals', callbackMs: 6_000 })
   })
+
+  test('recentWorstLagMs reads the worst of the last LOOP_RECENT_MS without taking it from the vitals header', () => {
+    const watch = createLoopWatch({ now: () => 0, every: () => () => {} })
+    expect(watch.recentWorstLagMs()).toBeNull() // not running: unmeasured, not calm
+    const t = setup()
+    t.block('vitals', 6_000)
+    expect(t.watch.recentWorstLagMs()).toBe(5_600)
+    expect(t.watch.recentWorstLagMs()).toBe(5_600)
+    expect(t.watch.takeWorstLagMs()).toBe(5_600)
+    expect(t.watch.recentWorstLagMs()).toBe(5_600)
+    t.quiet(LOOP_RECENT_MS)
+    expect(t.watch.recentWorstLagMs()).toBe(5_600)
+    t.quiet(LOOP_BEAT_MS) // the block's beat leaves the window
+    expect(t.watch.recentWorstLagMs()).toBe(0)
+  })
 })
 
 describe('loop watch: a gap is not a stall', () => {
@@ -147,7 +162,7 @@ describe('loop watch: rate limits', () => {
     t.block('x', 3_000)
     expect(t.alerts).toEqual([])
     t.block('vitals', 6_000)
-    expect(t.alerts).toEqual(["⚠️ The daemon's event loop stalled for 5.6s (`vitals` held it 6s). Every connection waits while it is held, and a stall of 4s or more drops Slack's live connection. Each stall is in the daemon log; this alert repeats at most once an hour."])
+    expect(t.alerts).toEqual(["⚠️ The daemon's event loop stalled for 5.6s (`vitals` held it 6s). Every connection waits while it is held, and a stall of 10s or more can drop Slack's live connection. Each stall is in the daemon log; this alert repeats at most once an hour."])
     t.advance(STALL_ALERT_EVERY_MS - 60_000); t.idle(0)
     t.block('vitals', 6_000)
     expect(t.alerts).toHaveLength(1)
