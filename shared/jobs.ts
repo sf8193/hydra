@@ -578,7 +578,7 @@ export function listProcesses(): Proc[] {
 
 /** hydra's own credentials. An attempt runs arbitrary check scripts, so it gets none of them. */
 export const isHydraSecret = (name: string) =>
-  name === 'DISCORD_BOT_TOKEN' || /^SLACK_.*TOKEN$/.test(name) || /^SLOPBOT_SLACK_/.test(name) || /^RAINDROP_/.test(name)
+  name === 'DISCORD_BOT_TOKEN' || /^SLACK_.*TOKEN$/.test(name) || /^(SLOPBOT|HYDRA)_SLACK_/.test(name) || /^RAINDROP_/.test(name)
 
 export function attemptEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}

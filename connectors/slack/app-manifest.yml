@@ -1,0 +1,41 @@
+# hydra's Slack app: create it at api.slack.com/apps → "From an app manifest", install it, and set
+# HYDRA_SLACK_APP_TOKEN (an app-level token with connections:write), HYDRA_SLACK_BOT_TOKEN (xoxb-) and
+# HYDRA_SLACK_USER_TOKEN (xoxp-, the installing operator's). The bot posts; the operator's token only reads.
+display_information:
+  name: hydra
+  description: Delivers Slack threads to hydra sessions. Posts as itself; reads as the operator only where the bot isn't invited.
+features:
+  bot_user:
+    display_name: hydra
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - groups:history
+      - channels:read
+      - groups:read
+      - im:history
+      - im:read
+      - users:read
+      - reactions:write
+      - chat:write
+      - files:read
+    user:
+      # Reading only, never DMs, never a write scope.
+      - channels:history
+      - groups:history
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - channel_rename
+      - group_rename
+    user_events:
+      - message.channels
+      - message.groups
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false

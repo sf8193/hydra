@@ -96,6 +96,8 @@ export type SlackWatchEntry = {
   heldSince?: Record<string, number>
   /** Since when it has waited for a session of its own (its specialist at `max`): its owed messages don't expire meanwhile, and the oldest waiter takes the next freed place. */
   waitingSince?: number
+  /** Read with the operator's user token, because the bot is not in the channel: heard live through the app's events as the operator, and reread by every deep catch-up. Absent: the bot reads it. */
+  via?: 'user'
 }
 
 /** The fields of a Slack `message` event this module reads. */
@@ -212,6 +214,21 @@ export const addressOf = (user: string | undefined): Address | undefined => user
 export function placeOptions(cfg: Pick<SlackWatchConfig, 'hydra' | 'directory'>, channel: string): PlaceOptions | undefined {
   for (const p of placesOf(cfg, channel)) if (cfg.hydra.places[p]) return cfg.hydra.places[p]
   return undefined
+}
+
+/** Slack's answer when the bot is not in a channel: a user token may still read it. */
+export const NOT_A_MEMBER = /not_in_channel|channel_not_found/
+
+/**
+ * Why a thread can't be heard, and what to do: one sentence, so the bind's refusal and the later alert say the same.
+ * Only the operator can act on it; a session can only pass it on.
+ */
+export function cantRead(h: Pick<HydraConfig, 'connectors'> | undefined, place: string, why: string, botUserId?: string): string {
+  if (!NOT_A_MEMBER.test(why)) return `it can't be read (${why})`
+  const bot = botUserId ? `the bot (<@${botUserId}>)` : 'the bot'
+  return h?.connectors.slack?.userTokenEnv
+    ? `neither ${bot} nor the operator is in ${place} (${why}). Ask the operator to invite the bot or join ${place}, then bind again`
+    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set [connectors.slack] user_token_env, then bind again`
 }
 
 /** The specialist that would answer a new conversation here, whoever asks: where an alert about this channel goes. */
@@ -576,9 +593,30 @@ export class SlackWatcher {
     return this.list().filter(e => e.waitingSince !== undefined && e.owed?.length && e.specialist && isTo(e.specialist)).sort((a, b) => a.waitingSince! - b.waitingSince!)
   }
 
-  /** Catch-up can't read the thread (gone, or its channel closed to the bot): what it owed can't be fetched. A drop, surfaced; it waits no more. */
+  /** Which token last read a thread: the bot's, or the operator's. Updated each time catch-up reads it, so an invite moves it to the bot. */
+  setVia(channel: string, threadTs: string, via: 'bot' | 'user'): void {
+    const e = this.get(channel, threadTs)
+    if (!e || (e.via ?? 'bot') === via) return
+    if (via === 'user') e.via = 'user'; else delete e.via
+    this.deps.log(`daemon: slack-watch: ${conversationId(e)} is now read ${via === 'user' ? 'as the operator' : 'by the bot'}\n`)
+    this.persist()
+  }
+
+  /**
+   * Catch-up can't read the thread (gone, or its channel closed to the bot): what it owed can't be fetched. A drop, surfaced; it waits no more.
+   * A session listening there would hear nothing, ever: it is told once, and the thread is let go.
+   */
   threadGone(channel: string, threadTs: string, why: string): void {
     const e = this.get(channel, threadTs)
+    if (e?.specialist && isSessionThread(e.specialist)) {
+      const cfg = this.deps.config()
+      // The one alert says why; what it still owed is counted under the same reason, not a second "unbound".
+      if (e.owed?.length) this.drop('expired', e, e.owed, `its thread can't be read any more (${why})`, false)
+      delete e.owed
+      this.deps.alert?.(`⚠️ Stopped listening to ${conversationId(e)}: ${cantRead(cfg?.hydra, cfg ? placeName(cfg, channel) : channel, why, cfg?.botUserId)}.`, e.specialist)
+      this.unwatch(channel, threadTs)
+      return
+    }
     if (!e?.owed?.length) return
     this.drop('expired', e, e.owed, `its thread can't be read any more (${why}), so they can never be fetched again`)
     delete e.owed

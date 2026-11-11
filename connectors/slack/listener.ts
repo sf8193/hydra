@@ -1,10 +1,10 @@
 import { App, LogLevel } from '@slack/bolt'
 import { WebClient } from '@slack/web-api'
 import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../shared/socket-supervisor.js'
-import { catchUp, toEvent, type CatchUpResult, type RawMessage, type SlackApi } from './catchup.js'
+import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
-import { routedChannels, hearsDms, unresolvedPlaces, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import type { HydraConfig } from '../../config/types.js'
 
 /**
@@ -40,6 +40,27 @@ export function explainSlackError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
 
+/** The operator's token cannot read a thread either: settled, as gone. Anything else (a rate limit, a 5xx) is passing. */
+const OPERATOR_CANT = /not_in_channel|channel_not_found|thread_not_found|message_not_found|missing_scope|invalid_auth|not_authed|token_revoked|token_expired|account_inactive/
+
+/**
+ * A thread is read by the bot; where the bot is not a member and a user token is set, as the operator: reading only,
+ * never posting. The bot is always asked first, so an invite moves the thread back. When the operator can't read it
+ * either, the bot's "not a member" is kept in the error, so catch-up lets go of that one thread; a passing failure is
+ * thrown as itself, and the next pass retries.
+ */
+export async function readReplies(read: (token: string) => Promise<Page>, tokens: { bot: string; user?: string }): Promise<Page> {
+  try { return await read(tokens.bot) } catch (e) {
+    const botErr = e instanceof Error ? e : new Error(String(e))
+    if (!tokens.user || !NOT_A_MEMBER.test(botErr.message)) throw botErr
+    try { return { ...await read(tokens.user), via: 'user' } } catch (e2) {
+      const why = e2 instanceof Error ? e2.message : String(e2)
+      if (!OPERATOR_CANT.test(why)) throw e2 instanceof Error ? e2 : new Error(why)
+      throw new Error(`${botErr.message}; as the operator: ${why}`)
+    }
+  }
+}
+
 /** One post's deadline. Past it the post's outcome is unknown: it may have landed. */
 export const POST_TIMEOUT_MS = 30_000
 export const CATCH_UP_INTERVAL_MS = 10 * 60_000
@@ -58,7 +79,7 @@ export type SlackAppLike = {
   authTest(): Promise<{ botId?: string; userId?: string; url?: string; scopes?: string[] }>
   /** Every channel the bot can see, by id and name (conversations.list). Needs channels:read or groups:read. */
   channels(): Promise<{ id: string; name: string }[]>
-  /** A channel was renamed (the channel_rename event). */
+  /** A channel was renamed (channel_rename, or group_rename for a private one). */
   onRename(handler: (id: string, name: string) => void): void
   userName(userId: string): Promise<string | undefined>
   /** A message in a channel, or in a thread when `threadTs` is set. Resolves to its ts. */
@@ -120,8 +141,8 @@ export type ListenerDeps = {
   watcher: SlackWatcher
   /** hydra.toml as loaded now. Slack is connected only while it has [connectors.slack]. */
   hydra: () => HydraConfig
-  tokens: () => { app?: string; bot?: string }
-  createApp: (tokens: { app: string; bot: string }) => SlackAppLike
+  tokens: () => { app?: string; bot?: string; user?: string }
+  createApp: (tokens: { app: string; bot: string; user?: string }) => SlackAppLike
   /** A plain message to the specialist's thread (not a session turn). */
   alert: (text: string) => void
   log: (line: string) => void
@@ -169,6 +190,9 @@ export class SlackListener {
     if (!hydra.connectors.slack || !this.identity) return null
     return { hydra, ...this.identity, directory: this.directoryRead ? this.directory : NO_DIRECTORY, ...SLACK_LIMITS }
   }
+
+  /** Slack's read calls, for a check outside catch-up (bind_conversation's). Null before the first connect attempt. */
+  get api(): SlackApi | null { return this.app?.api ?? null }
 
   /** A specialist's reply, into its conversation. Throws when Slack isn't connected. */
   async post(channel: string, threadTs: string | undefined, text: string): Promise<string> {
@@ -269,7 +293,7 @@ export class SlackListener {
     const h = this.d.hydra()
     if (!t.app || !t.bot || !h.connectors.slack) throw new Error('slack listener is not configured')
     if (this.app) { try { await this.app.stop() } catch {} }
-    const app = this.d.createApp({ app: t.app, bot: t.bot })
+    const app = this.d.createApp({ app: t.app, bot: t.bot, ...(t.user && { user: t.user }) })
     app.onMessage(raw => this.onMessage(raw))
     app.onRename((id, name) => { this.directory.rename(id, name); this.d.log(`daemon: slack listener: channel ${id} is now #${name}\n`) })
     this.app = app
@@ -421,7 +445,7 @@ export class SlackListener {
 // The real Slack app. Thin on purpose: everything above is tested against a fake.
 // ---------------------------------------------------------------------------
 
-export function boltApp(tokens: { app: string; bot: string }): SlackAppLike {
+export function boltApp(tokens: { app: string; bot: string; user?: string }): SlackAppLike {
   const app = new App({ token: tokens.bot, appToken: tokens.app, socketMode: true, logLevel: LogLevel.ERROR })
   let handler: (event: RawEvent) => void = () => {}
   app.message(async ({ message }) => { handler(message as RawEvent) })
@@ -429,7 +453,7 @@ export function boltApp(tokens: { app: string; bot: string }): SlackAppLike {
   // was told "unknown" would post twice. Reading keeps the SDK's patient retries.
   const poster = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR })
   let renamed: (id: string, name: string) => void = () => {}
-  app.event('channel_rename', async ({ event }) => { const c = (event as { channel?: { id?: string; name?: string } }).channel; if (c?.id && c.name) renamed(c.id, c.name) })
+  for (const name of ['channel_rename', 'group_rename'] as const) app.event(name, async ({ event }) => { const c = (event as { channel?: { id?: string; name?: string } }).channel; if (c?.id && c.name) renamed(c.id, c.name) })
   const client = app.client
   const page = (r: { messages?: unknown[]; response_metadata?: { next_cursor?: string } }) => ({
     messages: (r.messages ?? []) as RawMessage[],
@@ -514,7 +538,8 @@ export function boltApp(tokens: { app: string; bot: string }): SlackAppLike {
         }
         return out
       },
-      replies: async a => page(await client.conversations.replies({ token: tokens.bot, channel: a.channel, ts: a.ts, oldest: a.oldest, inclusive: a.inclusive, limit: 200, ...(a.cursor && { cursor: a.cursor }) }).catch(e => { throw explainSlackError(e) })),
+      replies: a => readReplies(token => client.conversations.replies({ token, channel: a.channel, ts: a.ts, oldest: a.oldest, inclusive: a.inclusive, limit: a.limit ?? 200, ...(a.cursor && { cursor: a.cursor }) })
+        .then(page, e => { throw explainSlackError(e) }), tokens),
     },
   }
 }

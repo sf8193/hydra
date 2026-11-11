@@ -557,3 +557,52 @@ describe('catch-up never passes over a gap', () => {
     expect(alerts.join()).toContain('catch-up read the newest 1000 messages in C0FOOD since 1000.000001')
   })
 })
+
+describe("a thread read with the operator's user token (the bot isn't in its channel)", () => {
+  const SESSION = '1552619225032425525'
+  test('catch-up records who read it, and moves it back to the bot once the bot can read it', async () => {
+    const { w } = setup()
+    w.bind('C0ELSE', '1792999000.000001', SESSION, 'tool')
+    let viaUser = true
+    const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => ({ messages: [], ...(viaUser && { via: 'user' as const }) }) }
+    await catchUp(w, api, cfg, opts({ deep: true }))
+    expect(w.get('C0ELSE', '1792999000.000001')!.via).toBe('user')
+    viaUser = false
+    await catchUp(w, api, cfg, opts({ deep: true }))
+    expect(w.get('C0ELSE', '1792999000.000001')!.via).toBeUndefined()
+  })
+
+  test('the deep pass rereads it from its own cursor and delivers what is new once', async () => {
+    const { w, sent } = setup()
+    w.bind('C0ELSE', '1792999000.000001', SESSION, 'tool')
+    const thread = { 'C0ELSE:1792999000.000001': [
+      { ts: '1792999500.000001', thread_ts: '1792999000.000001', user: 'UOLD', text: 'before the bind' },
+      { ts: '1793000100.000001', thread_ts: '1792999000.000001', user: 'UKEVIN', text: 'can we ask increase directly' },
+    ] }
+    const { api } = fakeApi({ [CH]: [] }, thread)
+    const userApi: SlackApi = { ...api, replies: async a => ({ ...await api.replies(a), via: 'user' as const }) }
+    await catchUp(w, userApi, cfg, opts({ deep: true }))
+    await w.flush()
+    await catchUp(w, userApi, cfg, opts({ deep: true }))
+    await w.flush()
+    expect(sent.join().match(/can we ask increase directly/g)?.length).toBe(1)
+    expect(sent.join()).not.toContain('before the bind')
+    expect(w.get('C0ELSE', '1792999000.000001')!.via).toBe('user')
+  })
+
+  test('a session listening to a thread nobody can read is told once, and the thread is let go', async () => {
+    const alerts: { text: string; to?: string }[] = []
+    const dir = mkdtempSync(join(tmpdir(), 'slack-catchup-'))
+    dirs.push(dir)
+    const w = new SlackWatcher({ now: () => 1_793_000_000_000, file: join(dir, 'w.json'), log: () => {}, config: () => cfg, deliver: async () => ({ ok: true }), alert: (text, to) => alerts.push({ text, to }) })
+    w.bind('C0ELSE', '1792999000.000001', SESSION, 'tool')
+    w.get('C0ELSE', '1792999000.000001')!.owed = ['1792999000.000002']
+    const api: SlackApi = { history: async () => ({ messages: [] }), replies: async () => { throw new Error('An API error occurred: not_in_channel') } }
+    await catchUp(w, api, cfg, opts({ deep: true }))
+    expect(w.get('C0ELSE', '1792999000.000001')).toBeUndefined()
+    expect(w.stats().dropped).toEqual({ expired: 1 })   // counted under the real reason, not a second "unbound" alert
+    expect(alerts).toEqual([{ text: expect.stringContaining("Stopped listening to slack:C0ELSE:1792999000.000001: the bot (<@UBOT>) isn't in slack:C0ELSE"), to: SESSION }])
+    await catchUp(w, api, cfg, opts({ deep: true }))
+    expect(alerts.length).toBe(1)
+  })
+})

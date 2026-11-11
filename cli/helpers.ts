@@ -473,6 +473,15 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       console.log(`tmux: ${data.tmux}`)
       console.log(`idempotency: ${data.idempotency.active} active keys`)
       if (data.raindrop) console.log(`raindrop: ${data.raindrop}`)
+      if (data.slack) {
+        const l = data.slack.listener
+        const state = !l ? 'off' : l.state === 'up' ? 'up' : `${l.state}${l.downMin !== null ? ` ${l.downMin} min` : ''}`
+        const catchUp = l?.catchUp ? ` · catch-up ${l.catchUp.ok ? 'ok' : `failing (${l.catchUp.reason ?? 'see log'})`} ${l.catchUp.ageMin} min ago` : ''
+        const s = data.slack
+        const asOperator = s.readAsOperator ? ` (${s.readAsOperator} read as the operator)` : ''
+        const owed = s.owed ? `${s.owed} owed, oldest ${s.oldestOwedAgeMin} min` : '0 owed'
+        console.log(`slack: listener ${state}${catchUp} · ${s.conversations} conversation${s.conversations === 1 ? '' : 's'}${asOperator} · ${owed}`)
+      }
       return
     case 'status':
       console.log(`${data.name} (${data.sessionId})`)

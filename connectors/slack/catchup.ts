@@ -38,12 +38,16 @@ export type RawMessage = {
   files?: { id?: string; name?: string; size?: number; url_private_download?: string }[]
 }
 
-export type Page = { messages: RawMessage[]; next?: string }
+/** `via`: read with the operator's user token, because the bot is not in the channel. */
+export type Page = { messages: RawMessage[]; next?: string; via?: 'user' }
 
 export type SlackApi = {
   history(a: { channel: string; oldest: string; cursor?: string }): Promise<Page>
-  /** `inclusive`: the message at `oldest` itself is wanted too (an owed message starts a thread read exactly there). */
-  replies(a: { channel: string; ts: string; oldest: string; inclusive: boolean; cursor?: string }): Promise<Page>
+  /**
+   * `inclusive`: the message at `oldest` itself is wanted too (an owed message starts a thread read exactly there).
+   * A page read as the operator (`via: 'user'`) cost two calls: the bot's refusal, then the operator's read.
+   */
+  replies(a: { channel: string; ts: string; oldest: string; inclusive: boolean; cursor?: string; limit?: number }): Promise<Page>
   /** The bot's DM conversations and who is on the other end (users.conversations, types=im). Optional: without it, only DMs already seen are scanned. */
   dms?(): Promise<{ channel: string; user?: string }[]>
 }
@@ -248,6 +252,8 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
           watcher.threadGone(t.channel, t.threadTs, why)
           break
         }
+        if (res.via === 'user') spend()
+        if (i === 0) watcher.setVia(t.channel, t.threadTs, res.via ?? 'bot')
         // A reply's ts never moves the channel cursor: only history does. A top-level message posted after the
         // history read, and missed live, would otherwise be passed over for good.
         feed(t.channel, res.messages)

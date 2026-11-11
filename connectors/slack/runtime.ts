@@ -1,4 +1,4 @@
-import { SlackWatcher, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
+import { SlackWatcher, cantRead, cmpTs, slackWatchesPath, unresolvedPlaces, conversationId, placeName, isDm, TOP_LEVEL, NO_DIRECTORY, SLACK_LIMITS, type SlackWatchConfig, type SlackWatchEntry, type SlackWatchStats } from './watch.js'
 import { getSpecialist, conversationSpecialistOf, specialistOf, boundAs } from '../../specialists/specialists.js'
 import { registry } from '../../daemon/sessions.js'
 import type { SessionInfo } from '../../daemon/sessions.js'
@@ -30,8 +30,25 @@ export const slackRuntimeDeps = {
   },
   /** How long a listening session's thread may stand empty (a handoff, a respawn) before its threads are let go. */
   releaseGraceMs: 60_000,
+  /**
+   * Who can read a thread now: the bot, the operator's user token, or (null) nobody can be asked because Slack isn't
+   * connected. Throws Slack's refusal when neither token can read it.
+   */
+  readThread: async (channel: string, threadTs: string): Promise<'bot' | 'user' | null> => {
+    const api = listener?.api
+    if (!api) return null
+    // A tool call must not wait out the SDK's retries: past the deadline the bind is made unchecked, as when disconnected.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), READ_THREAD_TIMEOUT_MS) })
+    try {
+      const r = await Promise.race([api.replies({ channel, ts: threadTs, oldest: threadTs, inclusive: true, limit: 1 }), late])
+      return r ? r.via ?? 'bot' : null
+    } finally { clearTimeout(timer) }
+  },
 }
 const hydraConfig = () => currentHydraConfig()
+/** How long bind_conversation waits for Slack to say who can read a thread. */
+const READ_THREAD_TIMEOUT_MS = 10_000
 
 /** What the watcher routes with: hydra.toml plus what the Slack connection learned. Null until Slack has connected. */
 function config(): SlackWatchConfig | null {
@@ -122,9 +139,9 @@ let listener: SlackListener | undefined
  * reach them all. Any other name is refused, with why, and the listener stays off.
  */
 /** The Slack token variables the daemon scrubs from every session. */
-const SLACK_TOKEN_VARS: readonly string[] = SCRUBBED_SPAWN_VARS.filter(v => v.startsWith('SLOPBOT_SLACK_'))
+const SLACK_TOKEN_VARS: readonly string[] = SCRUBBED_SPAWN_VARS.filter(v => /^(SLOPBOT|HYDRA)_SLACK_/.test(v))
 
-export function slackTokens(h: HydraConfig, env: Readonly<Record<string, string>> = SCRUBBED_ENV, warn: (line: string) => void = log): { app?: string; bot?: string } {
+export function slackTokens(h: HydraConfig, env: Readonly<Record<string, string>> = SCRUBBED_ENV, warn: (line: string) => void = log): { app?: string; bot?: string; user?: string } {
   const c = h.connectors.slack
   if (!c) return {}
   const read = (name: string | undefined): string | undefined => {
@@ -135,7 +152,8 @@ export function slackTokens(h: HydraConfig, env: Readonly<Record<string, string>
     }
     return env[name]
   }
-  return { bot: read(c.botTokenEnv), app: read(c.appTokenEnv) }
+  const user = read(c.userTokenEnv)
+  return { bot: read(c.botTokenEnv), app: read(c.appTokenEnv), ...(user && { user }) }
 }
 
 /**
@@ -278,10 +296,10 @@ export const TOOL_BIND_MAX = 10
 
 /**
  * `bind_conversation`: a session binds a Slack thread to itself (boundAs): a specialist's session to the specialist,
- * at a place it hears; any other session to its own thread, wherever the bot can read. It may bind one that is unbound
- * or already its own. Moving another's conversation is the operator's (`hydra conversations bind`).
+ * at a place it hears; any other session to its own thread, wherever the bot, or the operator, can read. It may bind
+ * one that is unbound or already its own. Moving another's conversation is the operator's (`hydra conversations bind`).
  */
-export function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown): string {
+export async function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 'tmuxName' | 'sessionType'>> | undefined, conversation: unknown): Promise<string> {
   const v = offlineView()
   if (!v.hydra.connectors.slack) throw new Error('Slack is not connected: hydra.toml has no [connectors.slack]')
   const me = boundAs(caller, v.hydra)
@@ -290,6 +308,14 @@ export function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 
   // A DM, or a place's top level, is routing's to hand out: a tool never takes one, least of all the operator's DM from main.
   if (isDm(c.channel) || c.threadTs === TOP_LEVEL) throw new Error(`${conversationId(c)} is not a thread in a channel: only a thread can be bound by hand`)
   if (!isSessionThread(me) && !listensOn(v, me, c.channel)) throw new Error(`${me} doesn't listen on ${placeName(v, c.channel)}: it binds only threads where it listens`)
+  // Asked of Slack, not assumed: a bind nobody can read would say "listening" and deliver nothing.
+  const via = await slackRuntimeDeps.readThread(c.channel, c.threadTs).catch((err: unknown) => {
+    const why = err instanceof Error ? err.message : String(err)
+    throw new Error(`not bound: ${conversationId(c)}: ${cantRead(v.hydra, placeName(v, c.channel), why, config()?.botUserId)}`)
+  })
+  // A specialist answers in its threads: one only the operator can read is one it could never post in.
+  if (via === 'user' && !isSessionThread(me)) throw new Error(`not bound: ${conversationId(c)}: the bot isn't in ${placeName(v, c.channel)}, so ${me} could not answer there. Ask the operator to invite it, then bind again`)
+  // From here to the bind nothing waits: the table checks and the bind can't interleave with another call.
   const w = getSlackWatcher()
   const bound = w.get(c.channel, c.threadTs)?.specialist
   // A specialist answers where it listens: a session only listening there gives the thread way, and is told.
@@ -299,9 +325,15 @@ export function bindConversation(caller: Partial<Pick<SessionInfo, 'threadId' | 
     throw new Error(`${me} already holds ${TOOL_BIND_MAX} conversations it opened itself; unbind one first`)
   }
   if (!w.bind(c.channel, c.threadTs, me, 'tool')) throw new Error(`the conversation table is full (${SLACK_LIMITS.maxWatches}); unbind one first`)
+  if (via) w.setVia(c.channel, c.threadTs, via)
   if (takeover) alert(`ℹ️ ${conversationId(c)} was bound to this session to listen; ${me} took it, since it answers there. This session no longer hears it.`, bound!)
-  if (isSessionThread(me)) return `${conversationId(c)} is bound to this session, listen-only: each new message in it is delivered here until it has been idle a week (the bot must be in ${placeName(v, c.channel)})`
-  return `${conversationId(c)} is bound to ${me}`
+  const place = placeName(v, c.channel)
+  const how = via === 'bot' ? `live: the bot is in ${place}`
+    : via === 'user' ? `live, read as the operator: the bot isn't in ${place}`
+    : isSessionThread(me) ? "not checked: Slack isn't connected; if the thread can't be read, the next deep catch-up lets it go and says so here"
+    : "not checked: Slack isn't connected"
+  if (isSessionThread(me)) return `${conversationId(c)} is bound to this session, listen-only (${how}): each new message in it is delivered here until it has been idle a week`
+  return `${conversationId(c)} is bound to ${me} (${how})`
 }
 
 /** `unbind_conversation`: a session lets go of one of its own conversations. */
@@ -435,8 +467,9 @@ const sessionNameIn = (threadId: string): string | undefined => [...registry.val
 const line = (v: Pick<SlackWatchConfig, 'directory'>, e: SlackWatchEntry, now: number): string => {
   const idle = Math.max(0, Math.round((now - e.lastEventAt) / 3_600_000))
   const owed = e.owed?.length ? ` · ${e.owed.length} owed` : ''
+  const via = e.via === 'user' ? ' · read as the operator' : ''
   const to = e.specialist && isSessionThread(e.specialist) ? `${sessionNameIn(e.specialist) ?? 'no session'} (listening, thread ${e.specialist})` : e.specialist
-  return `${conversationId(e)} (${placeName(v, e.channel)}) → ${to ?? '(unbound: its next message binds it)'} · idle ${idle}h${owed}`
+  return `${conversationId(e)} (${placeName(v, e.channel)}) → ${to ?? '(unbound: its next message binds it)'} · idle ${idle}h${owed}${via}`
 }
 
 /** The operator's view: every conversation. */
@@ -453,7 +486,7 @@ export function formatConversationsFor(caller: Partial<Pick<SessionInfo, 'thread
 }
 
 /** For `hydra health` and `hydra conversations`: null when Slack isn't configured. Refusals and drops count since the daemon started. */
-export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } & SlackWatchStats) | null {
+export function slackWatchHealth(now = Date.now()): ({ places: { place: string; to: string; note?: string }[]; conversations: number; readAsOperator: number; owed: number; oldestOwedAgeMin: number | null; listener?: ListenerHealth } & SlackWatchStats) | null {
   const h = hydraConfig()
   if (!h.connectors.slack) return null
   const v = offlineView()
@@ -468,6 +501,7 @@ export function slackWatchHealth(now = Date.now()): ({ places: { place: string; 
   return {
     places,
     conversations: entries.length,
+    readAsOperator: entries.filter(e => e.via === 'user').length,
     owed: owed.length,
     oldestOwedAgeMin: oldest ? Math.max(0, Math.round((now / 1000 - parseFloat(oldest)) / 60)) : null,
     ...getSlackWatcher().stats(),

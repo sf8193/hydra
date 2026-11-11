@@ -62,7 +62,8 @@ export type Specialist = {
 
 export type Connectors = {
   discord?: { botTokenEnv: string }
-  slack?: { botTokenEnv: string; appTokenEnv?: string }
+  /** `userTokenEnv`: the operator's user token, used only to read threads the bot is not in; never to post. */
+  slack?: { botTokenEnv: string; appTokenEnv?: string; userTokenEnv?: string }
   /** `repos` are `owner/repo`, lowercased. */
   github?: { repos: string[]; pollMs: number }
 }
