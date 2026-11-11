@@ -122,7 +122,9 @@ export class SocketSupervisor {
         if (gen !== this.generation) return
         this.touch()
       })
-      for (const down of ['connecting', 'reconnecting', 'disconnecting', 'disconnected']) {
+      // `close` ends every socket. After a ping timeout it comes one ping (~1.7s) later, since the first disconnect()
+      // only sends a close frame; the SDK's own `reconnecting` follows at least 5s after that.
+      for (const down of ['close', 'connecting', 'reconnecting', 'disconnecting', 'disconnected']) {
         client.on(down, () => {
           if (gen !== this.generation) return
           this.connected = false
@@ -167,10 +169,12 @@ export class SocketSupervisor {
   }
 
   /**
-   * One health check. Health is the socket's own connection state: the client pings every 5s,
-   * times the server out at 30s, and auto-reconnects faster than this watchdog. Intervene only
-   * once it has been *continuously* disconnected past the threshold, so a self-healing blip
-   * never trips it. Without the lifecycle hook, fall back to event-time staleness.
+   * One health check. Health is the socket's own connection state: the client pings every
+   * clientPingTimeout/3 (1.67s at the default 5s), starts closing the socket once no pong has come
+   * for over 5s and terminates it one ping later, times the server out at 30s, and auto-reconnects
+   * faster than this watchdog. Intervene only once it has been *continuously* disconnected past the
+   * threshold, so a self-healing blip never trips it. Without the lifecycle hook, fall back to
+   * event-time staleness.
    */
   async tick(): Promise<void> {
     const now = this.now()

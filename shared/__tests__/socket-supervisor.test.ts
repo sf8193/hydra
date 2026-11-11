@@ -49,6 +49,16 @@ describe('SocketSupervisor: noticing a dead socket', () => {
     expect(t.calls.start).toBe(0)
   })
 
+  test('close marks the socket down at once, before the SDK says reconnecting', () => {
+    const t = setup()
+    t.sup.attach()
+    t.client.current!.emit('connected')
+    expect(t.sup.state.connected).toBe(true)
+    t.client.current!.emit('close') // the ping monitor terminated it; reconnecting is at least 5s away
+    expect(t.sup.state.connected).toBe(false)
+    expect(t.sup.state.downSince).toBe(t.now())
+  })
+
   test('continuously down past the threshold reconnects, and the tick withholds the heartbeat while it is stale', async () => {
     const t = setup()
     t.sup.attach()
