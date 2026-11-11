@@ -13,6 +13,7 @@
 import { transport } from './bridge-transport.js'
 import { registry } from './sessions.js'
 import { tmuxHasSession } from './util.js'
+import { awakeSince } from '../shared/resume.js'
 
 /** The one grace window: how long a running session may go without a bridge before it counts as orphaned. */
 export const ORPHAN_GRACE_MS = 90_000
@@ -25,9 +26,12 @@ function daemonStartedAt(): number {
   return daemonStartedAtOverride ?? Date.now() - process.uptime() * 1000
 }
 
-/** A daemon restart restarts the clock: an older session's bridge gets the full window to reconnect. */
+/**
+ * A daemon restart restarts the clock: an older session's bridge gets the full window to reconnect. Only awake time
+ * counts: a session spawned just before the machine slept gets its whole window after it wakes.
+ */
 export function bridgeWaitMs(createdAt: number, now = Date.now()): number {
-  return now - Math.max(createdAt, daemonStartedAt())
+  return awakeSince(Math.max(createdAt, daemonStartedAt()), now)
 }
 
 export type Occupancy =
@@ -92,7 +96,7 @@ export function occupied(o: Occupancy): o is 'starting' | 'reachable' | 'orphane
   return o === 'starting' || o === 'reachable' || o === 'orphaned'
 }
 
-export function daemonPastOrphanGrace(uptimeMs = Date.now() - daemonStartedAt()): boolean {
+export function daemonPastOrphanGrace(uptimeMs = awakeSince(daemonStartedAt())): boolean {
   return uptimeMs > ORPHAN_GRACE_MS
 }
 

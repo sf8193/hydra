@@ -9,6 +9,7 @@ import type { HydraConfig } from '../../../config/types.js'
 import { SlackListener, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
+import { createResumeDetector, type LastSleep } from '../../../shared/resume.js'
 
 const BOT = 'UBOT'
 const CH = 'C0FOOD'
@@ -36,7 +37,8 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
   const logs: string[] = []
   const alerts: string[] = []
   const apps: { handler: (e: RawEvent) => void; client: FakeClient; stopped: boolean; started: number; apiCalls: string[] }[] = []
-  const state = { failStart: !!over.failStart, historyError: over.historyError as string | undefined, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[], duringHistory: undefined as (() => void) | undefined }
+  const state = { failStart: !!over.failStart, historyError: over.historyError as string | undefined, history: over.history ?? [], threads: over.threads ?? {}, nameLookups: [] as string[], duringHistory: undefined as (() => void) | undefined, network: true, lastSleep: null as Awaited<ReturnType<LastSleep>> }
+  const resumes = createResumeDetector({ now: () => now, lastSleep: async () => state.lastSleep, log: l => logs.push(l) })
   // Before it has connected, the watcher sees the same file through a stand-in view, so setup can lay down a cursor.
   let listener: SlackListener | undefined
   const before = toml === null ? null : view(toml, { names: Object.fromEntries((over.channels ?? []).map(c => [c.id, c.name])) })
@@ -53,7 +55,8 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
     now: () => now,
     log: l => logs.push(l),
     alert: t => alerts.push(t),
-    fetch: async () => ({ ok: true }),
+    resumes,
+    fetch: async () => ({ ok: state.network }),
     ...(over.firstRetryBaseMs !== undefined && { firstRetryBaseMs: over.firstRetryBaseMs }),
     createApp: tokens => {
       expect(tokens).toEqual(TOKENS)
@@ -80,7 +83,16 @@ function setup(over: { tokens?: { app?: string; bot?: string }; toml?: string | 
     },
   })
   listeners.push(listener!)
-  return { listener: listener!, watcher, sent, logs, alerts, apps, state, tick: (ms: number) => { now += ms } }
+  return {
+    listener: listener!, watcher, sent, logs, alerts, apps, state, tick: (ms: number) => { now += ms },
+    /** The machine sleeps `ms`; on wake the loop watch hands the gap to the detector, and the bus to the listener. */
+    sleep: (ms: number) => {
+      now += ms
+      state.lastSleep = { sleptAt: now - ms, wokeAt: now }
+      resumes.noteResume(ms, now, now - ms)
+      listener!.onResume()
+    },
+  }
 }
 const message = (over: Partial<RawEvent>): RawEvent => ({ channel: CH, ts: '1100.000001', user: 'UB', text: mention, ...over })
 
@@ -349,6 +361,18 @@ describe('catch-up', () => {
     expect(t.alerts).toHaveLength(0)
   })
 
+  test('a resume during a pass is a gap in its window: no "another process?" alert, even with the socket never replaced', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.tick(10 * 60_000)
+    t.state.network = false // on wake the network is not back yet, so the supervisor cannot replace the socket
+    t.state.history = [{ ts: '2000.000001', user: 'UB', text: mention }] // posted while the machine slept
+    t.state.duringHistory = () => { t.state.duringHistory = undefined; t.sleep(99 * 60_000) } // the periodic pass overdue at wake runs first
+    await t.listener.runCatchUp(true, 'periodic')
+    expect(t.apps).toHaveLength(1)
+    expect(t.alerts).toHaveLength(0)
+  })
+
   test('one pass at a time: a request during a pass runs once more afterwards', async () => {
     const t = setup()
     await t.listener.start()
@@ -388,6 +412,52 @@ describe('health and alerts', () => {
     t.tick(CATCH_UP_STALE_AFTER_MS + 60_000)
     await t.listener.checkAlerts()
     expect(t.alerts.filter(a => a.includes('catch-up pass has not completed'))).toHaveLength(2)
+  })
+
+  test('after a sleep, the catch-up alarm counts awake time, and when it does fire it names the sleep', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.state.historyError = 'ratelimited' // no pass completes from here on
+    t.tick(5 * 60_000)
+    t.sleep(99 * 60_000)
+    await Bun.sleep(20)
+    expect(t.logs).toContain('daemon: resumed after 99m (the machine was asleep for 99m)\n')
+    expect(t.logs.some(l => l.includes('slack catch-up (resumed, deep): incomplete'))).toBe(true)
+    await t.listener.checkAlerts()
+    expect(t.alerts.filter(a => a.includes('catch-up pass has not completed'))).toHaveLength(0) // 5 min awake, not 104
+    t.tick(CATCH_UP_STALE_AFTER_MS - 5 * 60_000 - 60_000)
+    await t.listener.checkAlerts()
+    expect(t.alerts.filter(a => a.includes('catch-up pass has not completed'))).toHaveLength(0)
+    t.tick(60_000)
+    await t.listener.checkAlerts()
+    expect(t.alerts).toEqual([`⚠️ The Slack catch-up pass has not completed for 25 min awake (the machine was asleep for 99 min; ratelimited). Live delivery is unaffected, but a gap would not be filled.`])
+  })
+
+  test('a socket that closed just before a sleep is down for its awake minutes on wake, not the sleep: no down alert', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.state.network = false // the supervisor cannot replace it on wake
+    t.apps[0].client.emit('close')
+    t.tick(60_000)
+    t.sleep(99 * 60_000)
+    await Bun.sleep(20)
+    expect(t.listener.health()).toMatchObject({ state: 'down', downMin: 1 })
+    await t.listener.checkAlerts()
+    expect(t.alerts.filter(a => a.includes('has been down'))).toHaveLength(0)
+    t.tick(DOWN_ALERT_AFTER_MS)
+    await t.listener.checkAlerts()
+    expect(t.alerts.filter(a => a.includes('has been down for 6 min'))).toHaveLength(1)
+  })
+
+  test('a resume replaces the socket at once and runs one resumed pass', async () => {
+    const t = setup()
+    await t.listener.start()
+    t.tick(5 * 60_000)
+    t.sleep(99 * 60_000)
+    await Bun.sleep(20)
+    expect(t.apps).toHaveLength(2) // a fresh socket, before any timer noticed the old one
+    expect(t.logs.filter(l => l.includes('slack catch-up (resumed, deep): done'))).toHaveLength(1)
+    expect(t.logs.some(l => l.includes('slack catch-up (reconnected'))).toBe(false)
   })
 
   test('health before start and after stop is off', async () => {

@@ -237,7 +237,9 @@ export function startSlackWatch(): void {
   for (const t of new Set(getSlackWatcher().list().map(e => e.specialist).filter((id): id is string => !!id && isSessionThread(id)))) releaseIfVacant(t)
   const offDeath = on('session:death', freed, 'slack-watch: wake conversations waiting at max')
   const offDead = on('session:marked-dead', freed, 'slack-watch: wake conversations waiting at max (found dead)')
-  unsubscribe = () => { offConfig(); offRelease(); offReleaseDead(); offDeath(); offDead() }
+  // After a sleep the socket is likely dead and Slack replays nothing: replace it and catch up now, not when a timer notices.
+  const offResumed = on('clock:resumed', () => listener?.onResume(), 'slack listener: replace the socket and catch up after a resume')
+  unsubscribe = () => { offConfig(); offRelease(); offReleaseDead(); offDeath(); offDead(); offResumed() }
 }
 
 /** Whether a live session is home in this thread. A reaped session's kept record (deadAt) is nobody. */

@@ -10,6 +10,7 @@
 //   declare module './event-bus' { interface EventMap { 'my:event': { ... } } }
 
 import type { ProviderId } from './engines/engine-adapter.js'
+import type { Resume } from '../shared/resume.js'
 
 export interface EventMap {
   'delivery:failed': { sessionId: string; status: 'rejected' | 'unknown'; reason: string; messageId?: string }
@@ -26,6 +27,9 @@ export interface EventMap {
   'review:complete': { threadId: string }
   'review:cancelled': { threadId: string }
   'review:round': { threadId: string; round: number; totalRounds: number; text: string }
+  // The daemon's loop ran again after a minute or more without running: the machine slept, most likely (shared/resume.ts).
+  // Fired at once, before the OS names the cause, so a check that ends a moment later already sees it.
+  'clock:resumed': Resume
 }
 
 type Listener<T> = (payload: T) => void | Promise<void>

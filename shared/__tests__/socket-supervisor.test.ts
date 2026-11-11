@@ -3,6 +3,7 @@ import {
   SocketSupervisor, type SocketEmitter, type SocketSupervisorOpts,
   STALE_THRESHOLD_MS, HEALTH_CHECK_MS, HEALTH_CHECK_FAST_MS, MAX_RECONNECT_ATTEMPTS, RECONNECT_BACKOFF_BASE_MS, RECONNECT_BACKOFF_CAP_MS, OUTAGE_GAP_MS, HEARTBEAT_WRITE_THROTTLE_MS,
 } from '../socket-supervisor.js'
+import { createResumeDetector } from '../resume.js'
 
 /** A Socket Mode client stand-in: tests fire its lifecycle events by name. */
 class FakeClient implements SocketEmitter {
@@ -89,6 +90,22 @@ describe('SocketSupervisor: noticing a dead socket', () => {
     t.tick(2)
     await t.sup.tick()
     expect(t.calls.start).toBe(1)
+  })
+
+  test('a socket down across a sleep is not stale on the first tick after wake: only awake time counts', async () => {
+    const resumes = createResumeDetector({ lastSleep: async () => null, log: () => {} })
+    const t = setup({ awakeSince: (at, now) => resumes.awakeSince(at, now) })
+    t.sup.attach()
+    t.client.current!.emit('connected')
+    t.client.current!.emit('close') // the lid closes a moment later
+    t.tick(1_000 + 99 * 60_000)
+    resumes.noteResume(99 * 60_000, t.now(), t.now() - 99 * 60_000)
+    await t.sup.tick()
+    expect(t.calls.start).toBe(0)
+    t.tick(STALE_THRESHOLD_MS)
+    await t.sup.tick()
+    expect(t.calls.start).toBe(1)
+    expect(t.logs[0]).toContain('socket down 181s')
   })
 
   test("a replaced connection's late events do nothing", async () => {
