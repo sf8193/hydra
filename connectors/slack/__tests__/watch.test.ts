@@ -261,6 +261,20 @@ describe('🚫: a refused or unrouted mention or DM', () => {
     expect(s.w.list()).toEqual([])
   })
 
+  test("with the operator's token, untagged chatter in a channel hydra.toml doesn't name is passed over; a tag is answered as ever; an open thread there still delivers", async () => {
+    const { a, reactions } = actions()
+    const s = setup({ toml: oneListener(CH).replace('app_token_env = "SLOPBOT_SLACK_APP_TOKEN"', 'app_token_env = "SLOPBOT_SLACK_APP_TOKEN"\nuser_token_env = "HYDRA_SLACK_USER_TOKEN"') })
+    s.w.setSlackActions(a)
+    expect(s.w.handle(ev({ channel: 'C0ELSE', ts: '2.000001', text: 'chatter in some channel the operator is in' }))).toBe('ignored')
+    expect(s.w.stats()).toMatchObject({ unrouted: 0, refused: 0 })
+    expect(s.w.handle(ev({ channel: 'C0ELSE', ts: '1.000001', text: mention }))).toBe('unrouted')
+    await Bun.sleep(1)
+    expect(reactions).toEqual([`C0ELSE:1.000001:${REFUSED_REACTION}`])
+    s.w.bind('C0ELSE', '3.000001', '1552619225032425525', 'tool')
+    expect(s.w.handle(ev({ channel: 'C0ELSE', ts: '4.000001', threadTs: '3.000001', text: 'a reply in the bound thread' }))).toBe('follow-up')
+    expect(s.w.handle(ev({ ts: '5.000001', text: mention }))).toBe('mention')   // a place hydra.toml names is heard as ever
+  })
+
   test('a refused mention gets 🚫; refused chatter in a bound thread does not', async () => {
     const { a, reactions } = actions()
     const s = setup({ toml: oneListener(CH, 'slopbot', '["staff"]') + '[people.alice]\nids = ["slack:UALICE"]\nroles = ["staff"]\n' })
@@ -1395,6 +1409,18 @@ ${place}
     w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'same file again', files: [file({ id: 'F01' })] }))
     await w.flush()
     expect(downloads).toHaveLength(1)
+  })
+
+  test("files in a thread read as the operator are listed, not fetched: the operator's token reads text only", async () => {
+    const s = setup()
+    const { a, downloads } = actions()
+    const { w } = withFiles(s, a, cfg({ toml: PLACES('files = true') }))
+    w.bind(CH, '1.000001', '1552619225032425525', 'tool')
+    w.setVia(CH, '1.000001', 'user')
+    w.handle(ev({ ts: '2.000001', threadTs: '1.000001', text: 'see attached', files: [file()] }))
+    await w.flush()
+    expect(downloads).toEqual([])
+    expect(s.sent[0].msg).toContain("  file: invoice.pdf (2 KB): not downloaded (the bot isn't in this channel; the thread is read as the operator)")
   })
 
   test('files: too large, failed, off for the place, or not connected: listed with why, and the message still goes', async () => {

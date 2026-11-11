@@ -429,9 +429,18 @@ describe('readReplies: the bot first, the operator where the bot is not a member
   })
 
   test("the operator can't read it either: the bot's not_in_channel is kept, so catch-up lets go of that thread", async () => {
-    for (const why of ['not_in_channel', 'token_revoked', 'missing_scope: the token needs groups:history']) {
+    for (const why of ['not_in_channel', 'thread_not_found']) {
       const s = script({ xoxb: fail('An API error occurred: not_in_channel'), xoxp: fail(`An API error occurred: ${why}`) })
       await expect(readReplies(s.read, { bot: 'xoxb', user: 'xoxp' })).rejects.toThrow(`not_in_channel; as the operator: An API error occurred: ${why}`)
+    }
+  })
+
+  test("a refused operator token is said as such: catch-up skips the thread and keeps it", async () => {
+    for (const why of ['token_revoked', 'invalid_auth', 'missing_scope: the token needs groups:history']) {
+      const s = script({ xoxb: fail('An API error occurred: not_in_channel'), xoxp: fail(`An API error occurred: ${why}`) })
+      const err = await readReplies(s.read, { bot: 'xoxb', user: 'xoxp' }).then(() => new Error('read'), (e: Error) => e)
+      expect(err.message).toBe(`the operator's Slack token was refused (An API error occurred: ${why})`)
+      expect(err.message).not.toContain('not_in_channel')
     }
   })
 

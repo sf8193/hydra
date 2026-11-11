@@ -1,5 +1,5 @@
 import { route } from '../../routing/route.js'
-import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { cmpTs, routedChannels, hearsDms, addressOf, TOP_LEVEL, OPERATOR_TOKEN_REFUSED, type SlackFile, type SlackMessageEvent, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 
 /** Where a watched thread is reread from when no specialist's channel cursor covers it (a session listening): its newest delivered message, else when it was bound. */
 function ownCursor(e: { delivered?: string[]; createdAt: number }): string {
@@ -245,9 +245,15 @@ export async function catchUp(watcher: SlackWatcher, api: SlackApi, cfg: SlackWa
         try {
           res = await api.replies({ channel: t.channel, ts: t.threadTs, oldest: t.from, inclusive: t.inclusive, ...(page && { cursor: page }) })
         } catch (err) {
-          // One thread Slack says isn't there (a made-up or deleted ts) must not cost every other thread its pass.
-          if (!GONE_THREAD.test(err instanceof Error ? err.message : String(err))) throw err
           const why = err instanceof Error ? err.message : String(err)
+          // The operator's token, not the thread, is at fault: the thread is kept for when it is replaced.
+          if (why.startsWith(OPERATOR_TOKEN_REFUSED)) {
+            opts.log(`daemon: slack catch-up: thread ${t.channel}:${t.threadTs} skipped (${why})\n`)
+            watcher.operatorTokenRefused(why)
+            break
+          }
+          // One thread Slack says isn't there (a made-up or deleted ts) must not cost every other thread its pass.
+          if (!GONE_THREAD.test(why)) throw err
           opts.log(`daemon: slack catch-up: thread ${t.channel}:${t.threadTs} can't be read (${why}); skipped\n`)
           watcher.threadGone(t.channel, t.threadTs, why)
           break

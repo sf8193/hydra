@@ -223,13 +223,21 @@ export const NOT_A_MEMBER = /not_in_channel|channel_not_found/
  * Why a thread can't be heard, and what to do: one sentence, so the bind's refusal and the later alert say the same.
  * Only the operator can act on it; a session can only pass it on.
  */
-export function cantRead(h: Pick<HydraConfig, 'connectors'> | undefined, place: string, why: string, botUserId?: string): string {
+export function cantRead(h: Pick<HydraConfig, 'connectors'> | undefined, place: string, why: string, botUserId?: string, then: 'bind' | 'tag' = 'bind'): string {
   if (!NOT_A_MEMBER.test(why)) return `it can't be read (${why})`
   const bot = botUserId ? `the bot (<@${botUserId}>)` : 'the bot'
+  // A session binds again; a specialist's conversation opens again on a tag.
+  const after = then === 'bind' ? 'then bind again' : 'then a tag in the thread opens it again'
   return h?.connectors.slack?.userTokenEnv
-    ? `neither ${bot} nor the operator is in ${place} (${why}). Ask the operator to invite the bot or join ${place}, then bind again`
-    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set [connectors.slack] user_token_env, then bind again`
+    ? `neither ${bot} nor the operator is in ${place} (${why}). Ask the operator to invite the bot or join ${place}, ${after}`
+    : `${bot} isn't in ${place} (${why}). Ask the operator to invite it, or to set [connectors.slack] user_token_env, ${after}`
 }
+
+/** How a refused operator token is said, so catch-up can tell it from a thread that is gone. */
+export const OPERATOR_TOKEN_REFUSED = "the operator's Slack token was refused"
+
+/** Slack's answers that close a whole channel, not one thread. */
+const CHANNEL_GONE = /not_in_channel|channel_not_found|is_archived/
 
 /** The specialist that would answer a new conversation here, whoever asks: where an alert about this channel goes. */
 export function listenerOf(cfg: SlackWatchConfig | null | undefined, channel: string): string | undefined {
@@ -603,25 +611,35 @@ export class SlackWatcher {
   }
 
   /**
-   * Catch-up can't read the thread (gone, or its channel closed to the bot): what it owed can't be fetched. A drop, surfaced; it waits no more.
-   * A session listening there would hear nothing, ever: it is told once, and the thread is let go.
+   * Catch-up can't read the thread: gone, or its channel closed to every token hydra has. No pass will ever read it, so
+   * it is let go, whoever holds it: what it owed is dropped, and the holder is told what was lost and what to do.
+   * A session hears every one. A specialist hears once an hour per channel and kind (the channel, or one thread), and
+   * a deleted thread it only followed, with nothing lost, is no news.
    */
   threadGone(channel: string, threadTs: string, why: string): void {
     const e = this.get(channel, threadTs)
-    if (e?.specialist && isSessionThread(e.specialist)) {
-      const cfg = this.deps.config()
-      // The one alert says why; what it still owed is counted under the same reason, not a second "unbound".
-      if (e.owed?.length) this.drop('expired', e, e.owed, `its thread can't be read any more (${why})`, false)
-      delete e.owed
-      this.deps.alert?.(`⚠️ Stopped listening to ${conversationId(e)}: ${cantRead(cfg?.hydra, cfg ? placeName(cfg, channel) : channel, why, cfg?.botUserId)}.`, e.specialist)
-      this.unwatch(channel, threadTs)
-      return
-    }
-    if (!e?.owed?.length) return
-    this.drop('expired', e, e.owed, `its thread can't be read any more (${why}), so they can never be fetched again`)
+    if (!e) return
+    const lost = e.owed?.length ?? 0
+    // Said once, in the alert below; an entry with no holder has its drop alerted where its channel is heard.
+    if (lost) this.drop('expired', e, e.owed!, `its thread can't be read any more (${why})`, !e.specialist)
     delete e.owed
-    delete e.waitingSince
-    this.persist()
+    this.unwatch(channel, threadTs)
+    if (!e.specialist) return
+    const session = isSessionThread(e.specialist)
+    const channelWide = CHANNEL_GONE.test(why)
+    if (!session && !channelWide && !lost) return
+    const cfg = this.deps.config()
+    const place = cfg ? placeName(cfg, channel) : channel
+    const others = !session && channelWide ? ` and any other conversations of yours in ${place}` : ''
+    const lostText = lost ? `; ${lost} undelivered message${lost === 1 ? ' is' : 's are'} lost` : ''
+    const text = `⚠️ Let go of ${conversationId(e)}${others}${lostText}: ${cantRead(cfg?.hydra, place, why, cfg?.botUserId, session ? 'bind' : 'tag')}.`
+    if (session) this.deps.alert?.(text, e.specialist)
+    else this.alertOnce(`thread-gone:${e.specialist}:${channel}:${channelWide ? 'channel' : 'thread'}`, e.specialist, text)
+  }
+
+  /** The operator's token was refused: the threads read with it are kept, unread until it is replaced. Said once an hour. */
+  operatorTokenRefused(why: string): void {
+    this.alertOnce('operator-token', undefined, `⚠️ ${why[0].toUpperCase()}${why.slice(1)}: threads read as the operator are not being read. Put a valid user token in the variable [connectors.slack] user_token_env names, and restart the daemon.`)
   }
 
   /** While catching up, live events must not move the cursor past the gap being filled. */
@@ -687,6 +705,10 @@ export class SlackWatcher {
     if (this.inflight.get(watchKey(ev.channel, threadTs))?.has(ev.ts)) return 'ignored'
     if (dm && own) return 'ignored'
     const existing = this.get(ev.channel, threadTs)
+    // With the operator's token the app hears every channel the operator is in. Untagged chatter outside the places
+    // hydra.toml names, in no open conversation, is nobody's: passed over before it opens or counts anything. A tag
+    // still gets its answer, as it would without the token.
+    if (!dm && !existing && !tagged && cfg.hydra.connectors.slack?.userTokenEnv && !routedChannels(cfg).includes(ev.channel)) return 'ignored'
 
     if (own) {
       // The bot's own top-level post opens a conversation, bound to whoever listens there. Its replies are not echoed back.
@@ -1048,6 +1070,8 @@ export class SlackWatcher {
       else if (!f.url) ref.note = 'not downloadable (Slack gave no download link: an external, hidden or deleted file)'
       else if (f.size !== undefined && f.size > FILE_MAX_BYTES) ref.note = `not downloaded (over ${FILE_MAX_BYTES / 1024 / 1024} MB)`
       else if (!this.slack || !this.deps.filesDir) ref.note = 'not downloaded (not connected to Slack)'
+      // Files are fetched only with the bot's token, and only where the bot is: the operator's token reads text, never files.
+      else if (entry.via === 'user') ref.note = "not downloaded (the bot isn't in this channel; the thread is read as the operator)"
       else {
         // Keyed by the file's own id, so a file shared in several messages is fetched once.
         const dest = join(this.deps.filesDir, entry.channel, `${f.id.replace(/[^A-Za-z0-9]/g, '')}-${safeFileName(f.name)}`)
