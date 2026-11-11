@@ -126,7 +126,8 @@ export type LaunchInput = {
   readonly resumeFrom?: string
   readonly resumeCodex?: { threadId: string; homeName: string }  // Codex: resume this thread in its original CODEX_HOME
   readonly resumeOmp?: { fromSessionId: string }                 // omp: continue the session file of this dead hydra session
-  readonly threadId?: string
+  readonly threadId?: string                                     // the chat thread this session serves; exported to its env
+  readonly sessionType?: SessionInfo['sessionType']              // and its role there; exported to its env
 }
 
 export type LaunchResult = {

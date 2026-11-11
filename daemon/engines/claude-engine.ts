@@ -25,7 +25,7 @@ import { readClaudeStatus } from './claude-status.js'
 import { defaultTurnSources } from './codex-observation.js'
 import { CLAUDE_CONFIG, SOCK_PATH, PLATFORM, STATE_DIR } from '../config.js'
 import { gateway } from '../config.js'
-import { scrubbedSpawnEnv, tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
+import { SESSION_IDENTITY_VARS, scrubbedSpawnEnv, tmuxNewSession, withRaisedFdLimit } from '../../shared/spawn-env.js'
 import { modsExport } from '../../shared/mods.js'
 import { BRIDGE_CHANNEL_FLAG, BRIDGE_MCP_SERVER_KEY } from '../plugin-manifest.js'
 import { clearNeedsAuthEntry, describeSetAt, NEEDS_AUTH_CLEARED_NOTE } from './claude-needs-auth.js'
@@ -39,13 +39,16 @@ const SPAWN_LOGS_DIR = join(STATE_DIR, 'spawn-logs')
 // Spawn env whitelist: explicit construction, not ambient inheritance. Each env var the byte
 // carries gets a conscious routing decision here:
 //   pass-through: shared between byte and sessions (platform, socket, config, mods)
-//   override:     session-specific identity
+//   override:     session-specific identity (thread and type as hookEnv gives them: '' when unknown)
 //   strip:        byte-only (HYDRA_ROLE), kept from leaking into sessions
 //   lineage:      the Claude session a fork continues, for hooks keyed on Claude's session_id (fresh: unset)
-function buildSpawnEnv(sessionId: string, tmuxName: string, forkedFromClaudeSessionId?: string): string[] {
+function buildSpawnEnv(input: LaunchInput): string[] {
+  const forkedFromClaudeSessionId = input.forkFrom?.claudeSessionId
   return [
-    `export HYDRA_SESSION_ID=${shq(sessionId)}`,
-    `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
+    `export HYDRA_SESSION_ID=${shq(input.sessionId)}`,
+    `export HYDRA_SESSION_NAME=${shq(input.tmuxName)}`,
+    `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`,
+    `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
     ...(forkedFromClaudeSessionId ? [`export HYDRA_FORKED_FROM_CLAUDE_SESSION_ID=${shq(forkedFromClaudeSessionId)}`] : []),
     `export DAEMON_SOCK=${shq(SOCK_PATH)}`,
     `export CLAUDE_CONFIG_DIR=${shq(CLAUDE_CONFIG)}`,
@@ -118,7 +121,7 @@ export function askForkArgv(claudeSessionId: string, question: string, model?: s
 // The fork must not look like any Hydra session: no identity or daemon socket to register with.
 export function askForkEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = scrubbedSpawnEnv(base)
-  for (const v of ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_ROLE', 'DAEMON_SOCK', 'TMUX', 'TMUX_PANE']) delete env[v]
+  for (const v of [...SESSION_IDENTITY_VARS, 'HYDRA_ROLE', 'DAEMON_SOCK', 'TMUX', 'TMUX_PANE']) delete env[v]
   return { ...env, CLAUDE_CONFIG_DIR: CLAUDE_CONFIG }
 }
 
@@ -290,7 +293,7 @@ export class ClaudeEngine implements EngineAdapter {
     const inner = [
       `_hydra_write_exit() { ${writeExitMarker}; }; trap _hydra_write_exit EXIT`,
       `cd ${shq(spawnCd)}`,
-      ...buildSpawnEnv(sessionId, tmuxName, input.forkFrom?.claudeSessionId),
+      ...buildSpawnEnv(input),
       `${claudeArgs} 2>>${shq(stderrLog)}`,
     ].join(' && ')
 

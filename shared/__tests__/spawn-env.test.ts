@@ -193,6 +193,13 @@ test('codexSpawnEnv with no argument still scrubs the live environment', () => {
   })
 })
 
+test('codexSpawnEnv drops an inherited session identity: codex launches with none of its own', () => {
+  withEnv({ HYDRA_SESSION_ID: 's', HYDRA_SESSION_NAME: 'n', HYDRA_THREAD_ID: 't', HYDRA_SESSION_TYPE: 'thread_owner' }, () => {
+    const out = codexSpawnEnv()
+    for (const v of ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_THREAD_ID', 'HYDRA_SESSION_TYPE']) expect(out[v]).toBeUndefined()
+  })
+})
+
 // zsh is absent on ubuntu-latest, and Bun.spawnSync throws on a missing binary.
 const SHELLS = ['bash', 'sh', ...(Bun.which('zsh') ? ['zsh'] : [])]
 

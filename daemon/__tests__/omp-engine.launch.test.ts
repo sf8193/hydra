@@ -40,6 +40,15 @@ test('the spawn prompt goes in the environment, and only when there is one', asy
   expect(await launchCommand('')).not.toContain('HYDRA_SPAWN_PROMPT')
 })
 
+test('the spawn env names the session\'s thread and type, empty when unknown', async () => {
+  const cmd = await launchCommand('hi', { threadId: 'th-own', sessionType: 'thread_owner' })
+  expect(cmd).toContain("export HYDRA_THREAD_ID='th-own'")
+  expect(cmd).toContain("export HYDRA_SESSION_TYPE='thread_owner'")
+  const bare = await launchCommand('hi')
+  expect(bare).toContain("export HYDRA_THREAD_ID=''")
+  expect(bare).toContain("export HYDRA_SESSION_TYPE=''")
+})
+
 test('a resume copies the dead session\'s file into the new session\'s directory and continues it with -c', async () => {
   const old = ompSessionDir('dead-session')
   rmSync(old, { recursive: true, force: true }); rmSync(ompSessionDir('s1'), { recursive: true, force: true })

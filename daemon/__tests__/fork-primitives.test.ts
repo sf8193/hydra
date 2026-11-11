@@ -537,6 +537,13 @@ describe('predecessor through doSpawnSession and the recovery cascades', () => {
     expect(launches[2].prompt).not.toContain('fork_from')
   })
 
+  test('a handoff successor launches with the thread and type it is registered under', async () => {
+    seedDead()
+    await doSpawnSession('t', undefined, undefined, { existingThreadId: THREAD, handedOffFrom: 'elder', artifact: '/h.md' })
+    expect([launches[0].threadId, launches[0].sessionType]).toEqual([live().threadId, live().sessionType])
+    expect(launches[0].sessionType).toBe('thread_owner')
+  })
+
   test('predecessorOf: a Claude session with no stored id is discovered from its pane', () => {
     const info = mk('fp-6', 'fpdisc', { worktreePath: '/wt/disc' })
     fake.pid('fpdisc', '4242')
@@ -822,6 +829,17 @@ describe('spawn_session fork_from and read_only', () => {
     })
   })
 
+  test('a fork launches with its own new thread and its type, not its source\'s or its spawner\'s', async () => {
+    mk('fs-caller', 'fscaller')
+    mk('fs-src', 'fssrc', { claudeSessionId: 'cl-src', worktreePath: dir, sessionMetadata: { model: 'claude-src-model', cwd: dir } as any })
+    expect((await spawn({ fork_from: 'fssrc' })).isError).toBeFalsy()
+    const child = registry.get(launches[0].sessionId)!
+    expect(launches[0].threadId).toMatch(/^fs-spawned-thread-/)
+    expect(launches[0].threadId).not.toBe(registry.get('fs-src')!.threadId)
+    expect(launches[0].threadId).not.toBe(registry.get('fs-caller')!.threadId)
+    expect([launches[0].threadId, launches[0].sessionType]).toEqual([child.threadId, child.sessionType])
+  })
+
   test('read_only without fork_from reaches the launch too', async () => {
     mk('fs-caller', 'fscaller')
     expect((await spawn({ read_only: true })).isError).toBeFalsy()
@@ -873,6 +891,20 @@ describe('Claude fork argv', () => {
       expect(line).toContain(`export HYDRA_SESSION_ID='sid-${name}'`)
       expect(line).not.toContain('HYDRA_FORKED_FROM_CLAUDE_SESSION_ID')
     }
+  })
+
+  test('the spawn env names the session\'s thread and type; empty when unknown', async () => {
+    const launchLine = async (extra: Partial<LaunchInput>) => {
+      const name = `fpthread${Math.random().toString(36).slice(2, 8)}`
+      await new ClaudeEngine(transport).launch({ sessionId: `sid-${name}`, tmuxName: name, cwd: '/src/dir', originalCwd: '/spawn', model: 'm', prompt: 'P', ...extra })
+      return fake.calls().find(c => c.startsWith('new-session') && c.includes(name)) ?? ''
+    }
+    const line = await launchLine({ threadId: 'th-own', sessionType: 'thread_guest' })
+    expect(line).toContain("export HYDRA_THREAD_ID='th-own'")
+    expect(line).toContain("export HYDRA_SESSION_TYPE='thread_guest'")
+    const bare = await launchLine({})
+    expect(bare).toContain("export HYDRA_THREAD_ID=''")
+    expect(bare).toContain("export HYDRA_SESSION_TYPE=''")
   })
 })
 

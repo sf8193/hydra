@@ -103,8 +103,11 @@ test('Claude askFork: exact argv, predecessor cwd, Hydra-free env; answer trimme
   ])
   expect(askForkArgv('id', 'q')).not.toContain('--model')
   expect(calls[0].opts.cwd).toBe(cwd)
-  for (const v of ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_ROLE', 'DAEMON_SOCK', 'TMUX', 'TMUX_PANE']) expect(calls[0].opts.env[v]).toBeUndefined()
+  for (const v of ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_THREAD_ID', 'HYDRA_SESSION_TYPE', 'HYDRA_ROLE', 'DAEMON_SOCK', 'TMUX', 'TMUX_PANE']) expect(calls[0].opts.env[v]).toBeUndefined()
   expect(askForkEnv({ HYDRA_SESSION_ID: 's', DAEMON_SOCK: '/x', PATH: '/bin' }).PATH).toBe('/bin')
+  // A daemon started from a session's shell carries that session's thread: the fork must not claim it for its hooks.
+  const inherited = askForkEnv({ HYDRA_THREAD_ID: 't', HYDRA_SESSION_TYPE: 'thread_owner' })
+  expect([inherited.HYDRA_THREAD_ID, inherited.HYDRA_SESSION_TYPE]).toEqual([undefined, undefined])
 
   next = () => fakeChild('', 1, 'No conversation found with session ID: pred-uuid')
   await expect(claudeEngine.askFork(claudePred.fork, cwd, 'why?', 5000)).rejects.toThrow('No conversation found')
