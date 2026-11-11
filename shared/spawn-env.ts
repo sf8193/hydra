@@ -28,8 +28,9 @@ const NO_SERVER = /no server running|error connecting to/
 
 export const SCRUBBED_SPAWN_VARS = [
   'RAINDROP_WRITE_KEY', 'RAINDROP_MODE', 'RAINDROP_USER_ID', 'RAINDROP_OMIT_REPO',
-  // The Slack-watch listener's tokens: only the daemon's listener may hold them.
+  // The Slack-watch listener's tokens: only the daemon's listener may hold them. HYDRA_SLACK_USER_TOKEN reads as the operator.
   'SLOPBOT_SLACK_APP_TOKEN', 'SLOPBOT_SLACK_BOT_TOKEN',
+  'HYDRA_SLACK_APP_TOKEN', 'HYDRA_SLACK_BOT_TOKEN', 'HYDRA_SLACK_USER_TOKEN',
 ] as const
 
 export const SWEEP_ARGV: readonly string[] = SCRUBBED_SPAWN_VARS.flatMap(

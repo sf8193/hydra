@@ -147,10 +147,11 @@ export function loadHydraConfig(text: string, env: LoadEnv): LoadResult {
       const botTokenEnv = envName('bot_token_env', true)
       if (botTokenEnv) connectors.discord = { botTokenEnv }
     } else if (platform === 'slack') {
-      unknownKeys(t, ['bot_token_env', 'app_token_env'], path)
+      unknownKeys(t, ['bot_token_env', 'app_token_env', 'user_token_env'], path)
       const botTokenEnv = envName('bot_token_env', true)
       const appTokenEnv = envName('app_token_env', false)
-      if (botTokenEnv) connectors.slack = { botTokenEnv, ...(appTokenEnv && { appTokenEnv }) }
+      const userTokenEnv = envName('user_token_env', false)
+      if (botTokenEnv) connectors.slack = { botTokenEnv, ...(appTokenEnv && { appTokenEnv }), ...(userTokenEnv && { userTokenEnv }) }
     } else if (platform === 'github') {
       unknownKeys(t, ['repos', 'poll'], path)
       const repos = strList(t, 'repos', path)

@@ -6,7 +6,7 @@ import { SlackWatcher } from '../watch.js'
 import { hydra as load, oneListener, view, BASE } from './slack-config.js'
 import { EMPTY_CONFIG } from '../../../config/load.js'
 import type { HydraConfig } from '../../../config/types.js'
-import { SlackListener, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, explainSlackError, type SlackAppLike, type RawEvent } from '../listener.js'
+import { SlackListener, DOWN_ALERT_AFTER_MS, CATCH_UP_STALE_AFTER_MS, explainSlackError, readReplies, type SlackAppLike, type RawEvent } from '../listener.js'
 import type { SlackApi, RawMessage } from '../catchup.js'
 import type { SocketEmitter } from '../../../shared/socket-supervisor.js'
 
@@ -397,5 +397,47 @@ describe('health and alerts', () => {
     t.listener.stop()
     expect(t.listener.health().state).toBe('off')
     expect(t.apps[0].stopped).toBe(true)
+  })
+})
+
+describe('readReplies: the bot first, the operator where the bot is not a member', () => {
+  const page = { messages: [{ ts: '1.000002' }] }
+  const script = (answers: Record<string, () => Promise<typeof page>>) => {
+    const asked: string[] = []
+    return { asked, read: (token: string) => { asked.push(token); return answers[token]() } }
+  }
+  const fail = (msg: string) => () => Promise.reject(new Error(msg))
+  const ok = () => Promise.resolve(page)
+
+  test('the bot reads it: one call, no via', async () => {
+    const s = script({ xoxb: ok, xoxp: ok })
+    expect(await readReplies(s.read, { bot: 'xoxb', user: 'xoxp' })).toEqual(page)
+    expect(s.asked).toEqual(['xoxb'])
+  })
+
+  test("the bot isn't a member: read as the operator, via 'user'; the bot is still asked first, so an invite moves it back", async () => {
+    const s = script({ xoxb: fail('An API error occurred: not_in_channel'), xoxp: ok })
+    expect(await readReplies(s.read, { bot: 'xoxb', user: 'xoxp' })).toEqual({ ...page, via: 'user' })
+    expect(s.asked).toEqual(['xoxb', 'xoxp'])
+  })
+
+  test('without a user token, or on any other bot error, the bot error stands', async () => {
+    await expect(readReplies(script({ xoxb: fail('An API error occurred: not_in_channel') }).read, { bot: 'xoxb' })).rejects.toThrow('not_in_channel')
+    const s = script({ xoxb: fail('An API error occurred: ratelimited'), xoxp: ok })
+    await expect(readReplies(s.read, { bot: 'xoxb', user: 'xoxp' })).rejects.toThrow('ratelimited')
+    expect(s.asked).toEqual(['xoxb'])
+  })
+
+  test("the operator can't read it either: the bot's not_in_channel is kept, so catch-up lets go of that thread", async () => {
+    for (const why of ['not_in_channel', 'token_revoked', 'missing_scope: the token needs groups:history']) {
+      const s = script({ xoxb: fail('An API error occurred: not_in_channel'), xoxp: fail(`An API error occurred: ${why}`) })
+      await expect(readReplies(s.read, { bot: 'xoxb', user: 'xoxp' })).rejects.toThrow(`not_in_channel; as the operator: An API error occurred: ${why}`)
+    }
+  })
+
+  test("a passing failure of the operator's read is thrown as itself, without not_in_channel: the pass retries, nothing is let go", async () => {
+    const s = script({ xoxb: fail('An API error occurred: not_in_channel'), xoxp: fail('An API error occurred: ratelimited') })
+    const err = await readReplies(s.read, { bot: 'xoxb', user: 'xoxp' }).then(() => new Error('read'), (e: Error) => e)
+    expect(err.message).toBe('An API error occurred: ratelimited')
   })
 })

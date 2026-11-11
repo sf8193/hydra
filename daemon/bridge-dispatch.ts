@@ -589,7 +589,7 @@ export async function executeTool(name: string, args: Record<string, unknown>, c
 
       case 'bind_conversation': {
         const caller = callerSessionId ? registry.get(callerSessionId) : undefined
-        return { content: [{ type: 'text', text: bindConversation(caller, args.conversation) }] }
+        return { content: [{ type: 'text', text: await bindConversation(caller, args.conversation) }] }
       }
 
       case 'unbind_conversation': {
