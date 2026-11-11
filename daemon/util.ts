@@ -83,8 +83,9 @@ function windowActivitySync(name: string): number | null {
 async function windowActivity(name: string): Promise<number | null> {
   try {
     const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
+      // SIGKILL: a child that ignored the default SIGTERM would leave this pending past its timeout.
       execFile('tmux', ['display-message', '-t', name, '-p', '#{window_activity}'],
-        { encoding: 'utf8', timeout: 2000 }, (err, stdout) => err ? reject(err) : resolve({ stdout }))
+        { encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL' }, (err, stdout) => err ? reject(err) : resolve({ stdout }))
     })
     const epoch = parseInt(stdout.trim(), 10)
     return isNaN(epoch) ? null : epoch

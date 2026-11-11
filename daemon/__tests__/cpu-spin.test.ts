@@ -4,7 +4,7 @@ import {
   formatPressure, formatSpinAlert, formatCpuSummary, claudeAncestor, startedAt,
 } from '../cpu-spin.js'
 import { parseCpuTime } from '../../shared/constants.js'
-import { systemPressure } from '../cpu-watch.js'
+import { systemPressure } from '../vitals-snapshot.js'
 
 describe('parseCpuTime', () => {
   test('macOS mmm:ss.cc — minutes are not capped at 59', () => {
@@ -22,27 +22,26 @@ describe('parseCpuTime', () => {
   })
 })
 
-test('parsePs reads pid, ppid, elapsed and cputime, skipping junk lines', () => {
-  const stats = parsePs('    1     0 102-19:02:23 562:03.35\n14498  6381   02:05   0:00.12\nps: bogus\n\n')
-  expect(stats.get(1)).toEqual({ ppid: 0, elapsedSec: 102 * 86400 + 19 * 3600 + 2 * 60 + 23, cpuSec: 562 * 60 + 3.35 })
-  expect(stats.get(14498)?.elapsedSec).toBe(125)
-  expect(stats.get(14498)?.ppid).toBe(6381)
+test('parsePs reads pid, ppid, rss, elapsed and cputime, skipping junk lines', () => {
+  const stats = parsePs('    1     0  12816 102-19:02:23 562:03.35\n14498  6381    208   02:05   0:00.12\nps: bogus\n\n')
+  expect(stats.get(1)).toEqual({ ppid: 0, rssKb: 12816, elapsedSec: 102 * 86400 + 19 * 3600 + 2 * 60 + 23, cpuSec: 562 * 60 + 3.35 })
+  expect(stats.get(14498)).toEqual({ ppid: 6381, rssKb: 208, elapsedSec: 125, cpuSec: 0.12 })
   expect(stats.size).toBe(2)
 })
 
-test('parsePs keeps the command, spaces and all', () => {
-  const stats = parsePs('63562 53795  21-22:38:01  89:13.03 claude\n  787     1 102-19:01:15  87:09.11 Core Audio Driver (Zoom)\n')
-  expect(stats.get(63562)?.comm).toBe('claude')
-  expect(stats.get(787)?.comm).toBe('Core Audio Driver (Zoom)')
+test('parsePs reads the 6-column form, keeping a command with spaces whole', () => {
+  const stats = parsePs('63562 53795 412304  21-22:38:01  89:13.03 claude\n  787     1  20480 102-19:01:15  87:09.11 Core Audio Driver (Zoom)\n')
+  expect(stats.get(63562)).toMatchObject({ ppid: 53795, rssKb: 412304, comm: 'claude' })
+  expect(stats.get(787)).toMatchObject({ ppid: 1, rssKb: 20480, cpuSec: 87 * 60 + 9.11, comm: 'Core Audio Driver (Zoom)' })
 })
 
 describe('claudeAncestor', () => {
   // Both live shapes (2026-11-08): a spawn's pane is a zsh wrapper with Claude under it; byte's pane is Claude.
   const spawn = parsePs([
-    '10 1 1:00 0:00.00 zsh', '11 10 1:00 0:00.00 caffeinate', '12 10 1:00 0:00.00 claude',
-    '13 12 1:00 0:00.00 bun', '14 13 1:00 0:00.00 /opt/homebrew/bin/bun', '99 1 1:00 0:00.00 bun',
+    '10 1 100 1:00 0:00.00 zsh', '11 10 100 1:00 0:00.00 caffeinate', '12 10 100 1:00 0:00.00 claude',
+    '13 12 100 1:00 0:00.00 bun', '14 13 100 1:00 0:00.00 /opt/homebrew/bin/bun', '99 1 100 1:00 0:00.00 bun',
   ].join('\n'))
-  const byte = parsePs(['20 1 1:00 0:00.00 claude', '21 20 1:00 0:00.00 caffeinate', '22 20 1:00 0:00.00 bun', '23 22 1:00 0:00.00 /opt/homebrew/bin/bun'].join('\n'))
+  const byte = parsePs(['20 1 100 1:00 0:00.00 claude', '21 20 100 1:00 0:00.00 caffeinate', '22 20 100 1:00 0:00.00 bun', '23 22 100 1:00 0:00.00 /opt/homebrew/bin/bun'].join('\n'))
   test('a spawn: past the bun wrapper to the claude under the pane', () => {
     expect(claudeAncestor(spawn, 14)).toBe(12)
   })
@@ -191,8 +190,8 @@ test('formatSpinAlert: one message, every entry, combined cores, advice per kind
 
 // A launchd-started daemon's PATH has no /usr/sbin, where sysctl lives: swap must still be read. In-process, so a
 // loaded suite can't time it out.
-test.if(process.platform === 'darwin')('swap is read with a PATH that leaves out /usr/sbin', () => {
+test.if(process.platform === 'darwin')('swap is read with a PATH that leaves out /usr/sbin', async () => {
   const path = process.env.PATH
   process.env.PATH = '/usr/bin:/bin'
-  try { expect(systemPressure().swapUsedMB).toBeNumber() } finally { process.env.PATH = path }
+  try { expect((await systemPressure()).swapUsedMB).toBeNumber() } finally { process.env.PATH = path }
 })

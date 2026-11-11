@@ -1,5 +1,6 @@
-// CPU sampling on the vitals tick: one `ps` for every session's Claude and bridge pid, the
-// spin classifier over the result, and a batched operator alert when sessions start spinning.
+// CPU sampling on the vitals tick: every session's Claude and bridge pid from the tick's one `ps`
+// snapshot (shared with the RSS walk), the spin classifier over the result, and a batched operator
+// alert when sessions start spinning.
 // Report-only: it reads system pressure but acts on nothing. A bridge whose launcher has died
 // (reparented) is sampled too: nothing else would ever notice it spinning.
 //
@@ -11,19 +12,18 @@
 // Main (byte) has no registry record but writes records under the key `main`, so it is sampled too.
 
 import { readdirSync, readFileSync } from 'fs'
-import { spawnSync } from 'child_process'
-import { loadavg, cpus } from 'os'
 import { join } from 'path'
 import { STATE_DIR } from './config.js'
 import { threadRegistry } from './sessions.js'
 import type { SessionInfo } from './sessions.js'
 import { notifyOperator } from './access.js'
-import { isSessionWorking } from './session-activity.js'
-import { fallbackDescription, isTmuxRecentlyActiveSync } from './util.js'
+import { isSessionWorkingAsync } from './session-activity.js'
+import { fallbackDescription, isTmuxRecentlyActive } from './util.js'
+import type { PaneVitals } from './vitals-snapshot.js'
 import { bridgeLifeDir, type BridgeLifeEvent } from '../shared/bridge-life.js'
 import { SPIN_CPU_PERCENT } from '../shared/constants.js'
 import {
-  claudeAncestor, createCpuMeter, createSpinTracker, formatSpinAlert, hotProcess, parseMeminfoSwap, parsePs, parseSwapUsage, startedAt,
+  claudeAncestor, createCpuMeter, createSpinTracker, formatSpinAlert, hotProcess, startedAt,
   type ProcStat, type SpinEntry, type SpinWho, type SystemPressure,
 } from './cpu-spin.js'
 
@@ -94,26 +94,7 @@ function bridgeRecords(stateDir: string): Array<StartRecord & { key: string }> {
   return out
 }
 
-/** One `ps` per tick: every process, so a bridge's ancestry can be walked in memory. */
-function psAll(): Map<number, ProcStat> {
-  const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,etime=,time=,comm='], { encoding: 'utf8' })
-  return parsePs(r.stdout ?? '')
-}
-
-function swapUsedMB(): number | undefined {
-  if (process.platform === 'darwin') {
-    // By path: sysctl lives in /usr/sbin, which a launchd-started daemon's PATH leaves out.
-    const r = spawnSync('/usr/sbin/sysctl', ['vm.swapusage'], { encoding: 'utf8' })
-    return parseSwapUsage(r.stdout ?? '')
-  }
-  try { return parseMeminfoSwap(readFileSync('/proc/meminfo', 'utf8')) } catch { return undefined }
-}
-
-export function systemPressure(): SystemPressure {
-  return { load1: loadavg()[0], cores: cpus().length, swapUsedMB: swapUsedMB() }
-}
-
-export type PaneProcs = { pid?: number }
+export type PaneProcs = Pick<PaneVitals, 'pid'>
 
 /** The main session (byte): it has no registry record, but it has a bridge, a Claude and a pane like any other. */
 export type MainSubject = { tmuxName: string; pid?: number }
@@ -123,7 +104,8 @@ type Subject = {
   id: string
   key: string
   fallbackClaude?: number
-  idle: () => boolean
+  /** Async: it asks tmux, and runs on the vitals tick. */
+  idle: () => Promise<boolean>
   entry: () => Pick<SpinEntry, 'name' | 'url' | 'label'>
 }
 
@@ -132,7 +114,7 @@ function sessionSubject(s: SessionInfo, pane: PaneProcs): Subject {
     id: s.sessionId,
     key: s.sessionId.replace(/[^\w-]/g, '_'),
     fallbackClaude: pane.pid,
-    idle: () => !isSessionWorking(s),
+    idle: async () => !(await isSessionWorkingAsync(s)),
     entry: () => {
       const thread = threadRegistry.get(s.threadId)
       return { name: s.tmuxName, url: thread?.threadUrl, label: s.description?.split('\n')[0].trim() || fallbackDescription(thread?.topic ?? '') }
@@ -145,19 +127,21 @@ function mainSubject(m: MainSubject): Subject {
     id: 'main',
     key: 'main',
     fallbackClaude: m.pid,
-    idle: () => !isTmuxRecentlyActiveSync(m.tmuxName),
+    idle: async () => !(await isTmuxRecentlyActive(m.tmuxName)),
     entry: () => ({ name: `${m.tmuxName} (main)` }),
   }
 }
 
 /**
  * Sample every live session's CPU, main's, and every orphaned bridge's; classify spins, and alert once
- * per episode. A subject's Claude is its bridge's nearest `claude` ancestor; `pane` gives a fallback
- * (the pane's first child) for a session with no live bridge.
+ * per episode. `all` is the tick's process snapshot. A subject's Claude is its bridge's nearest
+ * `claude` ancestor; `pane` gives a fallback (the pane's first child) for a session with no live bridge.
+ * With no snapshot (`ps` failed) the tick is skipped: read as an empty process table it would end every
+ * spin episode, and a process still spinning would be alerted again a few ticks later.
  */
-export function sampleCpu(live: SessionInfo[], pane: (sessionId: string) => PaneProcs | undefined, pressure: SystemPressure, main?: MainSubject): CpuSample {
+export async function sampleCpu(all: Map<number, ProcStat> | undefined, live: SessionInfo[], pane: (sessionId: string) => PaneProcs | undefined, pressure: SystemPressure, main?: MainSubject): Promise<CpuSample> {
+  if (!all) return { sessions: new Map(), orphans: [] }
   const records = bridgeRecords(STATE_DIR)
-  const all = psAll()
   const now = Date.now()
   // A record is live when its pid still runs and started when the record says (not a recycled pid).
   const liveRecords = records.filter(r => startedAt(all.get(r.pid), r.ts, now))
@@ -178,18 +162,22 @@ export function sampleCpu(live: SessionInfo[], pane: (sessionId: string) => Pane
   orphans.forEach(o => watch(o.pid))
   const pct = meter.update(watched, now)
 
-  const readings = new Map<string, CpuVitals>()
-  const newly: SpinEntry[] = []
-  for (const { subject, bridges, claudePid } of perSubject) {
+  const measured = perSubject.map(({ subject, bridges, claudePid }) => {
     const bridge = [...bridges].sort((a, b) => (pct.get(b.pid) ?? -1) - (pct.get(a.pid) ?? -1))[0]
     const reading = {
       claudePid, bridgePid: bridge?.pid,
       claudePct: claudePid ? pct.get(claudePid) : undefined,
       bridgePct: bridge ? pct.get(bridge.pid) : undefined,
     }
-    // The idle test reads tmux, so it is only asked when something is hot.
-    const idle = hotProcess({ ...reading, idle: true }, spinThreshold) ? subject.idle() : true
-    const state = tracker.observe(subject.id, { ...reading, idle })
+    return { subject, bridge, reading }
+  })
+  // The idle test asks tmux, so it is only asked when something is hot, and all at once.
+  const idles = await Promise.all(measured.map(m => hotProcess({ ...m.reading, idle: true }, spinThreshold) ? m.subject.idle() : true))
+
+  const readings = new Map<string, CpuVitals>()
+  const newly: SpinEntry[] = []
+  for (const [i, { subject, bridge, reading }] of measured.entries()) {
+    const state = tracker.observe(subject.id, { ...reading, idle: idles[i] })
     const v: CpuVitals = { ...reading, spinning: state.spinning, at: now }
     readings.set(subject.id, v)
     latest.set(subject.id, v)
@@ -198,7 +186,7 @@ export function sampleCpu(live: SessionInfo[], pane: (sessionId: string) => Pane
         ...subject.entry(),
         who: state.spinning,
         pct: (state.spinning === 'bridge' ? reading.bridgePct : reading.claudePct) ?? 0,
-        pid: state.spinning === 'bridge' ? bridge?.pid : claudePid,
+        pid: state.spinning === 'bridge' ? bridge?.pid : reading.claudePid,
       })
     }
   }
