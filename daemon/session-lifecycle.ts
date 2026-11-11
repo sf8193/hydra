@@ -1025,16 +1025,16 @@ export async function doSpawnSession(topic: string, chatId?: string, messageId?:
     }
   }
   const adapter = resolveEngine(engine)
+  const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const launched = await adapter.launch({
     sessionId, tmuxName, cwd: effectiveCwd, originalCwd: spawnCwd, model, prompt,
     worktreePath, forkFromOriginalCwd: !!worktreeTarget,
     tools: opts?.tools, disallowedTools,
     forkFrom: opts?.forkFrom, resumeFrom: opts?.resumeFrom, resumeCodex: opts?.resumeCodex, resumeOmp: opts?.resumeOmp,
-    threadId,
+    threadId, sessionType: spawnType,
   })
 
   const now = Date.now()
-  const spawnType = opts?.sessionType ?? (isJoin ? 'thread_guest' : 'thread_owner')
   const sessionMetadata = {
     role: 'worker' as const,
     tools: spawnToolNames(adapter, spawnType),

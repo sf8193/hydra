@@ -637,6 +637,11 @@ For example, to refuse letters with no Next action:
 grep -q '^#* *Next action' "$1" || { echo "letter has no Next action heading"; exit 1; }
 ```
 
+
+### Session environment
+
+Each Claude or omp session that hydra spawns has its identity in its own environment: `HYDRA_SESSION_ID`, `HYDRA_SESSION_NAME`, `HYDRA_THREAD_ID` and `HYDRA_SESSION_TYPE` (not main, not codex). A Claude Code hook can read its thread from there without calling the daemon. A `spawn_session fork_from` fork gets a new thread; a handoff successor, a resume, a respawn and a recovered session keep their thread; a protocol guest gets the thread it joined, with type `thread_guest`. An unknown value is empty. A session launched before this change has none of the last two, so treat unset as empty.
+
 ### Forking sessions
 
 `spawn_session` can start from a copy of another Claude session's conversation instead of from scratch:

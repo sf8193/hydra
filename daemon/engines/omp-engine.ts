@@ -51,6 +51,7 @@ export class OmpEngine implements EngineAdapter {
     const inner = [
       `cd ${shq(input.cwd)}`,
       `export HYDRA_SESSION_ID=${shq(sessionId)}`, `export HYDRA_SESSION_NAME=${shq(tmuxName)}`,
+      `export HYDRA_THREAD_ID=${shq(input.threadId ?? '')}`, `export HYDRA_SESSION_TYPE=${shq(input.sessionType ?? '')}`,
       `export DAEMON_SOCK=${shq(SOCK_PATH)}`, `export CHAT_PLATFORM=${shq(PLATFORM)}`,
       ...(input.prompt ? [`export HYDRA_SPAWN_PROMPT=${shq(input.prompt)}`] : []),
       `unset HYDRA_ROLE CLAUDE_CONFIG_DIR`,

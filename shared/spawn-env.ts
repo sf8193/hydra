@@ -89,6 +89,12 @@ export function tmuxNewSession(
   exec('tmux', ['new-session', ...args], run)
 }
 
+// A session's identity. Claude and omp export their own at launch. A process started from a session's
+// shell inherits that session's; codex gets none of its own, so drop any it inherited.
+export const SESSION_IDENTITY_VARS = ['HYDRA_SESSION_ID', 'HYDRA_SESSION_NAME', 'HYDRA_THREAD_ID', 'HYDRA_SESSION_TYPE'] as const
+
 export function codexSpawnEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return scrubbedSpawnEnv({ ...process.env, ...extra })
+  const env = scrubbedSpawnEnv({ ...process.env, ...extra })
+  for (const v of SESSION_IDENTITY_VARS) delete env[v]
+  return env
 }
