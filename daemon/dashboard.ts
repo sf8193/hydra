@@ -13,6 +13,7 @@ import { sessionLiveAsync } from './session-activity.js'
 import { homeRecoverable, homeStatus, homeStatusAccessory, type HomeStatus } from './home-status.js'
 import { confirmedStuckState, homeActionable, type BlockingState } from './pane-probe.js'
 import { daemonPastOrphanGrace, occupancy, occupied } from './session-reachability.js'
+import { timed } from '../shared/loop-watch.js'
 
 const DEBOUNCE_MS = 2000
 const PERIODIC_REFRESH_MS = 5 * 60 * 1000
@@ -297,8 +298,8 @@ export function refreshDashboardNow(): void {
 }
 
 // Periodic fallback refresh — keeps dashboard fresh even when no session changes occur
-setInterval(() => void doUpdate(), PERIODIC_REFRESH_MS)
+setInterval(() => timed('dashboard', () => void doUpdate()), PERIODIC_REFRESH_MS)
 
-setInterval(() => void doUpdate(true), STATUS_CHECK_MS)
+setInterval(() => timed('dashboard-status', () => void doUpdate(true)), STATUS_CHECK_MS)
 
 export const __test = process.env.NODE_ENV === 'test' ? { statusKey, coalesced, buttonTarget } : undefined

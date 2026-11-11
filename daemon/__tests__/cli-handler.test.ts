@@ -40,6 +40,13 @@ describe('cli-handler', () => {
     } finally { registry.delete(sid); transport.bridges.delete(sid) }
   })
 
+  test('health reports the event loop: its worst lag since start, and no stall before there is one', async () => {
+    const data = (await handleCLIRequest(makeReq({ command: 'health' }))).data as any
+    // No probe runs under test, so nothing has been late.
+    expect(data.loopLagMaxMs).toBe(0)
+    expect('loopLastStall' in data).toBe(false)
+  })
+
   test('list returns a row per seeded session', async () => {
     const sid = `cli-list-${Date.now()}`
     registry.set(sid, { sessionId: sid, tmuxName: 'list-row', threadId: 't', createdAt: Date.now(), lastActive: Date.now(), adapter: engines.claude } as any)

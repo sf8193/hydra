@@ -6,6 +6,7 @@ import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'f
 import { dirname } from 'path'
 import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
 import type { HydraConfig } from '../../config/types.js'
+import { timed } from '../../shared/loop-watch.js'
 
 /**
  * The Slack connector: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
@@ -245,8 +246,8 @@ export class SlackListener {
       this.scheduleFirstRetry()
     }
     this.sup.begin()
-    for (const [fn, ms] of [[() => { void this.runCatchUp(true, 'periodic') }, CATCH_UP_INTERVAL_MS], [() => { void this.checkAlerts() }, ALERT_CHECK_MS]] as const) {
-      const timer = setInterval(fn, ms)
+    for (const [name, fn, ms] of [['slack-catch-up', () => { void this.runCatchUp(true, 'periodic') }, CATCH_UP_INTERVAL_MS], ['slack-alerts', () => { void this.checkAlerts() }, ALERT_CHECK_MS]] as const) {
+      const timer = setInterval(() => timed(name, fn), ms)
       ;(timer as { unref?: () => void }).unref?.()
       this.timers.push(timer)
     }

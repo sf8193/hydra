@@ -5,6 +5,7 @@ import { STATE_DIR, ACCESS_FILE, APPROVED_DIR, STATIC, gateway, DEFAULT_SESSION_
 import { currentHydraConfig, hydraConfigInUse } from './hydra-config.js'
 import { chunk, safeSend } from './util.js'
 import type { InboundMessage } from '../gateway.js'
+import { timed } from '../shared/loop-watch.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,4 +242,4 @@ function checkApprovals(): void {
   }
 }
 
-if (!STATIC) setInterval(checkApprovals, 5000).unref()
+if (!STATIC) setInterval(() => timed('access-approvals', checkApprovals), 5000).unref()

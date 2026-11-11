@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from 'bun:test'
 import { openSync, writeSync, closeSync, writeFileSync, readFileSync, statSync, existsSync, unlinkSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, type ConversationForensics } from '../observability.js'
+import { trimSpawnLog, trimDaemonLog, buildCrashNotice, buildAutopsy, readConversationForensics, vitalsHeader, type ConversationForensics } from '../observability.js'
 import { claudeTurnOutcome } from '../engines/claude-transcript.js'
 import { codexTurnOutcome, defaultTurnSources, type TurnSources } from '../engines/codex-observation.js'
 import { engines } from '../engines/instances.js'
@@ -22,6 +22,12 @@ afterEach(() => {
 })
 
 const MB = 1024 * 1024
+
+describe('vitals header', () => {
+  test('carries the event loop\'s worst lag since the last header', () => {
+    expect(vitalsHeader(12, { load1: 7.8, cores: 16, swapUsedMB: 15100 }, 19)).toBe('daemon: vitals (12 live, load=7.8/16cores swap=15100MB, loop=19ms):')
+  })
+})
 
 describe('trimDaemonLog (HYDRA_LOG gating)', () => {
   // The trim mechanics are shared with trimSpawnLog above — both route through

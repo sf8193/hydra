@@ -472,6 +472,10 @@ export function printResponse(response: Record<string, unknown>, json: boolean):
       console.log(`sessions: ${data.sessions.total} (${data.sessions.connected} connected, ${data.sessions.disconnected} disconnected)`)
       console.log(`tmux: ${data.tmux}`)
       console.log(`idempotency: ${data.idempotency.active} active keys`)
+      if (data.loopLagMaxMs !== undefined) {
+        const s = data.loopLastStall
+        console.log(`event loop: worst lag ${data.loopLagMaxMs}ms since start${s ? `; last stall ${s.ms}ms${s.callback ? ` (${s.callback} held it ${s.callbackMs}ms)` : ''} at ${s.at}` : ''}`)
+      }
       if (data.raindrop) console.log(`raindrop: ${data.raindrop}`)
       if (data.slack) {
         const l = data.slack.listener

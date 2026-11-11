@@ -16,6 +16,7 @@ import { currentHydraConfig, onHydraConfigLoad } from '../../daemon/hydra-config
 import { MAIN, currentId, isSessionThread } from '../../routing/route.js'
 import { chunk } from '../../daemon/util.js'
 import type { HydraConfig } from '../../config/types.js'
+import { timed } from '../../shared/loop-watch.js'
 
 const log = (line: string) => { process.stderr.write(line) }
 
@@ -218,7 +219,7 @@ export function startSlackWatch(): void {
   if (sweepTimer) return
   const w = getSlackWatcher()
   w.sweep()
-  sweepTimer = setInterval(() => { w.sweep() }, SWEEP_INTERVAL_MS)
+  sweepTimer = setInterval(() => timed('slack-watch-sweep', () => { w.sweep() }), SWEEP_INTERVAL_MS)
   ;(sweepTimer as { unref?: () => void }).unref?.()
   refreshSlackSpecialistSurface()
   const offConfig = onHydraConfigLoad(() => queueMicrotask(refreshSlackSpecialistSurface))
