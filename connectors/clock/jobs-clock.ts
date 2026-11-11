@@ -16,6 +16,7 @@ import {
   writeAtomic, type AttemptResult, type DaemonState, type Dispatch, type Job, type JobsConfig, type JobState,
 } from '../../shared/jobs.js'
 import { migratedJobsToml, schedulesAreSource } from '../../shared/schedules.js'
+import { timed } from '../../shared/loop-watch.js'
 
 const noSuch = (cfg: JobsConfig, name: string) => cfg.fromSchedules ? `no schedule named ${name} in hydra.toml` : `no job named ${name} in jobs.toml`
 
@@ -108,10 +109,10 @@ export class JobsClock {
   start(firstTickMs = 5_000): void {
     const loop = () => {
       this.cancel = null
-      void this.tick().finally(() => { if (!this.stopped) this.cancel = this.d.schedule(loop, msToNextMinute(this.d.now())) })
+      void timed('jobs-clock', () => this.tick()).finally(() => { if (!this.stopped) this.cancel = this.d.schedule(loop, msToNextMinute(this.d.now())) })
     }
     this.cancel = this.d.schedule(loop, firstTickMs)
-    const health = () => { void this.healthCheck().finally(() => { if (!this.stopped) this.cancelHealth = this.d.schedule(health, TICK_MS) }) }
+    const health = () => { void timed('jobs-health', () => this.healthCheck()).finally(() => { if (!this.stopped) this.cancelHealth = this.d.schedule(health, TICK_MS) }) }
     this.cancelHealth = this.d.schedule(health, TICK_MS)
   }
 

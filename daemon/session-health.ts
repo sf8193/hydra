@@ -8,6 +8,7 @@ import { bridgeWaitMs, occupancy } from './session-reachability.js'
 import { notifyOperator } from './access.js'
 import type { SessionInfo } from './sessions.js'
 import { autoHandoff } from './auto-handoff.js'
+import { timed } from '../shared/loop-watch.js'
 
 const SESSION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 const CONTEXT_ALERT_THRESHOLDS = [50, 70]
@@ -17,7 +18,7 @@ const crashAlerted = new Set<string>()
 const orphanAlerted = new Map<string, number>()
 
 export function startSessionHealthPoll(): void {
-  setInterval(() => pollSessionsOnce(Date.now()), SESSION_CHECK_INTERVAL_MS)
+  setInterval(() => timed('session-health', () => pollSessionsOnce(Date.now())), SESSION_CHECK_INTERVAL_MS)
 }
 
 /** One session-health pass: crash detection, orphan detection (+ id discovery), context alert. */

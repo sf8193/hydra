@@ -17,6 +17,7 @@ import type { Protocol, FallbackCause } from './protocol-dsl.js'
 import type { RunState, BehaviorContext, CompletionEvent, PhaseChangeEvent } from './protocol-types.js'
 import { EventEmitter } from 'events'
 import { requiredLenses, withDefaultLenses, type Modifier, type SeedModifier } from './modifiers.js'
+import { timed } from '../shared/loop-watch.js'
 
 let doSpawnSession = _doSpawnSession
 let waitForBridge = _waitForBridge
@@ -1085,7 +1086,7 @@ function startHealthMonitor(run: ProtocolRun): void {
   run._nudged = false
   run._escalated = false
   run._bridgeEscalated = false
-  run._healthMonitor = setInterval(() => { void runHealthCheck(run) }, HEALTH_CHECK_INTERVAL_MS)
+  run._healthMonitor = setInterval(() => timed('protocol-health', () => { void runHealthCheck(run) }), HEALTH_CHECK_INTERVAL_MS)
 }
 
 function clearTimers(run: ProtocolRun): void {

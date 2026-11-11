@@ -8,6 +8,7 @@ import { atomicWriteFileSync, formatDuration, safeSend } from '../../daemon/util
 import { specialistForThread } from '../../specialists/specialists.js'
 import { DELIVER_MAX_MESSAGE_BYTES } from '../../shared/constants.js'
 import type { DeliverOpts, DeliverOutcome } from '../../specialists/targets.js'
+import { timed } from '../../shared/loop-watch.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -855,11 +856,11 @@ export async function backfillTitles(): Promise<number> {
 export function startPrWatcher(): void {
   loadPersisted()
   loadGhToken()
-  pollTimer = setInterval(() => {
+  pollTimer = setInterval(() => timed('pr-watch', () => {
     void pollAll().catch(err => {
       process.stderr.write(`daemon: pr-watch: poll cycle failed: ${err}\n`)
     })
-  }, POLL_INTERVAL_MS)
+  }), POLL_INTERVAL_MS)
   process.stderr.write(`daemon: pr-watch: started (interval: ${POLL_INTERVAL_MS / 1000}s)\n`)
 }
 

@@ -25,6 +25,7 @@ import {
   type SignalBody,
   type SessionFacts,
 } from './raindrop-payload.js'
+import { timed } from '../shared/loop-watch.js'
 
 export type RaindropMode = 'off' | 'dryrun' | 'live'
 
@@ -657,7 +658,7 @@ export function register(): () => void {
     })
   })
 
-  const usageTick = setInterval(() => {
+  const usageTick = setInterval(() => timed('raindrop-usage', () => {
     const at = deps.now()
     // One fleet-wide condition, reported once — the sessions themselves still
     // land in `unresolved`, which is what names CLAUDE_CONFIG_DIR to the operator.
@@ -686,10 +687,10 @@ export function register(): () => void {
         for (const b of batch) if (pendingEmits.get(b.sessionId) === inFlight) pendingEmits.delete(b.sessionId)
       })
     for (const b of batch) pendingEmits.set(b.sessionId, inFlight)
-  }, USAGE_TICK_MS)
+  }), USAGE_TICK_MS)
   usageTick.unref()
 
-  const sweep = setInterval(() => {
+  const sweep = setInterval(() => timed('raindrop-sweep', () => {
     // Membership: a crashed record stays in the registry, so its facts and
     // cursor survive for a death event that only a later kill or destroy emits.
     const known = new Set(deps.knownSessionIds())
@@ -701,7 +702,7 @@ export function register(): () => void {
     // entry — and the count it feeds is the only alarm for a wrong config dir.
     const live = new Set(deps.liveSessionIds())
     for (const id of [...unresolved]) if (!live.has(id)) unresolved.delete(id)
-  }, TRACKED_SWEEP_MS)
+  }), TRACKED_SWEEP_MS)
   sweep.unref()
 
   const unsubs = [

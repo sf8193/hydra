@@ -125,6 +125,9 @@ backfillAnchorChannelIds().catch(err => {
   process.stderr.write(`daemon: anchorChannelId backfill failed: ${err}\n`)
 })
 
+import { startLoopWatch, timed } from './shared/loop-watch.js'
+startLoopWatch({ alert: notifyOperator })
+
 import { startVitalsSnapshots } from './daemon/observability.js'
 startVitalsSnapshots((id) => transport.has(id))
 
@@ -507,14 +510,14 @@ startSessionHealthPoll()
 
 // Reply guard: poll session activity every 20s (see pollActivityOnce). The same tick releases
 // typed-delivery messages held for an idle session (daemon/typed-delivery.ts): no timer of its own.
-setInterval(() => {
+setInterval(() => timed('reply-guard', () => {
   pollActivityOnce(Math.floor(Date.now() / 1000))
   void flushAllHeld()
-}, 20_000)
+}), 20_000)
 
 // Pane probe: detect CC sessions stuck on interactive prompts (plan mode, login).
 // Lower cadence than reply guard — these stalls are minutes-scale.
-setInterval(() => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }, 60_000)
+setInterval(() => timed('pane-probe', () => { probeAllSessions().catch(err => process.stderr.write(`daemon: pane-probe error: ${err}\n`)) }), 60_000)
 
 // Jobs clock: runs jobs.toml's jobs, or once migrate has moved them, hydra.toml's [schedules], as detached attempts and
 // applies their results (connectors/clock/jobs-clock.ts). A job's failure goes to its `to` target, then main; a schedule's to main;

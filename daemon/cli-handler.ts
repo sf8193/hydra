@@ -22,6 +22,7 @@ import { raindropStatusLine } from './raindrop.js'
 import { getCpuVitals } from './cpu-watch.js'
 import { formatCpuSummary } from './cpu-spin.js'
 import { jobsClock } from '../connectors/clock/jobs-clock.js'
+import { loopHealth } from '../shared/loop-watch.js'
 
 // ---------------------------------------------------------------------------
 // Idempotency completion on session death
@@ -243,6 +244,7 @@ function handleHealth(req: CLIRequest): CLIResponse {
     sessions: { total: sessions.length, connected, disconnected },
     tmux: tmuxRunning ? 'running' : 'not running',
     idempotency: { active: listIdempotencyEntries().length },
+    ...loopHealth(),
     ...(raindropLine ? { raindrop: raindropLine } : {}),
     ...(slackWatchHealth() ? { slack: slackWatchHealth() } : {}),
     ...(jobsClock() ? { jobs: jobsClock()!.health() } : {}),

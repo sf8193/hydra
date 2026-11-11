@@ -9,6 +9,7 @@ import { isAbsolute, join, normalize } from 'path'
 import { latestSlot, nextSlot, parseCron, type Slot } from './cron-local.js'
 import { parseDuration, parseIdleTtl } from './constants.js'
 import { launchdCalendar } from './jobs-launchd.js'
+import type { LoopClock } from './loop-watch.js'
 
 // ---------------------------------------------------------------------------
 // jobs.toml
@@ -474,7 +475,7 @@ export const STALE_TICK_MS = 5 * 60_000
  * that sleeps through an attempt would wake into its deadline. A gap between beats longer than two beats is sleep
  * and counts as one beat. Returns a cancel.
  */
-export function awakeTimeout(fn: () => void, ms: number, clock: { now: () => number; every: (f: () => void, ms: number) => () => void } = {
+export function awakeTimeout(fn: () => void, ms: number, clock: LoopClock = {
   now: Date.now,
   every: (f, beat) => { const t = setInterval(f, beat); return () => clearInterval(t) },
 }): () => void {

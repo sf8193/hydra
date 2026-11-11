@@ -11,9 +11,10 @@ import { formatDuration } from './util.js'
 import { PLATFORM, RAINDROP_DRYRUN_FILE } from './config.js'
 import { transcriptPathFor } from './usage.js'
 import { sampleCpu, type CpuSample, type CpuVitals } from './cpu-watch.js'
-import { formatPct, formatPressure } from './cpu-spin.js'
+import { formatPct, formatPressure, type SystemPressure } from './cpu-spin.js'
 import { vitalsSnapshot, type PaneVitals } from './vitals-snapshot.js'
 import { byteTmuxName } from '../shared/constants.js'
+import { takeWorstLagMs, timed } from '../shared/loop-watch.js'
 
 const VITALS_INTERVAL_MS = 60_000
 
@@ -292,13 +293,13 @@ function frontTrim(path: string, maxBytes: number, keepBytes: number, label: str
 export function startVitalsSnapshots(isConnected: (id: string) => boolean): void {
   // A tick that outlives the interval (a slow ps or tmux) is not stacked under the next.
   let ticking = false
-  setInterval(() => {
+  setInterval(() => timed('vitals', () => {
     if (ticking) return
     ticking = true
     void vitalsTick(isConnected)
       .catch(err => process.stderr.write(`daemon: vitals failed: ${err}\n`))
       .finally(() => { ticking = false })
-  }, VITALS_INTERVAL_MS).unref()
+  }), VITALS_INTERVAL_MS).unref()
 }
 
 async function vitalsTick(isConnected: (id: string) => boolean): Promise<void> {
@@ -333,7 +334,12 @@ async function vitalsTick(isConnected: (id: string) => boolean): Promise<void> {
   const lines = live.map(s => '  ' + sessionVitalsLine(s, now, isConnected, panes.get(s.sessionId)!, cpu.sessions.get(s.sessionId)))
   if (cpu.main) lines.push(`  ${mainTmux} (main) cpu=${formatPct(cpu.main.claudePct)} bridge=${cpu.main.bridgePid ?? '?'}/${formatPct(cpu.main.bridgePct)}${cpu.main.spinning ? ` [spinning: ${cpu.main.spinning}]` : ''}`)
   for (const o of cpu.orphans) lines.push(`  orphan bridge pid=${o.pid} session=${o.key} cpu=${formatPct(o.pct)}${o.spinning ? ' [spinning]' : ''}`)
-  process.stderr.write(`daemon: vitals (${live.length} live, ${formatPressure(pressure)}):\n${lines.join('\n')}\n`)
+  process.stderr.write(`${vitalsHeader(live.length, pressure, takeWorstLagMs())}\n${lines.join('\n')}\n`)
+}
+
+/** `loopLagMs`: the event loop's worst lateness since the last header (shared/loop-watch.ts). */
+export function vitalsHeader(live: number, pressure: SystemPressure, loopLagMs: number): string {
+  return `daemon: vitals (${live} live, ${formatPressure(pressure)}, loop=${loopLagMs}ms):`
 }
 
 // Pure: `now` and `sample` are injected (not read from the wall clock / global

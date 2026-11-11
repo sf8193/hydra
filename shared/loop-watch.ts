@@ -1,0 +1,148 @@
+// The daemon's event loop, measured. Every connection the daemon keeps alive (Slack Socket Mode,
+// the Discord gateway, the CLI and bridge sockets) is served by timers on its one thread, and a
+// block of 4 s drops Slack's socket (its client gives up after 5 s without a pong, and an overdue
+// timer runs before the pong waiting on the socket is read). Nothing measured the loop, so a sync
+// call on a timer showed up only as a connection flapping.
+//
+// A drift probe: a beat every LOOP_BEAT_MS, and the lateness of each beat is how long the loop was
+// held. Not `monitorEventLoopDelay`: under bun 1.4.4 its histogram stayed at 2 ms through a 300 ms
+// busy loop. Periodic callbacks run under `timed(name, …)`, so a stall can name what held the loop.
+
+/** The probe's period. */
+export const LOOP_BEAT_MS = 500
+/** A timed callback that holds the loop this long is remembered, to name the stall it falls in. */
+export const SLOW_CALLBACK_MS = 250
+/** A beat this late is a stall, and is logged. */
+export const STALL_LOG_MS = 1_000
+/** Stall lines are at least this far apart, unless the stall reaches STALL_ALERT_MS; the stalls between are counted into the next line. */
+export const STALL_LOG_SPACING_MS = 10_000
+/** A stall this long tells the operator: it is where Slack's Socket Mode client drops its socket. */
+export const STALL_ALERT_MS = 4_000
+/** At most one stall alert per this long; every stall is still in the log. */
+export const STALL_ALERT_EVERY_MS = 3_600_000
+/** A gap this long, beyond what any timed callback explains, is taken as the machine waking from sleep, not a stall. */
+export const RESUME_GAP_MS = 60_000
+
+/** `every` starts a repeating beat and returns its cancel. The clock seam `awakeTimeout` (shared/jobs.ts) takes too. */
+export type LoopClock = { now: () => number; every: (beat: () => void, ms: number) => () => void }
+
+/** The last stall: how late the beat was, when, and the slowest timed callback since the beat before, if any. */
+export type LoopStall = { ms: number; at: number; callback?: { name: string; ms: number } }
+
+/** Where the watch reports: everything it says goes through here. */
+export type LoopWatchOutlets = {
+  /** Reaches the operator (the daemon passes `notifyOperator`). */
+  alert: (text: string) => Promise<boolean>
+  log?: (line: string) => void
+  /**
+   * A gap of RESUME_GAP_MS or more that no timed callback explains: a resume detector's input (not yet
+   * built). Until it exists, an untimed block of a minute or more lands here too.
+   */
+  onResume?: (gapMs: number, now: number) => void
+}
+
+export type LoopWatch = {
+  /** Starts the probe. Returns its stop. */
+  start(outlets: LoopWatchOutlets): () => void
+  /**
+   * Times `fn`'s synchronous run. For an async `fn` that is only the run up to its first `await`:
+   * later synchronous work still stalls the loop and is logged, but unnamed. Returns what `fn` returns.
+   */
+  timed<T>(name: string, fn: () => T): T
+  /** The worst lateness since the last call, then resets: the vitals header reads it once per tick. */
+  takeWorstLagMs(): number
+  /** For `hydra health`: the worst lateness since start, and the last stall. */
+  health(): { loopLagMaxMs: number; loopLastStall?: { ms: number; at: string; callback?: string; callbackMs?: number } }
+}
+
+const realClock: LoopClock = {
+  now: Date.now,
+  every: (beat, ms) => { const t = setInterval(beat, ms); t.unref(); return () => clearInterval(t) },
+}
+
+const stderr = (line: string) => { process.stderr.write(line) }
+const seconds = (ms: number) => `${+(ms / 1000).toFixed(1)}s`
+
+/** `clock` is the only thing fixed at construction; where the watch reports is given to `start`. */
+export function createLoopWatch(clock: LoopClock = realClock): LoopWatch {
+  let worstMs = 0
+  let maxMs = 0
+  let lastStall: LoopStall | undefined
+  // The slowest timed callback since the last beat: if this beat is late, it is what held the loop.
+  let slowest: { name: string; ms: number } | undefined
+  let stop: (() => void) | undefined
+
+  return {
+    start({ alert, log = stderr, onResume }) {
+      if (stop) return stop
+      let last = clock.now()
+      let lastLineAt = -Infinity
+      let unlogged = 0
+      let lastAlertAt = -Infinity
+
+      const stalled = (stall: LoopStall) => {
+        lastStall = stall
+        const { ms, at: now, callback } = stall
+        // The callback is named as what held the loop only if it ran for at least half the stall;
+        // otherwise it is only the slowest seen. `name` and `held` are formatted for the log or the alert.
+        const blame = (name: (n: string) => string, held: (ms: number) => string) => !callback ? ''
+          : callback.ms >= ms / 2 ? ` (${name(callback.name)} held it ${held(callback.ms)})`
+          : ` (slowest timed callback: ${name(callback.name)} ${held(callback.ms)})`
+        if (ms >= STALL_ALERT_MS || now - lastLineAt >= STALL_LOG_SPACING_MS) {
+          log(`daemon: event loop stalled ${ms}ms${blame(n => n, n => `${n}ms`)}${unlogged ? `; ${unlogged} more since the last line` : ''}\n`)
+          lastLineAt = now
+          unlogged = 0
+        } else unlogged++
+        if (ms < STALL_ALERT_MS || now - lastAlertAt < STALL_ALERT_EVERY_MS) return
+        lastAlertAt = now
+        const text = `⚠️ The daemon's event loop stalled for ${seconds(ms)}${blame(n => `\`${n}\``, seconds)}. Every connection waits while it is held, and a stall of ${seconds(STALL_ALERT_MS)} or more drops Slack's live connection. Each stall is in the daemon log; this alert repeats at most once an hour.`
+        void alert(text).then(
+          sent => { if (!sent) log('daemon: event loop stall alert not delivered to any operator\n') },
+          err => log(`daemon: event loop stall alert failed: ${err}\n`),
+        )
+      }
+
+      const cancel = clock.every(() => {
+        const now = clock.now()
+        const late = Math.max(0, now - last - LOOP_BEAT_MS)
+        last = now
+        const callback = slowest
+        slowest = undefined
+        // Longer than any timed callback explains: a sleep, most likely (a callback that ran on wake explains
+        // only its own run). Not a stall, so neither counted nor alerted; a resume detector takes it up through onResume.
+        if (late - (callback?.ms ?? 0) >= RESUME_GAP_MS) {
+          log(`daemon: event loop gap ${late}ms that no timed callback explains (a sleep, or an untimed block)\n`)
+          onResume?.(late, now)
+          return
+        }
+        worstMs = Math.max(worstMs, late)
+        maxMs = Math.max(maxMs, late)
+        if (late >= STALL_LOG_MS) stalled({ ms: late, at: now, ...(callback && { callback }) })
+      }, LOOP_BEAT_MS)
+      stop = () => { cancel(); stop = undefined }
+      return stop
+    },
+    timed(name, fn) {
+      const t = clock.now()
+      try { return fn() } finally {
+        const ms = clock.now() - t
+        if (ms >= SLOW_CALLBACK_MS && ms > (slowest?.ms ?? 0)) slowest = { name, ms }
+      }
+    },
+    takeWorstLagMs() {
+      const w = worstMs
+      worstMs = 0
+      return w
+    },
+    health() {
+      const s = lastStall
+      return {
+        loopLagMaxMs: maxMs,
+        ...(s && { loopLastStall: { ms: s.ms, at: new Date(s.at).toISOString(), ...(s.callback && { callback: s.callback.name, callbackMs: s.callback.ms }) } }),
+      }
+    },
+  }
+}
+
+/** The daemon's one watch: callbacks anywhere in the daemon wrap themselves with `timed`. */
+export const { start: startLoopWatch, timed, takeWorstLagMs, health: loopHealth } = createLoopWatch()
