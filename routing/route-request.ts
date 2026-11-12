@@ -15,7 +15,7 @@ export type RouteParams = { as?: string; at?: string; bound?: string; app?: stri
  * `default`); `--heard-by` adds the other apps in the channel, and `--mentioned` lists the apps the text tags, first tag first, so
  * ownership shows too. It reads the config and binds nothing.
  */
-export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string) => string[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
+export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string, app?: string) => string[]): { ok: true; fate: string; to?: string; report: string } | { ok: false; error: string } {
   if (!p.as || !p.at) return { ok: false, error: ROUTE_USAGE }
   if (p.boundApp && !p.bound) return { ok: false, error: '--bound-app goes with --bound: it names the app that opened the conversation bound to that specialist' }
   let from: Address | undefined
@@ -25,7 +25,7 @@ export function routeFor(h: HydraConfig, p: RouteParams, aliases: (place: string
     if (!from) return { ok: false, error: `"${p.as}" is neither a person in hydra.toml nor an address like slack:U0ABC` }
   }
   const list = (v: string | undefined) => v ? v.split(',').map(a => a.trim()).filter(Boolean) : undefined
-  const at = aliases(p.at)
+  const at = aliases(p.at, p.app)   // channel names are read per app: each reads its own workspace's
   // An app only means something on a Slack place; elsewhere the message came through no app.
   const slack = at.some(x => x.startsWith('slack:'))
   const app = p.app || DEFAULT_SLACK_APP

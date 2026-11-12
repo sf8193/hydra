@@ -27,6 +27,16 @@ export const SLACK_APP_NEEDS = {
   botEvents: { messages: ['message.channels', 'message.groups', 'message.im'], renames: ['channel_rename', 'group_rename'] },
   /** With `user_token_env`. */
   userEvents: ['message.channels', 'message.groups'],
+  /**
+   * Only when hydra.toml declares several apps: which of them are in a channel, so exactly one answers a message they all hear.
+   * `public` is read for every public channel, `private` for private ones (asked only when a `slack:G…` place is named); each is a
+   * scope the apps already hold for channel names. The events tell a join or a leave at once, not when the cache expires.
+   */
+  membership: {
+    public: { option: 'telling which apps are in a public channel (several apps declared)', any: ['channels:read'] } as ScopeNeed,
+    private: { option: 'telling which apps are in a private channel (several apps declared)', any: ['groups:read'] } as ScopeNeed,
+    botEvents: ['member_joined_channel', 'member_left_channel'],
+  },
 } as const
 
 /**
@@ -42,9 +52,10 @@ export const SLACK_APP_DEFAULTS = {
 
 /**
  * A Slack app manifest (YAML) for one of this hydra's apps: its name and description from hydra.toml, its scopes and events
- * from `SLACK_APP_NEEDS`. User scopes and events only when a user token is configured. Socket Mode on, org deploy off.
+ * from `SLACK_APP_NEEDS`. User scopes and events only when a user token is configured; the membership events only when
+ * hydra.toml declares `several` apps. Socket Mode on, org deploy off.
  */
-export function slackManifest(app?: SlackApp): string {
+export function slackManifest(app?: SlackApp, opts: { several?: boolean } = {}): string {
   // With no app at all (no hydra.toml), the defaults.
   const name = app?.displayName ?? SLACK_APP_DEFAULTS.name
   const withUser = !!app?.userTokenEnv
@@ -69,7 +80,7 @@ export function slackManifest(app?: SlackApp): string {
     'settings:',
     '  event_subscriptions:',
     '    bot_events:',
-    ...list('      ', [...SLACK_APP_NEEDS.botEvents.messages, ...SLACK_APP_NEEDS.botEvents.renames]),
+    ...list('      ', [...SLACK_APP_NEEDS.botEvents.messages, ...SLACK_APP_NEEDS.botEvents.renames, ...(opts.several ? SLACK_APP_NEEDS.membership.botEvents : [])]),
     ...(withUser ? ['    user_events:', ...list('      ', SLACK_APP_NEEDS.userEvents)] : []),
     '  socket_mode_enabled: true',
     '  org_deploy_enabled: false',
@@ -78,9 +89,17 @@ export function slackManifest(app?: SlackApp): string {
   ].join('\n')
 }
 
-/** Names a key of the app hydra connects, for an operator to find: the same key in either table that can declare it. */
-export const defaultAppKey = (key: string): string =>
-  `\`${key}\` of the app named \`default\` (\`[slack.apps.default]\` or \`[connectors.slack]\`)`
+/** Names a key of one app, for an operator to find. `default` is also declared by `[connectors.slack]`, so it names both tables. */
+export const appKey = (app: string, key: string): string =>
+  app === 'default'
+    ? `\`${key}\` of the app named \`default\` (\`[slack.apps.default]\` or \`[connectors.slack]\`)`
+    : `\`${key}\` of the app named \`${app}\` (\`[slack.apps.${app}]\`)`
 
-/** What an operator is told when hydra.toml has no app named `default`. */
-export const NO_DEFAULT_APP = 'hydra.toml has no app named `default`: add `[slack.apps.default]`'
+/** ` for the app named `x``: said where an app would otherwise go unnamed, only once there is more than one app to tell apart (a lone `default` is just "Slack"). */
+export const appSuffix = (app: string, declared: number): string => app === 'default' && declared <= 1 ? '' : ` for the app named \`${app}\``
+
+/** What a Slack call says when the app it would go through has no connection. */
+export const notConnected = (app: string, declared: number): string => `Slack is not connected${appSuffix(app, declared)} (hydra.toml does not declare it, or its tokens are not set)`
+
+/** What an operator is told when hydra.toml declares no Slack app. */
+export const NO_SLACK_APP = 'hydra.toml declares no Slack app: add `[slack.apps.<id>]` (or `[connectors.slack]`)'

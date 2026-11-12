@@ -505,10 +505,11 @@ description = "Answers sales threads."
     expect(defaultSlackApp(r.config)?.botTokenEnv).toBe('HYDRA_SLACK_BOT_TOKEN')
     expect(r.warnings).toEqual([])
   })
-  test('without an app named `default`, hydra connects none, and says so', () => {
+  test('an app need not be named `default`: it is one of the apps hydra connects, and loads with no warning', () => {
     const r = ok(`${BASE}\n[slack.apps.sales]\nbot_token_env = "SALES_SLACK_BOT_TOKEN"\n`)
     expect(defaultSlackApp(r.config)).toBeUndefined()
-    expect(r.warnings).toEqual(['slack.apps: no app is named "default", and Slack connects only the app named "default", so Slack stays off. Name the app to connect "default".'])
+    expect(Object.keys(r.config.slackApps)).toEqual(['sales'])
+    expect(r.warnings).toEqual([])
   })
   test('both [connectors.slack] and [slack.apps.default] is an error', () => {
     expect(errorsOf(`${single()}[slack.apps.default]\nbot_token_env = "OTHER_BOT_TOKEN"\n`)).toEqual(['slack.apps.default: is the same app as [connectors.slack]: declare it once, in either table'])
@@ -563,9 +564,52 @@ description = "Answers sales threads."
     expect(Object.hasOwn(c.slackApps, 'toString')).toBe(false)
     expect(defaultSlackApp(c)).toBeUndefined()
   })
-  test('a slack-listening specialist with no default app is warned, naming what to add', () => {
+  test('a slack-listening specialist with no Slack app declared is warned, naming what to add', () => {
     expect(ok(`${BASE}\n[specialists.ops]\nworkdir = "~/agents/ops"\nlistens = ["slack:#y"]\n`).warnings)
-      .toEqual(['specialists.ops: listens on slack:#y, but hydra.toml has no app named "default": add [slack.apps.default], or it won\'t hear it'])
+      .toEqual(['specialists.ops: listens on slack:#y, but hydra.toml declares no Slack app: add [slack.apps.<id>], or it won\'t hear it'])
+  })
+})
+
+describe('speaks_as: the app a specialist posts as when no message came in', () => {
+  const two = `${BASE}
+[slack.apps.default]
+bot_token_env = "HYDRA_SLACK_BOT_TOKEN"
+[slack.apps.sales]
+bot_token_env = "SALES_SLACK_BOT_TOKEN"
+[slack.apps.support]
+bot_token_env = "SUPPORT_SLACK_BOT_TOKEN"
+`
+  const spec = (lines: string) => `${two}\n[specialists.x]\nworkdir = "~/agents/crm"\nlistens = ["slack:#a"]\n${lines}\n`
+  test('it names a declared app; it is kept on the specialist', () => {
+    expect(ok(spec('speaks_as = "sales"')).config.specialists.x.speaksAs).toBe('sales')
+    expect(ok(spec('')).config.specialists.x.speaksAs).toBeUndefined()
+  })
+  test('an undeclared app is an error that names the key and the apps declared', () => {
+    expect(errorsOf(spec('speaks_as = "ghost"'))).toEqual(['specialists.x.speaks_as: no app "ghost": declare [slack.apps.ghost]; hydra.toml declares default, sales, support'])
+  })
+  test('a pinned specialist speaks only through its own apps', () => {
+    expect(errorsOf(spec('apps = ["sales"]\nspeaks_as = "support"'))).toEqual(['specialists.x.speaks_as: support is not one of the apps x is pinned to (sales): a pinned specialist speaks only through its own apps'])
+    expect(ok(spec('apps = ["sales", "support"]\nspeaks_as = "support"')).config.specialists.x.speaksAs).toBe('support')
+  })
+  test('an unpinned specialist cannot speak as an app that is pinned to someone else, or its replies could not come back', () => {
+    const pinned = `${spec('speaks_as = "sales"')}[specialists.y]\nworkdir = "~/agents/desk"\napps = ["sales"]\nlistens = ["slack:#b"]\n`
+    expect(errorsOf(pinned)).toEqual(['specialists.x.speaks_as: app sales serves only specialists pinned to it (y), and x is not pinned: set `speaks_as` to an app x can be reached through, or pin x to sales'])
+  })
+  test('a specialist with a Slack home must have an app to post as: with several apps and none `default`, `speaks_as` is required, and the error names the key', () => {
+    const none = `${BASE}\n[slack.apps.a]\nbot_token_env = "A_BOT"\n[slack.apps.b]\nbot_token_env = "B_BOT"\n`
+    const x = (extra: string) => `${none}[specialists.x]\nworkdir = "~/agents/crm"\nlistens = ["slack:#a"]\nhome = "slack:#ops"\n${extra}`
+    expect(errorsOf(x(''))).toEqual(['specialists.x.speaks_as: x has a Slack home, and 2 Slack apps are declared and none is `default`: set `speaks_as` to the app it posts as'])
+    expect(ok(x('speaks_as = "b"')).config.specialists.x.speaksAs).toBe('b')
+    // No home, no post of its own: nothing to require.
+    expect(ok(`${none}[specialists.x]\nworkdir = "~/agents/crm"\nlistens = ["slack:#a"]\n`).config.specialists.x.speaksAs).toBeUndefined()
+  })
+  test('the app it would post as, derived when `speaks_as` is absent, must be able to reach it', () => {
+    // `default` is pinned by y, so an unpinned x with a home would post through an app that never delivers to it.
+    const toml = `${two}[specialists.y]\nworkdir = "~/agents/desk"\napps = ["default"]\nlistens = ["slack:#b"]\n[specialists.x]\nworkdir = "~/agents/crm"\nlistens = ["slack:#a"]\nhome = "slack:#ops"\n`
+    expect(errorsOf(toml)).toEqual(['specialists.x.speaks_as: app default serves only specialists pinned to it (y), and x is not pinned: set `speaks_as` to an app x can be reached through, or pin x to default'])
+  })
+  test('speaks_as is a string', () => {
+    expect(errorsOf(spec('speaks_as = 3'))).toEqual(['specialists.x.speaks_as: must be a non-empty string'])
   })
 })
 

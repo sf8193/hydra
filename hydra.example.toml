@@ -20,7 +20,7 @@ repos = ["acme/widget"]               # required: the repos whose PR comments hy
 poll = "3m"                           # how often it looks (default 3m)
 
 # --- slack: one table per Slack app, [slack.apps.<id>]. Tokens stay in .env. `hydra slack manifest [<app>]` prints an app's manifest. ---
-# Only the app named `default` connects today, so every live Slack message arrives through `default`; `hydra route --app` checks how other apps would route.
+# Every app declared connects, each with its own tokens; an app whose tokens are not set is skipped, and the daemon says which key. A message leaves through the app that heard it.
 # [connectors.slack] is the app named `default`, with `app_name` and `app_description` for `display_name` and `description`.
 # Each token needs its own variable, one the daemon alone needs (not PATH, HOME, HYDRA_*, ...).
 
@@ -79,6 +79,8 @@ idle = "2h"                           # end a quiet session and resume it on the
 [specialists.deals]
 workdir = "~/agents/ops"
 apps = ["sales"]                      # Slack app ids (declared above). Absent: unpinned. Only Slack places: a pinned specialist can't listen on discord: or github:
+speaks_as = "sales"                   # the app it posts as when it answers no message (its home, a new thread); one of `apps` if pinned.
+                                      # Absent: its first pinned app; if unpinned, `default`, else the only app declared. With several apps and no `default`, required for a specialist with a Slack home. A `#name` home is resolved through that app's workspace.
 listens = ["slack:#help"]
 
 # PR reviews on one repo.

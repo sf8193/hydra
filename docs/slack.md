@@ -2,7 +2,7 @@
 
 Hydra bridges a Slack app to a Claude Code session: you DM the bot (or @mention it in a channel) and Claude replies, with the ability to spawn isolated sub-sessions in threads.
 
-**Flow:** `Slack ⇄ SlackGateway ⇄ daemon ⇄ bridge (MCP plugin) ⇄ Claude Code`. The daemon holds one Slack Socket-Mode connection and routes messages; the bridge is an MCP server loaded into Claude that relays messages and tool calls over a unix socket.
+**Flow:** `Slack ⇄ SlackGateway ⇄ daemon ⇄ bridge (MCP plugin) ⇄ Claude Code`. The daemon holds one Socket Mode connection per Slack app declared in hydra.toml and routes messages; the bridge is an MCP server loaded into Claude that relays messages and tool calls over a unix socket.
 
 ## Prerequisites
 
@@ -133,13 +133,13 @@ app_token_env = "SALES_SLACK_APP_TOKEN"
 - `[connectors.slack]` still works: it is the app named `default`, and spells the two text keys `app_name` and `app_description`. Declaring `default` in both tables is an error.
 - Each token needs its own variable: one variable on two keys (two apps, one app, or an app and `[connectors.discord]`) is an error.
 - Token variable names are uppercase. Hydra keeps every variable hydra.toml names as a token from the sessions it starts, so name only variables the daemon needs. These are refused when hydra.toml loads: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMUX`, `TERM`, `PWD`, `TMPDIR`, `LANG`, `ANTHROPIC_API_KEY`, `GH_TOKEN`, `SSH_AUTH_SOCK`, and anything starting `HYDRA_` (except `HYDRA_SLACK_`), `CLAUDE_`, `LC_` or `XDG_`.
-- Slack connects only the app named `default`. With other apps declared but no `default`, hydra.toml loads with a warning and Slack stays off.
+- Every app declared connects, whatever it is named, when hydra.toml loads, provided its token variables are already in the daemon's environment (new variables need a restart). An app whose tokens are not set is skipped: the daemon says which key to fix, in the thread of each specialist that hears Slack, and logs `slack listener for the app named <id> off (…)`; the others connect.
 
 `hydra slack manifest [<app>]` prints one app's manifest. Leave the name out when hydra.toml declares one app; with several, a missing or unknown name lists the ones declared.
 
 ## Apps and routing
 
-Only the app named `default` connects today, so every live Slack message arrives through `default`; `hydra route --app` checks how other apps would route.
+**One connection per app.** Hydra opens a Socket Mode connection for each app, each with its own bot, its own tokens, and its own reconnects and catch-up pass. An app added to hydra.toml connects as soon as hydra.toml loads (no restart); one taken out disconnects. Every message records the app that heard it, and everything that follows goes through that app: its reply, its reactions, the files it downloads, the threads it rereads. A message goes in through one app and leaves through the same one.
 
 An app is a way in: a message reaches hydra through the app whose connection delivered it. Routing knows which, and three things use it. `hydra route --as <person> --at <place> --app <app>` shows each.
 
@@ -168,8 +168,8 @@ Two specialists may `listen` on the same place only when no app reaches both: th
 
 **One app owns a message.** When two apps are in one channel, both hear every message in it, and exactly one answers. The owner is the first of these that applies, among the apps that heard it:
 
-1. The app the message tags. With two tags, the first in the text. A tag always wins: it opens that app's own conversation.
-2. The app that opened the conversation, if it is already a bound conversation: an untagged follow-up stays with that app.
+1. The app the message tags. With two tags, the first in the text. A tag outranks everything below, the app that opened the conversation included: it opens that app's own conversation, even in a thread another app opened. A tagged app whose connection is down still owns its tag: no other app answers in its place, and it catches the message up when it is back.
+2. The app that opened the conversation, if it is already a bound conversation: an untagged follow-up stays with that app. When the thread is bound through two apps, the one most recently active in it.
 3. The channel's `default_app`: `default_app = "sales"` under `[places."slack:#help"]` (the place's id or its name; it must be a declared app, on a Slack channel). It is honored as written, even if that app delivers to no one there.
 4. The app named `default`, if it delivers to someone at this place.
 5. The first app, in hydra.toml order, that delivers to someone at this place.
@@ -183,7 +183,50 @@ The other apps do nothing: `hydra route` shows them as `ignored`, with the app t
 default_app = "support"          # an untagged message in #help is answered by support; tag @sales and sales answers
 ```
 
+**Several apps in one channel need a read of who is in it.** Each connection receives every message of a channel its bot is in, so with several apps connected each connection asks whether the other apps' bots are members (`conversations.info`, through that app's own token; an app never asks about itself, and at most 5 asks are in flight). A member is believed for ten minutes, a non-member for 30 seconds (an invite is the common change), and an answer that fails is never taken as a verdict: the last good answer stands and Slack is asked again in 30 seconds. A message that tags an app reads that app again first, so an invite followed at once by a tag is answered by the tagged app. The first connection to decide a message fixes its owner for every other connection's copy of it (and for a catch-up pass), so exactly one app answers even if who is in the channel changes between two copies. A DM belongs to the app it was sent to. With one app connected nothing is asked.
+
+A join or a leave is seen at once when the apps send `member_joined_channel` and `member_left_channel`. `hydra slack manifest <app>` includes both when hydra.toml declares more than one app; an app created while only one was declared needs them added under Event Subscriptions and a reinstall (hydra says so, once, when an invite went unreported). The scopes are ones the manifest already grants for channel names: `channels:read` for public channels, and `groups:read` for private ones (asked of the startup check when hydra.toml names a `slack:G…` place). If the read is refused, the operator is told once, naming the app and the scope; until it is fixed the app that receives a message answers it, so a channel two apps are in may be answered by both.
+
+Each app's bot ids are kept in `<state>/slack-apps.json`, so after a restart a tag of an app that has not connected yet is still recognised. While an app that was started has not yet joined (up to 30 seconds), a message in a channel hydra.toml names is not answered: its cursor is held and a catch-up pass reads it once the app has joined or failed to.
+
+A message from another app's bot is another bot's message: it is passed over unless the place has `bots = true`. A bot that is one of hydra's own apps is never heard, `bots = true` or not, so two apps cannot answer each other.
+
 `hydra route` takes `--app <app>`: the app this check runs for, the one that heard the message (default: the app named `default`). `--heard-by <app,app>` adds the other apps in the channel. `--mentioned <app,app>` lists the apps the text tags, first tag first. `--bound-app <app>` (with `--bound`) is the app that opened the bound conversation.
+
+## Conversations and replies, per app
+
+**A conversation is an app, a channel and a thread.** The same thread heard through two apps (each tagged in turn) is two conversations, each bound on its own, answered through its own app. Its id, as `hydra conversations`, `reply`, `bind_conversation` and the guard's stdin (`conversation`) write it:
+
+| App | Id | Example |
+|---|---|---|
+| `default` | `slack:<channel id>[:<thread ts>]` | `slack:C0ABC:1793732224.093059` |
+| any other, `sales` here | `slack:<app>:<channel id>[:<thread ts>]` | `slack:sales:C0ABC:1793732224.093059` |
+
+A DM, or a top-level message where `listen = "all"`, has no thread ts: `slack:D0ABC`, `slack:C0ABC`. Copy the id from the delivery you are answering.
+
+The id of `default` is exactly what it was before apps existed, so its sessions, transcripts, stored conversations and idempotency keys carry on; a conversation id written without an app is `default`'s, and `slack:default:C0ABC:…` names the same conversation. Another app's per-conversation session is named with the app in it (`deals_sales-c0abc-1793732224-093059`), and its attachments are kept under `<state>/slack-files/sales/<channel>/`. Stored conversations and catch-up cursors carry the app when it is not `default`; a store written before apps loads as `default`'s and is not rewritten.
+
+**Replies leave through the app that heard the message.** `reply` into a conversation posts with that conversation's app, never another. A post that answers no message (a specialist's `home`, a new thread) has no app to follow, so it uses the specialist's `speaks_as`:
+
+```toml
+[specialists.deals]
+apps = ["sales"]
+speaks_as = "sales"            # the app it posts as when it answers no message; one of `apps` if it is pinned
+home = "slack:#sales-ops"
+```
+
+`speaks_as` must name a declared app, and one of `apps` for a pinned specialist; an unpinned specialist cannot speak as an app another specialist is pinned to. Absent: its first pinned app; if it is unpinned, `default`, else the only app declared. With several apps, none of them `default`, `speaks_as` is required of a specialist with a Slack `home`: hydra.toml refuses to load without it. A `#name` home is resolved through that app's workspace. The thread such a post opens is a conversation of that app, bound to the specialist.
+
+`bind_conversation` and `hydra conversations bind` carry the app too, and refuse what routing would: a specialist can be bound only through an app it is pinned to (any app if it is unpinned).
+
+## Adding an app
+
+1. Declare it: `[slack.apps.<id>]` in hydra.toml with `bot_token_env` and `app_token_env` (and `user_token_env` if it should read threads as the operator).
+2. `hydra slack manifest <id>` prints its manifest. Create the app from it at api.slack.com/apps, install it, and put its tokens in the variables the keys name, in `.env`.
+3. Restart the daemon: it reads the tokens from its environment when it starts. The app connects when hydra.toml loads, provided its token variables are already in the daemon's environment; new variables need a restart.
+4. Invite the bot to the channels it should hear. For a channel more than one app is in, `default_app` (below) says which answers an untagged message; `apps` on a specialist pins it to an app.
+5. With a second app, add `member_joined_channel` and `member_left_channel` under Event Subscriptions of every existing app (`hydra slack manifest <app>` lists them) and reinstall each, so a join or a leave is noticed at once.
+6. Check with `hydra route --as <person> --at <place> --app <id>`, and `hydra health` (`slack.apps.<id>` is each connection's health; `slack.listener` is the same fact for `default`, else the first connected).
 
 ## Troubleshooting
 

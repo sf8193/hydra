@@ -4,16 +4,17 @@ import { SocketSupervisor, START_TIMEOUT_MS, type SocketEmitter } from '../../sh
 import { catchUp, toEvent, type CatchUpResult, type Page, type RawMessage, type SlackApi } from './catchup.js'
 import { mkdirSync, openSync, writeSync, closeSync, renameSync, rmSync } from 'fs'
 import { dirname } from 'path'
-import { routedChannels, hearsDms, unresolvedPlaces, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
-import { defaultSlackApp, type HydraConfig, type SlackApp } from '../../config/types.js'
-import { SLACK_APP_NEEDS, NO_DEFAULT_APP, defaultAppKey, type ScopeNeed } from './app.js'
+import { routedChannels, hearsDms, unresolvedPlaces, isDm, mentionedApps, NOT_A_MEMBER, OPERATOR_TOKEN_REFUSED, NO_DIRECTORY, SLACK_LIMITS, type AppWatch, type SlackDirectory, type SlackWatchConfig, type SlackWatcher } from './watch.js'
+import { DEFAULT_SLACK_APP, type HydraConfig, type SlackApp } from '../../config/types.js'
+import { SLACK_APP_NEEDS, NO_SLACK_APP, appKey, appSuffix, type ScopeNeed } from './app.js'
+import { ConnectedApps } from './apps.js'
 import { timed } from '../../shared/loop-watch.js'
 import { awakeSince, suspendedSince, describeCause, type ResumeDetector } from '../../shared/resume.js'
 import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
 
 /**
- * The Slack connector: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
- * that replays what the connection missed. Its writes are reactions (the `ack`, and 🚫) and a specialist's replies,
+ * The Slack connector for one app: one Socket Mode connection that feeds `message` events to the watcher, and the catch-up pass
+ * that replays what the connection missed. Each app hydra.toml declares has a listener of its own (runtime.ts), all feeding one watcher. Its writes are reactions (the `ack`, and 🚫) and a specialist's replies,
  * posted only into the conversation they answer (`post`).
  * What the connection learns (the bot's own ids, the workspace, channel names) joins hydra.toml in `view()`, which is
  * what the watcher routes with.
@@ -30,12 +31,13 @@ import { SLACK_CLIENT_PING_TIMEOUT_MS } from '../../shared/constants.js'
  * recovered messages the live stream never delivered.
  */
 
-/** Slack errors a retry cannot fix, each with what to do about it. */
-export const PERMANENT_SLACK_ERRORS: [RegExp, string][] = [
-  [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in the variable named by the ' + defaultAppKey('bot_token_env') + ', and restart the daemon.'],
-  [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in the variable named by the ' + defaultAppKey('bot_token_env') + ', and restart the daemon.'],
+/** Slack errors a retry cannot fix, each with what to do about it, for one app. */
+export const permanentSlackErrors = (app: string): [RegExp, string][] => [
+  [/missing_scope/, 'the bot token lacks a scope. Add the scope named above (channels:history for public channels, groups:history for private ones), reinstall the app, put the new bot token in the variable the ' + appKey(app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
+  [/invalid_auth|not_authed|token_revoked|token_expired|account_inactive/, 'Slack does not accept the bot token. Put a valid bot token in the variable the ' + appKey(app, 'bot_token_env') + ' names (in `.env`), and restart the daemon.'],
   [/not_in_channel|channel_not_found/, 'the bot cannot see a channel hydra.toml names. Invite it to the channel, or correct the place.'],
 ]
+export const PERMANENT_SLACK_ERRORS = permanentSlackErrors(DEFAULT_SLACK_APP)
 
 /** Slack's `missing_scope` names the scope it needed and the ones the token has; the SDK's message drops both. */
 export function explainSlackError(err: unknown): Error {
@@ -76,6 +78,8 @@ export const ALERT_CHECK_MS = 60_000
 export const DOWN_ALERT_AFTER_MS = 5 * 60_000
 export const CATCH_UP_STALE_AFTER_MS = CATCH_UP_INTERVAL_MS * 2.5
 const MISSED_LIVE_ALERT_EVERY_MS = 60 * 60_000
+/** The longest a message waits to learn which apps are in its channel. */
+export const MEMBERSHIP_WAIT_MS = 5_000
 
 /** What the Slack SDK offers the listener, narrowed so the rest is testable without it. */
 export type SlackAppLike = {
@@ -88,6 +92,10 @@ export type SlackAppLike = {
   channels(): Promise<{ id: string; name: string }[]>
   /** A channel was renamed (channel_rename, or group_rename for a private one). */
   onRename(handler: (id: string, name: string) => void): void
+  /** Whether the bot is a member of a channel (conversations.info). Needs channels:read or groups:read. Asked only while several apps are connected. */
+  isMember?(channel: string): Promise<boolean>
+  /** Someone joined or left a channel (member_joined_channel, member_left_channel): who is in it may have changed. Subscribed only with several apps. */
+  onMembership?(handler: (channel: string) => void): void
   userName(userId: string): Promise<string | undefined>
   /** A message in a channel, or in a thread when `threadTs` is set. Resolves to its ts. */
   post(channel: string, threadTs: string | undefined, text: string): Promise<string>
@@ -100,6 +108,7 @@ export type SlackAppLike = {
 
 /** The scopes each enabled option needs (from `SLACK_APP_NEEDS`), so a missing one is a read at startup rather than a guess later. */
 export function scopesNeeded(h: HydraConfig): ScopeNeed[] {
+  const several = Object.keys(h.slackApps).length > 1
   const places = [...Object.values(h.specialists).flatMap(s => s.listens), ...h.rules.map(r => r.at)].filter((p): p is string => !!p && p.startsWith('slack:'))
   const slackOpts = Object.entries(h.places).filter(([p]) => p.startsWith('slack:')).map(([, o]) => o)
   const s = SLACK_APP_NEEDS.botScopes
@@ -111,6 +120,7 @@ export function scopesNeeded(h: HydraConfig): ScopeNeed[] {
     ...(slackOpts.some(o => o.files) ? [s.files] : []),
     s.reactions,
     s.replies,
+    ...(several ? [SLACK_APP_NEEDS.membership.public, ...(places.some(p => /^slack:G/.test(p)) ? [SLACK_APP_NEEDS.membership.private] : [])] : []),
   ]
 }
 
@@ -147,7 +157,11 @@ export type ListenerHealth = {
 
 export type ListenerDeps = {
   watcher: SlackWatcher
-  /** hydra.toml as loaded now. Slack is connected only while it has an app named `default`. */
+  /** The app this listener is, by its id in hydra.toml. Absent: `default`. It connects only while hydra.toml declares it. */
+  app?: string
+  /** What the connections share: each app's bot ids, and which apps are in which channel. Absent: this listener's own. */
+  apps?: ConnectedApps
+  /** hydra.toml as loaded now. */
   hydra: () => HydraConfig
   /** The tokens of one app, read from the variables it names. */
   tokens: (app: SlackApp) => { app?: string; bot?: string; user?: string }
@@ -159,6 +173,8 @@ export type ListenerDeps = {
   /** Time the daemon was suspended (shared/resume.ts): the catch-up alarm and the supervisor age by awake time. */
   resumes?: Pick<ResumeDetector, 'awakeSince' | 'suspendedSince'>
   healthUrl?: string
+  /** The longest a message waits to learn which apps are in its channel. Default `MEMBERSHIP_WAIT_MS`. */
+  membershipWaitMs?: number
   /** First delay before retrying a failed first connection; doubles up to 5 minutes. */
   firstRetryBaseMs?: number
   fetch?: (url: string, init: { signal: AbortSignal }) => Promise<{ ok: boolean }>
@@ -193,17 +209,39 @@ export class SlackListener {
   private readonly directory = new Directory()
   private directoryRead = false
   private namesWarned = false
+  readonly id: string
+  private readonly apps: ConnectedApps
+  private readonly w: AppWatch
+  /** Per channel, the events waiting for who is in it to be read, in the order they came: none is handled ahead of one before it. A channel with nothing waiting never queues. */
+  private readonly queues = new Map<string, Promise<void>>()
 
   constructor(private readonly d: ListenerDeps) {
     this.now = d.now ?? Date.now
     this.resumes = d.resumes ?? { awakeSince, suspendedSince }
+    this.id = d.app ?? DEFAULT_SLACK_APP
+    this.apps = d.apps ?? new ConnectedApps({ now: this.now, log: d.log, alert: t => d.alert(t) })
+    this.w = d.watcher.forApp(this.id)
   }
+
+  /** This app as hydra.toml declares it. */
+  private declared(): SlackApp | undefined { const a = this.d.hydra().slackApps; return Object.hasOwn(a, this.id) ? a[this.id] : undefined }
+
+  /** ` for the app named `x``: said in alerts only when there is more than one app to tell apart. */
+  private appSuffix(): string { return appSuffix(this.id, Object.keys(this.d.hydra().slackApps).length) }
 
   /** What the watcher routes with: hydra.toml joined with what this connection learned. Null until connected once. */
   view(): SlackWatchConfig | null {
     const hydra = this.d.hydra()
-    if (!defaultSlackApp(hydra) || !this.identity) return null
-    return { hydra, ...this.identity, directory: this.directoryRead ? this.directory : NO_DIRECTORY, ...SLACK_LIMITS }
+    if (!this.declared() || !this.identity) return null
+    return {
+      hydra, app: this.id, ...this.identity,
+      identities: this.apps.identities(),
+      heardBy: channel => this.apps.heardBy(channel, this.id),
+      connected: () => this.apps.connectedApps(),
+      // With one app connected there is nothing to tell apart, and nothing to remember.
+      ...(this.apps.several() && { decideOwner: (channel: string, ts: string, decide: () => string) => this.apps.decideOwner(channel, ts, decide) }),
+      directory: this.directoryRead ? this.directory : NO_DIRECTORY, ...SLACK_LIMITS,
+    }
   }
 
   /** Slack's read calls, for a check outside catch-up (bind_conversation's). Null before the first connect attempt. */
@@ -211,7 +249,7 @@ export class SlackListener {
 
   /** A specialist's reply, into its conversation. Throws when Slack isn't connected. */
   async post(channel: string, threadTs: string | undefined, text: string): Promise<string> {
-    if (!this.app || !this.sup?.state.connected) throw new Error('Slack is not connected; try again once it is (hydra health shows the listener)')
+    if (!this.app || !this.sup?.state.connected) throw new Error(`Slack is not connected${this.appSuffix()}; try again once it is (hydra health shows the listener)`)
     return this.app.post(channel, threadTs, text)
   }
 
@@ -230,17 +268,17 @@ export class SlackListener {
 
   /** False, with a log line naming what is missing, when Slack watching is not configured. */
   async start(): Promise<boolean> {
-    const slack = defaultSlackApp(this.d.hydra())
+    const slack = this.declared()
     const t = slack ? this.d.tokens(slack) : {}
     if (!slack || !t.app || !t.bot) {
-      this.d.log(`daemon: slack listener off (${!slack ? NO_DEFAULT_APP : !t.bot ? `${slack.botTokenEnv} is not set` : slack.appTokenEnv ? `${slack.appTokenEnv} is not set` : 'the app named `default` needs app_token_env for Socket Mode'})\n`)
+      this.d.log(`daemon: slack listener${this.appSuffix()} off (${!slack ? (Object.keys(this.d.hydra().slackApps).length ? `hydra.toml has no app named \`${this.id}\`` : NO_SLACK_APP) : !t.bot ? `${slack.botTokenEnv} is not set` : slack.appTokenEnv ? `${slack.appTokenEnv} is not set` : `the app named \`${this.id}\` needs app_token_env for Socket Mode`})\n`)
       return false
     }
     if (this.started) return true
     this.started = true
     this.startedAt = this.now()
     this.sup = new SocketSupervisor({
-      name: 'slack listener',
+      name: `slack listener${this.appSuffix()}`,
       start: () => this.connect(),
       emitter: () => this.app?.emitter() ?? null,
       healthUrl: this.d.healthUrl ?? 'https://slack.com/api/api.test',
@@ -255,6 +293,7 @@ export class SlackListener {
       await this.boundedConnect()
     } catch (err) {
       this.d.log(`daemon: slack listener: first connection failed, will keep trying: ${err instanceof Error ? err.message : err}\n`)
+      this.apps.failedToJoin(this.id)   // the other apps do not wait on it; it joins when it connects
       this.scheduleFirstRetry()
     }
     this.sup.begin()
@@ -269,12 +308,16 @@ export class SlackListener {
 
   stop(): void {
     this.started = false
+    this.generation++   // a connect still in flight finds itself stale, and stops what it made
     if (this.firstTimer) clearTimeout(this.firstTimer)
     for (const t of this.timers.splice(0)) clearInterval(t)
     if (this.retryTimer) clearTimeout(this.retryTimer)
     this.sup?.stop()
     void this.app?.stop().catch(() => {})
     this.app = null
+    this.apps.leave(this.id)   // not joining, no identity, no probe
+    this.w.setSlackActions(undefined)
+    this.w.setNameResolver(undefined)
   }
 
   /** The SDK's start can hang, so the first connection is bounded the way the supervisor bounds a reconnect. */
@@ -306,16 +349,24 @@ export class SlackListener {
   /** (Re)create the connection. Also what the supervisor calls to reconnect. */
   private async connect(): Promise<void> {
     const h = this.d.hydra()
-    const slack = defaultSlackApp(h)
+    const slack = this.declared()
     const t = slack ? this.d.tokens(slack) : {}
-    if (!t.app || !t.bot || !slack) throw new Error('slack listener is not configured')
+    if (!t.app || !t.bot || !slack) throw new Error(`slack listener${this.appSuffix()} is not configured`)
+    const gen = ++this.generation
+    // Stopped (or replaced) while this was waiting: what it made is let go, and nothing of it is left registered.
+    const stale = async (made?: SlackAppLike): Promise<void> => {
+      if (gen === this.generation && this.started) return
+      if (made) { try { await made.stop() } catch {} ; if (this.app === made) this.app = null }
+      throw new Error('stopped while connecting')
+    }
     if (this.app) { try { await this.app.stop() } catch {} }
+    await stale()
     const app = this.d.createApp({ app: t.app, bot: t.bot, ...(t.user && { user: t.user }) })
-    app.onMessage(raw => this.onMessage(raw))
+    app.onMessage(raw => { if (gen === this.generation) this.onMessage(raw) })
     app.onRename((id, name) => { this.directory.rename(id, name); this.d.log(`daemon: slack listener: channel ${id} is now #${name}\n`) })
+    app.onMembership?.(channel => this.apps.changed(channel, this.id))
     this.app = app
     this.sup!.attach() // before start, so the first `connected` is seen
-    const gen = ++this.generation
     app.emitter()?.on('connected', () => {
       if (gen !== this.generation) return
       const was = this.everConnected
@@ -325,16 +376,21 @@ export class SlackListener {
     })
     // Who the bot is and what the channels are called, before the socket opens: routing needs both for the first event.
     const auth = await app.authTest().catch(err => { this.d.log(`daemon: slack listener: auth.test failed: ${err}\n`); return {} as { botId?: string; userId?: string; url?: string; scopes?: string[] } })
+    await stale(app)
     if (auth.userId) this.identity = { botUserId: auth.userId, ...(auth.botId && { botId: auth.botId }), ...(auth.url && { workspaceUrl: auth.url.replace(/\/+$/, '') }) }
     // Without its own id, a tag can't be told from chatter: no connection is better than one that hears wrong.
     if (!this.identity) throw new Error('auth.test gave no bot user id, so tags cannot be recognized')
-    if (auth.botId) this.d.watcher.setBotId(auth.botId)
+    if (auth.botId) this.w.setBotId(auth.botId)
+    // Known to every connection from here: its bot's ids (so a tag of it is recognised), and whether it is in a channel (so exactly one app answers where several are).
+    this.apps.join(this.id, { botUserId: this.identity.botUserId, ...(this.identity.botId && { botId: this.identity.botId }) }, channel => app.isMember ? app.isMember(channel) : Promise.reject(new Error('this Slack client cannot read channel membership')))
     await this.refreshDirectory(app)
+    await stale(app)
     // Hold every cursor before the socket opens: a live message must not move a cursor past the downtime gap the
     // catch-up pass that follows has yet to read. Each pass releases what it reads.
     const view = this.view()
-    this.d.watcher.beginCatchUp([...routedChannels(view), ...(hearsDms(view) ? this.d.watcher.dmChannels() : [])])
+    this.w.beginCatchUp([...routedChannels(view), ...(hearsDms(view) ? this.w.dmChannels() : [])])
     await app.start()
+    await stale(app)
     const needed = scopesNeeded(h)
     this.d.log(`daemon: slack listener: enabled options need: ${needed.map(n => `${n.option} → ${n.any.join(' or ')}`).join('; ')}\n`)
     if (auth.scopes) {
@@ -346,20 +402,69 @@ export class SlackListener {
         }
       }
     }
-    this.d.watcher.setNameResolver(id => app.userName(id))
-    this.d.watcher.setSlackActions({ react: (c, ts, name) => app.react(c, ts, name), download: (url, dest, max) => app.download(url, dest, max) })
+    this.w.setNameResolver(id => app.userName(id))
+    this.w.setSlackActions({ react: (c, ts, name) => app.react(c, ts, name), download: (url, dest, max) => app.download(url, dest, max) })
     this.sup!.touch()
   }
 
+  /**
+   * With one app connected a message is handled at once. With several, which of them is in its channel decides who answers, so
+   * a message in a channel where that is not known waits (a few seconds at most) for it, queued behind the earlier ones of that
+   * channel only: a DM, or a channel that is settled, never waits on another. A message still undecidable because a started app
+   * has not joined is not answered: its channel's cursor is held and a catch-up pass reads it once the app has joined.
+   */
   private onMessage(raw: RawEvent): void {
-    this.sup?.touch()
     try {
-      if (!raw.channel) return
-      const ev = toEvent(raw.channel, raw)
-      if (ev) this.d.watcher.handle(ev)
+      this.sup?.touch()
+      const channel = raw.channel
+      if (!channel) return
+      const tagged = this.taggedElsewhere(raw.text)
+      if (!this.queues.has(channel) && (isDm(channel) || this.apps.settled(channel, this.id, tagged))) { this.ingest(raw); return }
+      const behind = this.queues.get(channel) ?? Promise.resolve()
+      const next: Promise<void> = behind.then(async () => {
+        await this.knowMembers([channel], tagged)
+        this.ingestOrHold(raw, channel)
+      }).catch(err => {
+        this.d.log(`daemon: slack listener: handling a message failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
+      }).finally(() => { if (this.queues.get(channel) === next) this.queues.delete(channel) })
+      this.queues.set(channel, next)
     } catch (err) {
       this.d.log(`daemon: slack listener: handling a message failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
     }
+  }
+
+  /** The other apps a text tags: the ones whose membership a decision must read fresh. */
+  private taggedElsewhere(text: string | undefined): string[] {
+    return this.apps.several() ? mentionedApps(this.apps.identities(), text).filter(a => a !== this.id) : []
+  }
+
+  /** Handle a message, or, when an app that was started has not yet joined, leave it unanswered: held (the cursor stays) and read again by a catch-up pass once it has. */
+  private ingestOrHold(raw: RawEvent, channel: string): void {
+    if (this.apps.isJoining() && routedChannels(this.view()).includes(channel)) {
+      this.w.beginCatchUp([channel])
+      void this.apps.allJoined().then(() => this.runCatchUp(false, 'apps joined'))
+      return
+    }
+    this.ingest(raw)
+  }
+
+  private ingest(raw: RawEvent): void {
+    try {
+      if (!raw.channel) return
+      const ev = toEvent(raw.channel, raw)
+      if (ev) this.w.handle(ev)
+    } catch (err) {
+      this.d.log(`daemon: slack listener: handling a message failed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
+    }
+  }
+
+  /** Which connected apps are in these channels, read where not known. Bounded: a slow Slack must not hold a message back for long (it is then decided on what is known). */
+  private async knowMembers(channels: string[], tagged: string[] = []): Promise<void> {
+    const wanted = [...new Set(channels)].filter(c => !isDm(c) && !this.apps.settled(c, this.id, tagged))
+    if (!wanted.length) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<void>(resolve => { timer = setTimeout(resolve, this.d.membershipWaitMs ?? MEMBERSHIP_WAIT_MS) })
+    try { await Promise.race([Promise.all(wanted.map(c => this.apps.ensure(c, this.id, tagged))), late]) } finally { clearTimeout(timer) }
   }
 
   /** The live stream may have missed something now. The one place a gap is recorded, whatever its source. */
@@ -406,7 +511,9 @@ export class SlackListener {
     try {
       // Names first: a channel renamed or joined since the last pass is scanned under its current name.
       await this.refreshDirectory(this.app)
-      result = await catchUp(this.d.watcher, this.app.api, this.view()!, { deep, now: this.now, log: this.d.log })
+      // Which apps are in each channel this pass will read, known before it hands a message to routing.
+      await this.knowMembers([...routedChannels(this.view()), ...this.w.list().map(e => e.channel)])
+      result = await catchUp(this.w, this.app.api, this.view()!, { deep, now: this.now, log: this.d.log })
       this.lastCatchUp = { at: this.now(), result }
       // What this pass found was posted after the last complete pass started. Only a complete pass moves that mark:
       // an incomplete one may have left a channel unread.
@@ -419,7 +526,7 @@ export class SlackListener {
       // now, at the end, so a gap that lands while this pass runs counts.
       if (why === 'periodic' && this.streamHeldSince(windowStart) && result.accepted > 0 && this.now() - this.lastMissedLiveAlertAt > MISSED_LIVE_ALERT_EVERY_MS) {
         this.lastMissedLiveAlertAt = this.now()
-        this.d.alert(`⚠️ The Slack catch-up pass found ${result.accepted} message(s) the live stream never delivered, though the connection stayed up since the previous complete pass began. Is another process connected to this Slack app (for example sir-not-slop's Bolt server)? Slack splits events across connections; nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
+        this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} found ${result.accepted} message(s) the live stream never delivered, though the connection stayed up since the previous complete pass began. Is another process connected to this Slack app (another Bolt server, for instance)? Slack splits events across connections; nothing is lost, but it arrives up to ${CATCH_UP_INTERVAL_MS / 60_000} minutes late.`)
       }
     } catch (err) {
       this.d.log(`daemon: slack catch-up crashed: ${err instanceof Error ? err.stack ?? err.message : err}\n`)
@@ -436,10 +543,10 @@ export class SlackListener {
 
   /** A refusal that retrying cannot fix is said once, at once, in the specialist's thread, with what to do. */
   private alertIfPermanent(reason: string | undefined): void {
-    const hit = reason ? PERMANENT_SLACK_ERRORS.find(([re]) => re.test(reason)) : undefined
+    const hit = reason ? permanentSlackErrors(this.id).find(([re]) => re.test(reason)) : undefined
     if (!hit || this.alerted.permanent === hit[1]) return
     this.alerted.permanent = hit[1]
-    this.d.alert(`⚠️ Slack refused the catch-up read: ${reason}. Retrying will not fix it: ${hit[1]}`)
+    this.d.alert(`⚠️ Slack refused the catch-up read${this.appSuffix()}: ${reason}. Retrying will not fix it: ${hit[1]}`)
   }
 
   health(): ListenerHealth {
@@ -466,10 +573,10 @@ export class SlackListener {
     const now = this.now()
     if (h.state !== 'up' && h.downMin !== null && h.downMin * 60_000 >= DOWN_ALERT_AFTER_MS && !this.alerted.down) {
       this.alerted.down = true
-      this.d.alert(`⚠️ The Slack listener has been ${h.state} for ${h.downMin} min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects.`)
+      this.d.alert(`⚠️ The Slack listener${this.appSuffix()} has been ${h.state} for ${h.downMin} min awake. Mentions are not arriving live; the catch-up pass replays them once it reconnects.`)
     } else if (h.state === 'up' && this.alerted.down) {
       this.alerted.down = false
-      this.d.alert('✅ The Slack listener is connected again.')
+      this.d.alert(`✅ The Slack listener${this.appSuffix()} is connected again.`)
     }
     // Overdue by awake time: no pass can complete while the machine sleeps, so a sleep is named, not counted.
     const since = this.lastOkCatchUpAt ?? this.startedAt
@@ -478,7 +585,7 @@ export class SlackListener {
       this.alerted.catchUp = true
       const away = this.resumes.suspendedSince(since, now)
       const notes = [...(away ? [`${describeCause(away.cause)} for ${Math.round(away.ms / 60_000)} min`] : []), ...(h.catchUp?.reason ? [h.catchUp.reason] : [])]
-      this.d.alert(`⚠️ The Slack catch-up pass has not completed for ${Math.round(overdue / 60_000)} min${away ? ' awake' : ''}${notes.length ? ` (${notes.join('; ')})` : ''}. Live delivery is unaffected, but a gap would not be filled.`)
+      this.d.alert(`⚠️ The Slack catch-up pass${this.appSuffix()} has not completed for ${Math.round(overdue / 60_000)} min${away ? ' awake' : ''}${notes.length ? ` (${notes.join('; ')})` : ''}. Live delivery is unaffected, but a gap would not be filled.`)
     }
   }
 }
@@ -497,6 +604,8 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   // was told "unknown" would post twice. Reading keeps the SDK's patient retries.
   const poster = new WebClient(tokens.bot, { retryConfig: { retries: 0 }, timeout: POST_TIMEOUT_MS, logLevel: LogLevel.ERROR })
   let renamed: (id: string, name: string) => void = () => {}
+  let membership: (channel: string) => void = () => {}
+  for (const name of SLACK_APP_NEEDS.membership.botEvents) app.event(name, async ({ event }) => { const c = (event as { channel?: string }).channel; if (c) membership(c) })
   for (const name of SLACK_APP_NEEDS.botEvents.renames) app.event(name, async ({ event }) => { const c = (event as { channel?: { id?: string; name?: string } }).channel; if (c?.id && c.name) renamed(c.id, c.name) })
   const client = app.client
   const page = (r: { messages?: unknown[]; response_metadata?: { next_cursor?: string } }) => ({
@@ -506,6 +615,18 @@ export function boltApp(tokens: { app: string; bot: string; user?: string }): Sl
   return {
     onMessage: h => { handler = h },
     onRename: h => { renamed = h },
+    onMembership: h => { membership = h },
+    // conversations.info says `is_member` for a channel the bot can see; a private channel it is not in is `channel_not_found`: not a member.
+    isMember: async channel => {
+      try {
+        const r = await client.conversations.info({ token: tokens.bot, channel })
+        return !!(r.channel as { is_member?: boolean } | undefined)?.is_member
+      } catch (e) {
+        const x = explainSlackError(e)
+        if (/channel_not_found/.test(x.message)) return false
+        throw x
+      }
+    },
     channels: async () => {
       const out: { id: string; name: string }[] = []
       let cursor: string | undefined

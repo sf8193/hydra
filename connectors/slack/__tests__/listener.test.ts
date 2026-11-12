@@ -176,10 +176,10 @@ describe('diagnosing a refused token', () => {
 })
 
 describe('starting', () => {
-  test('without an app named `default` or a token it stays off and names what is missing, never a token', async () => {
+  test('without a declared app or a token it stays off and names what is missing, never a token', async () => {
     const noCfg = setup({ toml: null })
     expect(await noCfg.listener.start()).toBe(false)
-    expect(noCfg.logs.join()).toContain('hydra.toml has no app named `default`: add `[slack.apps.default]`')
+    expect(noCfg.logs.join()).toContain('hydra.toml declares no Slack app: add `[slack.apps.<id>]` (or `[connectors.slack]`)')
     const noApp = setup({ tokens: { bot: TOKENS.bot } })
     expect(await noApp.listener.start()).toBe(false)
     expect(noApp.logs.join()).toContain('SLOPBOT_SLACK_APP_TOKEN is not set')

@@ -30,7 +30,7 @@ export function slackCommand(args: string[], stateDirOpt: string | undefined): n
   const declared = ids.length ? `declares: ${ids.join(', ')}` : 'declares no Slack app'
   if (name) {
     if (!Object.hasOwn(r.config.slackApps, name)) { console.error(`${path}: no app named ${name}; hydra.toml ${declared}`); return 1 }
-    process.stdout.write(slackManifest(r.config.slackApps[name]))
+    process.stdout.write(slackManifest(r.config.slackApps[name], { several: ids.length > 1 }))
     return 0
   }
   if (ids.length > 1) { console.error(`${path}: declares ${ids.length} Slack apps; pass one: hydra slack manifest <app> (${ids.join(', ')})`); return 1 }
